@@ -9,11 +9,14 @@ def write_fake_app_server(
     tmp_path: Path,
     *,
     completion_notification_method: str | None = "turn/completed",
+    completion_notification_assistant_text: str | None = None,
+    completion_visible_on_thread_read: bool = True,
     complete_turn_on_read: bool = True,
     omit_turns_on_read: bool = False,
     omit_turns_on_initial_reads: int = 0,
     omit_turns_when_incomplete: bool = False,
     assistant_text: str = "OK",
+    incomplete_assistant_text: str | None = None,
     thread_status_type: str = "idle",
     thread_status_reason: str | None = None,
     fail_thread_resume: bool = False,
@@ -29,18 +32,28 @@ def write_fake_app_server(
     skill_outcome_payload: dict | str | None = None,
     steer_record_path: Path | None = None,
     interrupt_record_path: Path | None = None,
+    turn_start_record_path: Path | None = None,
     codex_home_record_path: Path | None = None,
     thread_recovery_error_message: str | None = None,
     thread_read_error_message: str | None = None,
 ) -> Path:
     script = tmp_path / "fake_app_server.py"
     completion_block = """
-        turn_completed = True
+        turn_completed = COMPLETION_VISIBLE_ON_THREAD_READ
+        completion_items = []
+        if COMPLETION_NOTIFICATION_ASSISTANT_TEXT is not None:
+            completion_items = [{
+                "type": "agentMessage",
+                "id": "completion-msg-1",
+                "text": COMPLETION_NOTIFICATION_ASSISTANT_TEXT,
+                "phase": "final_answer",
+                "memoryCitation": None,
+            }]
         sys.stdout.write(json.dumps({
             "method": COMPLETION_NOTIFICATION_METHOD,
             "params": {
                 "threadId": thread_id,
-                "turn": {"id": "vendor-turn-1", "items": [], "status": "completed", "error": None},
+                "turn": {"id": "vendor-turn-1", "items": completion_items, "status": "completed", "error": None},
             },
         }) + "\\n")
 """.rstrip()
@@ -52,6 +65,7 @@ import os
 import sys
 
 INTERRUPT_RECORD_PATH = __INTERRUPT_RECORD_PATH__
+TURN_START_RECORD_PATH = __TURN_START_RECORD_PATH__
 STEER_RECORD_PATH = __STEER_RECORD_PATH__
 CODEX_HOME_RECORD_PATH = __CODEX_HOME_RECORD_PATH__
 FAIL_THREAD_RESUME = __FAIL_THREAD_RESUME__
@@ -64,11 +78,14 @@ RESUME_REQUIRES_EXISTING_ROLLOUT_PATH = __RESUME_REQUIRES_EXISTING_ROLLOUT_PATH_
 START_THREAD_ID = __START_THREAD_ID__
 START_THREAD_PATH = __START_THREAD_PATH__
 COMPLETION_NOTIFICATION_METHOD = __COMPLETION_NOTIFICATION_METHOD__
+COMPLETION_NOTIFICATION_ASSISTANT_TEXT = __COMPLETION_NOTIFICATION_ASSISTANT_TEXT__
+COMPLETION_VISIBLE_ON_THREAD_READ = __COMPLETION_VISIBLE_ON_THREAD_READ__
 COMPLETE_TURN_ON_READ = __COMPLETE_TURN_ON_READ__
 OMIT_TURNS_ON_READ = __OMIT_TURNS_ON_READ__
 OMIT_TURNS_ON_INITIAL_READS = __OMIT_TURNS_ON_INITIAL_READS__
 OMIT_TURNS_WHEN_INCOMPLETE = __OMIT_TURNS_WHEN_INCOMPLETE__
 ASSISTANT_TEXT = __ASSISTANT_TEXT__
+INCOMPLETE_ASSISTANT_TEXT = __INCOMPLETE_ASSISTANT_TEXT__
 THREAD_STATUS_TYPE = __THREAD_STATUS_TYPE__
 THREAD_STATUS_REASON = __THREAD_STATUS_REASON__
 ROLLOUT_ENTRIES_ON_READ = __ROLLOUT_ENTRIES_ON_READ__
@@ -208,6 +225,9 @@ for line in sys.stdin:
         assert isinstance(input_items, list)
         assert input_items[0]["type"] == "text"
         assert input_items[0]["text"] == "Reply with exactly the word OK"
+        if TURN_START_RECORD_PATH:
+            with open(TURN_START_RECORD_PATH, "w", encoding="utf-8") as handle:
+                json.dump(message["params"], handle)
         turn_completed = COMPLETE_TURN_ON_READ and not COMPLETION_NOTIFICATION_METHOD
         sys.stdout.write(json.dumps({
             "id": msg_id,
@@ -298,6 +318,10 @@ __COMPLETION_BLOCK__
             turn_items = [
                 {"type": "agentMessage", "id": "msg-1", "text": ASSISTANT_TEXT, "phase": "final_answer", "memoryCitation": None}
             ]
+        elif INCOMPLETE_ASSISTANT_TEXT is not None:
+            turn_items = [
+                {"type": "agentMessage", "id": "msg-1", "text": INCOMPLETE_ASSISTANT_TEXT, "phase": "commentary", "memoryCitation": None}
+            ]
         should_omit_turns = (
             (OMIT_TURNS_ON_READ or thread_read_attempts <= OMIT_TURNS_ON_INITIAL_READS)
             and (turn_completed or OMIT_TURNS_WHEN_INCOMPLETE)
@@ -351,6 +375,10 @@ __COMPLETION_BLOCK__
             repr(str(interrupt_record_path) if interrupt_record_path is not None else ""),
         )
         .replace(
+            "__TURN_START_RECORD_PATH__",
+            repr(str(turn_start_record_path) if turn_start_record_path is not None else ""),
+        )
+        .replace(
             "__STEER_RECORD_PATH__",
             repr(str(steer_record_path) if steer_record_path is not None else ""),
         )
@@ -376,6 +404,14 @@ __COMPLETION_BLOCK__
             repr(completion_notification_method),
         )
         .replace(
+            "__COMPLETION_NOTIFICATION_ASSISTANT_TEXT__",
+            repr(completion_notification_assistant_text),
+        )
+        .replace(
+            "__COMPLETION_VISIBLE_ON_THREAD_READ__",
+            "True" if completion_visible_on_thread_read else "False",
+        )
+        .replace(
             "__COMPLETE_TURN_ON_READ__",
             "True" if complete_turn_on_read else "False",
         )
@@ -388,6 +424,7 @@ __COMPLETION_BLOCK__
         .replace("__START_THREAD_ID__", repr(start_thread_id))
         .replace("__START_THREAD_PATH__", repr(start_thread_path))
         .replace("__ASSISTANT_TEXT__", repr(assistant_text))
+        .replace("__INCOMPLETE_ASSISTANT_TEXT__", repr(incomplete_assistant_text))
         .replace("__THREAD_STATUS_TYPE__", repr(thread_status_type))
         .replace("__THREAD_STATUS_REASON__", repr(thread_status_reason))
         .replace("__ROLLOUT_ENTRIES_ON_READ__", repr(rollout_entries_on_read or []))

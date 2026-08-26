@@ -18,6 +18,63 @@ Keys for model providers (e.g. Google and OpenAI) are injected from this user's 
 - **Credential validation**: Failed workflows often stem from missing provider or GitHub credentials. The first Activity attempt records the failure reason in Temporal's execution history. Once you resolve secrets, you can retry the workflow or rely on Temporal's native Activity retry policies.
 - **Artifact locations**: Patches, JSONL logs, and GitHub API responses are stored under `var/artifacts/workflows/<workflow_id>/`.
 
+### Workflow worker deployment and resolver registration
+
+Use `/healthz` only for liveness and `/readyz` for traffic readiness. New
+`pr-resolver` traffic uses `MoonMind.UserWorkflow` plus `MoonMind.AgentRun` and
+must execute the resolved Skill bundle. `MoonMind.PRResolver` registration is
+required only while older histories that already recorded that child type remain
+within the replay/support window; its presence must not be used to route new
+resolver work. Readiness still requires the expected task queues, immutable build
+identity, and registry fingerprint.
+Production mode fails startup unless `MOONMIND_BUILD_SHA` or
+`MOONMIND_IMAGE_DIGEST` is set and Temporal worker deployment versioning is
+enabled. Deploy immutable images, promote a controlled worker version, drain old
+workers from the queue, and run:
+
+```bash
+python tools/run_pr_resolver_deployment_canary.py
+```
+
+This legacy canary validates replay registration for the old workflow type. It
+does not validate the active Skill-owned resolver path. Validate new resolver
+deployments with a `MoonMind.UserWorkflow` dry run that resolves `pr-resolver`,
+records `skill_owned_execution_required`, starts `MoonMind.AgentRun`, and
+produces the Skill's terminal artifact without selecting the native child.
+
+Python workers do not hot-reload mounted workflow source. After workflow code or
+registration changes in local Compose, recreate the complete workflow worker
+service; a generic healthy container or a changed bind mount is not evidence of
+new registration.
+
+If a parent reports `worker_capability_unavailable`, no resolver or remediation
+agent was launched and resolver budgets were not consumed. Compare the reported
+workflow type and task queue with `/readyz`, inspect worker build/fingerprint
+distribution, recreate or drain stale workers, rerun the canary, then explicitly
+retry or recover the parent. Repeated unregistered-workflow task failures and
+mixed incompatible builds on one queue require an operator alert.
+
+### Removed activity cutovers
+
+Removing an Activity Type is a controlled deployment cutover, not an ordinary
+rolling worker update. Before deploying a build that removes an Activity
+binding, stop new admission for the owning capability while the previous worker
+build remains on its existing Task Queue. Use Temporal visibility to identify
+every open workflow with the removed Activity pending or running, and either
+allow each workflow to reach a terminal state or explicitly cancel it and verify
+its cleanup. Deploy the replacement worker only after no non-terminal history
+can schedule or retry that Activity Type. Record the environment, old and new
+build identities, query used, terminal workflow count, and operator decision as
+the cutover evidence.
+
+The PentestGPT removal follows this procedure for
+`security.pentest.execute`: disable Pentest submissions, drain or cancel every
+admitted Pentest workflow on the old worker build, verify that Temporal reports
+zero pending or running instances of the Activity, and only then replace the
+worker with the build where the binding is absent. Never place old and new
+workers on the same queue and assume an in-flight Pentest Activity will select
+the compatible build.
+
 ### Execution Observability
 
 - **Metrics detail**: Temporal workflows increment standard Prometheus series automatically:

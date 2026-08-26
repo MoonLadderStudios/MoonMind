@@ -48,6 +48,10 @@ from moonmind.runtime_intent import (
     RuntimeIntentValidationError,
     validate_runtime_tier_intent,
 )
+from moonmind.workflows.temporal.remediation_loop import (
+    RemediationLoopSpec,
+    validate_remediation_loop_agent_instructions,
+)
 
 _FORBIDDEN_STEP_KEYS = frozenset(
     {
@@ -119,7 +123,10 @@ _SECRET_LIKE_KEY_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _SECRET_LIKE_VALUE_PATTERN = re.compile(
-    r"(token=|password=|bearer\s+|ghp_|github_pat_|akia[0-9a-z]{16}|aiza|atatt|-----begin [a-z ]*private key)",
+    r"(token=|password=|"
+    r"authorization[ \t]*:[ \t]*bearer[ \t]+\S+|"
+    r"ghp_|github_pat_|akia[0-9a-z]{16}|aiza|atatt|"
+    r"-----begin [a-z ]*private key)",
     re.IGNORECASE,
 )
 _STEP_RESERVED_KEYS = frozenset(
@@ -1151,7 +1158,14 @@ def _contains_secret_like_value(value: Any) -> bool:
         return False
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return any(_contains_secret_like_value(item) for item in value)
-    return bool(_SECRET_LIKE_VALUE_PATTERN.search(str(value or "")))
+    text = str(value or "")
+    if _SECRET_LIKE_VALUE_PATTERN.search(text):
+        return True
+    return any(
+        len(parts) == 2 and parts[0].casefold() == "bearer" and bool(parts[1])
+        for line in text.splitlines()
+        if (parts := line.strip().split())
+    )
 
 def _capability_contract_from_inputs(
     *,
@@ -1543,6 +1557,118 @@ class SeedSyncResult:
 
     created: int = 0
     updated: int = 0
+
+
+def _validate_moonspec_remediation_topology(steps: list[dict[str, Any]]) -> None:
+    """Validate either the canonical loop or a replay-only static topology."""
+
+    loop_specs: list[Mapping[str, Any]] = []
+    for step in steps:
+        annotations = step.get("annotations")
+        if not isinstance(annotations, Mapping):
+            continue
+        raw_loop = annotations.get("remediationLoop")
+        if isinstance(raw_loop, Mapping):
+            loop_specs.append(raw_loop)
+    if loop_specs:
+        if len(loop_specs) != 1:
+            raise PresetValidationError(
+                "A resolved plan may declare only one remediation loop."
+            )
+        try:
+            loop_spec = RemediationLoopSpec.model_validate(loop_specs[0])
+            validate_remediation_loop_agent_instructions(loop_spec)
+        except ValueError as exc:
+            raise PresetValidationError(
+                f"Invalid remediation loop contract: {exc}"
+            ) from exc
+        if any(
+            isinstance(step.get("annotations"), Mapping)
+            and (
+                step["annotations"].get("moonSpecRemediationAttempt") is not None
+                or step["annotations"].get("moonSpecRemediationMaxAttempts")
+                is not None
+            )
+            for step in steps
+        ):
+            raise PresetValidationError(
+                "A remediation loop cannot be mixed with pre-expanded attempts."
+            )
+        return
+
+    chain: list[tuple[int, str, int, int, bool]] = []
+    for index, step in enumerate(steps):
+        annotations = step.get("annotations")
+        if not isinstance(annotations, Mapping):
+            continue
+        role = str(
+            annotations.get("issueImplementRole")
+            or annotations.get("jiraOrchestrateRole")
+            or ""
+        ).strip().lower()
+        if role not in {"moonspec-remediation", "moonspec-verification-gate"}:
+            continue
+        try:
+            attempt = int(annotations.get("moonSpecRemediationAttempt"))
+            maximum = int(annotations.get("moonSpecRemediationMaxAttempts"))
+        except (TypeError, ValueError) as exc:
+            raise PresetValidationError(
+                "MoonSpec remediation annotations require integer attempt metadata."
+            ) from exc
+        chain.append(
+            (
+                index,
+                role,
+                attempt,
+                maximum,
+                annotations.get("moonSpecFinalRemediationGate") is True,
+            )
+        )
+    if not chain:
+        return
+    maxima = {item[3] for item in chain}
+    if len(maxima) != 1:
+        raise PresetValidationError(
+            "MoonSpec remediation nodes must declare one shared maximum attempt count."
+        )
+    maximum = next(iter(maxima))
+    if maximum < 1:
+        raise PresetValidationError("MoonSpec remediation maximum must be positive.")
+    active = [item for item in chain if item[2] <= maximum]
+    expected_count = maximum * 2
+    if len(active) != expected_count:
+        raise PresetValidationError(
+            "remediation_max_attempts must activate a complete, unambiguous "
+            "remediation and verification topology."
+        )
+    chain_indices = [item[0] for item in active]
+    if chain_indices != list(
+        range(chain_indices[0], chain_indices[0] + expected_count)
+    ):
+        raise PresetValidationError(
+            "No publication or unrelated node may appear inside the MoonSpec "
+            "remediation chain."
+        )
+    for attempt in range(1, maximum + 1):
+        pair = sorted(
+            (item for item in active if item[2] == attempt),
+            key=lambda item: item[0],
+        )
+        if (
+            len(pair) != 2
+            or pair[0][1] != "moonspec-remediation"
+            or pair[1][1] != "moonspec-verification-gate"
+            or pair[1][0] != pair[0][0] + 1
+        ):
+            raise PresetValidationError(
+                f"MoonSpec remediation attempt {attempt} must be one adjacent "
+                "remediation/verifier pair."
+            )
+        if pair[1][4] != (attempt == maximum):
+            raise PresetValidationError(
+                "Only the active final MoonSpec verifier may be marked as the final gate."
+            )
+
 
 class PresetCatalogService:
     """Catalog service for presets."""
@@ -2438,6 +2564,7 @@ class PresetCatalogService:
             visited={(normalized_scope.value, template.slug, normalized_scope_ref)},
             resolved_steps=resolved_steps,
         )
+        _validate_moonspec_remediation_topology(resolved_steps)
         authored_presets = _authored_presets_from_composition(composition)
 
         template_caps = _normalize_capabilities(
@@ -2453,6 +2580,15 @@ class PresetCatalogService:
         if workflow_publish is not None and not isinstance(workflow_publish, Mapping):
             raise PresetValidationError(
                 "Template workflowPublish annotation must be an object."
+            )
+        if isinstance(workflow_publish, Mapping):
+            # Workflow-level publish policy may reference validated inputs the
+            # same way steps do, so operator-facing controls such as merge
+            # method or a review-cycle budget stay in one declarative place.
+            workflow_publish = _render_value(
+                self._template_env,
+                dict(workflow_publish),
+                variables=variables,
             )
         annotations = template.annotations or {}
         checkpoint_branching = annotations.get("checkpointBranching") or annotations.get(

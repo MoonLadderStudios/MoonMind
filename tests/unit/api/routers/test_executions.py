@@ -23,6 +23,7 @@ from temporalio.service import RPCError, RPCStatusCode
 
 from api_service.api.routers.executions import (
     _get_service,
+    get_temporal_client_adapter,
     _artifact_id_from_ref,
     _build_original_workflow_input_snapshot_payload,
     _build_recurring_target,
@@ -51,11 +52,17 @@ from api_service.api.routers.executions import (
     _optional_temporal_search_attributes_cache,
     get_temporal_client,
     _serialize_execution,
+    _verified_output_branch,
     router,
     update_execution as update_execution_route,
 )
+from api_service.api.routers import executions as executions_module
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
+from moonmind.omnigent.bridge_store import (
+    BridgeChatBindingAmbiguousError,
+    ChatBindingResolution,
+)
 from api_service.db.models import (
     Base,
     MoonMindWorkflowState,
@@ -74,12 +81,23 @@ from api_service.db.models import (
 )
 from api_service.services.recurring_workflows_service import RecurringWorkflowValidationError
 from moonmind.config.settings import settings
+from moonmind.security.execution_fanout_capabilities import (
+    mint_execution_fanout_capability,
+)
+from moonmind.workflows.temporal.publication_recovery import (
+    publication_operation_key,
+    publication_recovery_workflow_id,
+)
+from moonmind.workflows.temporal.client import WorkflowStartResult
 from moonmind.workflows.temporal.service import ExecutionDependencySummary
 from moonmind.workflows.temporal import (
     TemporalExecutionNotFoundError,
     TemporalExecutionValidationError,
 )
-from moonmind.workflows.temporal.artifacts import TemporalArtifactAuthorizationError
+from moonmind.workflows.temporal.artifacts import (
+    TemporalArtifactAuthorizationError,
+    TemporalArtifactStateError,
+)
 from moonmind.schemas.temporal_models import (
     ExecutionMergeAutomationResolverChildModel,
     ExecutionProgressModel,
@@ -91,9 +109,36 @@ from moonmind.schemas.temporal_models import (
     StepLedgerSnapshotModel,
     UpdateExecutionRequest,
 )
+from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
 from moonmind.workflows.temporal.service import TemporalExecutionService
+from moonmind.services.control_stop_continuation import (
+    ControlStopContinuationReservation,
+)
+from moonmind.workflows.executions.control_stop_continuation import (
+    ContinuationBudgetGrant,
+)
 
 _TARGET_SEARCH_ATTRIBUTE_TYPE = int(IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_LIST)
+
+
+def test_deployment_skill_requirements_merge_into_canonical_capabilities() -> None:
+    assert executions_module._merge_deployment_skill_required_capabilities(
+        ["Git", "execution.fanout"],
+        {
+            "batch-skill": {
+                "required_capabilities": ["execution.fanout", "GH"]
+            },
+            "step-skill": {"required_capabilities": ["docker"]},
+        },
+    ) == ["git", "execution.fanout", "gh", "docker"]
+
+
+def test_deployment_skill_requirements_reject_malformed_trusted_metadata() -> None:
+    with pytest.raises(HTTPException, match="must be a JSON array of strings"):
+        executions_module._merge_deployment_skill_required_capabilities(
+            [],
+            {"batch-skill": {"required_capabilities": "execution.fanout"}},
+        )
 
 
 class _ScalarRows:
@@ -113,6 +158,283 @@ class _ExecuteResult:
 
     def scalar_one_or_none(self) -> object | None:
         return self._rows[0] if self._rows else None
+
+
+def test_remediation_submission_branch_validation_rejects_tampered_refs() -> None:
+    with pytest.raises(HTTPException, match="not an allowed git branch"):
+        executions_module._validate_remediation_branch_submission(
+            task_payload={
+                "remediation": {"target": {"workflowId": "mm:target"}}
+            },
+            git_payload={"startingBranch": "main..tampered"},
+        )
+
+    with pytest.raises(HTTPException, match="not an allowed git branch"):
+        executions_module._validate_remediation_branch_submission(
+            task_payload={
+                "remediation": {
+                    "target": {"workflowId": "mm:target"},
+                    "checkpointBranchPolicy": {"gitWorkBranch": "main"},
+                }
+            },
+            git_payload={"startingBranch": "main"},
+        )
+
+
+def test_remediation_submission_branch_validation_accepts_editable_safe_refs() -> None:
+    executions_module._validate_remediation_branch_submission(
+        task_payload={
+            "remediation": {
+                "target": {"workflowId": "mm:target"},
+                "checkpointBranchPolicy": {
+                    "gitWorkBranch": "remediation/mm-3623-fix"
+                },
+            }
+        },
+        git_payload={"startingBranch": "release/2026-Q3"},
+    )
+
+
+def test_remediation_approval_projection_disables_expired_request() -> None:
+    projection = executions_module._remediation_approval_state_from_link(
+        SimpleNamespace(
+            approval_state={
+                "requestId": "approval-expired",
+                "status": "pending",
+                "expiresAt": "2020-01-01T00:00:00+00:00",
+            }
+        ),
+        authority_mode="approval_gated",
+        status_value="awaiting_approval",
+    )
+
+    assert projection is not None
+    assert projection.status == "expired"
+    assert projection.decision == "expired"
+    assert projection.canDecide is False
+
+
+def test_remediation_approval_projection_enforces_reviewer_eligibility() -> None:
+    link = SimpleNamespace(
+        approval_state={
+            "requestId": "approval-high-risk",
+            "status": "pending",
+            "reviewerRule": "high_risk_reviewer",
+            "requestingActor": "requester@example.com",
+        }
+    )
+
+    ordinary_projection = executions_module._remediation_approval_state_from_link(
+        link,
+        authority_mode="approval_gated",
+        status_value="awaiting_approval",
+        actor="owner@example.com",
+        actor_can_approve_high_risk=False,
+    )
+    privileged_projection = executions_module._remediation_approval_state_from_link(
+        link,
+        authority_mode="approval_gated",
+        status_value="awaiting_approval",
+        actor="reviewer@example.com",
+        actor_can_approve_high_risk=True,
+    )
+    requester_projection = executions_module._remediation_approval_state_from_link(
+        link,
+        authority_mode="approval_gated",
+        status_value="awaiting_approval",
+        actor="requester@example.com",
+        actor_can_approve_high_risk=True,
+    )
+
+    assert ordinary_projection is not None
+    assert ordinary_projection.canDecide is False
+    assert privileged_projection is not None
+    assert privileged_projection.canDecide is True
+    assert requester_projection is not None
+    assert requester_projection.canDecide is False
+
+
+def test_authored_remediation_contract_preserves_follow_up_retrieval() -> None:
+    contract = executions_module._authored_remediation_contract(
+        {
+            "followUpRetrieval": {
+                "enabled": True,
+                "budgetPreset": "balanced",
+            }
+        },
+        {"remediation": {"authorityMode": "approval_gated"}},
+    )
+
+    assert contract["retrieval"] == {
+        "rag": None,
+        "followUpRetrieval": {
+            "enabled": True,
+            "budgetPreset": "balanced",
+        },
+    }
+
+
+def test_context_evidence_projection_adds_per_class_freshness_and_degradation() -> None:
+    projection = executions_module._context_evidence_availability_projection(
+        [
+            {"class": "stdout", "status": "available"},
+            {
+                "class": "diagnostics",
+                "status": "missing",
+                "fallback": "merged_logs",
+            },
+            {
+                "class": "omnigent_capture",
+                "status": "available",
+                "bounded": False,
+                "freshness": "provider_reported",
+            },
+        ],
+        generated_at="2026-08-12T10:00:00Z",
+    )
+
+    assert projection[0] == {
+        "class": "stdout",
+        "status": "available",
+        "bounded": True,
+        "freshness": "source_reported",
+        "observedAt": "2026-08-12T10:00:00Z",
+    }
+    assert projection[1]["degradedReason"] == "merged_logs"
+    assert projection[2]["bounded"] is False
+    assert projection[2]["freshness"] == "provider_reported"
+
+
+@pytest.mark.asyncio
+async def test_remediation_artifact_projection_is_bounded_redacted_and_linkable() -> None:
+    created_at = datetime.now(UTC)
+    artifact_link = SimpleNamespace(
+        link_type="remediation.action_request",
+        label="latest action request",
+        created_at=created_at,
+    )
+    artifact = SimpleNamespace(
+        artifact_id="art_action_request",
+        status=TemporalArtifactStatus.COMPLETE,
+        metadata_json={
+            "actionKind": "execution.pause",
+            "riskTier": "medium",
+            "untrustedExtra": "excluded",
+        },
+        # SQLite commonly returns a naive timestamp. Projection comparison must
+        # remain safe while the API emits the original persisted value.
+        expires_at=(created_at + timedelta(hours=1)).replace(tzinfo=None),
+    )
+    session = AsyncMock()
+    session.execute.return_value = SimpleNamespace(
+        all=lambda: [(artifact_link, artifact)]
+    )
+    artifact_service = SimpleNamespace(
+        read=AsyncMock(
+            return_value=(
+                artifact,
+                json.dumps(
+                    {
+                        "actionKind": "execution.pause",
+                        "password": "must-not-reach-the-browser",
+                        "expectedState": "paused",
+                    }
+                ).encode("utf-8"),
+            )
+        )
+    )
+    link = SimpleNamespace(
+        remediation_workflow_id="mm:remediation-artifact",
+        remediation_run_id="run-remediation-artifact",
+    )
+
+    with patch.object(
+        executions_module,
+        "get_temporal_artifact_service",
+        return_value=artifact_service,
+    ):
+        await executions_module._attach_remediation_artifact_projection(
+            link,
+            session=session,
+            principal="operator-1",
+        )
+
+    assert link.lifecycle_artifacts == [
+        {
+            "artifactRef": "art_action_request",
+            "artifactType": "remediation.action_request",
+            "status": "complete",
+            "label": "latest action request",
+            "createdAt": created_at,
+            "expiresAt": artifact.expires_at,
+            "freshness": "current",
+            "bounded": True,
+            "metadata": {
+                "actionKind": "execution.pause",
+                "riskTier": "medium",
+            },
+        }
+    ]
+    assert link.latest_action_request["actionKind"] == "execution.pause"
+    assert link.latest_action_request["expectedState"] == "paused"
+    assert "must-not-reach-the-browser" not in json.dumps(link.latest_action_request)
+    artifact_service.read.assert_awaited_once_with(
+        artifact_id="art_action_request",
+        principal="operator-1",
+    )
+
+
+@pytest.mark.asyncio
+async def test_remediation_artifact_projection_keeps_metadata_when_body_is_unreadable() -> None:
+    created_at = datetime.now(UTC)
+    artifact_link = SimpleNamespace(
+        link_type="remediation.summary",
+        label="lifecycle summary",
+        created_at=created_at,
+    )
+    artifact = SimpleNamespace(
+        artifact_id="art_pending_summary",
+        status=TemporalArtifactStatus.PENDING_UPLOAD,
+        metadata_json={"phase": "verification"},
+        expires_at=None,
+    )
+    session = AsyncMock()
+    session.execute.return_value = SimpleNamespace(
+        all=lambda: [(artifact_link, artifact)]
+    )
+    artifact_service = SimpleNamespace(
+        read=AsyncMock(side_effect=TemporalArtifactStateError("artifact is not readable"))
+    )
+    link = SimpleNamespace(
+        remediation_workflow_id="mm:remediation-artifact",
+        remediation_run_id="run-remediation-artifact",
+    )
+
+    with patch.object(
+        executions_module,
+        "get_temporal_artifact_service",
+        return_value=artifact_service,
+    ):
+        await executions_module._attach_remediation_artifact_projection(
+            link,
+            session=session,
+            principal="operator-1",
+        )
+
+    assert link.lifecycle_artifacts == [
+        {
+            "artifactRef": "art_pending_summary",
+            "artifactType": "remediation.summary",
+            "status": "pending_upload",
+            "label": "lifecycle summary",
+            "createdAt": created_at,
+            "expiresAt": None,
+            "freshness": "durable",
+            "bounded": True,
+            "metadata": {"phase": "verification"},
+        }
+    ]
+    assert not hasattr(link, "lifecycle_summary")
 
 
 def _phase_11_manifest(**overrides: Any) -> StepExecutionManifestModel:
@@ -204,6 +526,57 @@ def _completed_attachment_artifact(
     )
 
 
+def test_verified_output_branch_projects_terminal_checkpoint_evidence() -> None:
+    result = _verified_output_branch({
+        "publish": {"status": "failed"},
+        "publishContext": {
+            "terminalPublication": {
+                "intent": "terminal_checkpoint",
+                "status": "pushed",
+                "branchName": "mm/run/workflow/cp-123/terminal-recovered-work",
+                "headSha": "abc123",
+                "baseBranch": "main",
+                "remoteVerified": True,
+            }
+        },
+    })
+    assert result == {
+        "name": "mm/run/workflow/cp-123/terminal-recovered-work",
+        "headSha": "abc123",
+        "baseBranch": "main",
+        "intent": "terminal_checkpoint",
+        "status": "pushed",
+    }
+
+
+def test_verified_output_branch_rejects_unverified_claim() -> None:
+    assert _verified_output_branch({
+        "publishContext": {
+            "terminalPublication": {
+                "status": "pushed",
+                "branchName": "mm/unverified",
+                "remoteVerified": False,
+            }
+        }
+    }) is None
+
+
+def test_verified_output_branch_coerces_unknown_intent() -> None:
+    result = _verified_output_branch({
+        "publishContext": {
+            "terminalPublication": {
+                "intent": "future_intent",
+                "status": "pushed",
+                "branchName": "mm/recovered",
+                "remoteVerified": True,
+            }
+        }
+    })
+
+    assert result is not None
+    assert result["intent"] == "normal"
+
+
 def test_mm_1129_derive_task_title_synthesizes_issue_title_from_instructions() -> None:
     title = _derive_task_title(
         {
@@ -235,6 +608,38 @@ def test_mm_1129_derive_task_title_bounds_instruction_fallback() -> None:
     assert title is not None
     assert len(title) == 150
     assert "token-999" not in title
+
+
+def test_derive_task_title_enriches_generated_preset_label() -> None:
+    title = _derive_task_title(
+        {
+            "title": "GitHub Issue Implement",
+            "taskTemplate": {"slug": "github-issue-implement"},
+            "inputs": {
+                "github_issue": {
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "number": 3143,
+                    "title": "Improve generated workflow titles",
+                }
+            },
+        }
+    )
+
+    assert title == (
+        "GitHub Issue Implement: MoonLadderStudios/MoonMind#3143 — "
+        "Improve generated workflow titles"
+    )
+
+
+def test_derive_task_title_preserves_explicit_instruction_only_title() -> None:
+    title = _derive_task_title(
+        {
+            "title": "My custom title",
+            "instructions": "Do the work",
+        }
+    )
+
+    assert title == "My custom title"
 
 
 def test_step_execution_detail_payload_exposes_phase_11_ref_only_evidence_summary() -> None:
@@ -284,11 +689,12 @@ def test_step_execution_detail_payload_exposes_typed_recovery_eligibility() -> N
         manifest_artifact_ref="artifact://manifest/implement-2",
     )["recoveryEligibility"]
 
-    assert eligible["eligible"] is True
-    assert eligible["defaultAction"] == "resume_from_checkpoint"
+    assert eligible["eligible"] is False
+    assert eligible["defaultAction"] == "full_retry"
     assert eligible["checkpointRef"] == "artifact://checkpoint/before"
-    assert eligible["requiredBoundary"] == "before_execution"
-    assert eligible["operatorGuidance"] == "resume"
+    assert eligible["checkpointBoundary"] == "before_execution"
+    assert eligible["operatorGuidance"] == "full_retry"
+    assert eligible["disabledReasonCode"] == "CHECKPOINT_CAPABILITY_SNAPSHOT_MISSING"
 
     ineligible = _step_execution_detail_payload(
         _phase_11_manifest(workspace={"stateCheckpointRef": "artifact://checkpoint/state"}),
@@ -297,7 +703,7 @@ def test_step_execution_detail_payload_exposes_typed_recovery_eligibility() -> N
 
     assert ineligible["eligible"] is False
     assert ineligible["defaultAction"] == "full_retry"
-    assert ineligible["disabledReasonCode"] == "missing_required_checkpoint_boundary"
+    assert ineligible["disabledReasonCode"] == "CHECKPOINT_ARTIFACT_INVALID"
     assert ineligible["evidence"][0]["status"] == "missing"
 
 
@@ -319,7 +725,7 @@ def test_step_execution_detail_payload_tolerates_nullable_manifest_sections() ->
     assert payload["recoveryEligibility"]["eligible"] is False
     assert (
         payload["recoveryEligibility"]["disabledReasonCode"]
-        == "missing_required_checkpoint_boundary"
+        == "CHECKPOINT_ARTIFACT_INVALID"
     )
 
 
@@ -383,7 +789,7 @@ def test_step_execution_detail_payload_exposes_environment_fix_guidance() -> Non
     }
 
     assert recovery["eligible"] is False
-    assert recovery["defaultAction"] == "environment_fix"
+    assert recovery["defaultAction"] == "fix_environment"
     assert recovery["disabledReasonCode"] == "environment_invalid"
     assert recovery["operatorGuidance"] == "fix_environment"
     assert diagnostic_kinds == {"provider_lease", "sidecar", "ghcr", "preflight"}
@@ -580,6 +986,30 @@ async def test_task_step_runtime_selection_is_normalized_and_resolved() -> None:
     }
 
 
+def test_task_step_runtime_preserves_omnigent_selection() -> None:
+    steps = _normalize_task_steps(
+        {
+            "steps": [
+                {
+                    "id": "implement",
+                    "runtime": {
+                        "mode": "omnigent",
+                        "omnigent": {
+                            "executionTargetRef": "omnigent-codex@1",
+                            "launchPolicyRef": "codex-on-demand@1",
+                        },
+                    },
+                }
+            ]
+        }
+    )
+
+    assert steps[0]["runtime"]["omnigent"] == {
+        "executionTargetRef": "omnigent-codex@1",
+        "launchPolicyRef": "codex-on-demand@1",
+    }
+
+
 @pytest.mark.asyncio
 async def test_step_runtime_inherits_task_profile_default_model() -> None:
     steps = _normalize_task_steps(
@@ -748,7 +1178,7 @@ async def test_goal_preset_submission_expands_before_planner(tmp_path) -> None:
                     "targetRuntime": "codex_cli",
                 },
                 session=session,
-                user_id=uuid4(),
+                user=SimpleNamespace(id=uuid4(), is_superuser=False),
             )
     finally:
         await engine.dispose()
@@ -763,6 +1193,171 @@ async def test_goal_preset_submission_expands_before_planner(tmp_path) -> None:
     assert task_payload["steps"][0]["title"] == "Load Jira preset brief"
     assert task_payload["steps"][1]["title"] == "Assess existing implementation state"
     assert task_payload["appliedStepTemplates"][0]["slug"] == "jira-implement"
+
+
+@pytest.mark.asyncio
+async def test_explicit_github_issue_template_expands_before_planner(tmp_path) -> None:
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/explicit_github_preset.db"
+    engine = create_async_engine(db_url, future=True)
+    session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    try:
+        async with session_factory() as session:
+            task_payload = {
+                "title": "Implement GitHub issue",
+                "instructions": (
+                    "Implement GitHub issue MoonLadderStudios/MoonMind#3143."
+                ),
+                "taskTemplate": {
+                    "slug": "github-issue-implement",
+                    "scope": "global",
+                },
+                "inputs": {
+                    "github_issue": {
+                        "repository": "MoonLadderStudios/MoonMind",
+                        "number": 3143,
+                    },
+                    "run_verify": True,
+                },
+            }
+            await _expand_goal_preset_for_workflow_submission(
+                task_payload=task_payload,
+                request_payload={
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "targetRuntime": "codex_cli",
+                },
+                session=session,
+                user=SimpleNamespace(id=uuid4(), is_superuser=False),
+            )
+    finally:
+        await engine.dispose()
+
+    assert len(task_payload["steps"]) == 9
+    assert task_payload["steps"][0]["tool"]["id"] == (
+        "github.load_issue_preset_brief"
+    )
+    assert task_payload["steps"][-1]["tool"]["id"] == (
+        "github.update_issue_status"
+    )
+    assert task_payload["appliedStepTemplates"][0]["slug"] == (
+        "github-issue-implement"
+    )
+    assert "Closes MoonLadderStudios/MoonMind#3143" in task_payload["steps"][-2][
+        "instructions"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_explicit_template_rejects_another_users_personal_scope() -> None:
+    owner_id = uuid4()
+    caller_id = uuid4()
+    task_payload = {
+        "taskTemplate": {
+            "slug": "private-preset",
+            "scope": "personal",
+            "scopeRef": str(owner_id),
+        }
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _expand_goal_preset_for_workflow_submission(
+            task_payload=task_payload,
+            request_payload={},
+            session=object(),
+            user=SimpleNamespace(id=caller_id, is_superuser=False),
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail["code"] == "template_scope_forbidden"
+
+
+@pytest.mark.asyncio
+async def test_explicit_template_maps_missing_preset_to_not_found(tmp_path) -> None:
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/missing_explicit_preset.db"
+    engine = create_async_engine(db_url, future=True)
+    session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    try:
+        async with session_factory() as session:
+            with pytest.raises(HTTPException) as exc_info:
+                await _expand_goal_preset_for_workflow_submission(
+                    task_payload={
+                        "taskTemplate": {
+                            "slug": "missing-explicit-preset",
+                            "scope": "global",
+                        }
+                    },
+                    request_payload={},
+                    session=session,
+                    user=SimpleNamespace(id=uuid4(), is_superuser=False),
+                )
+            with pytest.raises(HTTPException) as validation_exc_info:
+                await _expand_goal_preset_for_workflow_submission(
+                    task_payload={
+                        "taskTemplate": {
+                            "slug": "github-issue-implement",
+                            "scope": "global",
+                        },
+                        "inputs": {},
+                    },
+                    request_payload={},
+                    session=session,
+                    user=SimpleNamespace(id=uuid4(), is_superuser=False),
+                )
+    finally:
+        await engine.dispose()
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail["code"] == "template_not_found"
+    assert validation_exc_info.value.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_explicit_template_preserves_branch_and_checkpoint_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class FakePresetCatalogService:
+        def __init__(self, session: Any) -> None:
+            self.session = session
+
+        async def expand_template(self, **kwargs: Any) -> dict[str, Any]:
+            captured.update(kwargs)
+            return {
+                "steps": [{"id": "step-1", "title": "Run", "instructions": "Run"}],
+                "appliedTemplate": {
+                    "slug": kwargs["slug"],
+                    "inputs": kwargs["inputs"],
+                    "stepIds": ["step-1"],
+                    "appliedAt": "2026-07-12T00:00:00+00:00",
+                },
+                "checkpointBranching": {"enabled": True},
+            }
+
+    monkeypatch.setattr(
+        "api_service.services.presets.catalog.PresetCatalogService",
+        FakePresetCatalogService,
+    )
+    task_payload = {
+        "taskTemplate": {"slug": "branch-aware", "scope": "global"},
+        "git": {"branch": "release/next"},
+        "checkpointBranching": {"enabled": False},
+    }
+
+    await _expand_goal_preset_for_workflow_submission(
+        task_payload=task_payload,
+        request_payload={"repository": "MoonLadderStudios/MoonMind"},
+        session=object(),
+        user=SimpleNamespace(id=uuid4(), is_superuser=False),
+    )
+
+    assert captured["context"]["branch"] == "release/next"
+    assert task_payload["checkpointBranching"] == {"enabled": False}
 
 
 @pytest.mark.asyncio
@@ -785,9 +1380,16 @@ async def test_goal_preset_submission_uses_default_runtime_for_composite_context
             }
             await _expand_goal_preset_for_workflow_submission(
                 task_payload=task_payload,
-                request_payload={"repository": "MoonLadderStudios/MoonMind"},
+                request_payload={
+                    "repository": {
+                        "provider": "git",
+                        "connectionRef": "repository-connection:git-default",
+                        "repository": {"name": "MoonLadderStudios/MoonMind"},
+                        "branch": {"name": "main"},
+                    }
+                },
                 session=session,
-                user_id=uuid4(),
+                user=SimpleNamespace(id=uuid4(), is_superuser=False),
             )
     finally:
         await engine.dispose()
@@ -861,7 +1463,7 @@ async def test_goal_preset_submission_carries_expanded_checkpoint_branching(
         task_payload=task_payload,
         request_payload={"repository": "MoonLadderStudios/MoonMind"},
         session=object(),
-        user_id=uuid4(),
+        user=SimpleNamespace(id=uuid4(), is_superuser=False),
     )
 
     assert task_payload["checkpointBranching"]["enabled"] is True
@@ -1290,6 +1892,20 @@ def _override_temporal_client(app: FastAPI) -> AsyncMock:
     app.dependency_overrides[get_temporal_client] = lambda: client
     return client
 
+@pytest.fixture(autouse=True)
+def _reset_default_runtime_for_legacy_tests(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Keep legacy hermetic unit tests on codex_cli while the product default is omnigent.
+
+    The feat/omnigent branch changes the product default to ``omnigent``, which
+    requires a real DB for plan compilation.  Legacy tests that do not set an
+    explicit targetRuntime should remain on the previous hermetic default so
+    they do not require DB mocking.
+    """
+
+    monkeypatch.setattr(settings.workflow, "default_runtime", "codex_cli")
+    yield
+
+
 @pytest.fixture
 def client() -> Iterator[tuple[TestClient, AsyncMock, SimpleNamespace]]:
     app = FastAPI()
@@ -1363,7 +1979,7 @@ def test_list_executions_passes_temporal_filters_for_admin() -> None:
 def test_create_task_shaped_execution_keeps_integration_as_metadata(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
-    test_client, service, _user = client
+    test_client, service, user = client
     service.create_execution.return_value = _build_execution_record()
 
     response = test_client.post(
@@ -3688,6 +4304,66 @@ def test_create_task_shaped_execution_rejects_explicit_skill_step_without_skill_
     service.create_execution.assert_not_awaited()
 
 
+def test_create_execution_lifts_context_retrieval_authoring(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MoonMind#3514: payload-level rag / followUpRetrieval reach initial parameters."""
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    async def _identity_validate_skill_step_inputs(*, initial_parameters, **_kwargs):
+        return SimpleNamespace(
+            valid=True,
+            parameters=initial_parameters,
+            error_dicts=lambda: [],
+        )
+
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.validate_skill_step_inputs",
+        _identity_validate_skill_step_inputs,
+    )
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "rag": {"collections": ["docs"], "allowStale": True},
+                "followUpRetrieval": {
+                    "enabled": True,
+                    "collections": ["repo", "docs"],
+                    "topK": 6,
+                },
+                "workflow": {
+                    "instructions": "Run with context retrieval authoring.",
+                    "steps": [
+                        {
+                            "id": "step-1",
+                            "title": "Step",
+                            "type": "skill",
+                            "skill": {
+                                "id": "noop",
+                                "inputs": {},
+                                "inputContractDigest": "sha256:saved",
+                            },
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    initial_parameters = service.create_execution.await_args.kwargs["initial_parameters"]
+    assert initial_parameters["rag"] == {"collections": ["docs"], "allowStale": True}
+    assert initial_parameters["followUpRetrieval"] == {
+        "enabled": True,
+        "collections": ["repo", "docs"],
+        "topK": 6,
+    }
+
+
 def test_create_task_shaped_execution_normalizes_skill_inputs(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
     monkeypatch: pytest.MonkeyPatch,
@@ -3960,6 +4636,528 @@ def test_create_task_shaped_execution_rejects_unsupported_runtime_with_attachmen
     service.create_execution.assert_not_awaited()
 
 
+def test_create_task_shaped_execution_rejects_missing_default_provider_profile(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+    db_session = SimpleNamespace(get=AsyncMock(return_value=None))
+    test_client.app.dependency_overrides[get_async_session] = lambda: db_session
+    snapshot = {
+        "profileId": "default",
+        "version": 1,
+        "digest": "sha256:" + "1" * 64,
+        "providerProfileRef": "codex-oauth-profile",
+        "executionProfileRef": "on-demand-docker",
+        "launchPolicyRef": "codex-on-demand@1",
+        "agentId": "codex-native-ui",
+        "document": {"model": {}, "rag": {}, "capture": {}, "workspace": {}},
+    }
+
+    with patch(
+        "api_service.api.routers.executions.resolve_default_agent_profile_snapshot",
+        new=AsyncMock(return_value=snapshot),
+    ):
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "workflow",
+                "payload": {
+                    "targetRuntime": "omnigent",
+                    "omnigent": {
+                        "executionTargetRef": "on-demand-docker",
+                        "launchPolicyRef": "codex-on-demand@1",
+                    },
+                    "workflow": {
+                        "instructions": "Run through Omnigent.",
+                        "runtime": {
+                            "mode": "omnigent",
+                            "executionProfileRef": "codex-oauth-profile",
+                        },
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 422, response.text
+    assert "Selected Provider Profile" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
+def test_create_execution_keeps_resolved_agent_profile_out_of_authored_omnigent(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+    provider_profile = SimpleNamespace(
+        profile_id="codex-openai-oauth", provider_id="openai"
+    )
+    db_session = SimpleNamespace(
+        get=AsyncMock(side_effect=[provider_profile, None]),
+        commit=AsyncMock(),
+        refresh=AsyncMock(),
+    )
+    test_client.app.dependency_overrides[get_async_session] = lambda: db_session
+    snapshot = {
+        "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
+        "profileId": "omnigent-bootstrap-default",
+        "version": 1,
+        "digest": "sha256:" + "a" * 64,
+        "providerProfileRef": "codex-openai-oauth",
+        "executionProfileRef": "omnigent-codex@1",
+        "launchPolicyRef": "codex-on-demand@1",
+        "agentId": "upstream-codex-agent",
+        "document": {
+            "model": {"settings": {}},
+            "rag": {},
+            "capture": {"stream": True},
+            "workspace": {"mutation": "allowed"},
+        },
+    }
+
+    profile_resolver = AsyncMock(return_value=snapshot)
+    plan_binding = OmnigentExecutionPlanBinding(
+        planRef="omnigent-execution-plan:sha256:" + "b" * 64,
+        planDigest="sha256:" + "b" * 64,
+        planArtifactRef="art_plan_1",
+        taskInputSnapshotRef="art_task_1",
+        taskInputSnapshotDigest="sha256:" + "c" * 64,
+    )
+    compiled_plan = SimpleNamespace(
+        binding=plan_binding,
+        artifact_refs=("art_profile_1", "art_skills_1", "art_plan_1"),
+        resolved_skillset_ref="art_skills_1",
+    )
+    with (
+        patch(
+            "api_service.api.routers.executions.resolve_agent_profile_snapshot",
+            new=profile_resolver,
+        ),
+        patch(
+            "api_service.services.omnigent_execution_plan_service.persist_json_artifact",
+            new=AsyncMock(return_value=("art_task_1", "sha256:" + "c" * 64)),
+        ),
+        patch(
+            "api_service.services.omnigent_execution_plan_service.compile_and_persist_execution_plan",
+            new=AsyncMock(return_value=compiled_plan),
+        ),
+        patch(
+            "api_service.api.routers.executions.get_temporal_artifact_service",
+            return_value=SimpleNamespace(),
+        ),
+    ):
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "workflow",
+                "payload": {
+                    "targetRuntime": "omnigent",
+                    "agentProfile": {
+                        "profileId": "omnigent-bootstrap-default",
+                        "providerProfileRef": "codex-openai-oauth",
+                    },
+                    "omnigent": {
+                        "executionTargetRef": "omnigent-codex@1",
+                        "launchPolicyRef": "codex-on-demand@1",
+                    },
+                    "workflow": {
+                        "instructions": "Run the selected agent profile.",
+                        "runtime": {"mode": "omnigent"},
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 201, response.text
+    assert profile_resolver.await_args.kwargs["selection"] == {
+        "profileId": "omnigent-bootstrap-default",
+        "providerProfileRef": "codex-openai-oauth",
+        "launchPolicyRef": "codex-on-demand@1",
+    }
+    initial_parameters = service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["agentProfileSnapshot"] == snapshot
+    assert initial_parameters["profileId"] == "codex-openai-oauth"
+    assert initial_parameters["omnigentExecutionPlan"] == plan_binding.model_dump(
+        mode="json", by_alias=True, exclude_none=True
+    )
+    assert initial_parameters["omnigent"] == {
+        "executionTargetRef": "omnigent-codex@1",
+        "launchPolicyRef": "codex-on-demand@1",
+    }
+    assert "agentProfileRef" not in initial_parameters["omnigent"]
+    assert "executionProfileRef" not in initial_parameters["omnigent"]
+    assert "agent" not in initial_parameters["omnigent"]
+
+
+def test_api_execution_compiles_opencode_plan_before_temporal_schedule(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, temporal_service, _user = client
+    events: list[str] = []
+
+    async def create_execution(**_kwargs):
+        events.append("temporal_schedule")
+        return _build_execution_record()
+
+    temporal_service.create_execution.side_effect = create_execution
+    provider_profile = SimpleNamespace(
+        profile_id="opencode-go-default", provider_id="opencode-go"
+    )
+    db_session = SimpleNamespace(
+        get=AsyncMock(side_effect=[provider_profile, None]),
+        commit=AsyncMock(),
+        refresh=AsyncMock(),
+    )
+    test_client.app.dependency_overrides[get_async_session] = lambda: db_session
+    snapshot = {
+        "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
+        "profileId": "opencode-default",
+        "version": 1,
+        "digest": "sha256:" + "a" * 64,
+        "providerProfileRef": "opencode-go-default",
+        "executionProfileRef": "omnigent-opencode@1",
+        "allowedLaunchPolicyRefs": ["opencode-on-demand@1"],
+        "launchPolicyRef": "opencode-on-demand@1",
+        "agentId": "opencode-agent",
+        "policyRef": "omnigent-policy:sha256:" + "d" * 64,
+        "document": {
+            "model": {"model": "opencode/model", "settings": {}},
+            "rag": {},
+            "capture": {"stream": True},
+            "workspace": {"mutation": "allowed"},
+            "harness": "opencode-native",
+        },
+    }
+    plan_binding = OmnigentExecutionPlanBinding(
+        planRef="omnigent-execution-plan:sha256:" + "b" * 64,
+        planDigest="sha256:" + "b" * 64,
+        planArtifactRef="art_opencode_plan",
+        taskInputSnapshotRef="art_opencode_task",
+        taskInputSnapshotDigest="sha256:" + "c" * 64,
+    )
+
+    async def persist_snapshot(**_kwargs):
+        events.append("task_snapshot")
+        return "art_opencode_task", "sha256:" + "c" * 64
+
+    async def compile_plan(**_kwargs):
+        events.append("execution_plan")
+        return SimpleNamespace(
+            binding=plan_binding,
+            artifact_refs=("art_profile", "art_skills", "art_opencode_plan"),
+            resolved_skillset_ref="art_skills",
+        )
+
+    with (
+        patch(
+            "api_service.api.routers.executions.resolve_agent_profile_snapshot",
+            new=AsyncMock(return_value=snapshot),
+        ),
+        patch(
+            "api_service.services.omnigent_execution_plan_service.persist_json_artifact",
+            new=persist_snapshot,
+        ),
+        patch(
+            "api_service.services.omnigent_execution_plan_service.compile_and_persist_execution_plan",
+            new=compile_plan,
+        ),
+        patch(
+            "api_service.api.routers.executions.get_temporal_artifact_service",
+            return_value=SimpleNamespace(),
+        ),
+    ):
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "workflow",
+                "payload": {
+                    "targetRuntime": "omnigent",
+                    "agentProfile": {
+                        "profileId": "opencode-default",
+                        "providerProfileRef": "opencode-go-default",
+                    },
+                    "omnigent": {
+                        "executionTargetRef": "omnigent-opencode@1",
+                        "launchPolicyRef": "opencode-on-demand@1",
+                    },
+                    "workflow": {
+                        "instructions": "Prove OpenCode through the product path.",
+                        "runtime": {"mode": "omnigent"},
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 201, response.text
+    assert events == ["task_snapshot", "execution_plan", "temporal_schedule"]
+    initial_parameters = temporal_service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["omnigentExecutionPlan"]["planRef"] == (
+        plan_binding.plan_ref
+    )
+
+
+def test_api_idempotent_omnigent_retry_reuses_recorded_plan_before_resolution(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, temporal_service, _user = client
+    existing = _build_execution_record()
+    existing.parameters = {
+        "targetRuntime": "omnigent",
+        "workflow": {"instructions": "Use the first admitted plan."},
+        "omnigentExecutionPlan": {
+            "planRef": "omnigent-execution-plan:sha256:" + "d" * 64,
+            "planDigest": "sha256:" + "d" * 64,
+            "planArtifactRef": "art_existing_plan",
+            "taskInputSnapshotRef": "art_existing_task",
+            "taskInputSnapshotDigest": "sha256:" + "e" * 64,
+        },
+    }
+    existing.memo.update(
+        {
+            "omnigent_execution_plan_ref": existing.parameters[
+                "omnigentExecutionPlan"
+            ]["planRef"],
+            "omnigent_execution_plan_digest": existing.parameters[
+                "omnigentExecutionPlan"
+            ]["planDigest"],
+            "omnigent_execution_plan_artifact_ref": "art_existing_plan",
+        }
+    )
+    db_session = SimpleNamespace(get=AsyncMock(return_value=existing))
+    test_client.app.dependency_overrides[get_async_session] = lambda: db_session
+    profile_resolver = AsyncMock()
+
+    with patch(
+        "api_service.api.routers.executions.resolve_agent_profile_snapshot",
+        new=profile_resolver,
+    ):
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "workflow",
+                "payload": {
+                    "idempotencyKey": "opencode-retry-1",
+                    "targetRuntime": "omnigent",
+                    "agentProfile": {
+                        "profileId": "opencode-default",
+                        "providerProfileRef": "opencode-go-default",
+                    },
+                    "workflow": {
+                        "instructions": "Use the first admitted plan.",
+                        "runtime": {"mode": "omnigent"},
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["omnigentExecutionPlan"]["planRef"] == (
+        existing.parameters["omnigentExecutionPlan"]["planRef"]
+    )
+    profile_resolver.assert_not_awaited()
+    temporal_service.create_execution.assert_not_awaited()
+
+
+def test_admitted_omnigent_execution_rejects_in_place_input_reinterpretation(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_client, temporal_service, user = client
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    record = _build_execution_record(owner_id=str(user.id))
+    record.parameters = {
+        "targetRuntime": "omnigent",
+        "workflow": {"instructions": "Use the admitted authority."},
+        "omnigentExecutionPlan": {
+            "planRef": "omnigent-execution-plan:sha256:" + "d" * 64,
+            "planDigest": "sha256:" + "d" * 64,
+            "planArtifactRef": "art-existing-plan",
+            "taskInputSnapshotRef": "art-existing-task",
+            "taskInputSnapshotDigest": "sha256:" + "e" * 64,
+        },
+    }
+    temporal_service.describe_execution.return_value = record
+
+    response = test_client.post(
+        "/api/executions/mm:wf-1/update",
+        json={
+            "updateName": "UpdateInputs",
+            "parametersPatch": {
+                "workflow": {"instructions": "Reinterpret current defaults."}
+            },
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == (
+        "omnigent_execution_plan_replacement_required"
+    )
+    temporal_service.update_execution.assert_not_awaited()
+
+
+def test_create_execution_rejects_agent_profile_execution_target_mismatch(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    test_client.app.dependency_overrides[get_async_session] = _empty_session_override
+    snapshot = {
+        "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
+        "profileId": "omnigent-bootstrap-default",
+        "version": 1,
+        "digest": "sha256:" + "a" * 64,
+        "providerProfileRef": "codex-openai-oauth",
+        "executionProfileRef": "omnigent-codex@1",
+        "launchPolicyRef": "codex-on-demand@1",
+        "agentId": "upstream-codex-agent",
+        "document": {
+            "model": {"settings": {}},
+            "rag": {},
+            "capture": {"stream": True},
+            "workspace": {"mutation": "allowed"},
+        },
+    }
+
+    with patch(
+        "api_service.api.routers.executions.resolve_agent_profile_snapshot",
+        new=AsyncMock(return_value=snapshot),
+    ):
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "workflow",
+                "payload": {
+                    "targetRuntime": "omnigent",
+                    "agentProfile": {
+                        "profileId": "omnigent-bootstrap-default",
+                        "providerProfileRef": "codex-openai-oauth",
+                    },
+                    "omnigent": {
+                        "executionTargetRef": "tampered-execution-profile",
+                        "launchPolicyRef": "codex-on-demand@1",
+                    },
+                    "workflow": {
+                        "instructions": "Run the selected agent profile.",
+                        "runtime": {"mode": "omnigent"},
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["message"] == (
+        "omnigent.executionTargetRef must match the selected Agent Profile "
+        "executionProfileRef."
+    )
+    service.create_execution.assert_not_awaited()
+
+
+def test_create_execution_accepts_generic_v2_profile_identity_as_target_ref(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    """Generic v2 targets advertise ``profileId@version``, not the realizer."""
+
+    test_client, temporal_service, _user = client
+
+    async def create_execution(**_kwargs):
+        return _build_execution_record()
+
+    temporal_service.create_execution.side_effect = create_execution
+    provider_profile = SimpleNamespace(
+        profile_id="opencode-go-default", provider_id="opencode-go"
+    )
+    db_session = SimpleNamespace(
+        get=AsyncMock(side_effect=[provider_profile, None]),
+        commit=AsyncMock(),
+        refresh=AsyncMock(),
+    )
+    test_client.app.dependency_overrides[get_async_session] = lambda: db_session
+    snapshot = {
+        "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
+        "profileId": "omnigent-opencode-default",
+        "version": 2,
+        "digest": "sha256:" + "a" * 64,
+        "providerProfileRef": "opencode-go-default",
+        # The compiled plan carries the host realizer ref, which is distinct
+        # from the readiness target identity the UI authors.
+        "executionProfileRef": "generic-omnigent-host@1",
+        "allowedLaunchPolicyRefs": ["omnigent-on-demand@1"],
+        "launchPolicyRef": "omnigent-on-demand@1",
+        "agentId": "opencode-native-ui",
+        "policyRef": "omnigent-on-demand@1",
+        "document": {
+            "model": {"settings": {}},
+            "rag": {},
+            "capture": {"stream": True},
+            "workspace": {"mutation": "allowed"},
+        },
+    }
+    plan_binding = OmnigentExecutionPlanBinding(
+        planRef="omnigent-execution-plan:sha256:" + "b" * 64,
+        planDigest="sha256:" + "b" * 64,
+        planArtifactRef="art_plan",
+        taskInputSnapshotRef="art_task",
+        taskInputSnapshotDigest="sha256:" + "c" * 64,
+    )
+
+    with (
+        patch(
+            "api_service.api.routers.executions.resolve_agent_profile_snapshot",
+            new=AsyncMock(return_value=snapshot),
+        ),
+        patch(
+            "api_service.services.omnigent_execution_plan_service.persist_json_artifact",
+            new=AsyncMock(return_value=("art_task", "sha256:" + "c" * 64)),
+        ),
+        patch(
+            "api_service.services.omnigent_execution_plan_service.compile_and_persist_execution_plan",
+            new=AsyncMock(
+                return_value=SimpleNamespace(
+                    binding=plan_binding,
+                    artifact_refs=("art_profile", "art_skills", "art_plan"),
+                    resolved_skillset_ref="art_skills",
+                )
+            ),
+        ),
+        patch(
+            "api_service.api.routers.executions.get_temporal_artifact_service",
+            return_value=SimpleNamespace(),
+        ),
+    ):
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "workflow",
+                "payload": {
+                    "targetRuntime": "omnigent",
+                    "agentProfile": {
+                        "profileId": "omnigent-opencode-default",
+                        "version": 2,
+                        "digest": "sha256:" + "a" * 64,
+                        "providerProfileRef": "opencode-go-default",
+                        "launchPolicyRef": "omnigent-on-demand@1",
+                    },
+                    "omnigent": {
+                        "executionTargetRef": (
+                            "omnigent-opencode-default@2"
+                        ),
+                        "launchPolicyRef": "omnigent-on-demand@1",
+                    },
+                    "workflow": {
+                        "instructions": "Run the selected agent profile.",
+                        "runtime": {"mode": "omnigent"},
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 201, response.text
+    temporal_service.create_execution.assert_awaited_once()
+
+
 def test_create_task_shaped_execution_rejects_unsupported_step_runtime(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -4000,27 +5198,6 @@ def test_create_task_shaped_execution_fetches_unique_attachments_in_one_query(
     test_client, service, _user = client
     monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
     service.create_execution.return_value = _build_execution_record()
-    execute = AsyncMock(
-        return_value=_ExecuteResult(
-            [
-                SimpleNamespace(
-                    artifact_id="art_01OBJECTIVEINPUT00000000",
-                    status=TemporalArtifactStatus.COMPLETE,
-                    content_type="image/png",
-                    size_bytes=10,
-                ),
-                SimpleNamespace(
-                    artifact_id="art_01STEPINPUT000000000000",
-                    status=TemporalArtifactStatus.COMPLETE,
-                    content_type="image/png",
-                    size_bytes=20,
-                ),
-            ]
-        )
-    )
-    test_client.app.dependency_overrides[get_async_session] = lambda: SimpleNamespace(
-        execute=execute
-    )
     execute = AsyncMock(
         return_value=_ExecuteResult(
             [
@@ -4863,6 +6040,61 @@ def test_create_remediation_convenience_route_expands_to_task_create_contract(
     assert kwargs["initial_parameters"]["publishMode"] == "pr"
     assert kwargs["initial_parameters"]["workflow"]["publish"]["mode"] == "pr"
 
+
+def test_create_remediation_preserves_authored_omnigent_plan_selection(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, _service, user = client
+    create_from_workflow = AsyncMock(
+        return_value=_serialize_execution(
+            _build_execution_record(owner_id=str(user.id)), user=user
+        )
+    )
+
+    with patch.object(
+        executions_module,
+        "_create_execution_from_workflow_request",
+        new=create_from_workflow,
+    ):
+        response = test_client.post(
+            "/api/executions/mm:target-workflow/remediation",
+            json={
+                "repository": "MoonLadderStudios/MoonMind",
+                "instructions": "Repair through the selected OpenCode authority.",
+                "targetRuntime": "omnigent",
+                "runtime": {"mode": "omnigent"},
+                "agentProfile": {
+                    "profileId": "opencode-default",
+                    "providerProfileRef": "opencode-go-default",
+                },
+                "omnigent": {
+                    "executionTargetRef": "omnigent-opencode@1",
+                    "launchPolicyRef": "opencode-on-demand@1",
+                },
+                "remediation": {
+                    "mode": "snapshot",
+                    "authorityMode": "observe_only",
+                    "trigger": {"type": "manual"},
+                },
+            },
+        )
+
+    assert response.status_code == 201, response.text
+    request = create_from_workflow.await_args.kwargs["request"]
+    assert request.payload["targetRuntime"] == "omnigent"
+    assert request.payload["agentProfile"] == {
+        "profileId": "opencode-default",
+        "providerProfileRef": "opencode-go-default",
+    }
+    assert request.payload["omnigent"] == {
+        "executionTargetRef": "omnigent-opencode@1",
+        "launchPolicyRef": "opencode-on-demand@1",
+    }
+    assert request.payload["workflow"]["remediation"]["target"] == {
+        "workflowId": "mm:target-workflow"
+    }
+
+
 def test_create_remediation_convenience_route_uses_top_level_overrides(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -4960,16 +6192,29 @@ def test_list_remediations_for_target_returns_compact_inbound_links(
             active_lock_holder="mm:remediation-1",
             latest_action_summary="Proposed session interrupt",
             outcome=None,
+            verification_outcome=None,
             context_artifact_ref="art_context",
             created_at=now,
             updated_at=now,
         )
     ]
 
-    response = test_client.get(
-        "/api/executions/mm:target-workflow/remediations",
-        params={"direction": "inbound"},
-    )
+    with (
+        patch.object(
+            executions_module,
+            "_attach_remediation_capability_projection",
+            new=AsyncMock(),
+        ),
+        patch.object(
+            executions_module,
+            "remediation_action_capability_matrix",
+            return_value=(),
+        ),
+    ):
+        response = test_client.get(
+            "/api/executions/mm:target-workflow/remediations",
+            params={"direction": "inbound"},
+        )
 
     assert response.status_code == 200
     assert response.json() == {
@@ -4986,11 +6231,14 @@ def test_list_remediations_for_target_returns_compact_inbound_links(
                 "activeLockScope": "target_execution",
                 "activeLockHolder": "mm:remediation-1",
                 "latestActionSummary": "Proposed session interrupt",
+                "deliveryStatus": None,
+                "verificationOutcome": None,
                 "resolution": None,
                 "contextArtifactRef": "art_context",
                 "selectedSteps": None,
                 "currentTargetState": None,
-                "allowedActions": None,
+                "allowedActions": [],
+                "actionCapabilities": [],
                 "evidenceDegraded": None,
                 "unavailableEvidenceClasses": None,
                 "liveObservation": None,
@@ -5036,17 +6284,31 @@ def test_list_remediations_for_remediation_returns_compact_outbound_links(
             active_lock_scope=None,
             active_lock_holder=None,
             latest_action_summary=None,
-            outcome="resolved",
+            outcome="applied",
+            verification_outcome="verified_resolved",
+            resolution="resolved",
             context_artifact_ref=None,
             created_at=now,
             updated_at=now,
         )
     ]
 
-    response = test_client.get(
-        "/api/executions/mm:remediation-1/remediations",
-        params={"direction": "outbound"},
-    )
+    with (
+        patch.object(
+            executions_module,
+            "_attach_remediation_capability_projection",
+            new=AsyncMock(),
+        ),
+        patch.object(
+            executions_module,
+            "remediation_action_capability_matrix",
+            return_value=(),
+        ),
+    ):
+        response = test_client.get(
+            "/api/executions/mm:remediation-1/remediations",
+            params={"direction": "outbound"},
+        )
 
     assert response.status_code == 200
     assert response.json()["direction"] == "outbound"
@@ -5061,11 +6323,14 @@ def test_list_remediations_for_remediation_returns_compact_outbound_links(
         "activeLockScope": None,
         "activeLockHolder": None,
         "latestActionSummary": None,
+        "deliveryStatus": "applied",
+        "verificationOutcome": "verified_resolved",
         "resolution": "resolved",
         "contextArtifactRef": None,
         "selectedSteps": None,
         "currentTargetState": None,
-        "allowedActions": None,
+        "allowedActions": [],
+        "actionCapabilities": [],
         "evidenceDegraded": None,
         "unavailableEvidenceClasses": None,
         "liveObservation": None,
@@ -5099,6 +6364,7 @@ def test_list_remediations_for_remediation_returns_rich_operator_metadata(
             active_lock_holder="mm:remediation-rich",
             latest_action_summary="Proposed session interrupt",
             outcome="precondition_failed",
+            verification_outcome="still_failed",
             context_artifact_ref="art_context_rich",
             selected_steps=["collect-context", "repair-runtime"],
             current_target_state="awaiting_external",
@@ -5136,23 +6402,111 @@ def test_list_remediations_for_remediation_returns_rich_operator_metadata(
                     "branchTurnId": "cbt-rich",
                     "checkpointRef": "artifact://checkpoints/rich",
                     "contextArtifactRef": "art_context_rich",
+                    "loopId": "loop-rich",
+                    "rootCheckpointRef": "artifact://workspace/C0",
+                    "rootWorkspaceDigest": "sha256:root",
+                    "headCheckpointRef": "artifact://workspace/C2",
+                    "headWorkspaceDigest": "sha256:head",
+                    "headStepExecutionId": "step:2",
+                    "headAttemptOrdinal": 2,
+                    "headVersion": 3,
+                    "headStatus": "verified_incomplete",
+                    "latestVerificationRef": "artifact://verification/V2",
+                    "latestVerificationVerdict": "ADDITIONAL_WORK_NEEDED",
+                    "remainingWorkRef": "artifact://verification/V2#remainingWork",
+                    "nextActionBaseline": {
+                        "checkpointRef": "artifact://workspace/C2",
+                        "workspaceDigest": "sha256:head",
+                        "headVersion": 3,
+                    },
+                    "turns": [
+                        {
+                            "branchTurnId": "cbt-rich",
+                            "status": "running",
+                            "runtimeAgentRunId": "agent-run-rich",
+                            "providerSessionId": "provider-session-rich",
+                            "instructionRef": "artifact://instructions/rich",
+                            "instructionDigest": "sha256:instructions-rich",
+                            "sourceCheckpointRef": "artifact://workspace/C0",
+                            "startedAt": "2026-08-12T00:00:01Z",
+                            "createdAt": "2026-08-12T00:00:00Z",
+                            "updatedAt": "2026-08-12T00:00:01Z",
+                            "outputArtifacts": {
+                                "output.branch_turn.result.json": "artifact://output/rich"
+                            },
+                            "comparisonArtifacts": {
+                                "comparison.branch_turn.diff.json": "artifact://comparison/rich"
+                            },
+                        }
+                    ],
                 }
             ],
+            authored_contract={
+                "instructions": "Repair the pinned target.",
+                "runtime": {"mode": "omnigent"},
+            },
+            selected_step_evidence=[{"logicalStepId": "collect-context"}],
+            context_generated_at="2026-08-12T00:00:00Z",
+            context_evidence_availability=[
+                {"class": "step_ledger", "status": "available", "bounded": True}
+            ],
+            context_boundedness={"rawLogBodiesIncluded": False},
+            diagnosis_hints=["Target session stopped responding."],
+            lifecycle_artifacts=[
+                {
+                    "artifactRef": "art_summary",
+                    "artifactType": "remediation.summary",
+                    "status": "complete",
+                    "freshness": "durable",
+                }
+            ],
+            latest_action_request={"actionKind": "session.interrupt"},
+            latest_action_result={"status": "precondition_failed"},
+            lifecycle_summary={"resolution": "operator_required"},
+            operator_controls={
+                "canCancel": True,
+                "canTakeOver": True,
+                "canResume": False,
+                "paused": False,
+            },
             created_at=now,
             updated_at=now,
         )
     ]
 
-    response = test_client.get(
-        "/api/executions/mm:remediation-rich/remediations",
-        params={"direction": "outbound"},
-    )
+    with (
+        patch.object(
+            executions_module,
+            "_attach_remediation_capability_projection",
+            new=AsyncMock(),
+        ),
+        patch.object(
+            executions_module,
+            "remediation_action_capability_matrix",
+            return_value=(),
+        ),
+    ):
+        response = test_client.get(
+            "/api/executions/mm:remediation-rich/remediations",
+            params={"direction": "outbound"},
+        )
 
     assert response.status_code == 200
     item = response.json()["items"][0]
     assert item["selectedSteps"] == ["collect-context", "repair-runtime"]
+    assert item["verificationOutcome"] == "still_failed"
+    assert item["authoredContract"]["runtime"] == {"mode": "omnigent"}
+    assert item["selectedStepEvidence"] == [{"logicalStepId": "collect-context"}]
+    assert item["contextEvidenceAvailability"][0]["bounded"] is True
+    assert item["diagnosisHints"] == ["Target session stopped responding."]
+    assert item["lifecycleArtifacts"][0]["artifactType"] == "remediation.summary"
+    assert item["latestActionRequest"] == {"actionKind": "session.interrupt"}
+    assert item["latestActionResult"] == {"status": "precondition_failed"}
+    assert item["lifecycleSummary"] == {"resolution": "operator_required"}
+    assert item["operatorControls"]["canTakeOver"] is True
     assert item["currentTargetState"] == "awaiting_external"
-    assert item["allowedActions"] == ["inspect_context", "request_approval"]
+    assert item["allowedActions"] == []
+    assert item["actionCapabilities"] == []
     assert item["evidenceDegraded"] is True
     assert item["unavailableEvidenceClasses"] == [
         "runtime_stderr",
@@ -5192,6 +6546,44 @@ def test_list_remediations_for_remediation_returns_rich_operator_metadata(
             "idempotencyKey": None,
             "checkpointRef": "artifact://checkpoints/rich",
             "contextArtifactRef": "art_context_rich",
+            "loopId": "loop-rich",
+            "rootCheckpointRef": "artifact://workspace/C0",
+            "rootWorkspaceDigest": "sha256:root",
+            "headCheckpointRef": "artifact://workspace/C2",
+            "headWorkspaceDigest": "sha256:head",
+            "headStepExecutionId": "step:2",
+            "headAttemptOrdinal": 2,
+            "headVersion": 3,
+            "headStatus": "verified_incomplete",
+            "latestVerificationRef": "artifact://verification/V2",
+            "latestVerificationVerdict": "ADDITIONAL_WORK_NEEDED",
+            "supersedesCheckpointRef": None,
+            "remainingWorkRef": "artifact://verification/V2#remainingWork",
+            "nextActionBaseline": {
+                "checkpointRef": "artifact://workspace/C2",
+                "workspaceDigest": "sha256:head",
+                "headVersion": 3,
+            },
+            "turns": [
+                {
+                    "branchTurnId": "cbt-rich",
+                    "status": "running",
+                    "runtimeAgentRunId": "agent-run-rich",
+                    "providerSessionId": "provider-session-rich",
+                    "instructionRef": "artifact://instructions/rich",
+                    "instructionDigest": "sha256:instructions-rich",
+                    "sourceCheckpointRef": "artifact://workspace/C0",
+                    "startedAt": "2026-08-12T00:00:01Z",
+                    "createdAt": "2026-08-12T00:00:00Z",
+                    "updatedAt": "2026-08-12T00:00:01Z",
+                    "outputArtifacts": {
+                        "output.branch_turn.result.json": "artifact://output/rich"
+                    },
+                    "comparisonArtifacts": {
+                        "comparison.branch_turn.diff.json": "artifact://comparison/rich"
+                    },
+                }
+            ],
             "createdAt": None,
         }
     ]
@@ -5247,6 +6639,7 @@ def test_record_remediation_approval_decision_calls_trusted_service(
         decision="approved",
         comment="Reviewed.",
         actor=user.email,
+        actor_can_approve_high_risk=bool(getattr(user, "is_superuser", False)),
     )
 
 def test_record_remediation_approval_decision_rejects_unknown_decision(
@@ -5323,6 +6716,128 @@ def test_create_task_shaped_execution_maps_instructions_and_tool_for_temporal(
         "startingBranch": "feature/resolve-pr",
         "branch": "codex/pr-resolver",
     }
+
+
+def test_create_workflow_omnigent_browser_payload_persists_canonical_intent(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    """Exercise the exact Create page request through POST /api/executions."""
+
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+    provider_profile = SimpleNamespace(
+        profile_id="codex-openai-oauth", provider_id="openai"
+    )
+    db_session = SimpleNamespace(
+        get=AsyncMock(side_effect=[provider_profile, None]),
+        commit=AsyncMock(),
+        refresh=AsyncMock(),
+    )
+    test_client.app.dependency_overrides[get_async_session] = lambda: db_session
+    snapshot = {
+        "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
+        "profileId": "omnigent-bootstrap-default",
+        "version": 1,
+        "digest": "sha256:" + "a" * 64,
+        "providerProfileRef": "codex-openai-oauth",
+        "executionProfileRef": "omnigent-codex@1",
+        "launchPolicyRef": "codex-on-demand@1",
+        "agentId": "upstream-codex-agent",
+        "document": {
+            "model": {"settings": {}},
+            "rag": {},
+            "capture": {"stream": True},
+            "workspace": {"mutation": "allowed"},
+        },
+    }
+    profile_resolver = AsyncMock(return_value=snapshot)
+    plan_binding = OmnigentExecutionPlanBinding(
+        planRef="omnigent-execution-plan:sha256:" + "b" * 64,
+        planDigest="sha256:" + "b" * 64,
+        planArtifactRef="art_codex_plan",
+        taskInputSnapshotRef="art_codex_task",
+        taskInputSnapshotDigest="sha256:" + "c" * 64,
+    )
+    compiled_plan = SimpleNamespace(
+        binding=plan_binding,
+        artifact_refs=("art_profile", "art_skills", "art_codex_plan"),
+        resolved_skillset_ref="art_skills",
+    )
+    with (
+        patch(
+            "api_service.api.routers.executions."
+            "resolve_default_agent_profile_snapshot",
+            new=profile_resolver,
+        ),
+        patch(
+            "api_service.services.omnigent_execution_plan_service."
+            "persist_json_artifact",
+            new=AsyncMock(
+                return_value=("art_codex_task", "sha256:" + "c" * 64)
+            ),
+        ),
+        patch(
+            "api_service.services.omnigent_execution_plan_service."
+            "compile_and_persist_execution_plan",
+            new=AsyncMock(return_value=compiled_plan),
+        ),
+        patch(
+            "api_service.api.routers.executions.get_temporal_artifact_service",
+            return_value=SimpleNamespace(),
+        ),
+    ):
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "task",
+                "payload": {
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "targetRuntime": "omnigent",
+                    "omnigent": {
+                        "executionTargetRef": "omnigent-codex@1",
+                        "launchPolicyRef": "codex-on-demand@1",
+                    },
+                    "task": {
+                        "instructions": "Make the bounded deterministic change.",
+                        "git": {"branch": "main"},
+                        "runtime": {"mode": "omnigent"},
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 201
+    initial_parameters = service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["targetRuntime"] == "omnigent"
+    assert initial_parameters["requestType"] == "task"
+    assert initial_parameters["omnigent"] == {
+        "executionTargetRef": "omnigent-codex@1",
+        "launchPolicyRef": "codex-on-demand@1",
+    }
+    assert initial_parameters["workflow"]["runtime"] == {"mode": "omnigent"}
+    assert initial_parameters["workflow"]["git"] == {"branch": "main"}
+    assert initial_parameters["agentProfileSnapshot"] == snapshot
+    assert initial_parameters["omnigentExecutionPlan"]["planRef"] == (
+        plan_binding.plan_ref
+    )
+    assert profile_resolver.await_args.kwargs["launch_policy_ref"] == (
+        "codex-on-demand@1"
+    )
+    assert initial_parameters["instructions"] == (
+        "Make the bounded deterministic change."
+    )
+    serialized = json.dumps(initial_parameters)
+    assert all(
+        forbidden not in serialized
+        for forbidden in (
+            "hostId",
+            "leaseId",
+            "registrationToken",
+            "direct_codex",
+        )
+    )
 
 def test_create_task_shaped_execution_preserves_proposal_and_skill_intent(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -6714,11 +8229,13 @@ def test_create_task_shaped_execution_rejects_pr_resolver_without_structured_sel
     assert response.status_code == 422
     assert (
         response.json()["detail"]["message"]
-        == "pr-resolver workflow requires a structured PR selector: "
-        "payload.workflow.inputs.pr, payload.workflow.inputs.branch, "
-        "payload.workflow.tool.inputs.pr/branch, or "
-        "payload.workflow.git.startingBranch, or a non-default "
-        "payload.workflow.git.branch."
+        == "pr-resolver requires an explicit pull request selector. In the "
+        "dashboard, select the pr-resolver Skill and fill in Pull request with a "
+        "PR number, PR URL, or head branch. API callers can set "
+        "payload.task.inputs.pr (or payload.workflow.inputs.pr); Skill/Tool "
+        "inputs named pr or branch, git.startingBranch, and a non-default "
+        "git.branch are also accepted. A default checkout branch such as main "
+        "does not identify a PR."
     )
     service.create_execution.assert_not_awaited()
 
@@ -6853,6 +8370,66 @@ def test_create_task_shaped_execution_synthesizes_generic_title(
     assert initial_parameters["workflow"]["title"] == "Jira Verify: KANDY-123"
 
 
+def test_create_task_shaped_execution_enriches_github_issue_preset_title(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "workflow": {
+                    "title": "GitHub Issue Implement",
+                    "instructions": "Implement the selected GitHub issue.",
+                    "runtime": {"mode": "claude_code"},
+                    "appliedStepTemplates": [
+                        {
+                            "slug": "github-issue-implement",
+                            "stepIds": ["step-1"],
+                        }
+                    ],
+                    "tool": {
+                        "type": "skill",
+                        "name": "github.load_issue_preset_brief",
+                    },
+                    "steps": [
+                        {
+                            "id": "step-1",
+                            "title": "Load GitHub issue brief",
+                            "instructions": "Load the selected GitHub issue.",
+                            "tool": {
+                                "type": "skill",
+                                "name": "github.load_issue_preset_brief",
+                            },
+                        }
+                    ],
+                    "inputs": {
+                        "github_issue": {
+                            "repository": "MoonLadderStudios/MoonMind",
+                            "number": 3143,
+                            "title": "Improve generated workflow titles",
+                        },
+                        "github_issue_ref": "MoonLadderStudios/MoonMind#3143",
+                    },
+                }
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    called_kwargs = service.create_execution.await_args.kwargs
+    expected = (
+        "GitHub Issue Implement: MoonLadderStudios/MoonMind#3143 — "
+        "Improve generated workflow titles"
+    )
+    assert called_kwargs["title"] == expected
+    assert called_kwargs["initial_parameters"]["workflow"]["title"] == expected
+
+
 def test_create_task_shaped_execution_synthesizes_issue_pr_title_without_repo(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -6926,261 +8503,7 @@ def test_create_task_shaped_execution_keeps_meaningful_title_after_synthesis(
     assert initial_parameters["workflow"]["title"] == "Verify auth redirect fix"
 
 
-def _pentest_workflow_payload(
-    *,
-    tool_inputs: dict[str, object] | None = None,
-    step_inputs: dict[str, object] | None = None,
-    authorized_principals: list[str] | None = None,
-) -> dict[str, object]:
-    safe_inputs: dict[str, object] = {
-        "target": "https://lab.example.test",
-        "scope_artifact_ref": "art_scope_valid",
-        "objective": "Recon only",
-        "operation_mode": "recon_only",
-        "runner_profile_id": "pentestgpt-claude-oauth",
-        "execution_profile_ref": "pentestgpt_claude_oauth",
-        "time_budget_minutes": 60,
-        "evidence_level": "standard",
-    }
-    if authorized_principals is not None:
-        safe_inputs["approved_scope"] = {
-            "authorized_principals": authorized_principals,
-        }
-    if tool_inputs:
-        safe_inputs.update(tool_inputs)
-    step_safe_inputs = dict(safe_inputs)
-    if step_inputs:
-        step_safe_inputs.update(step_inputs)
-    return {
-        "type": "workflow",
-        "payload": {
-            "workflow": {
-                "title": "Pentest recon",
-                "instructions": "Run the approved pentest.",
-                "tool": {
-                    "type": "skill",
-                    "name": "security.pentest.run",
-                    "inputs": safe_inputs,
-                },
-                "steps": [
-                    {
-                        "id": "step-pentest",
-                        "type": "tool",
-                        "instructions": "Run the curated pentest tool.",
-                        "tool": {
-                            "type": "skill",
-                            "name": "security.pentest.run",
-                            "inputs": step_safe_inputs,
-                        },
-                    }
-                ],
-            }
-        },
-    }
 
-def test_create_task_shaped_execution_rejects_disabled_pentest_submission(
-    client: tuple[TestClient, AsyncMock, SimpleNamespace],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    test_client, service, user = client
-    user.roles = ["admin"]
-    monkeypatch.setattr(settings.pentest, "enabled", False)
-
-    response = test_client.post("/api/executions", json=_pentest_workflow_payload())
-
-    assert response.status_code == 422
-    assert response.json()["detail"]["code"] == "invalid_execution_request"
-    assert "disabled" in response.json()["detail"]["message"]
-    service.create_execution.assert_not_awaited()
-
-@pytest.mark.parametrize("role", ["admin", "security_operator"])
-def test_create_task_shaped_execution_accepts_authorized_pentest_roles(
-    client: tuple[TestClient, AsyncMock, SimpleNamespace],
-    monkeypatch: pytest.MonkeyPatch,
-    role: str,
-) -> None:
-    test_client, service, user = client
-    user.roles = [role]
-    monkeypatch.setattr(settings.pentest, "enabled", True)
-    service.create_execution.return_value = _build_execution_record()
-
-    response = test_client.post("/api/executions", json=_pentest_workflow_payload())
-
-    assert response.status_code == 201
-    workflow = service.create_execution.await_args.kwargs["initial_parameters"][
-        "workflow"
-    ]
-    assert workflow["tool"] == {
-        "type": "skill",
-        "name": "security.pentest.run",
-        "inputs": {
-            "target": "https://lab.example.test",
-            "scope_artifact_ref": "art_scope_valid",
-            "objective": "Recon only",
-            "operation_mode": "recon_only",
-            "runner_profile_id": "pentestgpt-claude-oauth",
-            "execution_profile_ref": "pentestgpt_claude_oauth",
-            "time_budget_minutes": 60,
-            "evidence_level": "standard",
-        },
-    }
-
-@pytest.mark.parametrize("roles", [[], [""], ["developer"], ["viewer", "auditor"]])
-def test_create_task_shaped_execution_rejects_non_security_pentest_roles(
-    client: tuple[TestClient, AsyncMock, SimpleNamespace],
-    monkeypatch: pytest.MonkeyPatch,
-    roles: list[str],
-) -> None:
-    test_client, service, user = client
-    user.roles = roles
-    monkeypatch.setattr(settings.pentest, "enabled", True)
-
-    response = test_client.post("/api/executions", json=_pentest_workflow_payload())
-
-    assert response.status_code == 422
-    assert response.json()["detail"]["code"] == "invalid_execution_request"
-    assert "admin or security_operator" in response.json()["detail"]["message"]
-    service.create_execution.assert_not_awaited()
-
-def test_create_task_shaped_execution_rejects_scope_member_without_pentest_role(
-    client: tuple[TestClient, AsyncMock, SimpleNamespace],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    test_client, service, user = client
-    user.roles = ["developer"]
-    monkeypatch.setattr(settings.pentest, "enabled", True)
-
-    response = test_client.post(
-        "/api/executions",
-        json=_pentest_workflow_payload(authorized_principals=[str(user.id)]),
-    )
-
-    assert response.status_code == 422
-    assert response.json()["detail"]["code"] == "invalid_execution_request"
-    service.create_execution.assert_not_awaited()
-
-def test_create_task_shaped_execution_rejects_pentest_privileged_overrides(
-    client: tuple[TestClient, AsyncMock, SimpleNamespace],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    test_client, service, user = client
-    user.roles = ["security_operator"]
-    monkeypatch.setattr(settings.pentest, "enabled", True)
-
-    response = test_client.post(
-        "/api/executions",
-        json=_pentest_workflow_payload(
-            tool_inputs={
-                "image": "unsafe:latest",
-                "provider_secret": "secret-value",
-                "env": {"TOKEN": "secret-value"},
-                "network": "host",
-                "mounts": ["/:/host"],
-                "capabilities": ["SYS_ADMIN"],
-                "raw_command": "sh -lc id",
-            }
-        ),
-    )
-
-    assert response.status_code == 422
-    assert response.json()["detail"]["code"] == "invalid_execution_request"
-    message = response.json()["detail"]["message"]
-    assert "privileged" in message
-    assert "secret-value" not in message
-
-def test_create_task_shaped_execution_rejects_pentest_provider_runtime_state_override(
-    client: tuple[TestClient, AsyncMock, SimpleNamespace],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    test_client, service, user = client
-    user.roles = ["security_operator"]
-    monkeypatch.setattr(settings.pentest, "enabled", True)
-
-    response = test_client.post(
-        "/api/executions",
-        json=_pentest_workflow_payload(
-            tool_inputs={
-                "provider_runtime_state": {
-                    "pentestgpt_claude_oauth": {"available_slots": 100}
-                }
-            }
-        ),
-    )
-
-    assert response.status_code == 422
-    assert response.json()["detail"]["code"] == "invalid_execution_request"
-    assert "provider_runtime_state" in response.json()["detail"]["message"]
-    service.create_execution.assert_not_awaited()
-
-def test_pentest_role_resolution_reads_object_values_and_request_claims() -> None:
-    request = SimpleNamespace(
-        state=SimpleNamespace(
-            claims={
-                "realm_access": {"roles": ["security_operator"]},
-                "resource_access": {
-                    "moonmind": {"roles": ["workflow_submitter"]},
-                },
-            }
-        ),
-        scope={},
-    )
-    user = SimpleNamespace(
-        is_superuser=False,
-        roles=[SimpleNamespace(name="viewer")],
-        groups=[SimpleNamespace(role="auditor")],
-    )
-
-    assert _effective_user_roles(user, request=request) == {
-        "auditor",
-        "security_operator",
-        "viewer",
-        "workflow_submitter",
-    }
-
-def test_pentest_safe_preset_exposes_only_ordinary_inputs() -> None:
-    import yaml
-
-    preset_path = Path("api_service/data/presets/pentest-recon.yaml")
-    preset = yaml.safe_load(preset_path.read_text())
-    schema_props = set(preset["annotations"]["inputSchema"]["properties"])
-    exposed_inputs = {item["name"] for item in preset["inputs"]}
-    required_inputs = {
-        item["name"] for item in preset["inputs"] if item.get("required") is True
-    }
-    step_inputs = preset["steps"][0]["tool"]["inputs"]
-    privileged = {
-        "image",
-        "provider_secret",
-        "provider_secret_ref",
-        "env",
-        "environment",
-        "network",
-        "mount",
-        "mounts",
-        "capability",
-        "capabilities",
-        "command",
-        "raw_command",
-    }
-
-    assert schema_props == {
-        "target",
-        "scope_artifact_ref",
-        "objective",
-        "operation_mode",
-        "evidence_level",
-        "time_budget_minutes",
-        "execution_profile_ref",
-    }
-    assert exposed_inputs == schema_props
-    assert preset["annotations"]["inputSchema"]["required"] == ["target"]
-    assert required_inputs == {"target"}
-    assert preset["annotations"]["uiSchema"]["scope_artifact_ref"]["advanced"] is True
-    assert preset["annotations"]["uiSchema"]["operation_mode"]["advanced"] is True
-    assert privileged.isdisjoint(schema_props)
-    assert privileged.isdisjoint(exposed_inputs)
-    assert step_inputs["runner_profile_id"] == "pentestgpt-claude-oauth"
-    assert privileged.isdisjoint(step_inputs)
 
 def test_create_task_shaped_submit_accepts_task_payload_pr_resolver(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -7273,6 +8596,115 @@ def test_create_task_shaped_execution_inherits_caller_runtime(
         "effort": "high",
         "executionProfileRef": "codex_default",
     }
+
+
+def _execution_fanout_token(*, parent_workflow_id: str = "mm:parent-task") -> str:
+    return mint_execution_fanout_capability(
+        secret=str(settings.security.JWT_SECRET_KEY),
+        parent_workflow_id=parent_workflow_id,
+        agent_run_id="agent-run-1",
+        step_id="step-1",
+        session_id="session-1",
+        runtime_id="codex_cli",
+        source_kind="omnigent",
+        lifetime_seconds=300,
+    )
+
+
+def test_create_task_shaped_execution_accepts_scoped_fanout_bearer(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, user = client
+    for dependency in tuple(test_client.app.dependency_overrides):
+        if getattr(dependency, "__name__", "") == "_current_user_fallback":
+            test_client.app.dependency_overrides[dependency] = lambda: None
+    service.create_execution.return_value = _build_execution_record(
+        owner_id=str(user.id)
+    )
+    service.describe_execution.return_value = SimpleNamespace(
+        workflow_id="mm:parent-task",
+        owner_id=user.id,
+        owner_type="user",
+        parameters={
+            "targetRuntime": "codex",
+            "model": "gpt-5.4",
+            "effort": "high",
+            "workflow": {"runtime": {"executionProfileRef": "codex_default"}},
+        },
+        memo={},
+        search_attributes={},
+    )
+
+    response = test_client.post(
+        "/api/executions",
+        headers={
+            "Authorization": f"Bearer {_execution_fanout_token()}",
+            "X-MoonMind-Execution-Fanout": "v1",
+        },
+        json={
+            "type": "workflow",
+            "payload": {
+                "runtimeInheritance": "caller",
+                "repository": "MoonLadderStudios/MoonMind",
+                "workflow": {
+                    "title": "feature/example",
+                    "instructions": "Resolve PR #42.",
+                    "idempotencyKey": "parent:pr:42",
+                    "skill": {"name": "pr-resolver"},
+                    "inputs": {"repo": "MoonLadderStudios/MoonMind", "pr": "42"},
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    initial_parameters = service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["parentWorkflowId"] == "mm:parent-task"
+    assert initial_parameters["targetRuntime"] == "codex_cli"
+    assert service.create_execution.await_args.kwargs["owner_id"] == user.id
+
+
+@pytest.mark.parametrize(
+    "request_body, expected_message",
+    [
+        (
+            {"workflowType": "MoonMind.UserWorkflow"},
+            "task or workflow child requests only",
+        ),
+        (
+            {
+                "type": "workflow",
+                "schedule": {"cron": "0 * * * *"},
+                "payload": {
+                    "runtimeInheritance": "caller",
+                    "workflow": {"idempotencyKey": "child-1"},
+                },
+            },
+            "cannot create recurring or delayed schedules",
+        ),
+    ],
+)
+def test_execution_fanout_rejects_non_child_or_scheduled_shapes(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    request_body: dict[str, Any],
+    expected_message: str,
+) -> None:
+    test_client, service, _user = client
+
+    response = test_client.post(
+        "/api/executions",
+        headers={
+            "Authorization": f"Bearer {_execution_fanout_token()}",
+            "X-MoonMind-Execution-Fanout": "v1",
+        },
+        json=request_body,
+    )
+
+    assert response.status_code == 422
+    assert expected_message in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
 
 
 def test_create_task_shaped_execution_rejects_caller_inheritance_for_user(
@@ -7687,7 +9119,246 @@ def test_create_task_shaped_execution_rejects_legacy_target_branch_aliases(
     assert "targetBranch" in response.json()["detail"]["message"]
     service.create_execution.assert_not_awaited()
 
-def test_create_task_shaped_execution_rejects_non_string_repository(
+@pytest.mark.parametrize(
+    ("skill_name", "publish_mode", "inputs"),
+    [
+        ("batch-pr-resolver", "none", {"repo": "Moon/Mind"}),
+        ("pr-resolver", "auto", {"repo": "Moon/Mind", "pr": 123}),
+    ],
+)
+def test_create_task_shaped_execution_accepts_provider_repository_for_resolvers(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    skill_name: str,
+    publish_mode: str,
+    inputs: dict[str, Any],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    repository_target = {
+        "provider": "git",
+        "connectionRef": "repository-connection:git-default",
+        "repository": {"name": "Moon/Mind"},
+        "branch": {"name": "main"},
+    }
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": repository_target,
+                "targetRuntime": "codex",
+                "task": {
+                    "instructions": "Resolve pull requests.",
+                    "skill": {"name": skill_name},
+                    "inputs": inputs,
+                    "publish": {"mode": publish_mode},
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201, response.json()
+    create_kwargs = service.create_execution.await_args.kwargs
+    assert create_kwargs["repository"] == "Moon/Mind"
+    assert create_kwargs["initial_parameters"]["repository"] == repository_target
+
+
+@pytest.mark.parametrize(
+    "repository_payload",
+    [
+        "MoonLadderStudios/MoonMind",
+        {
+            "provider": "git",
+            "connectionRef": "repository-connection:git-default",
+            "repository": {"name": "MoonLadderStudios/MoonMind"},
+            "branch": {"name": "main"},
+        },
+    ],
+)
+@pytest.mark.parametrize(
+    "issue_authority",
+    [
+        {
+            "inputs": {
+                "github_issue": {
+                    "repository": "MoonLadderStudios/Tactics",
+                    "number": 2490,
+                }
+            }
+        },
+        {
+            "appliedStepTemplates": [
+                {
+                    "slug": "github-issue-implement",
+                    "inputs": {
+                        "github_issue": {
+                            "repository": "MoonLadderStudios/Tactics",
+                            "number": 2490,
+                        }
+                    },
+                }
+            ]
+        },
+        {
+            "steps": [
+                {
+                    "type": "tool",
+                    "tool": {
+                        "id": "github.load_issue_preset_brief",
+                        "inputs": {
+                            "github_issue": {
+                                "repository": "MoonLadderStudios/Tactics",
+                                "number": 2490,
+                            }
+                        },
+                    },
+                }
+            ]
+        },
+        {
+            "steps": [
+                {
+                    "type": "skill",
+                    "skill": {
+                        "id": "github-issue-verify",
+                        "args": {
+                            "github_issue": {
+                                "repository": "MoonLadderStudios/Tactics",
+                                "number": 2490,
+                            }
+                        },
+                    },
+                }
+            ]
+        },
+    ],
+)
+def test_create_execution_rejects_github_issue_repository_mismatch(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    repository_payload: object,
+    issue_authority: dict[str, Any],
+) -> None:
+    test_client, service, _user = client
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "repository": repository_payload,
+                "targetRuntime": "omnigent",
+                "workflow": {
+                    "instructions": "Implement the selected GitHub issue.",
+                    **issue_authority,
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    message = response.json()["detail"]["message"]
+    assert "MoonLadderStudios/MoonMind" in message
+    assert "MoonLadderStudios/Tactics" in message
+    assert "does not match the GitHub issue repository" in message
+    service.create_execution.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "repository_payload",
+    [
+        "MoonLadderStudios/Tactics",
+        {
+            "provider": "git",
+            "connectionRef": "repository-connection:git-default",
+            "repository": {
+                "name": "https://github.com/MoonLadderStudios/Tactics"
+            },
+            "branch": {"name": "main"},
+        },
+        {
+            "provider": "git",
+            "connectionRef": "repository-connection:git-default",
+            "repository": {
+                "name": "git@github.com:MoonLadderStudios/Tactics.git"
+            },
+            "branch": {"name": "main"},
+        },
+    ],
+)
+def test_create_execution_accepts_matching_github_issue_repository(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    repository_payload: object,
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "repository": repository_payload,
+                "targetRuntime": "codex",
+                "workflow": {
+                    "instructions": "Implement the selected GitHub issue.",
+                    "inputs": {
+                        "github_issue": {
+                            "repository": "MoonLadderStudios/Tactics",
+                            "number": 2490,
+                        }
+                    },
+                    "appliedStepTemplates": [
+                        {
+                            "slug": "github-issue-implement",
+                            "inputs": {
+                                "github_issue": {
+                                    "repository": "moonladderstudios/tactics",
+                                    "number": 2490,
+                                }
+                            },
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201, response.json()
+    service.create_execution.assert_awaited_once()
+
+
+def test_create_execution_requires_repository_for_github_issue_authority(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "targetRuntime": "omnigent",
+                "workflow": {
+                    "instructions": "Implement the selected GitHub issue.",
+                    "inputs": {
+                        "github_issue": {
+                            "repository": "MoonLadderStudios/Tactics",
+                            "number": 2490,
+                        }
+                    },
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "payload.repository is required" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
+def test_create_task_shaped_execution_rejects_malformed_repository_target(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
     test_client, service, _user = client
@@ -7706,7 +9377,164 @@ def test_create_task_shaped_execution_rejects_non_string_repository(
     )
 
     assert response.status_code == 422
-    assert "repository" in response.json()["detail"]["message"]
+    assert response.json()["detail"]["message"].startswith(
+        "payload.repository is invalid: REPOSITORY_TARGET_INVALID:"
+    )
+    service.create_execution.assert_not_awaited()
+
+
+@pytest.mark.parametrize("publish_mode", ["branch", "pr"])
+@pytest.mark.parametrize("recurring", [False, True])
+def test_create_execution_rejects_publishing_from_repository_revision(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    recurring: bool,
+    publish_mode: str,
+) -> None:
+    test_client, service, _user = client
+    payload: dict[str, Any] = {
+        "repository": {
+            "provider": "git",
+            "connectionRef": "repository-connection:git-default",
+            "repository": {"name": "Moon/Mind"},
+            "branch": {"name": "main"},
+            "revision": {"kind": "git_commit", "commitSha": "abcdef012345"},
+        },
+        "targetRuntime": "codex",
+        "workflow": {
+            "instructions": "Mutate an immutable revision.",
+            "publish": {"mode": publish_mode},
+        },
+    }
+    if recurring:
+        payload["schedule"] = {
+            "mode": "recurring",
+            "cron": "0 1 * * *",
+            "timezone": "UTC",
+        }
+
+    response = test_client.post(
+        "/api/executions",
+        json={"type": "workflow", "payload": payload},
+    )
+
+    assert response.status_code == 422
+    assert "repository.revision" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
+@pytest.mark.parametrize("field", ["repository", "branch"])
+def test_create_execution_rejects_whitespace_only_repository_identity(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    field: str,
+) -> None:
+    test_client, service, _user = client
+    repository_target = {
+        "provider": "git",
+        "connectionRef": "repository-connection:git-default",
+        "repository": {"name": "Moon/Mind"},
+        "branch": {"name": "main"},
+    }
+    repository_target[field] = {"name": "   "}
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "repository": repository_target,
+                "workflow": {"instructions": "Reject blank identity."},
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "REPOSITORY_TARGET_INVALID" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
+def test_create_execution_rejects_structured_repository_with_legacy_git(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "repository": {
+                    "provider": "git",
+                    "connectionRef": "repository-connection:git-default",
+                    "repository": {"name": "Moon/Mind"},
+                    "branch": {"name": "main"},
+                },
+                "workflow": {
+                    "instructions": "Run conflicting branch authority.",
+                    "git": {"branch": "other"},
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "workflow.git" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
+@pytest.mark.parametrize("skill_name", ["batch-pr-resolver", "pr-resolver"])
+def test_create_execution_rejects_github_resolver_skills_for_lore(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    skill_name: str,
+) -> None:
+    test_client, service, _user = client
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "repository": {
+                    "provider": "lore",
+                    "connectionRef": "repository-connection:tactics",
+                    "repository": {"name": "Tactics"},
+                    "branch": {"name": "main"},
+                },
+                "workflow": {
+                    "instructions": "Resolve GitHub PRs against Lore.",
+                    "skill": {"name": skill_name},
+                    "publish": {"mode": "none"},
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "GitHub-only Skills" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
+def test_create_execution_rejects_nested_repository_target(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "workflow": {
+                    "instructions": "Bypass top-level repository authority.",
+                    "repository": {
+                        "repository": {"name": "Moon/Mind"},
+                    },
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "use payload.repository" in response.json()["detail"]["message"]
     service.create_execution.assert_not_awaited()
 
 def test_create_task_shaped_execution_rejects_attachment_declared_for_multiple_targets(
@@ -8383,6 +10211,38 @@ def test_create_recurring_schedule_accepts_snake_case_target_aliases() -> None:
     assert target["initialParameters"] == {
         "action": "plan",
         "options": {"dryRun": True},
+    }
+
+
+def test_recurring_target_preserves_omnigent_selection_in_initial_parameters() -> None:
+    target = _build_recurring_target(
+        {
+            "workflowType": "MoonMind.UserWorkflow",
+            "initialParameters": {
+                "workflow": {
+                    "instructions": "Run nightly",
+                    "runtime": {
+                        "mode": "omnigent",
+                        "executionProfileRef": "codex-oauth-profile",
+                    },
+                }
+            },
+            "omnigent": {
+                "executionTargetRef": "on-demand-docker",
+                "launchPolicyRef": "codex-on-demand@1",
+            },
+        },
+        runtime_metadata={"targetRuntime": "omnigent"},
+    )
+
+    assert target["initialParameters"]["targetRuntime"] == "omnigent"
+    assert target["initialParameters"]["omnigent"] == {
+        "executionTargetRef": "on-demand-docker",
+        "launchPolicyRef": "codex-on-demand@1",
+    }
+    assert target["initialParameters"]["workflow"]["runtime"] == {
+        "mode": "omnigent",
+        "executionProfileRef": "codex-oauth-profile",
     }
 
 
@@ -13725,6 +15585,10 @@ def _valid_failed_run_recovery_manifest_payload(
 def test_failed_step_recovery_hydrates_checkpoint_artifact(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        "api_service.api.routers.executions._checkpoint_resume_admission_for_request",
+        lambda **_kwargs: SimpleNamespace(admitted=True),
+    )
     app = FastAPI()
     app.include_router(router)
     mock_service = AsyncMock()
@@ -13774,6 +15638,7 @@ def test_failed_step_recovery_hydrates_checkpoint_artifact(
             "branch": "feature/resume",
             "commit": "abc123",
             "checkpointRef": "artifact://resume-checkpoints/source/checkpoint-v1",
+            "archiveBytes": 100,
         },
     }
     manifest_payload = _valid_failed_run_recovery_manifest_payload(
@@ -13825,6 +15690,10 @@ def test_failed_step_recovery_hydrates_checkpoint_artifact(
 def test_failed_step_recovery_hydrates_checkpoint_from_manifest_summary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        "api_service.api.routers.executions._checkpoint_resume_admission_for_request",
+        lambda **_kwargs: SimpleNamespace(admitted=True),
+    )
     app = FastAPI()
     app.include_router(router)
     mock_service = AsyncMock()
@@ -13878,6 +15747,7 @@ def test_failed_step_recovery_hydrates_checkpoint_from_manifest_summary(
         ],
         "recoveryWorkspace": {
             "checkpointRef": "artifact://resume-checkpoints/source/checkpoint-v1",
+            "archiveBytes": 100,
         },
     }
     manifest_payload = _valid_failed_run_recovery_manifest_payload(
@@ -13928,6 +15798,10 @@ def test_failed_step_recovery_hydrates_checkpoint_from_manifest_summary(
 def test_selected_step_recovery_pins_source_and_selected_step(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        "api_service.api.routers.executions._checkpoint_resume_admission_for_request",
+        lambda **_kwargs: SimpleNamespace(admitted=True),
+    )
     app = FastAPI()
     app.include_router(router)
     mock_service = AsyncMock()
@@ -13972,7 +15846,8 @@ def test_selected_step_recovery_pins_source_and_selected_step(
             }
         ],
         "recoveryWorkspace": {
-            "checkpointRef": "artifact://resume-checkpoints/source/checkpoint-v1"
+            "checkpointRef": "artifact://resume-checkpoints/source/checkpoint-v1",
+            "archiveBytes": 100,
         },
     }
     manifest_payload = _valid_failed_run_recovery_manifest_payload(
@@ -14257,6 +16132,305 @@ def test_mm644_failed_task_edit_for_rerun_requires_authoritative_snapshot(
     )
 
 
+def test_workflow_gate_actions_expose_distinct_capabilities_and_consumed_refs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    monkeypatch.setattr(
+        settings.temporal_dashboard, "temporal_workflow_editing_enabled", True
+    )
+    record = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    record.finish_summary_json = {
+        "controlStop": {
+            "kind": "workflow_gate",
+            "controlStopId": "verify:control-stop:6",
+            "remainingWorkRef": "artifact://remaining/final",
+            "workspaceHeadRef": "artifact://workspace/final",
+            "sourceBudget": {
+                "maxAttempts": 6,
+                "consumedAttempts": 6,
+                "exhaustedDimension": "remediation_attempts",
+            },
+            "continuationBudgetGrant": {
+                "grantId": "grant-1",
+                "maxAttempts": 3,
+                "maxConsecutiveNoProgressAttempts": 2,
+            },
+            "destinationWorkflowId": "control-stop-continuation-digest",
+            "restorationEvidenceRef": "artifact://restore/evidence",
+            "hostSessionLifecycle": {"activityCleanupCompleted": True},
+            "metrics": {"remediationAdmitted": True},
+            "auxiliaryOutcomes": {
+                "gitPublication": {
+                    "status": "failed",
+                    "recoveryContract": {
+                        "sourceWorkflowId": record.workflow_id,
+                        "sourceRunId": record.run_id,
+                        "sourceSemanticOutcome": "failed",
+                        "target": {
+                            "kind": "publication",
+                            "publicationKind": "pull_request",
+                            "sourcePublicationOperationId": "publish-1",
+                            "semanticContext": "incomplete_draft_handoff",
+                        },
+                        "continuation": {
+                            "phase": "resume_publication",
+                            "publicationIdempotencyKey": (
+                                publication_operation_key(
+                                    source_workflow_id=record.workflow_id,
+                                    source_run_id=record.run_id,
+                                    publication_kind="pull_request",
+                                    repository="MoonLadderStudios/MoonMind",
+                                    head_ref="issue-3481",
+                                    base_ref="main",
+                                )
+                            ),
+                            "candidateRef": "artifact://workspace/final",
+                            "beforePublicationCheckpointRef": (
+                                "artifact://checkpoint/before-publication"
+                            ),
+                            "expectedHeadSha": "a" * 40,
+                            "expectedTreeDigest": "sha256:" + "b" * 64,
+                            "expectedDiffDigest": "sha256:" + "c" * 64,
+                            "priorObservationsRef": "artifact://github/observations",
+                            "secretScanRef": "artifact://scan/clean",
+                            "diagnosticsRef": "artifact://diagnostics/publication",
+                            "remainingWorkRef": "artifact://remaining/final",
+                        },
+                        "intent": {
+                            "repository": "MoonLadderStudios/MoonMind",
+                            "baseRef": "main",
+                            "headRef": "issue-3481",
+                            "mode": "draft_pr",
+                            "branchPolicy": "reuse_exact_head",
+                            "githubAuthorityRef": "managed-secret://github/source",
+                        },
+                        "candidateAccepted": False,
+                        "hasPublishableChange": True,
+                        "publicationAuthorityCurrent": True,
+                        "incompleteDraftAuthorized": True,
+                    },
+                }
+            },
+        }
+    }
+
+    actions = _serialize_execution(record).actions.model_dump(by_alias=True)
+
+    assert actions["canFullRetry"] is True
+    assert actions["canContinueRemediation"] is True
+    assert actions["canRetryPublication"] is True
+    assert actions["canResumeFromFailedStep"] is False
+    assert actions["actionEvidence"]["continueRemediation"] == {
+        "candidateRef": "artifact://workspace/final",
+        "remainingWorkRef": "artifact://remaining/final",
+        "controlStopId": "verify:control-stop:6",
+        "sourceBudget": {
+            "maxAttempts": 6,
+            "consumedAttempts": 6,
+            "exhaustedDimension": "remediation_attempts",
+        },
+        "continuationBudget": {
+            "grantId": "grant-1",
+            "maxAttempts": 3,
+            "maxConsecutiveNoProgressAttempts": 2,
+        },
+        "destinationWorkflowId": "control-stop-continuation-digest",
+        "restorationEvidenceRef": "artifact://restore/evidence",
+        "hostSessionLifecycle": {"activityCleanupCompleted": True},
+    }
+
+
+def _publication_recovery_record() -> SimpleNamespace:
+    record = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    operation_key = publication_operation_key(
+        source_workflow_id=record.workflow_id,
+        source_run_id=record.run_id,
+        publication_kind="pull_request",
+        repository="MoonLadderStudios/MoonMind",
+        head_ref="issue-3481",
+        base_ref="main",
+    )
+    record.finish_summary_json = {
+        "controlStop": {
+            "auxiliaryOutcomes": {
+                "gitPublication": {
+                    "status": "failed",
+                    "recoveryContract": {
+                        "sourceWorkflowId": record.workflow_id,
+                        "sourceRunId": record.run_id,
+                        "sourceSemanticOutcome": "accepted",
+                        "target": {
+                            "kind": "publication",
+                            "publicationKind": "pull_request",
+                            "sourcePublicationOperationId": "publish-1",
+                            "semanticContext": "accepted",
+                        },
+                        "continuation": {
+                            "phase": "resume_publication",
+                            "publicationIdempotencyKey": operation_key,
+                            "candidateRef": "artifact://candidate/accepted",
+                            "verifiedRemoteCandidateRef": "artifact://remote/head",
+                            "expectedHeadSha": "a" * 40,
+                            "expectedTreeDigest": "sha256:" + "b" * 64,
+                            "expectedDiffDigest": "sha256:" + "c" * 64,
+                            "priorObservationsRef": "artifact://github/observations",
+                            "secretScanRef": "artifact://scan/clean",
+                            "diagnosticsRef": "artifact://diagnostics/publication",
+                        },
+                        "intent": {
+                            "repository": "MoonLadderStudios/MoonMind",
+                            "baseRef": "main",
+                            "headRef": "issue-3481",
+                            "mode": "pr",
+                            "branchPolicy": "reuse_exact_head",
+                            "githubAuthorityRef": "managed-secret://github/source",
+                        },
+                        "candidateAccepted": True,
+                        "hasPublishableChange": True,
+                        "publicationAuthorityCurrent": True,
+                    },
+                }
+            }
+        }
+    }
+    return record
+
+
+def test_retry_publication_starts_stable_linked_workflow_and_deduplicates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    service = AsyncMock()
+    record = _publication_recovery_record()
+    service.describe_execution.return_value = record
+    adapter = AsyncMock()
+    contract_payload = record.finish_summary_json["controlStop"]["auxiliaryOutcomes"][
+        "gitPublication"
+    ]["recoveryContract"]
+    from moonmind.workflows.temporal.publication_recovery import (
+        PublicationRecoveryContract,
+    )
+
+    destination_id = publication_recovery_workflow_id(
+        PublicationRecoveryContract.model_validate(contract_payload)
+    )
+    adapter.start_workflow.return_value = WorkflowStartResult(
+        workflow_id=destination_id,
+        run_id="publication-run-1",
+    )
+    app.dependency_overrides[_get_service] = lambda: service
+    app.dependency_overrides[get_temporal_client_adapter] = lambda: adapter
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(settings.feature_flags, "publication_recovery_enabled", True)
+    monkeypatch.setattr(
+        settings.feature_flags, "publication_recovery_generation", "canary-1"
+    )
+
+    with TestClient(app) as test_client:
+        first = test_client.post("/api/executions/mm:wf-1/retry-publication")
+        duplicate = test_client.post("/api/executions/mm:wf-1/retry-publication")
+
+    assert first.status_code == 201
+    assert duplicate.status_code == 201
+    assert first.json() == duplicate.json()
+    assert first.json()["workflowId"] == destination_id
+    assert first.json()["rolloutGeneration"] == "canary-1"
+    assert adapter.start_workflow.await_count == 2
+    for call_args in adapter.start_workflow.await_args_list:
+        assert call_args.kwargs["workflow_id"] == destination_id
+        assert call_args.kwargs["workflow_type"] == "MoonMind.PublicationRecoveryV1"
+        assert call_args.kwargs["input_args"] == (
+            PublicationRecoveryContract.model_validate(contract_payload).model_dump(
+                by_alias=True, mode="json"
+            )
+        )
+        assert call_args.kwargs["memo"]["source_workflow_id"] == "mm:wf-1"
+        assert call_args.kwargs["memo"]["publication_semantic_context"] == "accepted"
+        assert call_args.kwargs["memo"][
+            "publication_no_implementation_rerun"
+        ] is True
+
+
+def test_retry_publication_stops_before_temporal_when_rollout_disables_admission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    service = AsyncMock()
+    service.describe_execution.return_value = _publication_recovery_record()
+    adapter = AsyncMock()
+    app.dependency_overrides[_get_service] = lambda: service
+    app.dependency_overrides[get_temporal_client_adapter] = lambda: adapter
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(settings.feature_flags, "publication_recovery_enabled", False)
+
+    with TestClient(app) as test_client:
+        response = test_client.post("/api/executions/mm:wf-1/retry-publication")
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason"] == "publication_recovery_disabled"
+    adapter.start_workflow.assert_not_awaited()
+
+
+@pytest.mark.parametrize("malformed_field", ["metrics", "auxiliaryOutcomes"])
+def test_workflow_gate_actions_ignore_malformed_optional_control_stop_fields(
+    monkeypatch: pytest.MonkeyPatch,
+    malformed_field: str,
+) -> None:
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    record = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    record.finish_summary_json = {
+        "controlStop": {
+            "kind": "workflow_gate",
+            malformed_field: "not-an-object",
+        }
+    }
+
+    actions = _serialize_execution(record).actions.model_dump(by_alias=True)
+
+    assert actions["canFullRetry"] is True
+    assert actions["canContinueRemediation"] is False
+    assert actions["canRetryPublication"] is False
+
+
+def test_workflow_gate_actions_expose_action_specific_disabled_reasons(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    monkeypatch.setattr(
+        settings.temporal_dashboard, "temporal_workflow_editing_enabled", True
+    )
+    record = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    record.memo["finishSummary"] = {
+        "controlStop": {
+            "kind": "workflow_gate",
+            "remainingWorkRef": "artifact://remaining/final",
+            "workspaceHeadRef": "artifact://workspace/final",
+            "metrics": {"remediationAdmitted": False},
+            "auxiliaryOutcomes": {"gitPublication": {"status": "not_attempted"}},
+        }
+    }
+
+    actions = _serialize_execution(record).actions.model_dump(by_alias=True)
+
+    assert actions["canContinueRemediation"] is False
+    assert (
+        actions["disabledReasons"]["canContinueRemediation"]
+        == "remediation_not_admitted"
+    )
+    assert actions["canRetryPublication"] is False
+    assert (
+        actions["disabledReasons"]["canRetryPublication"]
+        == "publication_not_failed"
+    )
+    assert actions["actionEvidence"]["continueRemediation"] == {
+        "candidateRef": "artifact://workspace/final",
+        "remainingWorkRef": "artifact://remaining/final",
+    }
+
+
 def test_mm644_rerun_snapshot_payload_records_source_lineage() -> None:
     payload = _build_original_workflow_input_snapshot_payload(
         source_kind="rerun",
@@ -14538,6 +16712,119 @@ def test_action_endpoints_reject_non_owner_operator(
     service.signal_execution.assert_not_awaited()
     service.cancel_execution.assert_not_awaited()
 
+
+def test_continue_remediation_returns_same_destination_for_duplicate_requests(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_client, service, user = client
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    service.describe_execution.return_value = _build_execution_record(
+        state=MoonMindWorkflowState.FAILED,
+        owner_id=str(user.id),
+    )
+    reservations = [
+        ControlStopContinuationReservation(
+            destination_workflow_id="control-stop-continuation-digest",
+            source_workflow_id="mm:wf-1",
+            source_run_id="run-2",
+            control_stop_id="verify:control-stop:6",
+            workspace_head_ref="artifact://checkpoint/head-6",
+            remaining_work_ref="artifact://verify/remaining-6",
+            created=created,
+        )
+        for created in (True, False)
+    ]
+    admit = AsyncMock(side_effect=reservations)
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.admit_control_stop_continuation",
+        admit,
+    )
+    authorized_budget = ContinuationBudgetGrant(
+        grantId="grant-1",
+        maxAttempts=2,
+        maxConsecutiveNoProgressAttempts=1,
+    )
+    repository = SimpleNamespace(
+        load_source_identity=AsyncMock(
+            return_value=(
+                "verify:control-stop:6",
+                SimpleNamespace(contract_payload={"authoritative": True}),
+            )
+        )
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.SqlControlStopContinuationRepository",
+        lambda _session: repository,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.ControlStopContinuationContract.model_validate",
+        lambda _payload: SimpleNamespace(continuation_budget=authorized_budget),
+    )
+
+    first = test_client.post(
+        "/api/executions/mm:wf-1/actions/continue-remediation",
+        json={
+            "proposedContinuationBudget": {
+                "maxAttempts": 1,
+                "maxConsecutiveNoProgressAttempts": 1,
+            }
+        },
+    )
+    duplicate = test_client.post(
+        "/api/executions/mm:wf-1/actions/continue-remediation",
+        json={
+            "proposedContinuationBudget": {
+                "maxAttempts": 1,
+                "maxConsecutiveNoProgressAttempts": 1,
+            }
+        },
+    )
+
+    assert first.status_code == 202
+    assert duplicate.status_code == 202
+    assert first.json()["destinationWorkflowId"] == duplicate.json()[
+        "destinationWorkflowId"
+    ]
+    assert first.json()["created"] is True
+    assert duplicate.json()["created"] is False
+    assert admit.await_count == 2
+    assert repository.load_source_identity.await_count == 2
+    for invocation in admit.await_args_list:
+        assert invocation.kwargs["source_workflow_id"] == "mm:wf-1"
+        assert invocation.kwargs["source_run_id"] == "run-2"
+        assert invocation.kwargs["control_stop_id"] == "verify:control-stop:6"
+        assert invocation.kwargs["continuation_budget"].grant_id == "grant-1"
+        assert invocation.kwargs["continuation_budget"].max_attempts == 1
+        assert invocation.kwargs["instruction_changes_ref"] is None
+
+
+def test_continue_remediation_rejects_non_owner_before_admission(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_client, service, _user = client
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    service.describe_execution.return_value = _build_execution_record(
+        state=MoonMindWorkflowState.FAILED,
+        owner_id="other-user",
+    )
+    admit = AsyncMock()
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.admit_control_stop_continuation",
+        admit,
+    )
+
+    response = test_client.post(
+        "/api/executions/mm:wf-1/actions/continue-remediation",
+        json={},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "execution_not_found"
+    admit.assert_not_awaited()
+
+
 def test_serialize_execution_canceled_state_uses_correct_spelling() -> None:
     """Regression: 'cancelled' (British) must not leak into the Literal('canceled') field."""
     from api_service.db.models import TemporalExecutionCloseStatus
@@ -14566,3 +16853,258 @@ def test_serialize_execution_canceled_state_uses_correct_spelling() -> None:
     assert payload.status == "canceled"
     assert payload.dashboard_status == "canceled"
     assert payload.temporal_status == "canceled"
+
+
+# --- native Workflow Chat binding API (MoonLadderStudios/MoonMind#3633) -------
+
+
+_CHAT_BINDING_ALLOWED_KEYS = {
+    "chatBindingId",
+    "workflowId",
+    "runId",
+    "logicalStepId",
+    "stepExecutionId",
+    "chatUrl",
+    "apiBase",
+    "state",
+    "readOnly",
+    "capabilities",
+    "unavailableReason",
+}
+
+# Identities that must never appear in the ordinary browser-safe response.
+_CHAT_BINDING_FORBIDDEN_KEYS = {
+    "providerSessionId",
+    "bridgeSessionId",
+    "agentRunId",
+    "omnigentSessionId",
+    "endpoint",
+    "endpointRef",
+    "omnigentEndpointRef",
+    "hostId",
+    "hostBindingRef",
+    "runnerId",
+    "omnigentRunnerRef",
+    "credentialGeneration",
+    "providerProfileId",
+    "agentProfileSnapshotRef",
+    "launchPolicyRef",
+    "policyId",
+    "workspace",
+}
+
+
+def _chat_binding_app(resolution=None, *, error=None, owner_id="user-123"):
+    app = FastAPI()
+    app.include_router(router)
+    service = AsyncMock()
+    service.describe_execution.return_value = _build_execution_record(owner_id=owner_id)
+    app.dependency_overrides[_get_service] = lambda: service
+    return app, service
+
+
+class _FakeChatBindingStore:
+    def __init__(self, resolution=None, error=None):
+        self._resolution = resolution
+        self._error = error
+
+    async def resolve_chat_binding(self, *, workflow_id, run_id=None):
+        if self._error is not None:
+            raise self._error
+        return self._resolution
+
+
+def _install_fake_store(monkeypatch, resolution=None, error=None):
+    monkeypatch.setattr(
+        executions_module,
+        "OmnigentBridgeSessionStore",
+        lambda *_a, **_k: _FakeChatBindingStore(resolution=resolution, error=error),
+    )
+
+
+def _declare_verified_immutable_server_image(monkeypatch) -> None:
+    """Serve as a deployment with verified immutable image evidence.
+
+    MoonLadderStudios/MoonMind#3685: the chat-binding projection only publishes
+    scoped navigation targets when the native-UI compatibility gate is ready,
+    and that version derives from the deployment's declared immutable Omnigent
+    server image. A mutable tag reports unknown and drops ``chatUrl``.
+    """
+
+    monkeypatch.delenv("OMNIGENT_NATIVE_UI_VERSION", raising=False)
+    monkeypatch.setenv(
+        "OMNIGENT_IMAGE_REF",
+        "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "d" * 64,
+    )
+
+
+def test_chat_binding_available_is_browser_safe(monkeypatch) -> None:
+    _declare_verified_immutable_server_image(monkeypatch)
+    resolution = ChatBindingResolution(
+        state="available",
+        read_only=False,
+        chat_binding_id="chatb_opaque123",
+        workflow_id="mm:wf-1",
+        run_id="run-2",
+        step_execution_id="mm:wf-1:run-2:implement:execution:1",
+        logical_step_id="implement",
+        capabilities={"viewTranscript": True, "sendMessage": True},
+        unavailable_reason=None,
+    )
+    app, _service = _chat_binding_app()
+    _override_user_dependencies(app, is_superuser=True)
+    _install_fake_store(monkeypatch, resolution=resolution)
+
+    with TestClient(app) as client:
+        response = client.get("/api/executions/mm:wf-1/chat-binding")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body.keys()) <= _CHAT_BINDING_ALLOWED_KEYS
+    assert not (_CHAT_BINDING_FORBIDDEN_KEYS & set(body.keys()))
+    assert body["chatBindingId"] == "chatb_opaque123"
+    assert body["state"] == "available"
+    assert body["readOnly"] is False
+    # Server-generated, binding-scoped navigation targets.
+    assert body["chatUrl"] == "/omnigent-ui/workflow-chat/chatb_opaque123?embedded=1"
+    assert body["apiBase"] == "/api/workflow-chat-bindings/chatb_opaque123/omnigent"
+    assert body["capabilities"] == {"viewTranscript": True, "sendMessage": True}
+
+
+def test_chat_binding_terminal_is_read_only(monkeypatch) -> None:
+    _declare_verified_immutable_server_image(monkeypatch)
+    resolution = ChatBindingResolution(
+        state="ended",
+        read_only=True,
+        chat_binding_id="chatb_terminal",
+        workflow_id="mm:wf-1",
+        run_id="run-2",
+        step_execution_id=None,
+        logical_step_id=None,
+        capabilities={"viewTranscript": True},
+        unavailable_reason=None,
+    )
+    app, _service = _chat_binding_app()
+    _override_user_dependencies(app, is_superuser=True)
+    _install_fake_store(monkeypatch, resolution=resolution)
+
+    with TestClient(app) as client:
+        response = client.get("/api/executions/mm:wf-1/chat-binding")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["state"] == "ended"
+    assert body["readOnly"] is True
+    assert body["chatUrl"].startswith("/omnigent-ui/workflow-chat/chatb_terminal")
+
+
+def test_chat_binding_unavailable_has_no_scoped_urls(monkeypatch) -> None:
+    resolution = ChatBindingResolution(
+        state="unavailable",
+        read_only=True,
+        chat_binding_id=None,
+        workflow_id="mm:wf-1",
+        run_id=None,
+        step_execution_id=None,
+        logical_step_id=None,
+        capabilities={},
+        unavailable_reason="no_session",
+    )
+    app, _service = _chat_binding_app()
+    _override_user_dependencies(app, is_superuser=True)
+    _install_fake_store(monkeypatch, resolution=resolution)
+
+    with TestClient(app) as client:
+        response = client.get("/api/executions/mm:wf-1/chat-binding")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["state"] == "unavailable"
+    assert body["unavailableReason"] == "no_session"
+    assert body["chatBindingId"] == ""
+    assert body["chatUrl"] == ""
+    assert body["apiBase"] == ""
+
+
+def test_chat_binding_serving_disabled_falls_back(monkeypatch) -> None:
+    # With native-UI serving disabled the scoped route fails closed to a 503, so
+    # the binding projection must surface ``unavailable`` and drop ``chatUrl`` —
+    # that selects the read-only compatibility fallback in the browser instead of
+    # an iframe pointed at the router's 503 page (MoonMind#3638 requirement 7).
+    monkeypatch.setenv("OMNIGENT_NATIVE_UI_ENABLED", "false")
+    resolution = ChatBindingResolution(
+        state="available",
+        read_only=False,
+        chat_binding_id="chatb_opaque123",
+        workflow_id="mm:wf-1",
+        run_id="run-2",
+        step_execution_id=None,
+        logical_step_id=None,
+        capabilities={"viewTranscript": True, "sendMessage": True},
+        unavailable_reason=None,
+    )
+    app, _service = _chat_binding_app()
+    _override_user_dependencies(app, is_superuser=True)
+    _install_fake_store(monkeypatch, resolution=resolution)
+
+    with TestClient(app) as client:
+        response = client.get("/api/executions/mm:wf-1/chat-binding")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["state"] == "unavailable"
+    assert body["unavailableReason"] == "native_ui_serving_disabled"
+    assert body["chatUrl"] == ""
+    # The binding id itself is still returned; only the live surface is withheld.
+    assert body["chatBindingId"] == "chatb_opaque123"
+
+
+def test_chat_binding_ambiguous_returns_409(monkeypatch) -> None:
+    app, _service = _chat_binding_app()
+    _override_user_dependencies(app, is_superuser=True)
+    _install_fake_store(monkeypatch, error=BridgeChatBindingAmbiguousError("ambiguous"))
+
+    with TestClient(app) as client:
+        response = client.get("/api/executions/mm:wf-1/chat-binding")
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "omnigent_chat_binding_ambiguous"
+
+
+def test_chat_binding_unauthorized_workflow_returns_404(monkeypatch) -> None:
+    # A non-admin caller who does not own the workflow is rejected before any
+    # binding information is resolved.
+    app, _service = _chat_binding_app(owner_id="another-user")
+    _override_user_dependencies(app, is_superuser=False)
+    resolved = {"called": False}
+
+    class _GuardStore:
+        def __init__(self, *_a, **_k):
+            pass
+
+        async def resolve_chat_binding(self, *, workflow_id, run_id=None):
+            resolved["called"] = True
+            raise AssertionError("resolution must not run for an unauthorized caller")
+
+    monkeypatch.setattr(executions_module, "OmnigentBridgeSessionStore", _GuardStore)
+
+    with TestClient(app) as client:
+        response = client.get("/api/executions/mm:wf-1/chat-binding")
+
+    assert response.status_code == 404
+    assert resolved["called"] is False
+
+
+def test_chat_binding_unknown_workflow_returns_404(monkeypatch) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    service = AsyncMock()
+    service.describe_execution.side_effect = TemporalExecutionNotFoundError("missing")
+    app.dependency_overrides[_get_service] = lambda: service
+    _override_user_dependencies(app, is_superuser=True)
+    _install_fake_store(monkeypatch, resolution=None)
+
+    with TestClient(app) as client:
+        response = client.get("/api/executions/mm:wf-unknown/chat-binding")
+
+    assert response.status_code == 404

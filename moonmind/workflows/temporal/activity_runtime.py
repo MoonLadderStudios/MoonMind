@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import fcntl
+import functools
+import gzip
 from email.message import EmailMessage
 import hashlib
 import httpx
@@ -18,13 +21,14 @@ import shutil
 import smtplib
 import stat
 import tempfile
+import threading
 import time
 import tarfile
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Iterable, Mapping, Protocol, Sequence, TypeVar, get_type_hints
+from typing import Any, Awaitable, BinaryIO, Callable, Iterable, Mapping, Protocol, Sequence, TypeVar, get_type_hints
 
 from pydantic import BaseModel, ValidationError
 from temporalio import activity as temporal_activity
@@ -38,37 +42,25 @@ from moonmind.security.outbound_scan import (
     scan_outbound_bundle,
     scan_outbound_text,
 )
-from moonmind.integrations.pentest.models import (
-    PENTEST_HEARTBEAT_PHASES,
-    PENTEST_RUNTIME_ID,
-    PentestApprovedScope,
-    PentestLaunchPolicyError,
-    PentestProviderMaterializationError,
-    PentestScopeValidationError,
-    PentestExecutionPolicy,
-    PentestWorkloadRequest,
-    PentestWorkloadResult,
-    build_pentest_execution_materialization,
-    build_pentest_publication_result,
-    build_pentest_provider_cooldown_diagnostic,
-    build_pentest_progress_annotation,
-    build_pentest_terminal_cleanup_result,
-    build_pentest_launch_plan,
-    classify_pentest_failure,
-    materialize_pentest_provider_profile,
-    pentest_cleanup_selector,
-    pentest_provider_lease_metadata,
-    redact_pentest_diagnostic_value,
-    redact_pentest_human_text,
-    resolve_pentest_provider_profile,
-    strictly_normalize_pentest_finding_set,
-)
 from moonmind.jules.status import JulesStatusSnapshot, normalize_jules_status
+from moonmind.workflows.temporal.runtime.workspace_locators import (
+    SandboxWorkspaceRecordStore,
+    resolve_managed_workspace_locator,
+    resolve_sandbox_workspace_locator,
+)
 from moonmind.schemas.manifest_ingest_models import CompiledManifestPlanModel
+from moonmind.schemas.managed_checkpoint_models import (
+    ManagedCheckpointEntry,
+    ManagedWorkspaceCheckpointCaptureInput,
+    ManagedWorkspaceCheckpointCaptureResult,
+)
 from moonmind.schemas.temporal_activity_models import (
+    AcceptedRepositoryEvidence,
     AgentRuntimeCancelInput,
     AgentRuntimeFetchResultInput,
     AgentRuntimeStatusInput,
+    AgentRuntimeTerminalCheckpointInput,
+    AgentRuntimeTerminalCheckpointResult,
     ExternalAgentRunInput,
     PlanGenerateInput,
 )
@@ -82,13 +74,33 @@ from moonmind.schemas.temporal_models import (
     WorkspaceCheckpointEvidenceModel,
     WorkspacePolicyApplyInput,
     WorkspacePolicyApplyResult,
+    build_step_execution_id,
+)
+from moonmind.omnigent.checkpoints import OmnigentCheckpointIdentity
+from moonmind.schemas.workspace_locator_models import (
+    ExternalStateLocator,
+    ManagedWorkspaceLocator,
+    SandboxWorkspaceLocator,
+    WORKSPACE_AUTHORITY_MISMATCH,
+    WORKSPACE_IDENTITY_MISMATCH,
+    WORKSPACE_LOCATOR_UNSUPPORTED,
+    WORKSPACE_LOCATOR_ADAPTER,
+    WorkspaceLocatorResolutionError,
 )
 from moonmind.workflows.report_output import report_output_display_name
+from moonmind.workflows.checkpoint_branches import generate_checkpoint_branch_name
 from moonmind.workflows.executions.routing import _coerce_bool
+from moonmind.workflows.executions.runtime_capabilities import (
+    resolve_runtime_execution_capabilities,
+)
 from moonmind.workflows.executions.prepared_context import (
     PreparedContextFailure,
     build_prepared_input_manifest,
     select_step_prepared_context,
+)
+from moonmind.workflows.temporal.agent_result_payloads import (
+    compact_agent_run_result_payload_for_workflow_history,
+    compact_published_agent_run_result_payload,
 )
 from moonmind.workflows.temporal.completion_summary import (
     is_generic_completion_summary,
@@ -104,6 +116,7 @@ from moonmind.workflows.adapters.managed_agent_adapter import (
     managed_run_status_metadata,
 )
 from moonmind.utils.logging import SecretRedactor, redact_sensitive_payload, redact_sensitive_text
+from moonmind.utils.metrics import get_metrics_emitter
 from moonmind.workflows.adapters.jules_agent_adapter import JulesAgentAdapter
 from moonmind.workflows.adapters.codex_cloud_agent_adapter import CodexCloudAgentAdapter
 from moonmind.workflows.adapters.codex_cloud_client import CodexCloudClient as CodexCloudHttpClient
@@ -131,16 +144,34 @@ from moonmind.schemas.agent_runtime_models import (
     ManagedRunRecord,
     ManagedRuntimeProfile,
     extract_durable_retrieval_metadata,
+    resolve_execution_budget,
 )
 from moonmind.schemas.workload_models import WorkloadResult, parse_workload_request
 from moonmind.workloads.tool_bridge import (
-    CONTAINER_START_HELPER_TOOL,
-    CONTAINER_STOP_HELPER_TOOL,
-    build_dood_tool_definition_payload,
-    is_dood_tool,
-    normalize_workflow_docker_mode,
-    tool_allowed_for_workflow_docker_mode,
+    build_container_job_tool_definition_payload,
+    is_container_job_tool,
 )
+from moonmind.workflow_docker_mode import normalize_workflow_docker_mode
+
+# Replay-only vocabulary for the retained ``workload.run`` Activity. These
+# names are absent from new executable-tool discovery and dispatch.
+_LEGACY_CONTAINER_START_HELPER_TOOL = "container.start_helper"
+_LEGACY_CONTAINER_STOP_HELPER_TOOL = "container.stop_helper"
+
+
+def _legacy_workload_tool_allowed(tool_name: str, workflow_docker_mode: str) -> bool:
+    mode = normalize_workflow_docker_mode(workflow_docker_mode)
+    curated = {
+        "container.run_workload",
+        _LEGACY_CONTAINER_START_HELPER_TOOL,
+        _LEGACY_CONTAINER_STOP_HELPER_TOOL,
+        "moonmind.integration_ci",
+        "unreal.run_tests",
+    }
+    return mode != "disabled" and (
+        tool_name in curated
+        or (mode == "unrestricted" and tool_name == "container.run_container")
+    )
 from moonmind.schemas.managed_session_models import (
     CodexManagedSessionArtifactsPublication,
     CodexManagedSessionBinding,
@@ -248,464 +279,159 @@ async def _run_command(cmd, **kwargs):
         raise RuntimeError(f"Command failed: {cmd} {stderr.decode('utf-8', errors='replace')}")
     return CmdRes(stdout)
 
+
+def _sandbox_workspace_git_command(workspace: Path, *args: str) -> list[str]:
+    """Build a Git command that trusts one resolved sandbox workspace only."""
+
+    resolved_workspace = str(workspace.resolve())
+    return [
+        "git",
+        "-c",
+        f"safe.directory={resolved_workspace}",
+        "-C",
+        resolved_workspace,
+        *args,
+    ]
+
 logger = getLogger(__name__)
 
-_PENTEST_RUNNING_HEARTBEAT_INTERVAL_SECONDS = 60.0
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _workspace_identity_digest(workspace: Path) -> str:
+    canonical_path = str(workspace.resolve())
+    payload = ("moonmind-workspace-identity/v1\0" + canonical_path).encode("utf-8")
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def _workspace_content_digest(entries: Sequence[Mapping[str, Any]]) -> str:
+    payload = json.dumps(
+        {
+            "schemaVersion": "moonmind-workspace-content/v1",
+            "entries": list(entries),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
 _PROFILE_MANAGER_READY_POLL_ATTEMPTS = 60
 _PROFILE_MANAGER_READY_POLL_SECONDS = 1.0
 _MANAGED_AGENT_UID = 1000
 _MANAGED_AGENT_GID = 1000
 
 
-class PentestWorkloadHandle(Protocol):
-    async def poll(self) -> Any | None:
-        """Return a workload result once complete, otherwise None."""
-
-    async def stop(self, *, grace_seconds: int) -> Mapping[str, Any] | None:
-        """Attempt graceful workload termination."""
-
-    async def remove(self) -> Mapping[str, Any] | None:
-        """Remove workload runtime resources."""
+def _managed_agent_subprocess_kwargs() -> dict[str, int]:
+    geteuid = getattr(os, "geteuid", None)
+    if os.name != "posix" or not callable(geteuid) or geteuid() != 0:
+        return {}
+    return {"user": _MANAGED_AGENT_UID, "group": _MANAGED_AGENT_GID}
 
 
-class PentestProviderLeaseManager(Protocol):
-    async def acquire(
-        self,
-        *,
-        runtime_id: str,
-        profile_id: str,
-        owner: str,
-        metadata: Mapping[str, Any],
-    ) -> str:
-        """Acquire provider capacity for one PentestGPT attempt."""
-
-    async def release(
-        self,
-        *,
-        runtime_id: str,
-        profile_id: str,
-        owner: str,
-        lease_id: str,
-    ) -> None:
-        """Release provider capacity for one PentestGPT attempt."""
-
-    async def record_cooldown(
-        self,
-        *,
-        runtime_id: str,
-        profile_id: str,
-        owner: str,
-        cooldown_seconds: int,
-        reason: str,
-    ) -> None:
-        """Record provider cooldown for a quota or rate-limit failure."""
+async def _create_managed_agent_subprocess(
+    *command: str,
+    **kwargs: Any,
+) -> asyncio.subprocess.Process:
+    return await asyncio.create_subprocess_exec(
+        *command,
+        **kwargs,
+        **_managed_agent_subprocess_kwargs(),
+    )
 
 
-class TemporalPentestProviderLeaseManager:
-    def __init__(self, client_adapter: Any) -> None:
-        self._client_adapter = client_adapter
+def _normalize_managed_git_ownership(workspace: str) -> None:
+    """Repair legacy root-owned Git directories before managed-user Git commands."""
 
-    async def _ensure_manager_started(self, runtime_id: str) -> str:
-        from temporalio.exceptions import WorkflowAlreadyStartedError
+    if not _managed_agent_subprocess_kwargs():
+        return
+    git_dir = Path(workspace).expanduser().resolve() / ".git"
+    try:
+        git_stat = os.lstat(git_dir)
+    except FileNotFoundError:
+        return
+    if not stat.S_ISDIR(git_stat.st_mode):
+        return
 
-        from moonmind.workflows.temporal.activity_catalog import get_workflow_task_queue
-        from moonmind.workflows.temporal.workflows.provider_profile_manager import (
-            WORKFLOW_NAME as PROVIDER_PROFILE_MANAGER_WF,
-            workflow_id_for_runtime,
-        )
-
-        workflow_id = workflow_id_for_runtime(runtime_id)
-        get_client = getattr(self._client_adapter, "get_client", None)
-        if get_client is None:
-            return workflow_id
-        client = await get_client()
-        try:
-            await client.start_workflow(
-                PROVIDER_PROFILE_MANAGER_WF,
-                {"runtime_id": runtime_id},
-                id=workflow_id,
-                task_queue=get_workflow_task_queue(),
-            )
-        except WorkflowAlreadyStartedError:
-            logger.debug(
-                "Provider profile manager %s is already running", workflow_id
-            )
-        return workflow_id
-
-    async def _assert_profile_known(
-        self,
-        *,
-        workflow_id: str,
-        profile_id: str,
-    ) -> None:
-        get_client = getattr(self._client_adapter, "get_client", None)
-        if get_client is None:
-            return
-        client = await get_client()
-        handle = client.get_workflow_handle(workflow_id)
-        last_error: Exception | None = None
-        for _attempt in range(_PROFILE_MANAGER_READY_POLL_ATTEMPTS):
-            try:
-                state = await handle.query("get_state")
-            except Exception as exc:
-                last_error = exc
-                await asyncio.sleep(_PROFILE_MANAGER_READY_POLL_SECONDS)
-                continue
-            last_error = None
-            profiles = state.get("profiles") if isinstance(state, Mapping) else None
-            if isinstance(profiles, Mapping) and profile_id in profiles:
-                return
-            await asyncio.sleep(_PROFILE_MANAGER_READY_POLL_SECONDS)
-        if last_error is not None:
-            raise last_error
+    directory_flag = getattr(os, "O_DIRECTORY", None)
+    no_follow_flag = getattr(os, "O_NOFOLLOW", None)
+    if directory_flag is None or no_follow_flag is None:
         raise RuntimeError(
-            f"Provider profile {profile_id!r} is not launch-ready in {workflow_id}"
+            "managed Git ownership repair requires O_DIRECTORY and O_NOFOLLOW support"
         )
-
-    async def acquire(
-        self,
-        *,
-        runtime_id: str,
-        profile_id: str,
-        owner: str,
-        metadata: Mapping[str, Any],
-    ) -> str:
-        update_workflow = getattr(self._client_adapter, "update_workflow", None)
-        if update_workflow is None:
-            raise RuntimeError("Temporal client adapter does not support workflow updates")
-        workflow_id = await self._ensure_manager_started(runtime_id)
-        await self._assert_profile_known(
-            workflow_id=workflow_id,
-            profile_id=profile_id,
-        )
-        await update_workflow(
-            workflow_id,
-            "AcquireSlot",
-            {
-                "requester_workflow_id": owner,
-                "runtime_id": runtime_id,
-                "execution_profile_ref": profile_id,
-                "metadata": dict(metadata),
-            },
-        )
-        return owner
-
-    async def release(
-        self,
-        *,
-        runtime_id: str,
-        profile_id: str,
-        owner: str,
-        lease_id: str,
-    ) -> None:
-        await self._client_adapter.signal_workflow(
-            await self._ensure_manager_started(runtime_id),
-            "release_slot",
-            {
-                "requester_workflow_id": owner,
-                "runtime_id": runtime_id,
-                "profile_id": profile_id,
-                "lease_id": lease_id,
-            },
-        )
-
-    async def record_cooldown(
-        self,
-        *,
-        runtime_id: str,
-        profile_id: str,
-        owner: str,
-        cooldown_seconds: int,
-        reason: str,
-    ) -> None:
-        await self._client_adapter.signal_workflow(
-            await self._ensure_manager_started(runtime_id),
-            "report_cooldown",
-            {
-                "runtime_id": runtime_id,
-                "profile_id": profile_id,
-                "requester_workflow_id": owner,
-                "cooldown_seconds": cooldown_seconds,
-                "reason": reason,
-            },
-        )
-
-
-def _pentest_provider_lease_owner(
-    *,
-    agent_run_id: str,
-    step_id: str,
-    attempt: int,
-) -> str:
-    return f"pentest:{agent_run_id}:{step_id}:{attempt}"
-
-
-def _pentest_target_hash(target: str) -> str:
-    return hashlib.sha256(target.encode("utf-8")).hexdigest()
-
-
-def _pentest_provider_lease_safe_metadata(
-    request: PentestWorkloadRequest,
-    *,
-    runtime_id: str,
-    profile_id: str,
-) -> dict[str, Any]:
-    return {
-        "tool": "security.pentest.run",
-        "runtime_id": runtime_id,
-        "profile_id": profile_id,
-        "agent_run_id": request.agent_run_id,
-        "step_id": request.step_id,
-        "attempt": request.attempt,
-        "target_hash": _pentest_target_hash(request.target),
-        "mode": request.operation_mode,
-        "runner_profile": request.runner_profile_id,
-    }
-
-def emit_pentest_activity_heartbeat(
-    *,
-    phase: str,
-    agent_run_id: str | None = None,
-    step_id: str | None = None,
-    attempt: int | None = None,
-    message: str | None = None,
-    metadata: Mapping[str, Any] | None = None,
-    elapsed_seconds: float | None = None,
-) -> dict[str, Any]:
-    """Emit and return a compact redacted Pentest activity heartbeat payload."""
-
-    dropped_metadata_keys = {
-        "stdout",
-        "stderr",
-        "logs",
-        "raw_logs",
-        "raw_evidence",
-        "evidence",
-        "diagnostics_body",
-        "env",
-        "env_overrides",
-        "command",
-        "credentials",
-        "secrets",
-    }
-    compact_metadata = {
-        str(key): redact_pentest_diagnostic_value(value)
-        for key, value in dict(metadata or {}).items()
-        if value is not None
-        and str(key) not in dropped_metadata_keys
-        and not re.search(r"(?i)(api[_-]?key|token|password|secret)", str(key))
-    }
-    payload: dict[str, Any] = {
-        "phase": build_pentest_progress_annotation(
-            phase=phase,
-            message=message or f"Pentest phase {phase}.",
-        ).phase,
-    }
-    if agent_run_id:
-        payload["agent_run_id"] = str(agent_run_id)
-    if step_id:
-        payload["step_id"] = str(step_id)
-    if attempt is not None:
-        payload["attempt"] = int(attempt)
-    if elapsed_seconds is not None:
-        payload["elapsed_seconds"] = max(0.0, round(float(elapsed_seconds), 3))
-    if message:
-        payload["message"] = redact_pentest_human_text(str(message))
-    if compact_metadata:
-        payload["metadata"] = compact_metadata
+    git_fd = os.open(git_dir, os.O_RDONLY | directory_flag | no_follow_flag)
     try:
-        temporal_activity.heartbeat(payload)
-    except RuntimeError:
-        # Unit tests and trusted internal callers may exercise the helper
-        # outside a live Temporal activity context.
-        pass
-    return payload
-
-async def _await_pentest_workload_with_activity_heartbeats(
-    workload_awaitable: Awaitable[Any],
-    *,
-    request: PentestWorkloadRequest,
-    heartbeat_interval_seconds: float = _PENTEST_RUNNING_HEARTBEAT_INTERVAL_SECONDS,
-) -> Any:
-    """Await a launched Pentest workload while emitting bounded running heartbeats."""
-
-    started_at = time.monotonic()
-    task = asyncio.ensure_future(workload_awaitable)
-    emit_pentest_activity_heartbeat(
-        phase="running",
-        agent_run_id=request.agent_run_id,
-        step_id=request.step_id,
-        attempt=request.attempt,
-        message="Pentest workload is running.",
-        elapsed_seconds=0.0,
-    )
-    interval = max(0.001, float(heartbeat_interval_seconds))
-    try:
-        while not task.done():
-            done, _pending = await asyncio.wait({task}, timeout=interval)
-            if done:
-                break
-            emit_pentest_activity_heartbeat(
-                phase="running",
-                agent_run_id=request.agent_run_id,
-                step_id=request.step_id,
-                attempt=request.attempt,
-                message="Pentest workload is still running.",
-                elapsed_seconds=time.monotonic() - started_at,
-            )
-        return await task
-    except asyncio.CancelledError:
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
-        raise
-
-async def _supervise_pentest_workload_with_activity_heartbeats(
-    launcher: Any,
-    validated_workload_request: Any,
-    *,
-    request: PentestWorkloadRequest,
-    timeout_seconds: float,
-    heartbeat_interval_seconds: float = _PENTEST_RUNNING_HEARTBEAT_INTERVAL_SECONDS,
-) -> WorkloadResult:
-    """Run a Pentest workload with activity-visible heartbeats and cleanup."""
-
-    if not callable(getattr(launcher, "start", None)):
-        raw_result = await _await_pentest_workload_with_activity_heartbeats(
-            launcher.run(validated_workload_request),
-            request=request,
-            heartbeat_interval_seconds=heartbeat_interval_seconds,
-        )
-        if isinstance(raw_result, WorkloadResult):
-            return raw_result
-        return WorkloadResult.model_validate(raw_result)
-
-    started_at = datetime.now(UTC)
-    monotonic_started_at = time.monotonic()
-    interval = max(0.001, float(heartbeat_interval_seconds))
-    timeout = max(0.001, float(timeout_seconds))
-    cleanup_metadata: dict[str, Any] = {
-        "gracefulTerminationAttempted": False,
-        "killEscalated": False,
-        "containerRemoved": False,
-        "cleanupErrors": [],
-    }
-
-    def _cleanup_metadata() -> dict[str, Any]:
-        return redact_sensitive_payload(dict(cleanup_metadata))
-
-    def _kill_grace_seconds() -> int:
-        profile = getattr(validated_workload_request, "profile", None)
-        cleanup = getattr(profile, "cleanup", None)
-        return int(getattr(cleanup, "kill_grace_seconds", 30) or 30)
-
-    async def _stop_and_remove(*, terminal_reason: str) -> None:
-        cleanup_metadata["terminalReason"] = terminal_reason
-        cleanup_metadata["gracefulTerminationAttempted"] = True
-        try:
-            stop_result = await handle.stop(grace_seconds=_kill_grace_seconds())
-            if isinstance(stop_result, Mapping):
-                cleanup_metadata.update(dict(stop_result))
-        except Exception as exc:
-            cleanup_metadata["killEscalated"] = True
-            cleanup_metadata["cleanupErrors"].append(
-                redact_pentest_human_text(str(exc))
-            )
-        try:
-            remove_result = await handle.remove()
-            cleanup_metadata["containerRemoved"] = True
-            if isinstance(remove_result, Mapping):
-                cleanup_metadata.update(dict(remove_result))
-        except Exception as exc:
-            cleanup_metadata["containerRemoved"] = False
-            cleanup_metadata["cleanupErrors"].append(
-                redact_pentest_human_text(str(exc))
-            )
-
-    handle: PentestWorkloadHandle = await launcher.start(validated_workload_request)
-    emit_pentest_activity_heartbeat(
-        phase="running",
-        agent_run_id=request.agent_run_id,
-        step_id=request.step_id,
-        attempt=request.attempt,
-        message="Pentest workload is running.",
-        elapsed_seconds=0.0,
-    )
-    try:
-        while True:
-            raw_result = await handle.poll()
-            if raw_result is not None:
-                result = (
-                    raw_result
-                    if isinstance(raw_result, WorkloadResult)
-                    else WorkloadResult.model_validate(raw_result)
+        os.fchown(git_fd, _MANAGED_AGENT_UID, _MANAGED_AGENT_GID)
+        for _root, dirnames, filenames, directory_fd in os.fwalk(
+            ".",
+            topdown=True,
+            follow_symlinks=False,
+            dir_fd=git_fd,
+        ):
+            for name in (*dirnames, *filenames):
+                os.chown(
+                    name,
+                    _MANAGED_AGENT_UID,
+                    _MANAGED_AGENT_GID,
+                    dir_fd=directory_fd,
+                    follow_symlinks=False,
                 )
-                result.metadata.setdefault("cleanup", _cleanup_metadata())
-                return result
-            elapsed = time.monotonic() - monotonic_started_at
-            if elapsed >= timeout:
-                await _stop_and_remove(terminal_reason="timeout")
-                completed_at = datetime.now(UTC)
-                return WorkloadResult(
-                    requestId=getattr(
-                        validated_workload_request,
-                        "container_name",
-                        f"pentest-{request.agent_run_id}-{request.step_id}-{request.attempt}",
-                    ),
-                    profileId=request.runner_profile_id,
-                    status="timed_out",
-                    exitCode=None,
-                    startedAt=started_at,
-                    completedAt=completed_at,
-                    durationSeconds=(completed_at - started_at).total_seconds(),
-                    timeoutReason="workload exceeded timeoutSeconds",
-                    metadata={"cleanup": _cleanup_metadata()},
-                )
-            await asyncio.sleep(min(interval, max(0.001, timeout - elapsed)))
-            emit_pentest_activity_heartbeat(
-                phase="running",
-                agent_run_id=request.agent_run_id,
-                step_id=request.step_id,
-                attempt=request.attempt,
-                message="Pentest workload is still running.",
-                elapsed_seconds=time.monotonic() - monotonic_started_at,
-            )
-    except asyncio.CancelledError:
-        await _stop_and_remove(terminal_reason="cancellation")
-        raise
-    except Exception:
-        await _stop_and_remove(terminal_reason="failure")
-        raise
+    finally:
+        os.close(git_fd)
 
-async def cleanup_pentest_orphan_containers(
-    janitor: Any,
-    *,
-    agent_run_id: str | None = None,
-    step_id: str | None = None,
-    runner_profile_id: str | None = None,
-) -> dict[str, Any]:
-    """Remove orphaned Pentest containers selected by deterministic labels."""
 
-    selector = pentest_cleanup_selector(
-        agent_run_id=agent_run_id,
-        step_id=step_id,
-        runner_profile_id=runner_profile_id,
-    )
-    container_ids = await janitor.find_by_labels(selector)
-    removed: list[str] = []
-    errors: list[str] = []
-    for container_id in container_ids:
+def _normalize_managed_path_owners(paths: Sequence[Path]) -> None:
+    if not _managed_agent_subprocess_kwargs():
+        return
+    for path in paths:
         try:
-            await janitor.remove(container_id)
-            removed.append(str(container_id))
-        except Exception as exc:
-            errors.append(redact_pentest_human_text(str(exc)))
-    return {
-        "selector": selector,
-        "selected_count": len(container_ids),
-        "removed_count": len(removed),
-        "removed_container_ids": removed,
-        "cleanup_errors": errors,
-    }
+            os.lstat(path)
+        except FileNotFoundError:
+            continue
+        os.chown(
+            path,
+            _MANAGED_AGENT_UID,
+            _MANAGED_AGENT_GID,
+            follow_symlinks=False,
+        )
+
+
+class _HashingArchiveReader:
+    """Hash file blocks while ``tarfile`` streams them into an archive."""
+
+    def __init__(self, file_handle: BinaryIO) -> None:
+        self._file_handle = file_handle
+        self._hash = hashlib.sha256()
+
+    def read(self, size: int = -1) -> bytes:
+        chunk = self._file_handle.read(size)
+        if chunk:
+            self._hash.update(chunk)
+        return chunk
+
+    def hexdigest(self) -> str:
+        return self._hash.hexdigest()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 _GIT_PUSH_SCAN_MAX_COMMIT_METADATA_CHARS = 100_000
 _GIT_PUSH_SCAN_MAX_FILE_DIFF_CHARS = 200_000
@@ -748,14 +474,9 @@ _PROPOSAL_TELEMETRY_TAG_LABELS = {
 _AUTO_SKILL_SENTINEL = "auto"
 _NON_SECRET_MANAGED_SESSION_ENV_KEYS: tuple[str, ...] = (
     "MOONMIND_URL",
-    # Non-secret Unreal toolchain image refs. Threaded into the managed-session
-    # launch environment so the docker-sidecar manifest preflight and the agent's
-    # build/test skill see the operator-configured image instead of falling back
-    # to a gated, late-failing pull. GHCR pull *credentials* are intentionally not
-    # here: they are secrets resolved separately by
-    # resolve_ghcr_pull_credentials_for_launch.
+    # Non-secret Unreal toolchain image ref consumed by portable skills that submit
+    # typed container jobs through MoonMind's API-owned Docker Backend.
     "MOONMIND_UNREAL_ENGINE_IMAGE",
-    "MOONMIND_DOCKER_PREFLIGHT_IMAGE_REF",
 )
 _MANAGED_SESSION_TELEMETRY_KEYS: tuple[str, ...] = (
     "activityType",
@@ -914,25 +635,6 @@ def _log_managed_session_activity(
         extra={"managed_session": context},
     )
 
-def _artifact_ref_for_pentest_name(
-    publication: Mapping[str, Any],
-    name: str,
-) -> str | None:
-    """Return the compact artifact ref for a named Pentest publication artifact."""
-
-    artifact_publication = publication.get("artifact_publication")
-    if not isinstance(artifact_publication, Mapping):
-        return None
-    artifacts = artifact_publication.get("artifacts")
-    if not isinstance(artifacts, Sequence) or isinstance(artifacts, (str, bytes)):
-        return None
-    for artifact in artifacts:
-        if not isinstance(artifact, Mapping):
-            continue
-        if artifact.get("name") == name:
-            ref = artifact.get("artifact_ref")
-            return str(ref).strip() if ref else None
-    return None
 _OPERATOR_SUMMARY_TAIL_BYTES = 64 * 1024
 _PUBLISH_GIT_EXCLUDED_PATHS: tuple[str, ...] = (
     "CLAUDE.md",
@@ -961,7 +663,13 @@ class ManagedSessionController(Protocol):
         pass
 
     async def send_turn(
-        self, request: SendCodexManagedSessionTurnRequest, /
+        self,
+        request: SendCodexManagedSessionTurnRequest,
+        /,
+        *,
+        observation_sink: Callable[
+            [list[Any], str, CodexManagedSessionLocator], Awaitable[None]
+        ] | None = None,
     ) -> CodexManagedSessionTurnResponse | Mapping[str, Any]:
         pass
 
@@ -978,11 +686,6 @@ class ManagedSessionController(Protocol):
     async def clear_session(
         self, request: CodexManagedSessionClearRequest, /
     ) -> CodexManagedSessionHandle | Mapping[str, Any]:
-        pass
-
-    async def ensure_docker_sidecar(
-        self, request: ManagedSessionEnsureDockerSidecarRequest, /
-    ) -> ManagedSessionEnsureDockerSidecarResponse | Mapping[str, Any]:
         pass
 
     async def terminate_session(
@@ -1006,8 +709,15 @@ class ManagedSessionController(Protocol):
     async def reap_orphan_session_containers(self) -> Any:
         pass
 
+    async def run_container_remediation_action(self, **kwargs: Any) -> Mapping[str, Any]:
+        pass
+
     async def collect_managed_runtime_cleanup_docker_references(self) -> Any:
         pass
+
+    async def reclaim_docker_storage_pressure(self, *, config: Any = None) -> Any:
+        pass
+
 
 def _managed_runtime_artifact_root() -> Path:
     return managed_runtime_artifact_root()
@@ -1185,6 +895,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "artifact.unpin": ("artifacts", "artifact_unpin"),
     "artifact.lifecycle_sweep": ("artifacts", "artifact_lifecycle_sweep"),
     "step_checkpoint.create": ("artifacts", "step_checkpoint_create"),
+    "step_checkpoint.create_v2": ("artifacts", "step_checkpoint_create"),
     "step_checkpoint.validate": ("artifacts", "step_checkpoint_validate"),
     "manifest.compile": ("manifest", "manifest_compile"),
     "manifest.write_summary": ("manifest", "manifest_write_summary"),
@@ -1197,10 +908,19 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "sandbox.run_command": ("sandbox", "sandbox_run_command"),
     "sandbox.run_tests": ("sandbox", "sandbox_run_tests"),
     "workspace.capture_checkpoint": ("sandbox", "workspace_capture_checkpoint"),
+    "workspace.apply_checkpoint": ("sandbox", "workspace_apply_policy"),
+    "agent_runtime.capture_workspace_checkpoint": (
+        "agent_runtime",
+        "agent_runtime_capture_workspace_checkpoint",
+    ),
     "workspace.apply_policy": ("sandbox", "workspace_apply_policy"),
     "workspace.classify_git_effect": ("sandbox", "workspace_classify_git_effect"),
     "provider_profile.list": ("artifacts", "provider_profile_list"),
     "provider_profile.ensure_manager": ("artifacts", "provider_profile_ensure_manager"),
+    "provider_profile.acquire_credential_maintenance_lease": (
+        "artifacts",
+        "provider_profile_acquire_credential_maintenance_lease",
+    ),
     "provider_profile.reset_manager": ("artifacts", "provider_profile_reset_manager"),
     "provider_profile.manager_state": ("artifacts", "provider_profile_manager_state"),
     "provider_profile.verify_lease_holders": (
@@ -1215,6 +935,8 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "artifacts",
         "provider_profile_pending_request_order",
     ),
+    "oauth_session.prepare_credential_maintenance": ("agent_runtime", "oauth_session_prepare_credential_maintenance"),
+    "oauth_session.revalidate_bound_host": ("agent_runtime", "oauth_session_revalidate_bound_host"),
     "oauth_session.ensure_volume": ("agent_runtime", "oauth_session_ensure_volume"),
     "oauth_session.start_auth_runner": ("agent_runtime", "oauth_session_start_auth_runner"),
     "oauth_session.update_terminal_session": ("artifacts", "oauth_session_update_terminal_session"),
@@ -1239,13 +961,60 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     # General-purpose repo operations (provider-agnostic)
     "repo.create_pr": ("integrations", "repo_create_pr"),
     "repo.merge_pr": ("integrations", "repo_merge_pr"),
+    "publication_recovery.observe": ("integrations", "publication_recovery_observe"),
+    "publication_recovery.publish": ("integrations", "publication_recovery_publish"),
+    "publication_recovery.verify": ("integrations", "publication_recovery_verify"),
+    "publication_recovery.restore_candidate": (
+        "agent_runtime",
+        "publication_recovery_restore_candidate",
+    ),
+    "publication_recovery.publish_candidate": (
+        "agent_runtime",
+        "publication_recovery_publish_candidate",
+    ),
+    "publication_recovery.cleanup": (
+        "agent_runtime",
+        "publication_recovery_cleanup",
+    ),
+    "publication_recovery.persist_result": (
+        "artifacts",
+        "publication_recovery_persist_result",
+    ),
     "merge_automation.evaluate_readiness": (
         "integrations",
         "merge_automation_evaluate_readiness",
     ),
+    "merge_automation.request_automated_review": (
+        "integrations",
+        "merge_automation_request_automated_review",
+    ),
     "merge_automation.complete_post_merge_jira": (
         "integrations",
         "merge_automation_complete_post_merge_jira",
+    ),
+    "merge_automation.complete_post_merge_github": (
+        "integrations",
+        "merge_automation_complete_post_merge_github",
+    ),
+    "pr_resolver.resolve_selector": (
+        "integrations",
+        "pr_resolver_resolve_selector",
+    ),
+    "pr_resolver.read_snapshot": ("integrations", "pr_resolver_read_snapshot"),
+    "pr_resolver.classify_gate": ("integrations", "pr_resolver_classify_gate"),
+    "pr_resolver.finalize_merge": ("integrations", "pr_resolver_finalize_merge"),
+    "pr_resolver.verify_remote_head": (
+        "integrations",
+        "pr_resolver_verify_remote_head",
+    ),
+    "pr_resolver.verify_merged": ("integrations", "pr_resolver_verify_merged"),
+    "worker.verify_workflow_capability": (
+        "integrations",
+        "worker_verify_workflow_capability",
+    ),
+    "pr_resolver.write_terminal_result": (
+        "artifacts",
+        "pr_resolver_write_terminal_result",
     ),
     "memory.evaluate_proposals": ("integrations", "memory_evaluate_proposals"),
     "memory.apply_policy": ("integrations", "memory_apply_policy"),
@@ -1267,7 +1036,53 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     ),
     "integration.codex_cloud.cancel": ("integrations", "integration_codex_cloud_cancel"),
     "integration.openclaw.execute": ("integrations", "integration_openclaw_execute"),
-    "integration.omnigent.execute": ("integrations", "integration_omnigent_execute"),
+    "integration.omnigent.execute": ("agent_runtime", "integration_omnigent_execute"),
+    "integration.omnigent.profile_bound_execute": ("agent_runtime", "integration_omnigent_profile_bound_execute"),
+    "integration.omnigent.oauth_host_janitor": ("agent_runtime", "integration_omnigent_oauth_host_janitor"),
+    "omnigent.evaluate_session_admission": (
+        "agent_runtime",
+        "omnigent_evaluate_session_admission",
+    ),
+    "omnigent.resolve_intent": ("agent_runtime", "omnigent_resolve_intent"),
+    "omnigent.load_reconciliation_inputs": (
+        "agent_runtime",
+        "omnigent_load_reconciliation_inputs",
+    ),
+    "omnigent.load_failure_authority": (
+        "agent_runtime",
+        "omnigent_load_failure_authority",
+    ),
+    "omnigent.ensure_provider_profile_lease": (
+        "agent_runtime",
+        "omnigent_ensure_provider_profile_lease",
+    ),
+    "omnigent.ensure_host": ("agent_runtime", "omnigent_ensure_host"),
+    "omnigent.ensure_provider_session": (
+        "agent_runtime",
+        "omnigent_ensure_provider_session",
+    ),
+    "omnigent.submit_turn": ("agent_runtime", "omnigent_submit_turn"),
+    "omnigent.heartbeat_host_lease": (
+        "agent_runtime",
+        "omnigent_heartbeat_host_lease",
+    ),
+    "omnigent.read_event_batch": ("agent_runtime", "omnigent_read_event_batch"),
+    "omnigent.observe_snapshot": ("agent_runtime", "omnigent_observe_snapshot"),
+    "omnigent.harvest_evidence": ("agent_runtime", "omnigent_harvest_evidence"),
+    "omnigent.publish_workspace": ("agent_runtime", "omnigent_publish_workspace"),
+    "omnigent.stop_provider_session": (
+        "agent_runtime",
+        "omnigent_stop_provider_session",
+    ),
+    "omnigent.stop_host": ("agent_runtime", "omnigent_stop_host"),
+    "omnigent.release_leases": ("agent_runtime", "omnigent_release_leases"),
+    "omnigent.persist_decision": ("agent_runtime", "omnigent_persist_decision"),
+    "omnigent.persist_signal_intents": (
+        "agent_runtime",
+        "omnigent_persist_signal_intents",
+    ),
+    "omnigent.record_terminal": ("agent_runtime", "omnigent_record_terminal"),
+    "omnigent.persist_failure": ("agent_runtime", "omnigent_persist_failure"),
     "agent_runtime.publish_artifacts": (
         "agent_runtime",
         "agent_runtime_publish_artifacts",
@@ -1318,11 +1133,46 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "agent_runtime",
         "agent_runtime_cleanup_managed_runtime_files",
     ),
+    "agent_runtime.reclaim_docker_storage": (
+        "agent_runtime",
+        "agent_runtime_reclaim_docker_storage",
+    ),
+    "agent_runtime.restore_workspace_checkpoint": (
+        "agent_runtime",
+        "agent_runtime_restore_workspace_checkpoint",
+    ),
     "agent_runtime.status": ("agent_runtime", "agent_runtime_status"),
     "agent_runtime.fetch_result": ("agent_runtime", "agent_runtime_fetch_result"),
+    "agent_runtime.publish_terminal_checkpoint": (
+        "agent_runtime",
+        "agent_runtime_publish_terminal_checkpoint",
+    ),
+    "agent_runtime.evaluate_terminal_evidence": (
+        "agent_runtime",
+        "agent_runtime_evaluate_terminal_evidence",
+    ),
     "agent_runtime.cancel": ("agent_runtime", "agent_runtime_cancel"),
     "workload.run": ("agent_runtime", "workload_run"),
-    "security.pentest.execute": ("agent_runtime", "security_pentest_execute"),
+    **{
+        f"container_job.{name}": ("agent_runtime", f"container_job_{name}")
+        for name in (
+            "submit",
+            "status",
+            "cancel",
+            "resolve_workspace",
+            "acquire_image",
+            "create_container",
+            "start_container",
+            "observe_container",
+            "reconcile_container",
+            "stop_container",
+            "remove_container",
+            "publish_evidence",
+            "project_status",
+            "repair_projection",
+            "cleanup",
+        )
+    },
     "proposal.generate": ("proposals", "proposal_generate"),
     "proposal.submit": ("proposals", "proposal_submit"),
     "step.review": ("reviews", "step_review"),
@@ -1332,6 +1182,50 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "agent_skill.query_on_demand": ("agent_skills", "query_on_demand"),
     "agent_skill.request_on_demand": ("agent_skills", "request_on_demand"),
 }
+
+# ``mm.tool.execute`` is registered as a capability-routed alias on multiple
+# fleets rather than as one catalog route. The workflow-fleet helper is bound
+# by ``workflow_registry`` because workflow workers do not use this module's
+# side-effecting activity implementations.
+_CAPABILITY_ROUTED_ACTIVITY_ALIASES = frozenset({"mm.tool.execute"})
+_EXTERNALLY_BOUND_CATALOG_ACTIVITIES = frozenset(
+    {
+        "integration.resolve_adapter_metadata",
+        "checkpoint_branch.turn.mark_running",
+        "checkpoint_branch.turn.persist_terminal",
+        "checkpoint_branch.turn.persist_terminal_rejection",
+    }
+)
+
+
+def validate_activity_catalog_runtime_bindings(
+    catalog: TemporalActivityCatalog,
+) -> None:
+    """Fail startup when canonical routes and concrete handlers drift apart."""
+    catalog_types = {definition.activity_type for definition in catalog.activities}
+    runtime_types = set(_ACTIVITY_HANDLER_ATTRS)
+    missing_catalog_routes = sorted(
+        runtime_types - catalog_types - _CAPABILITY_ROUTED_ACTIVITY_ALIASES
+    )
+    missing_runtime_handlers = sorted(
+        catalog_types - runtime_types - _EXTERNALLY_BOUND_CATALOG_ACTIVITIES
+    )
+    if not missing_catalog_routes and not missing_runtime_handlers:
+        return
+
+    details: list[str] = []
+    if missing_catalog_routes:
+        details.append(
+            "handlers without catalog routes: " + ", ".join(missing_catalog_routes)
+        )
+    if missing_runtime_handlers:
+        details.append(
+            "catalog routes without handlers: " + ", ".join(missing_runtime_handlers)
+        )
+    raise TemporalActivityRuntimeError(
+        "Temporal activity catalog/runtime binding mismatch; " + "; ".join(details)
+    )
+
 
 def _artifact_id_from_ref(value: ArtifactRef | str) -> str:
     if isinstance(value, ArtifactRef):
@@ -1536,8 +1430,8 @@ def _tail_text(payload: bytes, *, max_chars: int = 512) -> str:
     return text[-max_chars:]
 
 def _default_registry_skill_payload(*, name: str) -> dict[str, Any]:
-    if is_dood_tool(name):
-        return build_dood_tool_definition_payload(name=name)
+    if is_container_job_tool(name):
+        return build_container_job_tool_definition_payload(name=name)
 
     if name == DEPLOYMENT_UPDATE_TOOL_NAME:
         return build_deployment_update_tool_definition_payload()
@@ -1545,227 +1439,6 @@ def _default_registry_skill_payload(*, name: str) -> dict[str, Any]:
     if name == OPS_DIAGNOSE_STACK_TOOL_NAME:
         return build_ops_diagnose_stack_tool_definition_payload()
 
-    if name == "security.pentest.run":
-        return {
-            "name": name,
-            "type": "skill",
-            "description": (
-                "Run an authorized PentestGPT workload against an approved "
-                "target scope and publish normalized findings plus evidence "
-                "artifacts."
-            ),
-            "inputs": {
-                "schema": {
-                    "type": "object",
-                    "required": ["target"],
-                    "properties": {
-                        "target": {"type": "string"},
-                        "scope_artifact_ref": {
-                            "type": "string",
-                            "description": (
-                                "Advanced: ArtifactRef for the approved pentest "
-                                "scope document. Execution still fails closed "
-                                "until MoonMind has an approved scope for the "
-                                "target."
-                            ),
-                        },
-                        "objective": {"type": "string"},
-                        "operation_mode": {
-                            "type": "string",
-                            "enum": [
-                                "recon_only",
-                                "validate_hypothesis",
-                                "full_authorized",
-                            ],
-                            "default": "recon_only",
-                        },
-                        "runner_profile_id": {
-                            "type": "string",
-                            "default": "pentestgpt-claude-oauth",
-                        },
-                        "execution_profile_ref": {
-                            "type": "string",
-                            "description": (
-                                "Exact Provider Profile to use for PentestGPT."
-                            ),
-                        },
-                        "provider_selector": {
-                            "type": "object",
-                            "additionalProperties": False,
-                            "properties": {
-                                "provider_id": {"type": "string"},
-                                "tags_any": {
-                                    "type": "array",
-                                    "items": {"type": "string"},
-                                },
-                                "tags_all": {
-                                    "type": "array",
-                                    "items": {"type": "string"},
-                                },
-                            },
-                        },
-                        "provider_runtime_state": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "object",
-                                "properties": {
-                                    "profile_id": {"type": "string"},
-                                    "current_leases": {
-                                        "type": "array",
-                                        "items": {"type": "string"},
-                                    },
-                                    "available_slots": {
-                                        "type": "integer",
-                                        "minimum": 0,
-                                    },
-                                    "cooldown_until": {"type": "string"},
-                                },
-                            },
-                        },
-                        "time_budget_minutes": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": 480,
-                            "default": 60,
-                        },
-                        "repo_dir": {"type": "string"},
-                        "artifacts_dir": {
-                            "type": "string",
-                            "description": (
-                                "Task artifact directory for PentestGPT evidence "
-                                "outputs. Supplied by the runtime when not "
-                                "provided by a trusted caller."
-                            ),
-                        },
-                        "evidence_level": {
-                            "type": "string",
-                            "enum": ["minimal", "standard", "full"],
-                            "default": "standard",
-                        },
-                        "network_attachment_ref": {
-                            "type": "string",
-                            "description": (
-                                "Optional artifact or ref reserved for future "
-                                "elevated-network runner profiles."
-                            ),
-                        },
-                    },
-                }
-            },
-            "outputs": {
-                "schema": {
-                    "type": "object",
-                    "required": [
-                        "status",
-                        "target",
-                        "runner_profile_id",
-                        "launch_plan",
-                    ],
-                    "properties": {
-                        "status": {
-                            "type": "string",
-                            "enum": ["launch_plan_ready", "provider_cooldown"],
-                        },
-                        "target": {"type": "string"},
-                        "runner_profile_id": {"type": "string"},
-                        "provider_profile": {"type": "object"},
-                        "provider_lease": {"type": "object"},
-                        "provider_cooldown": {
-                            "type": "object",
-                            "properties": {
-                                "profile_id": {"type": "string"},
-                                "cooldown_seconds": {
-                                    "type": "integer",
-                                    "minimum": 0,
-                                },
-                                "failure_category": {"type": "string"},
-                                "retry_allowed": {"type": "boolean"},
-                            },
-                        },
-                        "instruction_bundle": {"type": "object"},
-                        "runtime_paths": {"type": "object"},
-                        "wrapper_invocation": {"type": "object"},
-                        "launch_plan": {
-                            "type": "object",
-                            "required": [
-                                "profile_id",
-                                "container_name",
-                                "image",
-                                "entrypoint",
-                                "workdir",
-                                "network_policy",
-                                "linux_capabilities",
-                                "devices",
-                                "labels",
-                                "cleanup_selector",
-                            ],
-                            "properties": {
-                                "profile_id": {"type": "string"},
-                                "container_name": {"type": "string"},
-                                "image": {"type": "string"},
-                                "entrypoint": {
-                                    "type": "array",
-                                    "items": {"type": "string"},
-                                },
-                                "workdir": {"type": "string"},
-                                "mounts": {
-                                    "type": "array",
-                                    "items": {"type": "object"},
-                                },
-                                "env_keys": {
-                                    "type": "array",
-                                    "items": {"type": "string"},
-                                },
-                                "network_policy": {"type": "string"},
-                                "linux_capabilities": {
-                                    "type": "array",
-                                    "items": {"type": "string"},
-                                },
-                                "devices": {
-                                    "type": "array",
-                                    "items": {"type": "string"},
-                                },
-                                "resources": {"type": "object"},
-                                "timeout_seconds": {"type": "integer"},
-                                "cleanup": {"type": "object"},
-                                "labels": {
-                                    "type": "object",
-                                    "additionalProperties": {"type": "string"},
-                                },
-                                "cleanup_selector": {
-                                    "type": "object",
-                                    "additionalProperties": {"type": "string"},
-                                },
-                            },
-                        },
-                    },
-                }
-            },
-            "executor": {
-                "activity_type": "security.pentest.execute",
-                "selector": {"mode": "by_capability"},
-                "binding_reason": "stronger_isolation",
-            },
-            "requirements": {"capabilities": ["agent_runtime"]},
-            "policies": {
-                "timeouts": {
-                    "start_to_close_seconds": 28800,
-                    "schedule_to_close_seconds": 32400,
-                },
-                "retries": {
-                    "max_attempts": 1,
-                    "backoff": "none",
-                    "non_retryable_error_codes": [
-                        "INVALID_SCOPE",
-                        "PERMISSION_DENIED",
-                        "UNAPPROVED_TARGET",
-                        "UNSUPPORTED_PROFILE",
-                        "NON_IDEMPOTENT_OPERATION",
-                    ],
-                },
-            },
-            "security": {"allowed_roles": ["admin", "security_operator"]},
-        }
 
     if name == JIRA_CHECK_BLOCKERS_TOOL_NAME:
         return {
@@ -2446,6 +2119,18 @@ def _validate_agent_runtime_fetch_result_input(
             f"agent_runtime.fetch_result payload is invalid: {exc}"
         ) from exc
 
+def _validate_agent_runtime_terminal_checkpoint_input(
+    payload: Any,
+) -> AgentRuntimeTerminalCheckpointInput:
+    if isinstance(payload, AgentRuntimeTerminalCheckpointInput):
+        return payload
+    try:
+        return AgentRuntimeTerminalCheckpointInput.model_validate(payload)
+    except ValidationError as exc:
+        raise TemporalActivityRuntimeError(
+            f"agent_runtime.publish_terminal_checkpoint payload is invalid: {exc}"
+        ) from exc
+
 def _validate_agent_runtime_cancel_input(payload: Any) -> AgentRuntimeCancelInput:
     if isinstance(payload, AgentRuntimeCancelInput):
         return payload
@@ -2488,12 +2173,43 @@ async def _await_with_activity_heartbeats(
             done, _ = await asyncio.wait({task}, timeout=heartbeat_interval)
             if task in done:
                 return await task
-            activity.heartbeat(dict(heartbeat_payload))
+            try:
+                activity.heartbeat(dict(heartbeat_payload))
+            except asyncio.QueueFull:
+                # The Temporal SDK coalesces activity heartbeats through a
+                # bounded local queue.  Queue saturation means an earlier
+                # heartbeat is already pending; it is backpressure, not an
+                # activity failure.
+                logger.debug("activity_heartbeat_coalesced_queue_full")
     finally:
         if not task.done():
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+
+
+async def _run_sync_call_until_stopped(
+    call: Callable[[], Any],
+    *,
+    cancellation_requested: threading.Event,
+) -> Any:
+    """Keep ownership of a sync worker until it exits after cancellation."""
+
+    worker = asyncio.get_running_loop().run_in_executor(None, call)
+    try:
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        cancellation_requested.set()
+        while not worker.done():
+            try:
+                await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                # Repeated Activity cancellation must not orphan the worker.
+                continue
+        with contextlib.suppress(BaseException):
+            worker.result()
+        raise
+
 
 class TemporalPlanActivities:
     """Implementation helpers for ``plan.*`` activities."""
@@ -3022,7 +2738,6 @@ class TemporalSandboxActivities:
         artifact_store: Any | None = None,
         redactor: SecretRedactor | None = None,
         workspace_root: str | Path | None = None,
-        managed_workspace_root: str | Path | None = None,
     ) -> None:
         self._artifact_service = artifact_service
         self._artifact_store = artifact_store or InMemoryArtifactStore()
@@ -3030,10 +2745,6 @@ class TemporalSandboxActivities:
         self._workspace_root = Path(
             workspace_root or settings.workflow.workspace_root
         ).resolve()
-        self._managed_workspace_root = Path(
-            managed_workspace_root
-            or os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs")
-        ).expanduser().resolve()
 
     async def _put_checkpoint_bytes(
         self,
@@ -3043,16 +2754,17 @@ class TemporalSandboxActivities:
         metadata: Mapping[str, Any] | None = None,
     ) -> str:
         if self._artifact_service is not None:
-            artifact, _upload = await self._artifact_service.create(
-                principal="system",
-                content_type=content_type,
-                metadata_json=dict(metadata or {}),
-            )
-            completed = await self._artifact_service.write_complete(
-                artifact_id=artifact.artifact_id,
-                principal="system",
-                payload=payload,
-                content_type=content_type,
+            artifact_kind = str(
+                (metadata or {}).get("artifact_kind") or "checkpoint"
+            ).strip()
+            completed, _reused = (
+                await self._artifact_service.put_content_addressed_payload_complete(
+                    principal="system",
+                    payload=payload,
+                    content_type=content_type,
+                    metadata_json=dict(metadata or {}),
+                    scope=artifact_kind,
+                )
             )
             return _compact_artifact_ref_text(build_artifact_ref(completed))
         artifact = self._artifact_store.put_bytes(
@@ -3120,8 +2832,27 @@ class TemporalSandboxActivities:
         pull_auth = self._pull_auth_diagnostics(model.pull_auth_context_ref)
         provider_refs = self._provider_lease_refs(model.provider_lease_context_ref)
 
+        if isinstance(model.workspace_locator, ManagedWorkspaceLocator):
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_AUTHORITY_MISMATCH,
+                "sandbox worker cannot resolve a managed-runtime workspace",
+            )
+
         if model.kind == "external_state_ref":
-            source_ref = model.external_state_ref or model.workspace_root_ref or ""
+            if model.workspace_locator is not None and not isinstance(
+                model.workspace_locator, ExternalStateLocator
+            ):
+                raise WorkspaceLocatorResolutionError(
+                    WORKSPACE_LOCATOR_UNSUPPORTED,
+                    "filesystem workspace locator cannot be used as external state",
+                )
+            if model.workspace_locator is None and model.workspace_root_ref:
+                self._record_legacy_workspace_path_usage("capture_checkpoint")
+            source_ref = (
+                model.workspace_locator.artifact_ref
+                if isinstance(model.workspace_locator, ExternalStateLocator)
+                else model.external_state_ref or model.workspace_root_ref or ""
+            )
             external_state_ref = await self._put_checkpoint_bytes(
                 _json_bytes(
                     {
@@ -3147,9 +2878,20 @@ class TemporalSandboxActivities:
             )
             return result.model_dump(by_alias=True, mode="json")
 
-        workspace = self._resolve_checkpoint_workspace(
-            model.workspace_path or model.workspace_root_ref or "",
-            must_exist=True,
+        if isinstance(model.workspace_locator, ExternalStateLocator):
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_LOCATOR_UNSUPPORTED,
+                "external state cannot be used by a local checkpoint operation",
+            )
+        if model.workspace_locator is None:
+            self._record_legacy_workspace_path_usage("capture_checkpoint")
+        workspace = (
+            self._resolve_sandbox_locator(model.workspace_locator, must_exist=True)
+            if isinstance(model.workspace_locator, SandboxWorkspaceLocator)
+            else self._resolve_workspace(
+                model.workspace_path or model.workspace_root_ref or "",
+                must_exist=True,
+            )
         )
 
         if model.kind == "worktree_archive" and (
@@ -3208,14 +2950,16 @@ class TemporalSandboxActivities:
         model: WorkspaceCheckpointCaptureInput,
         workspace: Path,
     ) -> WorkspaceCheckpointEvidenceModel:
+        workspace_identity_digest = _workspace_identity_digest(workspace)
         if model.kind == "git_patch":
             if model.include_untracked or model.include_ignored_files:
                 raise TemporalActivityRuntimeError(
                     "git_patch checkpoint kind does not support including untracked or ignored files"
                 )
             diff_result = await _run_command(
-                ["git", "diff", "--binary", model.base_commit, "--"],
-                cwd=str(workspace),
+                _sandbox_workspace_git_command(
+                    workspace, "diff", "--binary", model.base_commit, "--"
+                ),
             )
             patch_payload = diff_result.stdout.encode("utf-8")
             patch_ref = await self._put_checkpoint_bytes(
@@ -3239,6 +2983,7 @@ class TemporalSandboxActivities:
                 kind="git_patch",
                 baseCommit=model.base_commit,
                 patchRef=patch_ref,
+                workspaceIdentityDigest=workspace_identity_digest,
                 manifestRef=manifest_ref,
                 includesUntracked=model.include_untracked,
                 includesIgnoredFiles=model.include_ignored_files,
@@ -3246,12 +2991,15 @@ class TemporalSandboxActivities:
             )
         if model.kind == "git_commit":
             head = (
-                await _run_command(["git", "rev-parse", "HEAD"], cwd=str(workspace))
+                await _run_command(
+                    _sandbox_workspace_git_command(workspace, "rev-parse", "HEAD")
+                )
             ).stdout.strip()
             return WorkspaceCheckpointEvidenceModel(
                 kind="git_commit",
                 baseCommit=model.base_commit,
                 headCommit=head,
+                workspaceIdentityDigest=workspace_identity_digest,
                 createdAt=datetime.now(UTC),
             )
         if model.kind == "ephemeral_workspace_ref":
@@ -3270,36 +3018,76 @@ class TemporalSandboxActivities:
             return WorkspaceCheckpointEvidenceModel(
                 kind="ephemeral_workspace_ref",
                 workspace_artifact_ref=workspace_ref,
+                workspaceIdentityDigest=workspace_identity_digest,
                 createdAt=datetime.now(UTC),
             )
         if model.kind == "worktree_archive":
-            archive_payload, archived_paths = self._build_worktree_archive(workspace)
+            head = model.base_commit
+            if (workspace / ".git").exists():
+                head = (
+                    await _run_command(
+                        _sandbox_workspace_git_command(
+                            workspace, "rev-parse", "HEAD"
+                        )
+                    )
+                ).stdout.strip()
+            archive_payload, entries = self._build_worktree_archive(workspace)
+            workspace_digest = _workspace_content_digest(entries)
             archive_ref = await self._put_checkpoint_bytes(
                 archive_payload,
                 content_type="application/vnd.moonmind.worktree-archive",
                 metadata={"artifact_kind": "checkpoint_archive"},
             )
+            manifest_body: dict[str, Any] = {
+                "schemaVersion": "v1",
+                "kind": "worktree_archive",
+                "baseCommit": model.base_commit,
+                "archiveRef": archive_ref,
+                "archiveDigest": "sha256:" + hashlib.sha256(archive_payload).hexdigest(),
+                "workspaceDigest": workspace_digest,
+                "entries": entries,
+                "pathCount": len(entries),
+            }
+            # ``gitStatusDigest`` lets restore cross-check the worktree's staged and
+            # untracked state, but only a git worktree exposes one. A non-git
+            # workspace still produces a valid archive + manifest; it simply omits
+            # the optional digest (restore already treats it as optional).
+            if (workspace / ".git").exists():
+                status = await _run_command(
+                    _sandbox_workspace_git_command(
+                        workspace,
+                        "status",
+                        "--porcelain=v1",
+                        "-z",
+                        "--untracked-files=all",
+                    ),
+                )
+                manifest_body["gitStatusDigest"] = (
+                    "sha256:"
+                    + hashlib.sha256(status.stdout.encode("utf-8")).hexdigest()
+                )
+            manifest_payload = _json_bytes(manifest_body)
             manifest_ref = await self._put_checkpoint_bytes(
-                _json_bytes(
-                    {
-                        "kind": "worktree_archive",
-                        "archiveRef": archive_ref,
-                        "pathCount": len(archived_paths),
-                    }
-                ),
+                manifest_payload,
                 content_type="application/json",
                 metadata={"artifact_kind": "checkpoint_manifest"},
             )
             return WorkspaceCheckpointEvidenceModel(
                 kind="worktree_archive",
+                baseCommit=model.base_commit,
+                headCommit=head,
                 archiveRef=archive_ref,
+                archiveDigest="sha256:" + hashlib.sha256(archive_payload).hexdigest(),
+                workspaceDigest=workspace_digest,
+                workspaceIdentityDigest=workspace_identity_digest,
                 manifestRef=manifest_ref,
+                manifestDigest="sha256:" + hashlib.sha256(manifest_payload).hexdigest(),
                 createdAt=datetime.now(UTC),
             )
         raise TemporalActivityRuntimeError(f"unsupported checkpoint kind: {model.kind}")
 
-    def _build_worktree_archive(self, workspace: Path) -> tuple[bytes, list[str]]:
-        archived_paths: list[str] = []
+    def _build_worktree_archive(self, workspace: Path) -> tuple[bytes, list[dict[str, Any]]]:
+        entries: list[dict[str, Any]] = []
         output = BytesIO()
         with tarfile.open(fileobj=output, mode="w:gz") as archive:
             for path in sorted(workspace.rglob("*")):
@@ -3325,7 +3113,11 @@ class TemporalSandboxActivities:
                     info.uname = "moonmind"
                     info.gname = "moonmind"
                     archive.addfile(info)
-                    archived_paths.append(str(relative))
+                    entries.append({
+                        "path": str(relative), "type": "symlink",
+                        "target": os.readlink(path),
+                        "mode": format(stat.S_IMODE(path.lstat().st_mode), "04o"),
+                    })
                     continue
                 info = archive.gettarinfo(str(path), arcname=str(relative))
                 info.uid = _MANAGED_AGENT_UID
@@ -3333,9 +3125,15 @@ class TemporalSandboxActivities:
                 info.uname = "moonmind"
                 info.gname = "moonmind"
                 with path.open("rb") as file_handle:
-                    archive.addfile(info, file_handle)
-                archived_paths.append(str(relative))
-        return output.getvalue(), archived_paths
+                    hashing_reader = _HashingArchiveReader(file_handle)
+                    archive.addfile(info, hashing_reader)
+                entries.append({
+                    "path": str(relative), "type": "file",
+                    "digest": "sha256:" + hashing_reader.hexdigest(),
+                    "bytes": info.size,
+                    "mode": format(stat.S_IMODE(path.stat().st_mode), "04o"),
+                })
+        return output.getvalue(), entries
 
     async def workspace_apply_policy(
         self,
@@ -3463,7 +3261,21 @@ class TemporalSandboxActivities:
         return decoded
 
     def _policy_target_workspace(self, model: WorkspacePolicyApplyInput) -> Path:
+        locator = model.target_workspace_locator
+        if isinstance(locator, ManagedWorkspaceLocator):
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_AUTHORITY_MISMATCH,
+                "sandbox worker cannot apply recovery to a managed-runtime workspace",
+            )
+        if isinstance(locator, ExternalStateLocator):
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_LOCATOR_UNSUPPORTED,
+                "external state cannot be used as a local recovery target",
+            )
+        if isinstance(locator, SandboxWorkspaceLocator):
+            return self._resolve_sandbox_locator(locator, must_exist=False)
         if model.target_workspace_ref:
+            self._record_legacy_workspace_path_usage("apply_policy")
             return self._resolve_workspace(model.target_workspace_ref, must_exist=False)
         digest = hashlib.sha256(model.idempotency_key.encode("utf-8")).hexdigest()[:16]
         target = (
@@ -3820,9 +3632,27 @@ class TemporalSandboxActivities:
         payload = _coerce_activity_request(
             request, activity_type="workspace.classify_git_effect"
         )
-        workspace = self._resolve_workspace(
-            payload.get("workspacePath") or payload.get("workspaceRootRef") or "",
-            must_exist=True,
+        raw_locator = payload.get("workspaceLocator")
+        locator = WORKSPACE_LOCATOR_ADAPTER.validate_python(raw_locator) if raw_locator else None
+        if isinstance(locator, ManagedWorkspaceLocator):
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_AUTHORITY_MISMATCH,
+                "sandbox worker cannot classify a managed-runtime workspace",
+            )
+        if isinstance(locator, ExternalStateLocator):
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_LOCATOR_UNSUPPORTED,
+                "external state cannot be used for git-effect classification",
+            )
+        if locator is None:
+            self._record_legacy_workspace_path_usage("classify_git_effect")
+        workspace = (
+            self._resolve_sandbox_locator(locator, must_exist=True)
+            if isinstance(locator, SandboxWorkspaceLocator)
+            else self._resolve_workspace(
+                payload.get("workspacePath") or payload.get("workspaceRootRef") or "",
+                must_exist=True,
+            )
         )
         status = (
             await _run_command(["git", "status", "--porcelain"], cwd=str(workspace))
@@ -3843,6 +3673,19 @@ class TemporalSandboxActivities:
             "diagnosticRefs": refs,
         }
 
+    @staticmethod
+    def _record_legacy_workspace_path_usage(operation: str) -> None:
+        try:
+            get_metrics_emitter().increment(
+                "workspace_locator.compatibility_path_usage",
+                tags={"operation": operation},
+            )
+        except Exception:
+            logger.warning(
+                "Failed to emit legacy workspace path compatibility metric",
+                exc_info=True,
+            )
+
     def _resolve_workspace(
         self, workspace_ref: str | Path, *, must_exist: bool
     ) -> Path:
@@ -3856,29 +3699,22 @@ class TemporalSandboxActivities:
             raise TemporalActivityRuntimeError(f"workspace does not exist: {workspace}")
         return workspace
 
-    def _resolve_checkpoint_workspace(
-        self, workspace_ref: str | Path, *, must_exist: bool
+    def _resolve_sandbox_locator(
+        self, locator: SandboxWorkspaceLocator, *, must_exist: bool
     ) -> Path:
-        workspace = Path(workspace_ref).expanduser().resolve()
         sandbox_root = (self._workspace_root / "temporal_sandbox").resolve()
-        try:
-            managed_relative = workspace.relative_to(self._managed_workspace_root)
-        except ValueError:
-            managed_relative = None
-        is_managed_repo_workspace = (
-            managed_relative is not None
-            and len(managed_relative.parts) == 2
-            and managed_relative.parts[1] == "repo"
-        )
-        if not (
-            workspace.is_relative_to(sandbox_root)
-            or is_managed_repo_workspace
-        ):
-            raise TemporalActivityRuntimeError(
-                f"workspace path escapes approved checkpoint roots: {workspace}"
+        workspace_root = (sandbox_root / locator.workspace_id).resolve()
+        if workspace_root.parent != sandbox_root:
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_AUTHORITY_MISMATCH, "sandbox workspace identity escapes its authority"
+            )
+        workspace = (workspace_root / locator.relative_path).resolve()
+        if not workspace.is_relative_to(workspace_root):
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_AUTHORITY_MISMATCH, "sandbox relative path escapes its workspace"
             )
         if must_exist and not workspace.exists():
-            raise TemporalActivityRuntimeError(f"workspace does not exist: {workspace}")
+            raise TemporalActivityRuntimeError("workspace locator does not resolve to an existing workspace")
         return workspace
 
     def _normalize_allowed_file_paths(
@@ -4488,6 +4324,219 @@ class TemporalIntegrationActivities:
             )
         )
 
+    async def publication_recovery_observe(self, payload, /, **kwargs):
+        """Read branch and PR identity from GitHub before any mutation."""
+        from moonmind.workflows.adapters.github_service import GitHubService
+
+        contract = dict((payload or {}).get("contract") or {})
+        intent = dict(contract.get("intent") or {})
+        continuation = dict(contract.get("continuation") or {})
+        repository = str(intent.get("repository") or "").strip()
+        head = str(intent.get("headRef") or "").strip()
+        base = str(intent.get("baseRef") or "").strip()
+        branch_repository = repository
+        branch_head = head
+        if ":" in head:
+            fork_owner, branch_head = head.split(":", 1)
+            repository_name = repository.partition("/")[2]
+            if fork_owner and repository_name and branch_head:
+                branch_repository = f"{fork_owner}/{repository_name}"
+        token, error = await GitHubService.resolve_github_token(repo=repository)
+        if not token:
+            return {
+                "authoritative": True,
+                "authorityAvailable": False,
+            }
+        headers = GitHubService._github_headers(token)
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                branch_response = await client.get(
+                    f"https://api.github.com/repos/{branch_repository}/git/ref/heads/{branch_head}",
+                    headers=headers,
+                )
+                if branch_response.status_code not in (200, 404):
+                    branch_response.raise_for_status()
+                branch_data = (
+                    branch_response.json() if branch_response.status_code == 200 else {}
+                )
+                pull_request = await GitHubService()._find_open_pull_request(
+                    client,
+                    repo=repository,
+                    head=head,
+                    base=base,
+                    headers=headers,
+                )
+        except (httpx.HTTPError, ValueError):
+            return {
+                "authoritative": False,
+                "authorityAvailable": True,
+                "transientAbsenceOnly": True,
+            }
+        branch_object = branch_data.get("object") or {}
+        pr_head = (pull_request or {}).get("head") or {}
+        pr_base = (pull_request or {}).get("base") or {}
+        return {
+            "authoritative": True,
+            "authorityAvailable": True,
+            "remoteBranchExists": branch_response.status_code == 200,
+            "remoteHeadSha": branch_object.get("sha"),
+            "pullRequestExists": pull_request is not None,
+            "pullRequestUrl": (pull_request or {}).get("html_url"),
+            "pullRequestHeadRef": pr_head.get("ref"),
+            "pullRequestBaseRef": pr_base.get("ref"),
+            "pullRequestHeadSha": pr_head.get("sha"),
+            "pullRequestDraft": (
+                (pull_request or {}).get("draft") if pull_request is not None else None
+            ),
+            "conflictingEvidence": (
+                branch_response.status_code == 200
+                and branch_object.get("sha")
+                != continuation.get("expectedHeadSha")
+            ),
+            "transientAbsenceOnly": False,
+        }
+
+    async def publication_recovery_publish(self, payload, /, **kwargs):
+        """Create or adopt exactly one PR using the frozen publication intent."""
+        from moonmind.workflows.adapters.github_service import GitHubService
+
+        contract = dict((payload or {}).get("contract") or {})
+        intent = dict(contract.get("intent") or {})
+        target = dict(contract.get("target") or {})
+        continuation = dict(contract.get("continuation") or {})
+        body = (
+            "Publication-only recovery for source workflow "
+            f"{contract.get('sourceWorkflowId')}.\n\n"
+            "No implementation or verification work was rerun."
+        )
+        if target.get("semanticContext") == "incomplete_draft_handoff":
+            body += (
+                "\n\nThis draft preserves incomplete work; the source workflow "
+                "remains failed. Remaining-work evidence: "
+                f"{continuation.get('remainingWorkRef')}"
+            )
+        result = await GitHubService().create_pull_request(
+            repo=str(intent.get("repository") or ""),
+            head=str(intent.get("headRef") or ""),
+            base=str(intent.get("baseRef") or ""),
+            title=f"Publication recovery: {target.get('sourcePublicationOperationId')}",
+            body=body,
+            draft=intent.get("mode") == "draft_pr",
+        )
+        if not result.url:
+            raise TemporalActivityRuntimeError(
+                f"publication recovery failed before a PR was reconciled: {result.summary}"
+            )
+        expected_draft = intent.get("mode") == "draft_pr"
+        if expected_draft and not (result.created or result.adopted):
+            raise TemporalActivityRuntimeError(
+                "publication recovery did not reconcile the authorized draft PR"
+            )
+        return {
+            "pullRequestUrl": result.url,
+            "headSha": result.head_sha,
+            "created": result.created,
+            "adopted": result.adopted,
+            "reconciliationOutcome": "new" if result.created else "reconciled",
+        }
+
+    async def publication_recovery_verify(self, payload, /, **kwargs):
+        """Re-observe GitHub and require the frozen head/base/commit identity."""
+        publication = dict((payload or {}).get("publication") or {})
+        reconciliation = dict((payload or {}).get("reconciliation") or {})
+        observed = await self.publication_recovery_observe(payload)
+        contract = dict((payload or {}).get("contract") or {})
+        continuation = dict(contract.get("continuation") or {})
+        intent = dict(contract.get("intent") or {})
+        target = dict(contract.get("target") or {})
+        restoration = (payload or {}).get("restoration")
+        repository = str(intent.get("repository") or "").strip()
+        expected_head = str(continuation.get("expectedHeadSha") or "").strip()
+        base_ref = str(intent.get("baseRef") or "").strip()
+        if (
+            not observed.get("authoritative")
+            or not observed.get("pullRequestExists")
+            or observed.get("remoteHeadSha") != continuation.get("expectedHeadSha")
+            or observed.get("pullRequestHeadSha")
+            != continuation.get("expectedHeadSha")
+        ):
+            raise TemporalActivityRuntimeError(
+                "publication recovery could not verify the expected remote PR head"
+            )
+        from moonmind.workflows.adapters.github_service import GitHubService
+
+        token, _error = await GitHubService.resolve_github_token(repo=repository)
+        if not token:
+            raise TemporalActivityRuntimeError(
+                "publication recovery could not measure remote candidate identity"
+            )
+        headers = GitHubService._github_headers(token)
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                commit_response = await client.get(
+                    f"https://api.github.com/repos/{repository}/git/commits/{expected_head}",
+                    headers=headers,
+                )
+                compare_response = await client.get(
+                    f"https://api.github.com/repos/{repository}/compare/{base_ref}...{expected_head}",
+                    headers=headers,
+                )
+                commit_response.raise_for_status()
+                compare_response.raise_for_status()
+                tree_sha = str((commit_response.json().get("tree") or {}).get("sha") or "")
+                patch = "\n".join(
+                    str(item.get("patch") or "")
+                    for item in compare_response.json().get("files", [])
+                    if isinstance(item, Mapping)
+                )
+        except (httpx.HTTPError, ValueError) as exc:
+            raise TemporalActivityRuntimeError(
+                "publication recovery could not measure remote tree/diff identity"
+            ) from exc
+        observed_tree_digest = "sha256:" + hashlib.sha256(tree_sha.encode()).hexdigest()
+        observed_diff_digest = "sha256:" + hashlib.sha256(patch.encode()).hexdigest()
+        from moonmind.workflows.temporal.publication_recovery import (
+            PublicationRecoveryEvidence,
+        )
+
+        evidence = PublicationRecoveryEvidence(
+            sourceWorkflowId=contract.get("sourceWorkflowId"),
+            sourceRunId=contract.get("sourceRunId"),
+            destinationWorkflowId=(payload or {}).get("destinationWorkflowId"),
+            publicationIdempotencyKey=(payload or {}).get("idempotencyKey"),
+            reconciliationOutcome=reconciliation.get("outcome"),
+            publicationOutcome=(
+                "new"
+                if publication.get("reconciliationOutcome") == "new"
+                else "reconciled"
+            ),
+            expectedHeadSha=continuation.get("expectedHeadSha"),
+            observedHeadSha=observed.get("pullRequestHeadSha"),
+            expectedTreeDigest=continuation.get("expectedTreeDigest"),
+            observedTreeDigest=observed_tree_digest,
+            expectedDiffDigest=continuation.get("expectedDiffDigest"),
+            observedDiffDigest=observed_diff_digest,
+            repository=intent.get("repository"),
+            baseRef=intent.get("baseRef"),
+            headRef=intent.get("headRef"),
+            pullRequestUrl=observed.get("pullRequestUrl")
+            or publication.get("pullRequestUrl"),
+            pullRequestDraft=bool(observed.get("pullRequestDraft")),
+            githubAuthorityRef=intent.get("githubAuthorityRef"),
+            secretScanRef=continuation.get("secretScanRef"),
+            diagnosticsRef=continuation.get("diagnosticsRef"),
+            publicationObservationsRef=continuation.get("priorObservationsRef"),
+            sourceSemanticOutcome=contract.get("sourceSemanticOutcome"),
+            semanticContext=target.get("semanticContext"),
+            remainingWorkRef=continuation.get("remainingWorkRef"),
+            restorationEvidenceRef=(
+                restoration.get("restorationEvidenceRef")
+                if isinstance(restoration, Mapping)
+                else None
+            ),
+        )
+        return evidence.model_dump(by_alias=True, mode="json", exclude_none=True)
+
     async def memory_evaluate_proposals(
         self,
         *,
@@ -4636,6 +4685,104 @@ class TemporalIntegrationActivities:
         from moonmind.workflows.temporal.activities.jules_activities import repo_merge_pr_activity
         return await repo_merge_pr_activity(payload)
 
+    async def worker_verify_workflow_capability(self, payload, /, **kwargs):
+        """Fail closed unless the deployed workflow fleet proves registration."""
+
+        request = dict(payload) if isinstance(payload, Mapping) else {}
+        workflow_type = str(request.get("workflowType") or "").strip()
+        task_queue = str(request.get("taskQueue") or "").strip()
+        url = str(
+            os.environ.get("TEMPORAL_WORKFLOW_READINESS_URL")
+            or "http://temporal-worker-workflow:8080/readyz"
+        ).strip()
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(url)
+                response.raise_for_status()
+                readiness = response.json()
+        except Exception as exc:
+            return {
+                "available": False,
+                "status": "blocked_operator",
+                "reasonCode": "worker_capability_unavailable",
+                "workflowType": workflow_type,
+                "taskQueue": task_queue,
+                "agentExecutionLaunched": False,
+                "diagnostic": exc.__class__.__name__,
+            }
+        if not isinstance(readiness, Mapping):
+            readiness = {}
+        workflow_types = {
+            str(item) for item in (readiness.get("workflowTypes") or [])
+        }
+        task_queues = {str(item) for item in (readiness.get("taskQueues") or [])}
+        available = (
+            readiness.get("ready") is True
+            and workflow_type in workflow_types
+            and task_queue in task_queues
+        )
+        fingerprints = [
+            str(item) for item in (readiness.get("registryFingerprints") or [])
+        ]
+        if not fingerprints and readiness.get("registryFingerprint"):
+            fingerprints = [str(readiness["registryFingerprint"])]
+        build_ids = [str(item) for item in (readiness.get("buildIds") or [])]
+        if not build_ids and readiness.get("buildId"):
+            build_ids = [str(readiness["buildId"])]
+        children = [
+            item
+            for item in (readiness.get("children") or [])
+            if isinstance(item, Mapping)
+            and workflow_type
+            in {str(value) for value in (item.get("workflowTypes") or [])}
+            and task_queue in {str(value) for value in (item.get("taskQueues") or [])}
+        ]
+        if not children and workflow_type in workflow_types and task_queue in task_queues:
+            children = [readiness]
+
+        def _single_value(key: str) -> str | None:
+            values = {
+                str(item.get(key))
+                for item in children
+                if item.get(key) is not None and str(item.get(key)).strip()
+            }
+            return next(iter(values)) if len(values) == 1 else None
+
+        result = {
+            "available": available,
+            "status": "ready" if available else "blocked_operator",
+            "reasonCode": (
+                "worker_capability_ready"
+                if available
+                else "worker_capability_unavailable"
+            ),
+            "workflowType": workflow_type,
+            "taskQueue": task_queue,
+            "agentExecutionLaunched": False,
+            "registryFingerprint": fingerprints[0] if len(fingerprints) == 1 else None,
+            "observedRegistryFingerprints": fingerprints,
+            "observedWorkerBuilds": build_ids,
+            "buildId": build_ids[0] if len(build_ids) == 1 else None,
+            "buildSha": _single_value("buildSha"),
+            "imageDigest": _single_value("imageDigest"),
+            "deploymentId": _single_value("deploymentId"),
+            "resolverCore": (
+                dict(children[0].get("resolverCore") or {})
+                if len(children) == 1
+                else {}
+            ),
+        }
+        if not available:
+            logger.error(
+                "workflow capability unavailable workflow_type=%s task_queue=%s "
+                "build_ids=%s registry_fingerprints=%s",
+                workflow_type,
+                task_queue,
+                build_ids,
+                fingerprints,
+            )
+        return result
+
     async def merge_automation_evaluate_readiness(self, payload, /, **kwargs):
         from moonmind.workflows.adapters.github_service import GitHubService
 
@@ -4666,12 +4813,23 @@ class TemporalIntegrationActivities:
         if not isinstance(jira_policy, Mapping):
             jira_policy = {}
 
+        review_loop = config.get("reviewLoop") if isinstance(config, Mapping) else {}
+        if not isinstance(review_loop, Mapping):
+            review_loop = {}
+        active_review_request = payload.get("activeReviewRequest")
+        if not isinstance(active_review_request, Mapping):
+            active_review_request = None
+
         readiness = await GitHubService().evaluate_pull_request_readiness(
             repo=str(pull_request.get("repo") or ""),
             pr_number=int(pull_request.get("number") or 0),
             head_sha=str(pull_request.get("headSha") or ""),
             policy=dict(policy),
             github_token=payload.get("githubToken"),
+            review_loop_enabled=bool(review_loop.get("enabled")),
+            review_request=dict(active_review_request)
+            if active_review_request
+            else None,
         )
         evidence = readiness.model_dump(by_alias=True)
 
@@ -4688,6 +4846,157 @@ class TemporalIntegrationActivities:
             evidence["jiraStatusAllowed"] = True
 
         return evidence
+
+    async def merge_automation_request_automated_review(self, payload, /, **kwargs):
+        """Post exactly one automated review request for one exact head SHA."""
+
+        from datetime import datetime, timedelta, timezone
+
+        from api_service.db.base import get_async_session_context
+        from api_service.services.merge_automation_review_requests import (
+            STATUS_FAILED,
+            STATUS_REQUESTED,
+            MergeAutomationReviewRequestStore,
+            build_review_request_key,
+        )
+        from moonmind.workflows.adapters.github_service import GitHubService
+        from pr_resolver_core.review_providers import (
+            automated_review_provider_or_raise,
+        )
+
+        if not isinstance(payload, Mapping):
+            raise TemporalActivityRuntimeError(
+                "merge_automation.request_automated_review requires an object"
+            )
+        repository = str(payload.get("repository") or "").strip()
+        expected_head_sha = str(payload.get("expectedHeadSha") or "").strip()
+        parent_workflow_id = str(payload.get("parentWorkflowId") or "").strip()
+        try:
+            pr_number = int(payload.get("prNumber") or 0)
+        except (TypeError, ValueError):
+            pr_number = 0
+        if not repository or pr_number <= 0 or not expected_head_sha:
+            raise TemporalActivityRuntimeError(
+                "merge_automation.request_automated_review requires repository, "
+                "prNumber, and expectedHeadSha"
+            )
+        try:
+            provider_record = automated_review_provider_or_raise(
+                payload.get("provider")
+            )
+        except ValueError as exc:
+            raise TemporalActivityRuntimeError(str(exc)) from exc
+
+        expected_request_key = build_review_request_key(
+            parent_workflow_id=parent_workflow_id,
+            repository=repository,
+            pr_number=pr_number,
+            head_sha=expected_head_sha,
+            provider=provider_record.provider,
+        )
+        supplied_request_key = str(payload.get("requestKey") or "").strip()
+        if supplied_request_key and supplied_request_key != expected_request_key:
+            raise TemporalActivityRuntimeError(
+                "merge_automation.request_automated_review received a requestKey "
+                "that does not match its request identity"
+            )
+
+        async with get_async_session_context() as session:
+            entry = await MergeAutomationReviewRequestStore(session).claim(
+                request_key=expected_request_key,
+                parent_workflow_id=parent_workflow_id,
+                repository=repository,
+                pr_number=pr_number,
+                head_sha=expected_head_sha,
+                provider=provider_record.provider,
+                command=provider_record.command,
+            )
+            await session.commit()
+
+        if entry.status == STATUS_REQUESTED and entry.request_comment_id:
+            return {
+                **entry.to_payload(),
+                "status": "recorded",
+                "retryable": False,
+                "summary": "Automated review request already recorded.",
+            }
+
+        attempt_started_at = entry.attempt_started_at
+        parsed_attempt_started_at = None
+        if attempt_started_at:
+            try:
+                parsed_attempt_started_at = datetime.fromisoformat(
+                    attempt_started_at.replace("Z", "+00:00")
+                )
+            except ValueError:
+                parsed_attempt_started_at = None
+        if parsed_attempt_started_at is None:
+            parsed_attempt_started_at = datetime.now(timezone.utc)
+        # Allow for clock skew between this service and GitHub so a comment the
+        # previous ambiguous attempt actually created is still reconcilable.
+        reconcile_from = parsed_attempt_started_at - timedelta(minutes=2)
+
+        result = await GitHubService().request_automated_review(
+            repo=repository,
+            pr_number=pr_number,
+            expected_head_sha=expected_head_sha,
+            provider=provider_record.provider,
+            attempt_started_at=reconcile_from.isoformat(),
+            recorded_comment_id=entry.request_comment_id,
+            github_token=payload.get("githubToken"),
+        )
+        outcome = result.model_dump(by_alias=True, mode="json")
+        posted = outcome.get("status") in {"requested", "reconciled", "recorded"}
+        requested_at = None
+        raw_requested_at = str(outcome.get("requestedAt") or "").strip()
+        if raw_requested_at:
+            try:
+                requested_at = datetime.fromisoformat(
+                    raw_requested_at.replace("Z", "+00:00")
+                )
+            except ValueError:
+                requested_at = None
+
+        async with get_async_session_context() as session:
+            settled = await MergeAutomationReviewRequestStore(session).settle(
+                request_key=expected_request_key,
+                status=STATUS_REQUESTED if posted else STATUS_FAILED,
+                request_comment_id=outcome.get("requestCommentId"),
+                request_comment_url=outcome.get("requestCommentUrl"),
+                requested_at=requested_at,
+                actor=outcome.get("actor"),
+                reconciled=bool(outcome.get("reconciled")),
+                failure_reason=None if posted else outcome.get("summary"),
+            )
+            await session.commit()
+
+        payload_out = dict(settled.to_payload()) if settled is not None else {}
+        payload_out.update(
+            {
+                "status": outcome.get("status"),
+                "provider": provider_record.provider,
+                "command": provider_record.command,
+                "headSha": expected_head_sha,
+                "observedHeadSha": outcome.get("observedHeadSha"),
+                "requestCommentId": outcome.get("requestCommentId"),
+                "requestCommentUrl": outcome.get("requestCommentUrl"),
+                "requestedAt": outcome.get("requestedAt"),
+                "actor": outcome.get("actor"),
+                "reconciled": bool(outcome.get("reconciled")),
+                "retryable": bool(outcome.get("retryable")),
+                "summary": outcome.get("summary"),
+                "requestKey": expected_request_key,
+            }
+        )
+        if not posted and outcome.get("retryable"):
+            # Retry through the activity retry policy; the ledger keeps the
+            # original attempt instant so the retry reconciles instead of
+            # posting a second request.
+            raise TemporalActivityRuntimeError(
+                "merge_automation.request_automated_review could not prove the "
+                f"request was posted: {outcome.get('summary')}"
+            )
+        return payload_out
 
     async def merge_automation_complete_post_merge_jira(self, payload, /, **kwargs):
         if not isinstance(payload, Mapping):
@@ -4742,6 +5051,175 @@ class TemporalIntegrationActivities:
             transition_issue=transition_issue,
         )
         return decision.model_dump(by_alias=True, mode="json")
+
+    async def merge_automation_complete_post_merge_github(self, payload, /, **kwargs):
+        config = payload.get("postMergeGithub") if isinstance(payload, Mapping) else None
+        if not isinstance(config, Mapping):
+            return {
+                "status": "blocked",
+                "required": True,
+                "reason": "Post-merge GitHub completion payload is invalid.",
+            }
+
+        from moonmind.workflows.temporal.story_output_tools import (
+            update_github_issue_status,
+        )
+
+        required = bool(config.get("required", True))
+        repository = str(config.get("repository") or "").strip()
+        issue_number = config.get("issueNumber") or config.get("issue_number")
+        result = await update_github_issue_status(
+            {
+                "repository": repository,
+                "issueNumber": issue_number,
+                "mode": "done",
+            }
+        )
+        outputs = dict(result.outputs)
+        succeeded = (
+            result.status == "COMPLETED"
+            and outputs.get("confirmedState") == "closed"
+        )
+        return {
+            "status": "succeeded" if succeeded else "failed",
+            "required": required,
+            "repository": repository,
+            "issueNumber": issue_number,
+            **outputs,
+        }
+
+    async def pr_resolver_resolve_selector(self, payload, /, **kwargs):
+        """Resolve a PR number, URL, or branch to one canonical PR identity."""
+
+        from moonmind.workflows.adapters.github_service import GitHubService
+
+        if not isinstance(payload, Mapping):
+            raise TemporalActivityRuntimeError(
+                "pr_resolver.resolve_selector requires an object"
+            )
+        repository = str(payload.get("repository") or "").strip()
+        selector = str(payload.get("selector") or "").strip()
+        if not repository or not selector:
+            raise TemporalActivityRuntimeError(
+                "pr_resolver.resolve_selector requires repository and selector"
+            )
+        result = await GitHubService().resolve_pull_request_selector(
+            repo=repository,
+            selector=selector,
+        )
+        return result.model_dump(by_alias=True, mode="json")
+
+    async def pr_resolver_read_snapshot(self, payload, /, **kwargs):
+        """Replay-only snapshot support for previously recorded native runs.
+
+        New pr-resolver executions must collect state through their resolved
+        Skill bundle and must not call this Activity.
+        """
+
+        from moonmind.workflows.adapters.github_service import GitHubService
+
+        if not isinstance(payload, Mapping):
+            raise TemporalActivityRuntimeError("pr_resolver.read_snapshot requires an object")
+        repository = str(payload.get("repository") or "").strip()
+        pr_number = int(payload.get("prNumber") or 0)
+        if not repository or pr_number <= 0:
+            raise TemporalActivityRuntimeError(
+                "pr_resolver.read_snapshot requires repository and prNumber"
+            )
+        readiness = await GitHubService().evaluate_pull_request_readiness(
+            repo=repository,
+            pr_number=pr_number,
+            head_sha=str(payload.get("headSha") or ""),
+            policy=dict(payload.get("policy") or {}),
+        )
+        result = readiness.model_dump(by_alias=True, mode="json")
+        result["idempotencyKey"] = str(payload.get("idempotencyKey") or "")
+        return result
+
+    async def pr_resolver_finalize_merge(self, payload, /, **kwargs):
+        """Replay-only merge support for previously recorded native runs.
+
+        New pr-resolver executions merge through the portable Skill helper.
+        """
+
+        from moonmind.workflows.adapters.github_service import GitHubService
+
+        if not isinstance(payload, Mapping):
+            raise TemporalActivityRuntimeError("pr_resolver.finalize_merge requires an object")
+        service = GitHubService()
+        repository = str(payload.get("repository") or "").strip()
+        pr_number = int(payload.get("prNumber") or 0)
+        expected_head = str(payload.get("headSha") or "").strip()
+        readiness = await service.evaluate_pull_request_readiness(
+            repo=repository,
+            pr_number=pr_number,
+            head_sha=expected_head,
+            policy=dict(payload.get("policy") or {}),
+        )
+        if readiness.pull_request_merged is True:
+            return {
+                "merged": True,
+                "alreadyMerged": True,
+                "headSha": readiness.head_sha,
+                "idempotencyKey": str(payload.get("idempotencyKey") or ""),
+            }
+        if expected_head and readiness.head_sha != expected_head:
+            return {
+                "merged": False,
+                "reasonCode": "stale_revision",
+                "headSha": readiness.head_sha,
+                "idempotencyKey": str(payload.get("idempotencyKey") or ""),
+            }
+        if not readiness.ready:
+            return {
+                "merged": False,
+                "reasonCode": "gate_not_ready",
+                "headSha": readiness.head_sha,
+                "idempotencyKey": str(payload.get("idempotencyKey") or ""),
+            }
+        result = await service.merge_pull_request(
+            pr_url=str(payload.get("prUrl") or ""),
+            merge_method=str(payload.get("mergeMethod") or "squash"),
+            expected_head_sha=expected_head or None,
+        )
+        output = result.model_dump(by_alias=True, mode="json")
+        output["idempotencyKey"] = str(payload.get("idempotencyKey") or "")
+        output["headSha"] = readiness.head_sha
+        return output
+
+    async def pr_resolver_classify_gate(self, payload, /, **kwargs):
+        """Replay-only classifier for previously recorded native runs."""
+
+        from moonmind.workflows.temporal.workflows.pr_resolver import (
+            classify_pr_resolver_snapshot,
+        )
+
+        if not isinstance(payload, Mapping):
+            raise TemporalActivityRuntimeError("pr_resolver.classify_gate requires an object")
+        snapshot = payload.get("snapshot")
+        if not isinstance(snapshot, Mapping):
+            raise TemporalActivityRuntimeError(
+                "pr_resolver.classify_gate requires snapshot"
+            )
+        result = classify_pr_resolver_snapshot(snapshot)
+        result["idempotencyKey"] = str(payload.get("idempotencyKey") or "")
+        return result
+
+    async def pr_resolver_verify_remote_head(self, payload, /, **kwargs):
+        """Independently re-read the PR head after a remediation child."""
+
+        return await self.pr_resolver_read_snapshot(payload)
+
+    async def pr_resolver_verify_merged(self, payload, /, **kwargs):
+        """Independently verify the authoritative remote merge state."""
+
+        snapshot = await self.pr_resolver_read_snapshot(payload)
+        return {
+            "merged": snapshot.get("pullRequestMerged") is True,
+            "headSha": snapshot.get("headSha"),
+            "mergeSha": snapshot.get("mergeSha"),
+            "idempotencyKey": str(payload.get("idempotencyKey") or ""),
+        }
 
     async def _merge_gate_jira_status_allowed(
         self,
@@ -4857,22 +5335,6 @@ class TemporalIntegrationActivities:
             raise TemporalActivityRuntimeError("integration.openclaw.execute requires AgentExecutionRequest payload")
             
         return await openclaw_execute_activity(req)
-
-    async def integration_omnigent_execute(self, request, /, **kwargs):
-        from moonmind.workflows.temporal.activities.omnigent_activities import omnigent_execute_activity
-        from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
-
-        if isinstance(request, Mapping):
-            request_payload = _coerce_activity_request(request, activity_type="integration.omnigent.execute")
-            if not request_payload:
-                raise TemporalActivityRuntimeError("integration.omnigent.execute requires AgentExecutionRequest payload")
-            req = AgentExecutionRequest.model_validate(request_payload)
-        elif isinstance(request, AgentExecutionRequest):
-            req = request
-        else:
-            raise TemporalActivityRuntimeError("integration.omnigent.execute requires AgentExecutionRequest payload")
-
-        return await omnigent_execute_activity(req)
 
 class TemporalProposalActivities:
     """Implementation helpers for ``proposal.*`` activities."""
@@ -6291,9 +6753,12 @@ class TemporalAgentRuntimeActivities:
         session_store: "ManagedSessionStore | None" = None,
         workload_launcher: Any | None = None,
         workload_registry: Any | None = None,
+        container_job_backend: Any | None = None,
         workflow_docker_mode: str = "profiles",
+        raw_docker_cli_enabled: bool = False,
         client_adapter: Any = None,
-        pentest_provider_lease_manager: PentestProviderLeaseManager | None = None,
+        omnigent_stuck_state_service: Any = None,
+        workspace_root: str | Path | None = None,
     ) -> None:
         self._artifact_service = artifact_service
         self._run_store = run_store
@@ -6303,24 +6768,647 @@ class TemporalAgentRuntimeActivities:
         self._session_store = session_store
         self._workload_launcher = workload_launcher
         self._workload_registry = workload_registry
+        self._container_job_backend = container_job_backend
         self._workflow_docker_mode = normalize_workflow_docker_mode(workflow_docker_mode)
+        self._raw_docker_cli_enabled = bool(raw_docker_cli_enabled)
+        self._workspace_root = Path(
+            workspace_root or settings.workflow.workspace_root
+        ).resolve()
         if client_adapter is None:
             from moonmind.workflows.temporal import client as temporal_client_module
 
             client_adapter = temporal_client_module.TemporalClientAdapter()
         self._client_adapter = client_adapter
-        self._pentest_provider_lease_manager = (
-            pentest_provider_lease_manager
-            or TemporalPentestProviderLeaseManager(client_adapter)
-        )
+        self._omnigent_stuck_state_service = omnigent_stuck_state_service
         self._supervision_tasks: set[asyncio.Task] = set()
-        # Pentest-specific activity logic lives in a dedicated module/class.
-        # Imported lazily to avoid an import cycle (that module imports this one).
-        from moonmind.workflows.temporal.activities.pentest_activities import (
-            TemporalPentestActivities,
+        from moonmind.workflows.temporal.runtime.checkpoint_restore import (
+            ManagedCheckpointRestoreService,
         )
 
-        self._pentest_activities = TemporalPentestActivities(self)
+        self._checkpoint_restore = ManagedCheckpointRestoreService(
+            authority_root=os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"),
+            artifact_service=artifact_service,
+            run_store=run_store,
+        )
+        self._checkpoint_capture_locks: dict[str, asyncio.Lock] = {}
+
+    async def publication_recovery_restore_candidate(self, payload, /, **kwargs):
+        """Translate a publication checkpoint into the typed managed restore plane."""
+        raw = dict(payload or {})
+        contract = dict(raw.get("contract") or {})
+        continuation = dict(contract.get("continuation") or {})
+        checkpoint_ref = str(
+            continuation.get("beforePublicationCheckpointRef") or ""
+        ).strip()
+        destination_workflow_id = str(raw.get("destinationWorkflowId") or "").strip()
+        destination_run_id = str(raw.get("destinationRunId") or "").strip()
+        operation_key = str(raw.get("idempotencyKey") or "").strip()
+        if not all(
+            (checkpoint_ref, destination_workflow_id, destination_run_id, operation_key)
+        ):
+            raise TemporalActivityRuntimeError(
+                "publication recovery restore requires checkpoint and destination identity"
+            )
+        checkpoint_bytes = await self._checkpoint_restore._read(
+            checkpoint_ref,
+            content_types={
+                "application/vnd.moonmind.step-execution-checkpoint+json;version=1"
+            },
+        )
+        try:
+            checkpoint = json.loads(checkpoint_bytes)
+        except (TypeError, ValueError) as exc:
+            raise TemporalActivityRuntimeError(
+                "publication recovery checkpoint is not valid JSON"
+            ) from exc
+        source = dict(checkpoint.get("source") or {})
+        workspace = dict(checkpoint.get("workspace") or {})
+        candidate_identity = dict(
+            checkpoint.get("publicationCandidateIdentity")
+            or checkpoint.get("candidateIdentity")
+            or {}
+        )
+        expected_identity = {
+            "headSha": continuation.get("expectedHeadSha"),
+            "treeDigest": continuation.get("expectedTreeDigest"),
+            "diffDigest": continuation.get("expectedDiffDigest"),
+        }
+        if candidate_identity != expected_identity:
+            raise TemporalActivityRuntimeError(
+                "publication recovery checkpoint candidate identity does not match "
+                "the accepted head/tree/diff evidence"
+            )
+        agent_run_id = (
+            "publication-recovery-"
+            + hashlib.sha256(operation_key.encode()).hexdigest()[:32]
+        )
+        request = {
+            "schemaVersion": "v1",
+            "recoveryIdentity": {
+                "workflowId": destination_workflow_id,
+                "runId": destination_run_id,
+                "logicalStepId": "publication",
+                "executionOrdinal": 1,
+            },
+            "source": {
+                **source,
+                "checkpointRef": checkpoint_ref,
+                "checkpointBoundary": checkpoint.get("boundary"),
+            },
+            "checkpoint": {
+                "kind": workspace.get("kind"),
+                "baseCommit": workspace.get("baseCommit"),
+                "archiveRef": workspace.get("archiveRef"),
+                "archiveDigest": workspace.get("archiveDigest"),
+                "manifestRef": workspace.get("manifestRef"),
+                "manifestDigest": workspace.get("manifestDigest"),
+            },
+            "destination": {
+                "runtimeId": "codex_cli",
+                "agentRunId": agent_run_id,
+                "repository": (contract.get("intent") or {}).get("repository"),
+                "relativePath": "repo",
+            },
+            "workspacePolicy": "restore_publication_candidate",
+            "resumePhase": "resume_publication",
+            "capabilitySetVersion": "publication-recovery-v1",
+            "capabilityDigest": hashlib.sha256(
+                b"publication-recovery-v1"
+            ).hexdigest(),
+            "idempotencyKey": operation_key,
+        }
+        restored = await self._checkpoint_restore.restore(request)
+        return {**restored, **expected_identity}
+
+    async def publication_recovery_publish_candidate(self, payload, /, **kwargs):
+        """Push a restored, verified candidate before GitHub PR reconciliation."""
+        raw = dict(payload or {})
+        contract = dict(raw.get("contract") or {})
+        continuation = dict(contract.get("continuation") or {})
+        intent = dict(contract.get("intent") or {})
+        restoration = dict(raw.get("restoration") or {})
+        locator = dict(restoration.get("destinationWorkspaceLocator") or {})
+        agent_run_id = str(locator.get("agentRunId") or "").strip()
+        expected_head = str(continuation.get("expectedHeadSha") or "").strip()
+        head_ref = str(intent.get("headRef") or "").strip()
+        branch = head_ref.split(":", 1)[-1]
+        if not agent_run_id or not expected_head or not branch:
+            raise TemporalActivityRuntimeError(
+                "publication recovery restored workspace identity is incomplete"
+            )
+        result = await self._push_workspace_branch(
+            agent_run_id,
+            target_branch=str(intent.get("baseRef") or ""),
+            head_branch=branch,
+            allow_target_branch_push=False,
+        )
+        if (
+            result.get("push_status") not in {"pushed", "already_published"}
+            or str(result.get("push_head_sha") or "") != expected_head
+        ):
+            raise TemporalActivityRuntimeError(
+                "publication recovery could not push and verify the restored candidate"
+            )
+        return {**restoration, "publicationPush": result}
+
+    async def publication_recovery_cleanup(self, payload, /, **kwargs):
+        """Return bounded cleanup evidence for a remote-only recovery."""
+        restoration = (payload or {}).get("restoration")
+        return {
+            "cleaned": restoration is None,
+            "workspaceReserved": restoration is not None,
+        }
+
+    async def agent_runtime_restore_workspace_checkpoint(
+        self, request: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Restore and verify a cold checkpoint before any agent is launched."""
+        from moonmind.schemas.checkpoint_restore_models import CheckpointRestoreError
+
+        try:
+            # Restore performs clone/extract/hash/rename work that can exceed the
+            # activity heartbeat timeout on large archives or slow clones.
+            # Heartbeat while it runs so Temporal does not time out and retry an
+            # attempt that may still be mutating the destination. Outside an
+            # activity context this simply awaits the coroutine.
+            return await _await_with_activity_heartbeats(
+                self._checkpoint_restore.restore(request),
+                heartbeat_payload={
+                    "activity": "agent_runtime.restore_workspace_checkpoint"
+                },
+            )
+        except CheckpointRestoreError as exc:
+            # CheckpointRestoreError is a plain RuntimeError, so Temporal would
+            # record type="CheckpointRestoreError" and the catalog's
+            # non_retryable_error_types (keyed on the stable failure codes) would
+            # never match, retrying deterministic failures up to the attempt cap.
+            # Re-raise as an ApplicationError whose type is the failure code and
+            # mark it non-retryable unless the envelope recommends a retry.
+            raise temporal_exceptions.ApplicationError(
+                str(exc),
+                type=exc.code,
+                non_retryable=(
+                    exc.failure_envelope.get("retryRecommendation") != "retry"
+                ),
+            ) from exc
+
+    async def agent_runtime_capture_workspace_checkpoint(
+        self, request: Mapping[str, Any] | ManagedWorkspaceCheckpointCaptureInput
+    ) -> dict[str, Any]:
+        """Capture a Codex workspace through its owning managed-run store."""
+
+        model = (
+            request
+            if isinstance(request, ManagedWorkspaceCheckpointCaptureInput)
+            else ManagedWorkspaceCheckpointCaptureInput.model_validate(request)
+        )
+        locator = model.workspace_locator
+        capture_started = time.monotonic()
+        logger.info("managed_checkpoint_capture_requested")
+        lock = self._checkpoint_capture_locks.setdefault(
+            model.idempotency_key, asyncio.Lock()
+        )
+        async with lock:
+            try:
+                if self._run_store is None or self._artifact_service is None:
+                    raise TemporalActivityRuntimeError(
+                        "managed checkpoint capture requires run and artifact stores"
+                    )
+                return await _await_with_activity_heartbeats(
+                    self._capture_managed_checkpoint_locked(
+                        model, locator, capture_started
+                    ),
+                    heartbeat_payload={
+                        "activity": "agent_runtime.capture_workspace_checkpoint",
+                        "phase": "capture",
+                    },
+                )
+            except Exception as exc:
+                failure_type = getattr(exc, "type", type(exc).__name__)
+                logger.warning(
+                    "managed_checkpoint_capture_failed failure_code=%s duration_ms=%s",
+                    failure_type,
+                    int((time.monotonic() - capture_started) * 1000),
+                )
+                if failure_type == "CHECKPOINT_CAPTURE_LIMIT_EXCEEDED":
+                    logger.warning("managed_checkpoint_capture_limit_exceeded")
+                raise
+
+    async def _capture_managed_checkpoint_locked(
+        self,
+        model: ManagedWorkspaceCheckpointCaptureInput,
+        locator: ManagedWorkspaceLocator,
+        capture_started: float,
+    ) -> dict[str, Any]:
+            record_root = self._run_store.store_root / "checkpoint_captures"
+            record_root.mkdir(parents=True, exist_ok=True)
+            record_name = hashlib.sha256(model.idempotency_key.encode()).hexdigest()
+            lock_file = (record_root / f"{record_name}.lock").open("a+b")
+            try:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                record_path = record_root / f"{record_name}.json"
+                # Keep the pre-sourceIdentity digest stable for in-flight
+                # idempotency records while still hashing the field when present.
+                immutable = model.model_dump(
+                    by_alias=True, mode="json", exclude_none=True
+                )
+                immutable_digest = hashlib.sha256(_json_bytes(immutable)).hexdigest()
+                if record_path.exists():
+                    saved = json.loads(record_path.read_text(encoding="utf-8"))
+                    if saved.get("immutableDigest") != immutable_digest:
+                        raise temporal_exceptions.ApplicationError(
+                            "immutable capture inputs changed",
+                            type="CHECKPOINT_IDEMPOTENCY_CONFLICT",
+                            non_retryable=True,
+                        )
+                    result = dict(saved["result"])
+                    logger.info("managed_checkpoint_capture_reused_idempotently")
+                    return result
+
+                expected = resolve_runtime_execution_capabilities("codex_cli")
+                if model.capability_digest != expected.capability_digest:
+                    raise temporal_exceptions.ApplicationError(
+                        "capability snapshot is stale",
+                        type="CHECKPOINT_CAPABILITY_DIGEST_MISMATCH",
+                        non_retryable=True,
+                    )
+                record = self._run_store.load(locator.agent_run_id)
+                if record is None:
+                    raise temporal_exceptions.ApplicationError(
+                        "managed run record was not found",
+                        type=WORKSPACE_IDENTITY_MISMATCH,
+                        non_retryable=True,
+                    )
+                # Session-backed records keep workflowId bound to the AgentRun
+                # child so live task/run lookups remain authoritative. Their
+                # stable runId is the managed-session binding's parent task
+                # workflow ID. Non-session records bind the parent directly in
+                # workflowId.
+                step_workflow_id = (
+                    record.run_id if record.session_id is not None else record.workflow_id
+                )
+                correlation = {
+                    "workflowId": step_workflow_id,
+                    "ownerRunId": record.owner_run_id,
+                    "logicalStepId": record.logical_step_id,
+                    "executionOrdinal": record.execution_ordinal,
+                }
+                expected_correlation = {
+                    "workflowId": model.identity.workflow_id,
+                    "ownerRunId": model.identity.run_id,
+                    "logicalStepId": model.identity.logical_step_id,
+                    "executionOrdinal": model.identity.execution_ordinal,
+                }
+                exact_execution_match = correlation == expected_correlation
+                source_correlation = (
+                    {
+                        "workflowId": model.source_identity.workflow_id,
+                        "ownerRunId": model.source_identity.run_id,
+                        "logicalStepId": model.source_identity.logical_step_id,
+                        "executionOrdinal": (
+                            model.source_identity.execution_ordinal
+                        ),
+                    }
+                    if model.source_identity is not None
+                    else None
+                )
+                terminal_source_execution_match = (
+                    model.boundary == "before_execution"
+                    and source_correlation is not None
+                    and record.status
+                    in {"completed", "failed", "canceled", "timed_out"}
+                    and record.finished_at is not None
+                    and correlation == source_correlation
+                )
+                prior_execution_baseline_match = (
+                    model.boundary == "before_execution"
+                    and record.status
+                    in {"completed", "failed", "canceled", "timed_out"}
+                    and record.finished_at is not None
+                    and correlation["workflowId"]
+                    == expected_correlation["workflowId"]
+                    and correlation["ownerRunId"]
+                    == expected_correlation["ownerRunId"]
+                    and correlation["logicalStepId"]
+                    == expected_correlation["logicalStepId"]
+                    and isinstance(correlation["executionOrdinal"], int)
+                    and correlation["executionOrdinal"] + 1
+                    == expected_correlation["executionOrdinal"]
+                )
+                workflow_scoped_session_baseline_match = (
+                    model.boundary in {"after_prepare", "before_execution"}
+                    and model.source_identity is None
+                    and record.session_id is not None
+                    and record.status
+                    in {"completed", "failed", "canceled", "timed_out"}
+                    and record.finished_at is not None
+                    and record.run_id == locator.agent_run_id
+                    and record.runtime_id == locator.runtime_id
+                    and correlation["workflowId"]
+                    == expected_correlation["workflowId"]
+                    and correlation["logicalStepId"]
+                    != expected_correlation["logicalStepId"]
+                    and expected_correlation["executionOrdinal"] == 1
+                )
+                if (
+                    not exact_execution_match
+                    and not prior_execution_baseline_match
+                    and not terminal_source_execution_match
+                    and not workflow_scoped_session_baseline_match
+                ):
+                    logger.warning("managed_checkpoint_capture_authority_rejected")
+                    raise temporal_exceptions.ApplicationError(
+                        "managed run record does not belong to the source Step Execution",
+                        type=WORKSPACE_IDENTITY_MISMATCH,
+                        non_retryable=True,
+                    )
+                if prior_execution_baseline_match:
+                    logger.info(
+                        "managed_checkpoint_capture_prior_execution_baseline_accepted"
+                    )
+                elif terminal_source_execution_match:
+                    logger.info(
+                        "managed_checkpoint_capture_terminal_source_execution_accepted"
+                    )
+                elif workflow_scoped_session_baseline_match:
+                    logger.info(
+                        "managed_checkpoint_capture_workflow_session_baseline_accepted"
+                    )
+                try:
+                    workspace = resolve_managed_workspace_locator(
+                        locator,
+                        store=self._run_store,
+                        current_agent_run_id=locator.agent_run_id,
+                        current_runtime_id=model.expected_runtime_id,
+                    )
+                except WorkspaceLocatorResolutionError as exc:
+                    raise temporal_exceptions.ApplicationError(
+                        str(exc), type=exc.code, non_retryable=True
+                    ) from exc
+                result = await self._capture_managed_worktree(model, workspace, record)
+                temporary = record_path.with_suffix(".tmp")
+                temporary.write_text(
+                    json.dumps(
+                        {"immutableDigest": immutable_digest, "result": result},
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    encoding="utf-8",
+                )
+                os.replace(temporary, record_path)
+                logger.info(
+                    "managed_checkpoint_capture_succeeded bytes=%s duration_ms=%s",
+                    result["workspace"].get("archiveBytes", 0),
+                    int((time.monotonic() - capture_started) * 1000),
+                )
+                return result
+            finally:
+                lock_file.close()
+
+    async def _capture_managed_worktree(
+        self,
+        model: ManagedWorkspaceCheckpointCaptureInput,
+        workspace: Path,
+        record: Any,
+    ) -> dict[str, Any]:
+        policy = model.capture_policy
+        enumerate_args = ["ls-files", "-z", "--cached"]
+        if policy.include_untracked:
+            enumerate_args.extend(["--others", "--exclude-standard"])
+        git_files = await _run_command(
+            self._workspace_git_command(str(workspace), *enumerate_args),
+        )
+        paths = sorted(filter(None, git_files.stdout.split("\0")))
+        excluded_names = {".env", ".env.local", "credentials", "credentials.json"}
+        excluded_parts = {
+            ".git", ".codex", ".ssh", ".gnupg", "node_modules", "__pycache__",
+            ".cache", ".docker", "credentials", "managed_runs", "managed_sessions",
+        }
+        selected = [
+            path for path in paths
+            if Path(path).name not in excluded_names
+            and not any(part in excluded_parts for part in Path(path).parts)
+            and Path(path).parts[:2]
+            not in {(".agents", "skills"), (".gemini", "skills")}
+        ]
+        if len(selected) > policy.max_file_count:
+            raise temporal_exceptions.ApplicationError(
+                "maximum file count exceeded", type="CHECKPOINT_CAPTURE_LIMIT_EXCEEDED",
+                non_retryable=True,
+            )
+        entries: list[ManagedCheckpointEntry] = []
+        total = 0
+        output = BytesIO()
+
+        with gzip.GzipFile(fileobj=output, mode="wb", mtime=0) as compressed, tarfile.open(
+            fileobj=compressed, mode="w", format=tarfile.PAX_FORMAT
+        ) as archive:
+            for relative_text in selected:
+                # Archive construction is synchronous. Yield between entries so
+                # the bounded heartbeat task can run without enqueueing one
+                # heartbeat per file and flooding the Temporal SDK queue.
+                await asyncio.sleep(0)
+                path = workspace / relative_text
+                if not path.exists() and not path.is_symlink():
+                    continue
+                info_stat = path.lstat()
+                if stat.S_ISLNK(info_stat.st_mode):
+                    target = os.readlink(path)
+                    resolved = (path.parent / target).resolve()
+                    if not resolved.is_relative_to(workspace):
+                        raise temporal_exceptions.ApplicationError(
+                            f"symlink escapes workspace: {relative_text}",
+                            type=WORKSPACE_AUTHORITY_MISMATCH, non_retryable=True,
+                        )
+                    payload = target.encode()
+                    entry_type = "symlink"
+                elif stat.S_ISREG(info_stat.st_mode):
+                    if info_stat.st_size > policy.max_file_bytes:
+                        raise temporal_exceptions.ApplicationError(
+                            "maximum per-file size exceeded",
+                            type="CHECKPOINT_CAPTURE_LIMIT_EXCEEDED", non_retryable=True,
+                        )
+                    digest = await asyncio.to_thread(_sha256_file, path)
+                    payload = None
+                    target = None
+                    entry_type = "file"
+                elif stat.S_ISDIR(info_stat.st_mode):
+                    # Gitlinks are represented by repository metadata and should not
+                    # recursively capture another repository's worktree.
+                    continue
+                else:
+                    raise temporal_exceptions.ApplicationError(
+                        f"unsupported file type: {relative_text}",
+                        type="CHECKPOINT_CAPTURE_POLICY_INVALID", non_retryable=True,
+                    )
+                payload_size = (
+                    len(payload) if payload is not None else info_stat.st_size
+                )
+                total += payload_size
+                if total > policy.max_total_bytes:
+                    raise temporal_exceptions.ApplicationError(
+                        "maximum total size exceeded",
+                        type="CHECKPOINT_CAPTURE_LIMIT_EXCEEDED", non_retryable=True,
+                    )
+                tar_info = archive.gettarinfo(str(path), arcname=relative_text)
+                tar_info.uid = tar_info.gid = tar_info.mtime = 0
+                tar_info.uname = tar_info.gname = ""
+                if entry_type == "file":
+                    with path.open("rb") as source:
+                        await asyncio.to_thread(archive.addfile, tar_info, source)
+                else:
+                    archive.addfile(tar_info)
+                entries.append(
+                    ManagedCheckpointEntry(
+                        path=relative_text,
+                        type=entry_type,
+                        mode=f"{stat.S_IMODE(info_stat.st_mode):06o}",
+                        size=payload_size,
+                        sha256=(
+                            digest
+                            if entry_type == "file"
+                            else hashlib.sha256(payload).hexdigest()
+                        ),
+                        linkTarget=target,
+                    )
+                )
+        archive_payload = output.getvalue()
+        archive_digest = "sha256:" + hashlib.sha256(archive_payload).hexdigest()
+        archive_ref = await self._put_managed_checkpoint_artifact(
+            archive_payload,
+            "application/vnd.moonmind.worktree-archive",
+            "checkpoint_archive",
+        )
+        async def _git(*args: str) -> str:
+            command = self._workspace_git_command(str(workspace), *args)
+            return (await _run_command(command)).stdout.strip()
+        head = await _git("rev-parse", "HEAD")
+        branch = await _git("branch", "--show-current")
+        status = (
+            await _run_command(
+                self._workspace_git_command(
+                    str(workspace),
+                    "status",
+                    "--porcelain=v1",
+                    "-z",
+                    "--untracked-files=all",
+                ),
+            )
+        ).stdout
+        created_at = (record.finished_at or record.started_at).isoformat()
+        staged_paths = []
+        records = status.split("\0")
+        index = 0
+        while index < len(records):
+            line = records[index]
+            index += 1
+            if len(line) < 4:
+                continue
+            if line[0] not in {" ", "?"}:
+                staged_paths.append(line[3:])
+            if line[0] in {"R", "C"} and index < len(records):
+                index += 1
+        manifest = {
+            "schemaVersion": "v1",
+            "contentType": "application/vnd.moonmind.managed-workspace-checkpoint-manifest+json;version=1",
+            "source": {**model.identity.model_dump(by_alias=True, mode="json"), "boundary": model.boundary},
+            "runtime": {"runtimeId": "codex_cli", "capabilitySetVersion": model.capability_set_version, "capabilityDigest": model.capability_digest},
+            "workspaceLocator": model.workspace_locator.model_dump(by_alias=True, mode="json"),
+            "git": {"baseCommit": head, "headCommit": head, "branch": branch, "isDirty": bool(status), "statusDigest": "sha256:" + hashlib.sha256(status.encode()).hexdigest(), "stagedPaths": staged_paths, "submodules": []},
+            "capturePolicy": policy.model_dump(by_alias=True, mode="json"),
+            "entries": [entry.model_dump(by_alias=True, mode="json", exclude_none=True) for entry in entries],
+            "archive": {"ref": archive_ref, "sha256": archive_digest, "size": len(archive_payload)},
+            "createdAt": created_at,
+        }
+        workspace_digest = _workspace_content_digest(manifest["entries"])
+        manifest["workspaceDigest"] = workspace_digest
+        manifest_payload = _json_bytes(manifest)
+        scan = scan_outbound_bundle(
+            [
+                OutboundBundleItem(location="checkpoint.manifest", content=manifest_payload.decode("utf-8")),
+            ],
+            high_security_mode=True,
+        )
+        if not scan.allowed:
+            raise temporal_exceptions.ApplicationError(
+                "checkpoint metadata failed outbound secret scanning",
+                type="CHECKPOINT_CAPTURE_SECRET_DETECTED",
+                non_retryable=True,
+            )
+        manifest_digest = "sha256:" + hashlib.sha256(manifest_payload).hexdigest()
+        manifest_ref = await self._put_managed_checkpoint_artifact(
+            manifest_payload,
+            "application/vnd.moonmind.managed-workspace-checkpoint-manifest+json;version=1",
+            "checkpoint_manifest",
+        )
+        logger.info("managed_checkpoint_capture_files files=%s", len(entries))
+        logger.info("managed_checkpoint_capture_bytes bytes=%s", len(archive_payload))
+        compact = ManagedWorkspaceCheckpointCaptureResult(
+            status="captured",
+            workspace={
+                "kind": "worktree_archive", "baseCommit": head,
+                "archiveRef": archive_ref, "archiveDigest": archive_digest,
+                "archiveBytes": len(archive_payload),
+                "workspaceDigest": workspace_digest,
+                "workspaceIdentityDigest": _workspace_identity_digest(workspace),
+                "manifestRef": manifest_ref, "manifestDigest": manifest_digest,
+                "includesUntracked": policy.include_untracked,
+                "includesIgnoredFiles": False,
+            },
+            sourceWorkspaceLocator=model.workspace_locator,
+            diagnosticRefs=[manifest_ref],
+            idempotencyKey=model.idempotency_key,
+        )
+        return compact.model_dump(by_alias=True, mode="json", exclude_none=True)
+
+    async def _put_managed_checkpoint_artifact(
+        self, payload: bytes, content_type: str, artifact_kind: str
+    ) -> str:
+        completed, _reused = (
+            await self._artifact_service.put_content_addressed_payload_complete(
+                principal="system",
+                payload=payload,
+                content_type=content_type,
+                scope=artifact_kind,
+                metadata_json={"artifact_kind": artifact_kind},
+            )
+        )
+        return _compact_artifact_ref_text(build_artifact_ref(completed))
+
+    async def agent_runtime_restore_workspace_checkpoint(
+        self, request: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Restore and verify a cold checkpoint before any agent is launched."""
+        from moonmind.schemas.checkpoint_restore_models import CheckpointRestoreError
+
+        try:
+            # Restore performs clone/extract/hash/rename work that can exceed the
+            # activity heartbeat timeout on large archives or slow clones.
+            # Heartbeat while it runs so Temporal does not time out and retry an
+            # attempt that may still be mutating the destination. Outside an
+            # activity context this simply awaits the coroutine.
+            return await _await_with_activity_heartbeats(
+                asyncio.to_thread(
+                    lambda: asyncio.run(self._checkpoint_restore.restore(request))
+                ),
+                heartbeat_payload={
+                    "activity": "agent_runtime.restore_workspace_checkpoint"
+                },
+            )
+        except CheckpointRestoreError as exc:
+            # CheckpointRestoreError is a plain RuntimeError, so Temporal would
+            # record type="CheckpointRestoreError" and the catalog's
+            # non_retryable_error_types (keyed on the stable failure codes) would
+            # never match, retrying deterministic failures up to the attempt cap.
+            # Re-raise as an ApplicationError whose type is the failure code and
+            # mark it non-retryable unless the envelope recommends a retry.
+            raise temporal_exceptions.ApplicationError(
+                str(exc),
+                type=exc.code,
+                non_retryable=(
+                    exc.failure_envelope.get("retryRecommendation") != "retry"
+                ),
+            ) from exc
 
     async def execution_notify_completion(
         self,
@@ -6470,6 +7558,300 @@ class TemporalAgentRuntimeActivities:
         if errors:
             result["errors"] = errors
         return result
+
+    async def integration_omnigent_execute(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> AgentRunResult:
+        from moonmind.workflows.temporal.activities.omnigent_activities import (
+            omnigent_execute_activity,
+        )
+
+        payload = _coerce_activity_payload_input(
+            request,
+            activity_type="integration.omnigent.execute",
+            kwargs=kwargs,
+        )
+        req = AgentExecutionRequest.model_validate(payload)
+        return await omnigent_execute_activity(req)
+
+    async def integration_omnigent_profile_bound_execute(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> AgentRunResult:
+        from moonmind.workflows.temporal.activities.omnigent_activities import (
+            omnigent_profile_bound_execute_activity,
+        )
+
+        payload = _coerce_activity_payload_input(
+            request,
+            activity_type="integration.omnigent.profile_bound_execute",
+            kwargs=kwargs,
+        )
+        req = AgentExecutionRequest.model_validate(payload)
+        return await omnigent_profile_bound_execute_activity(req)
+
+    async def integration_omnigent_oauth_host_janitor(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, object]:
+        from moonmind.workflows.temporal.activities.omnigent_activities import (
+            omnigent_oauth_host_janitor_activity,
+        )
+
+        payload = _coerce_activity_payload_input(
+            request,
+            activity_type="integration.omnigent.oauth_host_janitor",
+            kwargs=kwargs,
+        )
+        return await omnigent_oauth_host_janitor_activity(payload)
+
+    async def _run_omnigent_session_activity(
+        self,
+        handler_name: str,
+        activity_type: str,
+        request: Any = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        from moonmind.workflows.temporal.activities import (
+            omnigent_session_activities,
+        )
+
+        payload = _coerce_activity_payload_input(
+            request,
+            activity_type=activity_type,
+            kwargs=kwargs,
+        )
+        handler = getattr(omnigent_session_activities, handler_name)
+        return await handler(payload)
+
+    async def omnigent_resolve_intent(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_resolve_intent_activity",
+            "omnigent.resolve_intent",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_evaluate_session_admission(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_evaluate_session_admission_activity",
+            "omnigent.evaluate_session_admission",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_load_reconciliation_inputs(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_load_reconciliation_inputs_activity",
+            "omnigent.load_reconciliation_inputs",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_load_failure_authority(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_load_failure_authority_activity",
+            "omnigent.load_failure_authority",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_ensure_provider_profile_lease(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_ensure_provider_profile_lease_activity",
+            "omnigent.ensure_provider_profile_lease",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_ensure_host(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_ensure_host_activity",
+            "omnigent.ensure_host",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_ensure_provider_session(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_ensure_provider_session_activity",
+            "omnigent.ensure_provider_session",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_submit_turn(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_submit_turn_activity",
+            "omnigent.submit_turn",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_heartbeat_host_lease(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_heartbeat_host_lease_activity",
+            "omnigent.heartbeat_host_lease",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_read_event_batch(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_read_event_batch_activity",
+            "omnigent.read_event_batch",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_observe_snapshot(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_observe_snapshot_activity",
+            "omnigent.observe_snapshot",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_harvest_evidence(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_harvest_evidence_activity",
+            "omnigent.harvest_evidence",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_publish_workspace(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_publish_workspace_activity",
+            "omnigent.publish_workspace",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_stop_provider_session(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_stop_provider_session_activity",
+            "omnigent.stop_provider_session",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_stop_host(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_stop_host_activity",
+            "omnigent.stop_host",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_release_leases(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_release_leases_activity",
+            "omnigent.release_leases",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_persist_decision(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_persist_decision_activity",
+            "omnigent.persist_decision",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_persist_signal_intents(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_persist_signal_intents_activity",
+            "omnigent.persist_signal_intents",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_record_terminal(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_record_terminal_activity",
+            "omnigent.record_terminal",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_persist_failure(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_persist_failure_activity",
+            "omnigent.persist_failure",
+            request,
+            **kwargs,
+        )
+
+    async def oauth_session_prepare_credential_maintenance(
+        self,
+        request: Any = None,
+        /,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        from moonmind.workflows.temporal.activities.oauth_session_activities import (
+            oauth_session_prepare_credential_maintenance as _prepare,
+        )
+
+        payload = _coerce_activity_payload_input(
+            request,
+            activity_type="oauth_session.prepare_credential_maintenance",
+            kwargs=kwargs,
+        )
+        return await _prepare(payload)
+
+    async def oauth_session_revalidate_bound_host(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        from moonmind.workflows.temporal.activities.oauth_session_activities import (
+            oauth_session_revalidate_bound_host as _revalidate,
+        )
+
+        payload = _coerce_activity_payload_input(
+            request,
+            activity_type="oauth_session.revalidate_bound_host",
+            kwargs=kwargs,
+        )
+        return await _revalidate(payload)
 
     async def oauth_session_ensure_volume(
         self,
@@ -6689,7 +8071,8 @@ class TemporalAgentRuntimeActivities:
             delta_env_overrides=delta_env_overrides,
             passthrough_env_keys=passthrough_env_keys,
             env_keys_count=len(combined_env_keys),
-            docker_sidecar_launch_plan=context.docker_sidecar_launch_plan,
+            workload_mode=context.workload_mode,
+            owner_user_id=context.owner_user_id,
         )
         return {
             "profile_id": result.profile_id,
@@ -6697,7 +8080,8 @@ class TemporalAgentRuntimeActivities:
             "delta_env_overrides": result.delta_env_overrides,
             "passthrough_env_keys": result.passthrough_env_keys,
             "env_keys_count": result.env_keys_count,
-            "docker_sidecar_launch_plan": result.docker_sidecar_launch_plan,
+            "workload_mode": result.workload_mode,
+            "owner_user_id": result.owner_user_id,
         }
 
     async def agent_runtime_launch(
@@ -6727,6 +8111,35 @@ class TemporalAgentRuntimeActivities:
         request = AgentExecutionRequest(**request_data)
         profile = ManagedRuntimeProfile(**profile_data)
         workspace_path = payload.get("workspace_path")
+        # Whether a resume must restore a workspace checkpoint is decided and
+        # enforced at the authoritative RunWorkflow ``before_recovery_restoration``
+        # boundary, which runs the restore activity before the failed step re-runs.
+        # The real resume payloads carry that decision under
+        # ``parameters["recoverySource"]`` / ``parameters["workflow"]["resume"]`` —
+        # never as a top-level ``recoveryMode == "resume_from_workspace_checkpoint"``
+        # sentinel (that value is produced nowhere), so the former sentinel gate
+        # was dead. When the restoration producer supplies verified evidence in the
+        # launch payload, verify it here as defense-in-depth before the agent
+        # starts.
+        restoration_requirement = payload.get("restoration_requirement")
+        if restoration_requirement is not None:
+            if not isinstance(restoration_requirement, Mapping):
+                raise TemporalActivityRuntimeError("restoration_requirement must be a mapping")
+            self._checkpoint_restore.assert_ready_for_launch(
+                agent_run_id=str(run_id),
+                checkpoint_ref=str(restoration_requirement.get("checkpointRef") or ""),
+                capability_digest=str(restoration_requirement.get("capabilityDigest") or ""),
+            )
+            expected_workspace = (
+                self._checkpoint_restore.root / str(run_id) / "repo"
+            ).resolve()
+            if workspace_path is None or Path(workspace_path).resolve() != expected_workspace:
+                from moonmind.schemas.checkpoint_restore_models import CheckpointRestoreError
+
+                raise CheckpointRestoreError(
+                    "CHECKPOINT_DESTINATION_IDENTITY_MISMATCH",
+                    "launch workspace does not match the verified restored destination",
+                )
 
         env_overrides = dict(profile.env_overrides) if profile.env_overrides else {}
         ref = env_overrides.pop("MANAGED_API_KEY_REF", None)
@@ -6748,17 +8161,28 @@ class TemporalAgentRuntimeActivities:
             record_run_id = str(getattr(record, "run_id", "") or run_id).strip()
             await self._report_task_run_binding(workflow_id, record_run_id)
 
+        response = record.model_dump(mode="json")
+        if request.terminal_contract is not None:
+            response["terminalContract"] = request.terminal_contract.model_dump(
+                mode="json", by_alias=True
+            )
+
         if process is None:
             # Idempotent path: run is already active, skip secondary supervision
-            return record.model_dump(mode="json")
+            return response
 
         # Start background supervision — hold a strong reference so the task
         # is not garbage-collected before it completes.
-        timeout_policy = getattr(request, "timeout_policy", None) or {}
-        timeout_seconds = (
-            timeout_policy.get("timeout_seconds", 3600)
-            if isinstance(timeout_policy, dict)
-            else getattr(timeout_policy, "timeout_seconds", 3600)
+        # Derive the supervisor deadline from the one shared execution-budget
+        # authority so it cannot diverge from the AgentRun workflow's budget
+        # (MoonLadderStudios/MoonMind#3685 review). The workflow publishes its
+        # effective budget into ``timeoutPolicy``; a direct launch without one
+        # falls back to the same kind-specific default the workflow would use.
+        # The budget is progress-aware, so this carries the base window, the hard
+        # ceiling, and the stall window together rather than a lone deadline.
+        budget = resolve_execution_budget(
+            agent_kind=str(getattr(request, "agent_kind", "managed") or "managed"),
+            timeout_policy=getattr(request, "timeout_policy", None),
         )
 
         async def _supervise_and_publish():
@@ -6766,7 +8190,7 @@ class TemporalAgentRuntimeActivities:
                 record = await self._run_supervisor.supervise(
                     run_id=run_id,
                     process=process,
-                    timeout_seconds=timeout_seconds,
+                    budget=budget,
                     cleanup_paths=cleanup_paths or None,
                     deferred_cleanup_paths=deferred_cleanup_paths or None,
                 )
@@ -6781,7 +8205,7 @@ class TemporalAgentRuntimeActivities:
         self._supervision_tasks.add(task)
         task.add_done_callback(self._supervision_tasks.discard)
 
-        return record.model_dump(mode="json")
+        return response
 
     async def workload_run(
         self,
@@ -6799,13 +8223,10 @@ class TemporalAgentRuntimeActivities:
             )
         request_payload = dict(payload.get("request", payload))
         reason = str(request_payload.pop("reason", "") or "bounded_window_complete")
-        if request_payload.get("toolName") == CONTAINER_STOP_HELPER_TOOL:
+        if request_payload.get("toolName") == _LEGACY_CONTAINER_STOP_HELPER_TOOL:
             request_payload.setdefault("command", ["stop"])
         request = parse_workload_request(request_payload)
-        if not tool_allowed_for_workflow_docker_mode(
-            tool_name=request.tool_name,
-            workflow_docker_mode=workflow_mode,
-        ):
+        if not _legacy_workload_tool_allowed(request.tool_name, workflow_mode):
             raise _docker_workflow_mode_forbidden_failure(
                 workflow_docker_mode=workflow_mode,
                 tool_name=request.tool_name,
@@ -6814,9 +8235,9 @@ class TemporalAgentRuntimeActivities:
             request,
             workflow_docker_mode=workflow_mode,
         )
-        if request.tool_name == CONTAINER_START_HELPER_TOOL:
+        if request.tool_name == _LEGACY_CONTAINER_START_HELPER_TOOL:
             result = await self._workload_launcher.start_helper(validated)
-        elif request.tool_name == CONTAINER_STOP_HELPER_TOOL:
+        elif request.tool_name == _LEGACY_CONTAINER_STOP_HELPER_TOOL:
             result = await self._workload_launcher.stop_helper(
                 validated,
                 reason=reason,
@@ -6827,38 +8248,133 @@ class TemporalAgentRuntimeActivities:
             result = WorkloadResult.model_validate(result)
         return result.model_dump(mode="json", by_alias=True)
 
-    async def security_pentest_execute(
-        self,
-        payload: Mapping[str, Any],
-        /,
+    async def _container_job_call(
+        self, operation: str, payload: Mapping[str, Any]
     ) -> dict[str, Any]:
-        """Registry-dispatched PentestGPT activity boundary (untrusted input).
+        """Validate and delegate one typed request to the trusted backend."""
 
-        Thin delegate to :class:`TemporalPentestActivities`. This is the
-        entrypoint bound to the ``security.pentest.execute`` activity type, so
-        its payload may originate from a caller-supplied plan and is always
-        treated as untrusted: an inline ``approved_scope`` is rejected and the
-        scope is always loaded from the artifact store.
-        """
+        if self._container_job_backend is None:
+            raise TemporalActivityRuntimeError(
+                f"container-job backend is required for container_job.{operation}"
+            )
+        from temporalio.exceptions import ApplicationError
 
-        return await self._pentest_activities.security_pentest_execute(payload)
-
-    async def _security_pentest_execute_trusted_internal(
-        self,
-        payload: Mapping[str, Any],
-        /,
-    ) -> dict[str, Any]:
-        """Internal entrypoint that may honor an inline ``approved_scope``.
-
-        Thin delegate to :class:`TemporalPentestActivities`. Intentionally
-        **not** registered in ``_ACTIVITY_HANDLER_ATTRS`` so it cannot be
-        reached through registry/plan dispatch; only trusted workflow-internal
-        code can call it.
-        """
-
-        return await self._pentest_activities._security_pentest_execute_trusted_internal(
-            payload
+        from moonmind.schemas.container_job_models import (
+            ContainerJobActivityRequest,
+            ContainerJobActivityResult,
+            ContainerJobBackendError,
+            ContainerJobFailureClass,
         )
+        from moonmind.workflows.temporal.container_image_acquisition import (
+            ImageAcquisitionError,
+        )
+
+        request = ContainerJobActivityRequest.model_validate(payload)
+        try:
+            result = await getattr(self._container_job_backend, operation)(request)
+        except ContainerJobBackendError as exc:
+            # Preserve the specific failure class across the activity boundary
+            # and fail fast on deterministic authority-sensitive denials so a
+            # denied image, credential, or scope is not retried pointlessly.
+            deterministic = {
+                ContainerJobFailureClass.IMAGE_USE_DENIED,
+                ContainerJobFailureClass.REPOSITORY_SCOPE_MISMATCH,
+                ContainerJobFailureClass.CREDENTIAL_UNRESOLVED,
+            }
+            raise temporal_exceptions.ApplicationError(
+                str(exc),
+                type=exc.failure_class.value,
+                non_retryable=exc.failure_class in deterministic,
+            ) from exc
+        except ImageAcquisitionError as exc:
+            # Surface the granular image failure class to the workflow via the
+            # ApplicationError type so the durable terminal outcome is exact.
+            raise temporal_exceptions.ApplicationError(
+                str(exc),
+                *([{"diagnosticsRef": exc.diagnostics_ref}] if exc.diagnostics_ref else []),
+                type=exc.failure_class.value,
+                non_retryable=exc.terminal,
+            ) from exc
+        return ContainerJobActivityResult.model_validate(result).model_dump(
+            mode="json", by_alias=True, exclude_none=True
+        )
+
+    async def container_job_submit(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        """Create/reuse API-owned identity and start its durable workflow."""
+        from api_service.db.base import get_async_session_context
+        from api_service.services.container_jobs import ContainerJobService
+        from moonmind.schemas.container_job_models import ContainerJobSubmitRequest, OwnerIdentity
+
+        owner = OwnerIdentity.model_validate(payload.get("owner"))
+        request = ContainerJobSubmitRequest.model_validate(payload.get("request"))
+        async with get_async_session_context() as session:
+            accepted = await ContainerJobService(session).submit(owner=owner, request=request)
+            await session.commit()
+        return accepted.model_dump(mode="json", by_alias=True, exclude_none=True)
+
+    async def container_job_status(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        from api_service.db.base import get_async_session_context
+        from api_service.services.container_jobs import ContainerJobService
+        from moonmind.schemas.container_job_models import OwnerIdentity
+
+        owner = OwnerIdentity.model_validate(payload.get("owner"))
+        async with get_async_session_context() as session:
+            status = await ContainerJobService(session).status(
+                owner=owner, job_id=str(payload.get("jobId") or "")
+            )
+        return status.model_dump(mode="json", by_alias=True, exclude_none=True)
+
+    async def container_job_cancel(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        from api_service.db.base import get_async_session_context
+        from api_service.services.container_jobs import ContainerJobService
+        from moonmind.schemas.container_job_models import ContainerJobCancelRequest, OwnerIdentity
+
+        owner = OwnerIdentity.model_validate(payload.get("owner"))
+        request = ContainerJobCancelRequest.model_validate(payload.get("request"))
+        async with get_async_session_context() as session:
+            result = await ContainerJobService(session).cancel(
+                owner=owner, job_id=str(payload.get("jobId") or ""), request=request
+            )
+            await session.commit()
+        return result.model_dump(mode="json", by_alias=True, exclude_none=True)
+
+    async def container_job_resolve_workspace(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        return await self._container_job_call("resolve_workspace", payload)
+
+    async def container_job_acquire_image(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        return await self._container_job_call("acquire_image", payload)
+
+    async def container_job_create_container(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        return await self._container_job_call("create_container", payload)
+
+    async def container_job_start_container(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        return await self._container_job_call("start_container", payload)
+
+    async def container_job_observe_container(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        return await self._container_job_call("observe_container", payload)
+
+    async def container_job_reconcile_container(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        return await self._container_job_call("reconcile_container", payload)
+
+    async def container_job_stop_container(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        return await self._container_job_call("stop_container", payload)
+
+    async def container_job_remove_container(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        return await self._container_job_call("remove_container", payload)
+
+    async def container_job_publish_evidence(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        return await self._container_job_call("publish_evidence", payload)
+
+    async def container_job_project_status(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        return await self._container_job_call("project_status", payload)
+
+    async def container_job_repair_projection(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        return await self._container_job_call("repair_projection", payload)
+
+    async def container_job_cleanup(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        return await self._container_job_call("cleanup", payload)
+
+
 
     async def agent_runtime_publish_artifacts(
         self,
@@ -7012,6 +8528,88 @@ class TemporalAgentRuntimeActivities:
                     return value.strip()
             return ""
 
+        def _result_workspace() -> Path | None:
+            """Resolve the authoritative workspace for output publication.
+
+            Managed runtimes identify their workspace with ``agentRunId``. Remote
+            runtimes such as Omnigent instead return the sandbox locator that the
+            worker used to materialize and bind the repository. Resolve either
+            contract at this owning worker boundary so portable output files can be
+            published without assuming that every runtime has a managed-run record.
+            """
+
+            agent_run_id = _metadata_text("agentRunId", "agent_run_id")
+            if agent_run_id and self._run_store is not None:
+                record = self._run_store.load(agent_run_id)
+                if record is None:
+                    logger.warning(
+                        "Managed run record was not found while resolving artifact "
+                        "publication workspace for %s",
+                        agent_run_id,
+                    )
+                else:
+                    workspace_path = str(
+                        getattr(record, "workspace_path", "") or ""
+                    ).strip()
+                    if workspace_path:
+                        return Path(workspace_path).expanduser().resolve()
+
+            raw_locator = metadata.get("workspaceLocator")
+            if not isinstance(raw_locator, Mapping):
+                return None
+            try:
+                locator = WORKSPACE_LOCATOR_ADAPTER.validate_python(raw_locator)
+            except Exception:
+                logger.warning(
+                    "Artifact publication workspace locator is invalid",
+                    exc_info=True,
+                )
+                return None
+            if not isinstance(locator, SandboxWorkspaceLocator):
+                return None
+
+            workflow_id = _metadata_text("correlationId", "correlation_id")
+            idempotency_key = _metadata_text("idempotencyKey", "idempotency_key")
+            suffix = ":agent_execute"
+            step_execution_id = (
+                idempotency_key[: -len(suffix)]
+                if idempotency_key.endswith(suffix)
+                else ""
+            )
+            if not workflow_id or not step_execution_id:
+                logger.warning(
+                    "Sandbox artifact publication requires workflow and step "
+                    "execution identity evidence"
+                )
+                return None
+
+            record_store = SandboxWorkspaceRecordStore(self._workspace_root)
+            try:
+                owner_record = record_store.load(locator.workspace_id)
+                if owner_record is None:
+                    logger.warning(
+                        "Sandbox workspace owner record was not found while "
+                        "publishing artifacts for %s",
+                        locator.workspace_id,
+                    )
+                    return None
+                return resolve_sandbox_workspace_locator(
+                    locator,
+                    workspace_root=self._workspace_root,
+                    expected_workspace_id=locator.workspace_id,
+                    owner_record=owner_record,
+                    expected_workflow_id=workflow_id,
+                    expected_step_execution_id=step_execution_id,
+                    must_exist=True,
+                )
+            except WorkspaceLocatorResolutionError:
+                logger.warning(
+                    "Sandbox workspace locator could not be authorized for "
+                    "artifact publication",
+                    exc_info=True,
+                )
+                return None
+
         def _story_output_mapping() -> Mapping[str, Any]:
             value = metadata.get("storyOutput") or metadata.get("story_output")
             return value if isinstance(value, Mapping) else {}
@@ -7123,21 +8721,9 @@ class TemporalAgentRuntimeActivities:
             )
             if not json_path:
                 return {}
-            agent_run_id = _metadata_text("agentRunId", "agent_run_id")
-            if not agent_run_id or self._run_store is None:
+            workspace = _result_workspace()
+            if workspace is None:
                 return {}
-            record = self._run_store.load(agent_run_id)
-            if record is None:
-                logger.warning(
-                    "Skipping story breakdown artifact publication: run record not "
-                    "found for %s",
-                    agent_run_id,
-                )
-                return {}
-            workspace_path = str(getattr(record, "workspace_path", "") or "").strip()
-            if not workspace_path:
-                return {}
-            workspace = Path(workspace_path).expanduser().resolve()
             published: dict[str, Any] = {}
             json_ref = await _publish_story_breakdown_file(
                 workspace=workspace,
@@ -7423,21 +9009,9 @@ class TemporalAgentRuntimeActivities:
             return _positive_int(_remediation_cadence().get("maxAttempts"))
 
         def _workspace_json_path(raw_path: str) -> Path | None:
-            agent_run_id = _metadata_text("agentRunId", "agent_run_id")
-            if not agent_run_id or self._run_store is None:
+            workspace = _result_workspace()
+            if workspace is None:
                 return None
-            record = self._run_store.load(agent_run_id)
-            if record is None:
-                logger.warning(
-                    "Skipping remediation artifact publication: run record not "
-                    "found for %s",
-                    agent_run_id,
-                )
-                return None
-            workspace_path = str(getattr(record, "workspace_path", "") or "").strip()
-            if not workspace_path:
-                return None
-            workspace = Path(workspace_path).expanduser().resolve()
             candidate = Path(raw_path)
             candidates: list[Path]
             if candidate.is_absolute():
@@ -7617,21 +9191,21 @@ class TemporalAgentRuntimeActivities:
             )
             if not verify_path:
                 return {}
-            agent_run_id = _metadata_text("agentRunId", "agent_run_id")
-            if not agent_run_id or self._run_store is None:
-                return {}
-            record = self._run_store.load(agent_run_id)
-            if record is None:
+            failure_class = str(
+                result_dict.get("failureClass")
+                or result_dict.get("failure_class")
+                or ""
+            ).strip()
+            if failure_class:
                 logger.warning(
-                    "Skipping MoonSpec verify artifact publication: run record not "
-                    "found for %s",
-                    agent_run_id,
+                    "Skipping MoonSpec verify artifact publication for failed "
+                    "agent result (%s)",
+                    failure_class,
                 )
                 return {}
-            workspace_path = str(getattr(record, "workspace_path", "") or "").strip()
-            if not workspace_path:
+            workspace = _result_workspace()
+            if workspace is None:
                 return {}
-            workspace = Path(workspace_path).expanduser().resolve()
             path = _workspace_moonspec_verify_path(workspace, verify_path)
             if path is None:
                 return {}
@@ -7651,6 +9225,45 @@ class TemporalAgentRuntimeActivities:
                 )
                 return {}
             gate_payload = _canonicalize_moonspec_verify_gate_payload(payload)
+            declared_verdict = _first_non_empty_text(
+                gate_payload,
+                "verdict",
+                "gateVerdict",
+                "gate_verdict",
+                "moonSpecVerdict",
+                "moonspecVerdict",
+                "verificationVerdict",
+                "verification_verdict",
+            )
+            additional_work_declared = (
+                recommended_next_action_for_verdict(declared_verdict)
+                == "reattempt_current_step"
+            )
+            remaining_work = gate_payload.get("remainingWork")
+            if additional_work_declared and isinstance(remaining_work, list):
+                # Workflow history carries only a stable semantic digest; the
+                # resolved verifier's full structured gaps remain in its
+                # artifact. This lets the progress gate compare attempts
+                # without duplicating Skill semantics or large payloads.
+                validated_refs_value = gate_payload.get(
+                    "validatedRefs",
+                    gate_payload.get("validated_refs"),
+                )
+                validated_refs = (
+                    dict(validated_refs_value)
+                    if isinstance(validated_refs_value, Mapping)
+                    else {}
+                )
+                validated_refs.setdefault(
+                    "progressEvidenceSchemaVersion",
+                    "remediation-progress-evidence/v1",
+                )
+                validated_refs.setdefault(
+                    "authoritativeEvidenceDigest",
+                    _unordered_json_list_digest(remaining_work),
+                )
+                gate_payload["validatedRefs"] = validated_refs
+                gate_payload.pop("validated_refs", None)
             contract_violations = step_gate_contract_violations(gate_payload)
             if contract_violations:
                 # Surface violations at the boundary where the verifier JSON
@@ -7682,6 +9295,16 @@ class TemporalAgentRuntimeActivities:
                 },
             )
             gate_payload["gateResultRef"] = verify_ref.artifact_id
+            if not _first_non_empty_text(
+                gate_payload,
+                "remainingWorkRef",
+                "remaining_work_ref",
+            ) and additional_work_declared:
+                # The resolved verifier bundle owns the remaining-work
+                # semantics. Its published JSON is therefore the durable
+                # evidence when the portable contract emits structured
+                # remainingWork inline but no separate artifact ref.
+                gate_payload["remainingWorkRef"] = verify_ref.artifact_id
             authoritative_ref = verify_ref.artifact_id
             remediation_verify_ref = (
                 await _publish_moonspec_remediation_verification_artifact(
@@ -7720,21 +9343,9 @@ class TemporalAgentRuntimeActivities:
             )
             if not assessment_path:
                 return {}
-            agent_run_id = _metadata_text("agentRunId", "agent_run_id")
-            if not agent_run_id or self._run_store is None:
+            workspace = _result_workspace()
+            if workspace is None:
                 return {}
-            record = self._run_store.load(agent_run_id)
-            if record is None:
-                logger.warning(
-                    "Skipping assessment verdict artifact publication: run record "
-                    "not found for %s",
-                    agent_run_id,
-                )
-                return {}
-            workspace_path = str(getattr(record, "workspace_path", "") or "").strip()
-            if not workspace_path:
-                return {}
-            workspace = Path(workspace_path).expanduser().resolve()
             candidates = _workspace_moonspec_verify_path_candidates(
                 workspace,
                 assessment_path,
@@ -7744,12 +9355,23 @@ class TemporalAgentRuntimeActivities:
                 None,
             )
             if path is None:
-                logger.warning(
-                    "Assessment verdict artifact file was not found for "
-                    "publication: %s",
-                    assessment_path,
+                failure_class = str(
+                    result_dict.get("failureClass")
+                    or result_dict.get("failure_class")
+                    or ""
+                ).strip()
+                if failure_class:
+                    logger.warning(
+                        "Skipping missing assessment verdict artifact for failed "
+                        "agent result (%s): %s",
+                        failure_class,
+                        assessment_path,
+                    )
+                    return {}
+                raise TemporalActivityRuntimeError(
+                    "Declared assessment verdict artifact was not produced: "
+                    f"{assessment_path}"
                 )
-                return {}
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
@@ -7782,6 +9404,21 @@ class TemporalAgentRuntimeActivities:
                     **step_artifact_metadata,
                 },
             )
+            parent_workflow_id = str(
+                metadata.get("parentWorkflowId") or ""
+            ).strip()
+            parent_run_id = str(metadata.get("parentRunId") or "").strip()
+            if parent_workflow_id and parent_run_id and info is not None:
+                await self._artifact_service.link_artifact(
+                    artifact_id=verdict_ref.artifact_id,
+                    principal="system:agent_runtime",
+                    execution_ref=ExecutionRef(
+                        namespace=info.namespace,
+                        workflow_id=parent_workflow_id,
+                        run_id=parent_run_id,
+                        link_type="input.assessment_handoff",
+                    ),
+                )
             published: dict[str, Any] = {
                 "assessmentArtifactRef": verdict_ref.artifact_id,
             }
@@ -7796,6 +9433,88 @@ class TemporalAgentRuntimeActivities:
             }:
                 published["assessmentVerdict"] = verdict
             return published
+
+        async def _publish_issue_brief_artifact() -> dict[str, Any]:
+            brief_path = _metadata_text(
+                "brief_artifact_path",
+                "briefArtifactPath",
+            )
+            if not brief_path:
+                return {}
+            workspace = _result_workspace()
+            if workspace is None:
+                return {}
+            candidates = _workspace_moonspec_verify_path_candidates(
+                workspace,
+                brief_path,
+            )
+            path = next(
+                (candidate for candidate in candidates if candidate.is_file()),
+                None,
+            )
+            if path is None:
+                failure_class = str(
+                    result_dict.get("failureClass")
+                    or result_dict.get("failure_class")
+                    or ""
+                ).strip()
+                if failure_class:
+                    logger.warning(
+                        "Skipping missing issue brief artifact for failed agent "
+                        "result (%s): %s",
+                        failure_class,
+                        brief_path,
+                    )
+                    return {}
+                raise TemporalActivityRuntimeError(
+                    "Declared issue brief artifact was not produced: "
+                    f"{brief_path}"
+                )
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise TemporalActivityRuntimeError(
+                    "Declared issue brief artifact could not be read as JSON: "
+                    f"{brief_path}"
+                ) from exc
+            if not isinstance(payload, Mapping):
+                raise TemporalActivityRuntimeError(
+                    "Declared issue brief artifact payload must be a JSON object: "
+                    f"{brief_path}"
+                )
+            brief_ref = await _write_json_artifact(
+                self._artifact_service,
+                principal="system:agent_runtime",
+                payload=dict(payload),
+                execution_ref=_execution_ref("output.issue_brief"),
+                metadata_json={
+                    "name": "issue-brief.json",
+                    "path": brief_path,
+                    "producer": "activity:agent_runtime.publish_artifacts",
+                    "labels": [
+                        "agent_runtime",
+                        "output.issue_brief",
+                        "issue_brief",
+                    ],
+                    **step_artifact_metadata,
+                },
+            )
+            parent_workflow_id = str(
+                metadata.get("parentWorkflowId") or ""
+            ).strip()
+            parent_run_id = str(metadata.get("parentRunId") or "").strip()
+            if parent_workflow_id and parent_run_id and info is not None:
+                await self._artifact_service.link_artifact(
+                    artifact_id=brief_ref.artifact_id,
+                    principal="system:agent_runtime",
+                    execution_ref=ExecutionRef(
+                        namespace=info.namespace,
+                        workflow_id=parent_workflow_id,
+                        run_id=parent_run_id,
+                        link_type="input.issue_brief_handoff",
+                    ),
+                )
+            return {"briefArtifactRef": brief_ref.artifact_id}
 
         result_summary = result_dict.get("summary") or result_dict.get("raw", "")
         operator_summary = self._sanitize_operator_summary(
@@ -7878,6 +9597,31 @@ class TemporalAgentRuntimeActivities:
             title = str(report_output.get("title") or "Final report").strip()
             return f"# {title}\n\n{body.rstrip()}\n"
 
+        assessment_output_required = bool(
+            _metadata_text(
+                "assessment_artifact_path",
+                "assessmentArtifactPath",
+            )
+        ) and not bool(
+            str(
+                result_dict.get("failureClass")
+                or result_dict.get("failure_class")
+                or ""
+            ).strip()
+        )
+        brief_output_required = bool(
+            _metadata_text(
+                "brief_artifact_path",
+                "briefArtifactPath",
+            )
+        ) and not bool(
+            str(
+                result_dict.get("failureClass")
+                or result_dict.get("failure_class")
+                or ""
+            ).strip()
+        )
+
         try:
             published_refs: dict[str, Any] = {}
             if instruction_ref:
@@ -7944,6 +9688,16 @@ class TemporalAgentRuntimeActivities:
                     else {}
                 )
                 enriched_metadata_for_result.update(assessment_verdict_refs)
+                result_dict["metadata"] = enriched_metadata_for_result
+            issue_brief_refs = await _publish_issue_brief_artifact()
+            if issue_brief_refs:
+                published_refs.update(issue_brief_refs)
+                enriched_metadata_for_result = (
+                    dict(result_dict.get("metadata") or {})
+                    if isinstance(result_dict.get("metadata"), Mapping)
+                    else {}
+                )
+                enriched_metadata_for_result.update(issue_brief_refs)
                 result_dict["metadata"] = enriched_metadata_for_result
             summary_ref = await _write_json_artifact(
                 self._artifact_service,
@@ -8060,54 +9814,65 @@ class TemporalAgentRuntimeActivities:
                     ).strip()
                     if primary_report_id:
                         published_refs["primaryReportRef"] = primary_report_id
-            # Enrich result with the diagnostics ref
-            if isinstance(result, Mapping):
-                enriched = dict(result)
-                if "diagnosticsRef" in enriched:
-                    enriched["diagnosticsRef"] = agent_result_ref.artifact_id
-                else:
-                    enriched["diagnostics_ref"] = agent_result_ref.artifact_id
-                enriched_metadata = (
-                    dict(enriched.get("metadata") or {})
-                    if isinstance(enriched.get("metadata"), Mapping)
-                    else {}
+            # Enrich and revalidate the real Activity output. Publication can
+            # push a valid near-limit input over the compact metadata boundary.
+            # The full pre-enrichment result is already durable at
+            # outputAgentResultRef, so oversized inline annotations may be
+            # projected out while all authoritative refs remain linkable.
+            if not isinstance(result, (Mapping, BaseModel)):
+                if hasattr(result, "diagnostics_ref"):
+                    result.diagnostics_ref = agent_result_ref.artifact_id
+                if hasattr(result, "metadata"):
+                    metadata_obj = getattr(result, "metadata", None)
+                    enriched_metadata = (
+                        dict(metadata_obj)
+                        if isinstance(metadata_obj, Mapping)
+                        else {}
+                    )
+                    enriched_metadata.update(
+                        {
+                            **published_refs,
+                            "outputSummaryRef": summary_ref.artifact_id,
+                            "outputAgentResultRef": agent_result_ref.artifact_id,
+                        }
+                    )
+                    result.metadata = enriched_metadata
+                await _notify_terminal_result(result)
+                return result
+            enriched = dict(result_dict)
+            enriched["diagnosticsRef"] = agent_result_ref.artifact_id
+            enriched.pop("diagnostics_ref", None)
+            enriched_metadata = (
+                dict(enriched.get("metadata") or {})
+                if isinstance(enriched.get("metadata"), Mapping)
+                else {}
+            )
+            enriched_metadata.update(
+                {
+                    **published_refs,
+                    "outputSummaryRef": summary_ref.artifact_id,
+                    "outputAgentResultRef": agent_result_ref.artifact_id,
+                }
+            )
+            enriched["metadata"] = enriched_metadata
+            try:
+                published_result = AgentRunResult.model_validate(enriched)
+            except ValueError:
+                published_result = AgentRunResult.model_validate(
+                    compact_published_agent_run_result_payload(enriched)
                 )
-                enriched_metadata.update(
-                    {
-                        **published_refs,
-                        "outputSummaryRef": summary_ref.artifact_id,
-                        "outputAgentResultRef": agent_result_ref.artifact_id,
-                    }
-                )
-                enriched["metadata"] = enriched_metadata
-                # Remove snake_case if alias is present to avoid Pydantic validation errors
-                if "diagnosticsRef" in enriched and "diagnostics_ref" in enriched:
-                    del enriched["diagnostics_ref"]
-                await _notify_terminal_result(enriched)
-                return enriched
-            if hasattr(result, "diagnostics_ref"):
-                result.diagnostics_ref = agent_result_ref.artifact_id
-            if hasattr(result, "metadata"):
-                metadata_obj = getattr(result, "metadata", None)
-                enriched_metadata = (
-                    dict(metadata_obj) if isinstance(metadata_obj, Mapping) else {}
-                )
-                enriched_metadata.update(
-                    {
-                        **published_refs,
-                        "outputSummaryRef": summary_ref.artifact_id,
-                        "outputAgentResultRef": agent_result_ref.artifact_id,
-                    }
-                )
-                result.metadata = enriched_metadata
-            await _notify_terminal_result(result)
-            return result
+            await _notify_terminal_result(published_result)
+            return published_result
         except Exception as exc:
             logger.warning(
                 "agent_runtime.publish_artifacts failed to publish managed-session artifacts",
                 exc_info=True,
             )
             if report_output_enabled and report_output_required:
+                raise
+            if assessment_output_required:
+                raise
+            if brief_output_required:
                 raise
             return result
 
@@ -8423,6 +10188,29 @@ class TemporalAgentRuntimeActivities:
                 request=request,
                 workspace_path=workspace_path_raw,
             )
+        remediation_evidence = await self._materialize_remediation_evidence_for_turn(
+            request=request,
+            workspace_path=workspace_path_raw,
+        )
+
+        def _prepared_request_metadata() -> dict[str, Any]:
+            prepared_payload: dict[str, Any] = {
+                "durableRetrievalMetadata": extract_durable_retrieval_metadata(
+                    request.parameters
+                )
+            }
+            if skill_materialization_metadata:
+                prepared_payload["activeSkillsDir"] = str(
+                    skill_materialization_metadata.get("visiblePath") or ""
+                )
+            if request.terminal_contract is not None:
+                prepared_payload["terminalContract"] = (
+                    request.terminal_contract.model_dump(
+                        by_alias=True, exclude_none=True
+                    )
+                )
+            return prepared_payload
+
         instruction_ref = str(request.instruction_ref or "").strip()
         if instruction_ref:
             if not workspace_path_raw:
@@ -8441,39 +10229,212 @@ class TemporalAgentRuntimeActivities:
                     workspace_path_raw
                 )
             instruction_ref = str(request.instruction_ref or "").strip()
+            if payload.get("metadataOnly") or payload.get("metadata_only"):
+                return _prepared_request_metadata()
             if instruction_ref:
+                instruction_ref = self._append_materialized_remediation_evidence(
+                    instruction_ref,
+                    remediation_evidence=remediation_evidence,
+                )
                 prepared = self._prepare_managed_codex_turn_text(
                     instruction_ref,
                     parameters=request.parameters,
                     skill_materialization_metadata=skill_materialization_metadata,
                 )
                 if payload.get("includePreparedRequestMetadata"):
-                    return {
+                    prepared_payload = {
                         "instructions": prepared,
                         "durableRetrievalMetadata": extract_durable_retrieval_metadata(
                             request.parameters
                         ),
                     }
+                    if skill_materialization_metadata:
+                        prepared_payload["activeSkillsDir"] = str(
+                            skill_materialization_metadata.get("visiblePath") or ""
+                        )
+                    if request.terminal_contract is not None:
+                        prepared_payload["terminalContract"] = (
+                            request.terminal_contract.model_dump(
+                                by_alias=True, exclude_none=True
+                            )
+                        )
+                    return prepared_payload
                 return prepared
+        if payload.get("metadataOnly") or payload.get("metadata_only"):
+            return _prepared_request_metadata()
         parameters = request.parameters if isinstance(request.parameters, dict) else {}
         instructions = str(parameters.get("instructions") or "").strip()
         if instructions:
+            instructions = self._append_materialized_remediation_evidence(
+                instructions,
+                remediation_evidence=remediation_evidence,
+            )
             prepared = self._prepare_managed_codex_turn_text(
                 instructions,
                 parameters=parameters,
                 skill_materialization_metadata=skill_materialization_metadata,
             )
             if payload.get("includePreparedRequestMetadata"):
-                return {
+                prepared_payload = {
                     "instructions": prepared,
                     "durableRetrievalMetadata": extract_durable_retrieval_metadata(
                         request.parameters
                     ),
                 }
+                if skill_materialization_metadata:
+                    prepared_payload["activeSkillsDir"] = str(
+                        skill_materialization_metadata.get("visiblePath") or ""
+                    )
+                if request.terminal_contract is not None:
+                    prepared_payload["terminalContract"] = (
+                        request.terminal_contract.model_dump(
+                            by_alias=True, exclude_none=True
+                        )
+                    )
+                return prepared_payload
             return prepared
         raise TemporalActivityRuntimeError(
             "request.instructionRef or request.parameters.instructions is required"
         )
+
+    async def _materialize_remediation_evidence_for_turn(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        workspace_path: str,
+    ) -> dict[str, dict[str, str]]:
+        """Resolve compact verifier refs into exact runtime-visible files."""
+
+        parameters = (
+            request.parameters if isinstance(request.parameters, Mapping) else {}
+        )
+        evidence_refs = {
+            field_name: str(parameters.get(field_name) or "").strip()
+            for field_name in ("gateResultRef", "remainingWorkRef")
+        }
+        evidence_refs = {
+            field_name: artifact_ref
+            for field_name, artifact_ref in evidence_refs.items()
+            if artifact_ref
+        }
+        if not evidence_refs:
+            return {}
+        if not workspace_path:
+            raise TemporalActivityRuntimeError(
+                "verifier evidence materialization requires payload.workspacePath"
+            )
+        if self._artifact_service is None:
+            raise TemporalActivityRuntimeError(
+                "verifier evidence materialization requires the artifact service"
+            )
+
+        workspace = Path(workspace_path).expanduser().resolve()
+        run_root = self._managed_session_run_root_for_workspace(workspace)
+        if run_root is None:
+            raise TemporalActivityRuntimeError(
+                "verifier evidence materialization requires a MoonMind-managed workspace"
+            )
+        evidence_root = run_root / "artifacts" / "remediation-inputs"
+        evidence_root.mkdir(parents=True, exist_ok=True)
+        resolved_evidence_root = evidence_root.resolve()
+        try:
+            resolved_evidence_root.relative_to(run_root.resolve())
+        except ValueError as exc:
+            raise TemporalActivityRuntimeError(
+                "verifier evidence materialization path escapes the managed run root"
+            ) from exc
+        if evidence_root.is_symlink():
+            raise TemporalActivityRuntimeError(
+                "verifier evidence materialization path must not be a symlink"
+            )
+
+        materialized: dict[str, dict[str, str]] = {}
+        for field_name, artifact_ref in evidence_refs.items():
+            if not artifact_ref.startswith("artifact://"):
+                raise TemporalActivityRuntimeError(
+                    f"{field_name} must use an artifact:// reference"
+                )
+            artifact_id = artifact_ref.removeprefix("artifact://").strip()
+            if not artifact_id:
+                raise TemporalActivityRuntimeError(
+                    f"{field_name} contains a blank artifact identifier"
+                )
+            try:
+                _artifact, artifact_payload = await self._artifact_service.read(
+                    artifact_id=artifact_id,
+                    principal="service:agent_runtime",
+                    allow_restricted_raw=True,
+                )
+            except Exception as exc:
+                raise TemporalActivityRuntimeError(
+                    f"failed to materialize {field_name} {artifact_ref}: {exc}"
+                ) from exc
+
+            label = "gate-result" if field_name == "gateResultRef" else "remaining-work"
+            ref_digest = hashlib.sha256(artifact_ref.encode("utf-8")).hexdigest()[:16]
+            target = resolved_evidence_root / f"{label}-{ref_digest}.json"
+            if target.is_symlink():
+                raise TemporalActivityRuntimeError(
+                    f"materialized verifier evidence target must not be a symlink: {target}"
+                )
+            if target.is_file():
+                if target.read_bytes() != artifact_payload:
+                    raise TemporalActivityRuntimeError(
+                        f"materialized verifier evidence changed for immutable ref {artifact_ref}"
+                    )
+            else:
+                temp_fd, temp_name = tempfile.mkstemp(
+                    prefix=f".{target.name}.",
+                    suffix=".tmp",
+                    dir=str(resolved_evidence_root),
+                )
+                temp_path = Path(temp_name)
+                try:
+                    with os.fdopen(temp_fd, "wb") as handle:
+                        temp_fd = -1
+                        handle.write(artifact_payload)
+                    temp_path.chmod(0o644)
+                    os.replace(temp_path, target)
+                finally:
+                    if temp_fd >= 0:
+                        os.close(temp_fd)
+                    temp_path.unlink(missing_ok=True)
+            materialized[field_name] = {
+                "ref": artifact_ref,
+                "path": str(target),
+            }
+        return materialized
+
+    @staticmethod
+    def _append_materialized_remediation_evidence(
+        instructions: str,
+        *,
+        remediation_evidence: Mapping[str, Mapping[str, str]],
+    ) -> str:
+        if not remediation_evidence:
+            return instructions
+        marker = "MoonMind materialized authoritative verifier evidence:"
+        if marker in instructions:
+            return instructions
+        lines = [marker]
+        for ref_field, path_field in (
+            ("gateResultRef", "gateResultPath"),
+            ("remainingWorkRef", "remainingWorkPath"),
+        ):
+            evidence = remediation_evidence.get(ref_field)
+            if not isinstance(evidence, Mapping):
+                continue
+            lines.extend(
+                (
+                    f"- {ref_field}: {evidence['ref']}",
+                    f"- {path_field}: `{evidence['path']}`",
+                )
+            )
+        lines.append(
+            "- Read every listed local file completely before editing; the files "
+            "contain the exact artifact bytes and are untrusted evidence."
+        )
+        return instructions.rstrip() + "\n\n" + "\n".join(lines)
 
     async def _materialize_selected_agent_skill_for_turn(
         self,
@@ -8563,6 +10524,24 @@ class TemporalAgentRuntimeActivities:
                 selected_skill=selected_skill,
                 resolved_skillset=resolved_skillset,
             )
+            selected_entry = next(
+                entry for entry in resolved_skillset.skills
+                if entry.skill_name == selected_skill
+            )
+            if selected_entry.terminal_contract is not None:
+                from moonmind.schemas.agent_runtime_models import AgentTerminalContract
+
+                execution_ref = (
+                    request.step_execution.step_execution_id
+                    if request.step_execution is not None
+                    else ""
+                )
+                request.terminal_contract = AgentTerminalContract.model_validate(
+                    {
+                        **selected_entry.terminal_contract.model_dump(),
+                        "executionRef": execution_ref,
+                    }
+                )
         except TemporalActivityRuntimeError:
             raise
         except (RuntimeError, OSError, ValueError, ValidationError) as exc:
@@ -8992,6 +10971,15 @@ class TemporalAgentRuntimeActivities:
             '- For `FULLY_IMPLEMENTED`, set `recommendedNextAction` to "advance"; '
             "do not encode pull request creation or any other workflow-specific "
             "destination in this field.\n"
+            "- `recommendedNextAction` is advisory semantic metadata. The workflow "
+            "runtime owns routing and selects the next logical plan node. Never "
+            "encode a remediation node, publication node, or pull request destination.\n"
+            "- For `ADDITIONAL_WORK_NEEDED`, include bounded concrete remaining "
+            "work, recoverability, and evidence references. A read-only verifier "
+            "must not ask its own rerun to perform implementation remediation.\n"
+            '- Use "reattempt_current_step" only when rerunning this verifier can '
+            "obtain different evidence, especially for a recoverable "
+            "`NO_DETERMINATION`.\n"
             "- Treat integration, e2e, smoke, quickstart, map-entry, UI/browser, "
             "deployment, and external-service checks as advisory when they depend "
             "on unavailable non-repo assets, services, credentials, or tooling; "
@@ -9086,8 +11074,42 @@ class TemporalAgentRuntimeActivities:
             activity_type="agent_runtime.send_turn",
             model_type=SendCodexManagedSessionTurnRequest,
         )
+        bridge_publication = validated.bridge_publication
+
+        async def _publish_active_observations(
+            observations: list[Any],
+            turn_id: str,
+            locator: CodexManagedSessionLocator,
+        ) -> None:
+            if not bridge_publication or not observations:
+                return
+            try:
+                await self.agent_runtime_publish_bridge_events(
+                    {
+                        **bridge_publication,
+                        "locator": locator.model_dump(mode="json", by_alias=True),
+                        "turnId": turn_id,
+                        "observations": observations,
+                        "phase": "active",
+                    }
+                )
+            except Exception:
+                logger.warning(
+                    "Active managed-session bridge publication failed; "
+                    "continuing the already-started turn",
+                    exc_info=True,
+                )
+
+        send_turn_call = (
+            controller.send_turn(
+                validated,
+                observation_sink=_publish_active_observations,
+            )
+            if bridge_publication
+            else controller.send_turn(validated)
+        )
         response = await _await_with_activity_heartbeats(
-            controller.send_turn(validated),
+            send_turn_call,
             heartbeat_payload={
                 "activityType": "agent_runtime.send_turn",
                 "sessionId": validated.session_id,
@@ -9197,35 +11219,6 @@ class TemporalAgentRuntimeActivities:
             model_type=CodexManagedSessionHandle,
         )
 
-    async def agent_runtime_ensure_docker_sidecar(
-        self,
-        request: Mapping[str, Any]
-        | ManagedSessionEnsureDockerSidecarRequest
-        | None = None,
-        /,
-    ) -> ManagedSessionEnsureDockerSidecarResponse:
-        controller = self._require_session_controller(
-            activity_type="agent_runtime.ensure_docker_sidecar"
-        )
-        validated = self._validate_session_request(
-            request,
-            activity_type="agent_runtime.ensure_docker_sidecar",
-            model_type=ManagedSessionEnsureDockerSidecarRequest,
-        )
-        response = await _await_with_activity_heartbeats(
-            controller.ensure_docker_sidecar(validated),
-            heartbeat_payload={
-                "activityType": "agent_runtime.ensure_docker_sidecar",
-                "sessionId": validated.session_id,
-                "containerId": validated.container_id,
-            },
-        )
-        return self._validate_session_response(
-            response,
-            activity_type="agent_runtime.ensure_docker_sidecar",
-            model_type=ManagedSessionEnsureDockerSidecarResponse,
-        )
-
     async def agent_runtime_terminate_session(
         self,
         request: Mapping[str, Any] | TerminateCodexManagedSessionRequest | None = None,
@@ -9252,6 +11245,37 @@ class TemporalAgentRuntimeActivities:
             response,
             activity_type="agent_runtime.terminate_session",
             model_type=CodexManagedSessionHandle,
+        )
+
+    async def agent_runtime_ensure_docker_sidecar(
+        self,
+        request: Mapping[str, Any]
+        | ManagedSessionEnsureDockerSidecarRequest
+        | None = None,
+        /,
+    ) -> ManagedSessionEnsureDockerSidecarResponse:
+        """Finish sidecar work already scheduled by a pre-cutover history."""
+
+        controller = self._require_session_controller(
+            activity_type="agent_runtime.ensure_docker_sidecar"
+        )
+        validated = self._validate_session_request(
+            request,
+            activity_type="agent_runtime.ensure_docker_sidecar",
+            model_type=ManagedSessionEnsureDockerSidecarRequest,
+        )
+        response = await _await_with_activity_heartbeats(
+            controller.ensure_docker_sidecar(validated),
+            heartbeat_payload={
+                "activityType": "agent_runtime.ensure_docker_sidecar",
+                "sessionId": validated.session_id,
+                "containerId": validated.container_id,
+            },
+        )
+        return self._validate_session_response(
+            response,
+            activity_type="agent_runtime.ensure_docker_sidecar",
+            model_type=ManagedSessionEnsureDockerSidecarResponse,
         )
 
     async def agent_runtime_fetch_session_summary(
@@ -9323,30 +11347,18 @@ class TemporalAgentRuntimeActivities:
 
         binding_raw = payload.get("binding")
         locator_raw = payload.get("locator")
-        turn_raw = payload.get("turnResponse")
-        summary_raw = payload.get("summary")
-        publication_raw = payload.get("publication")
-        if not all(
-            isinstance(value, Mapping)
-            for value in (
-                binding_raw,
-                locator_raw,
-                turn_raw,
-                summary_raw,
-                publication_raw,
-            )
-        ):
+        phase = str(payload.get("phase") or "terminal").strip()
+        if phase not in {"started", "active", "terminal"}:
             raise TemporalActivityRuntimeError(
-                "payload.binding, locator, turnResponse, summary, and publication are required"
+                "payload.phase must be 'started', 'active', or 'terminal'"
+            )
+        if not all(isinstance(value, Mapping) for value in (binding_raw, locator_raw)):
+            raise TemporalActivityRuntimeError(
+                "payload.binding and locator are required"
             )
 
         binding = CodexManagedSessionBinding.model_validate(dict(binding_raw))
         locator = CodexManagedSessionLocator.model_validate(dict(locator_raw))
-        turn_response = CodexManagedSessionTurnResponse.model_validate(dict(turn_raw))
-        summary = CodexManagedSessionSummary.model_validate(dict(summary_raw))
-        publication = CodexManagedSessionArtifactsPublication.model_validate(
-            dict(publication_raw)
-        )
         compatibility_profile = (
             str(
                 payload.get("compatibilityProfile")
@@ -9357,7 +11369,6 @@ class TemporalAgentRuntimeActivities:
         )
 
         from api_service.db.base import get_async_session_context
-        from moonmind.omnigent.bridge_events import build_omnigent_bridge_event
         from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 
         store = OmnigentBridgeSessionStore(get_async_session_context)
@@ -9388,6 +11399,87 @@ class TemporalAgentRuntimeActivities:
             endpoint_ref="direct-codex-compat",
         )
 
+        source_metadata = {
+            "source": "codex_direct_compat",
+            "compatibilityProfile": compatibility_profile,
+            "directManagedSessionId": locator.session_id,
+            "sessionEpoch": locator.session_epoch,
+            "containerId": locator.container_id,
+        }
+        if phase == "started":
+            event_payloads = [
+                {
+                    "type": "session.started",
+                    "status": "running",
+                    "data": {
+                        **source_metadata,
+                        "managedSessionWorkflowId": binding.workflow_id,
+                    },
+                },
+                {
+                    "type": "session.input.user_message",
+                    "status": "running",
+                    "direction": "moonmind_to_host",
+                    "text": str(payload.get("userMessage") or ""),
+                    "data": {
+                        **source_metadata,
+                        "requestId": f"{request.idempotency_key}:initial",
+                    },
+                },
+                {
+                    "type": "session.item.turn_started",
+                    "status": "running",
+                    "data": source_metadata,
+                },
+            ]
+            return await self._append_direct_codex_bridge_events(
+                store=store,
+                row=row,
+                request=request,
+                locator=locator,
+                event_payloads=event_payloads,
+                compatibility_profile=compatibility_profile,
+            )
+
+        if phase == "active":
+            observations = payload.get("observations")
+            turn_id = _string_or_none_for_activity(payload.get("turnId"))
+            if not isinstance(observations, list) or turn_id is None:
+                raise TemporalActivityRuntimeError(
+                    "active payload requires turnId and observations"
+                )
+            source_metadata["turnId"] = turn_id
+            active_event_payloads = self._direct_codex_active_event_payloads(
+                observations=observations,
+                source_metadata=source_metadata,
+                locator=locator,
+                turn_id=turn_id,
+            )
+            return await self._append_direct_codex_bridge_events(
+                store=store,
+                row=row,
+                request=request,
+                locator=locator,
+                event_payloads=active_event_payloads,
+                compatibility_profile=compatibility_profile,
+            )
+
+        turn_raw = payload.get("turnResponse")
+        summary_raw = payload.get("summary")
+        publication_raw = payload.get("publication")
+        if not all(
+            isinstance(value, Mapping)
+            for value in (turn_raw, summary_raw, publication_raw)
+        ):
+            raise TemporalActivityRuntimeError(
+                "terminal payload requires turnResponse, summary, and publication"
+            )
+        turn_response = CodexManagedSessionTurnResponse.model_validate(dict(turn_raw))
+        summary = CodexManagedSessionSummary.model_validate(dict(summary_raw))
+        publication = CodexManagedSessionArtifactsPublication.model_validate(
+            dict(publication_raw)
+        )
+        source_metadata["turnId"] = turn_response.turn_id
         assistant_text = str(
             turn_response.metadata.get("assistantText")
             or summary.metadata.get("lastAssistantText")
@@ -9398,25 +11490,94 @@ class TemporalAgentRuntimeActivities:
                 "type": "session.started",
                 "status": "running",
                 "data": {
-                    "sessionId": locator.session_id,
-                    "sessionEpoch": locator.session_epoch,
-                    "containerId": locator.container_id,
+                    **source_metadata,
                     "threadId": locator.thread_id,
-                    "managedSessionWorkflowId": binding.workflow_id,
                     "managedAgentRunId": binding.agent_run_id,
-                    "compatibilityProfile": compatibility_profile,
-                    "producer": "direct_codex_managed_session",
                 },
             }
         ]
-        if assistant_text:
+        for intervention in turn_response.metadata.get("sessionInterventions") or []:
+            if isinstance(intervention, Mapping):
+                event_payloads.append(
+                    {
+                        "type": "session.item.reset_boundary",
+                        "status": "running",
+                        "data": {**source_metadata, **dict(intervention)},
+                        "latestResetBoundaryRef": publication.latest_reset_boundary_ref,
+                    }
+                )
+        mapped_observations = (
+            ("toolEvents", "session.item.tool"),
+            ("controlEvents", "session.item.control"),
+            ("approvalEvents", "session.item.approval"),
+        )
+        allowed_intervention_outcomes = {
+            "requested", "accepted", "rejected", "completed", "failed",
+            "delivery_unknown",
+        }
+        for metadata_key, event_prefix in mapped_observations:
+            for observation in turn_response.metadata.get(metadata_key) or []:
+                if not isinstance(observation, Mapping):
+                    continue
+                outcome = str(
+                    observation.get("outcome")
+                    or observation.get("status")
+                    or "completed"
+                ).strip()
+                if outcome not in allowed_intervention_outcomes:
+                    raise TemporalActivityRuntimeError(
+                        f"{metadata_key} outcome must be one of: "
+                        + ", ".join(sorted(allowed_intervention_outcomes))
+                    )
+                if metadata_key in {"controlEvents", "approvalEvents"}:
+                    required = (
+                        "actorId", "idempotencyKey", "expectedSessionId",
+                        "expectedSessionEpoch", "expectedTurnId", "auditRef",
+                    )
+                    missing_fields = [name for name in required if not observation.get(name)]
+                    if missing_fields:
+                        raise TemporalActivityRuntimeError(
+                            f"{metadata_key} requires authoritative intervention evidence: "
+                            + ", ".join(missing_fields)
+                        )
+                    if str(observation["expectedSessionId"]) != locator.session_id or int(
+                        observation["expectedSessionEpoch"]
+                    ) != locator.session_epoch or str(observation["expectedTurnId"]) != turn_response.turn_id:
+                        raise TemporalActivityRuntimeError(
+                            f"{metadata_key} expected session/epoch/turn does not match the active turn"
+                        )
+                event_payloads.append(
+                    {
+                        "type": f"{event_prefix}.{outcome}",
+                        "status": (
+                            "waiting"
+                            if outcome in {"requested", "accepted"}
+                            else "running"
+                        ),
+                        "data": {**source_metadata, **dict(observation)},
+                        "artifactRef": observation.get("auditRef"),
+                    }
+                )
+        existing_events = await store.list_events(row.bridge_session_id)
+        active_assistant_output_published = any(
+            event.event_type in {"response.output", "response.output.completed"}
+            and str(
+                (getattr(event, "metadata_", {}) or {})
+                .get("moonmind", {})
+                .get("turnId")
+                or ""
+            )
+            == turn_response.turn_id
+            for event in existing_events
+        )
+        if assistant_text and not active_assistant_output_published:
             event_payloads.append(
                 {
                     "type": "response.output",
                     "status": "running",
                     "text": assistant_text,
                     "data": {
-                        "turnId": turn_response.turn_id,
+                        **source_metadata,
                         "text": assistant_text,
                     },
                 }
@@ -9425,34 +11586,143 @@ class TemporalAgentRuntimeActivities:
             payload.get("terminalStatus")
             or ("completed" if turn_response.status == "completed" else "failed")
         ).strip()
-        if terminal_status not in {"completed", "failed"}:
+        if terminal_status not in {"completed", "failed", "canceled", "timed_out"}:
             raise TemporalActivityRuntimeError(
-                "payload.terminalStatus must be 'completed' or 'failed'"
+                "payload.terminalStatus must be completed, failed, canceled, or timed_out"
             )
-        terminal_type = (
-            "response.completed" if terminal_status == "completed" else "response.failed"
-        )
+        terminal_type = {
+            "completed": "response.completed",
+            "failed": "response.failed",
+            "canceled": "session.item.terminal.canceled",
+            "timed_out": "session.item.terminal.timed_out",
+        }[terminal_status]
         event_payloads.append(
             {
                 "type": terminal_type,
                 "status": terminal_status,
                 "data": {
-                    "turnId": turn_response.turn_id,
+                    **source_metadata,
                     "outputRefs": list(turn_response.output_refs),
                     "publishedArtifactRefs": list(publication.published_artifact_refs),
                 },
             }
         )
-        events = [
-            build_omnigent_bridge_event(
-                payload=event_payload,
-                sequence=index,
-                request=request,
-                omnigent_session_id=locator.session_id,
-                bridge_session_id=row.bridge_session_id,
-            ).event
-            for index, event_payload in enumerate(event_payloads, start=1)
-        ]
+        resource_refs = {
+            "summaryRef": publication.latest_summary_ref,
+            "checkpointRef": publication.latest_checkpoint_ref,
+            "controlEventRef": publication.latest_control_event_ref,
+            "resetBoundaryRef": publication.latest_reset_boundary_ref,
+        }
+        resource_refs.update(
+            {
+                key: value
+                for key, value in publication.metadata.items()
+                if key
+                in {
+                    "stdoutArtifactRef",
+                    "stderrArtifactRef",
+                    "diagnosticsRef",
+                    "observabilityEventsRef",
+                }
+            }
+        )
+        typed_output_refs: dict[str, str] = {}
+        for index, artifact_ref in enumerate(turn_response.output_refs):
+            typed_output_refs[f"outputRef:{index}"] = artifact_ref
+        for key in ("workspaceArtifactRef", "diffArtifactRef", "continuityMetadataRef", "capabilityGapsRef"):
+            value = turn_response.metadata.get(key) or publication.metadata.get(key)
+            if value:
+                typed_output_refs[key] = str(value)
+        resource_refs.update(typed_output_refs)
+        for resource_kind, artifact_ref in resource_refs.items():
+            if artifact_ref:
+                event_payloads.insert(
+                    -1,
+                    {
+                        "type": "session.item.resource_published",
+                        "status": "running",
+                        "artifactRef": artifact_ref,
+                        "data": {
+                            **source_metadata,
+                            "resourceKind": resource_kind,
+                            "artifactRef": artifact_ref,
+                        },
+                    },
+                )
+        append_result = await self._append_direct_codex_bridge_events(
+            store=store,
+            row=row,
+            request=request,
+            locator=locator,
+            event_payloads=event_payloads,
+            compatibility_profile=compatibility_profile,
+        )
+        if str(communication.get("comparisonMode") or "").strip() == "dual_write":
+            durable_events = await store.list_events(row.bridge_session_id)
+
+            def event_source(event: Any) -> str:
+                metadata = getattr(event, "metadata_", {})
+                moonmind = (
+                    metadata.get("moonmind", {})
+                    if isinstance(metadata, Mapping)
+                    else {}
+                )
+                return str(moonmind.get("source") or "")
+
+            direct_events = [
+                event for event in durable_events
+                if event_source(event) == "codex_direct_compat"
+            ]
+            comparison_events = [
+                event for event in durable_events
+                if event_source(event)
+                and event_source(event) != "codex_direct_compat"
+                and not str(event.event_type).startswith("lifecycle.")
+            ]
+            comparison = self._compare_bridge_event_streams(
+                direct_events=direct_events,
+                comparison_events=comparison_events,
+            )
+            actual = comparison.pop("actualEventClasses")
+            expected = comparison.pop("expectedEventClasses")
+            missing = comparison["missingEventClasses"]
+            extra = comparison["unexpectedEventClasses"]
+            dropped_count = comparison["droppedEventCount"]
+            duplicate_count = comparison["duplicateEventCount"]
+            reordered = comparison["reordered"]
+            semantic_mismatch_count = comparison["semanticMismatchCount"]
+            comparison_available = comparison["comparisonAvailable"]
+            matched = comparison["matched"]
+            await store.record_lifecycle_event(
+                request.idempotency_key,
+                event_type="codex_direct_compat.comparison",
+                code=(
+                    "comparison_source_unavailable"
+                    if not comparison_available
+                    else "projection_parity" if matched else "projection_mismatch"
+                ),
+                summary=(
+                    "Independent comparison producer has not emitted durable events."
+                    if not comparison_available
+                    else "Direct compatibility and independent projections matched."
+                    if matched
+                    else "Direct compatibility projection differed from the independent projection."
+                ),
+                metadata={
+                    "expectedEventClasses": expected,
+                    "actualEventClasses": actual,
+                    "missingEventClasses": missing,
+                    "unexpectedEventClasses": extra,
+                    "droppedEventCount": dropped_count,
+                    "duplicateEventCount": duplicate_count,
+                    "reordered": reordered,
+                    "semanticMismatchCount": semantic_mismatch_count,
+                    "comparisonAvailable": comparison_available,
+                },
+            )
+            append_result["comparison"] = {
+                **comparison,
+            }
         await store.mark_terminal(
             request.idempotency_key,
             status=terminal_status,
@@ -9465,12 +11735,272 @@ class TemporalAgentRuntimeActivities:
                 },
                 "publishedArtifactRefs": list(publication.published_artifact_refs),
             },
-            events=events,
         )
+        return append_result
+
+    @staticmethod
+    def _compare_bridge_event_streams(
+        *, direct_events: list[Any], comparison_events: list[Any]
+    ) -> dict[str, Any]:
+        """Compare two independently persisted producer streams."""
+        actual = [str(event.event_type) for event in direct_events]
+        expected = [str(event.event_type) for event in comparison_events]
+        missing = sorted(set(expected) - set(actual))
+        extra = sorted(set(actual) - set(expected))
+        dropped_count = sum(max(expected.count(value) - actual.count(value), 0) for value in set(expected))
+        duplicate_count = sum(max(actual.count(value) - expected.count(value), 0) for value in set(actual))
+        reordered = bool(expected and actual and expected != actual and sorted(expected) == sorted(actual))
+        semantic_fields = ("normalized_status", "artifact_ref", "text_preview")
+        semantic_mismatch_count = sum(
+            1
+            for direct, comparison in zip(direct_events, comparison_events)
+            if direct.event_type == comparison.event_type
+            and any(getattr(direct, field, None) != getattr(comparison, field, None) for field in semantic_fields)
+        )
+        comparison_available = bool(comparison_events)
+        matched = bool(
+            comparison_available and not missing and not extra
+            and not dropped_count and not duplicate_count and not reordered
+            and not semantic_mismatch_count
+        )
+        return {
+            "expectedEventClasses": expected,
+            "actualEventClasses": actual,
+            "missingEventClasses": missing,
+            "unexpectedEventClasses": extra,
+            "droppedEventCount": dropped_count,
+            "duplicateEventCount": duplicate_count,
+            "reordered": reordered,
+            "semanticMismatchCount": semantic_mismatch_count,
+            "comparisonAvailable": comparison_available,
+            "matched": matched,
+        }
+
+    @staticmethod
+    def _direct_codex_active_event_payloads(
+        *,
+        observations: list[Any],
+        source_metadata: Mapping[str, Any],
+        locator: CodexManagedSessionLocator,
+        turn_id: str,
+    ) -> list[dict[str, Any]]:
+        """Map the runtime-neutral observation contract to bridge event classes."""
+        kind_map = {
+            "assistant_message_delta": "response.output.delta",
+            "assistant_message": "response.output",
+            "assistant_message_completed": "response.output.completed",
+            "tool_call_started": "session.item.tool.started",
+            "tool_call_output": "session.item.tool.output",
+            "tool_call_completed": "session.item.tool.completed",
+            "tool_call_failed": "session.item.tool.failed",
+            "approval_requested": "session.item.approval.requested",
+            "approval_resolved": "session.item.approval.resolved",
+            "intervention_requested": "session.item.control.requested",
+            "intervention_accepted": "session.item.control.accepted",
+            "intervention_rejected": "session.item.control.rejected",
+            "intervention_completed": "session.item.control.completed",
+            "intervention_failed": "session.item.control.failed",
+            "intervention_delivery_unknown": "session.item.control.delivery_unknown",
+            "turn_interrupted": "session.item.control.interrupted",
+            "turn_canceled": "session.item.terminal.canceled",
+            "turn_timed_out": "session.item.terminal.timed_out",
+            "turn_started": "session.item.turn_started",
+            "turn_completed": "session.item.turn.completed",
+            "turn_failed": "session.item.turn_failed",
+            "reset_boundary_published": "session.item.reset_boundary",
+            "summary_published": "session.item.resource_published",
+            "checkpoint_published": "session.item.resource_published",
+            "artifact_published": "session.item.resource_published",
+            "continuity_published": "session.item.resource_published",
+            "cleanup_completed": "session.item.cleanup.completed",
+            "cleanup_failed": "session.item.cleanup.failed",
+        }
+        intervention_kinds = {
+            "approval_requested",
+            "approval_resolved",
+            "intervention_requested",
+            "intervention_accepted",
+            "intervention_rejected",
+            "intervention_completed",
+            "intervention_failed",
+            "intervention_delivery_unknown",
+            "turn_interrupted",
+        }
+        mapped: list[dict[str, Any]] = []
+        for index, raw in enumerate(observations):
+            if not isinstance(raw, Mapping):
+                continue
+            kind = str(raw.get("kind") or raw.get("type") or "").strip()
+            event_type = kind_map.get(kind)
+            if event_type is None:
+                continue
+            metadata = raw.get("metadata")
+            metadata = dict(metadata) if isinstance(metadata, Mapping) else {}
+            source_event_id = str(
+                metadata.get("sourceEventId")
+                or metadata.get("eventId")
+                or f"{locator.session_id}:{locator.session_epoch}:{turn_id}:{index}:{kind}"
+            )
+            data = {
+                **dict(source_metadata),
+                **metadata,
+                "sourceEventId": source_event_id,
+                "turnId": str(raw.get("turnId") or turn_id),
+            }
+            if kind in intervention_kinds:
+                required = {
+                    "actorId", "idempotencyKey", "expectedSessionId",
+                    "expectedSessionEpoch", "expectedTurnId", "outcome", "auditRef",
+                }
+                missing = sorted(name for name in required if not data.get(name))
+                if missing:
+                    raise TemporalActivityRuntimeError(
+                        f"{kind} requires authoritative intervention evidence: "
+                        + ", ".join(missing)
+                    )
+                if (
+                    str(data["expectedSessionId"]) != locator.session_id
+                    or int(data["expectedSessionEpoch"]) != locator.session_epoch
+                    or str(data["expectedTurnId"]) != turn_id
+                ):
+                    raise TemporalActivityRuntimeError(
+                        f"{kind} expected session/epoch/turn does not match the active turn"
+                    )
+            event: dict[str, Any] = {
+                "type": event_type,
+                "status": "running",
+                "eventId": source_event_id,
+                "data": data,
+                "metadata": metadata,
+            }
+            text = str(raw.get("text") or "").strip()
+            if text:
+                event["text"] = text[:500]
+            artifact_ref = data.get("auditRef") or data.get("artifactRef")
+            if artifact_ref:
+                event["artifactRef"] = str(artifact_ref)
+            mapped.append(event)
+        return mapped
+
+    async def _append_direct_codex_bridge_events(
+        self,
+        *,
+        store: Any,
+        row: Any,
+        request: AgentExecutionRequest,
+        locator: CodexManagedSessionLocator,
+        event_payloads: list[dict[str, Any]],
+        compatibility_profile: str,
+    ) -> dict[str, Any]:
+        """Append compatibility events idempotently across activity retries."""
+        from moonmind.omnigent.bridge_events import build_omnigent_bridge_event
+
+        existing = await store.list_events(row.bridge_session_id)
+
+        def identity(event: Mapping[str, Any]) -> tuple[Any, ...]:
+            data = (
+                event.get("data")
+                if isinstance(event.get("data"), Mapping)
+                else {}
+            )
+            mm = (
+                ((event.get("metadata") or {}).get("moonmind") or {})
+                if isinstance(event.get("metadata"), Mapping)
+                else {}
+            )
+            event_type = event.get("eventType") or event.get("type")
+            turn_id = mm.get("turnId") or data.get("turnId")
+            if event_type == "session.started":
+                turn_id = None
+            return (
+                event_type,
+                mm.get("directManagedSessionId")
+                or data.get("directManagedSessionId"),
+                mm.get("sessionEpoch") or data.get("sessionEpoch"),
+                turn_id,
+                mm.get("sourceEventId")
+                or data.get("requestId")
+                or data.get("idempotencyKey")
+                or data.get("controlId")
+                or data.get("approvalId"),
+                mm.get("sourceOutcome") or data.get("outcome"),
+                event.get("textPreview") or "",
+                event.get("artifactRef") or "",
+            )
+
+        seen = {
+            identity(
+                {
+                    "eventType": event.event_type,
+                    "textPreview": event.text_preview,
+                    "artifactRef": event.artifact_ref,
+                    "metadata": event.metadata_,
+                }
+            )
+            for event in existing
+        }
+        normalized = []
+        for event_payload in event_payloads:
+            source_data = (
+                event_payload.get("data")
+                if isinstance(event_payload.get("data"), Mapping)
+                else {}
+            )
+            event = build_omnigent_bridge_event(
+                payload=event_payload,
+                sequence=1,
+                request=request,
+                omnigent_session_id=locator.session_id,
+                bridge_session_id=row.bridge_session_id,
+            ).event
+            event["metadata"]["moonmind"].update(
+                {
+                    "source": "codex_direct_compat",
+                    "compatibilityProfile": compatibility_profile,
+                    "directManagedSessionId": locator.session_id,
+                    "sessionEpoch": locator.session_epoch,
+                    "turnId": (
+                        str((event.get("data") or {}).get("turnId") or "") or None
+                    ),
+                    "sourceEventId": next(
+                        (
+                            str((event.get("data") or {}).get(name))
+                            for name in (
+                                "sourceEventId", "requestId", "idempotencyKey",
+                                "controlId", "approvalId",
+                            )
+                            if (event.get("data") or {}).get(name)
+                        ),
+                        None,
+                    ),
+                    "sourceOutcome": source_data.get("outcome"),
+                }
+            )
+            event["metadata"].update(
+                {
+                    key: value
+                    for key, value in source_data.items()
+                    if key
+                    not in {
+                        "source",
+                        "compatibilityProfile",
+                        "directManagedSessionId",
+                        "sessionEpoch",
+                        "turnId",
+                        "sourceEventId",
+                    }
+                }
+            )
+            key = identity(event)
+            if key not in seen:
+                seen.add(key)
+                normalized.append(event)
+        if normalized:
+            await store.append_events(row.bridge_session_id, normalized)
         return {
             "bridgeSessionId": row.bridge_session_id,
             "omnigentSessionId": locator.session_id,
-            "eventCount": len(events),
+            "eventCount": len(normalized),
             "compatibilityProfile": compatibility_profile,
         }
 
@@ -9482,7 +12012,91 @@ class TemporalAgentRuntimeActivities:
         controller = self._require_session_controller(
             activity_type="agent_runtime.reconcile_managed_sessions"
         )
-        del payload
+        action_payload = dict(payload or {})
+        omnigent_reconcile_request = action_payload.get("omnigentReconcileRequest")
+        stuck_state_service = self._omnigent_stuck_state_service
+        if stuck_state_service is None and self._artifact_service is not None:
+            from api_service.db.base import async_session_maker
+            from moonmind.omnigent.control_plane.stuck_state_reconciliation import (
+                StuckStateReconciliationService,
+            )
+            from moonmind.workflows.temporal.activities.omnigent_stuck_state import (
+                TemporalOmnigentReconcileDispatcher,
+                TemporalStuckStateDiagnosticPublisher,
+            )
+
+            stuck_state_service = StuckStateReconciliationService(
+                session_factory=async_session_maker,
+                dispatcher=TemporalOmnigentReconcileDispatcher(
+                    self._client_adapter
+                ),
+                diagnostic_publisher=TemporalStuckStateDiagnosticPublisher(
+                    self._artifact_service
+                ),
+            )
+        validated_omnigent_request = None
+        if isinstance(omnigent_reconcile_request, Mapping):
+            if stuck_state_service is None:
+                raise TemporalActivityRuntimeError(
+                    "Omnigent reconcile request requires control-plane persistence"
+                )
+            validated_omnigent_request = (
+                await stuck_state_service.validate_reconcile_request(
+                    session_id=str(
+                        omnigent_reconcile_request.get("sessionId") or ""
+                    ),
+                    workflow_id=str(
+                        action_payload.get("omnigentWorkflowId") or ""
+                    ),
+                    request_id=str(
+                        omnigent_reconcile_request.get("requestId") or ""
+                    ),
+                    reason_code=str(
+                        omnigent_reconcile_request.get("reasonCode") or ""
+                    ),
+                    expected_revision=int(
+                        omnigent_reconcile_request.get("expectedRevision") or 0
+                    ),
+                    expected_fencing_generation=int(
+                        omnigent_reconcile_request.get(
+                            "expectedFencingGeneration"
+                        )
+                        or 0
+                    ),
+                )
+            )
+        action_kind = str(action_payload.get("actionKind") or "").strip()
+        if action_kind:
+            if action_kind not in {
+                "workload.restart_helper_container",
+                "workload.reap_orphan_container",
+            }:
+                raise TemporalActivityRuntimeError(
+                    f"unsupported managed-runtime remediation action: {action_kind}"
+                )
+            if not str(action_payload.get("containerRef") or "").strip():
+                raise TemporalActivityRuntimeError(
+                    "containerRef is required for managed-runtime remediation"
+                )
+            return await _await_with_activity_heartbeats(
+                controller.run_container_remediation_action(
+                    action_kind=action_kind,
+                    container_ref=str(action_payload["containerRef"]),
+                    expected_state=(
+                        str(action_payload.get("expectedState") or "").strip() or None
+                    ),
+                    request_id=(
+                        str(action_payload.get("requestId") or "").strip()
+                    ),
+                    target_workflow_id=str(
+                        action_payload.get("targetWorkflowId") or ""
+                    ).strip(),
+                ),
+                heartbeat_payload={
+                    "activityType": "agent_runtime.reconcile_managed_sessions",
+                    "actionKind": action_kind,
+                },
+            )
         records = await _await_with_activity_heartbeats(
             controller.reconcile(),
             heartbeat_payload={
@@ -9549,7 +12163,7 @@ class TemporalAgentRuntimeActivities:
                 getattr(reap_result, "reaped_session_ids", ()) or ()
             )[:session_id_limit]
 
-        return {
+        summary = {
             "managedSessionRecordsReconciled": reconciled_count,
             "degradedSessionRecords": degraded_count,
             "sessionIds": session_ids,
@@ -9563,6 +12177,34 @@ class TemporalAgentRuntimeActivities:
             "orphanVolumeReapSkippedActive": orphan_volume_reap_skipped_active,
             "orphanVolumeReapSkippedRecent": orphan_volume_reap_skipped_recent,
         }
+        # The existing durable operational schedule is the single bounded
+        # sweeper owner for both managed-runtime reattachment and canonical
+        # Omnigent stuck-state inspection.  Reusing it adds no idle container or
+        # second scheduling authority (MoonLadderStudios/MoonMind#3708).
+        if validated_omnigent_request is not None:
+            summary["omnigentReconcileRequest"] = validated_omnigent_request
+            return summary
+        if stuck_state_service is not None:
+            try:
+                stuck_result = await _await_with_activity_heartbeats(
+                    stuck_state_service.sweep(),
+                    heartbeat_payload={
+                        "activityType": "agent_runtime.reconcile_managed_sessions",
+                        "phase": "omnigent_stuck_state_sweep",
+                    },
+                )
+            except Exception:
+                # Managed-session reattachment is the activity's primary result;
+                # an auxiliary sweep outage is observable and retried by the next
+                # durable schedule tick rather than rewriting primary success.
+                logger.warning(
+                    "Omnigent stuck-state sweep failed during managed-session reconcile",
+                    exc_info=True,
+                )
+                summary["omnigentStuckStateSweepFailed"] = 1
+            else:
+                summary["omnigentStuckState"] = stuck_result.to_dict()
+        return summary
 
     async def agent_runtime_cleanup_managed_runtime_files(
         self,
@@ -9583,6 +12225,16 @@ class TemporalAgentRuntimeActivities:
                 "run_store is required for agent_runtime.cleanup_managed_runtime_files"
             )
         config = ManagedRuntimeCleanupConfig.from_env()
+        action_payload = dict(payload or {})
+        action_kind = str(action_payload.get("actionKind") or "").strip()
+        if action_kind and action_kind != "cleanup.request_janitor":
+            raise TemporalActivityRuntimeError(
+                f"unsupported managed-runtime cleanup action: {action_kind}"
+            )
+        if action_kind and not str(action_payload.get("cleanupRef") or "").strip():
+            raise TemporalActivityRuntimeError(
+                "cleanupRef is required for remediation cleanup"
+            )
         if isinstance(payload, Mapping) and isinstance(payload.get("config"), Mapping):
             config_payload = payload["config"]
             config = ManagedRuntimeCleanupConfig(
@@ -9647,25 +12299,128 @@ class TemporalAgentRuntimeActivities:
                 failed=True,
                 reason="docker reference scan unavailable",
             )
-        result = cleanup_managed_runtime_files(
-            run_store=self._run_store,
-            session_store=session_store,
-            config=config,
-            docker_reference_provider=(
-                None if docker_state is None else lambda: docker_state
+        # The janitor performs recursive synchronous filesystem work. Keep it
+        # off this fleet's async loop so live status/control Activities remain
+        # serviceable, and own heartbeats from the event-loop side. Cancellation
+        # is cooperative, and the Activity does not release ownership until the
+        # janitor has stopped and released its process lock.
+        cancellation_requested = threading.Event()
+
+        def _check_cleanup_cancellation(_progress: Mapping[str, object]) -> None:
+            if cancellation_requested.is_set():
+                raise asyncio.CancelledError
+
+        result = await _await_with_activity_heartbeats(
+            _run_sync_call_until_stopped(
+                functools.partial(
+                    cleanup_managed_runtime_files,
+                    run_store=self._run_store,
+                    session_store=session_store,
+                    config=config,
+                    docker_reference_provider=(
+                        None if docker_state is None else lambda: docker_state
+                    ),
+                    progress_callback=_check_cleanup_cancellation,
+                ),
+                cancellation_requested=cancellation_requested,
             ),
-            progress_callback=(
-                lambda progress: temporal_activity.heartbeat(
-                    {
-                        "activityType": "agent_runtime.cleanup_managed_runtime_files",
-                        **dict(progress),
-                    }
-                )
-                if temporal_activity.in_activity()
-                else None
-            ),
+            heartbeat_payload={
+                "activityType": "agent_runtime.cleanup_managed_runtime_files",
+                "phase": "filesystem_cleanup",
+            },
         )
-        return result.to_dict()
+        result_payload = result.to_dict()
+        if action_kind:
+            result_payload.update(
+                {
+                    "actionKind": action_kind,
+                    "requestId": action_payload.get("requestId"),
+                    "cleanupRef": action_payload.get("cleanupRef"),
+                    "targetWorkflowId": action_payload.get("targetWorkflowId"),
+                    "expectedState": action_payload.get("expectedState"),
+                }
+            )
+        logger.info(
+            "Managed runtime cleanup pass completed: enabled=%s dry_run=%s "
+            "scanned_run_records=%s scanned_session_records=%s "
+            "scanned_workspace_roots=%s scanned_artifact_dirs=%s "
+            "protected_roots=%s eligible_roots=%s deleted_roots=%s "
+            "deleted_artifact_dirs=%s deleted_record_files=%s "
+            "estimated_deleted_bytes=%s skipped_active=%s skipped_recent=%s "
+            "skipped_unsafe_path=%s skipped_ambiguous_owner=%s "
+            "delete_budget_exhausted=%s errors=%s candidate_samples=%s",
+            not result_payload.get("disabled", False),
+            result_payload.get("dryRun"),
+            result_payload.get("scannedRunRecords", 0),
+            result_payload.get("scannedSessionRecords", 0),
+            result_payload.get("scannedWorkspaceRoots", 0),
+            result_payload.get("scannedArtifactDirs", 0),
+            result_payload.get("protectedRoots", 0),
+            result_payload.get("eligibleRoots", 0),
+            result_payload.get("deletedRoots", 0),
+            result_payload.get("deletedArtifactDirs", 0),
+            result_payload.get("deletedRecordFiles", 0),
+            result_payload.get("estimatedDeletedBytes", 0),
+            result_payload.get("skippedActive", 0),
+            result_payload.get("skippedRecent", 0),
+            result_payload.get("skippedUnsafePath", 0),
+            result_payload.get("skippedAmbiguousOwner", 0),
+            result_payload.get("deleteBudgetExhausted", 0),
+            len(result_payload.get("errors", [])),
+            result_payload.get("candidateSamples", []),
+        )
+        pass_errors = list(result_payload.get("errors", []))
+        unreadable_records = int(result_payload.get("unreadableOwnerRecords", 0) or 0)
+        if pass_errors or unreadable_records:
+            # A cleanup pass that cannot read owner records reclaims less than it
+            # should. Log loudly: a silent degraded pass let retained workspaces
+            # accumulate until the runtime volume filled.
+            logger.warning(
+                "Managed runtime cleanup pass degraded: unreadable_owner_records=%s "
+                "protected_by_unreadable_owner=%s deleted_roots=%s errors=%s",
+                unreadable_records,
+                result_payload.get("skippedUnreadableOwner", 0),
+                result_payload.get("deletedRoots", 0),
+                pass_errors[:5],
+            )
+        return result_payload
+
+    async def agent_runtime_reclaim_docker_storage(
+        self,
+        payload: Mapping[str, Any] | None = None,
+        /,
+    ) -> dict[str, Any]:
+        """Run bounded image/cache reclamation at the trusted Docker boundary."""
+        from moonmind.workflows.temporal.runtime.docker_storage_maintenance import (
+            DockerStorageMaintenanceConfig,
+        )
+
+        if payload:
+            raise TemporalActivityRuntimeError(
+                "agent_runtime.reclaim_docker_storage does not accept overrides"
+            )
+        if self._session_controller is None or not hasattr(
+            self._session_controller, "reclaim_docker_storage_pressure"
+        ):
+            raise TemporalActivityRuntimeError(
+                "Docker storage maintenance requires the managed session controller"
+            )
+        result = await _await_with_activity_heartbeats(
+            self._session_controller.reclaim_docker_storage_pressure(
+                config=DockerStorageMaintenanceConfig.from_env()
+            ),
+            heartbeat_payload={
+                "activityType": "agent_runtime.reclaim_docker_storage",
+            },
+        )
+        if isinstance(result, Mapping):
+            return dict(result)
+        to_dict = getattr(result, "to_dict", None)
+        if not callable(to_dict):
+            raise TemporalActivityRuntimeError(
+                "Docker storage maintenance returned an invalid result"
+            )
+        return dict(to_dict())
 
     @staticmethod
     def _agent_runtime_request_identifiers(
@@ -9716,6 +12471,35 @@ class TemporalAgentRuntimeActivities:
         await self._cleanup_run_support_best_effort(run_id)
         self._cleanup_deferred_run_files_best_effort(run_id)
 
+    @staticmethod
+    def _accepted_repository_evidence(
+        push_info: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        """Promote a successful managed push into the workflow gate contract."""
+
+        push_status = str(push_info.get("push_status") or "").strip()
+        if push_status not in {"pushed", "no_commits"}:
+            return None
+        try:
+            evidence = AcceptedRepositoryEvidence(
+                pushStatus=push_status,
+                branch=push_info.get("push_branch"),
+                baseBranch=push_info.get("push_base_branch"),
+                headSha=push_info.get("push_head_sha"),
+                commitsAheadOfBase=push_info.get("push_commit_count"),
+                repositoryChanged=push_status == "pushed",
+                remoteVerified=push_info.get("remote_verified"),
+            )
+        except ValidationError:
+            logger.warning(
+                "Managed git push completed with status %s but lacked the "
+                "bounded identity/count fields required for accepted "
+                "repository evidence.",
+                push_status,
+            )
+            return None
+        return evidence.model_dump(mode="json", by_alias=True)
+
     async def agent_runtime_status(
         self,
         request: Any = None,
@@ -9758,6 +12542,171 @@ class TemporalAgentRuntimeActivities:
         )
         return status
 
+    async def agent_runtime_publish_terminal_checkpoint(
+        self,
+        request: Any = None,
+        /,
+    ) -> AgentRuntimeTerminalCheckpointResult:
+        """Preserve controlled-failure work without changing its outcome.
+
+        This is the single reusable semantic boundary for live workspaces and
+        restored checkpoints.  It deliberately returns failure evidence
+        instead of raising over the primary workflow failure.
+        """
+        request = _validate_agent_runtime_terminal_checkpoint_input(request)
+        if not request.publication_enabled:
+            return AgentRuntimeTerminalCheckpointResult(
+                status="skipped",
+                reasonCode="policy_disabled",
+                source=request.source,
+                attempted=False,
+                idempotencyKey=request.idempotency_key,
+            )
+        if request.no_remote_writes:
+            return AgentRuntimeTerminalCheckpointResult(
+                status="skipped",
+                reasonCode="no_remote_writes",
+                source=request.source,
+                attempted=False,
+                idempotencyKey=request.idempotency_key,
+            )
+        if request.read_only:
+            return AgentRuntimeTerminalCheckpointResult(
+                status="skipped",
+                reasonCode="read_only",
+                source=request.source,
+                attempted=False,
+                idempotencyKey=request.idempotency_key,
+            )
+        if request.dry_run:
+            return AgentRuntimeTerminalCheckpointResult(
+                status="skipped",
+                reasonCode="dry_run",
+                source=request.source,
+                attempted=False,
+                idempotencyKey=request.idempotency_key,
+            )
+        if not request.runtime_capability_supported:
+            return AgentRuntimeTerminalCheckpointResult(
+                status="skipped",
+                reasonCode="runtime_capability_unsupported",
+                source=request.source,
+                attempted=False,
+                idempotencyKey=request.idempotency_key,
+            )
+        if not request.workspace_authoritative:
+            return AgentRuntimeTerminalCheckpointResult(
+                status="skipped",
+                reasonCode="workspace_unavailable",
+                source=request.source,
+                attempted=False,
+                idempotencyKey=request.idempotency_key,
+            )
+        record = self._run_store.load(request.run_id) if self._run_store else None
+        if record is None or not record.workspace_path:
+            return AgentRuntimeTerminalCheckpointResult(
+                status="skipped",
+                reasonCode="checkpoint_unavailable",
+                source=request.source,
+                attempted=False,
+                idempotencyKey=request.idempotency_key,
+            )
+        token = await self._resolve_workspace_push_github_token(record.workspace_path)
+        env = self._workspace_command_env(record.workspace_path, github_token=token)
+        if request.existing_branch and request.existing_head_sha:
+            try:
+                remote_sha = await self._resolve_workspace_remote_branch_sha(
+                    workspace=record.workspace_path,
+                    branch=request.existing_branch,
+                    run_id=request.run_id,
+                    env=env,
+                )
+            except Exception:
+                remote_sha = None
+            if remote_sha == request.existing_head_sha:
+                return AgentRuntimeTerminalCheckpointResult(
+                    status="already_published",
+                    reasonCode="equivalent_remote_head_verified",
+                    source=request.source,
+                    attempted=False,
+                    branchName=request.existing_branch,
+                    headSha=request.existing_head_sha,
+                    baseBranch=request.target_branch,
+                    prUrl=request.existing_pr_url,
+                    remoteVerified=True,
+                    idempotencyKey=request.idempotency_key,
+                )
+
+        recovery_branch = generate_checkpoint_branch_name(
+            workflow_id=request.run_id,
+            logical_step_id="workflow",
+            checkpoint_ref=f"managed-run:{request.run_id}",
+            product_branch_id="terminal",
+            label="recovered-work",
+            idempotency_key=request.idempotency_key,
+        )
+        try:
+            info = await self._push_workspace_branch(
+                request.run_id,
+                github_token=token,
+                target_branch=request.target_branch,
+                head_branch=recovery_branch,
+                allow_target_branch_push=False,
+                commit_message=(
+                    f"Preserve failed workflow work for {request.run_id} "
+                    "(MoonLadderStudios/MoonMind#3229)"
+                ),
+            )
+            raw_status = str(info.get("push_status") or "failed")
+            status = "no_changes" if raw_status == "no_commits" else raw_status
+            if status not in {"pushed", "already_published", "no_changes"}:
+                status = "failed"
+            verified = info.get("remote_verified") is True
+            if status == "pushed" and not verified:
+                expected_sha = str(info.get("push_head_sha") or "").strip()
+                remote_sha = await self._resolve_workspace_remote_branch_sha(
+                    workspace=record.workspace_path,
+                    branch=str(info.get("push_branch") or recovery_branch),
+                    run_id=request.run_id,
+                    env=env,
+                )
+                verified = bool(expected_sha and remote_sha == expected_sha)
+                if not verified:
+                    status = "failed"
+                    info["push_error"] = "remote head verification failed"
+            return AgentRuntimeTerminalCheckpointResult(
+                status=status,
+                reasonCode=(
+                    "graceful_failure_checkpoint_pushed"
+                    if status == "pushed"
+                    else f"terminal_checkpoint_{status}"
+                ),
+                source=request.source,
+                attempted=True,
+                commitCreated=bool(info.get("push_commit_message")),
+                branchPushed=status == "pushed",
+                branchName=info.get("push_branch"),
+                headSha=info.get("push_head_sha"),
+                baseBranch=info.get("push_base_branch"),
+                remoteVerified=verified,
+                idempotencyKey=request.idempotency_key,
+                error=info.get("push_error"),
+            )
+        except Exception as exc:
+            logger.warning(
+                "Terminal checkpoint publication failed for managed run %s: %s",
+                request.run_id,
+                exc,
+            )
+            return AgentRuntimeTerminalCheckpointResult(
+                status="failed",
+                reasonCode="terminal_checkpoint_failed",
+                source=request.source,
+                attempted=True,
+                idempotencyKey=request.idempotency_key,
+                error=str(exc),
+            )
+
     async def agent_runtime_fetch_result(
         self,
         request: Any = None,
@@ -9765,10 +12714,10 @@ class TemporalAgentRuntimeActivities:
     ) -> AgentRunResult:
         """Read one managed run result via activity execution.
 
-        When *publish_mode* is not ``"none"``, this activity also pushes the
-        agent's work branch to the remote **before** returning the result.
-        This is deterministic (the workflow awaits this activity) instead of
-        the old fire-and-forget pattern that could silently lose pushes.
+        For MoonMind-owned ``branch`` and ``pr`` modes, this activity also
+        pushes the agent's work branch to the remote **before** returning the
+        result. Agent-owned ``auto`` mode only collects Skill evidence here;
+        native publication would violate the publish authority contract.
         """
         if self._run_store is None:
             raise TemporalActivityRuntimeError(
@@ -9880,6 +12829,11 @@ class TemporalAgentRuntimeActivities:
             # Build merged metadata from the typed result, then enrich with
             # push/PR URL info using model_copy to preserve the typed contract.
             meta = dict(result.metadata or {})
+            # Provider/agent metadata is untrusted at this authority handoff.
+            # Only the managed git-push boundary below may emit accepted
+            # repository evidence.
+            meta.pop("acceptedRepositoryEvidence", None)
+            meta.pop("accepted_repository_evidence", None)
             if record is not None:
                 meta.setdefault("agentRunId", record.run_id)
                 if record.stdout_artifact_ref:
@@ -9915,14 +12869,72 @@ class TemporalAgentRuntimeActivities:
                 if final_operator_summary:
                     meta["operator_summary"] = final_operator_summary
 
-            # Push the agent's work branch if publish_mode requires it and the
-            # agent completed without failure.
+            # Push successful results normally. Controlled failures use the
+            # same scan/commit/lease pipeline, but an isolated deterministic
+            # branch and explicitly secondary terminal-publication evidence.
             publish_agent_id = agent_id
             if record is not None:
                 publish_agent_id = record.runtime_id or record.agent_id or agent_id
+            controlled_failure = result.failure_class in {
+                "user_error",
+                "execution_error",
+                "integration_error",
+                "timed_out",
+            }
             if (
-                result.failure_class is None
+                controlled_failure
+                and isinstance(request, AgentRuntimeFetchResultInput)
+                and request.terminal_checkpoint_publication_enabled
                 and publish_mode != "none"
+                and _normalize_provider_native_pr_agent_id(publish_agent_id)
+                not in _PROVIDER_NATIVE_PR_AGENT_IDS
+            ):
+                existing = meta.get("terminalPublication")
+                existing = existing if isinstance(existing, Mapping) else {}
+                publication = await self.agent_runtime_publish_terminal_checkpoint(
+                    AgentRuntimeTerminalCheckpointInput(
+                        runId=run_id,
+                        agentId=publish_agent_id,
+                        failureClass=result.failure_class,
+                        targetBranch=target_branch,
+                        existingBranch=(
+                            existing.get("branchName") or meta.get("push_branch")
+                        ),
+                        existingHeadSha=(
+                            existing.get("headSha") or meta.get("push_head_sha")
+                        ),
+                        existingPrUrl=(
+                            existing.get("prUrl") or meta.get("pull_request_url")
+                        ),
+                        publicationEnabled=(
+                            request.terminal_checkpoint_publication_enabled
+                        ),
+                        noRemoteWrites=request.no_remote_writes,
+                        readOnly=request.read_only,
+                        dryRun=request.dry_run,
+                        workspaceAuthoritative=request.workspace_authoritative,
+                        runtimeCapabilitySupported=(
+                            request.terminal_checkpoint_capability_supported
+                        ),
+                        idempotencyKey=f"terminal-checkpoint-v1:{run_id}",
+                    )
+                )
+                publication_payload = publication.model_dump(
+                    mode="json", by_alias=True, exclude_none=True
+                )
+                meta["terminalPublication"] = publication_payload
+                meta.update(
+                    {
+                        "push_status": publication.status,
+                        "push_branch": publication.branch_name,
+                        "push_head_sha": publication.head_sha,
+                        "push_base_branch": publication.base_branch,
+                        "remote_verified": publication.remote_verified,
+                    }
+                )
+            elif (
+                result.failure_class is None
+                and publish_mode in {"branch", "pr"}
                 and _normalize_provider_native_pr_agent_id(publish_agent_id)
                 not in _PROVIDER_NATIVE_PR_AGENT_IDS
             ):
@@ -9943,11 +12955,31 @@ class TemporalAgentRuntimeActivities:
                     and raw_commit_message.strip()
                 ):
                     push_kwargs["commit_message"] = raw_commit_message.strip()
-                push_info = await self._push_workspace_branch(
-                    run_id,
-                    github_token=workspace_github_token,
-                    **push_kwargs,
+                try:
+                    push_info = await self._push_workspace_branch(
+                        run_id,
+                        github_token=workspace_github_token,
+                        **push_kwargs,
+                    )
+                except Exception:
+                    raise
+                accepted_repository_evidence = self._accepted_repository_evidence(
+                    push_info
                 )
+                if accepted_repository_evidence is not None:
+                    meta["acceptedRepositoryEvidence"] = (
+                        accepted_repository_evidence
+                    )
+                elif push_info.get("push_status") in {"pushed", "no_commits"}:
+                    push_info = {
+                        **push_info,
+                        "push_original_status": push_info["push_status"],
+                        "push_status": "failed",
+                        "push_error": (
+                            "managed push did not produce authoritative "
+                            "repository evidence"
+                        ),
+                    }
                 meta.update(push_info)
 
             # Enrich result with pull_request_url detected from workspace git
@@ -9966,6 +12998,297 @@ class TemporalAgentRuntimeActivities:
             return result
         finally:
             await self._cleanup_managed_run_publish_support_best_effort(run_id)
+
+    async def agent_runtime_evaluate_terminal_evidence(
+        self,
+        request: Mapping[str, Any],
+        /,
+    ) -> AgentRunResult:
+        """Apply an execution-bound terminal contract above provider adapters."""
+        from moonmind.workflows.terminal_evidence import (
+            evaluate_terminal_evidence,
+            resolve_terminal_evidence_source,
+        )
+
+        result = AgentRunResult.model_validate(request.get("result") or {})
+        contract = request.get("terminalContract")
+        if not isinstance(contract, Mapping):
+            return result
+
+        workspace_path = str(request.get("workspacePath") or "").strip()
+        if not workspace_path:
+            workspace_path = str((result.metadata or {}).get("workspacePath") or "").strip()
+        raw_workspace_locator = request.get("workspaceLocator")
+        if isinstance(raw_workspace_locator, Mapping):
+            locator = WORKSPACE_LOCATOR_ADAPTER.validate_python(raw_workspace_locator)
+            if isinstance(locator, ManagedWorkspaceLocator):
+                run_id = str(request.get("runId") or "").strip()
+                if not run_id or locator.agent_run_id != run_id:
+                    raise WorkspaceLocatorResolutionError(
+                        WORKSPACE_IDENTITY_MISMATCH,
+                        "terminal evidence managed workspace does not match the run",
+                    )
+                if self._run_store is None:
+                    raise WorkspaceLocatorResolutionError(
+                        WORKSPACE_LOCATOR_UNSUPPORTED,
+                        "terminal evidence managed workspace store is unavailable",
+                    )
+                managed_record = self._run_store.load(run_id)
+                if managed_record is None or not managed_record.workspace_path:
+                    raise WorkspaceLocatorResolutionError(
+                        WORKSPACE_IDENTITY_MISMATCH,
+                        "terminal evidence managed workspace record was not found",
+                    )
+                record_runtime_id = resolve_runtime_execution_capabilities(
+                    str(managed_record.runtime_id or "")
+                ).runtime_id
+                locator_runtime_id = resolve_runtime_execution_capabilities(
+                    locator.runtime_id
+                ).runtime_id
+                if record_runtime_id != locator_runtime_id:
+                    raise WorkspaceLocatorResolutionError(
+                        WORKSPACE_IDENTITY_MISMATCH,
+                        "terminal evidence managed workspace runtime does not match",
+                    )
+                workspace_path = managed_record.workspace_path
+            elif isinstance(locator, SandboxWorkspaceLocator):
+                owner_workflow_id = str(
+                    request.get("workspaceOwnerWorkflowId") or ""
+                ).strip()
+                owner_step_execution_id = str(
+                    request.get("workspaceOwnerStepExecutionId") or ""
+                ).strip()
+                if not owner_workflow_id or not owner_step_execution_id:
+                    raise WorkspaceLocatorResolutionError(
+                        WORKSPACE_IDENTITY_MISMATCH,
+                        "terminal evidence sandbox authority is incomplete",
+                    )
+                expected_workspace_id = hashlib.sha256(
+                    f"{owner_workflow_id}:{owner_step_execution_id}".encode("utf-8")
+                ).hexdigest()[:24]
+                owner_record = SandboxWorkspaceRecordStore(self._workspace_root).load(
+                    expected_workspace_id
+                )
+                if owner_record is None:
+                    raise WorkspaceLocatorResolutionError(
+                        WORKSPACE_IDENTITY_MISMATCH,
+                        "terminal evidence sandbox owner record was not found",
+                    )
+                workspace_path = str(
+                    resolve_sandbox_workspace_locator(
+                        locator,
+                        workspace_root=self._workspace_root,
+                        expected_workspace_id=expected_workspace_id,
+                        owner_record=owner_record,
+                        expected_workflow_id=owner_workflow_id,
+                        expected_step_execution_id=owner_step_execution_id,
+                    )
+                )
+            else:
+                raise WorkspaceLocatorResolutionError(
+                    WORKSPACE_LOCATOR_UNSUPPORTED,
+                    "terminal evidence requires a local authoritative workspace",
+                )
+        run_id = str(request.get("runId") or "").strip()
+        if not workspace_path and run_id and self._run_store is not None:
+            record = self._run_store.load(run_id)
+            workspace_path = str(getattr(record, "workspace_path", "") or "").strip()
+
+        artifact_spool_path = str(request.get("artifactSpoolPath") or "").strip()
+        contract_payload = dict(contract)
+        if (
+            str(contract_payload.get("contractId") or "")
+            == "auto_publish_terminal.v1"
+        ):
+            selected_skill = str(request.get("selectedSkill") or "").strip()
+            if selected_skill:
+                contract_payload["skillId"] = selected_skill
+        evaluation = evaluate_terminal_evidence(
+            contract_payload,
+            workspace_path=workspace_path,
+            artifact_spool_path=artifact_spool_path,
+        )
+        metadata = {**dict(result.metadata or {}), **dict(evaluation.metadata)}
+        metadata["terminalContractId"] = str(contract.get("contractId") or "")
+        metadata["terminalContractAuthority"] = "MoonMind.AgentRun"
+        metadata["terminalContractOutcome"] = evaluation.outcome
+        if evaluation.failure_code:
+            metadata["failureCode"] = evaluation.failure_code
+
+        async def _persist_terminal_evidence_source(
+            source: Any,
+            *,
+            link_type: str,
+            labels: list[str],
+        ) -> str | None:
+            if source.path is None:
+                return None
+            if self._artifact_service is None:
+                logger.warning(
+                    "Terminal evidence artifact service is unavailable; evidence "
+                    "remains run-scoped at %s",
+                    source.relative_path,
+                )
+                return None
+            payload = source.path.read_bytes()
+            try:
+                info = temporal_activity.info()
+            except RuntimeError:
+                info = None
+            execution_ref = (
+                ExecutionRef(
+                    namespace=info.namespace,
+                    workflow_id=info.workflow_id,
+                    run_id=info.workflow_run_id,
+                    link_type=link_type,
+                )
+                if info is not None
+                else None
+            )
+            artifact, _upload = await self._artifact_service.create(
+                principal="system:agent_runtime",
+                content_type="application/json",
+                size_bytes=len(payload),
+                link=execution_ref,
+                metadata_json={
+                    "name": source.path.name,
+                    "path": source.relative_path,
+                    "producer": "activity:agent_runtime.evaluate_terminal_evidence",
+                    "labels": labels,
+                    "terminalContractId": metadata["terminalContractId"],
+                },
+            )
+            completed = await self._artifact_service.write_complete(
+                artifact_id=artifact.artifact_id,
+                principal="system:agent_runtime",
+                payload=payload,
+                content_type="application/json",
+            )
+            return completed.artifact_id
+
+        # Terminal evidence is the authoritative full result for fan-out and
+        # merge automation. Publish the validated run-scoped file here, before
+        # the workflow projects large child records out of its result metadata.
+        terminal_evidence_ref: str | None = None
+        if evaluation.metadata.get("terminalContractEvidencePath"):
+            source = resolve_terminal_evidence_source(
+                contract_payload,
+                workspace_path=workspace_path,
+                artifact_spool_path=artifact_spool_path,
+            )
+            terminal_evidence_ref = await _persist_terminal_evidence_source(
+                source,
+                link_type="output.terminal_evidence",
+                labels=["agent_runtime", "output.terminal_evidence"],
+            )
+            if terminal_evidence_ref:
+                metadata["terminalContractEvidenceRef"] = terminal_evidence_ref
+
+        if (
+            evaluation.satisfied
+            and metadata["terminalContractId"] == "auto_publish_terminal.v1"
+            and terminal_evidence_ref
+        ):
+            metadata["publishEvidence"] = terminal_evidence_ref
+
+        # A successful pr-resolver contract already requires the portable Skill
+        # to write its canonical publish_result.json companion. Preserve that
+        # exact file as the parent workflow's auto-publish evidence instead of
+        # forcing a second publisher to infer the merge from assistant prose.
+        if (
+            evaluation.satisfied
+            and metadata["terminalContractId"] == "pr_resolver_terminal.v1"
+            and metadata.get("mergeAutomationDisposition")
+            in {"merged", "already_merged"}
+        ):
+            publish_source = resolve_terminal_evidence_source(
+                {"relativePath": "artifacts/publish_result.json"},
+                workspace_path=workspace_path,
+                artifact_spool_path=artifact_spool_path,
+            )
+            publish_evidence_ref = await _persist_terminal_evidence_source(
+                publish_source,
+                link_type="output.publish_evidence",
+                labels=["agent_runtime", "output.publish_evidence"],
+            )
+            if publish_evidence_ref:
+                metadata["publishEvidence"] = publish_evidence_ref
+
+        def _validated_result(update: Mapping[str, Any]) -> AgentRunResult:
+            updated = result.model_copy(update=dict(update))
+            payload = updated.model_dump(mode="json", by_alias=True)
+            try:
+                return AgentRunResult.model_validate(payload)
+            except ValueError:
+                return AgentRunResult.model_validate(
+                    compact_agent_run_result_payload_for_workflow_history(payload)
+                )
+
+        if evaluation.satisfied:
+            metadata["terminalContractSatisfied"] = True
+            return _validated_result({"metadata": metadata})
+
+        if evaluation.outcome == "continuation_requested":
+            metadata.update(
+                {
+                    "terminalContractSatisfied": False,
+                    "terminalContractMissingEvidence": [],
+                    "terminalContractRecoveryOutcome": "durable_parent_required",
+                }
+            )
+            if result.failure_class is not None:
+                return _validated_result({"metadata": metadata})
+            return _validated_result(
+                {
+                    "summary": "Agent completed an authoritative durable continuation handoff.",
+                    "failure_class": "execution_error",
+                    "provider_error_code": "PR_RESOLVER_REENTER_GATE",
+                    "metadata": metadata,
+                }
+            )
+
+        metadata.update(
+            {
+                "terminalContractSatisfied": False,
+                "terminalContractMissingEvidence": list(evaluation.missing_evidence),
+                "terminalContractRecoveryOutcome": "unsupported_or_exhausted",
+            }
+        )
+        missing = ", ".join(evaluation.missing_evidence) or "valid terminal evidence"
+        terminal_failure_message = str(
+            metadata.get("terminalFailureMessage") or ""
+        ).strip()
+        terminal_failure_code = str(
+            metadata.get("terminalFailureCode") or evaluation.failure_code or ""
+        ).strip()
+        if evaluation.failure_code == "BATCH_FANOUT_INPUT_INVALID":
+            return _validated_result(
+                {
+                    "summary": terminal_failure_message
+                    or "Batch fan-out input validation failed.",
+                    "failure_class": "user_error",
+                    "provider_error_code": terminal_failure_code,
+                    "metadata": metadata,
+                }
+            )
+        if result.failure_class is not None:
+            return _validated_result(
+                {
+                    "provider_error_code": result.provider_error_code
+                    or evaluation.failure_code
+                    or "missing_terminal_evidence",
+                    "metadata": metadata,
+                }
+            )
+        return _validated_result(
+            {
+                "summary": f"Agent completed without required terminal evidence: {missing}",
+                "failure_class": "execution_error",
+                "provider_error_code": evaluation.failure_code
+                or "missing_terminal_evidence",
+                "metadata": metadata,
+            }
+        )
 
     async def _managed_session_summary_metadata(
         self,
@@ -10762,6 +14085,10 @@ class TemporalAgentRuntimeActivities:
                 exc_info=True,
             )
 
+        _normalize_managed_path_owners(
+            (support_root, support_bin, git_helper_path, support_gitconfig)
+        )
+
         if support_bin.exists():
             existing_path = str(env.get("PATH") or "").strip()
             env["PATH"] = (
@@ -10781,6 +14108,7 @@ class TemporalAgentRuntimeActivities:
         if git_email:
             env["GIT_AUTHOR_EMAIL"] = git_email
             env["GIT_COMMITTER_EMAIL"] = git_email
+        env["HOME"] = str(support_root)
         env["GIT_TERMINAL_PROMPT"] = "0"
         return env
 
@@ -10803,10 +14131,11 @@ class TemporalAgentRuntimeActivities:
         head_branch: str | None = None,
     ) -> dict[str, Any]:
         """Create one deterministic commit when the workspace is dirty."""
+        _normalize_managed_git_ownership(workspace)
         command_env = dict(env) if env is not None else self._workspace_command_env(workspace)
 
         async def _read_status() -> tuple[int, bytes, bytes]:
-            status_proc = await asyncio.create_subprocess_exec(
+            status_proc = await _create_managed_agent_subprocess(
                 *self._workspace_git_command(
                     workspace,
                     "status",
@@ -10891,7 +14220,7 @@ class TemporalAgentRuntimeActivities:
         ) -> dict[str, str] | None:
             if not paths:
                 return None
-            add_proc = await asyncio.create_subprocess_exec(
+            add_proc = await _create_managed_agent_subprocess(
                 *self._workspace_git_command(
                     workspace, "add", mode, "--", *paths,
                 ),
@@ -10920,7 +14249,7 @@ class TemporalAgentRuntimeActivities:
         if stage_error is not None:
             return stage_error
 
-        staged_proc = await asyncio.create_subprocess_exec(
+        staged_proc = await _create_managed_agent_subprocess(
             *self._workspace_git_command(
                 workspace, "diff", "--cached", "--name-only",
             ),
@@ -10958,7 +14287,7 @@ class TemporalAgentRuntimeActivities:
             if isinstance(commit_message, str) and commit_message.strip()
             else f"MoonMind workflow result for run {run_id}"
         )
-        commit_proc = await asyncio.create_subprocess_exec(
+        commit_proc = await _create_managed_agent_subprocess(
             *self._workspace_git_command(
                 workspace,
                 "commit",
@@ -11013,7 +14342,7 @@ class TemporalAgentRuntimeActivities:
         if not branch_name or branch_name == "HEAD" or branch_name.startswith("-"):
             return False
 
-        fetch_proc = await asyncio.create_subprocess_exec(
+        fetch_proc = await _create_managed_agent_subprocess(
             *self._workspace_git_command(
                 workspace,
                 "fetch",
@@ -11040,7 +14369,7 @@ class TemporalAgentRuntimeActivities:
             )
             return False
 
-        verify_proc = await asyncio.create_subprocess_exec(
+        verify_proc = await _create_managed_agent_subprocess(
             *self._workspace_git_command(
                 workspace,
                 "cat-file",
@@ -11101,6 +14430,7 @@ class TemporalAgentRuntimeActivities:
         try:
             self._normalize_workspace_git_alternates(workspace)
             self._recover_orphan_workspace_object_stores(workspace)
+            _normalize_managed_git_ownership(workspace)
             resolved_github_token = str(github_token or "").strip()
             if not resolved_github_token:
                 resolved_github_token = await self._resolve_workspace_push_github_token(
@@ -11111,7 +14441,7 @@ class TemporalAgentRuntimeActivities:
                 workspace,
                 github_token=resolved_github_token,
             )
-            branch_proc = await asyncio.create_subprocess_exec(
+            branch_proc = await _create_managed_agent_subprocess(
                 *self._workspace_git_command(
                     workspace, "rev-parse", "--abbrev-ref", "HEAD",
                 ),
@@ -11131,6 +14461,12 @@ class TemporalAgentRuntimeActivities:
             target_branch_name = (
                 target_branch.strip() if isinstance(target_branch, str) else ""
             )
+            if target_branch_name.startswith("refs/remotes/origin/"):
+                target_branch_name = target_branch_name.removeprefix(
+                    "refs/remotes/origin/"
+                )
+            elif target_branch_name.startswith("refs/heads/"):
+                target_branch_name = target_branch_name.removeprefix("refs/heads/")
             head_branch_name = (
                 head_branch.strip() if isinstance(head_branch, str) else ""
             )
@@ -11145,11 +14481,15 @@ class TemporalAgentRuntimeActivities:
             if target_branch_name and not target_branch_push_allowed:
                 protected.add(target_branch_name)
             if (
-                current_branch in {"main", "master"}
-                and head_branch_name
+                head_branch_name
+                and current_branch != head_branch_name
                 and head_branch_name not in protected
+                and (
+                    current_branch not in protected
+                    or current_branch in {"main", "master"}
+                )
             ):
-                checkout_proc = await asyncio.create_subprocess_exec(
+                checkout_proc = await _create_managed_agent_subprocess(
                     *self._workspace_git_command(
                         workspace,
                         "checkout",
@@ -11211,11 +14551,6 @@ class TemporalAgentRuntimeActivities:
                 commit_info.setdefault("push_branch", current_branch)
                 return commit_info
 
-            same_branch_publish = (
-                target_branch_push_allowed
-                and bool(target_branch_name)
-                and current_branch == target_branch_name
-            )
             base_branch_name = (
                 target_branch_name
                 or await self._resolve_workspace_default_branch(
@@ -11225,6 +14560,46 @@ class TemporalAgentRuntimeActivities:
                 )
             )
             base_ref = f"origin/{base_branch_name}"
+            base_ref_refreshed = await self._refresh_workspace_remote_base_ref(
+                workspace=workspace,
+                base_branch=base_branch_name,
+                run_id=run_id,
+                env=auth_command_env,
+            )
+            if not base_ref_refreshed and base_branch_name.startswith("origin/"):
+                # ``origin/release`` can be a literal remote branch name. Try
+                # that exact authored identity first, then interpret the short
+                # form as a remote-tracking ref only when the literal branch is
+                # absent. This repairs legacy ``origin/main`` inputs without
+                # silently publishing against the wrong branch when both names
+                # are meaningful.
+                remote_tracking_branch = base_branch_name.removeprefix("origin/")
+                if remote_tracking_branch:
+                    base_branch_name = remote_tracking_branch
+                    base_ref = f"origin/{base_branch_name}"
+                    base_ref_refreshed = (
+                        await self._refresh_workspace_remote_base_ref(
+                            workspace=workspace,
+                            base_branch=base_branch_name,
+                            run_id=run_id,
+                            env=auth_command_env,
+                        )
+                    )
+            if not base_ref_refreshed:
+                return {
+                    "push_status": "failed",
+                    "push_branch": current_branch,
+                    "push_base_branch": base_branch_name,
+                    "push_base_ref": base_ref,
+                    "push_error": (
+                        f"could not refresh authoritative publish base '{base_ref}'"
+                    ),
+                }
+            same_branch_publish = (
+                target_branch_push_allowed
+                and bool(base_branch_name)
+                and current_branch == base_branch_name
+            )
             commit_count: int | None = None
             if same_branch_publish:
                 commit_count = await self._count_branch_commits_ahead(
@@ -11245,6 +14620,31 @@ class TemporalAgentRuntimeActivities:
                     run_id=run_id,
                     env=command_env,
                 )
+                remote_verified = await self._verify_workspace_remote_branch_head(
+                    workspace=workspace,
+                    branch=current_branch,
+                    expected_head_sha=head_sha,
+                    run_id=run_id,
+                    env=auth_command_env,
+                )
+                if not remote_verified:
+                    logger.warning(
+                        "Post-agent git push for run %s did not verify the "
+                        "exact remote head for branch %s.",
+                        run_id,
+                        current_branch,
+                    )
+                    return {
+                        "push_status": "failed",
+                        "push_branch": current_branch,
+                        "push_base_branch": base_branch_name,
+                        "push_base_ref": base_ref,
+                        "push_head_sha": head_sha,
+                        "remote_verified": False,
+                        "push_error": (
+                            "post-push remote head did not match the local head"
+                        ),
+                    }
 
                 final_commit_count = precomputed_commit_count
                 # Verify the branch actually has commits over the publish base.
@@ -11259,6 +14659,19 @@ class TemporalAgentRuntimeActivities:
                         run_id=run_id,
                         env=command_env,
                     )
+                if final_commit_count < 0:
+                    return {
+                        "push_status": "failed",
+                        "push_branch": current_branch,
+                        "push_base_branch": base_branch_name,
+                        "push_base_ref": base_ref,
+                        "push_head_sha": head_sha,
+                        "remote_verified": True,
+                        "push_error": (
+                            "could not measure commits over the authoritative "
+                            "publish base"
+                        ),
+                    }
 
                 if final_commit_count == 0:
                     logger.warning(
@@ -11274,6 +14687,7 @@ class TemporalAgentRuntimeActivities:
                         "push_base_branch": base_branch_name,
                         "push_base_ref": base_ref,
                         "push_commit_count": 0,
+                        "remote_verified": True,
                     }
                     if head_sha:
                         result["push_head_sha"] = head_sha
@@ -11291,6 +14705,7 @@ class TemporalAgentRuntimeActivities:
                     "push_branch": current_branch,
                     "push_base_branch": base_branch_name,
                     "push_base_ref": base_ref,
+                    "remote_verified": True,
                 }
                 result.update(commit_info)
                 if extra:
@@ -11318,7 +14733,7 @@ class TemporalAgentRuntimeActivities:
             if pre_push_scan_result is not None:
                 return pre_push_scan_result
 
-            push_proc = await asyncio.create_subprocess_exec(
+            push_proc = await _create_managed_agent_subprocess(
                 *self._workspace_git_command(
                     workspace,
                     *build_git_push_with_lease_args(
@@ -11359,7 +14774,7 @@ class TemporalAgentRuntimeActivities:
                 if classified.get("push_status") == "lease_conflict":
                     retry_metadata: dict[str, Any] = {"push_retry_count": 1}
                     remote_tracking_ref = f"refs/remotes/origin/{current_branch}"
-                    fetch_proc = await asyncio.create_subprocess_exec(
+                    fetch_proc = await _create_managed_agent_subprocess(
                         *self._workspace_git_command(
                             workspace,
                             "fetch",
@@ -11426,7 +14841,7 @@ class TemporalAgentRuntimeActivities:
                                 precomputed_commit_count=None,
                             )
 
-                        rebase_proc = await asyncio.create_subprocess_exec(
+                        rebase_proc = await _create_managed_agent_subprocess(
                             *self._workspace_git_command(
                                 workspace, "rebase", remote_tracking_ref,
                             ),
@@ -11458,7 +14873,7 @@ class TemporalAgentRuntimeActivities:
                                 f"{classified['push_error']}; automatic rebase "
                                 f"onto {remote_tracking_ref} failed: {rebase_detail}"
                             )
-                            abort_proc = await asyncio.create_subprocess_exec(
+                            abort_proc = await _create_managed_agent_subprocess(
                                 *self._workspace_git_command(
                                     workspace, "rebase", "--abort",
                                 ),
@@ -11488,7 +14903,7 @@ class TemporalAgentRuntimeActivities:
                         if retry_scan_result is not None:
                             retry_scan_result.update(retry_metadata)
                             return retry_scan_result
-                        retry_push_proc = await asyncio.create_subprocess_exec(
+                        retry_push_proc = await _create_managed_agent_subprocess(
                             *self._workspace_git_command(
                                 workspace,
                                 *build_git_push_with_lease_args(
@@ -11540,6 +14955,62 @@ class TemporalAgentRuntimeActivities:
                 "push_error": str(exc),
             }
 
+    async def _refresh_workspace_remote_base_ref(
+        self,
+        *,
+        workspace: str,
+        base_branch: str,
+        run_id: str,
+        env: Mapping[str, str],
+    ) -> bool:
+        """Refresh the exact remote base used for publication measurements."""
+
+        branch_name = str(base_branch or "").strip()
+        if not branch_name:
+            return False
+        remote_ref = f"refs/remotes/origin/{branch_name}"
+        try:
+            proc = await _create_managed_agent_subprocess(
+                *self._workspace_git_command(
+                    workspace,
+                    "fetch",
+                    "--no-tags",
+                    "origin",
+                    f"+refs/heads/{branch_name}:{remote_ref}",
+                ),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+            )
+            try:
+                await asyncio.wait_for(proc.communicate(), timeout=60)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                logger.warning(
+                    "Timed out refreshing publish base %s for run %s.",
+                    branch_name,
+                    run_id,
+                )
+                return False
+            if proc.returncode == 0:
+                return True
+            logger.warning(
+                "Could not refresh publish base %s for run %s (rc=%s).",
+                branch_name,
+                run_id,
+                proc.returncode,
+            )
+            return False
+        except Exception:
+            logger.warning(
+                "Failed to refresh publish base %s for run %s.",
+                branch_name,
+                run_id,
+                exc_info=True,
+            )
+            return False
+
     async def _resolve_workspace_remote_branch_sha(
         self,
         *,
@@ -11569,8 +15040,28 @@ class TemporalAgentRuntimeActivities:
         if remote_sha:
             return remote_sha
 
+        return await self._query_workspace_remote_branch_sha(
+            workspace=workspace,
+            branch=branch_name,
+            run_id=run_id,
+            env=env,
+        )
+
+    async def _query_workspace_remote_branch_sha(
+        self,
+        *,
+        workspace: str,
+        branch: str,
+        run_id: str,
+        env: Mapping[str, str],
+    ) -> str | None:
+        """Read the live remote branch head without trusting a tracking ref."""
+
+        branch_name = str(branch or "").strip()
+        if not branch_name:
+            return None
         try:
-            proc = await asyncio.create_subprocess_exec(
+            proc = await _create_managed_agent_subprocess(
                 *self._workspace_git_command(
                     workspace,
                     "ls-remote",
@@ -11612,6 +15103,28 @@ class TemporalAgentRuntimeActivities:
             )
             return None
 
+    async def _verify_workspace_remote_branch_head(
+        self,
+        *,
+        workspace: str,
+        branch: str,
+        expected_head_sha: str | None,
+        run_id: str,
+        env: Mapping[str, str],
+    ) -> bool:
+        """Verify the live remote branch points at the exact local candidate."""
+
+        expected = str(expected_head_sha or "").strip()
+        if not expected:
+            return False
+        remote_head_sha = await self._query_workspace_remote_branch_sha(
+            workspace=workspace,
+            branch=branch,
+            run_id=run_id,
+            env=env,
+        )
+        return remote_head_sha == expected
+
     async def _resolve_workspace_ref_sha(
         self,
         *,
@@ -11621,7 +15134,7 @@ class TemporalAgentRuntimeActivities:
         env: Mapping[str, str],
     ) -> str | None:
         try:
-            proc = await asyncio.create_subprocess_exec(
+            proc = await _create_managed_agent_subprocess(
                 *self._workspace_git_command(workspace, "rev-parse", "--verify", ref),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -11655,7 +15168,7 @@ class TemporalAgentRuntimeActivities:
         env: Mapping[str, str],
     ) -> str | None:
         try:
-            proc = await asyncio.create_subprocess_exec(
+            proc = await _create_managed_agent_subprocess(
                 *self._workspace_git_command(workspace, "rev-parse", "HEAD"),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -11823,7 +15336,7 @@ class TemporalAgentRuntimeActivities:
         timeout: int,
         args: Sequence[str],
     ) -> str:
-        proc = await asyncio.create_subprocess_exec(
+        proc = await _create_managed_agent_subprocess(
             *self._workspace_git_command(workspace, *args),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -11856,7 +15369,7 @@ class TemporalAgentRuntimeActivities:
         """Resolve the remote default branch for branchless PR publishing."""
 
         try:
-            proc = await asyncio.create_subprocess_exec(
+            proc = await _create_managed_agent_subprocess(
                 *self._workspace_git_command(
                     workspace,
                     "symbolic-ref",
@@ -11905,7 +15418,7 @@ class TemporalAgentRuntimeActivities:
         env: Mapping[str, str],
     ) -> int:
         try:
-            count_proc = await asyncio.create_subprocess_exec(
+            count_proc = await _create_managed_agent_subprocess(
                 *self._workspace_git_command(
                     workspace,
                     "rev-list",
@@ -12360,6 +15873,22 @@ def _json_bytes(payload: Mapping[str, Any] | list[Any]) -> bytes:
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
+def _unordered_json_list_digest(values: Sequence[Any]) -> str:
+    """Hash a JSON list as a multiset while preserving each item's semantics."""
+
+    canonical_items = sorted(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        for value in values
+    )
+    canonical_list = "[" + ",".join(canonical_items) + "]"
+    return "sha256:" + hashlib.sha256(canonical_list.encode("utf-8")).hexdigest()
+
+
 class TemporalCheckpointActivities:
     """Artifact-fleet activities for canonical Step Execution checkpoints."""
 
@@ -12402,6 +15931,10 @@ class TemporalCheckpointActivities:
         return _compact_artifact_ref_text(artifact)
 
     async def _read_bytes(self, artifact_ref: str) -> bytes:
+        if artifact_ref.startswith("artifact://omnigent/"):
+            from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
+
+            return await LocalOmnigentArtifactGateway().read_bytes(artifact_ref)
         if self._artifact_service is not None:
             _artifact, payload = await self._artifact_service.read(
                 artifact_id=artifact_ref,
@@ -12420,6 +15953,20 @@ class TemporalCheckpointActivities:
             if isinstance(request, StepCheckpointCreateInput)
             else StepCheckpointCreateInput.model_validate(request)
         )
+        omnigent_checkpoint = model.omnigent
+        if omnigent_checkpoint is None and model.omnigent_capture is not None:
+            omnigent_checkpoint = await self._materialize_omnigent_checkpoint_identity(
+                model
+            )
+        step_outputs = dict(model.step_outputs)
+        if model.omnigent_capture is not None and omnigent_checkpoint is None:
+            step_outputs["omnigentCheckpointValidation"] = {
+                "valid": False,
+                "reasons": ["capture_incomplete_or_unresolvable"],
+                "liveReattachAvailable": False,
+                "workspaceColdRestoreAvailable": False,
+                "branchCreationAvailable": False,
+            }
         payload = build_step_checkpoint_payload(
             identity=model.identity,
             boundary=model.boundary,
@@ -12429,7 +15976,8 @@ class TemporalCheckpointActivities:
             plan_ref=model.plan_ref,
             plan_digest=model.plan_digest,
             prepared_input_refs=model.prepared_input_refs,
-            step_outputs=model.step_outputs,
+            step_outputs=step_outputs,
+            omnigent_checkpoint=omnigent_checkpoint,
         )
         checkpoint_ref = await self._put_bytes(
             _json_bytes(payload),
@@ -12445,6 +15993,159 @@ class TemporalCheckpointActivities:
             workspace_kind=model.workspace.kind,
             diagnostic_refs=model.diagnostic_refs,
             idempotency_key=model.idempotency_key,
+        )
+
+    async def _materialize_omnigent_checkpoint_identity(
+        self,
+        model: StepCheckpointCreateInput,
+    ) -> OmnigentCheckpointIdentity | None:
+        """Join independently captured session and workspace authority planes.
+
+        Implements the production boundary required by
+        MoonLadderStudios/MoonMind#3509.
+        """
+
+        capture = dict(model.omnigent_capture or {})
+        external_ref = str(capture.get("externalStateRef") or "").strip()
+        workspace_ref = str(
+            model.workspace.archive_ref
+            or model.workspace.patch_ref
+            or model.workspace.workspace_artifact_ref
+            or ""
+        ).strip()
+        workspace_digest = str(
+            model.workspace.archive_digest
+            or model.workspace.workspace_digest
+            or ""
+        ).strip()
+        required = (
+            external_ref,
+            workspace_ref,
+            workspace_digest,
+            capture.get("workspaceLocator"),
+            model.workspace.base_commit,
+            model.workspace.head_commit,
+            capture.get("providerProfileId"),
+            capture.get("credentialRef"),
+            capture.get("credentialGeneration"),
+            capture.get("hostBindingRef"),
+            capture.get("endpointRef"),
+            capture.get("bridgeSessionId"),
+            capture.get("idempotencyKey"),
+            capture.get("executionProfileRef"),
+            capture.get("launchPolicyRef"),
+        )
+        if not all(required):
+            return None
+        try:
+            external_bytes = await self._read_bytes(external_ref)
+            external = json.loads(external_bytes.decode("utf-8"))
+        except (ArtifactStoreError, TemporalArtifactError, json.JSONDecodeError, UnicodeDecodeError):
+            return None
+        if not isinstance(external, Mapping):
+            return None
+        first_message = external.get("firstMessage")
+        first_message = first_message if isinstance(first_message, Mapping) else {}
+        response_ids = first_message.get("responseIdentifiers")
+        response_ids = response_ids if isinstance(response_ids, Mapping) else {}
+        first_digest = str(first_message.get("digest") or "").strip() or None
+        first_id = str(
+            response_ids.get("itemId")
+            or response_ids.get("pendingId")
+            or ""
+        ).strip() or None
+        retry = external.get("retry")
+        retry = retry if isinstance(retry, Mapping) else {}
+        cursor = str(
+            external.get("lastCommittedBridgeEventCursor")
+            or retry.get("lastCommittedBridgeEventCursor")
+            or ""
+        ).strip() or None
+        capture_manifest_ref = str(capture.get("captureManifestRef") or "").strip() or None
+        capture_manifest_digest = None
+        if capture_manifest_ref:
+            try:
+                capture_manifest_bytes = await self._read_bytes(capture_manifest_ref)
+            except (ArtifactStoreError, TemporalArtifactError):
+                return None
+            capture_manifest_digest = "sha256:" + hashlib.sha256(
+                capture_manifest_bytes
+            ).hexdigest()
+        cold_available = True
+        live_available = bool(
+            capture.get("providerLeaseRef")
+            and capture.get("hostLeaseRef")
+            and capture.get("omnigentHostId")
+            and external.get("omnigentSessionId")
+            and first_id
+            and first_digest
+            and cursor
+        )
+        return OmnigentCheckpointIdentity(
+            workflowId=model.identity.workflow_id,
+            runId=model.identity.run_id,
+            logicalStepId=model.identity.logical_step_id,
+            stepExecutionId=build_step_execution_id(model.identity),
+            attemptOrdinal=model.identity.execution_ordinal,
+            boundary=model.boundary,
+            executionPlanRef=capture.get("executionPlanRef"),
+            runtimeBindingRef=capture.get("runtimeBindingRef"),
+            runtimeBindingRevision=capture.get("runtimeBindingRevision"),
+            runtimeBindingFencingGeneration=capture.get(
+                "runtimeBindingFencingGeneration"
+            ),
+            providerProfileId=capture["providerProfileId"],
+            credentialRef=capture["credentialRef"],
+            credentialGeneration=capture["credentialGeneration"],
+            providerLeaseRef=capture.get("providerLeaseRef"),
+            hostBindingRef=capture["hostBindingRef"],
+            hostLeaseRef=capture.get("hostLeaseRef"),
+            endpointRef=capture["endpointRef"],
+            omnigentHostId=capture.get("omnigentHostId"),
+            omnigentSessionId=external.get("omnigentSessionId"),
+            bridgeSessionId=capture["bridgeSessionId"],
+            externalStateRef=external_ref,
+            externalStateDigest="sha256:" + hashlib.sha256(external_bytes).hexdigest(),
+            idempotencyKey=capture["idempotencyKey"],
+            terminalRef=capture.get("terminalRef"),
+            diagnosticsRef=capture.get("diagnosticsRef"),
+            effectiveLaunchRef=capture.get("effectiveLaunchRef"),
+            executionProfileRef=capture["executionProfileRef"],
+            launchPolicyRef=capture["launchPolicyRef"],
+            policyId=capture.get("policyId"),
+            policyVersion=capture.get("policyVersion"),
+            policyRef=capture.get("policyRef"),
+            policyDigest=capture.get("policyDigest"),
+            policySnapshotRef=capture.get("policySnapshotRef"),
+            policyValidation=capture.get("policyValidation"),
+            lastBridgeEventCursor=cursor,
+            firstMessageId=first_id,
+            firstMessageDigest=first_digest,
+            captureManifestRef=capture_manifest_ref,
+            captureManifestDigest=capture_manifest_digest,
+            patchCapable=bool(model.workspace.patch_ref),
+            workspaceLocator=capture["workspaceLocator"],
+            baselineCommit=model.workspace.base_commit,
+            headCommit=model.workspace.head_commit,
+            headRef=workspace_ref,
+            headDigest=workspace_digest,
+            diffRef=model.workspace.patch_ref,
+            diffDigest=(workspace_digest if model.workspace.patch_ref else None),
+            workspaceCheckpointRef=workspace_ref,
+            workspaceCheckpointDigest=workspace_digest,
+            instructionRefs=capture.get("instructionRefs") or [],
+            sourceBranch=capture.get("sourceBranch") or model.workspace.branch or "detached",
+            outputBranch=capture.get("outputBranch"),
+            publicationState=capture.get("publicationState") or "none",
+            capturedAt=model.created_at,
+            producerVersion="moonmind-step-checkpoint-v2",
+            validation={
+                "valid": cold_available,
+                "liveReattachAvailable": live_available,
+                "workspaceColdRestoreAvailable": cold_available,
+                "branchCreationAvailable": cold_available,
+                "reasons": ([] if cold_available else ["capture_incomplete"]),
+            },
         )
 
     async def step_checkpoint_validate(
@@ -12697,4 +16398,5 @@ __all__ = [
     "TemporalSkillActivities",
     "TemporalSandboxActivities",
     "build_activity_bindings",
+    "validate_activity_catalog_runtime_bindings",
 ]

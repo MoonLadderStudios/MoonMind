@@ -1,15 +1,17 @@
 # Secrets System
 
+**Document Class:** Canonical declarative
+**Viewpoint:** Cross-Cutting Concept
 **Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 
 Status: **Design Draft**
 Owners: MoonMind Engineering
-Last Updated: 2026-06-11
+Last Updated: 2026-08-18
 
 > [!NOTE]
 > This document defines the desired-state MoonMind Secrets System.
 > It is a declarative contract for how secrets are referenced, stored, resolved, materialized, and audited.
-> Phase sequencing, migration work, and implementation checklists belong in .
+> Phase sequencing, migration work, and implementation checklists belong in `docs/tmp/`.
 
 ---
 
@@ -63,6 +65,10 @@ When high-security mode is enabled, MoonMind-owned outbound callers should scan 
 The managed workspace publish path scans git pushes before invoking `git push`. It resolves the outbound range from the recorded remote branch SHA when available, otherwise from the publish base ref, and builds the scan bundle from commit metadata plus per-file diffs with bounded item sizes. A blocked scan returns file/commit locations such as `git.push.diff:<path>` without printing the detected value.
 
 MoonMind-owned send-message boundaries scan message content before provider or notification sends. This includes chat provider calls, provider-specific follow-up message clients, generated external-agent answers, and execution completion notification payloads. Clean messages continue through the existing sender unchanged. A blocked scan prevents the downstream send and emits redacted diagnostics that identify the message surface, such as `chat.openai.messages[0].content`, `jules.send_message.prompt`, `jules.answer_question.answer`, or `execution.notification.webhook.payload`.
+
+The native Omnigent chat surface (`native Omnigent UI -> binding-scoped facade -> upstream Omnigent session`) preserves the same guarantee before any provider or host side effect. A versioned extractor/normalizer (`moonmind.omnigent.native_outbound_scan`) enumerates the supported text-bearing native request shapes — ordinary, queued, and steered messages; supported slash-command text and arguments; reply/quote text; workspace-mention and file-caption text; and elicitation/approval response text — extracts the exact outbound text with stable caller-provided locations, and runs the canonical bundle scanner. The decision is bound to a canonical payload digest and the idempotency key, so a retry, queued flush, steer, reconnect replay, or delivery reconciliation cannot reuse an allow result after the content changes. A secret-like finding blocks the request with only the redacted finding category and safe location. Enforcement that cannot be performed — an unknown or uninspectable event shape, an undecodable required text field, a binary/opaque attachment part, or a scanner that is unavailable or errors — fails closed with a *distinct* enforcement-unavailable error that is never conflated with a content block. Bounded scan evidence (scan contract version, surface, effective mode, scanner policy ref, payload digest, outcome, and redacted finding categories/locations) is recorded without persisting the detected value, message body, or attachment contents.
+
+Binary attachments, terminal input, and browser automation are outside the native text-scan contract: they are never claimed as scanned. Read-only resource reads return provider content to the browser and are not an operator-authored outbound-text surface. The facade is an explicit method/route allowlist rather than an open reverse proxy, so there is no alternate direct upstream browser path that could bypass the scoped scan; any surface that would require inspection the transport cannot provide fails closed in high-security mode instead of forwarding.
 
 When high-security mode is disabled, the scan contract returns an allow result and does not silently mutate caller-supplied outbound content.
 
@@ -153,6 +159,13 @@ Secret values should be resolved as late as practical and exposed to as little c
 ### 4.5 Proxy First
 
 If MoonMind itself is making the provider or tool call, the preferred design is for the caller to use a MoonMind-issued capability or internal token rather than receiving the provider secret directly.
+
+Runtime capability values follow the same rule. For example, an Omnigent run
+with the policy-authorized `execution.fanout` requirement receives a
+short-lived, parent-scoped MoonMind capability through a lease-owned read-only
+file. The runtime environment contains only the file selector; runs without the
+requirement receive no capability. This avoids distributing a user API token or
+provider credential while keeping built-in batch Skills automatic by default.
 
 ### 4.6 Fail Fast
 

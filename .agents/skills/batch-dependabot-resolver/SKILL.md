@@ -6,8 +6,80 @@ metadata:
     kind: enqueue_children
     owner: agent
     outcomeArtifact: artifacts/batch_dependabot_resolver_result.json
+    terminalContractId: batch_dependabot_resolver_fanout.v1
+    terminalSchemaVersion: moonmind.batch-dependabot-resolver-result.v1
   required-capabilities:
     - gh
+inputSchema:
+  type: object
+  properties:
+    repo:
+      type: string
+      title: Repository
+      description: >-
+        Target repository in owner/repo form; inferred from task context when omitted.
+      x-moonmind-context-default: repository
+    state:
+      type: string
+      title: Pull request state
+      enum: [open, closed, merged, all]
+      default: open
+    mergeMethod:
+      type: string
+      title: Merge method
+      enum: [squash, merge, rebase]
+      default: squash
+    maxIterations:
+      type: integer
+      title: Resolver iteration limit
+      minimum: 1
+      default: 5
+    maxAttempts:
+      type: integer
+      title: Queue attempt limit
+      minimum: 1
+      default: 3
+    priority:
+      type: integer
+      title: Queue priority
+      default: 0
+    packageManagers:
+      type: array
+      title: Package managers
+      items:
+        type: string
+      default: []
+    titleRegex:
+      type: string
+      title: Version-bump title regex
+      default: '^(?!.* from .* from )(?!.* to .* to )(?:Bump|[A-Za-z][A-Za-z0-9_-]*\(deps(?:-dev)?\): bump) .+ from \S+ to \S+(?: in /.+)?$'
+    includeSecurityUpdates:
+      type: boolean
+      title: Include security updates
+      default: true
+    maxPrs:
+      type: integer
+      title: Maximum PRs per run
+      minimum: 1
+    dryRun:
+      type: boolean
+      title: Dry run
+      default: false
+    runtimeMode:
+      type: string
+      title: Child runtime override
+    runtimeModel:
+      type: string
+      title: Child model override
+    runtimeEffort:
+      type: string
+      title: Child effort override
+    runtimeProviderProfile:
+      type: string
+      title: Child provider profile override
+uiSchema:
+  titleRegex:
+    widget: textarea
 ---
 
 # Batch Dependabot Resolver Skill
@@ -41,7 +113,12 @@ each queued `pr-resolver` child owns its repository publishing outcome.
   `github-actions`. Matched against the Dependabot branch ecosystem segment with alias
   normalization (`npm`↔`npm_and_yarn`, `github-actions`↔`github_actions`). Omit to allow all.
 - `titleRegex` (string, optional): Override for the version-bump title matcher.
-  Default `^Bump .+ from \S+ to \S+(?: in /.+)?$` (matches e.g. `Bump anthropic from 0.105.2 to 0.107.1` and subdirectory suffixes like `in /frontend`).
+  Default `^(?!.* from .* from )(?!.* to .* to )(?:Bump|[A-Za-z][A-Za-z0-9_-]*\(deps(?:-dev)?\): bump) .+ from \S+ to \S+(?: in /.+)?$`
+  (matches both Dependabot's legacy `Bump anthropic from 0.105.2 to 0.107.1`
+  titles and conventional-commit titles whose type is scoped to `deps` or `deps-dev`,
+  such as `Build(deps): bump anthropic from 0.105.2 to 0.107.1`, including
+  subdirectory suffixes like `in /frontend`, while rejecting grouped or edited titles
+  that contain multiple `from ... to ...` update segments).
 - `includeSecurityUpdates` (boolean, optional): Default `true`. When `false`, PRs labeled
   `security` are skipped.
 - `maxPrs` (number, optional): Safety cap on the number of resolver workflows queued per run.
@@ -94,13 +171,20 @@ python3 .agents/skills/batch-dependabot-resolver/bin/batch_dependabot_resolver.p
    `batch-dependabot-resolver:{repo}:pr:{number}:head:{headSha}`. Submit via
    `POST /api/executions`, require the canonical `workflowId`, and verify it via
    `GET /api/executions/{workflowId}` before counting the child as queued
-   (`MOONMIND_URL` must point at the MoonMind API).
+   (`MOONMIND_URL` must point at the MoonMind API). When MoonMind supplies
+   `MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE` (preferred) or
+   `MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN`, read/forward the execution-scoped
+   bearer and mark both calls as fan-out v1. A configured capability file that
+   is missing or empty fails closed.
 
 5. Write a summary artifact `batch_dependabot_resolver_result.json` (under the managed
    session artifact spool when available, otherwise the configured `--artifacts-dir`) listing
    discovered PRs, matched count, queued / would-queue resolver workflows, skipped PRs with
-   reasons, and submission errors. A deliberate zero-match run also writes
-   `skill_outcome.json` with `status: "no_op"`.
+   reasons, runtime-inheritance mode, and submission errors. A deliberate zero-match run also
+   writes `skill_outcome.json` with `status: "no_op"`. When the default title contract rejects
+   a Dependabot title that still has the shape of a single version bump (`bump ... from ... to
+   ...`), the helper records title-contract drift and fails instead of silently reporting a
+   successful no-op.
 
 6. Print a short summary to stdout (`matched`, `queued`, `would_queue`, `skipped`, `errors`).
 

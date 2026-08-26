@@ -1,6 +1,22 @@
 from __future__ import annotations
 
-from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+from moonmind.workflows.temporal.workflows.run import (
+    MoonMindRunWorkflow,
+    _worker_capability_unavailable_error,
+)
+
+
+def test_worker_capability_error_preserves_structured_details() -> None:
+    capability = {
+        "available": False,
+        "reasonCode": "worker_capability_unavailable",
+    }
+
+    error = _worker_capability_unavailable_error(capability)
+
+    assert error.type == "WORKER_CAPABILITY_UNAVAILABLE"
+    assert error.non_retryable is True
+    assert error.details == (capability,)
 
 def test_merge_automation_disabled_by_default() -> None:
     workflow = MoonMindRunWorkflow()
@@ -29,6 +45,67 @@ def test_merge_automation_request_can_be_enabled_from_task_publish() -> None:
     assert request is not None
     assert request["mergeMethod"] == "squash"
     assert request["jiraIssueKey"] == "MM-341"
+
+
+def test_merge_automation_request_infers_github_issue_completion() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    request = workflow._merge_automation_request(
+        {
+            "publishMode": "pr",
+            "mergeAutomation": {"enabled": True},
+            "workflow": {
+                "inputs": {
+                    "github_issue": {
+                        "repository": "MoonLadderStudios/MoonMind",
+                        "number": 3143,
+                    }
+                }
+            },
+        }
+    )
+
+    assert request is not None
+    assert request["postMergeGithub"] == {
+        "enabled": True,
+        "required": True,
+        "repository": "MoonLadderStudios/MoonMind",
+        "issueNumber": 3143,
+    }
+
+
+def test_merge_gate_start_payload_carries_post_merge_github_completion() -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._repo = "MoonLadderStudios/MoonMind"
+    workflow._publish_context["branch"] = "implement-3143"
+    workflow._publish_context["baseRef"] = "main"
+
+    payload = workflow._build_merge_gate_start_payload(
+        parameters={
+            "publishMode": "pr",
+            "mergeAutomation": {"enabled": True},
+            "workflow": {
+                "inputs": {
+                    "github_issue": {
+                        "repository": "MoonLadderStudios/MoonMind",
+                        "number": 3143,
+                    }
+                }
+            },
+        },
+        pull_request_url="https://github.com/MoonLadderStudios/MoonMind/pull/3225",
+        head_sha="abc123",
+        parent_workflow_id="mm:github-issue",
+        parent_run_id="run-1",
+    )
+
+    assert payload is not None
+    assert payload["mergeAutomationConfig"]["postMergeGithub"] == {
+        "enabled": True,
+        "required": True,
+        "repository": "MoonLadderStudios/MoonMind",
+        "issueNumber": 3143,
+    }
 
 def test_merge_automation_request_infers_jira_orchestrate_issue_key() -> None:
     workflow = MoonMindRunWorkflow()

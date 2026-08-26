@@ -1,0 +1,8 @@
+{
+  "failureShapeId": "managed-workspace-checkpoint-routing",
+  "incident": "MoonLadderStudios/MoonMind#3145 journey B",
+  "runtime": "codex_cli",
+  "protocolVersion": "managed-session-v1",
+  "eventScript": ["agent_execution_completed", "after_execution_started", "checkpoint_capture_failed", "checkpoint_capture_retried"],
+  "invariant": "Finalization failure cannot overwrite durable execution success"
+}

@@ -69,14 +69,14 @@ def _config(tmp_path, *, enabled: bool = True, dry_run: bool = True) -> ManagedR
     )
 
 
-def test_mm948_janitor_defaults_to_disabled(monkeypatch) -> None:
+def test_mm948_janitor_defaults_to_enabled_destructive_mode(monkeypatch) -> None:
     monkeypatch.delenv("MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED", raising=False)
     monkeypatch.delenv("MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN", raising=False)
 
     config = ManagedRuntimeCleanupConfig.from_env()
 
-    assert config.enabled is False
-    assert config.dry_run is True
+    assert config.enabled is True
+    assert config.dry_run is False
 
 
 def test_mm948_dry_run_reports_old_terminal_workspace_without_deleting(tmp_path) -> None:

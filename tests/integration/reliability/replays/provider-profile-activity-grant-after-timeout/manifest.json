@@ -1,0 +1,8 @@
+{
+  "incidentWorkflowId": "mm:9c24f15d-dc04-49b0-8d25-48c47ed1f49c",
+  "failureShape": "AcquireSlot remained pending after its caller Activity heartbeat-timed out, then claimed capacity after an older lease was released even though the owning workflow was already terminal",
+  "providerProfileId": "codex_openai_oauth",
+  "providerLeaseRef": "profile-lease:execution_omnigent:late-grant",
+  "terminalWorkflowId": "mm:terminal-exact-rerun",
+  "terminalStatus": "FAILED"
+}

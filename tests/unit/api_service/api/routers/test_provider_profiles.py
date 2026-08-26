@@ -31,7 +31,25 @@ from api_service.services.provider_profile_service import (
     _manager_profile_payload,
     normalize_runtime_default_profile,
 )
-from api_service.services.provider_profile_readiness import provider_profile_launch_ready
+from api_service.services.provider_profile_readiness import (
+    provider_profile_launch_ready,
+    provider_profile_launch_ready_from_payload,
+)
+from api_service.api.routers.provider_profiles import ProviderProfileCreate
+
+
+def test_codex_oauth_profile_rejects_parallel_capacity_above_one() -> None:
+    with pytest.raises(ValueError, match="require max_parallel_runs=1"):
+        ProviderProfileCreate(
+            profile_id="codex-oauth-invalid-capacity",
+            runtime_id="codex_cli",
+            provider_id="openai",
+            credential_source="oauth_volume",
+            runtime_materialization_mode="oauth_home",
+            volume_ref="codex_auth_volume",
+            volume_mount_path="/home/app/.codex",
+            max_parallel_runs=2,
+        )
 
 @pytest.fixture(scope="module")
 def _module_db(tmp_path_factory):
@@ -63,6 +81,15 @@ def _module_db(tmp_path_factory):
 
 @pytest.fixture
 def client_app(_module_db) -> AsyncClient:
+    async def _maintenance_guard_override():
+        yield object()
+
+    app.dependency_overrides[
+        provider_profiles_router._credential_validation_guard
+    ] = _maintenance_guard_override
+    app.dependency_overrides[
+        provider_profiles_router._credential_disconnect_guard
+    ] = _maintenance_guard_override
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver")
 
 
@@ -369,6 +396,34 @@ def test_launch_ready_rejects_malformed_secret_refs() -> None:
     profile.secret_refs = {"provider_api_key": 123}
 
     assert provider_profile_launch_ready(profile) is False
+
+
+def test_launch_ready_rejects_nonexclusive_codex_oauth_profile() -> None:
+    profile = _TrackedProfile(
+        profile_id="codex_oauth_legacy_capacity",
+        runtime_id="codex_cli",
+        enabled=True,
+        priority=100,
+        is_default=False,
+        events=[],
+        auth_state=ProviderProfileAuthState.CONNECTED,
+        credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+        runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+        volume_ref="codex_auth_volume",
+        volume_mount_path="/home/app/.codex",
+        max_parallel_runs=2,
+    )
+
+    assert provider_profile_launch_ready(profile) is False
+
+    assert provider_profile_launch_ready_from_payload(
+        {
+            "runtimeId": "codex_cli",
+            "credentialSource": "oauth_volume",
+            "runtimeMaterializationMode": "oauth_home",
+            "maxParallelRuns": 2,
+        }
+    ) is False
 
 
 @pytest.mark.asyncio
@@ -2346,6 +2401,84 @@ async def test_provider_api_key_setup_transient_validation_error_preserves_profi
     assert profile_payload["secret_refs"] == {}
     assert profile_payload["env_template"] == {}
     assert synced_runtimes == []
+
+
+@pytest.mark.asyncio
+async def test_opencode_rotation_validation_failure_preserves_previous_authority(
+    client_app: AsyncClient,
+    _module_db,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.omnigent.opencode_runtime_validation import (
+        OpenCodeProviderRuntimeValidationService,
+    )
+
+    profile_id = "opencode-atomic-rotation"
+    owner = _override_current_user()
+    previous_ref = "db://opencode-existing-secret"
+    previous_evidence = {
+        "credentialGeneration": 4,
+        "imageRef": "registry.test/opencode@sha256:" + "a" * 64,
+        "models": [{"qualifiedId": "opencode-go/model"}],
+    }
+    candidate_key = "candidate-opencode-key"
+
+    async def _failing_validation(self, **kwargs):
+        assert kwargs["candidate_secret"] == candidate_key
+        assert kwargs["candidate_generation"] == 5
+        raise RuntimeError("candidate rejected")
+
+    async def _maintenance_guard_override():
+        yield SimpleNamespace(lease=SimpleNamespace(lease_id="maintenance-1"))
+
+    monkeypatch.setenv(
+        "OMNIGENT_OPENCODE_HOST_IMAGE_REF",
+        "registry.test/opencode@sha256:" + "a" * 64,
+    )
+    monkeypatch.setattr(
+        OpenCodeProviderRuntimeValidationService,
+        "validate",
+        _failing_validation,
+    )
+    app.dependency_overrides[
+        provider_profiles_router._credential_validation_guard
+    ] = _maintenance_guard_override
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="opencode",
+                provider_id="opencode-go",
+                provider_label="OpenCode Go",
+                owner_user_id=owner.id,
+                credential_source=ProviderCredentialSource.SECRET_REF,
+                runtime_materialization_mode=RuntimeMaterializationMode.CONFIG_BUNDLE,
+                secret_refs={"opencode_api_key": previous_ref},
+                credential_generation=4,
+                model_catalog_evidence_json=previous_evidence,
+                enabled=True,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+            )
+        )
+        await session.commit()
+
+    async with client_app as client:
+        response = await client.post(
+            f"/api/v1/provider-profiles/{profile_id}/credentials/api-key",
+            json={"api_key": candidate_key},
+        )
+
+    assert response.status_code == 502
+    assert candidate_key not in response.text
+    async with db_base.async_session_maker() as session:
+        persisted = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert persisted is not None
+        assert persisted.secret_refs == {"opencode_api_key": previous_ref}
+        assert persisted.credential_generation == 4
+        assert persisted.model_catalog_evidence_json == previous_evidence
+        assert persisted.enabled is True
+        assert persisted.auth_state is ProviderProfileAuthState.CONNECTED
 
 @pytest.mark.asyncio
 async def test_provider_api_key_setup_can_validate_without_enabling(

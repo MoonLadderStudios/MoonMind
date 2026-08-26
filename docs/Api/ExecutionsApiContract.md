@@ -1,10 +1,12 @@
 # Executions API Contract
 
+**Document Class:** Canonical declarative
+**Viewpoint:** Module Contract Specification
 **Project:** MoonMind 
 **Doc type:** API contract 
 **Status:** Draft 
 **Owner:** MoonMind Platform 
-**Last updated:** 2026-06-25 (UTC)
+**Last updated:** 2026-08-18 (UTC)
 **Audience:** backend, dashboard, integrations
 
 **Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
@@ -54,6 +56,24 @@ This document does **not** define:
 - `/api/executions` is the **execution-oriented** surface for Temporal-managed work.
 - Callers should treat `workflowId` as the canonical execution handle for this API.
 - This contract should remain stable even if backing reads move closer to Temporal Visibility.
+- Remediation authoring uses the same `POST /api/executions` endpoint and
+  persists canonical `task.remediation`; there is no privileged one-click UI
+  submission path.
+- `GET /api/executions/{workflowId}/remediations?direction=inbound|outbound`
+  returns bidirectional link identity plus bounded canonical projections of the
+  authored contract, selected evidence, context availability/boundedness,
+  approval/lock/operator controls, action request/result, target-level repair
+  verification, lifecycle artifacts/summary, and Checkpoint Branch state.
+- Approval decisions use
+  `POST /api/executions/{remediationWorkflowId}/remediation/approvals/{requestId}`
+  with `decision` and optional rationale `comment`. Takeover/pause, resume, and
+  cancellation remain ordinary Workflow signal/cancel operations.
+
+Create admission independently revalidates target visibility and exact run,
+selected Step Executions/checkpoints/Agent Runs, Agent and Provider Profile
+snapshots, launch-policy identity, remediation mode/authority/action policy,
+repository and work-branch syntax, and publish mode. Posted UI state never
+confers target or runtime authority.
 
 ### 2.4 Current implementation note
 
@@ -134,7 +154,9 @@ External JSON fields use **camelCase**.
 
 ### 6.1 Authentication
 
-All `/api/executions` endpoints require an authenticated MoonMind user.
+All `/api/executions` endpoints require an authenticated MoonMind user except
+the exact create and describe operations admitted by the workflow-scoped
+execution fan-out capability in Section 6.5.
 
 ### 6.2 Ownership model
 
@@ -160,6 +182,28 @@ Rules:
 ### 6.4 Information disclosure posture
 
 For direct fetch/update/signal/cancel operations, non-admin callers receive `404 Not Found` for executions they do not own. This intentionally avoids confirming whether another user's execution exists.
+
+### 6.5 Workflow-scoped execution fan-out
+
+A managed runtime with the normalized `execution.fanout` requirement may receive
+a short-lived bearer plus `X-MoonMind-Execution-Fanout: v1`. This is an
+operation-specific capability, not a user session, worker token, container-job
+token, or general API credential.
+
+The capability is bound to one parent Workflow Execution, agent run, optional
+step, runtime session, runtime id, source kind, and expiry. The API resolves the
+parent's authoritative user owner and permits only:
+
+- `POST /api/executions` with exactly one task or workflow child,
+  `runtimeInheritance="caller"`, and a stable `idempotencyKey`; and
+- `GET /api/executions/{workflowId}` when the target is a child of that parent
+  and has the same owner.
+
+Fan-out authentication rejects schedules, direct-create payloads, source
+overrides, unrelated execution reads, and every other execution operation.
+Unauthorized or unrelated describe requests return `404` so the capability
+cannot probe execution existence. Runtime adapters mint and materialize this
+bearer only when policy authorizes the declared requirement.
 
 ---
 
@@ -373,6 +417,15 @@ On successful create:
 - `state` begins as `initializing`,
 - baseline `searchAttributes` and `memo` are materialized,
 - the response body is an `ExecutionModel`.
+
+Display titles are resolved deterministically before `memo` and Visibility
+metadata are materialized. A caller-provided title wins when it is meaningfully
+different from the selected preset or capability label. Otherwise MoonMind
+combines that label with up to two structured targets, such as a Jira issue,
+GitHub `owner/repository#number` issue reference, pull request, branch, or
+failing check. A preset label with no recognized target remains the fallback.
+Generated step identifiers and other execution bookkeeping fields are not title
+targets. Resolved titles are limited to 150 characters.
 
 ### 9.6 Success response
 
@@ -827,6 +880,13 @@ Behavior:
 Purpose:
 
 - deliver a human or policy approval signal.
+
+Remediation approvals are read from the `approvalState` projection returned with
+both remediation and target execution links. `POST
+/api/executions/{workflowId}/remediation/approvals/{requestId}` records an
+authenticated `approved` or `rejected` decision idempotently. The request id
+must name the currently pending durable record; expired, terminal, self-approved,
+or reviewer-rule-ineligible mutations return a bounded validation error.
 
 Required payload fields:
 

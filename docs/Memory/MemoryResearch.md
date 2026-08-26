@@ -9,7 +9,7 @@ Prioritized experiments, schema/API follow-ups, and effort estimates are listed 
 As of February 2026, “memory” for LLM-based agents is best understood as a *systems* problem rather than a single model feature: most reliable deployments combine short-term working memory (what fits in the prompt), durable stores (documents, vectors, databases), and explicit state machines + logs so that agent behavior is auditable and recoverable. Core research results still point to a practical theme: **LLMs are strong reasoners when the right context is surfaced, but weak at reliably “remembering” without deliberate retrieval and state management**—hence the mainstream adoption of retrieval-augmented generation and tiered memory architectures. citeturn22view0turn20view0
 
 From inspecting the MoonMind codebase and deployment manifests (via direct repository file inspection), MoonMind already has several foundational building blocks that align well with best-practice memory stacks:
-- A “knowledge base” style semantic memory path built around a vector store (via entity["company","Qdrant","vector database"]) and entity["organization","LlamaIndex","llm data framework"]-based ingestion/retrieval.
+- A managed, budget-aware semantic retrieval path backed by entity["company","Qdrant","vector database"], with source ingestion available through declarative manifest adapters.
 - Durable operational state and audit artifacts via a relational DB plus stored workflow artifacts (patches/logs) for Celery-driven orchestrations.
 - A growing agent/tool integration story via Model Context Protocol (MCP), which is increasingly positioned as a standard way for agent runtimes to access tools and data sources. citeturn24search0turn24search1
 
@@ -28,10 +28,10 @@ Long-context models (including 200k–1M token contexts in commercial APIs) are 
 ### Observed architecture and data flows
 
 Based on direct inspection of repository source files and configuration (Docker Compose, API routers, workflows, and DB models), MoonMind appears to be:
-- A self-hosted “AI orchestration hub” exposing OpenAI-compatible endpoints and routing requests to multiple model providers (including entity["company","Anthropic","ai model vendor"], entity["company","Google","tech company"] and entity["company","OpenAI","ai company"]) while supporting local runtimes.
+- A self-hosted orchestration control plane that launches provider-maintained agent runtimes behind managed workflow and session boundaries.
 - A hybrid of:
- - **Interactive chat** (OpenAI-style `/v1/chat/completions`) with optional retrieval injection from a vector index.
- - **Document ingestion** into the vector store from sources such as entity["company","GitHub","code hosting platform"], Confluence, and Google Drive (via LlamaIndex readers).
+ - **Managed context retrieval** with explicit budgets, provenance, and retrieval-session ownership.
+ - **Declarative source ingestion** from sources such as entity["company","GitHub","code hosting platform"], Confluence, and Google Drive through manifest adapters.
  - **Workflow automation** using durable Temporal-backed runs (with step artifacts and persisted identity/configuration snapshots where applicable).
 
 Even without assuming any specific production scale (repo does not specify user counts, request rates, latency SLOs, or corpus size), the architecture implies MoonMind will benefit from memory that is:
@@ -46,8 +46,8 @@ The table below maps major MoonMind components (as reflected in code and configu
 
 | Repo component (logical) | Primary function | Current “memory” behavior (observed) | Memory requirements for game-dev agents | High-value memory strategy fit |
 |---|---|---|---|---|
-| Chat API router and model routing | User↔LLM chat, tool routing, RAG injection | Uses a vector retriever to fetch relevant nodes and inject context; model routing is provider-aware | Thread continuity across multi-day features; user preference memory; safe tool-use traces | Working + summary memory; long-term user/app memory store; episodic ledger |
-| Document ingestion (GitHub/Confluence/Drive indexers) | Build/update knowledge base | Ingests documents into embeddings and vector index | Mixed corpora retrieval for code, docs, design specs, tickets; provenance + freshness control | Hybrid retrieval and reranking; hierarchical indexes; doc metadata and ACLs |
+| Managed sessions and retrieval gateway | Execute provider-maintained agents with scoped context | Resolves context through a budget-aware managed retrieval service | Thread continuity across multi-day features; user preference memory; safe tool-use traces | Working + summary memory; long-term user/app memory store; episodic ledger |
+| Manifest source adapters | Build/update knowledge base | Loads declared sources into the managed retrieval corpus | Mixed corpora retrieval for code, docs, design specs, tickets; provenance + freshness control | Hybrid retrieval and reranking; hierarchical indexes; doc metadata and ACLs |
 | Workflow automation (spec workflow, PR generation, system runs) | Agentic execution + artifacts | Persists run/workflow state and writes logs/patches as artifacts | Episodic memory of “what happened” (attempts, failures, fixes), reusable across runs | Event-sourced episodic store + embedding; run summarization into semantic memory |
 | DB models for users and profiles | User identity and secrets | Encrypted API keys; structured run records | Personalization without leaking secrets; policy enforcement by user/team | “Memory namespaces” with RBAC; secret redaction; audit trails |
 | MCP integration docs/config | Connect agents to tools/data | MCP is positioned as standardized tool/data connector | Safe tool execution, controlled “write” operations, reproducible runs | Tool/state management; governance layer around memory writes |

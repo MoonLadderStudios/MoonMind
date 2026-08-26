@@ -13,7 +13,19 @@ from moonmind.workflows.temporal.activity_catalog import (
     TemporalActivityRoute,
     TemporalActivityTimeouts,
 )
-from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+from moonmind.workflows.temporal.activity_runtime import (
+    TemporalAgentRuntimeActivities,
+)
+from moonmind.workflows.temporal.workflows.run import (
+    RUN_EMPTY_AGENT_SKILLSET_SNAPSHOT_PATCH,
+    MoonMindRunWorkflow,
+)
+
+
+def _all_patches_except_empty_skillset(patch_id: str) -> bool:
+    """Keep generic execution fixtures focused on their asserted boundary."""
+
+    return patch_id != RUN_EMPTY_AGENT_SKILLSET_SNAPSHOT_PATCH
 
 
 @pytest.fixture(autouse=True)
@@ -77,6 +89,25 @@ def _checkpoint_create_result(payload: Any) -> dict[str, Any]:
         "workspaceKind": workspace_kind,
         "diagnosticRefs": [],
         "idempotencyKey": checkpoint_id,
+    }
+
+
+def _managed_checkpoint_capture_result(payload: Any) -> dict[str, Any]:
+    normalized = _normalize_payload(payload)
+    return {
+        "status": "captured",
+        "workspace": {
+            "kind": "worktree_archive",
+            "baseCommit": "abc123",
+            "archiveRef": "artifact://managed/archive",
+            "archiveDigest": "sha256:" + ("a" * 64),
+            "manifestRef": "artifact://managed/manifest",
+            "manifestDigest": "sha256:" + ("b" * 64),
+            "includesUntracked": True,
+            "includesIgnoredFiles": False,
+        },
+        "diagnosticRefs": ["artifact://managed/manifest"],
+        "idempotencyKey": normalized["idempotencyKey"],
     }
 
 async def _immediate_wait_condition(
@@ -144,6 +175,69 @@ def test_initialize_from_payload_captures_input_and_plan_refs(
     assert plan_ref == "art_plan_1"
     assert workflow._input_ref == "art_input_1"
     assert workflow._plan_ref == "art_plan_1"
+    assert workflow._repo == "MoonLadderStudios/MoonMind"
+
+
+def test_initialize_from_payload_projects_canonical_repository_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._canonical_git_repository_projection_enabled = True
+    monkeypatch.setattr(run_workflow_module.workflow, "memo", lambda: {})
+    monkeypatch.setattr(
+        MoonMindRunWorkflow,
+        "_trusted_owner_metadata",
+        lambda self: ("user", "owner-1"),
+    )
+
+    workflow._initialize_from_payload(
+        {
+            "workflowType": "MoonMind.UserWorkflow",
+            "initialParameters": {
+                "repository": {
+                    "provider": "git",
+                    "connectionRef": "repository-connection:git-default",
+                    "repository": {"name": "MoonLadderStudios/Tactics"},
+                    "branch": {"name": "main"},
+                },
+                "workflow": {"instructions": "Resolve GitHub issues."},
+            },
+        }
+    )
+
+    assert workflow._repo == "MoonLadderStudios/Tactics"
+
+
+def test_initialize_from_payload_does_not_project_lore_target_to_github_repo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._canonical_git_repository_projection_enabled = True
+    monkeypatch.setattr(run_workflow_module.workflow, "memo", lambda: {})
+    monkeypatch.setattr(
+        MoonMindRunWorkflow,
+        "_trusted_owner_metadata",
+        lambda self: ("user", "owner-1"),
+    )
+
+    workflow._initialize_from_payload(
+        {
+            "workflowType": "MoonMind.UserWorkflow",
+            "initialParameters": {
+                "repo": "must-not-be-used-as-a-github-repository",
+                "repository": {
+                    "provider": "lore",
+                    "connectionRef": "repository-connection:tactics",
+                    "repository": {"name": "tactics-id"},
+                    "branch": {"name": "Main"},
+                },
+                "workflow": {"instructions": "Prepare a Lore review request."},
+            },
+        }
+    )
+
+    assert workflow._repo is None
+
 
 def test_initialize_from_payload_tracks_declared_dependencies(
     monkeypatch: pytest.MonkeyPatch,
@@ -172,7 +266,7 @@ def test_initialize_from_payload_tracks_declared_dependencies(
         "upsert_memo",
         lambda memo: captured_memo.append(dict(memo)),
     )
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
 
     workflow._update_memo()
 
@@ -243,6 +337,8 @@ async def test_run_execution_stage_reads_plan_and_dispatches_steps(
         captured.append((activity_type, _normalize_payload(payload)))
         if activity_type == "provider_profile.list":
             return {"profiles": []}
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
         if activity_type == "step_checkpoint.create":
             return _checkpoint_create_result(payload)
         if activity_type == "artifact.read":
@@ -324,7 +420,7 @@ async def test_run_execution_stage_reads_plan_and_dispatches_steps(
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
 
     await workflow._run_execution_stage(
         parameters={"repo": "MoonLadderStudios/MoonMind"},
@@ -380,6 +476,8 @@ async def test_run_finalizing_stage_writes_dependency_summary_metadata(
     ) -> Any:
         if activity_type == "artifact.create":
             return ({"artifact_id": "art_summary_1"}, {"upload_url": "unused"})
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
         if activity_type == "step_checkpoint.create":
             return _checkpoint_create_result(payload)
         raise AssertionError(f"unexpected activity: {activity_type}")
@@ -418,7 +516,7 @@ async def test_run_finalizing_stage_writes_dependency_summary_metadata(
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: finish_time)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
 
     await workflow._run_finalizing_stage(
         parameters={"runtime": {"mode": "codex"}, "publishMode": "none"},
@@ -483,6 +581,8 @@ async def test_run_finalizing_stage_writes_structured_moonspec_failure_summary(
     ) -> Any:
         if activity_type == "artifact.create":
             return ({"artifact_id": "art_summary_1"}, {"upload_url": "unused"})
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
         if activity_type == "step_checkpoint.create":
             return _checkpoint_create_result(payload)
         raise AssertionError(f"unexpected activity: {activity_type}")
@@ -521,7 +621,7 @@ async def test_run_finalizing_stage_writes_structured_moonspec_failure_summary(
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: finish_time)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
     monkeypatch.setattr(
         run_workflow_module.workflow,
         "upsert_memo",
@@ -612,6 +712,8 @@ async def test_run_finalizing_stage_writes_transient_codex_failure_summary(
     ) -> Any:
         if activity_type == "artifact.create":
             return ({"artifact_id": "art_summary_2"}, {"upload_url": "unused"})
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
         if activity_type == "step_checkpoint.create":
             return _checkpoint_create_result(payload)
         raise AssertionError(f"unexpected activity: {activity_type}")
@@ -650,7 +752,7 @@ async def test_run_finalizing_stage_writes_transient_codex_failure_summary(
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: finish_time)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
     monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
     monkeypatch.setattr(
         run_workflow_module.workflow,
@@ -781,7 +883,7 @@ async def test_run_execution_stage_rejects_legacy_skill_registry_dispatch(
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
 
     await workflow._run_execution_stage(
         parameters={"repo": "MoonLadderStudios/MoonMind"},
@@ -886,7 +988,7 @@ async def test_run_execution_stage_skips_empty_registry_for_agent_runtime_only_p
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
 
     await workflow._run_execution_stage(
         parameters={"repo": "MoonLadderStudios/MoonMind"},
@@ -959,6 +1061,8 @@ async def test_run_execution_stage_stops_plan_after_structured_blocked_outcome(
                     "edges": [{"from": "check-blockers", "to": "implement"}],
                 }
             ).encode("utf-8")
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
         if activity_type == "step_checkpoint.create":
             return _checkpoint_create_result(payload)
         raise AssertionError(f"unexpected activity {activity_type}")
@@ -1202,6 +1306,8 @@ async def test_run_execution_stage_rejects_legacy_jira_blocker_skill_plan(
                     },
                 }
             return {"status": "COMPLETED", "outputs": {"summary": "Implemented."}}
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
         if activity_type == "step_checkpoint.create":
             return _checkpoint_create_result(payload)
         raise AssertionError(f"unexpected activity {activity_type}")
@@ -2431,6 +2537,32 @@ def test_build_agent_execution_request_includes_bundle_metadata(
     assert moonmind_meta["bundleManifestRef"] == "artifact://bundle/1"
     assert moonmind_meta["bundleStrategy"] == "one_shot_jules"
 
+
+def test_build_agent_execution_request_enforces_read_repository_operation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+
+    request = workflow._build_agent_execution_request(
+        node_inputs={
+            "instructions": "Read-only verification",
+            "repository": "org/repo",
+            "publishMode": "pr",
+            "repositoryOperation": "read",
+        },
+        node_id="verify",
+        tool_name="omnigent",
+    )
+
+    assert request.parameters["repositoryOperation"] == "read"
+    assert request.parameters["publishMode"] == "none"
+
 @pytest.mark.asyncio
 async def test_run_execution_stage_fail_fast_raises_when_tool_returns_failed_status(
     monkeypatch: pytest.MonkeyPatch,
@@ -2489,7 +2621,7 @@ async def test_run_execution_stage_fail_fast_raises_when_tool_returns_failed_sta
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
 
     with pytest.raises(ValueError) as exc_info:
         await workflow._run_execution_stage(
@@ -2578,7 +2710,7 @@ async def test_run_execution_stage_continue_mode_keeps_running_after_failed_stat
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
 
     await workflow._run_execution_stage(
         parameters={"repo": "MoonLadderStudios/MoonMind"},
@@ -2848,7 +2980,7 @@ async def test_run_execution_stage_publish_pr_blocks_after_failed_continue_step(
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
 
     await workflow._run_execution_stage(
         parameters={
@@ -2929,7 +3061,7 @@ async def test_run_execution_stage_publish_mode_pr_requires_pull_request_url(
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
 
     with pytest.raises(
         ValueError,
@@ -2999,7 +3131,7 @@ async def test_run_execution_stage_publish_mode_pr_accepts_github_pull_request_u
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
 
     await workflow._run_execution_stage(
         parameters={"repo": "MoonLadderStudios/MoonMind", "publishMode": "pr"},
@@ -3119,7 +3251,7 @@ async def test_run_execution_stage_publish_mode_pr_uses_publish_overrides(
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
 
     await workflow._run_execution_stage(
         parameters={
@@ -3246,7 +3378,7 @@ async def test_run_execution_stage_publish_mode_pr_defaults_title_from_task_inte
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
 
     await workflow._run_execution_stage(
         parameters={
@@ -3389,7 +3521,7 @@ async def test_run_execution_stage_publish_mode_pr_prefers_pushed_branch_for_nat
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
 
     await workflow._run_execution_stage(
         parameters={
@@ -3542,8 +3674,11 @@ def test_activity_result_retryable_allows_empty_assistant_turn_recovery() -> Non
 def test_agent_runtime_retry_classification_is_patch_gated() -> None:
     source = inspect.getsource(MoonMindRunWorkflow._run_execution_stage)
 
-    assert "workflow.patched(RUN_AGENT_RUNTIME_RETRY_CLASSIFICATION_PATCH)" in source
-    assert "self._activity_result_retryable(" in source
+    patch_guard = source.index("RUN_AGENT_RUNTIME_RETRY_CLASSIFICATION_PATCH")
+    classifier = source.index("self._activity_result_retryable(")
+
+    assert "workflow.patched(" in source[:patch_guard]
+    assert patch_guard < classifier
 
 
 def test_activity_result_provider_failure_summary_ignores_generic_activity_failure() -> None:
@@ -3594,7 +3729,7 @@ async def test_skipped_jira_blocker_wait_restores_executing_state(
         "wait_condition",
         fake_wait_condition,
     )
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
     monkeypatch.setattr(
         run_workflow_module.workflow,
         "logger",
@@ -3652,6 +3787,8 @@ async def test_run_execution_stage_fail_fast_raises_provider_failure_summary(
             )
             if artifact_create_result is not None:
                 return artifact_create_result
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
         if activity_type == "step_checkpoint.create":
             return _checkpoint_create_result(payload)
         assert activity_type == "artifact.read"
@@ -3747,7 +3884,7 @@ async def test_run_execution_stage_fail_fast_raises_provider_failure_summary(
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
     monkeypatch.setattr(
         MoonMindRunWorkflow,
         "_resolve_agent_node_skillset_ref",
@@ -3800,6 +3937,8 @@ async def test_run_execution_stage_fail_fast_raises_agent_runtime_failure_summar
             )
             if artifact_create_result is not None:
                 return artifact_create_result
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
         if activity_type == "step_checkpoint.create":
             return _checkpoint_create_result(payload)
         assert activity_type == "artifact.read"
@@ -3948,7 +4087,7 @@ async def test_run_execution_stage_fail_fast_raises_agent_runtime_failure_summar
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
     monkeypatch.setattr(
         MoonMindRunWorkflow,
         "_resolve_agent_node_skillset_ref",
@@ -4004,6 +4143,8 @@ async def test_run_execution_stage_does_not_retry_permanent_agent_runtime_failur
             )
             if artifact_create_result is not None:
                 return artifact_create_result
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
         if activity_type == "step_checkpoint.create":
             return _checkpoint_create_result(payload)
         assert activity_type == "artifact.read"
@@ -4107,7 +4248,7 @@ async def test_run_execution_stage_does_not_retry_permanent_agent_runtime_failur
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
     monkeypatch.setattr(
         MoonMindRunWorkflow,
         "_resolve_agent_node_skillset_ref",
@@ -4297,7 +4438,7 @@ async def test_run_marks_blocked_outcome_as_failed_terminal_state(
     monkeypatch.setattr(
         run_workflow_module.workflow,
         "patched",
-        lambda _patch_id: True,
+        _all_patches_except_empty_skillset,
     )
     monkeypatch.setattr(
         run_workflow_module.workflow,
@@ -4455,7 +4596,7 @@ async def test_run_observes_cancel_after_late_stages_before_completion(
         "now",
         lambda: datetime.now(timezone.utc),
     )
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
     monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
     monkeypatch.setattr(
         run_workflow_module.workflow,
@@ -4584,7 +4725,7 @@ async def test_run_records_no_commit_terminal_state_for_skipped_publish(
         "now",
         lambda: datetime.now(timezone.utc),
     )
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
     monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
     monkeypatch.setattr(
         run_workflow_module.workflow,
@@ -4858,6 +4999,172 @@ async def test_run_execution_stage_jira_implement_not_required_skips_native_pr(
 
 
 @pytest.mark.asyncio
+async def test_run_execution_stage_reopens_pr_gate_after_later_push(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for workflow mm:ede07a85-049a-4860-ae0b-b016c488cda0."""
+
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._repo = "MoonLadderStudios/Tactics"
+    workflow._canonical_no_commit_outcome_enabled = True
+    workflow._authoritative_publish_outcome_enabled = True
+    create_pr_payloads: list[dict[str, object]] = []
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, object] | None = None,
+        **_kwargs: object,
+    ) -> object:
+        if activity_type == "repo.create_pr":
+            assert payload is not None
+            create_pr_payloads.append(payload)
+            return {
+                "url": "https://github.com/MoonLadderStudios/Tactics/pull/2240",
+                "created": True,
+                "headSha": "abc123",
+            }
+        if activity_type == "artifact.read":
+            return json.dumps(
+                {
+                    "plan_version": "1.0",
+                    "metadata": {
+                        "title": "GitHub Issue Implement",
+                        "created_at": "2026-07-21T00:00:00Z",
+                        "registry_snapshot": {
+                            "digest": "reg:sha256:" + ("a" * 64),
+                            "artifact_ref": "artifact://registry/1",
+                        },
+                    },
+                    "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
+                    "nodes": [
+                        _agent_runtime_step("assess"),
+                        _agent_runtime_step("publish"),
+                    ],
+                    "edges": [{"from": "assess", "to": "publish"}],
+                }
+            ).encode("utf-8")
+        return {"status": "COMPLETED", "outputs": {}}
+
+    child_calls = 0
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        _args: object,
+        **_kwargs: object,
+    ) -> object:
+        nonlocal child_calls
+        child_calls += 1
+        if child_calls == 1:
+            return {
+                "summary": "Assessment completed without repository changes.",
+                "metadata": {
+                    "push_status": "no_commits",
+                    "push_branch": "feature/issue-2231",
+                    "push_commit_count": 0,
+                },
+                "output_refs": [],
+            }
+        return {
+            "summary": "Implementation branch published.",
+            "metadata": {
+                "push_status": "pushed",
+                "push_branch": "feature/issue-2231",
+                "push_commit_count": 6,
+                "push_head_sha": "abc123",
+            },
+            "output_refs": [],
+        }
+
+    async def bind_publish_request(request: object) -> object:
+        return request
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_maybe_bind_workflow_scoped_session",
+        bind_publish_request,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            run_workflow_module.RUN_CONDITIONAL_REGISTRY_READ_PATCH,
+            run_workflow_module.RUN_AUTHORITATIVE_PR_REQUIREMENT_PATCH,
+            run_workflow_module.RUN_PAUSE_SAFE_BOUNDARIES_PATCH,
+        },
+    )
+
+    await workflow._run_execution_stage(
+        parameters={
+            "repo": "MoonLadderStudios/Tactics",
+            "publishMode": "pr",
+            "workflow": {
+                "appliedStepTemplates": [
+                    {
+                        "slug": "github-issue-implement",
+                        "version": "1.0.0",
+                        "composition": {"includes": []},
+                    }
+                ]
+            },
+        },
+        plan_ref="art_plan_1",
+    )
+
+    assert child_calls == 2
+    assert len(create_pr_payloads) == 1
+    assert create_pr_payloads[0]["head"] == "feature/issue-2231"
+    assert workflow._pull_request_url == (
+        "https://github.com/MoonLadderStudios/Tactics/pull/2240"
+    )
+    assert workflow._publish_context["commitCount"] == 6
+    assert "noCommitPublish" not in workflow._publish_context
+
+
+def test_authoritative_pr_requirement_prefers_commits_over_stale_story_output() -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._integration = None
+    workflow._publish_status = "published"
+    workflow._publish_context = {
+        "storyOutputMode": "github",
+        "commitCount": 2,
+    }
+
+    assert workflow._authoritative_pr_requirement(
+        publish_mode="pr",
+        pr_publish_optional=False,
+    ) is True
+
+
+@pytest.mark.asyncio
 async def test_run_execution_stage_moonspec_verify_blocks_native_pr_creation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -5035,6 +5342,223 @@ async def test_run_execution_stage_moonspec_verify_blocks_native_pr_creation(
     assert status == "failed"
     assert publish_failure is True
     assert "MoonSpec verification did not approve publication" in message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("recovery_handoff_enabled", "expect_create_pr"),
+    [(False, False), (True, True)],
+)
+async def test_run_execution_stage_additional_work_publishes_pushed_branch_as_draft(
+    monkeypatch: pytest.MonkeyPatch,
+    recovery_handoff_enabled: bool,
+    expect_create_pr: bool,
+) -> None:
+    """A skipped normal handoff must not suppress the recovery draft."""
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._repo = "MoonLadderStudios/MoonMind"
+    workflow._publish_status = "not_required"
+    workflow._publish_reason = "Earlier issue update required no PR output."
+    create_pr_payload: dict[str, object] | None = None
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, object] | None = None,
+        **_kwargs: object,
+    ) -> object:
+        nonlocal create_pr_payload
+        if activity_type == "repo.create_pr":
+            create_pr_payload = dict(payload or {})
+            return {
+                "url": "https://github.com/MoonLadderStudios/MoonMind/pull/999",
+                "created": True,
+                "adopted": False,
+                "headSha": "abc123",
+            }
+        if activity_type == "agent_skill.resolve":
+            return {
+                "manifestRef": "art_skill_snapshot_1",
+                "skills": [{"name": "moonspec-verify"}],
+            }
+        if activity_type == "artifact.read":
+            artifact_ref = (
+                payload.get("artifact_ref")
+                if isinstance(payload, dict)
+                else getattr(payload, "artifact_ref", None)
+            ) if payload is not None else None
+            if artifact_ref == "artifact://registry/1":
+                return json.dumps({"skills": []}).encode("utf-8")
+            return json.dumps(
+                {
+                    "plan_version": "1.0",
+                    "metadata": {
+                        "title": "MoonSpec exhausted remediation draft",
+                        "created_at": "2026-07-17T00:00:00Z",
+                        "registry_snapshot": {
+                            "digest": "reg:sha256:" + ("a" * 64),
+                            "artifact_ref": "artifact://registry/1",
+                        },
+                    },
+                    "policy": {
+                        "failure_mode": "FAIL_FAST",
+                        "max_concurrency": 1,
+                    },
+                    "nodes": [
+                        {
+                            "id": "verify-remediation-1",
+                            "tool": {
+                                "type": "agent_runtime",
+                                "name": "auto",
+                            },
+                            "inputs": {
+                                "runtime": {"mode": "codex"},
+                                "selectedSkill": "moonspec-verify",
+                                "targetBranch": "partial-work",
+                                "title": "Verify remediation attempt 1 of 1",
+                                "annotations": {
+                                    "issueImplementRole": (
+                                        "moonspec-verification-gate"
+                                    ),
+                                    "moonSpecRemediationAttempt": 1,
+                                    "moonSpecRemediationMaxAttempts": 1,
+                                    "moonSpecFinalRemediationGate": True,
+                                },
+                                "instructions": "Verify the final remediation.",
+                            },
+                            "options": {},
+                        }
+                    ],
+                    "edges": [],
+                }
+            ).encode("utf-8")
+        return {"status": "COMPLETED", "outputs": {}}
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        _request: object,
+        **_kwargs: object,
+    ) -> object:
+        push_info = {
+            "push_status": "pushed",
+            "push_branch": "partial-work",
+            "push_base_branch": "main",
+            "push_base_ref": "origin/main",
+            "push_commit_count": 2,
+            "push_head_sha": "abc123",
+            "remote_verified": True,
+        }
+        accepted_repository_evidence = (
+            TemporalAgentRuntimeActivities._accepted_repository_evidence(push_info)
+        )
+        assert accepted_repository_evidence is not None
+        return {
+            "summary": "Verdict: ADDITIONAL_WORK_NEEDED",
+            "metadata": {
+                "verdict": "ADDITIONAL_WORK_NEEDED",
+                "recommendedNextAction": "reattempt_current_step",
+                "operator_summary": "One retry-stability gap remains.",
+                "diagnostics_ref": "art_verify_remaining_work",
+                **push_info,
+                "acceptedRepositoryEvidence": accepted_repository_evidence,
+            },
+            "output_refs": [],
+        }
+
+    async def fake_bind_workflow_scoped_session(
+        self: MoonMindRunWorkflow,
+        request: object,
+    ) -> object:
+        return request
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "wait_condition",
+        _immediate_wait_condition,
+    )
+    monkeypatch.setattr(
+        MoonMindRunWorkflow,
+        "_maybe_bind_workflow_scoped_session",
+        fake_bind_workflow_scoped_session,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_memo",
+        lambda _memo: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    enabled_patches = {
+        run_workflow_module.RUN_CONDITIONAL_REGISTRY_READ_PATCH,
+        run_workflow_module.NATIVE_PR_BRANCH_DEFAULTS_PATCH,
+        run_workflow_module.RUN_MOONSPEC_VERIFY_PUBLICATION_GATE_PATCH,
+        run_workflow_module.RUN_MOONSPEC_VERIFY_REMEDIATION_INDEX_PATCH,
+        run_workflow_module.RUN_PLAN_ROUTED_MOONSPEC_REMEDIATION_PATCH,
+        run_workflow_module.RUN_MOONSPEC_ADDITIONAL_WORK_DRAFT_PUBLISH_PATCH,
+    }
+    if recovery_handoff_enabled:
+        enabled_patches.add(
+            run_workflow_module.RUN_MOONSPEC_DRAFT_PUBLISH_RECOVERY_HANDOFF_PATCH
+        )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id in enabled_patches,
+    )
+
+    await workflow._run_execution_stage(
+        parameters={
+            "repo": "MoonLadderStudios/MoonMind",
+            "publishMode": "pr",
+        },
+        plan_ref="art_plan_1",
+    )
+
+    if not expect_create_pr:
+        assert create_pr_payload is None
+        assert workflow._pull_request_url is None
+        assert workflow._publish_status == "not_required"
+        assert workflow._publish_context["moonSpecDraftPublication"]["policy"] == (
+            "draft_pr_on_additional_work_needed"
+        )
+        return
+
+    assert create_pr_payload is not None
+    assert create_pr_payload["head"] == "partial-work"
+    assert create_pr_payload["base"] == "main"
+    assert create_pr_payload["draft"] is True
+    assert "MoonSpec verification incomplete" in str(create_pr_payload["body"])
+    assert workflow._pull_request_url == (
+        "https://github.com/MoonLadderStudios/MoonMind/pull/999"
+    )
+    assert workflow._publish_status == "published"
+    assert workflow._publish_context["moonSpecDraftPublication"]["policy"] == (
+        "draft_pr_on_additional_work_needed"
+    )
 
 
 @pytest.mark.asyncio
@@ -5266,6 +5790,264 @@ async def test_run_execution_stage_moonspec_verify_uses_remaining_remediation_bu
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("refresh_enabled", "expect_published"),
+    [(False, False), (True, True)],
+)
+async def test_dynamic_remediation_final_pass_replaces_prior_blocking_verdict(
+    monkeypatch: pytest.MonkeyPatch,
+    refresh_enabled: bool,
+    expect_published: bool,
+) -> None:
+    """A passing verifier decision must supersede the prior loop decision.
+
+    Regression for workflow mm:bd309558-4b8c-4883-b4aa-d60ea7494698: the
+    final verifier returned FULLY_IMPLEMENTED, but the execution stage retained
+    the preceding ADDITIONAL_WORK_NEEDED blocking reason and failed instead of
+    publishing.
+    """
+
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._repo = "MoonLadderStudios/MoonMind"
+    executed_steps: list[str] = []
+    create_pr_called = False
+
+    def request_step_id(request: object) -> str:
+        parameters = getattr(request, "parameters", {})
+        metadata = parameters.get("metadata") if isinstance(parameters, dict) else {}
+        moonmind = metadata.get("moonmind") if isinstance(metadata, dict) else {}
+        step_ledger = moonmind.get("stepLedger") if isinstance(moonmind, dict) else {}
+        return str(step_ledger.get("logicalStepId") or "")
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, object] | None = None,
+        **_kwargs: object,
+    ) -> object:
+        nonlocal create_pr_called
+        if activity_type == "repo.create_pr":
+            create_pr_called = True
+            return {
+                "url": "https://github.com/MoonLadderStudios/MoonMind/pull/999",
+            }
+        if activity_type == "agent_skill.resolve":
+            return {
+                "manifestRef": "art_skill_snapshot_1",
+                "skills": [
+                    {"name": "moonspec-implement"},
+                    {"name": "moonspec-verify"},
+                ],
+            }
+        if activity_type == "artifact.read":
+            artifact_ref = (
+                payload.get("artifact_ref")
+                if isinstance(payload, dict)
+                else getattr(payload, "artifact_ref", None)
+            ) if payload is not None else None
+            if artifact_ref == "artifact://registry/1":
+                return json.dumps({"skills": []}).encode("utf-8")
+            loop = {
+                "kind": "remediation_loop",
+                "loopId": "issue-implementation-remediation",
+                "remediationTool": {
+                    "type": "agent_runtime",
+                    "name": "auto",
+                    "inputs": {
+                        "selectedSkill": "moonspec-implement",
+                        "instructions": "Fix the remaining verified gaps.",
+                    },
+                },
+                "verificationTool": {
+                    "type": "agent_runtime",
+                    "name": "auto",
+                    "inputs": {
+                        "selectedSkill": "moonspec-verify",
+                        "instructions": "Verify the remediated candidate.",
+                    },
+                },
+                "workspacePolicy": "continue_from_loop_head",
+                "budgets": {
+                    "hardMaxAttempts": 6,
+                    "maxConsecutiveSemanticNoProgress": 2,
+                },
+                "terminalPolicy": {
+                    "fullyImplemented": "advance",
+                    "additionalWorkNeeded": "continue_when_allowed",
+                    "blocked": "stop",
+                    "noDetermination": "retry_evidence_or_stop",
+                    "failedUnrecoverable": "stop",
+                },
+                "sideEffectPolicy": "workflow_owned",
+                "publicationPolicy": "evaluate_after_terminal",
+            }
+            return json.dumps(
+                {
+                    "plan_version": "1.0",
+                    "metadata": {
+                        "title": "Dynamic remediation final pass",
+                        "created_at": "2026-07-27T00:00:00Z",
+                        "registry_snapshot": {
+                            "digest": "reg:sha256:" + ("a" * 64),
+                            "artifact_ref": "artifact://registry/1",
+                        },
+                    },
+                    "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
+                    "nodes": [
+                        {
+                            "id": "verify-initial",
+                            "tool": {"type": "agent_runtime", "name": "auto"},
+                            "inputs": {
+                                "runtime": {"mode": "codex"},
+                                "selectedSkill": "moonspec-verify",
+                                "instructions": "Verify the implementation.",
+                                "annotations": {"remediationLoop": loop},
+                            },
+                            "options": {},
+                        }
+                    ],
+                    "edges": [],
+                }
+            ).encode("utf-8")
+        return {"status": "COMPLETED", "outputs": {}}
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        request: object,
+        **_kwargs: object,
+    ) -> object:
+        step_id = request_step_id(request)
+        executed_steps.append(step_id)
+        if step_id == "verify-initial":
+            return {
+                "summary": "Verdict: ADDITIONAL_WORK_NEEDED",
+                "metadata": {
+                    "verdict": "ADDITIONAL_WORK_NEEDED",
+                    "recommendedNextAction": "reattempt_current_step",
+                    "remainingWorkRef": "art_remaining_initial",
+                    "recoverableInCurrentRuntime": True,
+                    "operator_summary": "One implementation gap remains.",
+                    "diagnostics_ref": "art_verify_initial",
+                },
+                "output_refs": [],
+            }
+        if step_id.endswith(":verification:1"):
+            return {
+                "summary": "Verdict: FULLY_IMPLEMENTED",
+                "metadata": {
+                    "verdict": "FULLY_IMPLEMENTED",
+                    "recommendedNextAction": "advance",
+                    "recoverableInCurrentRuntime": True,
+                    "operator_summary": "All requirements are implemented.",
+                    "diagnostics_ref": "art_verify_final",
+                    "push_status": "pushed",
+                    "push_branch": "fixed-workflow-gate",
+                    "push_base_ref": "origin/main",
+                },
+                "output_refs": [],
+            }
+        return {
+            "summary": "Remediation completed.",
+            "metadata": {
+                "operator_summary": "Remediation completed.",
+                "push_status": "pushed",
+                "push_branch": "fixed-workflow-gate",
+                "push_base_ref": "origin/main",
+            },
+            "output_refs": [],
+        }
+
+    async def fake_bind_workflow_scoped_session(
+        self: MoonMindRunWorkflow,
+        request: object,
+    ) -> object:
+        return request
+
+    artifact_ordinal = count(1)
+
+    async def fake_write_json_artifact(**_kwargs: object) -> str:
+        return f"artifact://test/{next(artifact_ordinal)}"
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "execute_activity", fake_execute_activity
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "wait_condition",
+        _immediate_wait_condition,
+    )
+    monkeypatch.setattr(
+        MoonMindRunWorkflow,
+        "_maybe_bind_workflow_scoped_session",
+        fake_bind_workflow_scoped_session,
+    )
+    monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    enabled_patches = {
+        run_workflow_module.RUN_CONDITIONAL_REGISTRY_READ_PATCH,
+        run_workflow_module.NATIVE_PR_BRANCH_DEFAULTS_PATCH,
+        run_workflow_module.RUN_MOONSPEC_VERIFY_PUBLICATION_GATE_PATCH,
+        run_workflow_module.RUN_MOONSPEC_VERIFY_REMEDIATION_INDEX_PATCH,
+        run_workflow_module.RUN_DYNAMIC_REMEDIATION_LOOP_CONTROLLER_PATCH,
+        run_workflow_module.RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH,
+    }
+    if refresh_enabled:
+        enabled_patches.add(
+            run_workflow_module.RUN_REFRESH_MOONSPEC_BLOCK_AFTER_REMEDIATION_DECISION_PATCH
+        )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id in enabled_patches,
+    )
+
+    await workflow._run_execution_stage(
+        parameters={"repo": "MoonLadderStudios/MoonMind", "publishMode": "pr"},
+        plan_ref="art_plan_1",
+    )
+
+    assert executed_steps == [
+        "verify-initial",
+        "wf-1:run-1:issue-implementation-remediation:remediation:1",
+        "wf-1:run-1:issue-implementation-remediation:verification:1",
+    ]
+    assert workflow._publish_context["moonSpecGate"]["verdict"] == (
+        "FULLY_IMPLEMENTED"
+    )
+    assert workflow._publish_context["remediationLoop"]["latestVerdict"] == (
+        "FULLY_IMPLEMENTED"
+    )
+    assert create_pr_called is expect_published
+    if expect_published:
+        assert "publicationBlockedBy" not in workflow._publish_context
+    else:
+        assert workflow._publish_context["publicationBlockedBy"] == (
+            "moonspec_verify"
+        )
+
+
+@pytest.mark.asyncio
 async def test_run_execution_stage_publish_mode_pr_jules_skips_native_pr(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -5367,7 +6149,7 @@ async def test_run_execution_stage_publish_mode_pr_jules_skips_native_pr(
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
 
     await workflow._run_execution_stage(
         parameters={"repo": "MoonLadderStudios/MoonMind", "publishMode": "pr"},
@@ -5498,7 +6280,7 @@ async def test_run_execution_stage_jules_pr_extracts_url_from_diagnostics_ref(
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
 
     await workflow._run_execution_stage(
         parameters={"repo": "MoonLadderStudios/MoonMind", "publishMode": "pr"},
@@ -5631,7 +6413,7 @@ async def test_run_execution_stage_non_jules_agent_with_session_id_creates_nativ
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
 
     await wf._run_execution_stage(
         parameters={"repo": "MoonLadderStudios/MoonMind", "publishMode": "pr"},
@@ -5642,6 +6424,132 @@ async def test_run_execution_stage_non_jules_agent_with_session_id_creates_nativ
         "repo.create_pr SHOULD have been called for a non-Jules agent "
         "even when child result metadata contains jules_session_id"
     )
+
+
+@pytest.mark.asyncio
+async def test_run_execution_stage_skips_native_pr_after_prepublication_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._repo = "MoonLadderStudios/MoonMind"
+    create_pr_called = False
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, object],
+        **_kwargs: object,
+    ) -> object:
+        nonlocal create_pr_called
+        if activity_type == "repo.create_pr":
+            create_pr_called = True
+            return {"url": "https://github.com/MoonLadderStudios/MoonMind/pull/999"}
+        if activity_type == "artifact.read":
+            return json.dumps(
+                {
+                    "plan_version": "1.0",
+                    "metadata": {
+                        "title": "Checkpoint Publish Plan",
+                        "created_at": "2026-07-14T00:00:00Z",
+                        "registry_snapshot": {
+                            "digest": "reg:sha256:" + ("a" * 64),
+                            "artifact_ref": "artifact://registry/1",
+                        },
+                    },
+                    "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
+                    "nodes": [_agent_runtime_step("assess")],
+                    "edges": [],
+                }
+            ).encode("utf-8")
+        return {"status": "COMPLETED", "outputs": {}}
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        _args: object,
+        **_kwargs: object,
+    ) -> object:
+        return {
+            "summary": "Assessment completed",
+            "metadata": {
+                "push_status": "pushed",
+                "push_branch": "feature/checkpoint-failure",
+            },
+            "output_refs": [],
+        }
+
+    async def fail_prepublication_checkpoint(
+        _logical_step_id: str,
+        *,
+        publish_mode: str,
+        updated_at: datetime,
+    ) -> bool:
+        assert publish_mode == "pr"
+        workflow._publish_status = "failed"
+        workflow._publish_reason = "pre-publication checkpoint failed"
+        return True
+
+    async def no_checkpoint(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    async def bind_existing_request(request: object) -> object:
+        return request
+
+    monkeypatch.setattr(
+        workflow,
+        "_record_prepublication_checkpoint",
+        fail_prepublication_checkpoint,
+    )
+    monkeypatch.setattr(workflow, "_record_canonical_step_checkpoint", no_checkpoint)
+    monkeypatch.setattr(
+        workflow,
+        "_maybe_bind_workflow_scoped_session",
+        bind_existing_request,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "execute_activity", fake_execute_activity
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            run_workflow_module.RUN_CONDITIONAL_REGISTRY_READ_PATCH,
+            run_workflow_module.RUN_PAUSE_SAFE_BOUNDARIES_PATCH,
+            run_workflow_module.RUN_PREPUBLICATION_FAILURE_BLOCKS_PUBLISH_PATCH,
+        },
+    )
+
+    await workflow._run_execution_stage(
+        parameters={"repo": "MoonLadderStudios/MoonMind", "publishMode": "pr"},
+        plan_ref="art_plan_1",
+    )
+
+    assert not create_pr_called
+    assert workflow._publish_status == "failed"
+    assert workflow._pull_request_url is None
+
 
 @pytest.mark.asyncio
 async def test_run_execution_stage_skips_native_pr_after_push_failure(
@@ -5753,7 +6661,7 @@ async def test_run_execution_stage_skips_native_pr_after_push_failure(
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
 
     await wf._run_execution_stage(
         parameters={"repo": "MoonLadderStudios/MoonMind", "publishMode": "pr"},
@@ -5871,7 +6779,7 @@ async def test_run_execution_stage_stops_after_publish_lease_conflict(
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
 
     await wf._run_execution_stage(
         parameters={"repo": "MoonLadderStudios/MoonMind", "publishMode": "pr"},
@@ -5895,7 +6803,7 @@ async def test_run_proposals_stage_global_disable_halts_execution(
     from moonmind.config.settings import settings
     workflow = MoonMindRunWorkflow()
     monkeypatch.setattr(settings.workflow, "enable_proposals", False)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda x: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
     
     # Enable proposing tasks in params, but global switch should stop it
     await workflow._run_proposals_stage(parameters={"proposeTasks": True})
@@ -5914,7 +6822,7 @@ async def test_run_proposals_stage_ignores_legacy_fallback_policy(
     workflow._owner_type = "user"
     workflow_info = type("WorkflowInfo", (), {"workflow_id": "wf-1", "run_id": "run-1", "namespace": "default"})()
     monkeypatch.setattr(run_workflow_module.workflow, "info", lambda: workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda x: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
     monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc))
     
     captured_policy = None
@@ -5953,7 +6861,7 @@ async def test_run_proposals_stage_uses_workflow_proposal_policy(
     workflow._owner_type = "user"
     workflow_info = type("WorkflowInfo", (), {"workflow_id": "wf-1", "run_id": "run-1", "namespace": "default"})()
     monkeypatch.setattr(run_workflow_module.workflow, "info", lambda: workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda x: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
     monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc))
     
     captured_policy = None
@@ -6013,7 +6921,7 @@ def test_update_memo_persists_pull_request_url_under_canonical_key(
         "upsert_memo",
         lambda memo: captured_memo.append(dict(memo)),
     )
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
 
     workflow._update_memo()
 

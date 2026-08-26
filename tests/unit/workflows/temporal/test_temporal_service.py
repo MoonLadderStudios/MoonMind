@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from unittest.mock import AsyncMock, MagicMock, Mock, call, patch
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -36,6 +37,11 @@ from api_service.db.models import (
     TemporalExecutionRecord,
     TemporalExecutionRemediationLink,
     TemporalWorkflowType,
+    WorkflowCheckpointBranchOperation,
+)
+from api_service.services.checkpoint_branch_service import (
+    CheckpointBranchService,
+    build_branch_turn_launch_idempotency_key,
 )
 from moonmind.config.settings import settings
 from moonmind.workflows.temporal.service import (
@@ -55,6 +61,13 @@ from moonmind.schemas.temporal_models import (
     has_user_workflow_plan_source,
 )
 from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
+from moonmind.schemas.workflow_recovery_models import (
+    WorkflowRecoveryTargetModel,
+    deterministic_recovery_creation_key,
+)
+from moonmind.workflows.executions.runtime_capabilities import (
+    resolve_runtime_execution_capabilities,
+)
 from moonmind.statuses.compat import (
     canonicalize_finish_outcome_code_alias,
     canonicalize_workflow_state_alias,
@@ -183,6 +196,49 @@ async def test_create_execution_synthesizes_jira_implement_title_metadata(
             "redirect",
             "handling",
         ]
+
+
+@pytest.mark.asyncio
+async def test_create_execution_synthesizes_github_issue_preset_title_metadata(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="GitHub Issue Implement",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "workflow": {
+                    "title": "GitHub Issue Implement",
+                    "instructions": "Implement the selected GitHub issue.",
+                    "taskTemplate": {"slug": "github-issue-implement"},
+                    "inputs": {
+                        "github_issue": {
+                            "repository": "MoonLadderStudios/MoonMind",
+                            "number": 3143,
+                            "title": "Improve generated workflow titles",
+                        },
+                        "github_issue_ref": "MoonLadderStudios/MoonMind#3143",
+                    },
+                }
+            },
+            idempotency_key=None,
+            integration="github",
+        )
+
+        assert created.memo["title"] == (
+            "GitHub Issue Implement: MoonLadderStudios/MoonMind#3143 — "
+            "Improve generated workflow titles"
+        )
+        assert created.memo["titleSource"] == "integration_target"
+        assert created.memo["titleConfidence"] == "high"
+        assert "3143" in created.search_attributes["mm_title"]
 
 
 def _write_mm730_cutover_files(tmp_path):
@@ -591,6 +647,149 @@ async def test_create_execution_routes_pr_merge_automation_workflows_to_dedicate
 
         start_kwargs = mock_client_adapter.start_workflow.await_args.kwargs
         assert start_kwargs["task_queue"] == "mm.workflow.merge_automation.test"
+
+
+@pytest.mark.asyncio
+async def test_create_execution_routes_review_loop_runs_that_publish_nothing(
+    tmp_path,
+    mock_client_adapter,
+    monkeypatch,
+):
+    """A preset that targets an existing PR still needs the gate's worker group.
+
+    ``pr-review-resolve`` publishes nothing of its own: the durable merge
+    automation gate owns every commit, review request, and merge. Deciding the
+    task queue from publish mode alone would strand the whole review loop on the
+    default queue.
+    """
+
+    temporal_settings = settings.temporal.model_copy(
+        update={
+            "merge_automation_workflow_task_queue": "mm.workflow.merge_automation.test"
+        }
+    )
+    monkeypatch.setattr(settings, "temporal", temporal_settings)
+
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(
+            session,
+            client_adapter=mock_client_adapter,
+        )
+
+        await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="Fix and review loop",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "publishMode": "none",
+                "workflow": {
+                    "instructions": "Resolve the target pull request.",
+                    "publish": {
+                        "mode": "none",
+                        "mergeAutomation": {
+                            "enabled": True,
+                            "reviewLoop": {"enabled": True, "provider": "codex"},
+                        },
+                    },
+                },
+            },
+            idempotency_key=None,
+        )
+
+        start_kwargs = mock_client_adapter.start_workflow.await_args.kwargs
+        assert start_kwargs["task_queue"] == "mm.workflow.merge_automation.test"
+
+
+@pytest.mark.asyncio
+async def test_create_execution_routes_runs_that_name_an_existing_pull_request(
+    tmp_path,
+    mock_client_adapter,
+    monkeypatch,
+):
+    temporal_settings = settings.temporal.model_copy(
+        update={
+            "merge_automation_workflow_task_queue": "mm.workflow.merge_automation.test"
+        }
+    )
+    monkeypatch.setattr(settings, "temporal", temporal_settings)
+
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(
+            session,
+            client_adapter=mock_client_adapter,
+        )
+
+        await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="Merge an existing PR",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "publishMode": "none",
+                "workflow": {
+                    "instructions": "Merge the pull request.",
+                    "publish": {
+                        "mode": "none",
+                        "mergeAutomation": {
+                            "enabled": True,
+                            "pullRequest": {"number": "3771"},
+                        },
+                    },
+                },
+            },
+            idempotency_key=None,
+        )
+
+        start_kwargs = mock_client_adapter.start_workflow.await_args.kwargs
+        assert start_kwargs["task_queue"] == "mm.workflow.merge_automation.test"
+
+
+@pytest.mark.asyncio
+async def test_create_execution_keeps_default_queue_when_merge_automation_is_off(
+    tmp_path,
+    mock_client_adapter,
+):
+    """Publishing nothing is not by itself a merge-automation selection."""
+
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(
+            session,
+            client_adapter=mock_client_adapter,
+        )
+
+        await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="Plain non-publishing run",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "publishMode": "none",
+                "workflow": {
+                    "instructions": "Investigate something.",
+                    "publish": {
+                        "mode": "none",
+                        "mergeAutomation": {
+                            "enabled": False,
+                            "reviewLoop": {"enabled": True},
+                        },
+                    },
+                },
+            },
+            idempotency_key=None,
+        )
+
+        start_kwargs = mock_client_adapter.start_workflow.await_args.kwargs
+        assert start_kwargs["task_queue"] is None
 
 
 @pytest.mark.asyncio
@@ -1188,8 +1387,227 @@ async def test_create_execution_persists_remediation_link_and_supports_lookups(
             remediation.workflow_id
         ]
 
+        with patch.object(
+            service,
+            "_attach_remediation_checkpoint_branch_links",
+            new=AsyncMock(),
+        ) as attach_branch_links:
+            inventory = await service.list_remediation_links()
+        assert [item.remediation_workflow_id for item in inventory] == [
+            remediation.workflow_id
+        ]
+        attach_branch_links.assert_not_awaited()
+
         prerequisites = await service.list_prerequisites(remediation.workflow_id)
         assert prerequisites == []
+
+
+@pytest.mark.asyncio
+async def test_remediation_relationship_projects_every_checkpoint_branch_turn(
+    tmp_path, mock_client_adapter, monkeypatch
+):
+    monkeypatch.setattr(settings.workflow, "temporal_artifact_backend", "local_fs")
+    monkeypatch.setattr(
+        settings.workflow,
+        "temporal_artifact_root",
+        str(tmp_path / "artifacts"),
+    )
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        mock_client_adapter.start_workflow.side_effect = [
+            SimpleNamespace(run_id="target-temporal-run"),
+            SimpleNamespace(run_id="remediation-temporal-run"),
+        ]
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        target = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=owner_id,
+            title="Target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters=_valid_user_workflow_parameters(),
+            idempotency_key=None,
+        )
+        remediation = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=owner_id,
+            title="Remediate target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "workflow": {
+                    "instructions": "Repair the target cumulatively.",
+                    "remediation": {
+                        "target": {"workflowId": target.workflow_id},
+                        "mode": "snapshot",
+                        "authorityMode": "approval_gated",
+                    },
+                }
+            },
+            idempotency_key=None,
+        )
+
+        branch_id = f"cbr-{uuid4().hex[:12]}"
+        first_turn_id = f"{branch_id}-turn-1"
+        branch_service = CheckpointBranchService(session)
+        await branch_service.create_branch_graph(
+            {
+                "branchId": branch_id,
+                "branchTurnId": first_turn_id,
+                "source": {
+                    "workflowId": target.workflow_id,
+                    "runId": target.run_id,
+                    "logicalStepId": "repair",
+                    "sourceExecutionOrdinal": 1,
+                    "checkpointBoundary": "after_execution",
+                    "checkpointRef": "artifact://checkpoint/target-root",
+                    "checkpointDigest": "sha256:target-root",
+                },
+                "label": "Cumulative remediation",
+                "workspacePolicy": "apply_previous_execution_diff_to_clean_baseline",
+                "runtimeContextPolicy": "fresh_agent_run",
+                "gitRepository": "repo://moonmind",
+                "gitBaseBranch": "main",
+                "gitWorkBranch": f"remediation/{branch_id}",
+                "createdBy": remediation.workflow_id,
+                "instructionRef": "artifact://instructions/turn-1",
+                "instructionDigest": "sha256:instructions-1",
+                "idempotencyKey": f"{branch_id}:create",
+            }
+        )
+        await branch_service.claim_turn_execution(
+            workflow_id=target.workflow_id,
+            branch_id=branch_id,
+            branch_turn_id=first_turn_id,
+            context_bundle_ref="artifact://context/turn-1",
+            step_execution_manifest_ref="artifact://manifest/turn-1",
+            diagnostics_ref="artifact://diagnostics/turn-1",
+            launch_idempotency_key=build_branch_turn_launch_idempotency_key(
+                workflow_id=target.workflow_id,
+                branch_id=branch_id,
+                branch_turn_id=first_turn_id,
+            ),
+            created_step_execution_id="repair:execution:1",
+            runtime_agent_run_id="agent-run-1",
+            agent_request_ref="artifact://agent-request/turn-1",
+            execution_workflow_id=f"checkpoint-branch-turn:{first_turn_id}",
+        )
+        await branch_service.mark_turn_running(
+            workflow_id=target.workflow_id,
+            branch_id=branch_id,
+            branch_turn_id=first_turn_id,
+            runtime_agent_run_id="agent-run-1",
+        )
+        second_turn_id = f"{branch_id}-turn-2"
+        second_turn = await branch_service.continue_branch(
+            workflow_id=target.workflow_id,
+            branch_id=branch_id,
+            payload={
+                "branchTurnId": second_turn_id,
+                "instructionRef": "artifact://instructions/turn-2",
+                "instructionDigest": "sha256:instructions-2",
+                "idempotencyKey": f"{branch_id}:continue:2",
+            },
+        )
+        assert second_turn.parent_turn_id == first_turn_id
+        await branch_service.claim_turn_execution(
+            workflow_id=target.workflow_id,
+            branch_id=branch_id,
+            branch_turn_id=second_turn_id,
+            context_bundle_ref="artifact://context/turn-2",
+            step_execution_manifest_ref="artifact://manifest/turn-2",
+            diagnostics_ref="artifact://launch-diagnostics/turn-2",
+            launch_idempotency_key=build_branch_turn_launch_idempotency_key(
+                workflow_id=target.workflow_id,
+                branch_id=branch_id,
+                branch_turn_id=second_turn_id,
+            ),
+            created_step_execution_id="repair:execution:2",
+            runtime_agent_run_id="agent-run-2",
+            agent_request_ref="artifact://agent-request/turn-2",
+            execution_workflow_id=f"checkpoint-branch-turn:{second_turn_id}",
+        )
+        await branch_service.mark_turn_running(
+            workflow_id=target.workflow_id,
+            branch_id=branch_id,
+            branch_turn_id=second_turn_id,
+            runtime_agent_run_id="agent-run-2",
+        )
+        await branch_service.finalize_turn_execution(
+            workflow_id=target.workflow_id,
+            branch_id=branch_id,
+            branch_turn_id=second_turn_id,
+            outcome="succeeded",
+            agent_result_ref="artifact://result/turn-2",
+            diagnostics_ref="artifact://diagnostics/turn-2",
+            checkpoint_ref="artifact://checkpoint/turn-2",
+            provider_session_id="provider-session-2",
+        )
+        await branch_service.record_artifact(
+            branch_id=branch_id,
+            branch_turn_id=second_turn_id,
+            artifact_kind="comparison.branch_turn.diff.json",
+            artifact_ref="artifact://comparison/turn-2",
+        )
+        session.add(
+            WorkflowCheckpointBranchOperation(
+                workflow_id=target.workflow_id,
+                branch_id=branch_id,
+                branch_turn_id=first_turn_id,
+                operation="checkpoint_branch.create",
+                idempotency_key=f"{branch_id}:remediation:create",
+                request_digest="sha256:" + "1" * 64,
+                response_payload={
+                    "branchId": branch_id,
+                    "branchTurnId": first_turn_id,
+                    "checkpointRef": "artifact://checkpoint/target-root",
+                    "remediation": {
+                        "workflowId": remediation.workflow_id,
+                        "runId": remediation.run_id,
+                        "checkpointRef": "artifact://checkpoint/target-root",
+                    },
+                },
+            )
+        )
+        await session.commit()
+
+        outbound = await service.list_remediation_targets(remediation.workflow_id)
+        projected_branch = outbound[0].checkpoint_branch_links[0]
+        assert [turn["branchTurnId"] for turn in projected_branch["turns"]] == [
+            first_turn_id,
+            second_turn_id,
+        ]
+        assert projected_branch["turns"][0]["status"] == "running"
+        assert projected_branch["turns"][0]["runtimeAgentRunId"] == "agent-run-1"
+        assert projected_branch["turns"][0]["providerSessionId"] is None
+        assert projected_branch["turns"][0]["startedAt"]
+        assert projected_branch["turns"][1]["parentTurnId"] == first_turn_id
+        assert projected_branch["turns"][1]["instructionRef"] == (
+            "artifact://instructions/turn-2"
+        )
+        assert projected_branch["turns"][1]["outputArtifacts"] == {
+            "output.branch_turn.step_execution_manifest.json": (
+                "artifact://manifest/turn-2"
+            ),
+            "output.branch_turn.launch_diagnostics.json": (
+                "artifact://launch-diagnostics/turn-2"
+            ),
+            "output.branch_turn.checkpoint.json": "artifact://checkpoint/turn-2",
+            "output.branch_turn.diagnostics.json": "artifact://diagnostics/turn-2",
+        }
+        assert "input.branch_turn.instructions.md" not in projected_branch[
+            "turns"
+        ][1]["outputArtifacts"]
+        assert "runtime.branch_turn.agent_result.json" not in projected_branch[
+            "turns"
+        ][1]["outputArtifacts"]
+        assert projected_branch["turns"][1]["comparisonArtifacts"] == {
+            "comparison.branch_turn.diff.json": "artifact://comparison/turn-2"
+        }
 
 
 @pytest.mark.asyncio
@@ -1321,11 +1739,20 @@ async def test_record_remediation_approval_decision_appends_bounded_audit(
         )
         assert link is not None
         link.status = "awaiting_approval"
+        request_id = f"{remediation.workflow_id}:approval:request"
+        link.approval_state = {
+            "requestId": request_id,
+            "approvalRef": f"approval://remediation/{request_id}",
+            "status": "pending",
+            "reviewerRule": "operator",
+            "requestingActor": "service:remediation",
+            "expiresAt": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+        }
         await session.commit()
 
         result = await service.record_remediation_approval_decision(
             remediation_workflow_id=remediation.workflow_id,
-            request_id=f"{remediation.workflow_id}:approval",
+            request_id=request_id,
             decision="approved",
             comment="Reviewed blast radius.",
             actor="ops@example.com",
@@ -1334,7 +1761,7 @@ async def test_record_remediation_approval_decision_appends_bounded_audit(
         assert result == {
             "accepted": True,
             "workflowId": remediation.workflow_id,
-            "requestId": f"{remediation.workflow_id}:approval",
+            "requestId": request_id,
             "decision": "approved",
         }
         record = await service.describe_execution(remediation.workflow_id)
@@ -1342,7 +1769,32 @@ async def test_record_remediation_approval_decision_appends_bounded_audit(
         assert audit[-1]["action"] == "remediation_approval_approved"
         assert audit[-1]["transport"] == "api"
         assert audit[-1]["summary"] == "Remediation approval approved."
-        assert f"{remediation.workflow_id}:approval" in audit[-1]["detail"]
+        assert request_id in audit[-1]["detail"]
+        await session.refresh(link)
+        assert link.approval_state["status"] == "approved"
+        assert link.approval_state["decisionActor"] == "ops@example.com"
+        assert link.approval_state["artifactRefs"]["approvalDecision"]
+        decision_artifact = await session.get(
+            TemporalArtifact,
+            link.approval_state["artifactRefs"]["approvalDecision"],
+        )
+        assert decision_artifact is not None
+        assert decision_artifact.metadata_json["artifact_type"] == (
+            "remediation.approval_decision"
+        )
+        decision_ref = link.approval_state["artifactRefs"]["approvalDecision"]
+        replayed = await TemporalExecutionService(
+            session, client_adapter=mock_client_adapter
+        ).record_remediation_approval_decision(
+            remediation_workflow_id=remediation.workflow_id,
+            request_id=request_id,
+            decision="approved",
+            comment="Reviewed blast radius.",
+            actor="ops@example.com",
+        )
+        assert replayed["accepted"] is True
+        await session.refresh(link)
+        assert link.approval_state["artifactRefs"]["approvalDecision"] == decision_ref
         assert "ops@example.com" in audit[-1]["detail"]
 
 @pytest.mark.asyncio
@@ -1517,6 +1969,55 @@ async def test_create_execution_rejects_elevated_user_remediation_of_system_targ
                 },
                 idempotency_key=None,
             )
+
+
+@pytest.mark.asyncio
+async def test_create_execution_rejects_admin_auto_while_release_gate_is_closed(
+    tmp_path, mock_client_adapter, monkeypatch
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        target = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=owner_id,
+            title="Target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters=_valid_user_workflow_parameters(),
+            idempotency_key=None,
+        )
+        monkeypatch.delenv(
+            "MOONMIND_OMNIGENT_REMEDIATION_RELEASE_EVIDENCE_REF",
+            raising=False,
+        )
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="MoonLadderStudios/MoonMind#3626",
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.UserWorkflow",
+                owner_id=owner_id,
+                title="Automatic remediation",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={
+                    "workflow": {
+                        "instructions": "Repair target",
+                        "remediation": {
+                            "target": {"workflowId": target.workflow_id},
+                            "authorityMode": "admin_auto",
+                        },
+                    }
+                },
+                idempotency_key=None,
+            )
+
 
 @pytest.mark.asyncio
 async def test_create_execution_rejects_missing_remediation_target_workflow_id(
@@ -1729,7 +2230,10 @@ async def test_create_execution_rejects_remediation_same_session_branch_policy(
                         "remediation": {
                             "target": {"workflowId": target.workflow_id},
                             "checkpointBranchPolicy": {
-                                "actionKind": "checkpoint_branch.create_from_remediation_context",
+                                "actionKind": (
+                                    "checkpoint_branch."
+                                    "create_from_remediation_context"
+                                ),
                                 "runtimeContextPolicy": "external_provider_continuation",
                             },
                         },
@@ -2230,6 +2734,311 @@ async def test_create_execution_accepts_owned_remediation_agent_run_ids(
         assert link is not None
         assert link.target_workflow_id == target.workflow_id
 
+
+@pytest.mark.asyncio
+async def test_create_execution_accepts_target_owned_remediation_step_selector(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        target = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=owner_id,
+            title="Target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "workflow": {"instructions": "Fail at the test step."},
+                "stepLedger": {
+                    "steps": [
+                        {
+                            "logicalStepId": "run-tests",
+                            "stepExecutionId": "run-tests:execution:2",
+                            "attempt": 2,
+                            "checkpointRef": "artifact://checkpoint/run-tests",
+                            "checkpointDigest": "sha256:target-checkpoint",
+                            "agentRunId": "target-agent-run",
+                        }
+                    ]
+                },
+            },
+            idempotency_key=None,
+        )
+
+        remediation = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=owner_id,
+            title="Remediate target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "workflow": {
+                    "instructions": "Repair the selected failed step.",
+                    "remediation": {
+                        "target": {
+                            "workflowId": target.workflow_id,
+                            "runId": target.run_id,
+                            "stepSelectors": [
+                                {
+                                    "logicalStepId": "run-tests",
+                                    "stepExecutionId": "run-tests:execution:2",
+                                    "attempt": 2,
+                                    "checkpointRef": "artifact://checkpoint/run-tests",
+                                    "checkpointDigest": "sha256:target-checkpoint",
+                                    "agentRunId": "target-agent-run",
+                                }
+                            ],
+                        }
+                    },
+                }
+            },
+            idempotency_key=None,
+        )
+
+        link = await session.get(
+            TemporalExecutionRemediationLink, remediation.workflow_id
+        )
+        assert link is not None
+        assert link.target_run_id == target.run_id
+
+
+@pytest.mark.asyncio
+async def test_create_execution_rejects_mixed_target_step_selector_tuple(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        target = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=owner_id,
+            title="Target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "workflow": {"instructions": "Fail two independent steps."},
+                "stepLedger": {
+                    "steps": [
+                        {
+                            "logicalStepId": "step-a",
+                            "stepExecutionId": "step-a:execution:1",
+                            "attempt": 1,
+                            "checkpointRef": "artifact://checkpoint/step-a",
+                            "agentRunId": "agent-run-a",
+                        },
+                        {
+                            "logicalStepId": "step-b",
+                            "stepExecutionId": "step-b:execution:1",
+                            "attempt": 1,
+                            "checkpointRef": "artifact://checkpoint/step-b",
+                            "agentRunId": "agent-run-b",
+                        },
+                    ]
+                },
+            },
+            idempotency_key=None,
+        )
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="fields must identify one target Step Execution/checkpoint",
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.UserWorkflow",
+                owner_id=owner_id,
+                title="Mixed selector remediation",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={
+                    "workflow": {
+                        "remediation": {
+                            "target": {
+                                "workflowId": target.workflow_id,
+                                "stepSelectors": [
+                                    {
+                                        "logicalStepId": "step-a",
+                                        "stepExecutionId": "step-a:execution:1",
+                                        "checkpointRef": "artifact://checkpoint/step-b",
+                                        "agentRunId": "agent-run-b",
+                                    }
+                                ],
+                            }
+                        }
+                    }
+                },
+                idempotency_key=None,
+            )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("selector", "error"),
+    [
+        (
+            {"logicalStepId": "tampered-step"},
+            "logicalStepId must belong to the target execution",
+        ),
+        (
+            {"checkpointRef": "artifact://checkpoint/tampered"},
+            "checkpointRef must belong to the target execution",
+        ),
+        (
+            {
+                "checkpointRef": "artifact://checkpoint/run-tests",
+                "checkpointDigest": "sha256:tampered",
+            },
+            "checkpointDigest must match the target checkpoint",
+        ),
+        (
+            {"logicalStepId": "run-tests", "attempt": 0},
+            "attempt must be a positive integer",
+        ),
+        (
+            {"logicalStepId": "run-tests", "attempt": 999},
+            "attempt must match the target Step Execution",
+        ),
+        (
+            {
+                "logicalStepId": "run-tests",
+                "stepExecutionId": "tampered-step-execution",
+            },
+            "stepExecutionId must belong to the target execution",
+        ),
+    ],
+)
+async def test_create_execution_rejects_tampered_remediation_step_selector(
+    tmp_path, mock_client_adapter, selector, error
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        target = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=owner_id,
+            title="Target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "workflow": {"instructions": "Fail at the test step."},
+                "stepLedger": {
+                    "steps": [
+                        {
+                            "logicalStepId": "run-tests",
+                            "stepExecutionId": "run-tests:execution:2",
+                            "attempt": 2,
+                            "checkpointRef": "artifact://checkpoint/run-tests",
+                            "checkpointDigest": "sha256:target-checkpoint",
+                        }
+                    ]
+                },
+            },
+            idempotency_key=None,
+        )
+
+        with pytest.raises(TemporalExecutionValidationError, match=error):
+            await service.create_execution(
+                workflow_type="MoonMind.UserWorkflow",
+                owner_id=owner_id,
+                title="Tampered remediation",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={
+                    "workflow": {
+                        "remediation": {
+                            "target": {
+                                "workflowId": target.workflow_id,
+                                "runId": target.run_id,
+                                "stepSelectors": [selector],
+                            }
+                        }
+                    }
+                },
+                idempotency_key=None,
+            )
+
+
+@pytest.mark.asyncio
+async def test_create_execution_rejects_tampered_remediation_mode_and_work_branch(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        target = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=owner_id,
+            title="Target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters=_valid_user_workflow_parameters(),
+            idempotency_key=None,
+        )
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="Unsupported workflow.remediation.mode",
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.UserWorkflow",
+                owner_id=owner_id,
+                title="Tampered remediation mode",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={
+                    "workflow": {
+                        "remediation": {
+                            "target": {"workflowId": target.workflow_id},
+                            "mode": "unbounded_follow",
+                        }
+                    }
+                },
+                idempotency_key=None,
+            )
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="gitWorkBranch is not an allowed git branch",
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.UserWorkflow",
+                owner_id=owner_id,
+                title="Tampered remediation branch",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={
+                    "workflow": {
+                        "remediation": {
+                            "target": {"workflowId": target.workflow_id},
+                            "checkpointBranchPolicy": {
+                                "actionKind": "checkpoint_branch.create_from_remediation_context",
+                                "runtimeContextPolicy": "fresh_agent_run",
+                                "gitWorkBranch": "main",
+                            },
+                        }
+                    }
+                },
+                idempotency_key=None,
+            )
+
 @pytest.mark.asyncio
 async def test_create_execution_normalizes_depends_on_before_limit_and_persistence(
     tmp_path, mock_client_adapter
@@ -2278,8 +3087,15 @@ async def test_create_execution_normalizes_depends_on_before_limit_and_persisten
 
 @pytest.mark.asyncio
 async def test_create_execution_removes_empty_normalized_depends_on_from_parameters(
-    tmp_path, mock_client_adapter
+    tmp_path,
+    mock_client_adapter,
+    monkeypatch: pytest.MonkeyPatch,
 ):
+    monkeypatch.setattr(
+        settings.workflow,
+        "moonspec_environment_blocked_publish_action",
+        "fail",
+    )
     async with temporal_db(tmp_path) as session:
         owner_id = uuid4()
         service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
@@ -2562,12 +3378,10 @@ async def test_record_terminal_state_preserves_existing_terminal_summary(
         assert canceled is not None
         assert canceled.state is MoonMindWorkflowState.CANCELED
         assert canceled.close_status is TemporalExecutionCloseStatus.CANCELED
-        mock_client_adapter.update_workflow.assert_called_once_with(
-            created.workflow_id,
-            "Cancel",
-            "operator requested cancellation",
+        mock_client_adapter.update_workflow.assert_not_called()
+        mock_client_adapter.cancel_workflow.assert_awaited_once_with(
+            created.workflow_id
         )
-        mock_client_adapter.cancel_workflow.assert_not_called()
         assert canceled.memo["summary"] == "operator requested cancellation"
 
 
@@ -3223,6 +4037,12 @@ async def test_request_rerun_creates_fresh_execution_for_terminal_execution(
             manifest_artifact_ref=None,
             failure_policy=None,
             initial_parameters={
+                "repository": {
+                    "provider": "git",
+                    "connectionRef": "repository-connection:git-default",
+                    "repository": {"name": "MoonLadderStudios/MoonMind"},
+                    "branch": {"name": "feature/mm-1219"},
+                },
                 "agentRunId": "old-agent-run",
                 "agent_run_id": "old-agent-run-snake",
                 "recoverySource": {"workflowId": "mm:source", "runId": "run-old"},
@@ -3282,6 +4102,8 @@ async def test_request_rerun_creates_fresh_execution_for_terminal_execution(
         assert source.state is MoonMindWorkflowState.CANCELED
         assert source.close_status is TemporalExecutionCloseStatus.CANCELED
         assert rerun.state is MoonMindWorkflowState.INITIALIZING
+        assert rerun.search_attributes["mm_repo"] == "MoonLadderStudios/MoonMind"
+        assert isinstance(rerun.parameters["repository"], dict)
         assert rerun.parameters["rerunSource"] == {
             "workflowId": source_workflow_id,
             "runId": source_run_id,
@@ -3375,6 +4197,36 @@ def test_full_retry_recovery_from_patch_rejects_non_string_source_ids():
             source_workflow_id="mm:source",
             source_run_id="run-source",
         )
+
+
+def test_full_rerun_preserves_immutable_omnigent_plan_authority() -> None:
+    plan = {
+        "planRef": "omnigent-execution-plan:sha256:" + "a" * 64,
+        "planDigest": "sha256:" + "a" * 64,
+        "planArtifactRef": "art_plan_3706",
+        "taskInputSnapshotRef": "art_task_3706",
+        "taskInputSnapshotDigest": "sha256:" + "b" * 64,
+    }
+
+    rerun = TemporalExecutionService._full_rerun_parameters(
+        {
+            "omnigentExecutionPlan": plan,
+            "agentRunId": "old-agent-run",
+            "recoveryCheckpointRef": "art_stale_checkpoint",
+            "workflow": {
+                "instructions": "Preserve the planned choices.",
+                "dependsOn": ["old-step"],
+                "recovery": {"kind": "old-recovery"},
+            },
+        }
+    )
+
+    assert rerun["omnigentExecutionPlan"] == plan
+    assert "agentRunId" not in rerun
+    assert "recoveryCheckpointRef" not in rerun
+    assert rerun["workflow"] == {
+        "instructions": "Preserve the planned choices."
+    }
 
 
 def test_full_retry_recovery_from_patch_rejects_forged_source_ids():
@@ -3619,6 +4471,141 @@ def test_recovery_checkpoint_model_allows_checkpoint_payload_ref_keys() -> None:
     }
 
 
+def _typed_failed_step_recovery_target(
+    *, source_workflow_id: str, source_run_id: str, destination_workflow_id: str
+) -> WorkflowRecoveryTargetModel:
+    capability = resolve_runtime_execution_capabilities("omnigent").model_dump(
+        by_alias=True, mode="json"
+    )
+    checkpoint_digest = "sha256:typed-checkpoint"
+    return WorkflowRecoveryTargetModel.model_validate(
+        {
+            "target": {
+                "kind": "failed_step",
+                "logicalStepId": "implement",
+                "sourceStepExecutionId": "step-execution-1",
+            },
+            "source": {
+                "workflowId": source_workflow_id,
+                "runId": source_run_id,
+                "planRef": "artifact://plan/source",
+                "planDigest": "sha256:plan",
+                "taskInputSnapshotRef": "artifact://snapshot/source",
+            },
+            "checkpoint": {
+                "ref": "artifact://checkpoint/source",
+                "boundary": "before_execution",
+                "kind": "worktree_archive",
+                "digest": checkpoint_digest,
+                "validationRef": "artifact://checkpoint-validation",
+                "sourceWorkspaceRef": "workspace://source",
+            },
+            "continuation": {"phase": "rerun_failed_step"},
+            "capabilitySnapshot": capability,
+            "preservedStepRefs": [],
+            "sideEffectDispositionRef": "artifact://side-effects",
+            "sideEffectSafe": True,
+            "destination": {
+                "workflowId": destination_workflow_id,
+                "creationKey": deterministic_recovery_creation_key(
+                    source_workflow_id,
+                    source_run_id,
+                    "failed_step",
+                    checkpoint_digest,
+                    "rerun_failed_step",
+                ),
+                "runtimeId": "omnigent",
+                "executionProfileRef": "provider-profile:primary",
+                "workspaceReservationId": "workspace-reservation:destination",
+            },
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_typed_recovery_creates_one_pinned_destination_and_frozen_lineage(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        source = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="typed recovery source",
+            input_artifact_ref="artifact://snapshot/source",
+            plan_artifact_ref="artifact://plan/source",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "repository": {
+                    "provider": "git",
+                    "connectionRef": "repository-connection:git-default",
+                    "repository": {"name": "MoonLadderStudios/MoonMind"},
+                    "branch": {"name": "feature/mm-1219"},
+                },
+                "agentRunId": "source-agent-run",
+                "workflow": {"title": "source", "instructions": "Original"},
+            },
+            idempotency_key=None,
+        )
+        canonical_source = await session.get(
+            TemporalExecutionCanonicalRecord, source.workflow_id
+        )
+        assert canonical_source is not None
+        canonical_source.state = MoonMindWorkflowState.FAILED
+        canonical_source.close_status = TemporalExecutionCloseStatus.FAILED
+        canonical_source.artifact_refs = list(canonical_source.artifact_refs or []) + [
+            "artifact://checkpoint/source",
+            "artifact://checkpoint-validation",
+        ]
+        await session.commit()
+        target = _typed_failed_step_recovery_target(
+            source_workflow_id=canonical_source.workflow_id,
+            source_run_id=canonical_source.run_id,
+            destination_workflow_id="mm:typed-recovery-destination",
+        )
+
+        first = await service.create_typed_recovery_execution(
+            canonical_source, recovery_target=target
+        )
+        second = await service.create_typed_recovery_execution(
+            canonical_source, recovery_target=target
+        )
+
+        assert first["execution"] == second["execution"]
+        assert first["execution"]["workflowId"] == "mm:typed-recovery-destination"
+        destination = await service.describe_execution(
+            first["execution"]["workflowId"]
+        )
+        assert destination.parameters["recoveryTarget"] == target.model_dump(
+            by_alias=True, mode="json"
+        )
+        assert destination.parameters["recoveryLineage"]["source"] == {
+            "workflowId": canonical_source.workflow_id,
+            "runId": canonical_source.run_id,
+            "planRef": "artifact://plan/source",
+            "planDigest": "sha256:plan",
+            "taskInputSnapshotRef": "artifact://snapshot/source",
+        }
+        assert destination.parameters["recoveryLineage"]["destinationRunId"] == (
+            destination.run_id
+        )
+        assert destination.parameters["recoverySource"]["recoveryCheckpointRef"] == (
+            "artifact://checkpoint/source"
+        )
+        assert destination.search_attributes["mm_repo"] == (
+            "MoonLadderStudios/MoonMind"
+        )
+        assert isinstance(destination.parameters["repository"], dict)
+        assert "agentRunId" not in destination.parameters
+        refreshed_source = await session.get(
+            TemporalExecutionCanonicalRecord, source.workflow_id
+        )
+        assert refreshed_source is not None
+        assert refreshed_source.state is MoonMindWorkflowState.FAILED
+        assert "recoveryTarget" not in refreshed_source.parameters
+
+
 @pytest.mark.asyncio
 async def test_failed_step_recovery_creates_linked_execution_with_source_identity(
     tmp_path, mock_client_adapter
@@ -3636,6 +4623,12 @@ async def test_failed_step_recovery_creates_linked_execution_with_source_identit
             manifest_artifact_ref=None,
             failure_policy=None,
             initial_parameters={
+                "repository": {
+                    "provider": "git",
+                    "connectionRef": "repository-connection:git-default",
+                    "repository": {"name": "MoonLadderStudios/MoonMind"},
+                    "branch": {"name": "feature/mm-1219"},
+                },
                 "agentRunId": "old-agent-run",
                 "workflow": {"title": "recovery source", "instructions": "Original"},
             },
@@ -3668,6 +4661,8 @@ async def test_failed_step_recovery_creates_linked_execution_with_source_identit
 
         resumed = await service.describe_execution(result["execution"]["workflowId"])
         assert result["applied"] == "created_resumed_execution"
+        assert resumed.search_attributes["mm_repo"] == "MoonLadderStudios/MoonMind"
+        assert isinstance(resumed.parameters["repository"], dict)
         assert result["source"] == {
             "workflowId": created.workflow_id,
             "runId": created.run_id,
@@ -5295,12 +6290,10 @@ async def test_cancel_execution_records_reject_audit_action(
         )
         assert canceled.closed_at is not None
         assert canceled.search_attributes["mm_state"] == "canceled"
-        mock_client_adapter.update_workflow.assert_called_once_with(
-            created.workflow_id,
-            "Cancel",
-            "Rejected by operator.",
+        mock_client_adapter.update_workflow.assert_not_called()
+        mock_client_adapter.cancel_workflow.assert_awaited_once_with(
+            created.workflow_id
         )
-        mock_client_adapter.cancel_workflow.assert_not_called()
 
 @pytest.mark.asyncio
 async def test_cancel_execution_accepts_projection_only_child_workflow(
@@ -5365,12 +6358,8 @@ async def test_cancel_execution_accepts_projection_only_child_workflow(
         assert canceled.memo["summary"] == "stop child"
         assert canceled.memo["intervention_audit"][-1]["action"] == "cancel"
         assert canceled.search_attributes["mm_state"] == "canceled"
-        mock_client_adapter.update_workflow.assert_called_once_with(
-            workflow_id,
-            "Cancel",
-            "stop child",
-        )
-        mock_client_adapter.cancel_workflow.assert_not_called()
+        mock_client_adapter.update_workflow.assert_not_called()
+        mock_client_adapter.cancel_workflow.assert_awaited_once_with(workflow_id)
 
 @pytest.mark.asyncio
 async def test_cancel_execution_rejects_orphaned_projection_only_workflow(
@@ -5471,15 +6460,153 @@ async def test_cancel_execution_best_effort_terminates_workflow_scoped_codex_ses
 
         mock_client_adapter.assert_has_calls(
             [
+                call.cancel_workflow(created.workflow_id),
                 call.update_workflow(
                     f"{created.workflow_id}:session:codex_cli",
                     "TerminateSession",
                     {"reason": "stop"},
                 ),
-                call.update_workflow(created.workflow_id, "Cancel", "stop"),
             ],
             any_order=False,
         )
+
+
+@pytest.mark.asyncio
+async def test_cancel_execution_dispatches_temporal_cancel_before_session_cleanup_finishes(
+    tmp_path, mock_client_adapter, monkeypatch
+):
+    async with temporal_db(tmp_path) as session:
+        monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path / "agent_jobs"))
+        monkeypatch.setattr(
+            "moonmind.workflows.temporal.service._BEST_EFFORT_SESSION_TERMINATION_TIMEOUT_SECONDS",
+            0.01,
+        )
+        service = TemporalExecutionService(session)
+        service._client_adapter = mock_client_adapter
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref="artifact://plan/1",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters=_valid_user_workflow_parameters(),
+            idempotency_key=None,
+        )
+
+        store = ManagedSessionStore(_get_managed_session_store_root())
+        store.save(
+            CodexManagedSessionRecord(
+                sessionId=f"sess:{created.workflow_id}:codex_cli",
+                sessionEpoch=1,
+                agentRunId=created.workflow_id,
+                containerId="container-1",
+                threadId="thread-1",
+                runtimeId="codex_cli",
+                imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+                controlUrl="docker-exec://container-1",
+                status="ready",
+                workspacePath=f"/work/agent_jobs/{created.workflow_id}/repo",
+                sessionWorkspacePath=f"/work/agent_jobs/{created.workflow_id}/session",
+                artifactSpoolPath=f"/work/agent_jobs/{created.workflow_id}/artifacts",
+                startedAt=datetime.now(tz=UTC),
+            )
+        )
+
+        cleanup_started = asyncio.Event()
+        cancel_dispatched = asyncio.Event()
+
+        async def _blocking_session_cleanup(*_args, **_kwargs):
+            cleanup_started.set()
+            await asyncio.Event().wait()
+
+        async def _record_temporal_cancel(*_args, **_kwargs):
+            cancel_dispatched.set()
+
+        mock_client_adapter.update_workflow.side_effect = _blocking_session_cleanup
+        mock_client_adapter.cancel_workflow.side_effect = _record_temporal_cancel
+
+        canceled = await asyncio.wait_for(
+            service.cancel_execution(
+                workflow_id=created.workflow_id, reason="stop", graceful=True
+            ),
+            timeout=0.2,
+        )
+
+        assert cancel_dispatched.is_set()
+        assert cleanup_started.is_set()
+        assert canceled.state is MoonMindWorkflowState.CANCELED
+
+
+@pytest.mark.asyncio
+async def test_cancel_execution_terminal_retry_retries_managed_session_cleanup(
+    tmp_path, mock_client_adapter, monkeypatch
+):
+    async with temporal_db(tmp_path) as session:
+        monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path / "agent_jobs"))
+        service = TemporalExecutionService(session)
+        service._client_adapter = mock_client_adapter
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref="artifact://plan/1",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters=_valid_user_workflow_parameters(),
+            idempotency_key=None,
+        )
+
+        store = ManagedSessionStore(_get_managed_session_store_root())
+        store.save(
+            CodexManagedSessionRecord(
+                sessionId=f"sess:{created.workflow_id}:codex_cli",
+                sessionEpoch=1,
+                agentRunId=created.workflow_id,
+                containerId="container-1",
+                threadId="thread-1",
+                runtimeId="codex_cli",
+                imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+                controlUrl="docker-exec://container-1",
+                status="ready",
+                workspacePath=f"/work/agent_jobs/{created.workflow_id}/repo",
+                sessionWorkspacePath=f"/work/agent_jobs/{created.workflow_id}/session",
+                artifactSpoolPath=f"/work/agent_jobs/{created.workflow_id}/artifacts",
+                startedAt=datetime.now(tz=UTC),
+            )
+        )
+        service._fan_out_dependency_resolution = AsyncMock(
+            side_effect=RuntimeError("dependency fan-out interrupted")
+        )
+
+        with pytest.raises(RuntimeError, match="dependency fan-out interrupted"):
+            await service.cancel_execution(
+                workflow_id=created.workflow_id,
+                reason="stop",
+                graceful=True,
+            )
+
+        service._fan_out_dependency_resolution = AsyncMock()
+        retried = await service.cancel_execution(
+            workflow_id=created.workflow_id,
+            reason="stop",
+            graceful=True,
+        )
+
+        assert retried.state is MoonMindWorkflowState.CANCELED
+        mock_client_adapter.cancel_workflow.assert_awaited_once_with(
+            created.workflow_id
+        )
+        mock_client_adapter.update_workflow.assert_awaited_once_with(
+            f"{created.workflow_id}:session:codex_cli",
+            "TerminateSession",
+            {"reason": "stop"},
+        )
+
 
 @pytest.mark.asyncio
 async def test_cancel_execution_prefers_direct_session_record_load_for_codex_task_session(
@@ -5536,12 +6663,12 @@ async def test_cancel_execution_prefers_direct_session_record_load_for_codex_tas
 
         mock_client_adapter.assert_has_calls(
             [
+                call.cancel_workflow(created.workflow_id),
                 call.update_workflow(
                     f"{created.workflow_id}:session:codex_cli",
                     "TerminateSession",
                     {"reason": "stop"},
                 ),
-                call.update_workflow(created.workflow_id, "Cancel", "stop"),
             ],
             any_order=False,
         )
@@ -5598,16 +6725,18 @@ async def test_cancel_execution_ignores_best_effort_session_terminate_failure(
 
         mock_client_adapter.assert_has_calls(
             [
+                call.cancel_workflow(created.workflow_id),
                 call.update_workflow(
                     f"{created.workflow_id}:session:codex_cli",
                     "TerminateSession",
                     {"reason": "stop"},
                 ),
-                call.update_workflow(created.workflow_id, "Cancel", "stop"),
             ],
             any_order=False,
         )
-        mock_client_adapter.cancel_workflow.assert_not_called()
+        mock_client_adapter.cancel_workflow.assert_awaited_once_with(
+            created.workflow_id
+        )
 
 @pytest.mark.asyncio
 async def test_forced_cancel_marks_failed_with_terminated_close_status(
@@ -6438,6 +7567,76 @@ async def test_ghost_projection_rows_without_canonical_source_are_hidden(tmp_pat
 
         with pytest.raises(TemporalExecutionNotFoundError):
             await service.describe_execution(ghost.workflow_id)
+
+
+@pytest.mark.asyncio
+async def test_describe_execution_accepts_scheduled_temporal_projection(
+    tmp_path,
+    mock_client_adapter,
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = str(uuid4())
+        created_at = datetime.now(UTC)
+        workflow_id = "mm:scheduled-parent-2026-07-14T06:59:11Z"
+        runtime_parameters = {
+            "targetRuntime": "codex_cli",
+            "model": "gpt-5.3-codex-spark",
+            "effort": "xhigh",
+            "profileId": "codex_openai_oauth",
+            "workflow": {
+                "runtime": {
+                    "mode": "codex_cli",
+                    "model": "gpt-5.3-codex-spark",
+                    "effort": "xhigh",
+                    "executionProfileRef": "codex_openai_oauth",
+                }
+            },
+        }
+        description = Mock(spec=WorkflowExecutionDescription)
+        description.id = workflow_id
+        description.run_id = str(uuid4())
+        description.namespace = "default"
+        description.workflow_type = "MoonMind.UserWorkflow"
+        description.status = WorkflowExecutionStatus.RUNNING
+        description.start_time = created_at
+        description.execution_time = created_at
+        description.close_time = None
+        description.search_attributes = {
+            "mm_owner_type": "user",
+            "mm_owner_id": owner_id,
+            "mm_state": "executing",
+            "mm_target_runtime": ["codex_cli"],
+        }
+
+        async def _memo() -> dict[str, object]:
+            return {
+                "title": "Scheduled parent",
+                "targetRuntime": "codex_cli",
+                "parameters": runtime_parameters,
+            }
+
+        description.memo = _memo
+        mock_client_adapter.describe_workflow.return_value = description
+        service = TemporalExecutionService(
+            session,
+            client_adapter=mock_client_adapter,
+        )
+
+        described = await service.describe_execution(workflow_id)
+
+        assert described.workflow_id == workflow_id
+        assert described.owner_id == owner_id
+        assert described.memo["targetRuntime"] == "codex_cli"
+        assert described.parameters == runtime_parameters
+        assert (
+            described.source_mode
+            == TemporalExecutionProjectionSourceMode.TEMPORAL_AUTHORITATIVE
+        )
+        assert (
+            await session.get(TemporalExecutionCanonicalRecord, workflow_id)
+            is None
+        )
+
 
 @pytest.mark.asyncio
 async def test_mark_execution_succeeded_rejects_terminal_execution(

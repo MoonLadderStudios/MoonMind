@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from moonmind.workflows.temporal.bounded_story_loop import (
     BoundedStoryLoopInput,
+    CandidateWorkspaceHead,
     CompiledBoundedStoryLoop,
     LoopAttempt,
     LoopBudget,
@@ -13,13 +14,21 @@ from moonmind.workflows.temporal.bounded_story_loop import (
     PreflightDecision,
     PublicationAction,
     PublicationDecision,
+    PublicationFeasibility,
     ProviderLeaseDecision,
+    RemainingWorkArtifact,
     TypedGateResult,
+    VerificationWorkspaceSnapshot,
+    RemediationLoopState,
+    advance_remediation_loop_state,
+    advance_candidate_workspace_head,
+    build_remediation_progress_vector,
     compile_bounded_story_loop,
     evaluate_attempt_continuation,
     evaluate_attempt_preflight,
     evaluate_provider_lease,
     evaluate_publication_decision,
+    validate_verification_workspace_integrity,
 )
 
 
@@ -46,6 +55,64 @@ def _gate(**overrides: object) -> TypedGateResult:
     return TypedGateResult.model_validate(payload)
 
 
+def test_loop_state_is_monotonic_and_linked_grants_add_capacity() -> None:
+    policy = _budget(
+        maxAttempts=6,
+        maxEvidenceRetries=2,
+        consumed={"attempts": 4, "evidenceRetries": 2},
+    )
+    prior = RemediationLoopState(
+        policy=policy,
+        consumed={"attempts": 4, "evidenceRetries": 2},
+        priorExhaustionReason="evidence_retry_budget_exhausted",
+    )
+
+    continued = advance_remediation_loop_state(
+        prior=prior,
+        policy=policy.model_copy(update={"consumed": {"attempts": 1}}),
+        progress_vector=None,
+        consumed={"attempts": 1},
+        grant={"attempts": 2, "evidenceRetries": 1},
+    )
+
+    assert continued.schema_version == "remediation-loop-state/v1"
+    assert continued.consumed == {"attempts": 4, "evidenceRetries": 2}
+    assert continued.policy.max_attempts == 8
+    assert continued.policy.max_evidence_retries == 3
+    assert continued.prior_exhaustion_reason == "evidence_retry_budget_exhausted"
+
+
+@pytest.mark.parametrize(
+    ("counter", "limit", "reason"),
+    [
+        ("evidenceRetries", "maxEvidenceRetries", "evidence_retry_budget_exhausted"),
+        (
+            "infrastructureRetries",
+            "maxInfrastructureRetries",
+            "infrastructure_retry_budget_exhausted",
+        ),
+        (
+            "contractRepairAttempts",
+            "maxContractRepairAttempts",
+            "contract_repair_budget_exhausted",
+        ),
+    ],
+)
+def test_non_semantic_retry_budgets_have_exact_stop_reasons(
+    counter: str, limit: str, reason: str
+) -> None:
+    decision = evaluate_attempt_continuation(
+        attempt=_attempt(),
+        gate=_gate(),
+        budget=_budget(**{limit: 1, "consumed": {counter: 1}}),
+        checkpoint_available=True,
+        policy_allowed=True,
+    )
+
+    assert decision.continue_loop is False
+    assert decision.reason == reason
+
+
 def _attempt(**overrides: object) -> LoopAttempt:
     payload = {
         "attemptOrdinal": 1,
@@ -59,6 +126,157 @@ def _attempt(**overrides: object) -> LoopAttempt:
     }
     payload.update(overrides)
     return LoopAttempt.model_validate(payload)
+
+
+def test_progress_vector_ignores_refs_prose_and_runtime_identity() -> None:
+    issue = {
+        "requirementId": "AC-1",
+        "scope": "api/controller.py",
+        "status": "unresolved",
+        "severity": "high",
+        "summary": "first wording",
+        "artifactRef": "artifact://report/one",
+        "runId": "run-one",
+    }
+    first = build_remediation_progress_vector(
+        loop_id="loop-1", attempt_ordinal=1, issues=[issue]
+    )
+    second = build_remediation_progress_vector(
+        loop_id="loop-1",
+        attempt_ordinal=2,
+        issues=[
+            {
+                **issue,
+                "summary": "completely rewritten",
+                "artifactRef": "artifact://report/two",
+                "runId": "run-two",
+            }
+        ],
+        prior=first,
+    )
+
+    assert first.unresolved_gap_digest == second.unresolved_gap_digest
+    assert second.classification == "no_progress"
+
+
+def test_progress_vector_detects_gap_check_and_evidence_progress() -> None:
+    baseline = build_remediation_progress_vector(
+        loop_id="loop-1",
+        attempt_ordinal=1,
+        issues=[
+            {"requirementId": "AC-1", "status": "unresolved", "severity": "high"},
+            {"requirementId": "AC-2", "status": "unresolved", "severity": "medium"},
+        ],
+        checks=[{"checkId": "unit", "status": "failed", "failureClass": "assertion"}],
+    )
+    progressed = build_remediation_progress_vector(
+        loop_id="loop-1",
+        attempt_ordinal=2,
+        issues=[
+            {"requirementId": "AC-1", "status": "resolved", "severity": "high"},
+            {"requirementId": "AC-2", "status": "unresolved", "severity": "medium"},
+        ],
+        checks=[{"checkId": "unit", "status": "passed"}],
+        prior=baseline,
+    )
+
+    assert progressed.classification == "meaningful_progress"
+    assert progressed.unresolved_gap_score < baseline.unresolved_gap_score
+    assert progressed.required_checks == {"passed": 1, "failed": 0, "not_run": 0}
+
+
+def test_relevant_diff_only_counts_when_it_addresses_a_named_gap() -> None:
+    issue = {"requirementId": "AC-1", "status": "unresolved", "severity": "high"}
+    baseline = build_remediation_progress_vector(
+        loop_id="loop-1",
+        attempt_ordinal=1,
+        issues=[issue],
+        relevant_diff_digest="sha256:old",
+    )
+    unrelated = build_remediation_progress_vector(
+        loop_id="loop-1",
+        attempt_ordinal=2,
+        issues=[issue],
+        prior=baseline,
+        relevant_diff_digest="sha256:new",
+        addressed_gap_ids=["AC-OTHER"],
+    )
+    relevant = build_remediation_progress_vector(
+        loop_id="loop-1",
+        attempt_ordinal=2,
+        issues=[issue],
+        prior=baseline,
+        relevant_diff_digest="sha256:new",
+        addressed_gap_ids=["ac-1"],
+    )
+
+    assert unrelated.classification == "no_progress"
+    assert relevant.classification == "meaningful_progress"
+
+
+def test_third_attempt_requires_meaningful_progress() -> None:
+    progress = build_remediation_progress_vector(
+        loop_id="loop-1",
+        attempt_ordinal=3,
+        issues=[{"requirementId": "AC-1", "status": "unresolved"}],
+    ).model_copy(update={"classification": "no_progress"})
+
+    decision = evaluate_attempt_continuation(
+        attempt=_attempt(attemptOrdinal=3, kind="remediation"),
+        gate=_gate(progressVector=progress),
+        budget=_budget(maxAttempts=6),
+        checkpoint_available=True,
+        policy_allowed=True,
+    )
+
+    assert decision.continue_loop is False
+    assert decision.reason == "required_progress_not_met"
+
+
+def test_semantic_third_attempt_requires_progress_for_plan_routed_gate() -> None:
+    progress = build_remediation_progress_vector(
+        loop_id="loop-1",
+        attempt_ordinal=3,
+        issues=[{"requirementId": "AC-1", "status": "unresolved"}],
+    ).model_copy(update={"classification": "no_progress"})
+
+    decision = evaluate_attempt_continuation(
+        attempt=_attempt(attemptOrdinal=1, kind="remediation"),
+        gate=_gate(progressVector=progress),
+        budget=_budget(maxAttempts=6),
+        checkpoint_available=True,
+        policy_allowed=True,
+    )
+
+    assert decision.continue_loop is False
+    assert decision.reason == "required_progress_not_met"
+
+
+def test_progress_vector_records_regressions_separately() -> None:
+    baseline = build_remediation_progress_vector(
+        loop_id="loop-1",
+        attempt_ordinal=1,
+        issues=[{"requirementId": "AC-1", "status": "unresolved"}],
+        checks=[{"checkId": "unit", "status": "passed"}],
+    )
+    regressed = build_remediation_progress_vector(
+        loop_id="loop-1",
+        attempt_ordinal=2,
+        issues=[
+            {"requirementId": "AC-1", "status": "unresolved"},
+            {"requirementId": "AC-2", "status": "unresolved"},
+        ],
+        checks=[{"checkId": "unit", "status": "failed"}],
+        prior=baseline,
+        candidate_disposition="contaminated",
+    )
+
+    assert regressed.classification == "regression"
+    assert set(regressed.regressions) == {
+        "new_gap_introduced",
+        "required_check_regressed",
+        "contaminated",
+    }
 
 
 def test_selected_item_validation_and_compilation_are_single_item_only() -> None:
@@ -129,20 +347,271 @@ def test_stop_state_enum_malformed_gate_and_continuation_decisions() -> None:
     assert decision.continue_loop is False
 
 
-def test_additional_work_needed_can_continue_without_remaining_work_ref() -> None:
+def test_additional_work_needed_requires_durable_remaining_work_ref() -> None:
+    with pytest.raises(
+        ValidationError,
+        match="ADDITIONAL_WORK_NEEDED requires remainingWorkRef durable evidence",
+    ):
+        _gate(remainingWorkRef=None)
+
+
+def test_remaining_work_v1_is_bounded_and_redacted() -> None:
+    artifact = RemainingWorkArtifact.model_validate(
+        {
+            "sourceGateResultRef": "artifact://gate/final",
+            "sourceVerificationRef": "artifact://verification/final",
+            "workspaceHeadRef": "artifact://workspace/final",
+            "gaps": ["implement result projection", "token=secret"],
+            "generatedAt": "2026-07-23T00:00:00Z",
+        }
+    )
+
+    assert artifact.schema_version == "remaining-work/v1"
+    assert artifact.gaps == (
+        "implement result projection",
+        "token=[REDACTED]",
+    )
+
+
+@pytest.mark.parametrize(
+    ("reason", "feasible"),
+    [
+        ("commits_ahead_of_base", True),
+        ("safe_candidate_diff", True),
+        ("verified_remote_head", True),
+        ("no_candidate_change", False),
+        ("publication_unauthorized", False),
+        ("candidate_contaminated", False),
+        ("publication_state_ambiguous", False),
+    ],
+)
+def test_publication_feasibility_has_stable_complete_reason_set(
+    reason: str, feasible: bool
+) -> None:
+    decision = PublicationFeasibility.model_validate(
+        {"feasible": feasible, "reason": reason}
+    )
+    assert decision.reason == reason
+
+
+def test_legacy_additional_work_uses_gate_result_as_remaining_work() -> None:
+    gate = TypedGateResult.from_boundary_payload(
+        {
+            "verdict": "ADDITIONAL_WORK_NEEDED",
+            "gateResultRef": "artifact://gate/legacy",
+        }
+    )
+
+    assert gate.remaining_work_ref == "artifact://gate/legacy"
+    assert gate.degraded is False
+
+
+def test_legacy_additional_work_without_evidence_degrades_deterministically() -> None:
+    gate = TypedGateResult.from_boundary_payload(
+        {"verdict": "ADDITIONAL_WORK_NEEDED"}
+    )
+
+    assert gate.verdict == "NO_DETERMINATION"
+    assert gate.terminal_disposition == "blocked"
+    assert gate.degraded is True
+
+
+def test_candidate_workspace_head_advances_from_latest_durable_checkpoint() -> None:
+    root = advance_candidate_workspace_head(
+        previous=None,
+        loop_id="mm:loop-1",
+        attempt_ordinal=0,
+        checkpoint_ref="artifact://checkpoint/root",
+        checkpoint_digest="sha256:" + "1" * 64,
+    )
+    advanced = advance_candidate_workspace_head(
+        previous=root,
+        loop_id="mm:loop-1",
+        attempt_ordinal=1,
+        checkpoint_ref="artifact://checkpoint/attempt-1",
+        checkpoint_digest="sha256:" + "2" * 64,
+    )
+
+    assert root.parent_head_digest is None
+    assert advanced.parent_head_digest == root.head_digest
+    assert advanced.head_digest != root.head_digest
+    assert CandidateWorkspaceHead.model_validate(
+        advanced.model_dump(by_alias=True)
+    ) == advanced
+
+
+def test_candidate_workspace_head_rejects_fallback_fork_and_tampering() -> None:
+    root = advance_candidate_workspace_head(
+        previous=None,
+        loop_id="mm:loop-1",
+        attempt_ordinal=0,
+        checkpoint_ref="artifact://checkpoint/root",
+        checkpoint_digest="sha256:" + "1" * 64,
+    )
+
+    with pytest.raises(ValueError, match="only the loop root"):
+        advance_candidate_workspace_head(
+            previous=None,
+            loop_id="mm:loop-1",
+            attempt_ordinal=2,
+            checkpoint_ref="artifact://checkpoint/original-root",
+            checkpoint_digest="sha256:" + "1" * 64,
+        )
+    with pytest.raises(ValueError, match="advance exactly once"):
+        advance_candidate_workspace_head(
+            previous=root,
+            loop_id="mm:loop-1",
+            attempt_ordinal=2,
+            checkpoint_ref="artifact://checkpoint/fork",
+            checkpoint_digest="sha256:" + "2" * 64,
+        )
+
+    tampered = root.model_dump(by_alias=True)
+    tampered["checkpointRef"] = "artifact://checkpoint/substituted"
+    with pytest.raises(ValidationError, match="digest does not match"):
+        CandidateWorkspaceHead.model_validate(tampered)
+
+
+def test_verification_workspace_integrity_preserves_read_only_candidate() -> None:
+    candidate = advance_candidate_workspace_head(
+        previous=None,
+        loop_id="mm:loop-1",
+        attempt_ordinal=0,
+        checkpoint_ref="artifact://checkpoint/root",
+        checkpoint_digest="sha256:" + "1" * 64,
+    )
+    snapshot = VerificationWorkspaceSnapshot.model_validate(
+        {
+            "candidateHeadDigest": candidate.head_digest,
+            "checkpointDigest": candidate.checkpoint_digest,
+            "workspaceDigest": "sha256:" + "2" * 64,
+            "projectionRef": "artifact://verification-projection/loop-1",
+            "accessMode": "read_only",
+        }
+    )
+
+    validate_verification_workspace_integrity(
+        candidate=candidate,
+        before=snapshot,
+        after=snapshot.model_copy(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("changed_field", "changed_value", "error"),
+    [
+        ("workspace_digest", "sha256:" + "3" * 64, "contaminated"),
+        ("projection_ref", "artifact://verification-projection/replaced", "replaced"),
+        ("candidate_head_digest", "sha256:" + "4" * 64, "candidate head"),
+        ("checkpoint_digest", "sha256:" + "5" * 64, "candidate checkpoint"),
+    ],
+)
+def test_verification_workspace_integrity_fails_closed_on_mutation_or_substitution(
+    changed_field: str, changed_value: str, error: str
+) -> None:
+    candidate = advance_candidate_workspace_head(
+        previous=None,
+        loop_id="mm:loop-1",
+        attempt_ordinal=0,
+        checkpoint_ref="artifact://checkpoint/root",
+        checkpoint_digest="sha256:" + "1" * 64,
+    )
+    before = VerificationWorkspaceSnapshot(
+        candidateHeadDigest=candidate.head_digest,
+        checkpointDigest=candidate.checkpoint_digest,
+        workspaceDigest="sha256:" + "2" * 64,
+        projectionRef="artifact://verification-projection/loop-1",
+    )
+    after = before.model_copy(update={changed_field: changed_value})
+
+    with pytest.raises(ValueError, match=error):
+        validate_verification_workspace_integrity(
+            candidate=candidate,
+            before=before,
+            after=after,
+        )
+
+
+def test_verification_workspace_snapshot_rejects_writable_projection() -> None:
+    with pytest.raises(ValidationError):
+        VerificationWorkspaceSnapshot.model_validate(
+            {
+                "candidateHeadDigest": "sha256:" + "1" * 64,
+                "checkpointDigest": "sha256:" + "2" * 64,
+                "workspaceDigest": "sha256:" + "3" * 64,
+                "projectionRef": "artifact://verification-projection/loop-1",
+                "accessMode": "read_write",
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    ("budget_overrides", "consumed", "reason"),
+    [
+        ({"maxAttempts": 2}, {"attempts": 2}, "max_attempts_exhausted"),
+        (
+            {"maxConsecutiveNoProgressAttempts": 2},
+            {"consecutive_no_progress_attempts": 2},
+            "semantic_no_progress_exhausted",
+        ),
+        (
+            {"maxRepeatedFailedCommands": 2},
+            {"repeated_failed_commands": 2},
+            "repeated_failure_signature_exhausted",
+        ),
+        (
+            {"maxUnsafeOrPolicyDeniedAttempts": 1},
+            {"unsafe_or_policy_denied_attempts": 1},
+            "unsafe_or_policy_denied",
+        ),
+        (
+            {"maxElapsedSeconds": 300},
+            {"elapsed_seconds": 300},
+            "wall_clock_budget_exhausted",
+        ),
+        ({"providerBudget": 2}, {"provider_budget": 2}, "provider_budget_exhausted"),
+        ({"tokenBudget": 20}, {"token_budget": 20}, "token_budget_exhausted"),
+        ({"costBudget": 3}, {"cost_budget": 3}, "cost_budget_exhausted"),
+    ],
+)
+def test_each_independent_loop_budget_fails_closed_at_its_limit(
+    budget_overrides: dict[str, int],
+    consumed: dict[str, int],
+    reason: str,
+) -> None:
     decision = evaluate_attempt_continuation(
         attempt=_attempt(),
-        gate=_gate(remainingWorkRef=None),
-        budget=_budget(consumed={"attempts": 0}),
+        gate=_gate(),
+        budget=_budget(**budget_overrides, consumed=consumed),
         checkpoint_available=True,
         policy_allowed=True,
     )
 
-    assert decision.state == "failed_with_remaining_work"
-    assert decision.reason == "verification_requested_remediation"
-    assert decision.remaining_work_ref is None
+    assert decision.continue_loop is False
+    assert decision.reason == reason
+    assert decision.remaining_work_ref == "artifact://remaining-work/attempt-1"
+
+
+def test_zero_optional_and_failure_budgets_do_not_stop_before_consumption() -> None:
+    decision = evaluate_attempt_continuation(
+        attempt=_attempt(),
+        gate=_gate(),
+        budget=_budget(
+            maxRepeatedFailedCommands=0,
+            maxUnsafeOrPolicyDeniedAttempts=0,
+            maxElapsedSeconds=None,
+            providerBudget=0,
+            tokenBudget=0,
+            costBudget=0,
+            consumed={},
+        ),
+        checkpoint_available=True,
+        policy_allowed=True,
+    )
+
     assert decision.continue_loop is True
-    assert decision.next_attempt_kind == "remediation"
+    assert decision.reason == "verification_requested_remediation"
+
 
 def test_checkpoint_candidate_remaining_work_refs_are_required_and_ref_only() -> None:
     failed = _attempt()
@@ -308,9 +777,9 @@ def test_publication_decision_requires_latest_accepted_step(action: PublicationA
     ("consumed", "expected_reason"),
     [
         ({"attempts": 3}, "max_attempts_exhausted"),
-        ({"consecutiveNoProgressAttempts": 2}, "no_progress_attempts_exhausted"),
-        ({"repeatedFailedCommands": 3}, "repeated_failed_commands_exhausted"),
-        ({"unsafeOrPolicyDeniedAttempts": 1}, "unsafe_policy_attempts_exhausted"),
+        ({"consecutiveNoProgressAttempts": 2}, "semantic_no_progress_exhausted"),
+        ({"repeatedFailedCommands": 3}, "repeated_failure_signature_exhausted"),
+        ({"unsafeOrPolicyDeniedAttempts": 1}, "unsafe_or_policy_denied"),
         ({"provider": 11}, "provider_budget_exhausted"),
         ({"tokens": 101}, "token_budget_exhausted"),
         ({"cost": 11}, "cost_budget_exhausted"),

@@ -1,0 +1,7 @@
+{
+  "invariant": "a rerun waits at the host admission gate until cancellation cleanup releases the selected Provider Profile's active host lease",
+  "busyCode": "OMNIGENT_OAUTH_HOST_PROFILE_BUSY",
+  "remediationAction": "wait_for_host_cleanup",
+  "rawDatabaseErrorEscapes": false,
+  "rerunAdmittedAfterCleanup": true
+}

@@ -86,6 +86,22 @@ _COMMENT_CALL_HINT = (
     '"arguments":{"issueKey":"<ISSUE_KEY>",'
     '"body":"<COMMENT_TEXT>"}}`.'
 )
+_BATCH_SEARCH_HINT = (
+    "- Resolve the batch cohort through `jira.search_issues`; do not request "
+    "an external Jira/Atlassian connector."
+)
+_BATCH_SEARCH_CALL_HINT = (
+    "- Example batch search call: "
+    '`{"tool":"jira.search_issues",'
+    '"arguments":{"jql":"project = <PROJECT_KEY> AND status = '
+    '\\\"<STATUS>\\\"","projectKey":"<PROJECT_KEY>","maxResults":25}}`.'
+)
+_BATCH_BLOCKED_HINT = (
+    "- Treat the task as blocked if trusted Jira search is unavailable; do not "
+    "wait for connector discovery or infer issue content."
+)
+
+_JIRA_TOOL_HINT_AGENT_SKILLS = frozenset({*JIRA_AGENT_SKILLS, "batch-workflows"})
 _BRANCH_VERIFY_BLOCKED_HINT = (
     "- Treat the task as blocked if trusted Jira tool calls are "
     "unavailable, the issue fetch is denied, or comment posting "
@@ -102,7 +118,7 @@ def append_selected_jira_tool_hint(
 
     params = parameters if isinstance(parameters, Mapping) else {}
     selected_skill = selected_agent_skill(params)
-    if selected_skill not in JIRA_AGENT_SKILLS:
+    if selected_skill not in _JIRA_TOOL_HINT_AGENT_SKILLS:
         return instructions
     if "MoonMind trusted Jira tools" in instructions:
         return instructions
@@ -111,7 +127,15 @@ def append_selected_jira_tool_hint(
         "- List available tools with `GET $MOONMIND_URL/mcp/tools`.",
         "- Invoke Jira tools with `POST $MOONMIND_URL/mcp/tools/call`.",
     ]
-    if selected_skill == "jira-issue-creator":
+    if selected_skill == "batch-workflows":
+        tool_lines.extend(
+            [
+                _BATCH_SEARCH_HINT,
+                _BATCH_SEARCH_CALL_HINT,
+                _BATCH_BLOCKED_HINT,
+            ]
+        )
+    elif selected_skill == "jira-issue-creator":
         story_breakdown_path = str(params.get("storyBreakdownPath") or "").strip()
         if story_breakdown_path:
             tool_lines.insert(

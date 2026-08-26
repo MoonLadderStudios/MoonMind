@@ -3075,6 +3075,8 @@ def test_list_session_resources_returns_authorized_redacted_artifact_projection(
     assert summary["metadata"] == {"label": "summary", "filename": "summary.json"}
     assert summary["content_url"].endswith("/art_summary/content")
     assert summary["download_url"].endswith("/art_summary/download")
+    assert summary["completeness_status"] == "complete"
+    assert summary["download_available"] is True
     assert "secret-token" not in json.dumps(body)
     assert "secret-password" not in json.dumps(body)
 
@@ -3398,7 +3400,7 @@ def test_get_agent_run_artifact_session_projection_forbids_cross_owner_access() 
         == "You do not have permission to access this agent run or its session projection."
     )
 
-def test_post_agent_run_artifact_session_control_routes_send_follow_up_and_returns_projection(
+def test_post_agent_run_artifact_session_control_routes_same_session_continuation_and_returns_projection(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
     test_client, artifact_service = client
@@ -3427,7 +3429,11 @@ def test_post_agent_run_artifact_session_control_routes_send_follow_up_and_retur
             response = test_client.post(
                 "/api/agent-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli/control",
                 json={
-                    "action": "send_follow_up",
+                    "schemaVersion": 1,
+                    "controlRequestId": "control-continue-1",
+                    "idempotencyKey": "control-continue-1",
+                    "expectedSessionEpoch": 2,
+                    "action": "continue_same_session",
                     "message": "Continue reusing the current session.",
                     "reason": "Operator clarification",
                 },
@@ -3439,11 +3445,12 @@ def test_post_agent_run_artifact_session_control_routes_send_follow_up_and_retur
         "SendFollowUp",
         {
             "message": "Continue reusing the current session.",
+            "requestId": "control-continue-1",
             "reason": "Operator clarification",
         },
     )
     body = response.json()
-    assert body["action"] == "send_follow_up"
+    assert body["action"] == "continue_same_session"
     assert body["projection"]["session_epoch"] == 2
     assert body["projection"]["latest_summary_ref"]["artifact_id"] == "art_summary"
     assert body["projection"]["latest_checkpoint_ref"]["artifact_id"] == "art_checkpoint"
@@ -3484,6 +3491,10 @@ def test_post_agent_run_artifact_session_control_routes_clear_session_and_return
             response = test_client.post(
                 "/api/agent-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli/control",
                 json={
+                    "schemaVersion": 1,
+                    "controlRequestId": "control-clear-1",
+                    "idempotencyKey": "control-clear-1",
+                    "expectedSessionEpoch": 3,
                     "action": "clear_session",
                     "reason": "Reset stale context",
                 },
@@ -3494,6 +3505,7 @@ def test_post_agent_run_artifact_session_control_routes_clear_session_and_return
         "wf-task-1:session:codex_cli",
         "ClearSession",
         {
+            "requestId": "control-clear-1",
             "reason": "Reset stale context",
         },
     )
@@ -3523,6 +3535,11 @@ def test_post_agent_run_artifact_session_control_routes_interrupt_turn(
             response = test_client.post(
                 "/api/agent-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli/control",
                 json={
+                    "schemaVersion": 1,
+                    "controlRequestId": "control-interrupt-1",
+                    "idempotencyKey": "control-interrupt-1",
+                    "expectedSessionEpoch": 2,
+                    "expectedTurnId": "turn-9",
                     "action": "interrupt_turn",
                     "reason": "Stop this turn",
                 },
@@ -3534,6 +3551,7 @@ def test_post_agent_run_artifact_session_control_routes_interrupt_turn(
         "InterruptTurn",
         {
             "sessionEpoch": 2,
+            "requestId": "control-interrupt-1",
             "reason": "Stop this turn",
         },
     )
@@ -3559,6 +3577,10 @@ def test_post_agent_run_artifact_session_control_routes_cancel_session(
             response = test_client.post(
                 "/api/agent-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli/control",
                 json={
+                    "schemaVersion": 1,
+                    "controlRequestId": "control-cancel-1",
+                    "idempotencyKey": "control-cancel-1",
+                    "expectedSessionEpoch": 2,
                     "action": "cancel_session",
                     "reason": "Operator cancel",
                 },
@@ -3569,6 +3591,7 @@ def test_post_agent_run_artifact_session_control_routes_cancel_session(
         "wf-task-1:session:codex_cli",
         "CancelSession",
         {
+            "requestId": "control-cancel-1",
             "reason": "Operator cancel",
         },
     )
@@ -3585,7 +3608,14 @@ def test_post_agent_run_artifact_session_control_rejects_false_capability(
         with patch("api_service.api.routers.agent_runs.get_temporal_client_adapter", return_value=client_adapter):
             response = test_client.post(
                 "/api/agent-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli/control",
-                json={"action": "interrupt_turn"},
+                json={
+                    "schemaVersion": 1,
+                    "controlRequestId": "control-unsupported-1",
+                    "idempotencyKey": "control-unsupported-1",
+                    "expectedSessionEpoch": 2,
+                    "expectedTurnId": "turn-missing",
+                    "action": "interrupt_turn",
+                },
             )
 
     assert response.status_code == 409
@@ -3600,7 +3630,11 @@ def test_post_agent_run_artifact_session_control_rejects_blank_follow_up_message
     response = test_client.post(
         "/api/agent-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli/control",
         json={
-            "action": "send_follow_up",
+            "schemaVersion": 1,
+            "controlRequestId": "control-blank-1",
+            "idempotencyKey": "control-blank-1",
+            "expectedSessionEpoch": 2,
+            "action": "continue_same_session",
             "message": "   ",
         },
     )

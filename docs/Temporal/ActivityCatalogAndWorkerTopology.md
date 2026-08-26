@@ -1,7 +1,7 @@
 # Activity Catalog and Worker Topology
 
 Status: Implemented in core runtime (catalog live; some target-state families still pending)
-Last updated: 2026-06-13
+Last updated: 2026-08-04
 Scope: Defines MoonMind’s canonical **Activity Types**, **worker fleets**, **Task Queue routing**, and the operational rules for executing artifacts, planning, skills, integrations, managed runtime supervision, and related Temporal-side support work.
 
 ## Related docs
@@ -31,6 +31,34 @@ This document standardizes:
 - the current implemented catalog and the target-state additions that are still pending
 
 This document covers the **Temporal-managed worker model** only.
+
+### Executable worker specification and readiness
+
+Every fleet is constructed from one immutable `WorkerSpec`. For the workflow
+fleet, the same class and activity tuples drive the Temporal SDK `Worker`,
+startup logs, `/readyz`, diagnostics, tests, and the registry fingerprint.
+Operator-facing workflow type lists are derived from those executable classes;
+an independent advertised string catalog is forbidden.
+
+`/healthz` proves only that the process event loop is responsive. `/readyz`
+remains unavailable until configuration and the executable specification are
+built, the Temporal client is connected, workers are constructed, and pollers
+have started. Its bounded response includes task queues, registered workflow and
+activity types, build/deployment identity, registry fingerprint, versioning
+state, and resolver-core identity. `MoonMind.PRResolver` may appear only when
+that exact workflow class was supplied to the SDK worker. Its registration is
+replay support for previously recorded histories, not an active host-selection
+surface for new `pr-resolver` runs.
+
+Worker topology construction validates the canonical catalog against the
+concrete runtime-handler inventory before any fleet starts polling. A handler
+without a catalog route, or a catalog route without its owning handler, is a
+startup/readiness failure rather than a runtime workflow-task failure. The
+capability-routed `mm.tool.execute` alias and the separately registered
+workflow-fleet helper are explicit ownership exceptions.
+
+The workflow fleet remains Temporal-only. It receives no repository mutation,
+GitHub credential, sandbox, local-git, or agent-runtime capabilities.
 
 ---
 
@@ -149,6 +177,7 @@ Temporal requires Task Queues so Workers can poll. MoonMind uses them strictly a
 - `mm.activity.sandbox`
 - `mm.activity.integrations`
 - `mm.activity.agent_runtime`
+- `mm.activity.agent_runtime.control`
 
 ## 4.2 Queue policy
 
@@ -161,7 +190,7 @@ Examples of deliberate non-decisions:
 - no queue-per-tool explosion
 - no queue-per-provider unless isolation or scaling truly demands it
 
-Rule of thumb: subdivide only when you need different secrets, different egress, different scaling behavior, or materially different isolation.
+Rule of thumb: subdivide only when you need different secrets, different egress, different scaling behavior, or materially different isolation. The agent-runtime control queue is a bounded exception within the same worker fleet: short authority handoffs such as terminal-evidence evaluation must remain schedulable while fan-out launches occupy the long-lived execution queue.
 
 ---
 
@@ -176,7 +205,7 @@ The activity catalog maps activity types onto the following fleets.
 | `llm` | `mm.activity.llm` | planning, validation, review, generic LLM work | model/provider credentials |
 | `sandbox` | `mm.activity.sandbox` | repo and command execution | isolated process execution |
 | `integrations` | `mm.activity.integrations` | external provider APIs and repo operations | provider tokens, egress to provider APIs |
-| `agent_runtime` | `mm.activity.agent_runtime` | managed runtime launch, supervision, status, result fetch, cancellation | isolated runtime execution, auth volume mounts |
+| `agent_runtime` | `mm.activity.agent_runtime`, `mm.activity.agent_runtime.control` | managed runtime launch and supervision; isolated terminal authority handoffs | isolated runtime execution, auth volume mounts |
 
 ## 5.1 Workflow fleet exception rule
 
@@ -358,6 +387,9 @@ Current implemented activities:
 Worker queue: `mm.activity.artifacts`
 
 These are support activities used by workflow and manager orchestration. They are not part of the end-user skill or agent contract surface.
+`provider_profile.reset_manager` remains registered only for replay compatibility
+and performs non-destructive ensure/recovery; it never terminates the lease
+authority workflow.
 
 ## 8.6 OAuth session activities (`oauth_session.*`)
 
@@ -444,11 +476,13 @@ Worker queue: `mm.activity.integrations`
 
 ## 8.9 Managed runtime activities (`agent_runtime.*`)
 
-Purpose: managed runtime launch, supervision support, result collection, artifact publication, and cancellation.
+Purpose: managed runtime launch, supervision support, owner-authorized workspace
+checkpoint capture, result collection, artifact publication, and cancellation.
 
 Current implemented activities:
 
 - `agent_runtime.launch`
+- `agent_runtime.capture_workspace_checkpoint`
 - `agent_runtime.launch_session`
 - `agent_runtime.prepare_turn_instructions`
 - `agent_runtime.publish_artifacts`
@@ -463,14 +497,22 @@ Current implemented activities:
 - `agent_runtime.reconcile_managed_sessions`
 - `agent_runtime.status`
 - `agent_runtime.fetch_result`
+- `agent_runtime.restore_workspace_checkpoint`
+- `agent_runtime.evaluate_terminal_evidence`
 - `agent_runtime.cancel`
 
-Worker queue: `mm.activity.agent_runtime`
+Worker queues: `mm.activity.agent_runtime` for long-lived execution and
+`mm.activity.agent_runtime.control` for terminal-evidence evaluation. Both are
+polled by the same agent-runtime service with independent bounded concurrency,
+so fan-out work cannot starve the terminal authority handoff and no additional
+always-on container is required.
 
 ### Contract expectations
 
 - `agent_runtime.status(...) -> AgentRunStatus`
+- `agent_runtime.capture_workspace_checkpoint(...) -> compact worktree archive and manifest refs`
 - `agent_runtime.fetch_result(...) -> AgentRunResult`
+- `agent_runtime.restore_workspace_checkpoint(...) -> ManagedWorkspaceRestoreResult`
 - `agent_runtime.cancel(...) -> AgentRunStatus`
 - `agent_runtime.launch_session(...) -> ManagedSessionHandle`
 - `agent_runtime.session_status(...) -> ManagedSessionHandle`
@@ -483,12 +525,24 @@ Worker queue: `mm.activity.agent_runtime`
 - `agent_runtime.fetch_session_summary(...) -> ManagedSessionSummary`
 - `agent_runtime.publish_session_artifacts(...) -> ManagedSessionArtifactsPublication`
 - `agent_runtime.reconcile_managed_sessions(...) -> reconciliation summary payload`
+- `agent_runtime.evaluate_terminal_evidence(...) -> AgentRunResult`
 
 `agent_runtime.publish_artifacts` should return a canonical-result-compatible enriched payload that can be materialized as `AgentRunResult`.
+
+Temporal workers also keep `agent_runtime.ensure_docker_sidecar` registered as a
+non-retryable rejection for durable pre-cutover histories. It is not a supported
+capability and cannot create a daemon, socket, graph volume, or container.
+
+`agent_runtime.capture_workspace_checkpoint` accepts only a typed managed-runtime
+locator, resolves it through the managed run store, and supports Codex CLI
+`worktree_archive` capture. Archive and manifest bodies remain in artifact
+storage. Capture support does not imply restore support or Resume eligibility.
 
 `agent_runtime.launch` is an internal launch/support activity rather than a public canonical runtime contract in the same sense as `status` and `fetch_result`.
 
 The session-oriented activities are remote-session contracts. They must delegate through a session controller or adapter boundary and must not fall back to the worker-local managed runtime launcher/process loop.
+
+`agent_runtime.restore_workspace_checkpoint` is the `codex_cli` cold-restore data plane. It runs only on `mm.activity.agent_runtime`, verifies checkpoint, archive, manifest, repository base, path containment, and restored entries before atomically activating a new managed workspace, and persists compact restoration evidence. A launch carrying a restoration requirement is rejected unless the destination is `ready` and its checkpoint and capability digest match.
 
 The session-oriented activity surface is intended to become runtime-neutral at the workflow boundary, but the live activity/controller path currently admits Codex CLI only. Runtime-specific protocol details remain behind the session adapter/controller boundary. The current container transport uses the Codex App Server-compatible remote-session protocol for the Codex binding. Claude Code must add a Claude-specific session adapter/controller before carrying `runtimeFamily = "claude_code"` or recording `runtimeId = "claude_code"` through this activity surface.
 
@@ -567,6 +621,8 @@ Representative capability classes include:
 - `sandbox.run_tests` routes to `mm.activity.sandbox`
 - `integration.jules.start` routes to `mm.activity.integrations`
 - `agent_runtime.fetch_result` routes to `mm.activity.agent_runtime`
+- `agent_runtime.restore_workspace_checkpoint` routes to `mm.activity.agent_runtime`
+- `agent_runtime.evaluate_terminal_evidence` routes to `mm.activity.agent_runtime.control`
 - `provider_profile.list` routes to `mm.activity.artifacts`
 - `integration.resolve_adapter_metadata` routes to `mm.workflow`
 

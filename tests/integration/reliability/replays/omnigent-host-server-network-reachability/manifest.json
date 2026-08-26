@@ -1,0 +1,8 @@
+{
+  "incidentWorkflowId": "mm:89e60946-953c-440a-bae7-cf6694e7f4cd",
+  "incidentRunId": "019fd35f-e1ed-73f2-afbd-8a4c497b942e",
+  "failedChildWorkflowId": "mm:89e60946-953c-440a-bae7-cf6694e7f4cd:agent:node-1",
+  "failedChildRunId": "019fd35f-f4f7-747e-b815-00c6f0dfd50e",
+  "failureShape": "the on-demand host was isolated on omnigent-egress-network while the Omnigent server was attached only to control-plane-network, so the host tunnel could not resolve omnigent",
+  "boundary": "isolated on-demand host network to trusted Omnigent server tunnel"
+}

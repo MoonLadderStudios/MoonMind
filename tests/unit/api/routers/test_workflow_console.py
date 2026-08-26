@@ -334,7 +334,9 @@ def test_dashboard_ui_info_endpoint_exposes_spa_boundary(client: TestClient) -> 
     assert payload["features"]["workflowLiveUpdates"] is True
     assert payload["features"]["remediationCollection"] is True
     assert isinstance(payload["features"]["omnigentAgents"], bool)
-    assert payload["features"]["omnigentPolicies"] is False
+    assert payload["features"]["omnigentPolicies"] is (
+        "settings.catalog.read" in payload["settingsPermissions"]
+    )
     assert payload["features"]["manifests"] is True
     assert payload["destinations"] == [
         destination.to_ui_info() for destination in DASHBOARD_DESTINATIONS
@@ -343,7 +345,18 @@ def test_dashboard_ui_info_endpoint_exposes_spa_boundary(client: TestClient) -> 
     skills_destination = next(
         item for item in payload["destinations"] if item["key"] == "skills"
     )
-    assert "displayMode" not in skills_destination
+    assert skills_destination["navigationGroup"] == "system"
+    assert skills_destination["displayMode"] == "skills-list"
+    recurring_destination = next(
+        item for item in payload["destinations"] if item["key"] == "recurring"
+    )
+    assert recurring_destination["navigationGroup"] == "system"
+    primary_keys = [
+        item["key"]
+        for item in payload["destinations"]
+        if item["navigationGroup"] == "primary"
+    ]
+    assert primary_keys == ["workflows", "create"]
     assert payload["endpoints"]["workflows"] == "/api/executions"
     assert (
         payload["endpoints"]["workflowUpdatesStream"] == "/api/workflows/updates/stream"
@@ -914,6 +927,51 @@ defaults:
     assert item["diagnostics"] == []
     assert item["hasInputSchema"] is True
     assert item["inputContractRef"] is None
+
+
+def test_skills_api_exposes_pr_resolver_selector_contract(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository_root = Path(__file__).resolve().parents[4]
+    monkeypatch.setattr(
+        "api_service.api.routers.workflow_console.settings.workflow.skills_local_mirror_root",
+        str(tmp_path / "local"),
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.workflow_console.settings.workflow.skills_legacy_mirror_root",
+        str(repository_root / ".agents" / "skills"),
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.workflow_console.list_available_skill_names",
+        lambda: ("pr-resolver",),
+    )
+
+    response = client.get("/api/workflows/skills")
+
+    assert response.status_code == 200
+    item = response.json()["legacyItems"][0]
+    assert item["id"] == "pr-resolver"
+    assert item["hasInputSchema"] is True
+    assert item["inputSchema"]["anyOf"] == [
+        {"required": ["pr"]},
+        {"required": ["branch"]},
+    ]
+    assert item["inputSchema"]["properties"]["pr"] == {
+        "type": "string",
+        "title": "Pull request",
+        "description": (
+            "PR number or PR URL. MoonMind requires either this value or a head "
+            "branch so the resolver cannot target the wrong PR."
+        ),
+    }
+    assert item["inputSchema"]["properties"]["branch"] == {
+        "type": "string",
+        "title": "Head branch",
+        "description": (
+            "PR head branch. MoonMind requires either this value or a PR number "
+            "or URL so the resolver cannot target the wrong PR."
+        ),
+    }
 
 
 def test_skills_api_large_schema_uses_input_contract_ref(

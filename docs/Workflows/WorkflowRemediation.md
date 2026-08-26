@@ -1,9 +1,25 @@
 # Workflow Remediation
 
+Omnigent remediation and approvals use the exact
+[immutable policy version](../Omnigent/PolicyAuthority.md).
+
+Release support for operator remediation through the normal product path is
+qualified by the versioned controlling artifact
+`moonmind.omnigent.remediation_matrix` (`operator-remediation-support-matrix/v1`);
+see [Operator remediation support matrix v1](../Omnigent/CodexSupportAndCutover.md#operator-remediation-support-matrix-v1).
+Autonomous mutating remediation stays fail-closed until every required row and
+operational gate passes. `admin_auto` is disabled in both remediation authoring
+surfaces and rejected by the ordinary Create service from the server-owned
+release status; a caller-supplied draft cannot bypass that boundary. Live
+qualification uses `tools/run_omnigent_live_conformance.py --mode remediation`,
+and combined release evidence is assembled with
+`tools/build_operator_remediation_release_evidence.py` from digest-bound,
+independently resolvable per-row observations.
+
 **Status:** Desired-state design
 **Document Class:** System / Feature Design View
 **Owners:** MoonMind Platform + dashboard
-**Last Updated:** 2026-07-03
+**Last Updated:** 2026-08-13
 **Related:** `docs/Workflows/WorkflowDependencies.md`, `docs/Workflows/CheckpointBranchSystem.md`, `docs/Api/ExecutionsApiContract.md`, `docs/Workflows/WorkflowRunsApi.md`, `docs/Workflows/WorkflowProposalSystem.md`, `docs/Observability/LiveLogs.md`, `docs/ManagedAgents/CodexCliManagedSessions.md`, `docs/ManagedAgents/SharedManagedAgentAbstractions.md`, `docs/Security/ProviderProfiles.md`, `docs/Security/SecretsSystem.md`, `docs/ManagedAgents/DockerOutOfDocker.md`, `docs/Artifacts/ArtifactPresentationContract.md`, `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Temporal/WorkflowRunHistoryAndNewRunSemantics.md`, `docs/Temporal/SourceOfTruthAndProjectionModel.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/Steps/StepExecutionsAndCheckpointing.md`, `docs/Steps/SkillSystem.md`, `docs/Omnigent/OmnigentAdapter.md`
 
 ---
@@ -368,17 +384,30 @@ The important rule is that **automatic remediation is policy-driven and bounded*
 
 ### 7.7 Create-page first remediation flow
 
-The dashboard `Remediate` action should open `/workflows/new` with an editable remediation draft instead of immediately submitting a hidden remediation run. The Create page should prefill:
+The dashboard `Remediate` action opens `/workflows/new?intent=remediate&draftId=…` with an editable remediation draft instead of immediately submitting a hidden remediation run. The Create page prefills:
 
 - target `workflowId` and pinned `runId`;
 - selected step or checkpoint refs when available;
 - repository `MoonLadderStudios/MoonMind` for MoonMind platform or prevention work;
+- starting and isolated Checkpoint work branches;
+- Codex via Omnigent runtime, Provider Profile, Agent Profile, execution target,
+  launch policy, model, effort, and retrieval controls from the target run;
 - default mode `snapshot_then_follow`;
 - default authority `approval_gated`;
 - default action policy `admin_healer_default`;
+- evidence, approval, mutation-lock, verification, and Checkpoint Branch policy;
 - branch and publish controls through the normal Create page fields.
 
-The operator can then edit instructions, runtime, model, branch, and publish mode before submitting through the normal `POST /api/executions` path with `task.remediation`.
+The UI separates immutable pinned target/run/failed-evidence identity from the
+editable repair intent. The operator edits instructions, repository, runtime,
+profiles, policy, branches, retrieval, and publish choices before ordinary
+`POST /api/executions` submission with `task.remediation`.
+
+The tab-scoped draft is schema-versioned, timestamped, and expires after two
+hours. It is removed after a complete successful import into visible form state
+or explicit discard. Missing, malformed, expired, and cross-tab drafts surface
+distinct safe errors and never partially import. A local presence marker contains
+no target or repair content and exists only to explain cross-tab URLs.
 
 ---
 
@@ -448,6 +477,32 @@ GET /api/executions/{workflowId}/remediations?direction=outbound
 Where:
 - `inbound` means remediation Workflow Executions targeting this execution,
 - `outbound` means executions that this Workflow Execution is remediating.
+
+The link response also projects the immutable authored contract, detailed
+selected-step evidence, context generation/boundedness and per-class
+availability, diagnosis hints, lifecycle artifact index, latest bounded action
+request/result, final lifecycle summary, target-level verification outcome,
+Checkpoint Branch publication/promotion/archive state, and durable Workflow
+operator controls. These values come from canonical rows and artifacts, not
+rendered logs or chat.
+
+### 8.6 Approval and Workflow operator APIs
+
+Authorized approval decisions use:
+
+```http
+POST /api/executions/{remediationWorkflowId}/remediation/approvals/{requestId}
+```
+
+The body is `{ "decision": "approved" | "rejected", "comment"?: "…" }`.
+The optional comment is the bounded decision rationale persisted by the durable
+approval owner. Expired, stale, terminal, mismatched, or self-approved requests
+fail closed.
+
+Operator takeover never grants raw Omnigent/runtime authority. It pauses the
+remediation Workflow through `POST /api/executions/{workflowId}/signal` with
+`Pause`; resume uses `Resume`, and cancellation uses the ordinary durable
+`POST /api/executions/{workflowId}/cancel` endpoint.
 
 ---
 
@@ -603,6 +658,33 @@ The remediation runtime should not scrape dashboard pages. It should receive a M
   Live follow when supported.
 
 - `remediation.list_allowed_actions()`
+
+Action discovery is capability-truthful. Each catalog identity has an
+independently evaluated capability row containing `requestable`,
+`dryRunSupported`, `executionBackendReady`, `approvalBackendReady`,
+`verificationBackendReady`, `supportedTargetRuntimes`, `supportedHostModes`,
+`requiredEvidenceClasses`, and bounded `blockedReasons`. The executable list is
+the intersection of catalog enablement, immutable target policy,
+caller/profile permission, current target state and evidence, action-specific
+runtime and host support, live owning execution-adapter readiness, durable
+approval support, and authoritative verifier readiness. The owning service
+evaluates those inputs for the exact remediation link; static catalog
+enablement is not backend readiness.
+Checkpoint Branch execution readiness is derived from the registered production
+workflow, Activity catalog, and Activity handlers. Its verification readiness
+is derived independently from the registered remediation-verifier classifier;
+bridge metadata or a declared contract cannot make either boundary ready by
+itself.
+Actions without both an execution owner and verifier remain visible only in the
+capability matrix and are rejected before mutation. In particular, managed
+session terminate/restart, targeted janitor cleanup, cleanup verification,
+target annotation/verification, helper-container, and Omnigent host/lease
+actions are not executable until their missing owners are wired.
+Workflow Detail publishes the full evaluated matrix as `actionCapabilities`;
+`allowedActions` is derived only from rows whose `requestable` value is true.
+Disabled rows retain bounded reasons so operators can distinguish policy,
+target/evidence, runtime/host, execution, approval, and verification blockers
+before requesting an action.
   Return action kinds allowed by `actionPolicyRef`.
 
 - `remediation.execute_action(actionKind, params, dryRun?)`
@@ -675,13 +757,25 @@ A remediation-created branch should record:
 
 Failed-step recovery remains the path that preserves original inputs and resumes from validated checkpoint evidence. It must not accept edited instructions, alternate branch settings, or publish-mode changes. Those belong to a Checkpoint Branch or a fresh workflow created through Create.
 
+The remediation action and public Checkpoint Branch API call the same durable
+branch-turn execution owner. Creating the graph is not execution success: the
+action projection reports graph persistence, launch acceptance, active or
+terminal turn state, and verification readiness independently. A Checkpoint
+Branch action is requestable only when both that execution owner and the
+authoritative `checkpoint_branch` verifier are ready.
+
 ### 9.10 Omnigent-backed remediation
 
 For Omnigent-backed target work, remediation consumes MoonMind artifacts harvested by the Omnigent adapter: normalized stream artifacts, snapshots, transcripts, workspace manifests, optional patch refs, PR metadata, and diagnostics.
 
 Omnigent session ids, file ids, resource ids, runner ids, and provider URLs are runtime binding or diagnostics metadata. They are not MoonMind evidence authority and should not replace artifact refs.
 
-Omnigent v1 uses a streaming-gateway activity that returns terminal results. Therefore remediation should not send hidden follow-up messages into a parent Omnigent session in v1. Corrective execution should create a fresh Checkpoint Branch turn with a new Omnigent session. Same-session continuation should wait for typed v2 activities such as `integration.omnigent.send_message` and `integration.omnigent.harvest_session`.
+The durable `MoonMind.OmnigentSession` supervisor accepts an authorized,
+reference-only continuation signal, but remediation must not send hidden
+follow-up messages into a parent session. Corrective execution creates a fresh
+Checkpoint Branch turn with new canonical Omnigent session authority; an
+explicit same-session continuation remains owned and audited by the existing
+session supervisor.
 
 ---
 
@@ -888,7 +982,18 @@ Release a managed runtime slot lease when the lease is stale or orphaned accordi
 These operate on workload containers that MoonMind launched through the Docker workload plane. They do not imply arbitrary image execution or unrestricted Docker access.
 
 #### `checkpoint_branch.create_from_remediation_context`
-Create a branch from a validated remediation context and checkpoint. Use this when corrected instructions, alternate branch settings, alternate publish mode, or a different runtime/model are required. This action must preserve source checkpoint identity, immutable instruction refs, workspace policy, runtime context policy, publish mode, remediation provenance, and idempotency key.
+Create a branch from a validated remediation context and checkpoint, then ask
+the shared branch-turn execution owner to launch its initial turn. Use this when
+corrected instructions, alternate branch settings, alternate publish mode, or a
+different runtime/model are required. This action must preserve source
+checkpoint identity, immutable instruction refs, workspace policy, runtime
+context policy, publish mode, remediation provenance, and idempotency key.
+
+Action delivery, terminal branch execution, and target repair are separate
+facts. The action may be `applied` after the durable owner accepts the launch,
+while `terminalBranchResultAvailable` and the trusted post-action verification
+outcome remain pending. Neither graph persistence nor a completed branch turn
+may claim that the original target was repaired.
 
 ### 11.4 Action request contract
 
@@ -949,6 +1054,12 @@ Allowed `status` values should include:
 - `timed_out`
 - `failed`
 
+This `status` is the action **delivery/application** status only. It is not the
+repair outcome. The trusted post-action verification phase (§11.6.1) publishes a
+separate `remediation.verification` artifact with a normalized repair outcome, so
+a delivered action or a persisted Checkpoint Branch never relabels the failed
+target as repaired.
+
 ### 11.6 Risk tiers and verification
 
 Every side-effecting action must declare:
@@ -961,6 +1072,50 @@ Examples:
 - `execution.retry_failed_step_with_remediation_context` — verify the retried step started from the intended checkpoint, preserved prior-step refs were reused rather than re-executed, corrected remediation context was recorded, and the target reached the expected repaired or still-failed state.
 - `session.restart_container` — verify new session identity fields and new continuity boundary artifact.
 - `execution.request_rerun_same_workflow` — verify target run state changes and runId rollover if applicable.
+
+### 11.6.1 Trusted post-action verification phase
+
+Action **delivery** and remediation **repair** are separate facts. Every
+side-effecting administrative action enters an explicit, trusted verification
+phase after it is delivered or applied. The phase never serializes an
+adapter-returned `verification` mapping and never defaults to a fabricated
+`verified`/`not_verified`; it re-reads fresh canonical evidence and classifies
+the actual repair outcome.
+
+**Typed contract and capability-aware registry.** Each action kind declares a
+verification contract: the authoritative evidence owner, the target resource
+kind and identity to verify, the immediate expected state, an optional bounded
+stabilization interval and poll strategy, a terminal timeout, and the
+before/after evidence classes. The registry is capability-aware: an action is
+advertised as automatically verifiable only when an owning verifier and a
+readable evidence surface exist. Actions whose owning subsystem verifier is not
+wired (managed session, host/lease, container, cleanup, annotation) return a
+truthful `evidence_unavailable` capability rather than a fabricated result.
+
+**Phase steps.** After delivery the phase (1) persists the immutable action
+result, (2) re-resolves the current target identity, (3) reads fresh canonical
+evidence rather than the pre-action context cache, (4) performs bounded
+stabilization/polling where the contract requires it, (5) publishes a typed
+verification result, and (6) updates the remediation/target projections without
+rewriting the target's original outcome. The phase performs no side effects of
+its own, so worker restart, Activity retry, and Temporal replay re-run it safely;
+the original action stays idempotent through the owning adapters' stable keys.
+
+**Normalized verification outcomes.** The `remediation.verification` artifact
+`status`/`outcome` is one of:
+
+- `verified_resolved` — the target reached the expected repaired state;
+- `verified_no_change` — the action was accepted but the target did not change and no change was expected (including no-op and not-applied deliveries);
+- `still_failed` — the target remains in the failure state the action was meant to repair (for example a Checkpoint Branch was created as a candidate but the target objective is not yet resolved);
+- `regressed` — the target looked repaired immediately after the action, then degraded during stabilization;
+- `evidence_unavailable` — fresh evidence could not be read, or no owning verifier exists, degraded with a bounded reason;
+- `approval_required` — the action is approval-gated and repair is not yet verifiable;
+- `verification_failed` — the verifier itself failed;
+- `canceled` — verification was canceled.
+
+The artifact records the target state `before` the action, `immediateAfter`
+delivery, and `stabilized` after bounded stabilization, plus the resulting
+run/branch/session identity and the exact action linkage.
 
 ### 11.7 Explicitly unsupported actions
 
@@ -1246,6 +1401,15 @@ Recommended `resolution` values:
 - `evidence_unavailable`
 - `failed`
 
+The final summary reports the immediate `repair` block and the long-term
+`prevention` block separately. The `repair` block carries the action
+`deliveryStatus`, the normalized repair `verificationOutcome` (§11.6.1), the
+resulting run/branch/session identity, and any `remainingOperatorWork`. The
+`prevention` block carries the prevention branch/PR `status` and its own
+`preventionVerificationOutcome`. A successfully delivered action or a prevention
+PR must not relabel the failed target as repaired: immediate repair verification
+and prevention verification stay distinct.
+
 ### 14.4 Target-side linkage summary
 
 The target execution detail view should show inbound remediation metadata such as:
@@ -1296,12 +1460,14 @@ The create UI should let the operator:
 ### 15.2 Target Workflow detail
 
 The target Workflow should show a **Remediation Workflows** panel with:
-- remediation Workflow links,
-- status,
-- authority mode,
-- last action,
-- resolution,
-- active lock badge.
+- remediation Workflow/run links and lifecycle phase/status,
+- pinned target run and selected Step Execution/checkpoint,
+- authority plus authored profile/policy identity,
+- active mutation lock and release state,
+- diagnosis, action delivery, approval, explicit repair verification,
+  resolution, prevention, resulting run/branch/PR, and cleanup evidence.
+
+This is an annotation region. It never overwrites the original target outcome.
 
 ### 15.3 Remediation Workflow detail
 
@@ -1311,7 +1477,16 @@ The remediation Workflow detail should show a **Remediation Target** panel with:
 - selected steps,
 - current target state,
 - evidence bundle link,
-- allowed actions,
+- immutable authored instructions/runtime/profile/policy/branch/retrieval/publish contract,
+- per-class evidence availability, freshness, boundedness, and degradation,
+- live-follow state and cursor,
+- action request/result authority chain, risk, expected state, policy decision,
+  idempotency, actor, approval, before/after refs, and delivery,
+- cumulative attempts and workspace head,
+- Checkpoint Branch source, isolated work branch, output, publication,
+  promotion, and archive state,
+- repair, prevention, cleanup, lease release, and unresolved operator work,
+- allowed actions with bounded disabled reasons,
 - approval state,
 - lock state.
 
@@ -1336,10 +1511,39 @@ If live follow is active:
 ### 15.6 Operator handoff
 
 When a remediation Workflow Execution is `approval_gated` or encounters a high-risk action:
+
+The canonical approval owner is the `approval_state` lifecycle persisted on the
+`execution_remediation_links` record. Authority evaluation creates it once for
+the exact action request digest and stores only redacted parameters plus their
+digest. It records the remediation and target run identities, expected target
+state, checkpoint/Step Execution, bridge/session/host/lease identities,
+credential generation, immutable policy and security-profile authority,
+approval class, reviewer rule, actors, timestamps, and
+one of `pending`, `approved`, `denied`, `expired`, `stale`, or `consumed`.
+Retries with the same request digest reuse the record; a different request under
+the same approval identity fails closed.
+
+The owner also publishes immutable `remediation.approval_request` and
+`remediation.approval_decision` artifacts. Their stable labels make publication
+idempotent across worker restart, Activity retry, and Workflow replay. The
+approval state stores both artifact references; decision evidence points back to
+the request artifact, and later action, audit, verification, and target
+annotation evidence carries the same approval reference and projected artifact
+map.
+
+An `approvalRef` is an opaque lookup key, never evidence by itself. Immediately
+before adapter dispatch MoonMind resolves it from this record, checks decision,
+expiry, single-use state, action identity, and current target authority, and
+marks mismatches stale with a bounded reason code. A successful dispatch consumes
+the approval and links the decision bidirectionally with the action request,
+result, audit, verification, and target-annotation artifacts. Requesters cannot decide their own
+request, and the `high_risk_reviewer` rule requires a privileged reviewer.
 - show the proposed action,
 - show preconditions,
 - show expected blast radius,
-- allow approve/reject,
+- allow authorized approve/deny with a recorded rationale,
+- show expired and stale decisions and why a new request is required,
+- expose durable Workflow cancellation/takeover without raw runtime authority,
 - keep the decision in the audit trail.
 
 ---

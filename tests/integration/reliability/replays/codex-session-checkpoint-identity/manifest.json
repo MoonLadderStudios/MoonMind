@@ -1,0 +1,29 @@
+{
+  "failureShapeId": "codex-session-checkpoint-identity",
+  "incidentWorkflowId": "mm:5fe90658-c496-4304-9a92-57f1ac6b5ecf",
+  "agentRunWorkflowId": "mm:5fe90658-c496-4304-9a92-57f1ac6b5ecf:agent:node-1",
+  "runtime": "codex_cli",
+  "protocolVersion": "managed-session-v1",
+  "eventScript": [
+    "agent_execution_completed",
+    "managed_run_record_persisted",
+    "after_execution_checkpoint_requested",
+    "checkpoint_authority_validated"
+  ],
+  "stepExecution": {
+    "schemaVersion": "v1",
+    "workflowId": "mm:5fe90658-c496-4304-9a92-57f1ac6b5ecf",
+    "runId": "019f619e-59e7-79c2-9b49-39d282d9c019",
+    "logicalStepId": "node-1",
+    "executionOrdinal": 1,
+    "stepExecutionId": "mm:5fe90658-c496-4304-9a92-57f1ac6b5ecf:019f619e-59e7-79c2-9b49-39d282d9c019:node-1:execution:1",
+    "runtimeContextPolicy": "fresh_agent_run"
+  },
+  "workspaceLocator": {
+    "kind": "managed_runtime",
+    "runtimeId": "codex_cli",
+    "agentRunId": "mm:5fe90658-c496-4304-9a92-57f1ac6b5ecf",
+    "relativePath": "repo"
+  },
+  "invariant": "The managed session record and canonical Step Execution use the same task workflow identity at checkpoint capture"
+}

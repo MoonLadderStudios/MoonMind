@@ -7,18 +7,111 @@ from typing import List, Optional
 
 import typer
 
+from moonmind.container_job_cli import (
+    ContainerJobCliError,
+    ContainerJobResult,
+    load_container_job_spec,
+    run_container_job,
+    run_python_tests,
+)
 from moonmind.manifest import manifest_cli
 from moonmind.rag import cli as rag_cli
 from moonmind.rag.guardrails import GuardrailError, ensure_rag_ready
 from moonmind.rag.settings import RagRuntimeSettings
+from moonmind.utils.logging import redact_sensitive_text
 
 app = typer.Typer(help="MoonMind developer utilities.")
 rag_app = typer.Typer(help="Retrieval helpers for Codex workers.")
 worker_app = typer.Typer(help="Worker runtime diagnostics.")
 manifest_app = typer.Typer(help="Manifest schema validation and pipeline commands.")
+container_app = typer.Typer(help="Run work through MoonMind's Docker backend.")
 app.add_typer(rag_app, name="rag")
 app.add_typer(worker_app, name="worker")
 app.add_typer(manifest_app, name="manifest")
+app.add_typer(container_app, name="container")
+
+
+def _print_container_job_result(result: ContainerJobResult) -> None:
+    for line in result.log_tail:
+        typer.echo(line)
+    if result.log_error:
+        typer.secho(
+            f"Warning: terminal logs could not be read: {result.log_error}",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
+    failure_detail = ""
+    if result.failure_class:
+        failure_detail += f", failureClass={result.failure_class}"
+    if result.message:
+        message = (
+            redact_sensitive_text(result.message)
+            .replace("\r", " ")
+            .replace("\n", " ")
+        )
+        failure_detail += f", message={message}"
+    typer.echo(
+        f"container job {result.job_id}: {result.state} "
+        f"(exitCode={result.exit_code}{failure_detail}, logsRef={result.logs_ref}, "
+        f"artifactsRef={result.artifacts_ref})"
+    )
+    if result.state != "succeeded" or result.exit_code not in {None, 0}:
+        raise typer.Exit(code=1)
+
+
+@container_app.command(
+    "run",
+    help=(
+        "Run a validated JSON workload spec in the active managed workspace "
+        "through MoonMind's durable Docker backend."
+    ),
+)
+def container_run(
+    spec: Path = typer.Option(
+        ...,
+        "--spec",
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        help="JSON file containing ContainerJobSpec workload fields.",
+    ),
+    request_id: str | None = typer.Option(
+        None,
+        "--request-id",
+        help="Stable caller request id for idempotent retries.",
+    ),
+) -> None:
+    try:
+        result = run_container_job(
+            load_container_job_spec(spec),
+            request_id=request_id,
+        )
+    except ContainerJobCliError as exc:
+        typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+    _print_container_job_result(result)
+
+
+@container_app.command(
+    "python-tests",
+    help=(
+        "Run Python unit tests in the active managed workspace through a durable "
+        "container job."
+    ),
+)
+def container_python_tests(
+    targets: list[str] | None = typer.Argument(
+        None, help="Optional pytest paths or node ids; defaults to tests/unit."
+    ),
+    timeout_seconds: int = typer.Option(3600, "--timeout-seconds", min=1, max=86400),
+) -> None:
+    try:
+        result = run_python_tests(targets or [], timeout_seconds=timeout_seconds)
+    except ContainerJobCliError as exc:
+        typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+    _print_container_job_result(result)
+
 
 @rag_app.command(
     "search", help="Embed a query, query Qdrant, and print a context block."

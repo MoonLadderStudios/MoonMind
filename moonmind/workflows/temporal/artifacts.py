@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import re
 import secrets
 import threading
@@ -37,7 +38,9 @@ logger = logging.getLogger(__name__)
 _CROCKFORD_BASE32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 _PREVIEW_MAX_BYTES = 16 * 1024
 _STREAM_CHUNK_BYTES = 64 * 1024
+_MULTIPART_WRITE_CHUNK_BYTES = 8 * 1024 * 1024
 _RUN_DIGEST_INDEXING_TIMEOUT_SECONDS = 10
+_PROVIDER_PROFILE_MANAGER_QUERY_TIMEOUT_SECONDS = 2.0
 _SINGLE_PUT_READ_RETRY_DELAYS_SECONDS = (0.1, 0.2, 0.4, 0.8, 1.6)
 _SINGLE_PUT_READ_RETRYABLE_S3_ERROR_CODES = {"404", "NoSuchKey", "NotFound"}
 _TASK_INPUT_ATTACHMENT_SOURCES = frozenset(
@@ -352,6 +355,64 @@ class TemporalArtifactStore:
     ) -> str:
         raise NotImplementedError
 
+    def build_content_addressed_storage_key(
+        self,
+        *,
+        namespace: str,
+        scope: str,
+        sha256: str,
+    ) -> str:
+        """Return one immutable blob key shared by equivalent logical artifacts."""
+
+        safe_namespace = namespace.strip().replace("\\", "/").strip("/") or "default"
+        if ".." in safe_namespace.split("/"):
+            raise TemporalArtifactValidationError(
+                "namespace must not contain traversal"
+            )
+        safe_scope = scope.strip().lower()
+        if not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", safe_scope):
+            raise TemporalArtifactValidationError(
+                "content-addressed scope must be a lowercase storage segment"
+            )
+        digest = _validate_sha256(sha256)
+        if digest is None:
+            raise TemporalArtifactValidationError(
+                "content-addressed storage requires sha256"
+            )
+        return (
+            f"{safe_namespace}/blobs/{safe_scope}/sha256/"
+            f"{digest[:2]}/{digest}"
+        )
+
+    def object_matches(
+        self,
+        storage_key: str,
+        *,
+        sha256: str,
+        size_bytes: int,
+    ) -> bool:
+        """Return whether stored bytes exactly match the immutable identity."""
+
+        expected_sha256 = _validate_sha256(sha256)
+        if expected_sha256 is None or size_bytes < 0:
+            raise TemporalArtifactValidationError(
+                "stored-object validation requires sha256 and non-negative size_bytes"
+            )
+        # Artifact digests are content identities, not password hashes.
+        digest = hashlib.sha256(usedforsecurity=False)
+        observed_size = 0
+        try:
+            for chunk in self.read_chunks(storage_key):
+                observed_size += len(chunk)
+                if observed_size > size_bytes:
+                    return False
+                digest.update(chunk)
+        except Exception as exc:
+            if not _is_retryable_single_put_read_error(exc):
+                raise
+            return False
+        return observed_size == size_bytes and digest.hexdigest() == expected_sha256
+
     def write_bytes(
         self, storage_key: str, payload: bytes, *, content_type: str | None
     ) -> None:
@@ -389,6 +450,18 @@ class TemporalArtifactStore:
         part_number: int,
         expires_in_seconds: int,
     ) -> tuple[str, dict[str, str]]:
+        raise TemporalArtifactValidationError(
+            "multipart upload is not supported by storage backend"
+        )
+
+    def upload_multipart_part(
+        self,
+        *,
+        storage_key: str,
+        upload_id: str,
+        part_number: int,
+        payload: bytes,
+    ) -> str:
         raise TemporalArtifactValidationError(
             "multipart upload is not supported by storage backend"
         )
@@ -465,7 +538,15 @@ class LocalTemporalArtifactStore(TemporalArtifactStore):
         _ = content_type
         destination = self.resolve_storage_key(storage_key)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(payload)
+        temporary = destination.with_name(f".{destination.name}.{uuid4().hex}.tmp")
+        try:
+            with temporary.open("xb") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, destination)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     def read_bytes(self, storage_key: str) -> bytes:
         return self.resolve_storage_key(storage_key).read_bytes()
@@ -628,6 +709,28 @@ class S3TemporalArtifactStore(TemporalArtifactStore):
         response = self._client.get_object(Bucket=self._bucket, Key=storage_key)
         return response["Body"].read()
 
+    def object_matches(
+        self,
+        storage_key: str,
+        *,
+        sha256: str,
+        size_bytes: int,
+    ) -> bool:
+        try:
+            response = self._client.head_object(Bucket=self._bucket, Key=storage_key)
+        except ClientError as exc:
+            code = str(exc.response.get("Error", {}).get("Code", ""))
+            if code in _SINGLE_PUT_READ_RETRYABLE_S3_ERROR_CODES:
+                return False
+            raise
+        if int(response.get("ContentLength", -1)) != size_bytes:
+            return False
+        return super().object_matches(
+            storage_key,
+            sha256=sha256,
+            size_bytes=size_bytes,
+        )
+
     def read_chunks(
         self, storage_key: str, *, chunk_size: int = _STREAM_CHUNK_BYTES
     ) -> Iterable[bytes]:
@@ -686,6 +789,28 @@ class S3TemporalArtifactStore(TemporalArtifactStore):
             HttpMethod="PUT",
         )
         return self._rewrite_presigned_url(url), {}
+
+    def upload_multipart_part(
+        self,
+        *,
+        storage_key: str,
+        upload_id: str,
+        part_number: int,
+        payload: bytes,
+    ) -> str:
+        response = self._client.upload_part(
+            Bucket=self._bucket,
+            Key=storage_key,
+            UploadId=upload_id,
+            PartNumber=part_number,
+            Body=payload,
+        )
+        etag = str(response.get("ETag") or "").strip()
+        if not etag:
+            raise TemporalArtifactStateError(
+                "multipart part upload did not return an etag"
+            )
+        return etag
 
     def complete_multipart_upload(
         self,
@@ -757,6 +882,9 @@ class TemporalArtifactRepository:
     async def commit(self) -> None:
         await self._session.commit()
 
+    async def flush(self) -> None:
+        await self._session.flush()
+
     async def create_artifact(
         self,
         *,
@@ -803,6 +931,42 @@ class TemporalArtifactRepository:
         if artifact is None:
             raise TemporalArtifactNotFoundError(artifact_id)
         return artifact
+
+    async def lock_storage_references(
+        self,
+        *,
+        storage_backend: db_models.TemporalArtifactStorageBackend,
+        storage_key: str,
+    ) -> None:
+        """Serialize final-blob deletion across logical references."""
+
+        stmt = (
+            select(db_models.TemporalArtifact.artifact_id)
+            .where(
+                db_models.TemporalArtifact.storage_backend == storage_backend,
+                db_models.TemporalArtifact.storage_key == storage_key,
+            )
+            .with_for_update()
+        )
+        await self._session.execute(stmt)
+
+    async def has_live_storage_reference(
+        self,
+        *,
+        storage_backend: db_models.TemporalArtifactStorageBackend,
+        storage_key: str,
+    ) -> bool:
+        stmt = (
+            select(db_models.TemporalArtifact.artifact_id)
+            .where(
+                db_models.TemporalArtifact.storage_backend == storage_backend,
+                db_models.TemporalArtifact.storage_key == storage_key,
+                db_models.TemporalArtifact.hard_deleted_at.is_(None),
+            )
+            .limit(1)
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar() is not None
 
     async def add_link(
         self,
@@ -1353,6 +1517,7 @@ class TemporalArtifactService:
         metadata_json: dict[str, Any] | None = None,
         encryption: db_models.TemporalArtifactEncryption = db_models.TemporalArtifactEncryption.NONE,
         redaction_level: db_models.TemporalArtifactRedactionLevel = db_models.TemporalArtifactRedactionLevel.NONE,
+        content_addressed_scope: str | None = None,
     ) -> tuple[db_models.TemporalArtifact, ArtifactUploadDescriptor]:
         now = datetime.now(UTC)
         try:
@@ -1388,11 +1553,23 @@ class TemporalArtifactService:
         namespace = (
             execution_ref.namespace if execution_ref else self._default_namespace
         )
-        storage_key = self._store.build_storage_key(
-            namespace=namespace,
-            artifact_id=artifact_id,
-            now=now,
-        )
+        declared_sha256 = _validate_sha256(sha256)
+        if content_addressed_scope is not None:
+            if declared_size is None or declared_sha256 is None:
+                raise TemporalArtifactValidationError(
+                    "content-addressed artifacts require declared size_bytes and sha256"
+                )
+            storage_key = self._store.build_content_addressed_storage_key(
+                namespace=namespace,
+                scope=content_addressed_scope,
+                sha256=declared_sha256,
+            )
+        else:
+            storage_key = self._store.build_storage_key(
+                namespace=namespace,
+                artifact_id=artifact_id,
+                now=now,
+            )
         upload_expires_at = now + timedelta(seconds=self._presign_ttl_seconds)
 
         mode = db_models.TemporalArtifactUploadMode.SINGLE_PUT
@@ -1422,7 +1599,7 @@ class TemporalArtifactService:
             created_by_principal=principal,
             content_type=(content_type or None),
             size_bytes=declared_size,
-            sha256=_validate_sha256(sha256),
+            sha256=declared_sha256,
             storage_backend=self._store.backend,
             storage_key=storage_key,
             encryption=encryption,
@@ -1457,6 +1634,98 @@ class TemporalArtifactService:
         )
         await self._repository.commit()
         return artifact, upload_descriptor
+
+    async def put_content_addressed_payload_complete(
+        self,
+        *,
+        principal: str,
+        payload: bytes,
+        content_type: str,
+        scope: str,
+        retention_class: db_models.TemporalArtifactRetentionClass | None = None,
+        link: dict[str, Any] | ExecutionRef | None = None,
+        metadata_json: dict[str, Any] | None = None,
+    ) -> tuple[db_models.TemporalArtifact, bool]:
+        """Create a logical artifact backed by one digest-addressed blob.
+
+        Logical rows remain distinct so authorization, linkage, pinning, and
+        expiry do not collapse across executions. Equivalent immutable payloads
+        share only their storage object. The returned boolean reports whether
+        the object already existed.
+        """
+
+        digest, size_bytes = self._compute_digest_and_size(payload)
+        artifact, _upload = await self.create(
+            principal=principal,
+            content_type=content_type,
+            size_bytes=size_bytes,
+            sha256=digest,
+            retention_class=retention_class,
+            link=link,
+            metadata_json=metadata_json,
+            content_addressed_scope=scope,
+        )
+        # The logical row is committed before this lock. Concurrent publishers
+        # therefore converge on one visible storage-key group, and only the
+        # lock owner that still observes a cold blob performs the upload.
+        await self._repository.lock_storage_references(
+            storage_backend=artifact.storage_backend,
+            storage_key=artifact.storage_key,
+        )
+        object_matches = await asyncio.get_running_loop().run_in_executor(
+            None,
+            lambda: self._store.object_matches(
+                artifact.storage_key,
+                sha256=digest,
+                size_bytes=size_bytes,
+            ),
+        )
+        if not object_matches:
+            completed = await self.write_payload_complete(
+                artifact_id=artifact.artifact_id,
+                principal=principal,
+                payload=payload,
+                content_type=content_type,
+            )
+            return completed, False
+
+        if artifact.upload_id:
+            try:
+                await asyncio.get_running_loop().run_in_executor(
+                    None,
+                    lambda: self._store.abort_multipart_upload(
+                        storage_key=artifact.storage_key,
+                        upload_id=artifact.upload_id or "",
+                    ),
+                )
+            except Exception as exc:  # pragma: no cover - cleanup is best effort
+                logger.warning(
+                    "Failed to abort redundant content-addressed upload "
+                    "artifact_id=%s: %s",
+                    artifact.artifact_id,
+                    exc,
+                )
+        artifact.sha256 = digest
+        artifact.size_bytes = size_bytes
+        artifact.content_type = content_type
+        artifact.status = db_models.TemporalArtifactStatus.COMPLETE
+        artifact.upload_id = None
+        artifact.upload_expires_at = None
+        await self._repository.commit()
+        await self._create_preview_if_required(
+            artifact=artifact,
+            principal=principal,
+            payload=payload,
+            policy="auto-generated",
+        )
+        logger.info(
+            "Temporal artifact reused content-addressed blob principal=%s "
+            "artifact_id=%s scope=%s",
+            principal,
+            artifact.artifact_id,
+            scope,
+        )
+        return artifact, True
 
     async def write_complete(
         self,
@@ -1546,6 +1815,85 @@ class TemporalArtifactService:
             artifact.artifact_id,
         )
         return artifact
+
+    async def write_payload_complete(
+        self,
+        *,
+        artifact_id: str,
+        principal: str,
+        payload: bytes,
+        content_type: str | None = None,
+    ) -> db_models.TemporalArtifact:
+        """Persist a trusted in-process payload through its declared upload mode.
+
+        HTTP single-put uploads continue to use :meth:`write_complete`, which
+        rejects multipart artifacts. Activity-owned payloads already resident in
+        process use this method so large evidence does not need to round-trip
+        through presigned HTTP URLs.
+        """
+
+        artifact = await self._repository.get_artifact(artifact_id)
+        self._assert_mutation_access(artifact, principal=principal)
+        if artifact.upload_mode is not db_models.TemporalArtifactUploadMode.MULTIPART:
+            return await self.write_complete(
+                artifact_id=artifact_id,
+                principal=principal,
+                payload=payload,
+                content_type=content_type,
+            )
+        if artifact.status is db_models.TemporalArtifactStatus.COMPLETE:
+            return artifact
+        if artifact.status is db_models.TemporalArtifactStatus.DELETED:
+            raise TemporalArtifactStateError("artifact is deleted")
+        if not artifact.upload_id:
+            raise TemporalArtifactStateError("multipart upload session is missing")
+        if not payload:
+            raise TemporalArtifactValidationError(
+                "multipart payload must not be empty"
+            )
+
+        upload_id = artifact.upload_id
+        parts: list[dict[str, Any]] = []
+        try:
+            for offset in range(0, len(payload), _MULTIPART_WRITE_CHUNK_BYTES):
+                part_number = len(parts) + 1
+                chunk = payload[offset : offset + _MULTIPART_WRITE_CHUNK_BYTES]
+                etag = await asyncio.get_running_loop().run_in_executor(
+                    None,
+                    lambda part_number=part_number, chunk=chunk: (
+                        self._store.upload_multipart_part(
+                            storage_key=artifact.storage_key,
+                            upload_id=upload_id,
+                            part_number=part_number,
+                            payload=chunk,
+                        )
+                    ),
+                )
+                parts.append({"part_number": part_number, "etag": etag})
+        except Exception:
+            try:
+                await asyncio.get_running_loop().run_in_executor(
+                    None,
+                    lambda: self._store.abort_multipart_upload(
+                        storage_key=artifact.storage_key,
+                        upload_id=upload_id,
+                    ),
+                )
+            except Exception as abort_exc:  # pragma: no cover - cleanup is best effort
+                logger.warning(
+                    "Failed to abort trusted multipart artifact upload artifact_id=%s: %s",
+                    artifact.artifact_id,
+                    abort_exc,
+                )
+            artifact.status = db_models.TemporalArtifactStatus.FAILED
+            await self._repository.commit()
+            raise
+
+        return await self.complete(
+            artifact_id=artifact_id,
+            principal=principal,
+            parts=parts,
+        )
 
     async def presign_upload_part(
         self,
@@ -2091,12 +2439,21 @@ class TemporalArtifactService:
                 "artifact must be soft-deleted before hard delete"
             )
 
-        await asyncio.get_running_loop().run_in_executor(
-            None, self._store.delete, artifact.storage_key
+        await self._repository.lock_storage_references(
+            storage_backend=artifact.storage_backend,
+            storage_key=artifact.storage_key,
         )
         now = datetime.now(UTC)
         artifact.hard_deleted_at = now
         artifact.tombstoned_at = now
+        await self._repository.flush()
+        if not await self._repository.has_live_storage_reference(
+            storage_backend=artifact.storage_backend,
+            storage_key=artifact.storage_key,
+        ):
+            await asyncio.get_running_loop().run_in_executor(
+                None, self._store.delete, artifact.storage_key
+            )
         await self._repository.commit()
         logger.info(
             "Temporal artifact hard_delete principal=%s artifact_id=%s",
@@ -2130,12 +2487,21 @@ class TemporalArtifactService:
         )
         hard_deleted = 0
         for artifact in hard_candidates:
-            await asyncio.get_running_loop().run_in_executor(
-                None, self._store.delete, artifact.storage_key
+            await self._repository.lock_storage_references(
+                storage_backend=artifact.storage_backend,
+                storage_key=artifact.storage_key,
             )
             artifact.hard_deleted_at = sweep_now
             artifact.tombstoned_at = sweep_now
             artifact.last_lifecycle_run_id = lifecycle_run_id
+            await self._repository.flush()
+            if not await self._repository.has_live_storage_reference(
+                storage_backend=artifact.storage_backend,
+                storage_key=artifact.storage_key,
+            ):
+                await asyncio.get_running_loop().run_in_executor(
+                    None, self._store.delete, artifact.storage_key
+                )
             hard_deleted += 1
 
         await self._repository.commit()
@@ -2501,6 +2867,232 @@ class TemporalArtifactActivities:
     def __init__(self, service: TemporalArtifactService) -> None:
         self._service = service
 
+    async def publication_recovery_persist_result(
+        self, request: Mapping[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Persist compact terminal evidence without changing source semantics."""
+        if not isinstance(request, Mapping):
+            raise TemporalArtifactValidationError(
+                "publication_recovery.persist_result requires an object"
+            )
+        contract = request.get("contract")
+        verified = request.get("verifiedEvidence")
+        reconciliation = request.get("reconciliation")
+        operation_key = str(request.get("idempotencyKey") or "").strip()
+        workflow_id = str(request.get("destinationWorkflowId") or "").strip()
+        run_id = str(request.get("destinationRunId") or "").strip()
+        if (
+            not isinstance(contract, Mapping)
+            or not isinstance(verified, Mapping)
+            or not isinstance(reconciliation, Mapping)
+            or not operation_key
+            or not workflow_id
+            or not run_id
+        ):
+            raise TemporalArtifactValidationError(
+                "contract, verifiedEvidence, reconciliation, idempotencyKey, "
+                "destinationWorkflowId, and destinationRunId are required"
+            )
+        from moonmind.workflows.temporal.publication_recovery import (
+            PublicationRecoveryEvidence,
+        )
+
+        evidence = PublicationRecoveryEvidence.model_validate(verified)
+        if (
+            evidence.destination_workflow_id != workflow_id
+            or evidence.publication_idempotency_key != operation_key
+            or evidence.source_workflow_id != contract.get("sourceWorkflowId")
+            or evidence.source_run_id != contract.get("sourceRunId")
+        ):
+            raise TemporalArtifactValidationError(
+                "verified publication evidence lineage does not match persistence request"
+            )
+        payload = {
+            "schemaVersion": "publication-recovery-result-v1",
+            "sourceWorkflowId": contract.get("sourceWorkflowId"),
+            "sourceRunId": contract.get("sourceRunId"),
+            "sourceSemanticOutcome": contract.get("sourceSemanticOutcome"),
+            "semanticContext": (contract.get("target") or {}).get("semanticContext"),
+            "reconciliation": dict(reconciliation),
+            "publication": dict(request.get("publication") or {}),
+            "verifiedEvidence": evidence.model_dump(
+                by_alias=True, mode="json", exclude_none=True
+            ),
+            "destinationWorkflowId": workflow_id,
+            "destinationRunId": run_id,
+        }
+        principal = f"workflow:{workflow_id}"
+        key_hash = hashlib.sha256(operation_key.encode()).hexdigest()
+        existing = await self._service.list_for_execution(
+            namespace=self._service._default_namespace,
+            workflow_id=workflow_id,
+            run_id=run_id,
+            principal=principal,
+            link_type="result",
+        )
+        for artifact in existing:
+            metadata = dict(artifact.metadata_json or {})
+            if (
+                metadata.get("name") == "publication-recovery-result.json"
+                and metadata.get("idempotencyKeyHash") == key_hash
+                and artifact.status is db_models.TemporalArtifactStatus.COMPLETE
+            ):
+                return {
+                    **payload,
+                    "resultArtifactRef": build_artifact_ref(artifact).model_dump(
+                        by_alias=True, mode="json"
+                    ),
+                }
+        encoded = (json.dumps(payload, sort_keys=True, indent=2) + "\n").encode()
+        artifact, _upload = await self._service.create(
+            principal=principal,
+            content_type="application/json",
+            size_bytes=len(encoded),
+            link=ExecutionRef(
+                namespace=self._service._default_namespace,
+                workflow_id=workflow_id,
+                run_id=run_id,
+                link_type="result",
+            ),
+            metadata_json={
+                "name": "publication-recovery-result.json",
+                "producer": "activity:publication_recovery.persist_result",
+                "labels": ["publication-recovery", "terminal"],
+                "idempotencyKeyHash": key_hash,
+            },
+        )
+        completed = await self._service.write_complete(
+            artifact_id=artifact.artifact_id,
+            principal=principal,
+            payload=encoded,
+            content_type="application/json",
+        )
+        return {
+            **payload,
+            "resultArtifactRef": build_artifact_ref(completed).model_dump(
+                by_alias=True, mode="json"
+            ),
+        }
+
+    async def pr_resolver_write_terminal_result(
+        self, request: Mapping[str, Any] | None = None
+    ) -> dict[str, str]:
+        """Publish resolver terminal and auto-publish evidence in one activity."""
+
+        if not isinstance(request, Mapping):
+            raise TemporalArtifactValidationError(
+                "pr_resolver.write_terminal_result requires an object"
+            )
+        principal = str(request.get("principal") or "").strip()
+        terminal = request.get("terminalResult")
+        idempotency_key = str(request.get("idempotencyKey") or "").strip()
+        execution = request.get("executionRef")
+        if not principal or not isinstance(terminal, Mapping) or not idempotency_key:
+            raise TemporalArtifactValidationError(
+                "principal, terminalResult, and idempotencyKey are required"
+            )
+        execution = execution if isinstance(execution, Mapping) else {}
+        namespace = str(execution.get("namespace") or self._service._default_namespace)
+        workflow_id = str(execution.get("workflow_id") or "").strip()
+        run_id = str(execution.get("run_id") or "").strip()
+
+        async def existing_ref(*, name: str, link_type: str) -> str | None:
+            if not workflow_id or not run_id:
+                return None
+            artifacts = await self._service.list_for_execution(
+                namespace=namespace,
+                workflow_id=workflow_id,
+                run_id=run_id,
+                principal=principal,
+                link_type=link_type,
+            )
+            for artifact in artifacts:
+                metadata = dict(artifact.metadata_json or {})
+                if (
+                    metadata.get("idempotencyKey") == idempotency_key
+                    and metadata.get("name") == name
+                    and artifact.status is db_models.TemporalArtifactStatus.COMPLETE
+                ):
+                    return artifact.artifact_id
+            return None
+
+        async def write_json(
+            *, name: str, payload: Mapping[str, Any], link_type: str
+        ) -> str:
+            prior = await existing_ref(name=name, link_type=link_type)
+            if prior:
+                return prior
+            encoded = (json.dumps(dict(payload), sort_keys=True, indent=2) + "\n").encode(
+                "utf-8"
+            )
+            link = None
+            if workflow_id and run_id:
+                link = ExecutionRef(
+                    namespace=namespace,
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    link_type=link_type,
+                )
+            artifact, _upload = await self._service.create(
+                principal=principal,
+                content_type="application/json",
+                size_bytes=len(encoded),
+                link=link,
+                metadata_json={
+                    "name": name,
+                    "producer": "activity:pr_resolver.write_terminal_result",
+                    "labels": ["pr-resolver", "terminal"],
+                    "idempotencyKey": idempotency_key,
+                },
+            )
+            completed = await self._service.write_complete(
+                artifact_id=artifact.artifact_id,
+                principal=principal,
+                payload=encoded,
+                content_type="application/json",
+            )
+            return build_artifact_ref(completed).artifact_id
+
+        status = str(terminal.get("status") or "failed")
+        publish_payload = {
+            "schemaVersion": "moonmind.publish.auto.v1",
+            "mode": "auto",
+            "owner": "agent",
+            "skillId": "pr-resolver",
+            "executionRef": terminal.get("executionRef") or idempotency_key,
+            "status": "verified"
+            if status in {"merged", "already_merged"}
+            else "blocked",
+            "action": "merge"
+            if status in {"merged", "already_merged"}
+            else "none",
+            "repository": terminal.get("repository"),
+            "branch": terminal.get("headBranch")
+            or f"pull-request/{terminal.get('prNumber') or 'unknown'}",
+            "localHead": terminal.get("verifiedHeadSha"),
+            "remoteBranchHead": terminal.get("verifiedHeadSha"),
+            "remoteVerified": status in {"merged", "already_merged"},
+            "pushed": False,
+            "merged": status in {"merged", "already_merged"},
+            "prUrl": terminal.get("prUrl"),
+            "blockedReason": None if status in {"merged", "already_merged"} else terminal.get("reasonCode"),
+            "verificationCommands": ["pr_resolver.verify_merged"],
+            "idempotencyKey": idempotency_key,
+        }
+        publish_ref = await write_json(
+            name="artifacts/publish_result.json",
+            payload=publish_payload,
+            link_type="pr_resolver.publish_evidence",
+        )
+        terminal_payload = dict(terminal)
+        terminal_payload["publishEvidenceRef"] = publish_ref
+        result_ref = await write_json(
+            name="var/pr_resolver/result.json",
+            payload=terminal_payload,
+            link_type="pr_resolver.terminal_result",
+        )
+        return {"resultRef": result_ref, "publishEvidenceRef": publish_ref}
+
     @staticmethod
     def _normalize_activity_artifact_id(
         artifact_ref: ArtifactRef | Mapping[str, Any] | str,
@@ -2729,21 +3321,38 @@ class TemporalArtifactActivities:
         from moonmind.schemas.temporal_activity_models import (
             ExecutionTerminalStateInput,
         )
-        from moonmind.workflows.temporal.service import TemporalExecutionService
+        from moonmind.workflows.temporal.service import (
+            TemporalExecutionNotFoundError,
+            TemporalExecutionService,
+        )
 
         model = ExecutionTerminalStateInput.model_validate(request or {})
 
         async with get_async_session_context() as session:
             service = TemporalExecutionService(session)
-            record = await service.record_terminal_state(
-                workflow_id=model.workflow_id,
-                state=model.state,
-                close_status=model.close_status,
-                summary=model.summary,
-                error_category=model.error_category,
-                finish_outcome_code=model.finish_outcome_code,
-                finish_summary=model.finish_summary,
-            )
+            try:
+                record = await service.record_terminal_state(
+                    workflow_id=model.workflow_id,
+                    state=model.state,
+                    close_status=model.close_status,
+                    summary=model.summary,
+                    error_category=model.error_category,
+                    finish_outcome_code=model.finish_outcome_code,
+                    finish_summary=model.finish_summary,
+                )
+            except TemporalExecutionNotFoundError:
+                # Internally-started child workflows can reach terminal state
+                # before the asynchronous Temporal projection sees their start.
+                # Temporal history remains authoritative; the projector will
+                # reconcile the row after close, so this auxiliary handoff must
+                # not turn primary success into an Activity failure.
+                return {
+                    "workflowId": model.workflow_id,
+                    "state": model.state,
+                    "closeStatus": model.close_status,
+                    "projectionDeferred": True,
+                    "reasonCode": "temporal_projection_pending",
+                }
 
         await self._write_run_digest_best_effort(record)
 
@@ -3035,6 +3644,7 @@ class TemporalArtifactActivities:
 
         from api_service.db.models import (
             ManagedAgentProviderProfile,
+            ProviderProfileSlotLease,
         )
         from api_service.db.base import get_async_session_context
         from api_service.services.provider_profile_readiness import (
@@ -3050,7 +3660,6 @@ class TemporalArtifactActivities:
         async with get_async_session_context() as session:
             stmt = select(ManagedAgentProviderProfile).where(
                 ManagedAgentProviderProfile.runtime_id == runtime_id,
-                ManagedAgentProviderProfile.enabled.is_(True),
             ).order_by(
                 ManagedAgentProviderProfile.is_default.desc(),
                 ManagedAgentProviderProfile.priority.desc(),
@@ -3058,17 +3667,37 @@ class TemporalArtifactActivities:
             )
             result = await session.execute(stmt)
             rows = list(result.scalars().all())
+            leased_profile_result = await session.execute(
+                select(ProviderProfileSlotLease.profile_id).where(
+                    ProviderProfileSlotLease.runtime_id == runtime_id
+                )
+            )
+            leased_profile_ids = set(leased_profile_result.scalars().all())
             managed_secret_statuses = await _managed_secret_statuses_for_profiles(
                 session=session,
                 rows=rows,
             )
 
         profiles = []
+        profile_statuses = []
         for row in rows:
-            if not provider_profile_launch_ready(
+            launch_ready = provider_profile_launch_ready(
                 row,
                 managed_secret_statuses=managed_secret_statuses,
-            ):
+            )
+            profile_statuses.append(
+                {
+                    "profile_id": row.profile_id,
+                    "runtime_id": row.runtime_id,
+                    "enabled": row.enabled,
+                    "launch_ready": launch_ready,
+                    "auth_state": row.auth_state.value if row.auth_state else None,
+                    "disabled_reason": (
+                        row.disabled_reason.value if row.disabled_reason else None
+                    ),
+                }
+            )
+            if not launch_ready and row.profile_id not in leased_profile_ids:
                 continue
             command_behavior = row.command_behavior or {}
             billing_metadata = (
@@ -3121,7 +3750,7 @@ class TemporalArtifactActivities:
                     "rate_limit_policy": row.rate_limit_policy.value,
                     "max_lease_duration_seconds": row.max_lease_duration_seconds,
                     "enabled": row.enabled,
-                    "launch_ready": True,
+                    "launch_ready": launch_ready,
                     "auth_state": row.auth_state.value if row.auth_state else None,
                     "disabled_reason": (
                         row.disabled_reason.value if row.disabled_reason else None
@@ -3142,7 +3771,7 @@ class TemporalArtifactActivities:
                 }
             )
 
-        return {"profiles": profiles}
+        return {"profiles": profiles, "profile_statuses": profile_statuses}
 
     async def provider_profile_ensure_manager(
         self,
@@ -3187,63 +3816,85 @@ class TemporalArtifactActivities:
             )
             return {"started": False, "workflow_id": workflow_id}
 
+    async def provider_profile_acquire_credential_maintenance_lease(
+        self,
+        *,
+        runtime_id: str,
+        profile_id: str,
+        owner_id: str,
+        purpose: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Acquire an acknowledged maintenance lease for a workflow owner."""
+
+        from moonmind.provider_profiles.lease_client import (
+            CredentialLeasePurpose,
+            ProviderProfileLeaseClient,
+        )
+        from moonmind.workflows.temporal.client import TemporalClientAdapter
+        from temporalio import activity
+
+        lease_task = asyncio.create_task(
+            ProviderProfileLeaseClient(
+                TemporalClientAdapter()
+            ).acquire_maintenance_lease(
+                runtime_id=runtime_id,
+                profile_id=profile_id,
+                owner_id=owner_id,
+                purpose=CredentialLeasePurpose(purpose),
+                metadata=metadata,
+                owner_is_workflow=True,
+            )
+        )
+        try:
+            while not lease_task.done():
+                await asyncio.wait({lease_task}, timeout=10)
+                if not lease_task.done():
+                    activity.heartbeat({"phase": "waiting_for_maintenance_lease"})
+            lease = await lease_task
+        except BaseException:
+            if not lease_task.done():
+                lease_task.cancel()
+                await asyncio.gather(lease_task, return_exceptions=True)
+            raise
+        return {
+            "profile_id": lease.profile_id,
+            "runtime_id": lease.runtime_id,
+            "lease_id": lease.lease_id,
+            "owner_id": lease.owner_id,
+            "purpose": lease.purpose.value,
+            "already_held": lease.already_held,
+        }
+
     async def provider_profile_reset_manager(
         self,
         *,
         runtime_id: str,
     ) -> dict[str, Any]:
-        """Terminate and restart the ProviderProfileManager for *runtime_id*.
+        """Replay-safe legacy recovery that never revokes lease authority.
 
-        Used by AgentRun when the manager appears stuck (e.g. nondeterminism
-        error causing workflow task failures). Terminates the existing manager
-        if running, then starts a fresh one.
+        Older AgentRun histories may already contain this activity type, so it
+        remains registered. Its destructive implementation is intentionally
+        removed: ambiguous manager health cannot authorize termination while a
+        credential consumer may still be active.
         """
-        from temporalio.exceptions import WorkflowAlreadyStartedError
-        from temporalio.service import RPCError
-
-        from moonmind.workflows.temporal.client import TemporalClientAdapter
-        from moonmind.workflows.temporal.activity_catalog import get_workflow_task_queue
-        from moonmind.workflows.temporal.workflows.provider_profile_manager import (
-            WORKFLOW_NAME as PROVIDER_PROFILE_MANAGER_WF,
-            workflow_id_for_runtime,
-        )
-
-        workflow_id = workflow_id_for_runtime(runtime_id)
-        adapter = TemporalClientAdapter()
-        client = await adapter.get_client()
-
-        # Terminate the existing manager if it exists.
-        try:
-            handle = client.get_workflow_handle(workflow_id)
-            await handle.terminate(reason="Reset by AgentRun: manager appeared stuck")
-            logger.info(
-                "provider_profile.reset_manager terminated stale manager for runtime=%s",
-                runtime_id,
-            )
-        except RPCError:
-            logger.debug(
-                "provider_profile.reset_manager no running manager to terminate for runtime=%s",
-                runtime_id,
-            )
-
-        # Start a fresh manager.
-        await client.start_workflow(
-            PROVIDER_PROFILE_MANAGER_WF,
-            {"runtime_id": runtime_id},
-            id=workflow_id,
-            task_queue=get_workflow_task_queue(),
-        )
+        result = await self.provider_profile_ensure_manager(runtime_id=runtime_id)
         logger.info(
-            "provider_profile.reset_manager started fresh manager for runtime=%s",
+            "provider_profile.reset_manager performed non-destructive recovery for runtime=%s",
             runtime_id,
         )
-        return {"reset": True, "workflow_id": workflow_id}
+        return {
+            "reset": False,
+            "started": bool(result.get("started")),
+            "workflow_id": result["workflow_id"],
+        }
 
     async def provider_profile_manager_state(
         self,
         *,
         runtime_id: str,
         requester_workflow_id: str | None = None,
+        execution_profile_ref: str | None = None,
     ) -> dict[str, Any]:
         """Return a compact ProviderProfileManager health snapshot."""
 
@@ -3266,6 +3917,7 @@ class TemporalArtifactActivities:
                 "running": False,
                 "workflow_id": workflow_id,
                 "status": f"RPC_ERROR_{exc.status.name}",
+                "inspection_succeeded": False,
                 "error_type": type(exc).__name__,
                 "error": str(exc),
             }
@@ -3276,24 +3928,40 @@ class TemporalArtifactActivities:
                 "running": False,
                 "workflow_id": workflow_id,
                 "status": status_name,
+                "inspection_succeeded": True,
             }
 
         try:
-            state = await handle.query("get_state")
+            state = await asyncio.wait_for(
+                handle.query("get_state"),
+                timeout=_PROVIDER_PROFILE_MANAGER_QUERY_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            return {
+                "running": True,
+                "workflow_id": workflow_id,
+                "status": status_name,
+                "inspection_succeeded": False,
+                "inspection_status": "QUERY_TIMEOUT",
+            }
         except RPCError as exc:
             return {
-                "running": False,
+                "running": True,
                 "workflow_id": workflow_id,
-                "status": f"RPC_ERROR_{exc.status.name}",
+                "status": status_name,
+                "inspection_succeeded": False,
+                "inspection_status": f"RPC_ERROR_{exc.status.name}",
                 "error_type": type(exc).__name__,
                 "error": str(exc),
             }
 
         if not isinstance(state, dict):
             return {
-                "running": False,
+                "running": True,
                 "workflow_id": workflow_id,
                 "status": status_name,
+                "inspection_succeeded": False,
+                "inspection_status": "INVALID_QUERY_PAYLOAD",
                 "error_type": "InvalidQueryPayload",
             }
 
@@ -3301,23 +3969,98 @@ class TemporalArtifactActivities:
         pending_requests = state.get("pending_requests")
         event_count = state.get("event_count")
         requester_pending = False
+        requester_queue_position = None
+        requester_request: dict[str, Any] | None = None
+        pending_requests_ordered = state.get("pending_requests_ordered") is True
         if requester_workflow_id and isinstance(pending_requests, list):
-            requester_pending = any(
-                isinstance(request, dict)
-                and request.get("requester_workflow_id") == requester_workflow_id
-                for request in pending_requests
+            for index, pending_request in enumerate(pending_requests):
+                if (
+                    isinstance(pending_request, dict)
+                    and pending_request.get("requester_workflow_id")
+                    == requester_workflow_id
+                ):
+                    requester_pending = True
+                    if pending_requests_ordered:
+                        requester_queue_position = index + 1
+                    requester_request = pending_request
+                    break
+
+        requested_profile_ref = str(execution_profile_ref or "").strip()
+        if not requested_profile_ref and requester_request is not None:
+            requested_profile_ref = str(
+                requester_request.get("execution_profile_ref") or ""
+            ).strip()
+        requested_profile: dict[str, Any] | None = None
+        if isinstance(profiles, dict):
+            raw_profile = profiles.get(requested_profile_ref)
+            profile_selector = (
+                requester_request.get("profile_selector")
+                if requester_request is not None
+                else None
             )
+            if not isinstance(raw_profile, dict) and isinstance(
+                profile_selector, dict
+            ):
+                matching_profiles = [
+                    profile
+                    for profile in profiles.values()
+                    if isinstance(profile, dict)
+                    and (
+                        not profile_selector.get("providerId")
+                        or profile.get("provider_id")
+                        == profile_selector.get("providerId")
+                    )
+                    and (
+                        not profile_selector.get("runtimeMaterializationMode")
+                        or profile.get("runtime_materialization_mode")
+                        == profile_selector.get("runtimeMaterializationMode")
+                    )
+                    and (
+                        not profile_selector.get("tagsAny")
+                        or set(profile.get("tags") or {}).intersection(
+                            profile_selector.get("tagsAny") or []
+                        )
+                    )
+                    and (
+                        not profile_selector.get("tagsAll")
+                        or set(profile_selector.get("tagsAll") or []).issubset(
+                            profile.get("tags") or []
+                        )
+                    )
+                ]
+                if len(matching_profiles) == 1:
+                    raw_profile = matching_profiles[0]
+            if not isinstance(raw_profile, dict) and len(profiles) == 1:
+                only_profile = next(iter(profiles.values()))
+                raw_profile = only_profile if isinstance(only_profile, dict) else None
+            if isinstance(raw_profile, dict):
+                current_leases = raw_profile.get("current_leases")
+                requested_profile = {
+                    "profile_id": str(
+                        raw_profile.get("profile_id") or requested_profile_ref
+                    ),
+                    "max_parallel_runs": raw_profile.get("max_parallel_runs"),
+                    "current_leases_count": (
+                        len(current_leases) if isinstance(current_leases, list) else 0
+                    ),
+                    "cooldown_until": raw_profile.get("cooldown_until"),
+                    "enabled": raw_profile.get("enabled"),
+                    "launch_ready": raw_profile.get("launch_ready"),
+                }
 
         return {
             "running": True,
             "workflow_id": workflow_id,
             "status": status_name,
+            "inspection_succeeded": True,
             "profile_count": len(profiles) if isinstance(profiles, dict) else 0,
             "pending_requests_count": (
                 len(pending_requests) if isinstance(pending_requests, list) else 0
             ),
             "event_count": event_count if isinstance(event_count, int) else None,
             "requester_pending": requester_pending,
+            "requester_queue_position": requester_queue_position,
+            "requested_profile": requested_profile,
         }
 
     async def provider_profile_verify_lease_holders(
@@ -3475,6 +4218,16 @@ class TemporalArtifactActivities:
                         "granted_at": row.granted_at.isoformat()
                         if row.granted_at
                         else None,
+                        "leaseId": row.lease_id or row.workflow_id,
+                        "ownerId": row.owner_id or row.workflow_id,
+                        "purpose": row.purpose,
+                        "ownerIsWorkflow": row.owner_is_workflow,
+                        "stepExecutionId": row.step_execution_id,
+                        "oauthSessionId": row.oauth_session_id,
+                        "idempotencyKey": row.idempotency_key,
+                        "expiresAt": row.expires_at.isoformat()
+                        if row.expires_at
+                        else None,
                     }
                     for row in rows
                 ]
@@ -3505,11 +4258,26 @@ class TemporalArtifactActivities:
                             granted_at = datetime.now(timezone.utc)
                     else:
                         granted_at = datetime.now(timezone.utc)
+                    expires_at = None
+                    expires_at_str = lease.get("expiresAt")
+                    if expires_at_str:
+                        try:
+                            expires_at = datetime.fromisoformat(expires_at_str)
+                        except (ValueError, TypeError):
+                            expires_at = None
                     new_lease = ProviderProfileSlotLease(
                         runtime_id=runtime_id,
                         workflow_id=workflow_id,
                         profile_id=profile_id,
                         granted_at=granted_at,
+                        lease_id=lease.get("leaseId") or workflow_id,
+                        owner_id=lease.get("ownerId") or workflow_id,
+                        purpose=lease.get("purpose") or "execution_direct",
+                        owner_is_workflow=lease.get("ownerIsWorkflow", True) is not False,
+                        step_execution_id=lease.get("stepExecutionId"),
+                        oauth_session_id=lease.get("oauthSessionId"),
+                        idempotency_key=lease.get("idempotencyKey"),
+                        expires_at=expires_at,
                     )
                     session.add(new_lease)
                     saved_count += 1

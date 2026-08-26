@@ -22,7 +22,7 @@ The desktop workspace has two ordered regions below the masthead:
 └──────────────────────────┴───────────────────────────────────────────┘
 ```
 
-1. Top-level destinations, including **Workflows**, **Create**, **Recurring**, and **Skills**, remain in the page masthead navigation.
+1. The permanent masthead holds the primary workflow journey — **Workflows**, **Create**, and the **System** menu. **Recurring** and **Skills** are System destinations grouped under **Workflow resources**; the System trigger is active on their routes and both render as inline links in the mobile System section.
 2. A **collection sidebar**, when the route owns one, is the first child of the route workspace and lists only entities from the active collection.
 3. The primary pane begins immediately after the collection sidebar and consumes the remaining width.
 4. The split workspace must not create a second sidebar or place the collection sidebar inside the detail frame.
@@ -77,9 +77,9 @@ The sidebar is a collapsed slice of its collection list, not a card stack or unr
 | --- | --- | --- |
 | Workflows detail and participating Create surfaces | `Workflow` | Workflow rows and route-derived selection; visible by default on direct detail visits unless the persisted Workflow preference is `hidden`. |
 | Recurring detail | `Recurring` | Recurring schedule rows only; visible by default on `/schedules/{definitionId}` unless the persisted Recurring preference is `hidden`. |
-| Skills preview and create | `Skill` | Skill rows; remains present for desktop preview and create states. |
+| Skills detail | `Skill` | Skill rows and route-derived selection; visible by default on `/skills/{skillId}` unless the persisted Skills preference is `hidden`. |
 
-Workflows and Recurring may additionally expose `hidden`, `sidebar`, and `table` modes. Their mode controls live in the shell/workspace utility area associated with the current collection, not in a centered masthead. Skills does not inherit Workflow mode state; it owns a persistent desktop sidebar and a mobile list-to-detail fallback.
+Workflows, Recurring, and Skills each expose the shared `hidden`, `sidebar`, and `table` modes through the collection list-display control, with independent per-collection state and preferences (see [`WorkflowListDisplayModes.md`](WorkflowListDisplayModes.md)). Edge-rail workspace geometry is shared through the neutral `collection-workspace--edge-rail` modifier rather than per-collection CSS forks.
 
 ## 5. Shared entity-detail frame
 
@@ -163,12 +163,12 @@ All rails, filters, rows, mode controls, tabs, and actions are keyboard reachabl
 
 Representative frontend tests must prove:
 
-1. page navigation remains in the masthead;
-2. Workflows, Recurring, and Skills links appear in the same rail with common active/focus behavior;
+1. page navigation remains in the masthead, with Recurring and Skills reachable through the System menu on desktop and inline in the mobile System section;
+2. primary links and the System trigger share common active/focus behavior, and the System trigger is active on Recurring and Skills routes;
 3. each collection sidebar is the first content-region column and is not inside a centered/max-width wrapper;
 4. Workflow, Recurring, and Skills adapters share the same sidebar shell and state components;
-5. direct Workflow and Recurring detail routes show the correct entity sidebar by default on desktop;
-6. Skills preview and create states keep the Skills sidebar present on desktop;
+5. direct Workflow, Recurring, and Skills detail routes show the correct entity sidebar by default on desktop;
+6. `/skills` renders the full catalog table, and Skills detail routes honor the persisted display mode;
 7. Workflow and Recurring detail pages render the shared detail-frame regions with entity-specific content;
 8. sidebar and detail failures remain localized;
 9. mobile removes non-rendered desktop controls from the accessibility tree;

@@ -1,0 +1,6 @@
+{
+  "invariant": "a stale managed-session action cannot publish over a newer durable epoch or thread",
+  "staleWriteError": "managed session state advanced while the action was running",
+  "sessionEpoch": 2,
+  "threadId": "logical-thread-2"
+}

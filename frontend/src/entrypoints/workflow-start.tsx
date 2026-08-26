@@ -31,9 +31,20 @@ import { WorkflowWorkspaceSidebarPanel } from "../components/workflows/WorkflowW
 import { WORKFLOW_START_ROUTE_CHANGE_REQUEST_EVENT } from "../lib/workflowStartRouteGuard";
 import {
   clearRemediationCreateDraft,
-  readRemediationCreateDraft,
+  inspectRemediationCreateDraft,
   type RemediationCreateDraft,
+  type RemediationCreateDraftReadResult,
 } from "../lib/remediationCreateDraft";
+import { DEFAULT_REMEDIATION_ACTION_POLICY } from "../lib/workflowActions";
+import { ContextRetrievalControls } from "../components/ContextRetrievalControls";
+import {
+  type ContextRetrievalAuthoring,
+  compileContextRetrievalParameters,
+  defaultContextRetrievalAuthoring,
+  hasAuthoredContextRetrieval,
+  parseContextRetrievalParameters,
+  retrievalCeilingsFromRuntimeConfig,
+} from "../lib/contextRetrievalAuthoring";
 
 type WorkflowStartDashboardConfig = {
   features?: {
@@ -50,6 +61,19 @@ function readWorkflowStartDashboardConfig(payload: BootPayload): WorkflowStartDa
 
 // This cutoff is enforced on UTF-8 encoded request bytes, not JavaScript string length.
 const INLINE_TASK_INPUT_LIMIT_BYTES = 8_000;
+const REMEDIATION_DRAFT_LOAD_MESSAGES: Record<
+  Exclude<RemediationCreateDraftReadResult["status"], "valid">,
+  string
+> = {
+  missing:
+    "This remediation draft is missing or was already imported. Return to the target workflow and choose Remediate again.",
+  cross_tab:
+    "This remediation draft belongs to another browser tab. Return to the target workflow in this tab and choose Remediate again; draft contents are intentionally tab-scoped.",
+  malformed:
+    "This remediation draft is malformed or was altered, so it was not imported. Discard the draft URL or return to the target workflow and choose Remediate again.",
+  expired:
+    "This remediation draft expired before import. Return to the target workflow and choose Remediate again to pin current target evidence.",
+};
 export const ARTIFACT_COMPLETE_RETRY_DELAYS_MS = [250, 500, 1000, 2000, 2000];
 const ARTIFACT_COMPLETE_RETRY_MESSAGE = "artifact upload is not complete";
 const MODEL_OPTIONS_DATALIST_ID = "queue-model-options";
@@ -99,21 +123,6 @@ const JIRA_LAST_BOARD_SESSION_KEY =
 const JIRA_MANUAL_CONTINUATION_MESSAGE =
   "You can continue creating the workflow manually.";
 const DEPENDENCY_LIMIT = 10;
-const PENTEST_TOOL_ID = "security.pentest.run";
-const PENTEST_SCOPE_ACTIONS = [
-  "recon",
-  "scan",
-  "content_discovery",
-  "auth_testing",
-  "vuln_validation",
-  "exploit_validation",
-] as const;
-const PENTEST_BASELINE_ACTIONS = ["recon", "scan", "content_discovery"];
-const PENTEST_VALIDATE_ACTIONS = [
-  "auth_testing",
-  "vuln_validation",
-  "exploit_validation",
-];
 const PRESET_REAPPLY_REQUIRED_MESSAGE =
   "Preset instructions changed. Reapply the preset to regenerate preset-derived steps.";
 const MAX_EXPLICIT_TITLE_LENGTH = 150;
@@ -246,21 +255,6 @@ function writeLocalPreference(key: string, value: string): void {
   }
 }
 
-function createPentestScopeDraftState(
-  overrides: Partial<PentestScopeDraftState> = {},
-): PentestScopeDraftState {
-  return {
-    mode: "generate",
-    generatedScopeValues: {},
-    validationErrors: {},
-    validationWarnings: [],
-    uploadStatus: "idle",
-    confirmAuthorized: false,
-    previewOpen: false,
-    ...overrides,
-  };
-}
-
 function readSessionPreference(key: string): string {
   try {
     return String(window.sessionStorage.getItem(key) || "").trim();
@@ -376,6 +370,7 @@ interface DashboardConfig {
     defaultEffortByRuntime?: Record<string, string>;
     defaultTaskEffortByRuntime?: Record<string, string>;
     supportedAgentRuntimes?: string[];
+    supportedRuntimes?: string[];
     repositoryOptions?: {
       items?: Array<{
         value?: string | null;
@@ -387,6 +382,15 @@ interface DashboardConfig {
     providerProfiles?: {
       list?: string;
       defaultProfileRef?: string | null;
+    };
+    omnigentExecutionCatalog?: {
+      profiles?: Array<{
+        ref?: string;
+        displayName?: string;
+        defaultPolicyRef?: string;
+        providerRuntime?: string;
+      }>;
+      policies?: Array<{ ref?: string; hostMode?: string }>;
     };
     presetCatalog?: {
       enabled?: boolean;
@@ -410,6 +414,7 @@ interface DashboardConfig {
       defaultBoardId?: string;
       rememberLastBoardInSession?: boolean;
     };
+    retrievalAuthoring?: Record<string, unknown>;
   };
 }
 
@@ -580,6 +585,140 @@ interface ProviderProfile {
   tags?: string[] | null;
 }
 
+interface OmnigentCatalogGateReason {
+  code: string;
+  message: string;
+  remediationHref: string;
+}
+
+interface OmnigentLaunchPolicyOption {
+  ref: string;
+  displayName: string;
+  hostMode: "static_compose" | "on_demand_docker";
+  isDefault: boolean;
+}
+
+interface OmnigentCodexCatalogReadiness {
+  schemaVersion: "moonmind.omnigent-codex-readiness.v2";
+  runtimeId: "omnigent";
+  displayName: string;
+  available: boolean;
+  defaultExecutionProfileRef: string;
+  executionProfiles: Array<{
+    ref: string;
+    displayName: string;
+    available: boolean;
+    launchPolicies: OmnigentLaunchPolicyOption[];
+    gateReasons: OmnigentCatalogGateReason[];
+  }>;
+  eligibleProviderProfiles: Array<{
+    profileId: string;
+    label: string;
+    providerId: string;
+    runtimeId: "codex_cli" | "claude_code";
+    busy: boolean;
+    queueWhenBusy: boolean;
+  }>;
+  ineligibleProviderProfiles: Array<{
+    profileId: string;
+    label: string;
+    runtimeId: "codex_cli" | "claude_code";
+    gateReasons: OmnigentCatalogGateReason[];
+  }>;
+  gateReasons: OmnigentCatalogGateReason[];
+  supportGateReasons: OmnigentCatalogGateReason[];
+  remediationRelease: {
+    policyVersion?: string;
+    matrixVersion?: string;
+    manualDiagnosisSupported?: boolean;
+    manualMutationSupported?: boolean;
+    autonomousRolloutAuthorized: boolean;
+    promotionAllowed?: boolean;
+    manualPromotionAllowed?: boolean;
+    rollbackRequired?: boolean;
+    generatedAt?: string | null;
+    expiresAt?: string | null;
+    telemetry?: {
+      schemaVersion?: string;
+      groups?: Record<string, unknown>;
+    };
+    alerts?: Array<{
+      code?: string;
+      severity?: string;
+      operatorAction?: string;
+    }>;
+    blockers: string[];
+  };
+}
+
+interface OmnigentExecutionReadinessV3 {
+  schemaVersion: "moonmind.omnigent-execution-readiness.v3";
+  runtimeId: "omnigent";
+  displayName: "Omnigent";
+  executionTargets: Array<{
+    ref: string;
+    harnessId: string;
+    agentProfileRef: { profileId: string; version: number; digest: string };
+    available: boolean;
+    supportTier: "experimental" | "supported";
+    compatibleProviderProfiles: Array<{
+      profileId: string; label: string; providerId: string; runtimeId: string;
+      busy?: boolean; queueWhenBusy?: boolean;
+    }>;
+    compatibleHostClasses: string[];
+    policies: string[];
+    models: string[];
+    gateReasons: OmnigentCatalogGateReason[];
+  }>;
+}
+
+export const OMNIGENT_READINESS_REFRESH_MS = 2_000;
+
+const OMNIGENT_RECOVERABLE_GATE_CODES = new Set([
+  "bridge_conformance_gated",
+  "bridge_endpoint_not_ready",
+  "immutable_image_unavailable",
+  "no_eligible_codex_oauth_profile",
+  "on_demand_backend_unavailable",
+  "profile_capacity_unavailable",
+  "static_host_not_ready",
+]);
+
+interface OmnigentReadinessSelection {
+  executionTargetRef?: string;
+  providerProfileRef?: string;
+}
+
+export function omnigentReadinessRefetchInterval(
+  catalog: OmnigentCodexCatalogReadiness | undefined,
+  selection: OmnigentReadinessSelection = {},
+): number | false {
+  if (!catalog) return false;
+  const executionTargetRef =
+    selection.executionTargetRef || catalog.defaultExecutionProfileRef;
+  const selectedExecutionProfile = (catalog.executionProfiles || []).find(
+    (profile) => profile.ref === executionTargetRef,
+  );
+  const selectedIneligibleProviderProfile = (
+    catalog.ineligibleProviderProfiles || []
+  ).find((profile) => profile.profileId === selection.providerProfileRef);
+  if (
+    selectedExecutionProfile?.available !== false &&
+    !selectedIneligibleProviderProfile &&
+    catalog.available
+  ) {
+    return false;
+  }
+  const reasons = [
+    ...(selectedExecutionProfile?.gateReasons || catalog.gateReasons || []),
+    ...(selectedIneligibleProviderProfile?.gateReasons || []),
+  ];
+  return reasons.length > 0 &&
+    reasons.every((reason) => OMNIGENT_RECOVERABLE_GATE_CODES.has(reason.code))
+    ? OMNIGENT_READINESS_REFRESH_MS
+    : false;
+}
+
 interface ProviderModelEffortTier {
   label?: string | null;
   model?: string | null;
@@ -616,6 +755,18 @@ function modelTiersForProfile(profile: ProviderProfile | undefined): ProviderMod
       annotations: {},
     },
   ];
+}
+
+function defaultModelTierForProfile(
+  profile: ProviderProfile | undefined,
+): ProviderModelEffortTier | undefined {
+  if (!profile || !Array.isArray(profile.model_tiers)) {
+    return undefined;
+  }
+  const defaultTier = profile.default_model_tier ?? 1;
+  return Number.isInteger(defaultTier) && defaultTier >= 1
+    ? profile.model_tiers[defaultTier - 1]
+    : undefined;
 }
 
 export function previewModelTier(
@@ -711,6 +862,26 @@ export function resolveDefaultProviderProfileId(
       return left.profile_id.localeCompare(right.profile_id);
     })[0]?.profile_id || ""
   );
+}
+
+export function resolveLoadedProviderProfileId({
+  profiles,
+  providerProfile,
+  configuredDefaultRef,
+  preserveUnavailableProfile,
+}: {
+  profiles: ProviderProfile[];
+  providerProfile: string;
+  configuredDefaultRef?: string | null;
+  preserveUnavailableProfile: boolean;
+}): string {
+  if (profiles.some((profile) => profile.profile_id === providerProfile)) {
+    return providerProfile;
+  }
+  if (preserveUnavailableProfile && providerProfile) {
+    return providerProfile;
+  }
+  return resolveDefaultProviderProfileId(profiles, configuredDefaultRef);
 }
 
 interface SkillsResponse {
@@ -840,6 +1011,8 @@ interface ExpandedStepPayload {
   skill?: PresetStepSkill;
   tool?: PresetStepSkill;
   type?: string;
+  repositoryOperation?: "read" | "write";
+  annotations?: Record<string, unknown>;
   source?: Record<string, unknown>;
   presetProvenance?: Record<string, unknown>;
   inputAttachments?: StepAttachmentRef[];
@@ -852,6 +1025,7 @@ interface ExpandedStepPayload {
 
 interface PresetExpandResponse {
   steps?: ExpandedStepPayload[];
+  publish?: Record<string, unknown>;
   appliedTemplate?: {
     slug?: string;
     presetDigest?: string;
@@ -919,26 +1093,59 @@ interface StepAttachmentRef {
   sizeBytes: number;
 }
 
-type PentestScopeMode = "generate" | "upload" | "existing";
-
-interface PentestScopeDraftState {
-  mode: PentestScopeMode;
-  generatedScopeValues: Record<string, unknown>;
-  uploadedScopeFileName?: string;
-  uploadedScopePreview?: Record<string, unknown>;
-  attachedArtifactId?: string;
-  attachedArtifactRef?: string;
-  attachedTarget?: string;
-  attachedOperationMode?: string;
-  attachedRunnerProfileId?: string;
-  validationErrors: Record<string, string>;
-  validationWarnings: string[];
-  uploadStatus: "idle" | "validating" | "uploading" | "attached" | "failed";
-  confirmAuthorized: boolean;
-  previewOpen: boolean;
-}
-
 type StepType = "tool" | "skill" | "preset";
+type RepositoryOperation = "" | "read" | "write";
+
+type OmnigentAgentProfileVersionOption = {
+  version: number;
+  digest: string;
+  document?: {
+    schemaVersion?: string;
+    harness?: { id?: string } | string;
+    allowedLaunchPolicyRefs?: string[];
+    model?: { qualifiedId?: string; effort?: string };
+    execution?: {
+      defaultExecutionProfileRef?: string;
+      allowedLaunchPolicyRefs?: string[];
+    };
+    policyRef?: string;
+  };
+  validationResult?: { ready?: boolean } | null;
+};
+
+type OmnigentAgentProfileOption = {
+  profileId: string;
+  displayName: string;
+  state: string;
+  defaultForRuntime?: boolean;
+  activeVersion?: number | null;
+  versions: OmnigentAgentProfileVersionOption[];
+};
+
+function resolveOmnigentLaunchPolicyOptions(
+  launchPolicies: OmnigentLaunchPolicyOption[],
+  agentProfileVersion: OmnigentAgentProfileVersionOption | undefined,
+): {
+  selectable: OmnigentLaunchPolicyOption[];
+  preferred: OmnigentLaunchPolicyOption | undefined;
+} {
+  const allowedPolicyRefs =
+    agentProfileVersion?.document?.allowedLaunchPolicyRefs ||
+    agentProfileVersion?.document?.execution?.allowedLaunchPolicyRefs || [];
+  const selectable = launchPolicies.filter(
+    (policy) =>
+      allowedPolicyRefs.length === 0 || allowedPolicyRefs.includes(policy.ref),
+  );
+  const preferredPolicyRefs = [
+    agentProfileVersion?.document?.policyRef,
+    ...allowedPolicyRefs,
+    launchPolicies.find((policy) => policy.isDefault)?.ref,
+  ].filter((ref): ref is string => Boolean(ref));
+  const preferred = preferredPolicyRefs
+    .map((ref) => selectable.find((policy) => policy.ref === ref))
+    .find(Boolean);
+  return { selectable, preferred };
+}
 
 const STEP_TYPE_HELP_TEXT: Record<StepType, string> = {
   skill: "Skill asks an agent to perform work using reusable behavior.",
@@ -966,12 +1173,12 @@ interface StepState {
   title: string;
   stepType: StepType;
   instructions: string;
+  repositoryOperation: RepositoryOperation;
   toolId: string;
   toolInputs: string;
   toolInputValues: Record<string, unknown>;
   toolInputErrors: Record<string, string>;
   toolJsonMode: boolean;
-  pentestScopeDraft: PentestScopeDraftState;
   skillId: string;
   skillArgs: string;
   skillInputContractDigest: string;
@@ -998,6 +1205,7 @@ interface StepState {
   templateAttachments: StepAttachmentRef[];
   generatedTool?: PresetStepSkill;
   generatedSkill?: PresetStepSkill;
+  annotations?: Record<string, unknown>;
   source?: Record<string, unknown>;
   storyOutput?: Record<string, unknown>;
   jiraOrchestration?: Record<string, unknown>;
@@ -1019,6 +1227,7 @@ interface PresetExpansionState {
   assumptions: string[];
   capabilities: string[];
   warnings: string[];
+  workflowPublish?: Record<string, unknown>;
   appliedTemplate?: PresetExpandResponse["appliedTemplate"];
 }
 
@@ -1031,6 +1240,8 @@ interface AppliedTemplateState {
   capabilities: string[];
   composition?: Record<string, unknown>;
   authoredPresets?: Array<Record<string, unknown>>;
+  /** Create-page-only copy of the preset's expanded workflow publish policy. */
+  workflowPublish?: Record<string, unknown>;
 }
 
 function readDashboardConfig(payload: BootPayload): DashboardConfig {
@@ -1465,6 +1676,16 @@ export function buildEditParametersPatch({
   if (!("mergeAutomation" in submittedPayload)) {
     delete parametersPatch.mergeAutomation;
   }
+  // Context retrieval authority (#3514) is an operator-cleared control. When the
+  // submission does not carry `rag` / `followUpRetrieval` the operator disabled
+  // that authoring, so the inherited base value must be explicitly removed
+  // rather than silently preserved (mirrors the `mergeAutomation` clear above).
+  if (!("rag" in submittedPayload)) {
+    delete parametersPatch.rag;
+  }
+  if (!("followUpRetrieval" in submittedPayload)) {
+    delete parametersPatch.followUpRetrieval;
+  }
   delete parametersPatch.startingBranch;
   delete parametersPatch.targetBranch;
   return parametersPatch;
@@ -1783,12 +2004,12 @@ function createStepStateEntry(
     title: "",
     stepType: "skill",
     instructions: "",
+    repositoryOperation: "",
     toolId: "",
     toolInputs: "{}",
     toolInputValues: {},
     toolInputErrors: {},
     toolJsonMode: false,
-    pentestScopeDraft: createPentestScopeDraftState(),
     skillId: "",
     skillArgs: "",
     skillInputContractDigest: "",
@@ -2090,6 +2311,7 @@ function createStepStateEntriesFromTemporalDraft(
       title: step.title,
       stepType: step.stepType,
       instructions: step.instructions,
+      repositoryOperation: step.repositoryOperation || "",
       skillId:
         step.stepType === "skill"
           ? shouldUsePrimarySkill
@@ -2139,6 +2361,9 @@ function createStepStateEntriesFromTemporalDraft(
       templateAttachments:
         step.templateAttachments ||
         (step.inputAttachments || []).map(stepAttachmentRefFromTemporal),
+      ...(step.annotations && Object.keys(step.annotations).length > 0
+        ? { annotations: { ...step.annotations } }
+        : {}),
       ...(step.storyOutput && Object.keys(step.storyOutput).length > 0
         ? { storyOutput: step.storyOutput }
         : {}),
@@ -2273,6 +2498,26 @@ function activeAppliedTemplatesForSteps(
       stepIds.some((stepId) => activeStepIds.has(stepId))
     );
   });
+}
+
+function workflowPublishForAppliedTemplates(
+  appliedTemplates: AppliedTemplateState[],
+): Record<string, unknown> | null {
+  for (let index = appliedTemplates.length - 1; index >= 0; index -= 1) {
+    const publish = appliedTemplates[index]?.workflowPublish;
+    if (publish && Object.keys(publish).length > 0) {
+      return cloneJsonRecord(publish);
+    }
+  }
+  return null;
+}
+
+function appliedTemplatePayloadsForSubmit(
+  appliedTemplates: AppliedTemplateState[],
+): Array<Omit<AppliedTemplateState, "workflowPublish">> {
+  return appliedTemplates.map(({ workflowPublish: _workflowPublish, ...template }) =>
+    template,
+  );
 }
 
 function templateCapabilitiesForStep(
@@ -2992,6 +3237,7 @@ const RUNTIME_DISPLAY_LABELS: Record<string, string> = {
   claude_code: "Claude Code",
   codex_cli: "Codex CLI",
   codex_cloud: "Codex Cloud",
+  omnigent: "Codex via Omnigent",
 };
 
 function formatRuntimeLabel(runtimeId: string): string {
@@ -3176,6 +3422,16 @@ function isMergeAutomationPublishMode(value: string | null | undefined): boolean
   return normalizePublishModeSelection(value) === PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE;
 }
 
+function publishModeSelectionForWorkflowPublish(
+  publish: Record<string, unknown> | null | undefined,
+): string {
+  const mode = normalizePublishModeForSubmit(String(publish?.mode || ""));
+  const mergeAutomation = recordValue(publish?.mergeAutomation);
+  return mode === "pr" && mergeAutomation.enabled === true
+    ? PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE
+    : mode;
+}
+
 function templateEnumOptionLabel(
   definition: PresetInputDefinition,
   option: string,
@@ -3220,6 +3476,7 @@ function mapExpandedStepToState(
   const jiraOrchestration =
     nonEmptyRecordValue(step.jiraOrchestration) ||
     nonEmptyRecordValue(step.jira_orchestration);
+  const annotations = nonEmptyRecordValue(step.annotations);
   const source =
     nonEmptyRecordValue(step.source) ||
     compactSourceFromPresetProvenance(nonEmptyRecordValue(step.presetProvenance));
@@ -3234,6 +3491,11 @@ function mapExpandedStepToState(
     title: String(step.title || "").trim(),
     stepType: isToolStep ? "tool" : "skill",
     instructions,
+    repositoryOperation:
+      step.repositoryOperation === "read" ||
+      step.repositoryOperation === "write"
+        ? step.repositoryOperation
+        : "",
     toolId: isToolStep ? String(tool.id || tool.name || "").trim() : "",
     toolInputs: isToolStep ? JSON.stringify(inlineInputs, null, 2) : "{}",
     toolInputValues: isToolStep
@@ -3250,6 +3512,7 @@ function mapExpandedStepToState(
     templateAttachments,
     ...(step.tool ? { generatedTool: step.tool } : {}),
     ...(step.skill ? { generatedSkill: step.skill } : {}),
+    ...(annotations ? { annotations: { ...annotations } } : {}),
     ...(normalizedSource ? { source: normalizedSource } : {}),
     ...(storyOutput ? { storyOutput } : {}),
     ...(jiraOrchestration ? { jiraOrchestration } : {}),
@@ -3317,6 +3580,33 @@ function schemaRequired(schema: Record<string, unknown> | undefined): Set<string
   );
 }
 
+function schemaAlternativeRequiredGroups(
+  schema: Record<string, unknown> | undefined,
+): string[][] {
+  const alternatives = Array.isArray(schema?.anyOf)
+    ? schema.anyOf
+    : Array.isArray(schema?.oneOf)
+      ? schema.oneOf
+      : [];
+  return alternatives
+    .map((alternative) =>
+      Array.from(schemaRequired(recordValue(alternative))),
+    )
+    .filter((group) => group.length > 0);
+}
+
+function schemaGuidedInputNames(
+  schema: Record<string, unknown> | undefined,
+): Set<string> {
+  const names = schemaRequired(schema);
+  for (const group of schemaAlternativeRequiredGroups(schema)) {
+    for (const name of group) {
+      names.add(name);
+    }
+  }
+  return names;
+}
+
 function capabilityFieldLabel(name: string, schema: Record<string, unknown>): string {
   return String(schema.title || name)
     .trim()
@@ -3360,11 +3650,21 @@ function capabilityWidgetName(
   schema: Record<string, unknown>,
   uiSchema: Record<string, unknown>,
 ): string {
-  return String(
+  const widget = String(
     uiSchema.widget || schema["x-moonmind-widget"] || schema.format || schema.type || "text",
   )
     .trim()
     .toLowerCase();
+  const aliases: Record<string, string> = {
+    checkbox: "boolean",
+    editor: "textarea",
+    "github.repository-picker": "repository-picker",
+    repository: "repository-picker",
+    repo: "repository-picker",
+    "repo-picker": "repository-picker",
+    "github.branch-picker": "branch",
+  };
+  return aliases[widget] || widget;
 }
 
 function schemaChoiceOptions(schema: Record<string, unknown>): Array<{
@@ -3451,6 +3751,8 @@ function unsupportedCapabilityWidget(
     "date-time",
     "email",
     "integer",
+    "json",
+    "multi-select",
     "github.issue-picker",
     "jira.issue-picker",
     "markdown",
@@ -3734,6 +4036,30 @@ function validateSchemaCapabilityValues(
       errors[name] = `${capabilityFieldLabel(name, fieldSchema)} must be a JSON object.`;
     }
   }
+  const alternativeRequiredGroups = schemaAlternativeRequiredGroups(
+    detail.inputSchema,
+  );
+  if (
+    alternativeRequiredGroups.length > 0 &&
+    !alternativeRequiredGroups.some((group) =>
+      group.every((name) => {
+        const value = values[name];
+        return value !== undefined && value !== null && value !== "";
+      }),
+    )
+  ) {
+    const labels = alternativeRequiredGroups.map((group) =>
+      group
+        .map((name) =>
+          capabilityFieldLabel(name, recordValue(properties[name])),
+        )
+        .join(" and "),
+    );
+    const errorField = alternativeRequiredGroups[0]?.[0];
+    if (errorField) {
+      errors[errorField] = `${labels.join(" or ")} is required.`;
+    }
+  }
   return errors;
 }
 
@@ -3910,277 +4236,6 @@ function serializeToolInputValues(values: Record<string, unknown>): string {
   return JSON.stringify(values, null, 2);
 }
 
-function slugPart(value: string): string {
-  return (
-    value
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 48) || "target"
-  );
-}
-
-function targetHostFromValue(value: string): string {
-  const target = value.trim();
-  if (!target) {
-    return "";
-  }
-  try {
-    return new URL(target).hostname;
-  } catch {
-    return target.replace(/^https?:\/\//i, "").split(/[/:?#]/, 1)[0] || target;
-  }
-}
-
-function inferPentestTargetClass(target: string): string {
-  const host = targetHostFromValue(target).toLowerCase();
-  if (
-    host === "localhost" ||
-    host.endsWith(".local") ||
-    host.includes("lab") ||
-    host.startsWith("10.") ||
-    host.startsWith("192.168.") ||
-    /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(host)
-  ) {
-    return "lab";
-  }
-  if (host.endsWith(".internal") || host.endsWith(".test")) {
-    return "internal_authorized";
-  }
-  return "external_authorized";
-}
-
-function defaultPentestExpiresAt(): string {
-  const expires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-  const localExpires = new Date(
-    expires.getTime() - expires.getTimezoneOffset() * 60 * 1000,
-  );
-  return localExpires.toISOString().slice(0, 16);
-}
-
-function datetimeLocalToIso(value: unknown): string {
-  const raw = String(value || "").trim();
-  if (!raw) {
-    return new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
-  }
-  const date = new Date(raw);
-  return Number.isNaN(date.getTime()) ? raw : date.toISOString();
-}
-
-function defaultPentestAllowedActions(operationMode: string): string[] {
-  if (operationMode === "validate_hypothesis") {
-    return [...PENTEST_VALIDATE_ACTIONS];
-  }
-  if (operationMode === "full_authorized") {
-    return [...PENTEST_SCOPE_ACTIONS];
-  }
-  return [...PENTEST_BASELINE_ACTIONS];
-}
-
-function pentestGeneratedScopeValues(
-  draft: PentestScopeDraftState,
-  toolInputs: Record<string, unknown>,
-): Record<string, unknown> {
-  const target = String(toolInputs.target || "").trim();
-  const host = targetHostFromValue(target);
-  const operationMode = String(toolInputs.operation_mode || "recon_only").trim();
-  const runnerProfile = String(
-    toolInputs.runner_profile_id || "pentestgpt-claude-oauth",
-  ).trim();
-  const current = draft.generatedScopeValues;
-  const inferredClass = inferPentestTargetClass(target);
-  return {
-    scope_title:
-      current.scope_title ||
-      (target ? `Pentest scope for ${target}` : "Pentest scope"),
-    scope_id:
-      current.scope_id ||
-      `${slugPart(host || target)}-${new Date().toISOString().slice(0, 10)}`,
-    environment: current.environment || "development",
-    expires_at: current.expires_at || defaultPentestExpiresAt(),
-    approval_ticket: current.approval_ticket || "self-approved-dev-test",
-    target_url: current.target_url || target,
-    target_host: current.target_host || host,
-    target_class: current.target_class || inferredClass,
-    allowed_actions: Array.isArray(current.allowed_actions)
-      ? current.allowed_actions
-      : defaultPentestAllowedActions(operationMode),
-    allowed_runner_profiles: Array.isArray(current.allowed_runner_profiles)
-      ? current.allowed_runner_profiles
-      : [runnerProfile || "pentestgpt-claude-oauth"],
-    requires_manual_approval:
-      current.requires_manual_approval !== undefined
-        ? Boolean(current.requires_manual_approval)
-        : inferredClass === "external_authorized",
-    approval_recorded:
-      current.approval_recorded !== undefined
-        ? Boolean(current.approval_recorded)
-        : draft.confirmAuthorized,
-    application_stack: current.application_stack || "",
-    notes: current.notes || "",
-  };
-}
-
-function buildPentestApprovedScope(
-  draft: PentestScopeDraftState,
-  toolInputs: Record<string, unknown>,
-): Record<string, unknown> {
-  const values = pentestGeneratedScopeValues(draft, toolInputs);
-  const target = String(values.target_url || toolInputs.target || "").trim();
-  const host = String(values.target_host || targetHostFromValue(target)).trim();
-  const allowedActions = Array.isArray(values.allowed_actions)
-    ? values.allowed_actions.map(String).filter(Boolean)
-    : defaultPentestAllowedActions(String(toolInputs.operation_mode || "recon_only"));
-  const allowedRunnerProfiles = Array.isArray(values.allowed_runner_profiles)
-    ? values.allowed_runner_profiles.map(String).filter(Boolean)
-    : [String(toolInputs.runner_profile_id || "pentestgpt-claude-oauth")];
-  return {
-    scope_id: String(values.scope_id || slugPart(host || target)).trim(),
-    title: String(values.scope_title || `Pentest scope for ${target}`).trim(),
-    owner_user_id: null,
-    created_at: new Date().toISOString(),
-    expires_at: datetimeLocalToIso(values.expires_at),
-    target_class: String(values.target_class || inferPentestTargetClass(target)),
-    targets: [
-      ...(target
-        ? [
-            {
-              kind: target.includes("://") ? "url" : "host",
-              value: target,
-              notes: String(values.notes || "Approved target.").trim(),
-            },
-          ]
-        : []),
-      ...(host && host !== target
-        ? [
-            {
-              kind: "fqdn",
-              value: host,
-              notes: "Host component of approved target.",
-            },
-          ]
-        : []),
-    ],
-    allowed_actions: allowedActions,
-    prohibited_actions: [],
-    requires_manual_approval: Boolean(values.requires_manual_approval),
-    approval_ticket: String(values.approval_ticket || "").trim(),
-    approval_recorded: Boolean(values.approval_recorded || draft.confirmAuthorized),
-    allowed_runner_profiles: allowedRunnerProfiles,
-    required_network_attachment_type: null,
-    metadata: {
-      environment: String(values.environment || "development"),
-      application_stack: String(values.application_stack || "").trim() || null,
-      production: String(values.environment || "").trim() === "production",
-      first_pass: true,
-      human_restrictions: [
-        "No denial-of-service testing on first pass.",
-        "No persistence.",
-        "No uncontrolled data exfiltration.",
-        "No uncontrolled lateral movement.",
-      ],
-    },
-  };
-}
-
-function validatePentestScopeDocument(
-  scope: Record<string, unknown>,
-  target: string,
-): Record<string, string> {
-  const errors: Record<string, string> = {};
-  if (!String(scope.scope_id || "").trim()) {
-    errors.scope_id = "Scope id is required.";
-  }
-  if (!String(scope.title || "").trim()) {
-    errors.title = "Scope title is required.";
-  }
-  if (!Array.isArray(scope.targets) || scope.targets.length === 0) {
-    errors.targets = "At least one target is required.";
-  }
-  const allowedActions = Array.isArray(scope.allowed_actions)
-    ? scope.allowed_actions.map(String)
-    : [];
-  if (allowedActions.length === 0) {
-    errors.allowed_actions = "At least one allowed action is required.";
-  } else {
-    const unsupported = allowedActions.filter(
-      (action) => !PENTEST_SCOPE_ACTIONS.includes(action as typeof PENTEST_SCOPE_ACTIONS[number]),
-    );
-    if (unsupported.length > 0) {
-      errors.allowed_actions = `Unsupported allowed action: ${unsupported[0]}.`;
-    }
-  }
-  if (
-    !Array.isArray(scope.allowed_runner_profiles) ||
-    scope.allowed_runner_profiles.length === 0
-  ) {
-    errors.allowed_runner_profiles = "At least one runner profile is required.";
-  }
-  const expires = new Date(String(scope.expires_at || ""));
-  if (Number.isNaN(expires.getTime()) || expires <= new Date()) {
-    errors.expires_at = "Expiration must be in the future.";
-  }
-  const normalizedTarget = target.trim().toLowerCase();
-  if (normalizedTarget && Array.isArray(scope.targets)) {
-    const normalizedTargetHost = targetHostFromValue(normalizedTarget).toLowerCase();
-    const covered = scope.targets.some((entry) => {
-      const value =
-        entry && typeof entry === "object"
-          ? String((entry as Record<string, unknown>).value || "").toLowerCase()
-          : "";
-      if (!value) {
-        return false;
-      }
-      const scopeHost = targetHostFromValue(value).toLowerCase();
-      return (
-        value === normalizedTarget ||
-        (normalizedTargetHost &&
-          scopeHost &&
-          (normalizedTargetHost === scopeHost ||
-            normalizedTargetHost.endsWith(`.${scopeHost}`)))
-      );
-    });
-    if (!covered) {
-      errors.target = "Scope targets do not appear to cover the selected target.";
-    }
-  }
-  return errors;
-}
-
-function pentestScopeWarnings(
-  draft: PentestScopeDraftState,
-  toolInputs: Record<string, unknown>,
-): string[] {
-  if (!draft.attachedArtifactId) {
-    return [];
-  }
-  const warnings: string[] = [];
-  const target = String(toolInputs.target || "").trim();
-  const operationMode = String(toolInputs.operation_mode || "").trim();
-  const runnerProfileId = String(toolInputs.runner_profile_id || "").trim();
-  if (draft.attachedTarget && target && draft.attachedTarget !== target) {
-    warnings.push(
-      "The target changed after this scope was attached. Regenerate or revalidate the scope before submitting.",
-    );
-  }
-  if (
-    draft.attachedOperationMode &&
-    operationMode &&
-    draft.attachedOperationMode !== operationMode
-  ) {
-    warnings.push("The operation mode changed after this scope was attached.");
-  }
-  if (
-    draft.attachedRunnerProfileId &&
-    runnerProfileId &&
-    draft.attachedRunnerProfileId !== runnerProfileId
-  ) {
-    warnings.push("The runner profile changed after this scope was attached.");
-  }
-  return warnings;
-}
-
 function SchemaCapabilityFields({
   fields,
   detail,
@@ -4190,6 +4245,7 @@ function SchemaCapabilityFields({
   repositoryOptions,
   branchOptions,
   onChange,
+  onGitHubIssueRepositoryChange,
 }: {
   fields: Array<[string, unknown]>;
   detail: Pick<PresetDetail, "uiSchema" | "defaults">;
@@ -4199,6 +4255,7 @@ function SchemaCapabilityFields({
   repositoryOptions: RepositoryOption[];
   branchOptions: BranchOption[];
   onChange: (name: string, value: unknown) => void;
+  onGitHubIssueRepositoryChange?: (repository: string) => void;
 }): ReactElement | null {
   if (fields.length === 0) {
     return null;
@@ -4215,7 +4272,15 @@ function SchemaCapabilityFields({
         const error = errors[name];
         const description = String(fieldSchema.description || "").trim();
         const choices = schemaChoiceOptions(fieldSchema);
-        if (unsupportedCapabilityWidget(widget, fieldSchema)) {
+        const hasTypeSafeRenderer =
+          fieldSchema.type === "boolean" ||
+          fieldSchema.type === "number" ||
+          fieldSchema.type === "integer" ||
+          fieldSchema.type === "array" ||
+          fieldSchema.type === "object" ||
+          Array.isArray(fieldSchema.enum) ||
+          choices.length > 0;
+        if (unsupportedCapabilityWidget(widget, fieldSchema) && !hasTypeSafeRenderer) {
           return (
             <label key={name} htmlFor={inputId}>
               {label}
@@ -4228,7 +4293,9 @@ function SchemaCapabilityFields({
                 aria-invalid={Boolean(error)}
                 onChange={(event) => onChange(name, event.target.value)}
               />
-              <span className="notice small">Unsupported field widget.</span>
+              <span className="notice small">
+                Widget {widget} is unavailable; using a text field.
+              </span>
               {error ? <span className="notice small">{error}</span> : null}
             </label>
           );
@@ -4253,13 +4320,27 @@ function SchemaCapabilityFields({
                 aria-invalid={Boolean(error)}
                 onChange={(event) => {
                   if (provider === "github") {
-                    onChange(
-                      name,
-                      normalizeGitHubIssueInput(
-                        event.target.value,
-                        String(issueValue.repository || readLocalPreference(LAST_REPOSITORY_OPTION_PREFERENCE_KEY) || ""),
+                    const normalizedIssue = normalizeGitHubIssueInput(
+                      event.target.value,
+                      String(
+                        issueValue.repository ||
+                          readLocalPreference(
+                            LAST_REPOSITORY_OPTION_PREFERENCE_KEY,
+                          ) ||
+                          "",
                       ),
                     );
+                    onChange(name, normalizedIssue);
+                    const issueRepository = String(
+                      normalizedIssue.repository || "",
+                    ).trim();
+                    if (
+                      issueRepository &&
+                      Number.isInteger(normalizedIssue.number) &&
+                      Number(normalizedIssue.number) > 0
+                    ) {
+                      onGitHubIssueRepositoryChange?.(issueRepository);
+                    }
                     return;
                   }
                   onChange(name, {
@@ -4378,7 +4459,10 @@ function SchemaCapabilityFields({
             </label>
           );
         }
-        if (widget === "textarea" || widget === "markdown") {
+        if (widget === "textarea" || widget === "markdown" || widget === "json") {
+          const structuredValue =
+            widget === "json" &&
+            (fieldSchema.type === "array" || fieldSchema.type === "object");
           return (
             <label key={name} htmlFor={inputId}>
               {label}
@@ -4388,7 +4472,14 @@ function SchemaCapabilityFields({
                 value={capabilityInputTextValue(values, detail.defaults, name)}
                 disabled={disabled}
                 aria-invalid={Boolean(error)}
-                onChange={(event) => onChange(name, event.target.value)}
+                onChange={(event) =>
+                  onChange(
+                    name,
+                    structuredValue
+                      ? parseComplexCapabilityValue(event.target.value)
+                      : event.target.value,
+                  )
+                }
               />
               {description ? <span className="small">{description}</span> : null}
               {error ? <span className="notice small">{error}</span> : null}
@@ -4740,77 +4831,6 @@ async function createInputArtifact(
   await completeArtifactUpload(
     artifactId,
     "Failed to finalize workflow input artifact upload.",
-  );
-  return { artifactId };
-}
-
-async function createJsonArtifact(
-  createEndpoint: string,
-  body: string,
-  metadata: Record<string, unknown>,
-  failureLabel: string,
-): Promise<{ artifactId: string }> {
-  const createResponse = await fetch(createEndpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-    },
-    body: JSON.stringify({
-      content_type: "application/json; charset=utf-8",
-      size_bytes: new TextEncoder().encode(body).length,
-      retention_class: "pinned",
-      metadata,
-    }),
-  });
-  if (!createResponse.ok) {
-    throw new Error(
-      await responseErrorMessage(createResponse, `Failed to create ${failureLabel}.`),
-    );
-  }
-  const created = (await createResponse.json()) as {
-    artifact_ref?: { artifact_id?: string };
-    upload?: {
-      mode?: string;
-      upload_url?: string;
-      required_headers?: Record<string, string>;
-    };
-  };
-  const artifactId = String(created.artifact_ref?.artifact_id || "").trim();
-  const uploadMode = String(created.upload?.mode || "single_put")
-    .trim()
-    .toLowerCase();
-  if (!artifactId) {
-    throw new Error(`${failureLabel} upload details were incomplete.`);
-  }
-  if (uploadMode === "multipart") {
-    throw new Error(`${failureLabel} is too large for browser upload.`);
-  }
-  const uploadUrl =
-    String(created.upload?.upload_url || "").trim() ||
-    `/api/artifacts/${encodeURIComponent(artifactId)}/content`;
-  const uploadHeaders = new Headers(
-    created.upload?.required_headers &&
-      typeof created.upload.required_headers === "object"
-      ? created.upload.required_headers
-      : {},
-  );
-  if (!uploadHeaders.has("content-type")) {
-    uploadHeaders.set("content-type", "application/json; charset=utf-8");
-  }
-  const uploadResponse = await fetch(uploadUrl, {
-    method: "PUT",
-    headers: uploadHeaders,
-    body,
-  });
-  if (!uploadResponse.ok) {
-    throw new Error(
-      await responseErrorMessage(uploadResponse, `Failed to upload ${failureLabel}.`),
-    );
-  }
-  await completeArtifactUpload(
-    artifactId,
-    `Failed to finalize ${failureLabel}.`,
   );
   return { artifactId };
 }
@@ -5168,14 +5188,6 @@ function ArrowRightIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
       <path d="M5 12h14m0 0-5-5m5 5-5 5" />
-    </svg>
-  );
-}
-
-function CheckIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <path d="M5 12.5 10 17.5 19 7.5" />
     </svg>
   );
 }
@@ -5705,6 +5717,9 @@ function StepContextBar({
 function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   useLiquidGL({ options: LIQUID_GL_OPTIONS });
   const dashboardConfig = readDashboardConfig(payload);
+  const retrievalCeilings = retrievalCeilingsFromRuntimeConfig(
+    dashboardConfig.system?.retrievalAuthoring,
+  );
   const pageMode = useMemo(
     () => resolveTaskSubmitPageMode(window.location.search),
     [],
@@ -5738,6 +5753,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     dashboardConfig.system?.providerProfiles?.list ||
       "/api/v1/provider-profiles",
   );
+  const omnigentCatalogEndpoint = "/api/omnigent/codex-catalog-readiness";
   const configuredDefaultProviderProfileRef =
     dashboardConfig.system?.providerProfiles?.defaultProfileRef ?? null;
   const presetCatalog = dashboardConfig.system?.presetCatalog;
@@ -5804,10 +5820,13 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     };
   }, [dashboardConfig.system?.attachmentPolicy]);
 
+  // Server-owned default: `dashboardConfig.system.defaultRuntime` from `build_runtime_config`
+  // is authoritative (now defaults to omnigent via `settings.workflow.default_runtime` and
+  // `DEFAULT_WORKFLOW_RUNTIME`). The hardcoded fallback is only for offline/legacy payloads.
   const defaultRuntime = String(
     dashboardConfig.system?.defaultRuntime ||
       dashboardConfig.system?.defaultAgentRuntime ||
-      "codex_cli",
+      "omnigent",
   );
   const defaultRepository = String(
     dashboardConfig.system?.defaultRepository || "",
@@ -5841,7 +5860,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     dashboardConfig.system?.defaultTaskEffortByRuntime ||
     {};
   const supportedAgentRuntimes = dashboardConfig.system
-    ?.supportedAgentRuntimes || ["codex_cli", "claude_code"];
+    ?.supportedAgentRuntimes ||
+    dashboardConfig.system?.supportedRuntimes || ["omnigent", "codex_cli", "claude_code"];
+  const runtimeOptions = Array.from(new Set(supportedAgentRuntimes));
 
   const [steps, setSteps] = useState<StepState[]>([createStepStateEntry(1)]);
   const stepsRef = useRef<StepState[]>(steps);
@@ -5854,6 +5875,18 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     () => readDashboardPreferences().createExpertMode,
   );
   const [runtime, setRuntime] = useState(defaultRuntime);
+  const [runtimeAuthored, setRuntimeAuthored] = useState(false);
+  const omnigentCatalog = dashboardConfig.system?.omnigentExecutionCatalog;
+  const omnigentProfiles = omnigentCatalog?.profiles || [];
+  const omnigentPolicies = omnigentCatalog?.policies || [];
+  const [omnigentExecutionTargetRef, setOmnigentExecutionTargetRef] = useState(
+    String(omnigentProfiles[0]?.ref || ""),
+  );
+  const [omnigentLaunchPolicyRef, setOmnigentLaunchPolicyRef] = useState(
+    String(omnigentProfiles[0]?.defaultPolicyRef || omnigentPolicies[0]?.ref || ""),
+  );
+  const [omnigentLaunchPolicyAuthored, setOmnigentLaunchPolicyAuthored] =
+    useState(false);
   const [model, setModel] = useState(
     String(
       defaultTaskModelByRuntime[defaultRuntime] ||
@@ -5875,7 +5908,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const [modelTier, setModelTier] = useState("");
   const [tierFallback, setTierFallback] = useState<TierFallbackMode>("clamp");
   const [repository, setRepository] = useState(initialRepository);
+  const [repositoryTouched, setRepositoryTouched] = useState(false);
   const [providerProfile, setProviderProfile] = useState("");
+  const [agentProfile, setAgentProfile] = useState("");
   const [branch, setBranch] = useState("");
   const [branchTouched, setBranchTouched] = useState(false);
   const [publishMode, setPublishMode] = useState(
@@ -5908,7 +5943,13 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const [selectedDependencyWorkflowId, setSelectedDependencyWorkflowId] = useState("");
   const [selectedDependencies, setSelectedDependencies] = useState<string[]>([]);
   const [remediationDraft, setRemediationDraft] = useState<RemediationCreateDraft | null>(null);
+  const [remediationDraftFailure, setRemediationDraftFailure] = useState<{
+    draftId: string;
+    status: Exclude<RemediationCreateDraftReadResult["status"], "valid">;
+  } | null>(null);
   const remediationDraftIdRef = useRef<string | null>(null);
+  const [contextRetrieval, setContextRetrieval] =
+    useState<ContextRetrievalAuthoring>(defaultContextRetrievalAuthoring);
   const [dependencyMessage, setDependencyMessage] = useState<string | null>(null);
   const [selectedPresetKey, setSelectedPresetKey] = useState("");
   const [templateMessage, setTemplateMessage] = useState<string | null>(null);
@@ -6222,13 +6263,23 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     },
   });
 
+  const selectedOmnigentExecutionProfile = omnigentProfiles.find(
+    (profile) => profile.ref === omnigentExecutionTargetRef,
+  );
+  const selectedOmnigentProviderRuntime =
+    selectedOmnigentExecutionProfile?.providerRuntime || "codex_cli";
+  const providerProfileRuntime =
+    runtime === "omnigent" ? selectedOmnigentProviderRuntime : runtime;
   const providerProfilesQuery = useQuery({
     ...configQueryDefaults,
-    queryKey: ["workflow-start", "provider-profiles", runtime],
+    queryKey: ["workflow-start", "provider-profiles", providerProfileRuntime],
     queryFn: async (): Promise<ProviderProfile[]> => {
       const separator = providerProfilesEndpoint.includes("?") ? "&" : "?";
+      const providerUrl = runtime === "omnigent"
+        ? providerProfilesEndpoint
+        : `${providerProfilesEndpoint}${separator}runtime_id=${encodeURIComponent(providerProfileRuntime)}`;
       const response = await fetch(
-        `${providerProfilesEndpoint}${separator}runtime_id=${encodeURIComponent(runtime)}`,
+        providerUrl,
         {
           headers: { Accept: "application/json" },
         },
@@ -6243,6 +6294,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       }
       return (await response.json()) as ProviderProfile[];
     },
+    // Omnigent eligibility comes exclusively from the readiness catalog, but
+    // the normal profile response remains the authority for model/effort
+    // capabilities. Load it for Codex and intersect the two below.
     enabled: Boolean(runtime),
     // Keep the previously loaded profiles visible while a runtime switch
     // refetches. Without this, the query key change empties `data`, which
@@ -6250,35 +6304,225 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     // (full width) until the fetch resolves and it snaps back to half width.
     placeholderData: keepPreviousData,
   });
+  const agentProfilesQuery = useQuery({
+    queryKey: ["workflow-start", "omnigent-agent-profiles"],
+    enabled: runtime === "omnigent",
+    queryFn: async (): Promise<OmnigentAgentProfileOption[]> => {
+      const response = await fetch("/api/omnigent/agent-profiles", { credentials: "same-origin" });
+      if (!response.ok) throw new Error(await responseErrorMessage(response, "Failed to load agent profiles."));
+      const value: unknown = await response.json();
+      return Array.isArray(value) ? value as OmnigentAgentProfileOption[] : [];
+    },
+  });
+  const readyAgentProfiles = (agentProfilesQuery.data || []).filter((profile) => {
+    const active = profile.versions.find((version) => version.version === profile.activeVersion);
+    return profile.state === "active" && active?.validationResult?.ready === true;
+  });
+  const selectedOmnigentAgentProfile = readyAgentProfiles.find(
+    (profile) => profile.profileId === agentProfile,
+  );
+  const authoredOmnigentAgentProfileVersion =
+    remediationDraft?.agentProfile?.profileId === agentProfile
+      ? remediationDraft.agentProfile.version
+      : pageMode.mode !== "create" &&
+          temporalDraftQuery.data?.draft.agentProfile?.profileId === agentProfile
+        ? temporalDraftQuery.data.draft.agentProfile.version || undefined
+        : undefined;
+  const selectedOmnigentAgentProfileVersion =
+    selectedOmnigentAgentProfile?.versions.find(
+      (version) =>
+        version.version ===
+        (authoredOmnigentAgentProfileVersion ||
+          selectedOmnigentAgentProfile.activeVersion),
+    );
+  const selectedProfileIsGenericV2 =
+    selectedOmnigentAgentProfileVersion?.document?.schemaVersion ===
+      "moonmind.omnigent-agent-profile.v2";
+  const submittedOmnigentAgentProfileVersion = selectedProfileIsGenericV2
+    ? selectedOmnigentAgentProfileVersion?.version
+    : authoredOmnigentAgentProfileVersion;
+  useEffect(() => {
+    if (runtime !== "omnigent") return;
+    const profileExecutionTargetRef = String(
+      selectedOmnigentAgentProfileVersion?.document?.execution
+        ?.defaultExecutionProfileRef || "",
+    ).trim();
+    if (
+      profileExecutionTargetRef &&
+      profileExecutionTargetRef !== omnigentExecutionTargetRef
+    ) {
+      setOmnigentExecutionTargetRef(profileExecutionTargetRef);
+    }
+  }, [
+    omnigentExecutionTargetRef,
+    runtime,
+    selectedOmnigentAgentProfileVersion,
+  ]);
+  useEffect(() => {
+    if (runtime !== "omnigent" || agentProfile) return;
+    const preferred = readyAgentProfiles.find((profile) => profile.defaultForRuntime) || readyAgentProfiles[0];
+    if (preferred) setAgentProfile(preferred.profileId);
+  }, [agentProfile, readyAgentProfiles, runtime]);
+
+  const omnigentCatalogQuery = useQuery({
+    queryKey: ["workflow-start", "omnigent-codex-catalog-readiness"],
+    queryFn: async (): Promise<OmnigentCodexCatalogReadiness> => {
+      const response = await fetch(omnigentCatalogEndpoint, {
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+      });
+      if (!response.ok) {
+        throw new Error(await responseErrorMessage(response, "Failed to load Omnigent readiness."));
+      }
+      return (await response.json()) as OmnigentCodexCatalogReadiness;
+    },
+    staleTime: 0,
+    refetchOnWindowFocus: true,
+    refetchInterval: (query) =>
+      runtime === "omnigent"
+        ? omnigentReadinessRefetchInterval(query.state.data, {
+            executionTargetRef: omnigentExecutionTargetRef,
+            providerProfileRef: providerProfile,
+          })
+        : false,
+  });
+
+  const omnigentExecutionReadinessQuery = useQuery({
+    queryKey: ["workflow-start", "omnigent-execution-readiness-v3"],
+    enabled: runtime === "omnigent" && selectedProfileIsGenericV2,
+    queryFn: async (): Promise<OmnigentExecutionReadinessV3> => {
+      const response = await fetch("/api/omnigent/execution-readiness", {
+        headers: { Accept: "application/json" }, cache: "no-store",
+      });
+      if (!response.ok) throw new Error(await responseErrorMessage(response, "Failed to load generic Omnigent readiness."));
+      return (await response.json()) as OmnigentExecutionReadinessV3;
+    },
+    staleTime: 0,
+    refetchOnWindowFocus: true,
+  });
+  const selectedGenericOmnigentTarget = omnigentExecutionReadinessQuery.data?.executionTargets?.find(
+    (target) => target.agentProfileRef.profileId === agentProfile &&
+      target.agentProfileRef.version === selectedOmnigentAgentProfileVersion?.version &&
+      target.agentProfileRef.digest === selectedOmnigentAgentProfileVersion?.digest,
+  );
+  const activeProviderProfiles: ProviderProfile[] = runtime === "omnigent"
+    ? selectedProfileIsGenericV2
+      ? (selectedGenericOmnigentTarget?.compatibleProviderProfiles || []).map((profile) => {
+          const capabilityProfile = (providerProfilesQuery.data || []).find(
+            (candidate) => candidate.profile_id === profile.profileId,
+          );
+          return {
+            ...capabilityProfile,
+            profile_id: profile.profileId,
+            account_label: profile.label,
+            provider_id: profile.providerId,
+            enabled: true,
+            launch_ready: true,
+          };
+        })
+      : (omnigentCatalogQuery.data?.eligibleProviderProfiles || [])
+      .filter((profile) => profile.runtimeId === selectedOmnigentProviderRuntime)
+      .map((profile) => {
+        const capabilityProfile = (providerProfilesQuery.data || []).find(
+          (candidate) => candidate.profile_id === profile.profileId,
+        );
+        return {
+          ...capabilityProfile,
+          profile_id: profile.profileId,
+          account_label: profile.label,
+          provider_id: profile.providerId,
+          enabled: true,
+          launch_ready: true,
+        };
+      })
+    : (providerProfilesQuery.data || []);
 
   useEffect(() => {
-    const profiles = providerProfilesQuery.data || [];
-    if (providerProfilesQuery.isLoading || providerProfilesQuery.isFetching) {
+    if (runtime !== "omnigent" || !omnigentCatalogQuery.data) return;
+    if (!omnigentExecutionTargetRef) {
+      setOmnigentExecutionTargetRef(omnigentCatalogQuery.data.defaultExecutionProfileRef);
+    }
+  }, [runtime, omnigentCatalogQuery.data, omnigentExecutionTargetRef]);
+
+  useEffect(() => {
+    if (
+      runtime === "omnigent" && selectedProfileIsGenericV2 &&
+      selectedGenericOmnigentTarget &&
+      selectedGenericOmnigentTarget.ref !== omnigentExecutionTargetRef
+    ) {
+      setOmnigentExecutionTargetRef(selectedGenericOmnigentTarget.ref);
+    }
+  }, [
+    omnigentExecutionTargetRef,
+    runtime,
+    selectedGenericOmnigentTarget,
+    selectedProfileIsGenericV2,
+  ]);
+
+  useEffect(() => {
+    if (
+      runtime !== "omnigent" ||
+      pageMode.mode !== "create" ||
+      omnigentLaunchPolicyAuthored
+    ) {
       return;
     }
-    if (pageMode.mode !== "create" && temporalDraftAppliedRef.current) {
-      return;
-    }
-    if (profiles.length === 0) {
-      if (providerProfile) {
-        setProviderProfile("");
+    if (selectedProfileIsGenericV2) {
+      const preferred = selectedGenericOmnigentTarget?.policies[0];
+      if (preferred && preferred !== omnigentLaunchPolicyRef) {
+        setOmnigentLaunchPolicyRef(preferred);
       }
       return;
     }
-
-    const stillValid = profiles.some(
-      (profile) => profile.profile_id === providerProfile,
+    if (!omnigentCatalogQuery.data) return;
+    const executionProfile = (
+      omnigentCatalogQuery.data.executionProfiles || []
+    ).find(
+      (profile) =>
+        profile.ref ===
+        (omnigentExecutionTargetRef ||
+          omnigentCatalogQuery.data.defaultExecutionProfileRef),
     );
-    if (stillValid) {
+    if (!executionProfile) return;
+    const { preferred: preferredPolicy } = resolveOmnigentLaunchPolicyOptions(
+      executionProfile.launchPolicies,
+      selectedOmnigentAgentProfileVersion,
+    );
+    if (preferredPolicy && preferredPolicy.ref !== omnigentLaunchPolicyRef) {
+      setOmnigentLaunchPolicyRef(preferredPolicy.ref);
+    }
+  }, [
+    omnigentCatalogQuery.data,
+    omnigentExecutionTargetRef,
+    omnigentLaunchPolicyAuthored,
+    omnigentLaunchPolicyRef,
+    pageMode.mode,
+    runtime,
+    selectedGenericOmnigentTarget,
+    selectedOmnigentAgentProfileVersion,
+    selectedProfileIsGenericV2,
+  ]);
+
+  useEffect(() => {
+    const profiles = activeProviderProfiles;
+    if (
+      (runtime === "omnigent" && (
+        omnigentCatalogQuery.isFetching ||
+        (selectedProfileIsGenericV2 && omnigentExecutionReadinessQuery.isFetching)
+      )) ||
+      (runtime !== "omnigent" && (providerProfilesQuery.isLoading || providerProfilesQuery.isFetching))
+    ) {
       return;
     }
-
-    const defaultProfileId = resolveDefaultProviderProfileId(
+    const resolvedProfileId = resolveLoadedProviderProfileId({
       profiles,
-      configuredDefaultProviderProfileRef,
-    );
-    if (defaultProfileId && providerProfile !== defaultProfileId) {
-      setProviderProfile(defaultProfileId);
+      providerProfile,
+      configuredDefaultRef: configuredDefaultProviderProfileRef,
+      preserveUnavailableProfile:
+        pageMode.mode !== "create" && Boolean(temporalDraftAppliedRef.current),
+    });
+    if (providerProfile !== resolvedProfileId) {
+      setProviderProfile(resolvedProfileId);
     }
   }, [
     pageMode.mode,
@@ -6286,6 +6530,12 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     providerProfilesQuery.data,
     providerProfilesQuery.isFetching,
     providerProfilesQuery.isLoading,
+    omnigentCatalogQuery.data,
+    omnigentCatalogQuery.isFetching,
+    omnigentExecutionReadinessQuery.data,
+    omnigentExecutionReadinessQuery.isFetching,
+    selectedOmnigentProviderRuntime,
+    runtime,
     configuredDefaultProviderProfileRef,
   ]);
 
@@ -6318,32 +6568,32 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       return;
     }
 
-    setEffort(
-      String(
-        defaultTaskEffortByRuntime[runtime] ||
-          dashboardConfig.system?.defaultEffort ||
-          dashboardConfig.system?.defaultTaskEffort ||
-          "",
-      ),
-    );
-
-    if (modelManualOverride && !runtimeChanged && !profileChanged) {
-      return;
-    }
-
-    const profileIdForModel = runtimeChanged ? "" : providerProfile;
+    const profileIdForDefaults = runtimeChanged ? "" : providerProfile;
     const profiles = providerProfilesQuery.data || [];
     const selectedProfile = profiles.find(
-      (p) => p.profile_id === profileIdForModel,
+      (p) => p.profile_id === profileIdForDefaults,
     );
-    if (selectedProfile?.default_model) {
-      setModel(selectedProfile.default_model);
-    } else {
+    const selectedDefaultTier = defaultModelTierForProfile(selectedProfile);
+    if (!modelManualOverride || runtimeChanged || profileChanged) {
       setModel(
         String(
-          defaultTaskModelByRuntime[runtime] ||
+          selectedDefaultTier?.model ||
+            selectedProfile?.default_model ||
+            defaultTaskModelByRuntime[runtime] ||
             dashboardConfig.system?.defaultModel ||
             dashboardConfig.system?.defaultTaskModel ||
+            "",
+        ),
+      );
+    }
+    if (!effortManualOverride || runtimeChanged || profileChanged) {
+      setEffort(
+        String(
+          selectedDefaultTier?.effort ||
+            selectedProfile?.default_effort ||
+            defaultTaskEffortByRuntime[runtime] ||
+            dashboardConfig.system?.defaultEffort ||
+            dashboardConfig.system?.defaultTaskEffort ||
             "",
         ),
       );
@@ -6355,6 +6605,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     dashboardConfig.system?.defaultModel,
     defaultTaskEffortByRuntime,
     defaultTaskModelByRuntime,
+    effortManualOverride,
     modelManualOverride,
     pageMode.mode,
     providerProfilesQuery.data,
@@ -6384,10 +6635,21 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     if (draft.runtime) {
       prevRuntimeRef.current = draft.runtime;
       setRuntime(draft.runtime);
+      setRuntimeAuthored(true);
     }
     if (draft.providerProfile) {
       prevProviderProfileRef.current = draft.providerProfile;
       setProviderProfile(draft.providerProfile);
+    }
+    if (draft.agentProfile?.profileId) {
+      setAgentProfile(draft.agentProfile.profileId);
+    }
+    if (draft.omnigentExecutionTargetRef) {
+      setOmnigentExecutionTargetRef(draft.omnigentExecutionTargetRef);
+    }
+    if (draft.omnigentLaunchPolicyRef) {
+      setOmnigentLaunchPolicyRef(draft.omnigentLaunchPolicyRef);
+      setOmnigentLaunchPolicyAuthored(true);
     }
     if (draft.model) {
       setModel(draft.model);
@@ -6405,6 +6667,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     }
     if (draft.repository) {
       setRepository(draft.repository);
+      setRepositoryTouched(true);
     }
     if (draft.branch) {
       setBranch(draft.branch);
@@ -6424,9 +6687,19 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       );
     }
     setProduceReport(draft.reportOutputEnabled);
+    const reconstructedContextRetrieval = parseContextRetrievalParameters(
+      recordValue(temporalDraftQuery.data.execution.inputParameters),
+    );
+    setContextRetrieval(reconstructedContextRetrieval);
     const reconstructedSteps = createStepStateEntriesFromTemporalDraft(draft);
     setSteps(reconstructedSteps);
-    setShowAdvancedStepOptions(hasAdvancedStepOptionValues(reconstructedSteps));
+    // Context retrieval authoring is only visible in Advanced mode, so a source
+    // run that already authored it reveals the controls instead of resubmitting
+    // an invisible retrieval policy.
+    setShowAdvancedStepOptions(
+      hasAdvancedStepOptionValues(reconstructedSteps) ||
+        hasAuthoredContextRetrieval(reconstructedContextRetrieval),
+    );
     setNextStepNumber(reconstructedSteps.length + 1);
     setPersistedObjectiveAttachments(
       draft.inputAttachments.map(stepAttachmentRefFromTemporal),
@@ -6453,27 +6726,33 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     const params = new URLSearchParams(window.location.search);
     if (params.get("intent") !== "remediate") {
       setRemediationDraft(null);
+      setRemediationDraftFailure(null);
       remediationDraftAppliedRef.current = null;
       remediationDraftIdRef.current = null;
       return;
     }
     const draftId = String(params.get("draftId") || "").trim();
-    if (!draftId || remediationDraftAppliedRef.current === draftId) {
+    const draftLoadKey = draftId || "__missing__";
+    if (remediationDraftAppliedRef.current === draftLoadKey) {
       return;
     }
-    const draft = readRemediationCreateDraft(draftId);
-    if (!draft) {
+    const draftResult = inspectRemediationCreateDraft(draftId);
+    if (draftResult.status !== "valid") {
       setRemediationDraft(null);
-      remediationDraftAppliedRef.current = null;
+      remediationDraftAppliedRef.current = draftLoadKey;
       remediationDraftIdRef.current = null;
-      setSubmitMessage("The remediation draft is no longer available. Open Remediate from the target workflow again.");
+      setRemediationDraftFailure({ draftId, status: draftResult.status });
+      setSubmitMessage(REMEDIATION_DRAFT_LOAD_MESSAGES[draftResult.status]);
       return;
     }
+    const draft = draftResult.draft;
 
-    remediationDraftAppliedRef.current = draftId;
+    remediationDraftAppliedRef.current = draftLoadKey;
     remediationDraftIdRef.current = draftId;
+    setRemediationDraftFailure(null);
     setRemediationDraft(draft);
     setRepository(draft.repository || "MoonLadderStudios/MoonMind");
+    setRepositoryTouched(true);
     if (draft.branch) {
       setBranch(draft.branch);
       setBranchTouched(false);
@@ -6481,13 +6760,34 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     if (draft.publishMode) {
       setPublishMode(normalizePublishModeForSubmit(draft.publishMode));
     }
+    if (draft.executionProfileRef) {
+      setOmnigentExecutionTargetRef(draft.executionProfileRef);
+    }
+    if (draft.launchPolicyRef) {
+      setOmnigentLaunchPolicyRef(draft.launchPolicyRef);
+      setOmnigentLaunchPolicyAuthored(true);
+    }
+    if (draft.contextRetrieval) {
+      setContextRetrieval(draft.contextRetrieval);
+      // The imported draft's retrieval policy stays visible and editable; the
+      // controls only render in Advanced mode.
+      if (hasAuthoredContextRetrieval(draft.contextRetrieval)) {
+        setShowAdvancedStepOptions(true);
+      }
+    }
     if (draft.runtime?.mode) {
       prevRuntimeRef.current = draft.runtime.mode;
       setRuntime(draft.runtime.mode);
+      setRuntimeAuthored(true);
     }
     if (draft.runtime?.profileId) {
       prevProviderProfileRef.current = draft.runtime.profileId;
       setProviderProfile(draft.runtime.profileId);
+    }
+    if (draft.agentProfile?.profileId) {
+      setAgentProfile(draft.agentProfile.profileId);
+      prevProviderProfileRef.current = draft.agentProfile.providerProfileRef;
+      setProviderProfile(draft.agentProfile.providerProfileRef);
     }
     if (draft.runtime?.model) {
       setModel(draft.runtime.model);
@@ -6512,6 +6812,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       ]);
       setNextStepNumber(2);
     }
+    // The draft has now crossed its single-hop authority boundary into React
+    // state. Remove both storage markers so it cannot be imported again from a
+    // copied URL; the visible form remains editable until ordinary submission.
+    clearRemediationCreateDraft(draftId);
+    remediationDraftIdRef.current = null;
   }, [pageMode.mode, setSubmitMessage]);
 
   const remediationTargetFreshnessQuery = useQuery({
@@ -7764,7 +8069,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     [persistedObjectiveAttachments, steps],
   );
 
-  const providerOptions = [...(providerProfilesQuery.data || [])]
+  const providerOptions = [...activeProviderProfiles]
     .sort((left, right) => {
       const leftDefault = Boolean(left.is_default);
       const rightDefault = Boolean(right.is_default);
@@ -7786,12 +8091,122 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           : profile.account_label || profile.profile_id,
       isDefault: Boolean(profile.is_default),
     }));
+  const selectedOmnigentReadiness = (omnigentCatalogQuery.data?.executionProfiles || []).find(
+    (profile) => profile.ref === omnigentExecutionTargetRef,
+  );
+  const genericLaunchPolicies: OmnigentLaunchPolicyOption[] = (
+    selectedGenericOmnigentTarget?.policies || []
+  ).map((ref, index) => ({
+    ref,
+    displayName: ref === "omnigent-on-demand@1" ? "On-demand isolated host" : ref,
+    hostMode: "on_demand_docker",
+    isDefault: index === 0,
+  }));
+  const effectiveOmnigentReadiness = selectedProfileIsGenericV2
+    ? selectedGenericOmnigentTarget
+      ? {
+          ref: selectedGenericOmnigentTarget.ref,
+          displayName: selectedOmnigentAgentProfile?.displayName || selectedGenericOmnigentTarget.ref,
+          available: selectedGenericOmnigentTarget.available,
+          launchPolicies: genericLaunchPolicies,
+          gateReasons: selectedGenericOmnigentTarget.gateReasons,
+        }
+      : undefined
+    : selectedOmnigentReadiness;
+  const selectableOmnigentProfiles = selectedProfileIsGenericV2
+    ? selectedGenericOmnigentTarget?.available
+      ? [{
+          ref: selectedGenericOmnigentTarget.ref,
+          displayName: selectedOmnigentAgentProfile?.displayName || selectedGenericOmnigentTarget.ref,
+          defaultPolicyRef: selectedGenericOmnigentTarget.policies[0] || "",
+        }]
+      : []
+    : omnigentProfiles.filter((profile) =>
+        (omnigentCatalogQuery.data?.executionProfiles || []).some(
+          (readiness) => readiness.ref === profile.ref && readiness.available,
+        ),
+      );
+  const { selectable: selectableOmnigentPolicies } =
+    resolveOmnigentLaunchPolicyOptions(
+      effectiveOmnigentReadiness?.launchPolicies || [],
+      selectedOmnigentAgentProfileVersion,
+    );
+  const selectedEligibleOmnigentProfile = selectedProfileIsGenericV2
+    ? selectedGenericOmnigentTarget?.compatibleProviderProfiles.find(
+        (profile) => profile.profileId === providerProfile,
+      )
+    : (omnigentCatalogQuery.data?.eligibleProviderProfiles || []).find(
+        (profile) =>
+          profile.profileId === providerProfile &&
+          profile.runtimeId === selectedOmnigentProviderRuntime,
+      );
+  const historicalOmnigentProviderProfile = (omnigentCatalogQuery.data?.ineligibleProviderProfiles || []).find(
+    (profile) =>
+      profile.profileId === providerProfile &&
+      profile.runtimeId === selectedOmnigentProviderRuntime,
+  );
+  const selectedOmnigentPolicyAvailable = selectableOmnigentPolicies.some(
+    (policy) => policy.ref === omnigentLaunchPolicyRef,
+  );
+  const selectedOmnigentLaunchPolicy = selectableOmnigentPolicies.find(
+    (policy) => policy.ref === omnigentLaunchPolicyRef,
+  );
+  const omnigentSelectionGateReason =
+    effectiveOmnigentReadiness?.gateReasons?.[0]?.message ||
+    (!selectedProfileIsGenericV2
+      ? historicalOmnigentProviderProfile?.gateReasons?.[0]?.message ||
+        omnigentCatalogQuery.data?.gateReasons?.[0]?.message
+      : undefined) ||
+    (!selectedEligibleOmnigentProfile
+      ? "Choose an eligible Provider Profile for the selected execution target."
+      : selectedEligibleOmnigentProfile.busy === true &&
+          selectedEligibleOmnigentProfile.queueWhenBusy !== true
+          ? "The selected Provider Profile is busy and does not support queued waiting."
+          : !selectedOmnigentPolicyAvailable
+            ? "Choose a compatible Omnigent host policy."
+            : null);
+  const omnigentSelectionEligible =
+    runtime !== "omnigent" ||
+    ((selectedProfileIsGenericV2
+        ? selectedGenericOmnigentTarget?.available === true
+        : omnigentCatalogQuery.data?.available === true) &&
+      effectiveOmnigentReadiness?.available === true &&
+      Boolean(selectedEligibleOmnigentProfile) &&
+      selectedOmnigentPolicyAvailable &&
+      !(
+        selectedEligibleOmnigentProfile?.busy === true &&
+        selectedEligibleOmnigentProfile.queueWhenBusy !== true
+      ));
+
+  useEffect(() => {
+    if (
+      runtime !== "omnigent" || !selectedProfileIsGenericV2 ||
+      modelManualOverride || !selectedGenericOmnigentTarget?.models.length
+    ) return;
+    if (!selectedGenericOmnigentTarget.models.includes(model)) {
+      setModel(selectedGenericOmnigentTarget.models[0] || "");
+    }
+  }, [
+    model,
+    modelManualOverride,
+    runtime,
+    selectedGenericOmnigentTarget,
+    selectedProfileIsGenericV2,
+  ]);
 
   const selectedProviderProfileForPreview = providerProfilesQuery.isPlaceholderData
     ? undefined
-    : (providerProfilesQuery.data || []).find(
+    : activeProviderProfiles.find(
         (profile) => profile.profile_id === providerProfile,
       );
+  const selectedProfileSupportsModelControls =
+    runtime !== "omnigent" ||
+    Boolean(
+      selectedProviderProfileForPreview &&
+        ((selectedProviderProfileForPreview.model_tiers?.length || 0) > 0 ||
+          selectedProviderProfileForPreview.default_model ||
+          selectedProviderProfileForPreview.default_effort),
+    );
   const workflowTierPreview = previewModelTier(
     selectedProviderProfileForPreview,
     modelTier,
@@ -7955,8 +8370,17 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   })();
   const handleRepositoryChange = (value: string) => {
     setRepository(value);
+    setRepositoryTouched(true);
     const selectedOption = repositoryOptionValue(repositoryOptions, value);
     writeLocalPreference(LAST_REPOSITORY_OPTION_PREFERENCE_KEY, selectedOption);
+  };
+  const handleGitHubIssueRepositoryChange = (issueRepository: string) => {
+    if (repositoryTouched || repository.trim() === issueRepository) {
+      return;
+    }
+    setRepository(issueRepository);
+    setBranch("");
+    setBranchTouched(false);
   };
 
   function stepPresetStatusText(step: StepState): string {
@@ -8191,163 +8615,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     updateStep(localId, { toolInputValues: nextValues });
   }
 
-  function updatePentestScopeDraft(
-    localId: string,
-    updates: Partial<PentestScopeDraftState>,
-  ) {
-    const step = stepsRef.current.find((item) => item.localId === localId);
-    updateStep(localId, {
-      pentestScopeDraft: {
-        ...(step?.pentestScopeDraft || createPentestScopeDraftState()),
-        ...updates,
-      },
-    });
-  }
-
-  function updateGeneratedPentestScopeValue(
-    localId: string,
-    name: string,
-    value: unknown,
-  ) {
-    const step = stepsRef.current.find((item) => item.localId === localId);
-    const draft = step?.pentestScopeDraft || createPentestScopeDraftState();
-    updatePentestScopeDraft(localId, {
-      generatedScopeValues: {
-        ...draft.generatedScopeValues,
-        [name]: value,
-      },
-      validationErrors: {},
-    });
-  }
-
-  async function attachPentestScopeArtifact(
-    localId: string,
-    scope: Record<string, unknown>,
-  ) {
-    const step = stepsRef.current.find((item) => item.localId === localId);
-    if (!step) {
-      return;
-    }
-    const target = String(step.toolInputValues.target || "").trim();
-    const errors = validatePentestScopeDocument(scope, target);
-    if (!step.pentestScopeDraft.confirmAuthorized) {
-      errors.authorization = "Confirm authorization before attaching scope.";
-    }
-    if (Object.keys(errors).length > 0) {
-      updatePentestScopeDraft(localId, {
-        validationErrors: errors,
-        uploadStatus: "failed",
-      });
-      return;
-    }
-    updatePentestScopeDraft(localId, {
-      uploadStatus: "uploading",
-      validationErrors: {},
-    });
-    try {
-      const body = JSON.stringify(scope, null, 2);
-      const artifact = await createJsonArtifact(
-        artifactCreateEndpoint,
-        body,
-        {
-          label: `Approved Pentest Scope - ${target || "target"}`,
-          artifact_type: "approved_pentest_scope",
-          target: target || null,
-          source: "workflow-start-pentest-scope",
-          tool: PENTEST_TOOL_ID,
-          scope_id: String(scope.scope_id || "").trim(),
-          environment: String(recordValue(scope.metadata).environment || "development"),
-        },
-        "approved Pentest scope artifact",
-      );
-      const nextValues = {
-        ...step.toolInputValues,
-        scope_artifact_ref: artifact.artifactId,
-      };
-      updateStep(localId, {
-        toolInputValues: nextValues,
-        pentestScopeDraft: {
-          ...step.pentestScopeDraft,
-          attachedArtifactId: artifact.artifactId,
-          attachedArtifactRef: artifact.artifactId,
-          attachedTarget: target,
-          attachedOperationMode: String(step.toolInputValues.operation_mode || "").trim(),
-          attachedRunnerProfileId: String(step.toolInputValues.runner_profile_id || "").trim(),
-          validationErrors: {},
-          validationWarnings: [],
-          uploadStatus: "attached",
-        },
-      });
-    } catch (error) {
-      const failure =
-        error instanceof Error
-          ? error
-          : new Error("Failed to attach approved Pentest scope.");
-      updatePentestScopeDraft(localId, {
-        uploadStatus: "failed",
-        validationErrors: { upload: failure.message },
-      });
-    }
-  }
-
-  async function attachGeneratedPentestScope(localId: string) {
-    const step = stepsRef.current.find((item) => item.localId === localId);
-    if (!step) {
-      return;
-    }
-    await attachPentestScopeArtifact(
-      localId,
-      buildPentestApprovedScope(step.pentestScopeDraft, step.toolInputValues),
-    );
-  }
-
-  async function handlePentestScopeFile(
-    localId: string,
-    file: File | undefined,
-  ) {
-    if (!file) {
-      return;
-    }
-    try {
-      updatePentestScopeDraft(localId, {
-        uploadStatus: "validating",
-        uploadedScopeFileName: file.name,
-        validationErrors: {},
-      });
-      const parsed = JSON.parse(await file.text()) as unknown;
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        throw new Error("Uploaded scope must be a JSON object.");
-      }
-      updatePentestScopeDraft(localId, {
-        uploadedScopePreview: parsed as Record<string, unknown>,
-        uploadStatus: "idle",
-      });
-    } catch (error) {
-      const failure =
-        error instanceof Error ? error : new Error("Invalid uploaded scope JSON.");
-      const step = stepsRef.current.find((item) => item.localId === localId);
-      updateStep(localId, {
-        pentestScopeDraft: {
-          ...(step?.pentestScopeDraft || createPentestScopeDraftState()),
-          uploadStatus: "failed",
-          validationErrors: { upload: failure.message },
-        },
-      });
-    }
-  }
-
-  async function attachUploadedPentestScope(localId: string) {
-    const step = stepsRef.current.find((item) => item.localId === localId);
-    const scope = step?.pentestScopeDraft.uploadedScopePreview;
-    if (!step || !scope) {
-      updatePentestScopeDraft(localId, {
-        validationErrors: { upload: "Choose a valid JSON scope file first." },
-      });
-      return;
-    }
-    await attachPentestScopeArtifact(localId, scope);
-  }
-
   async function loadJiraTransitionOptions(step: StepState) {
     const issueKey = extractIssueKeyFromToolInputs(step.toolInputs);
     if (!issueKey) {
@@ -8478,6 +8745,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         const nextStep: StepState = {
           ...step,
           stepType: nextType,
+          repositoryOperation: "",
         };
 
         // MM-936: explicitRequiredCapabilities is a step-level field that is
@@ -8501,7 +8769,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           nextStep.toolInputValues = {};
           nextStep.toolInputErrors = {};
           nextStep.toolJsonMode = false;
-          nextStep.pentestScopeDraft = createPentestScopeDraftState();
         }
 
         if (
@@ -8889,6 +9156,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             .map((warning) => String(warning).trim())
             .filter(Boolean)
         : [],
+      ...(expanded.publish && typeof expanded.publish === "object"
+        ? { workflowPublish: cloneJsonRecord(expanded.publish) }
+        : {}),
       appliedTemplate: expanded.appliedTemplate,
     };
   }
@@ -8929,6 +9199,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         : {}),
       ...(Array.isArray(appliedTemplate.authoredPresets)
         ? { authoredPresets: appliedTemplate.authoredPresets }
+        : {}),
+      ...(expansion.workflowPublish
+        ? { workflowPublish: cloneJsonRecord(expansion.workflowPublish) }
         : {}),
     };
   }
@@ -8997,6 +9270,12 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       attachmentSignature(selectedObjectiveAttachmentFiles),
     );
     recordAppliedPreset(preset, detail, expansion, expandedSteps);
+    const expandedPublishSelection = publishModeSelectionForWorkflowPublish(
+      expansion.workflowPublish,
+    );
+    if (pageMode.mode === "create" && expandedPublishSelection) {
+      setPublishMode(expandedPublishSelection);
+    }
     const autoFillSuffix =
       expansion.assumptions.length > 0
         ? ` Auto-filled ${expansion.assumptions.length} input(s): ${expansion.assumptions.join(", ")}.`
@@ -9467,10 +9746,12 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     steps: StepState[];
     appliedTemplates: AppliedTemplateState[];
     warnings: string[];
+    workflowPublish: Record<string, unknown> | null;
   }> {
     let nextSubmissionSteps = steps.map((step) => ({ ...step }));
     const nextAppliedTemplates = [...appliedTemplates];
     const warnings: string[] = [];
+    let workflowPublish: Record<string, unknown> | null = null;
     let generatedStepIndex = nextStepNumber;
 
     for (let index = 0; index < nextSubmissionSteps.length; index += 1) {
@@ -9586,6 +9867,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         if (appliedTemplate) {
           nextAppliedTemplates.push(appliedTemplate);
         }
+        if (expansion.workflowPublish) {
+          workflowPublish = cloneJsonRecord(expansion.workflowPublish);
+        }
         warnings.push(...expansion.warnings);
         nextSubmissionSteps = [
           ...nextSubmissionSteps.slice(0, index),
@@ -9624,6 +9908,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       steps: nextSubmissionSteps,
       appliedTemplates: nextAppliedTemplates,
       warnings,
+      workflowPublish,
     };
   }
 
@@ -9641,6 +9926,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
 
     let submissionSteps = steps;
     let submissionAppliedTemplates = appliedTemplates;
+    let submitExpandedWorkflowPublish: Record<string, unknown> | null = null;
     const clearSubmitBusy = () => {
       submitExpansionInFlightRef.current = false;
       setIsSubmitting(false);
@@ -9650,6 +9936,19 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     if (normalizedRepository && !isValidRepositoryInput(normalizedRepository)) {
       setSubmitMessage(
         "Repository must be owner/repo, https://<host>/<path>, or git@<host>:<path> (token-free).",
+      );
+      clearSubmitBusy();
+      return;
+    }
+    if (normalizedRepository && !effectiveBranch) {
+      setSubmitMessage(
+        branchOptionsQuery.isLoading
+          ? "Wait for the repository default branch to load, or enter a branch before starting this workflow."
+          : branchTouched
+            ? "Choose a branch before starting this repository-backed workflow."
+            : branchOptionsQuery.isError
+              ? "The repository default branch could not be loaded. Enter a branch before starting this workflow."
+              : "No repository default branch is available. Enter a branch before starting this workflow.",
       );
       clearSubmitBusy();
       return;
@@ -9670,17 +9969,124 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     setAttachmentTargetErrors({});
 
     const normalizedRuntime = runtime.trim().toLowerCase();
-    const supportedAgentRuntimeIds = supportedAgentRuntimes.map((item) =>
+    let submittedOmnigentLaunchPolicyRef = omnigentLaunchPolicyRef;
+    const supportedAgentRuntimeIds = runtimeOptions.map((item) =>
       item.trim().toLowerCase(),
     );
     if (!supportedAgentRuntimeIds.includes(normalizedRuntime)) {
       setSubmitMessage(
-        `Runtime must be one of: ${supportedAgentRuntimes.join(", ")}.`,
+        `Runtime must be one of: ${runtimeOptions.join(", ")}.`,
       );
       clearSubmitBusy();
       return;
     }
-    const submittedModelTierValue = modelTier.trim();
+    if (normalizedRuntime === "omnigent") {
+      if (selectedProfileIsGenericV2) {
+        const refreshed = await omnigentExecutionReadinessQuery.refetch();
+        const target = refreshed.data?.executionTargets?.find(
+          (item) =>
+            item.agentProfileRef.profileId === agentProfile &&
+            item.agentProfileRef.version === selectedOmnigentAgentProfileVersion?.version &&
+            item.agentProfileRef.digest === selectedOmnigentAgentProfileVersion?.digest,
+        );
+        if (refreshed.isError || !target?.available) {
+          setSubmitMessage(
+            target?.gateReasons[0]?.message ||
+              "Generic Omnigent readiness could not be verified.",
+          );
+          clearSubmitBusy();
+          return;
+        }
+        if (!target.compatibleProviderProfiles.some(
+          (profile) => profile.profileId === providerProfile,
+        )) {
+          setSubmitMessage(
+            "The selected Provider Profile is not compatible with this Agent Profile.",
+          );
+          clearSubmitBusy();
+          return;
+        }
+        if (!target.policies.includes(submittedOmnigentLaunchPolicyRef)) {
+          if (!omnigentLaunchPolicyAuthored && target.policies[0]) {
+            submittedOmnigentLaunchPolicyRef = target.policies[0];
+            setOmnigentLaunchPolicyRef(target.policies[0]);
+          } else {
+            setSubmitMessage(
+              "The selected Omnigent host policy is no longer compatible.",
+            );
+            clearSubmitBusy();
+            return;
+          }
+        }
+      } else {
+      const refreshed = await omnigentCatalogQuery.refetch();
+      if (refreshed.isError) {
+        setSubmitMessage("Omnigent readiness could not be verified.");
+        clearSubmitBusy();
+        return;
+      }
+      const catalog = refreshed.data;
+      const executionProfile = (catalog?.executionProfiles || []).find(
+        (profile) => profile.ref === omnigentExecutionTargetRef,
+      );
+      const eligibleProfile = catalog?.eligibleProviderProfiles.find(
+        (profile) =>
+          profile.profileId === providerProfile &&
+          profile.runtimeId === selectedOmnigentProviderRuntime,
+      );
+      if (!catalog?.available || !executionProfile?.available) {
+        setSubmitMessage(
+          executionProfile?.gateReasons[0]?.message ||
+            catalog?.gateReasons[0]?.message ||
+            "Omnigent readiness could not be verified.",
+        );
+        clearSubmitBusy();
+        return;
+      }
+      if (!eligibleProfile) {
+        setSubmitMessage(
+          "The selected OAuth Provider Profile is not eligible for this execution target. Choose a compatible profile explicitly.",
+        );
+        clearSubmitBusy();
+        return;
+      }
+      const {
+        selectable: refreshedCompatiblePolicies,
+        preferred: refreshedPreferredPolicy,
+      } = resolveOmnigentLaunchPolicyOptions(
+        executionProfile.launchPolicies,
+        selectedOmnigentAgentProfileVersion,
+      );
+      if (
+        !refreshedCompatiblePolicies.some(
+          (policy) => policy.ref === submittedOmnigentLaunchPolicyRef,
+        ) &&
+        !omnigentLaunchPolicyAuthored
+      ) {
+        if (refreshedPreferredPolicy) {
+          submittedOmnigentLaunchPolicyRef = refreshedPreferredPolicy.ref;
+          setOmnigentLaunchPolicyRef(refreshedPreferredPolicy.ref);
+        }
+      }
+      if (
+        !refreshedCompatiblePolicies.some(
+          (policy) => policy.ref === submittedOmnigentLaunchPolicyRef,
+        )
+      ) {
+        setSubmitMessage(
+          "The selected Omnigent host policy is no longer compatible. Choose an available policy explicitly.",
+        );
+        clearSubmitBusy();
+        return;
+      }
+      if (eligibleProfile.busy && !eligibleProfile.queueWhenBusy) {
+        setSubmitMessage("The selected Provider Profile is busy and does not support queued waiting.");
+        clearSubmitBusy();
+        return;
+      }
+      }
+    }
+    const submittedModelTierValue = selectedProfileSupportsModelControls ? modelTier.trim() : "";
     const submittedModelTier = Number.parseInt(submittedModelTierValue, 10);
     const hasSubmittedModelTier = submittedModelTierValue !== "";
     if (
@@ -9693,12 +10099,17 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     }
     const invalidStepRuntime = submissionSteps.find((step) => {
       const stepRuntime = (step.runtimeMode || "").trim().toLowerCase();
-      return stepRuntime && !supportedAgentRuntimeIds.includes(stepRuntime);
+      return (
+        stepRuntime === "omnigent" ||
+        (stepRuntime && !supportedAgentRuntimeIds.includes(stepRuntime))
+      );
     });
     if (invalidStepRuntime) {
       const stepIndex = submissionSteps.indexOf(invalidStepRuntime) + 1;
       setSubmitMessage(
-        `Step ${stepIndex} runtime must be one of: ${supportedAgentRuntimes.join(", ")}.`,
+        (invalidStepRuntime.runtimeMode || "").trim().toLowerCase() === "omnigent"
+          ? `Step ${stepIndex} cannot use Codex via Omnigent; select it as the workflow runtime instead.`
+          : `Step ${stepIndex} runtime must be one of: ${supportedAgentRuntimes.join(", ")}.`,
       );
       clearSubmitBusy();
       return;
@@ -9718,8 +10129,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       return;
     }
 
-    const normalizedPublishMode = normalizePublishModeForSubmit(publishMode);
-    if (!["auto", "none", "branch", "pr"].includes(normalizedPublishMode)) {
+    const formPublishMode = normalizePublishModeForSubmit(publishMode);
+    if (!["auto", "none", "branch", "pr"].includes(formPublishMode)) {
       setSubmitMessage("Publish mode must be one of: auto, none, branch, pr.");
       clearSubmitBusy();
       return;
@@ -9732,6 +10143,16 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     const effectiveMaxAttempts = showAdvancedStepOptions
       ? maxAttempts
       : DEFAULT_MAX_ATTEMPTS;
+
+    // Context retrieval (RAG) authoring lives behind the same Advanced mode
+    // toggle. While the controls are hidden the submission carries the
+    // unauthored default so deployment retrieval policy applies, instead of a
+    // stale value the operator can no longer see. Inherited authored retrieval
+    // is never silently dropped: the rerun/edit and remediation reconstruction
+    // paths turn Advanced mode on whenever the source already authored it.
+    const effectiveContextRetrieval = showAdvancedStepOptions
+      ? contextRetrieval
+      : defaultContextRetrievalAuthoring();
 
     if (!Number.isInteger(effectivePriority)) {
       setSubmitMessage("Priority must be an integer.");
@@ -9755,6 +10176,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         });
         submissionSteps = expanded.steps;
         submissionAppliedTemplates = expanded.appliedTemplates;
+        submitExpandedWorkflowPublish = expanded.workflowPublish;
         if (expanded.warnings.length > 0) {
           setSubmitMessage(expanded.warnings.join(" "), "pending");
         } else {
@@ -9794,6 +10216,23 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       submissionSteps,
     );
     submissionAppliedTemplates = activeSubmissionAppliedTemplates;
+    const presetWorkflowPublish = workflowPublishForAppliedTemplates(
+      activeSubmissionAppliedTemplates,
+    );
+    const presetPublishSelection = publishModeSelectionForWorkflowPublish(
+      presetWorkflowPublish,
+    );
+    const submitExpandedPublishMode = normalizePublishModeForSubmit(
+      String(submitExpandedWorkflowPublish?.mode || ""),
+    );
+    // A preset expanded during this submit has not yet had a chance to update
+    // the visible form control. Use its workflow-level policy for this request.
+    // For an already-applied preset, a different visible mode is an explicit
+    // operator override and therefore wins over the annotation.
+    const requestedPublishMode =
+      submitExpandedWorkflowPublish && submitExpandedPublishMode
+        ? submitExpandedPublishMode
+        : formPublishMode;
     const effectiveSubmissionSkillId = primarySkillId;
     const effectivePublishSkillId = resolveEffectivePublishSkillId(
       primarySkillId,
@@ -9802,7 +10241,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     const effectivePublishSkillDetailForSubmit =
       skillsQuery.data?.detailsById[effectivePublishSkillId.trim()] || null;
     if (
-      normalizedPublishMode === "auto" &&
+      requestedPublishMode === "auto" &&
       !isSelfManagedPublishSkill(
         effectivePublishSkillId,
         effectivePublishSkillDetailForSubmit,
@@ -9825,7 +10264,22 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             effectivePublishSkillDetailForSubmit,
           )
           ? "none"
-          : normalizedPublishMode;
+          : requestedPublishMode;
+    const selectedWorkflowPublish =
+      submitExpandedWorkflowPublish ||
+      (normalizePublishModeSelection(publishMode) === presetPublishSelection
+        ? presetWorkflowPublish
+        : null);
+    const effectiveWorkflowPublish =
+      selectedWorkflowPublish &&
+      normalizePublishModeForSubmit(
+        String(selectedWorkflowPublish.mode || ""),
+      ) === effectivePublishMode
+        ? {
+            ...selectedWorkflowPublish,
+            mode: effectivePublishMode,
+          }
+        : { mode: effectivePublishMode };
     if (effectivePublishMode === "branch" && !effectiveBranch) {
       setSubmitMessage(
         "Choose a branch before saving or rerunning this publish-mode workflow.",
@@ -10510,6 +10964,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                     : {}),
                 }
               : undefined;
+          const submittedAnnotations =
+            sourceStep.annotations &&
+            Object.keys(sourceStep.annotations).length > 0
+              ? { ...sourceStep.annotations }
+              : undefined;
           const hasPayloadContent = Object.entries(entry.payload).some(
             ([key, value]) =>
               !(
@@ -10522,6 +10981,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             hasPayloadContent ||
             Boolean((sourceStep.id || "").trim()) ||
             Boolean(sourceStep.title.trim()) ||
+            Boolean(submittedAnnotations) ||
             Boolean(sourceStep.storyOutput) ||
             Boolean(
               submittedSource && Object.keys(submittedSource).length > 0,
@@ -10541,11 +11001,17 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             ...(sourceStep.title.trim()
               ? { title: sourceStep.title.trim() }
               : {}),
+            ...(sourceStep.repositoryOperation && !sourceInstructionsChanged
+              ? { repositoryOperation: sourceStep.repositoryOperation }
+              : {}),
             ...(hasSubmittedStepShape && shouldSubmitStepType
               ? { type: submittedStepType }
               : {}),
             ...(sourceStep.storyOutput
               ? { storyOutput: sourceStep.storyOutput }
+              : {}),
+            ...(submittedAnnotations
+              ? { annotations: submittedAnnotations }
               : {}),
             ...(submittedSource && Object.keys(submittedSource).length > 0
               ? { source: submittedSource }
@@ -10658,14 +11124,14 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     // Never resolve a provider profile from placeholder data: during a runtime
     // switch refetch `data` still holds the previous runtime's profiles, which
     // must not be submitted under the newly selected runtime.
-    const selectedProviderProfile = providerProfilesQuery.isPlaceholderData
+    const selectedProviderProfile = runtime !== "omnigent" && providerProfilesQuery.isPlaceholderData
       ? undefined
-      : (providerProfilesQuery.data || []).find(
+      : activeProviderProfiles.find(
           (profile) => profile.profile_id === providerProfile,
         );
     const selectedProviderId = selectedProviderProfile?.provider_id?.trim?.() || "";
-    const submittedModel = modelManualOverride ? model.trim() : "";
-    const submittedEffort = effortManualOverride ? effort.trim() : "";
+    const submittedModel = selectedProfileSupportsModelControls && modelManualOverride ? model.trim() : "";
+    const submittedEffort = selectedProfileSupportsModelControls && effortManualOverride ? effort.trim() : "";
 
     const taskPayload: Record<string, unknown> = {
       instructions: objectiveInstructionsForSubmit,
@@ -10682,17 +11148,39 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       proposeTasks,
       runtime: {
         mode: normalizedRuntime,
+        authored: runtimeAuthored,
         ...(hasSubmittedModelTier ? { modelTier: submittedModelTier } : {}),
-        ...(hasSubmittedModelTier || tierFallback === "strict" ? { tierFallback } : {}),
+        ...(selectedProfileSupportsModelControls &&
+        (hasSubmittedModelTier || tierFallback === "strict")
+          ? { tierFallback }
+          : {}),
         ...(submittedModel ? { model: submittedModel } : {}),
         ...(submittedEffort ? { effort: submittedEffort } : {}),
         ...(providerProfile ? { profileId: providerProfile } : {}),
+        ...(runtime === "omnigent" && agentProfile
+          ? {
+              agentProfile: {
+                profileId: agentProfile,
+                ...(submittedOmnigentAgentProfileVersion
+                  ? { version: submittedOmnigentAgentProfileVersion }
+                  : {}),
+                ...(selectedProfileIsGenericV2 &&
+                selectedOmnigentAgentProfileVersion?.digest
+                  ? { digest: selectedOmnigentAgentProfileVersion.digest }
+                  : {}),
+                providerProfileRef: providerProfile,
+                ...(submittedOmnigentLaunchPolicyRef
+                  ? { launchPolicyRef: submittedOmnigentLaunchPolicyRef }
+                  : {}),
+              },
+            }
+          : {}),
         ...(selectedProviderId
           ? { profileSelector: { providerId: selectedProviderId } }
           : {}),
       },
       publish: {
-        mode: effectivePublishMode,
+        ...effectiveWorkflowPublish,
       },
       ...(produceReport || pageMode.mode !== "create"
         ? {
@@ -10707,16 +11195,13 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             },
           }
         : {}),
-      ...(normalizedRepository && effectiveBranch
-        ? {
-            git: {
-              branch: effectiveBranch,
-            },
-          }
-        : {}),
       ...(normalizedSteps.length > 0 ? { steps: normalizedSteps } : {}),
       ...(submissionAppliedTemplates.length > 0
-        ? { appliedStepTemplates: submissionAppliedTemplates }
+        ? {
+            appliedStepTemplates: appliedTemplatePayloadsForSubmit(
+              submissionAppliedTemplates,
+            ),
+          }
         : {}),
       ...(submissionAuthoredPresets.length > 0
         ? { authoredPresets: submissionAuthoredPresets }
@@ -10734,11 +11219,48 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       priority: effectivePriority,
       maxAttempts: effectiveMaxAttempts,
       payload: {
-        ...(normalizedRepository ? { repository: normalizedRepository } : {}),
+        ...(normalizedRepository && effectiveBranch
+          ? {
+              repository: {
+                provider: "git",
+                connectionRef: "repository-connection:git-default",
+                repository: { name: normalizedRepository },
+                branch: { name: effectiveBranch },
+              },
+            }
+          : {}),
         ...(mergedCapabilities.length > 0
           ? { requiredCapabilities: mergedCapabilities }
           : {}),
         targetRuntime: normalizedRuntime,
+        ...(normalizedRuntime === "omnigent" && agentProfile
+          ? {
+              agentProfile: {
+                profileId: agentProfile,
+                ...(submittedOmnigentAgentProfileVersion
+                  ? { version: submittedOmnigentAgentProfileVersion }
+                  : {}),
+                ...(selectedProfileIsGenericV2 &&
+                selectedOmnigentAgentProfileVersion?.digest
+                  ? { digest: selectedOmnigentAgentProfileVersion.digest }
+                  : {}),
+                providerProfileRef: providerProfile,
+                ...(submittedOmnigentLaunchPolicyRef
+                  ? { launchPolicyRef: submittedOmnigentLaunchPolicyRef }
+                  : {}),
+              },
+            }
+          : {}),
+        ...(normalizedRuntime === "omnigent" && omnigentExecutionTargetRef
+          ? {
+              omnigent: {
+                executionTargetRef: omnigentExecutionTargetRef,
+                ...(submittedOmnigentLaunchPolicyRef
+                  ? { launchPolicyRef: submittedOmnigentLaunchPolicyRef }
+                  : {}),
+              },
+            }
+          : {}),
         publishMode: effectivePublishMode,
         ...(produceReport || pageMode.mode !== "create"
           ? {
@@ -10763,6 +11285,25 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     if (schedulePayload) {
       (requestBody.payload as Record<string, unknown>).schedule =
         schedulePayload;
+    }
+
+    // Context retrieval (RAG) authoring (#3514). Placed at the payload level so
+    // `rag` / `followUpRetrieval` are lifted into the run's initial parameters
+    // (and, for scheduled runs, into target.initialParameters) server-side.
+    if (hasAuthoredContextRetrieval(effectiveContextRetrieval)) {
+      const compiledRetrieval =
+        compileContextRetrievalParameters(effectiveContextRetrieval);
+      const submittedRetrievalPayload = requestBody.payload as Record<
+        string,
+        unknown
+      >;
+      if (compiledRetrieval.rag) {
+        submittedRetrievalPayload.rag = compiledRetrieval.rag;
+      }
+      if (compiledRetrieval.followUpRetrieval) {
+        submittedRetrievalPayload.followUpRetrieval =
+          compiledRetrieval.followUpRetrieval;
+      }
     }
 
     try {
@@ -10847,6 +11388,27 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         requestBody.payload = artifactPayload;
       }
       const rerunDraft = temporalDraftData?.draft;
+      // Context retrieval authoring (#3514) is submitted via the payload, not the
+      // workflow draft, so it must be compared explicitly or an exact rerun that
+      // only changes retrieval controls is classified as unchanged and its
+      // `parametersPatch` is dropped to null. Compare the compiled submission
+      // against the compiled source parameters.
+      const submittedRetrievalConfig = hasAuthoredContextRetrieval(
+        effectiveContextRetrieval,
+      )
+        ? compileContextRetrievalParameters(effectiveContextRetrieval)
+        : {};
+      const sourceRetrievalAuthoring = parseContextRetrievalParameters(
+        recordValue(temporalDraftData?.execution?.inputParameters),
+      );
+      const sourceRetrievalConfig = hasAuthoredContextRetrieval(
+        sourceRetrievalAuthoring,
+      )
+        ? compileContextRetrievalParameters(sourceRetrievalAuthoring)
+        : {};
+      const retrievalConfigChanged =
+        JSON.stringify(submittedRetrievalConfig) !==
+        JSON.stringify(sourceRetrievalConfig);
       const currentPublishModeSelection = normalizePublishModeSelection(publishMode);
       const rerunDraftPublishModeSelection = normalizePublishModeSelection(
         rerunDraft?.publishMode,
@@ -10859,6 +11421,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           selectedAttachmentFiles.length > 0 ||
           normalizedRepository !== String(rerunDraft.repository || "").trim() ||
           normalizedRuntime !== String(rerunDraft.runtime || "").trim() ||
+          omnigentExecutionTargetRef.trim() !==
+            String(rerunDraft.omnigentExecutionTargetRef || "").trim() ||
+          omnigentLaunchPolicyRef.trim() !==
+            String(rerunDraft.omnigentLaunchPolicyRef || "").trim() ||
           model.trim() !== String(rerunDraft.model || "").trim() ||
           effort.trim() !== String(rerunDraft.effort || "").trim() ||
           effectivePublishMode !== rerunDraftEffectivePublishMode ||
@@ -10885,7 +11451,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               })),
             ) ||
           JSON.stringify(taskLevelAttachmentRefs) !==
-            JSON.stringify(rerunDraft.inputAttachments)
+            JSON.stringify(rerunDraft.inputAttachments) ||
+          retrievalConfigChanged
         : false;
       const isExactRerun = isExactRerunRequest && !rerunFormChanged;
       const artifactWorkflowPayload = mergeRecordValues(
@@ -11088,6 +11655,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const isTemporalFormBlocked =
     pageMode.mode !== "create" &&
     (temporalDraftQuery.isLoading || Boolean(modeLoadError));
+  const isSubmitBlocked =
+    isTemporalFormBlocked || (runtime === "omnigent" && !omnigentSelectionEligible);
 
   useEffect(() => {
     if (!showPrimaryCtaArrow || isTemporalFormBlocked) {
@@ -11410,11 +11979,47 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           disabled={isTemporalFormBlocked}
           aria-busy={isTemporalFormBlocked}
         >
+        {remediationDraftFailure ? (
+          <section
+            className="card queue-remediation-draft-summary stack"
+            aria-label="Remediation draft import error"
+          >
+            <h2>Remediation draft was not imported</h2>
+            <p className="notice error" role="alert">
+              {REMEDIATION_DRAFT_LOAD_MESSAGES[remediationDraftFailure.status]}
+            </p>
+            <div className="actions">
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => {
+                  clearRemediationCreateDraft(remediationDraftFailure.draftId);
+                  setRemediationDraftFailure(null);
+                  remediationDraftAppliedRef.current = null;
+                  const url = new URL(window.location.href);
+                  url.searchParams.delete("intent");
+                  url.searchParams.delete("draftId");
+                  window.history.replaceState(
+                    {},
+                    "",
+                    `${url.pathname}${url.search}${url.hash}`,
+                  );
+                  setSubmitMessage(
+                    "Remediation draft reference discarded. Create remains open as an ordinary workflow.",
+                  );
+                }}
+              >
+                Discard draft reference
+              </button>
+            </div>
+          </section>
+        ) : null}
         {remediationDraft ? (
           <section
             className="card queue-remediation-draft-summary stack"
             aria-label="Remediation draft"
             data-jira-issue="MM-1119"
+            data-github-issue="MoonLadderStudios/MoonMind#3623"
           >
             <div className="queue-section-heading">
               <div>
@@ -11423,8 +12028,41 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                   Target {remediationDraft.target.title || remediationDraft.target.workflowId}
                 </p>
               </div>
+              <button
+                type="button"
+                className="secondary"
+                aria-label="Discard remediation draft"
+                onClick={() => {
+                  clearRemediationCreateDraft(remediationDraftIdRef.current);
+                  remediationDraftAppliedRef.current = null;
+                  remediationDraftIdRef.current = null;
+                  setRemediationDraft(null);
+                  const url = new URL(window.location.href);
+                  url.searchParams.delete("intent");
+                  url.searchParams.delete("draftId");
+                  window.history.replaceState(
+                    {},
+                    "",
+                    `${url.pathname}${url.search}${url.hash}`,
+                  );
+                  setSubmitMessage(
+                    "Remediation draft discarded. Create remains open as an ordinary workflow.",
+                  );
+                }}
+              >
+                Discard draft
+              </button>
             </div>
-            <div className="grid-2">
+            <fieldset
+              className="queue-remediation-pinned-target stack"
+              aria-label="Pinned target identity"
+            >
+              <legend>Pinned target identity (immutable)</legend>
+              <p className="small">
+                These values identify the original outcome and exact run. Editing
+                the repair intent below never changes this pinned identity.
+              </p>
+              <div className="grid-2">
               <label>
                 Target workflow
                 <input value={remediationDraft.target.workflowId} readOnly />
@@ -11433,29 +12071,346 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                 Pinned run
                 <input value={remediationDraft.target.runId} readOnly />
               </label>
+              {remediationDraft.target.state ? (
+                <label>
+                  Original target outcome
+                  <input value={remediationDraft.target.state} readOnly />
+                </label>
+              ) : null}
+              <label>
+                Selected evidence
+                <input
+                  value={
+                    remediationDraft.remediation.target.stepSelectors
+                      ?.map((selector) =>
+                        String(
+                          selector.logicalStepId ||
+                            selector.checkpointRef ||
+                            selector.source ||
+                            "",
+                        ),
+                      )
+                      .filter(Boolean)
+                      .join(", ") || "No step/checkpoint selected"
+                  }
+                  readOnly
+                />
+              </label>
+              </div>
+            </fieldset>
+            <fieldset
+              className="queue-remediation-repair-intent stack"
+              aria-label="Editable repair intent"
+            >
+              <legend>Editable repair intent</legend>
+              <p className="small">
+                Instructions, runtime/profile selections, policies, branches,
+                retrieval, and publication controls remain editable until submit.
+              </p>
+            <div className="grid-2">
+              <label>
+                Starting branch
+                <input
+                  value={branch}
+                  onChange={(event) => {
+                    setBranchTouched(true);
+                    setBranch(event.target.value);
+                    setRemediationDraft((current) => current ? {
+                      ...current,
+                      branch: event.target.value,
+                      startingBranch: event.target.value,
+                    } : current);
+                  }}
+                />
+              </label>
+              <label>
+                Checkpoint work branch
+                <input
+                  value={remediationDraft.workBranch || ""}
+                  placeholder="Generated when left blank"
+                  onChange={(event) => {
+                    const workBranch = event.target.value;
+                    setRemediationDraft((current) => {
+                      if (!current) return current;
+                      const {
+                        gitWorkBranch: _previousWorkBranch,
+                        ...checkpointBranchPolicy
+                      } = current.remediation.checkpointBranchPolicy || {};
+                      return {
+                        ...current,
+                        workBranch,
+                        remediation: {
+                          ...current.remediation,
+                          checkpointBranchPolicy: {
+                            ...checkpointBranchPolicy,
+                            ...(workBranch ? { gitWorkBranch: workBranch } : {}),
+                          },
+                        },
+                      };
+                    });
+                  }}
+                />
+              </label>
               <label>
                 Remediation mode
-                <input value={remediationDraft.remediation.mode} readOnly />
+                <select
+                  value={remediationDraft.remediation.mode}
+                  onChange={(event) => {
+                    const mode = event.target.value as RemediationCreateDraft["remediation"]["mode"];
+                    setRemediationDraft((current) => current ? {
+                      ...current,
+                      remediation: { ...current.remediation, mode },
+                    } : current);
+                  }}
+                >
+                  <option value="snapshot">Snapshot</option>
+                  <option value="live_follow">Live follow</option>
+                  <option value="snapshot_then_follow">Snapshot then follow</option>
+                </select>
               </label>
               <label>
                 Authority
-                <input value={remediationDraft.remediation.authorityMode} readOnly />
+                <select
+                  value={remediationDraft.remediation.authorityMode}
+                  onChange={(event) => {
+                    const authorityMode = event.target.value as RemediationCreateDraft["remediation"]["authorityMode"];
+                    setRemediationDraft((current) => current ? {
+                      ...current,
+                      remediation: { ...current.remediation, authorityMode },
+                    } : current);
+                  }}
+                >
+                  <option value="observe_only">Observe only</option>
+                  <option value="approval_gated">Approval gated</option>
+                  <option
+                    value="admin_auto"
+                    disabled={
+                      omnigentCatalogQuery.data?.remediationRelease
+                        ?.autonomousRolloutAuthorized !== true
+                    }
+                  >
+                    Administrator automatic (release gated)
+                  </option>
+                </select>
               </label>
+              {omnigentCatalogQuery.data?.remediationRelease
+                ?.autonomousRolloutAuthorized !== true ? (
+                  <p className="small" role="status">
+                    Autonomous mutation remains disabled until the operator
+                    remediation release matrix passes.
+                  </p>
+                ) : null}
+              {omnigentCatalogQuery.data?.remediationRelease ? (
+                <details className="small" data-testid="remediation-release-status">
+                  <summary>Operator remediation release status</summary>
+                  <dl>
+                    <dt>Manual diagnosis</dt>
+                    <dd>
+                      {omnigentCatalogQuery.data.remediationRelease.manualDiagnosisSupported
+                        ? "Supported"
+                        : "Not qualified"}
+                    </dd>
+                    <dt>Manual mutation</dt>
+                    <dd>
+                      {omnigentCatalogQuery.data.remediationRelease.manualMutationSupported
+                        ? "Supported"
+                        : "Not qualified"}
+                    </dd>
+                    <dt>Manual promotion</dt>
+                    <dd>
+                      {omnigentCatalogQuery.data.remediationRelease.manualPromotionAllowed
+                        ? "Allowed"
+                        : "Blocked"}
+                    </dd>
+                    <dt>Rollback</dt>
+                    <dd>
+                      {omnigentCatalogQuery.data.remediationRelease.rollbackRequired
+                        ? "Required"
+                        : "Not required"}
+                    </dd>
+                    <dt>Evidence expiry</dt>
+                    <dd>
+                      {omnigentCatalogQuery.data.remediationRelease.expiresAt || "No qualifying evidence"}
+                    </dd>
+                    <dt>Telemetry</dt>
+                    <dd>
+                      {omnigentCatalogQuery.data.remediationRelease.telemetry?.schemaVersion
+                        || "Unavailable"}
+                    </dd>
+                  </dl>
+                  {(omnigentCatalogQuery.data.remediationRelease.alerts || []).length > 0 ? (
+                    <ul aria-label="Remediation release alerts">
+                      {(omnigentCatalogQuery.data.remediationRelease.alerts || []).map((alert) => (
+                        <li key={alert.code || alert.operatorAction}>
+                          {alert.severity || "warning"}: {alert.code || "release_gate_alert"}
+                          {alert.operatorAction ? ` — ${alert.operatorAction}` : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </details>
+              ) : null}
               <label>
                 Action policy
-                <input value={remediationDraft.remediation.actionPolicyRef || ""} readOnly />
+                <select
+                  value={remediationDraft.remediation.actionPolicyRef || ""}
+                  onChange={(event) => {
+                    const actionPolicyRef = event.target.value;
+                    setRemediationDraft((current) => current ? {
+                      ...current,
+                      remediation: { ...current.remediation, actionPolicyRef },
+                    } : current);
+                  }}
+                >
+                  <option value={DEFAULT_REMEDIATION_ACTION_POLICY}>
+                    Administrator healer default
+                  </option>
+                </select>
               </label>
               <label>
-                Checkpoint refs
-                <input
-                  value={String(remediationDraft.target.stepSelectors?.length || 0)}
-                  readOnly
-                />
+                Checkpoint
+                <select
+                  value={String(
+                    remediationDraft.remediation.target.stepSelectors?.[0]?.checkpointRef || "",
+                  )}
+                  onChange={(event) => {
+                    const selected = remediationDraft.target.stepSelectors?.find(
+                      (item) => String(item.checkpointRef || "") === event.target.value,
+                    );
+                    setRemediationDraft((current) => current ? {
+                      ...current,
+                      remediation: {
+                        ...current.remediation,
+                        target: {
+                          ...current.remediation.target,
+                          stepSelectors: selected ? [selected] : [],
+                        },
+                      },
+                    } : current);
+                  }}
+                >
+                  <option value="">No checkpoint selected</option>
+                  {(remediationDraft.target.stepSelectors || []).map((selector, index) => (
+                    <option
+                      key={`${String(selector.checkpointRef || "")}:${index}`}
+                      value={String(selector.checkpointRef || "")}
+                    >
+                      {String(selector.logicalStepId || selector.source || `Checkpoint ${index + 1}`)}
+                    </option>
+                  ))}
+                </select>
               </label>
             </div>
             <p className="small">
               Evidence preview: recovery, incident, step ledger, checkpoint branch, adapter, diagnostics, and linked artifact refs.
             </p>
+            <div className="grid-2" aria-label="Remediation evidence controls">
+              {([
+                ["includeStepLedger", "Step execution ledger"],
+                ["includeDiagnostics", "Diagnostics"],
+                ["includeRecovery", "Recovery evidence"],
+                ["includeIncident", "Incident evidence"],
+                ["includeCheckpointBranches", "Checkpoint branches"],
+                ["includeAdapterRefs", "Runtime adapter evidence"],
+              ] as const).map(([key, label]) => (
+                <label key={key} className="checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={remediationDraft.remediation.evidencePolicy?.[key] !== false}
+                    onChange={(event) => {
+                      const checked = event.target.checked;
+                      setRemediationDraft((current) => current ? {
+                        ...current,
+                        remediation: {
+                          ...current.remediation,
+                          evidencePolicy: {
+                            ...current.remediation.evidencePolicy,
+                            [key]: checked,
+                          },
+                        },
+                      } : current);
+                    }}
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
+            <div className="grid-2" aria-label="Remediation action controls">
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={remediationDraft.remediation.approvalPolicy?.requiredForHighRisk !== false}
+                  onChange={(event) => setRemediationDraft((current) => current ? {
+                    ...current,
+                    remediation: {
+                      ...current.remediation,
+                      approvalPolicy: {
+                        ...current.remediation.approvalPolicy,
+                        requiredForHighRisk: event.target.checked,
+                      },
+                    },
+                  } : current)}
+                />
+                Require approval for high-risk actions
+              </label>
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={remediationDraft.remediation.lockPolicy?.targetMutationLock !== false}
+                  onChange={(event) => setRemediationDraft((current) => current ? {
+                    ...current,
+                    remediation: {
+                      ...current.remediation,
+                      lockPolicy: {
+                        ...current.remediation.lockPolicy,
+                        targetMutationLock: event.target.checked,
+                      },
+                    },
+                  } : current)}
+                />
+                Hold target mutation lock
+              </label>
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={remediationDraft.remediation.verificationPolicy?.verifyAppliedActions !== false}
+                  onChange={(event) => setRemediationDraft((current) => current ? {
+                    ...current,
+                    remediation: {
+                      ...current.remediation,
+                      verificationPolicy: {
+                        ...current.remediation.verificationPolicy,
+                        verifyAppliedActions: event.target.checked,
+                      },
+                    },
+                  } : current)}
+                />
+                Verify applied actions
+              </label>
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={remediationDraft.remediation.checkpointBranchPolicy?.runtimeContextPolicy === "fresh_agent_run"}
+                  onChange={(event) => setRemediationDraft((current) => {
+                    if (!current) return current;
+                    const { checkpointBranchPolicy: _disabledPolicy, ...remediation } = current.remediation;
+                    return {
+                      ...current,
+                      remediation: event.target.checked ? {
+                        ...remediation,
+                        checkpointBranchPolicy: {
+                          ...current.remediation.checkpointBranchPolicy,
+                          actionKind: "checkpoint_branch.create_from_remediation_context",
+                          runtimeContextPolicy: "fresh_agent_run",
+                        },
+                      } : remediation,
+                    };
+                  })}
+                />
+                Create branch for corrected inputs
+              </label>
+            </div>
+            </fieldset>
             {remediationTargetFreshnessWarning ? (
               <p className="notice small" role="alert">
                 {remediationTargetFreshnessWarning}
@@ -11531,11 +12486,34 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                   step.skillInputContractDigest,
                   selectedSkillDetail?.contractDigest,
                 ) || step.skillInputContractNotice;
-              const visibleSkillSchemaFields = schemaContractHasFields(
+              const selectedSkillHasInputFields = schemaContractHasFields(
                 selectedSkillDetail,
-              )
-                ? Object.entries(schemaProperties(selectedSkillDetail?.inputSchema))
+              );
+              const availableSkillSchemaFields = selectedSkillHasInputFields
+                ? Object.entries(
+                    schemaProperties(selectedSkillDetail?.inputSchema),
+                  ).filter(([name]) => {
+                    const uiSchema = capabilityFieldUiSchema(
+                      selectedSkillDetail?.uiSchema,
+                      name,
+                    );
+                    return capabilityFieldVisible(
+                      uiSchema,
+                      step.presetInputValues,
+                      selectedSkillDetail?.defaults,
+                    );
+                  })
                 : [];
+              const guidedSkillInputNames = schemaGuidedInputNames(
+                selectedSkillDetail?.inputSchema,
+              );
+              const visibleSkillSchemaFields = showAdvancedStepOptions
+                ? availableSkillSchemaFields
+                : availableSkillSchemaFields.filter(([name]) =>
+                    guidedSkillInputNames.has(name),
+                  );
+              const hiddenOptionalSkillInputCount =
+                availableSkillSchemaFields.length - visibleSkillSchemaFields.length;
               const toolSearchText = toolSearchTextByStep[step.localId] || "";
               const trustedToolDefinitions = trustedToolsQuery.data || [];
               const toolChoiceGroups = groupedToolChoices(
@@ -11601,22 +12579,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                 stepPreviewProfile,
                 step.runtimeModelTier,
               );
-              const isPentestTool = step.toolId.trim() === PENTEST_TOOL_ID;
-              const pentestScopeValues = isPentestTool
-                ? pentestGeneratedScopeValues(
-                    step.pentestScopeDraft,
-                    step.toolInputValues,
-                  )
-                : {};
-              const pentestWarnings = isPentestTool
-                ? [
-                    ...step.pentestScopeDraft.validationWarnings,
-                    ...pentestScopeWarnings(
-                      step.pentestScopeDraft,
-                      step.toolInputValues,
-                    ),
-                  ]
-                : [];
               const jiraTransitionState =
                 jiraTransitionStateByStep[step.localId] || null;
               const showJiraTransitionOptions =
@@ -11866,329 +12828,37 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                       <p className="small">
                         {toolContractSummary(selectedTrustedTool)}
                       </p>
-                      {isPentestTool ? (
-                        <div className="notice small">
-                          Runs require an approved scope artifact. Inline scope is
-                          not accepted from workflow submission. External targets
-                          are disabled unless explicitly enabled by deployment
-                          policy. PentestGPT runs through the Claude OAuth
-                          runner profile.
-                        </div>
-                      ) : null}
                       {selectedToolDetail && visibleToolSchemaFields.length > 0 ? (
                         <div className="stack">
                           <SchemaCapabilityFields
-                            fields={requiredToolSchemaFields.filter(
-                              ([name]) =>
-                                !(isPentestTool && name === "scope_artifact_ref"),
-                            )}
+                            fields={requiredToolSchemaFields}
                             detail={selectedToolDetail}
                             values={step.toolInputValues}
                             errors={step.toolInputErrors}
                             disabled={false}
                             repositoryOptions={repositoryOptions}
                             branchOptions={branchOptions}
+                            onGitHubIssueRepositoryChange={
+                              handleGitHubIssueRepositoryChange
+                            }
                             onChange={(name, value) =>
                               updateToolInputValue(step.localId, name, value)
                             }
                           />
-                          {isPentestTool ? (
-                            <div className="stack queue-tool-dynamic-options">
-                              <strong>Approved Scope</strong>
-                              <div
-                                className="segmented-control"
-                                data-intensity="loud"
-                                role="radiogroup"
-                                aria-label="Approved Scope mode"
-                                style={{
-                                  "--segmented-control-count": 3,
-                                } as CSSProperties}
-                              >
-                                {[
-                                  ["generate", "Generate from fields"],
-                                  ["upload", "Upload JSON"],
-                                  ["existing", "Use existing artifact ref"],
-                                ].map(([mode, label]) => (
-                                  <label
-                                    key={mode}
-                                    className="segmented-control-item"
-                                  >
-                                    <input
-                                      type="radio"
-                                      name={`pentest-scope-mode-${step.localId}`}
-                                      value={mode}
-                                      checked={step.pentestScopeDraft.mode === mode}
-                                      onChange={(event) =>
-                                        updatePentestScopeDraft(step.localId, {
-                                          mode: event.target.value as PentestScopeMode,
-                                          validationErrors: {},
-                                        })
-                                      }
-                                    />
-                                    <span className="segmented-control-item-label">
-                                      {label}
-                                    </span>
-                                  </label>
-                                ))}
-                              </div>
-                              {step.pentestScopeDraft.mode === "generate" ? (
-                                <div className="grid-2">
-                                  <label>
-                                    Scope title
-                                    <input
-                                      value={String(pentestScopeValues.scope_title || "")}
-                                      onChange={(event) =>
-                                        updateGeneratedPentestScopeValue(
-                                          step.localId,
-                                          "scope_title",
-                                          event.target.value,
-                                        )
-                                      }
-                                    />
-                                  </label>
-                                  <label>
-                                    Environment
-                                    <select
-                                      value={String(pentestScopeValues.environment || "development")}
-                                      onChange={(event) =>
-                                        updateGeneratedPentestScopeValue(
-                                          step.localId,
-                                          "environment",
-                                          event.target.value,
-                                        )
-                                      }
-                                    >
-                                      {["development", "staging", "internal", "lab", "production"].map((item) => (
-                                        <option key={item} value={item}>
-                                          {item}
-                                        </option>
-                                      ))}
-                                    </select>
-                                  </label>
-                                  <label>
-                                    Target URL
-                                    <input
-                                      value={String(pentestScopeValues.target_url || "")}
-                                      onChange={(event) =>
-                                        updateGeneratedPentestScopeValue(
-                                          step.localId,
-                                          "target_url",
-                                          event.target.value,
-                                        )
-                                      }
-                                    />
-                                  </label>
-                                  <label>
-                                    Target host/FQDN
-                                    <input
-                                      value={String(pentestScopeValues.target_host || "")}
-                                      onChange={(event) =>
-                                        updateGeneratedPentestScopeValue(
-                                          step.localId,
-                                          "target_host",
-                                          event.target.value,
-                                        )
-                                      }
-                                    />
-                                  </label>
-                                  <label>
-                                    Target class
-                                    <select
-                                      value={String(pentestScopeValues.target_class || "lab")}
-                                      onChange={(event) =>
-                                        updateGeneratedPentestScopeValue(
-                                          step.localId,
-                                          "target_class",
-                                          event.target.value,
-                                        )
-                                      }
-                                    >
-                                      {["lab", "internal_authorized", "external_authorized"].map((item) => (
-                                        <option key={item} value={item}>
-                                          {item}
-                                        </option>
-                                      ))}
-                                    </select>
-                                  </label>
-                                  <label>
-                                    Expires at
-                                    <input
-                                      type="datetime-local"
-                                      value={String(pentestScopeValues.expires_at || "")}
-                                      onChange={(event) =>
-                                        updateGeneratedPentestScopeValue(
-                                          step.localId,
-                                          "expires_at",
-                                          event.target.value,
-                                        )
-                                      }
-                                    />
-                                  </label>
-                                  <label>
-                                    Approval ticket / reason
-                                    <input
-                                      value={String(pentestScopeValues.approval_ticket || "")}
-                                      onChange={(event) =>
-                                        updateGeneratedPentestScopeValue(
-                                          step.localId,
-                                          "approval_ticket",
-                                          event.target.value,
-                                        )
-                                      }
-                                    />
-                                  </label>
-                                  <label>
-                                    Allowed actions
-                                    <select
-                                      value={String(
-                                        Array.isArray(pentestScopeValues.allowed_actions)
-                                          ? pentestScopeValues.allowed_actions.join(",")
-                                          : PENTEST_BASELINE_ACTIONS.join(","),
-                                      )}
-                                      onChange={(event) =>
-                                        updateGeneratedPentestScopeValue(
-                                          step.localId,
-                                          "allowed_actions",
-                                          event.target.value.split(",").filter(Boolean),
-                                        )
-                                      }
-                                    >
-                                      <option value={PENTEST_BASELINE_ACTIONS.join(",")}>
-                                        First-pass baseline
-                                      </option>
-                                      <option value={PENTEST_VALIDATE_ACTIONS.join(",")}>
-                                        Validate hypothesis
-                                      </option>
-                                      {String(step.toolInputValues.operation_mode || "") ===
-                                      "full_authorized" ? (
-                                        <option value={PENTEST_SCOPE_ACTIONS.join(",")}>
-                                          Full authorized
-                                        </option>
-                                      ) : null}
-                                    </select>
-                                  </label>
-                                  <label>
-                                    Application stack
-                                    <input
-                                      value={String(pentestScopeValues.application_stack || "")}
-                                      onChange={(event) =>
-                                        updateGeneratedPentestScopeValue(
-                                          step.localId,
-                                          "application_stack",
-                                          event.target.value,
-                                        )
-                                      }
-                                    />
-                                  </label>
-                                </div>
-                              ) : null}
-                              {step.pentestScopeDraft.mode === "upload" ? (
-                                <div className="stack">
-                                  <label>
-                                    Upload approved scope JSON
-                                    <input
-                                      type="file"
-                                      accept="application/json,.json"
-                                      onChange={(event) => {
-                                        void handlePentestScopeFile(
-                                          step.localId,
-                                          event.currentTarget.files?.[0],
-                                        );
-                                        event.currentTarget.value = "";
-                                      }}
-                                    />
-                                  </label>
-                                  {step.pentestScopeDraft.uploadedScopeFileName ? (
-                                    <p className="small">
-                                      {`Selected: ${step.pentestScopeDraft.uploadedScopeFileName}`}
-                                    </p>
-                                  ) : null}
-                                </div>
-                              ) : null}
-                              {step.pentestScopeDraft.mode === "existing" ? (
-                                <label>
-                                  Approved scope artifact
-                                  <input
-                                    value={String(step.toolInputValues.scope_artifact_ref || "")}
-                                    placeholder="art_..."
-                                    aria-invalid={Boolean(step.toolInputErrors.scope_artifact_ref)}
-                                    onChange={(event) =>
-                                      updateToolInputValue(
-                                        step.localId,
-                                        "scope_artifact_ref",
-                                        event.target.value,
-                                      )
-                                    }
-                                  />
-                                  <span className="small">
-                                    ArtifactRef for the approved pentest scope document.
-                                  </span>
-                                </label>
-                              ) : null}
-                              <label>
-                                <input
-                                  type="checkbox"
-                                  checked={step.pentestScopeDraft.confirmAuthorized}
-                                  onChange={(event) =>
-                                    updatePentestScopeDraft(step.localId, {
-                                      confirmAuthorized: event.target.checked,
-                                      validationErrors: {},
-                                    })
-                                  }
-                                />
-                                I confirm I am authorized to test this target within the selected scope.
-                              </label>
-                              {step.pentestScopeDraft.mode === "generate" ? (
-                                <button
-                                  type="button"
-                                  className="secondary"
-                                  disabled={step.pentestScopeDraft.uploadStatus === "uploading"}
-                                  onClick={() => void attachGeneratedPentestScope(step.localId)}
-                                >
-                                  Generate and attach scope
-                                </button>
-                              ) : null}
-                              {step.pentestScopeDraft.mode === "upload" ? (
-                                <button
-                                  type="button"
-                                  className="secondary"
-                                  disabled={step.pentestScopeDraft.uploadStatus === "uploading"}
-                                  onClick={() => void attachUploadedPentestScope(step.localId)}
-                                >
-                                  Upload and attach scope
-                                </button>
-                              ) : null}
-                              {step.pentestScopeDraft.attachedArtifactId ? (
-                                <p className="notice small">
-                                  {`Approved scope attached: ${step.pentestScopeDraft.attachedArtifactId}`}
-                                </p>
-                              ) : null}
-                              {Object.values(step.pentestScopeDraft.validationErrors).map((error) => (
-                                <p key={error} className="notice small">
-                                  {error}
-                                </p>
-                              ))}
-                              {pentestWarnings.map((warning) => (
-                                <p key={warning} className="notice small">
-                                  {warning}
-                                </p>
-                              ))}
-                            </div>
-                          ) : null}
                           {optionalToolSchemaFields.length > 0 ? (
                             <details>
                               <summary>Optional inputs</summary>
                               <SchemaCapabilityFields
-                                fields={optionalToolSchemaFields.filter(
-                                  ([name]) =>
-                                    !(isPentestTool && name === "approved_scope"),
-                                )}
+                                fields={optionalToolSchemaFields}
                                 detail={selectedToolDetail}
                                 values={step.toolInputValues}
                                 errors={step.toolInputErrors}
                                 disabled={false}
                                 repositoryOptions={repositoryOptions}
                                 branchOptions={branchOptions}
+                                onGitHubIssueRepositoryChange={
+                                  handleGitHubIssueRepositoryChange
+                                }
                                 onChange={(name, value) =>
                                   updateToolInputValue(step.localId, name, value)
                                 }
@@ -12323,7 +12993,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                           </span>
                         )}
                       </div>
-                      {selectedSkillDetail && visibleSkillSchemaFields.length === 0 ? (
+                      {selectedSkillDetail && !selectedSkillHasInputFields ? (
                         <div
                           className="notice small"
                           data-testid={`skill-schema-fallback-${index}`}
@@ -12337,6 +13007,18 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                             This Skill does not publish structured input fields.
                           </span>
                         </div>
+                      ) : null}
+
+                      {selectedSkillHasInputFields &&
+                      !showAdvancedStepOptions &&
+                      hiddenOptionalSkillInputCount > 0 ? (
+                        <p
+                          className="small"
+                          data-testid={`skill-optional-inputs-notice-${index}`}
+                        >
+                          Optional Skill inputs are hidden. Advanced mode shows
+                          customization fields.
+                        </p>
                       ) : null}
 
                       {showSkillArgsField ? (
@@ -12378,6 +13060,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                           disabled={false}
                           repositoryOptions={repositoryOptions}
                           branchOptions={branchOptions}
+                          onGitHubIssueRepositoryChange={
+                            handleGitHubIssueRepositoryChange
+                          }
                           onChange={(name, value) =>
                             updateStepPresetInputValue(
                               step.localId,
@@ -12665,6 +13350,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                           disabled={isApplyingPreset}
                           repositoryOptions={repositoryOptions}
                           branchOptions={branchOptions}
+                          onGitHubIssueRepositoryChange={
+                            handleGitHubIssueRepositoryChange
+                          }
                           onChange={(name, value) =>
                             updateStepPresetInputValue(
                               step.localId,
@@ -12872,15 +13560,54 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             <select
               name="runtime"
               value={runtime}
-              onChange={(event) => setRuntime(event.target.value)}
+              onChange={(event) => {
+                setRuntime(event.target.value);
+                setRuntimeAuthored(true);
+              }}
             >
-              {supportedAgentRuntimes.map((runtimeOption) => (
+              {runtimeOptions.map((runtimeOption) => (
                 <option key={runtimeOption} value={runtimeOption}>
                   {formatRuntimeLabel(runtimeOption)}
                 </option>
               ))}
             </select>
+            {runtime === "omnigent" && (
+              selectedProfileIsGenericV2
+                ? selectedGenericOmnigentTarget?.available === false
+                : omnigentCatalogQuery.data?.available === false
+            ) ? (
+              <span className="small" role="status">
+                Omnigent needs setup: {omnigentSelectionGateReason || "readiness checks failed."}{" "}
+                <button type="button" onClick={() => { void omnigentCatalogQuery.refetch(); void omnigentExecutionReadinessQuery.refetch(); }}>
+                  Refresh readiness
+                </button>
+              </span>
+            ) : null}
           </label>
+
+          {runtime === "omnigent" ? (
+            <label>
+              Agent profile
+              <select
+                name="agentProfile"
+                value={agentProfile}
+                onChange={(event) => setAgentProfile(event.target.value)}
+                disabled={agentProfilesQuery.isFetching}
+                required
+              >
+                <option value="">Select a launch-ready agent profile</option>
+                {readyAgentProfiles.map((profile) => (
+                  <option key={profile.profileId} value={profile.profileId}>
+                    {profile.displayName}{profile.defaultForRuntime ? " (Default)" : ""} · v{profile.activeVersion}
+                  </option>
+                ))}
+              </select>
+              {agentProfilesQuery.isError ? <span className="small" role="alert">Failed to load agent profiles.</span> : null}
+              {!agentProfilesQuery.isPending && !agentProfilesQuery.isError && readyAgentProfiles.length === 0 ? (
+                <span className="small" role="alert">No launch-ready agent profile is available.</span>
+              ) : null}
+            </label>
+          ) : null}
 
           {providerOptions.length > 0 ? (
             <div id="queue-provider-profile-wrap">
@@ -12895,18 +13622,25 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                   // layout stays stable. Those profiles do not belong to the newly
                   // selected runtime, so the control is disabled and the stale
                   // options are withheld to prevent selecting/submitting them.
-                  disabled={providerProfilesQuery.isPlaceholderData}
+                  disabled={runtime === "omnigent" ? omnigentCatalogQuery.isFetching || (selectedProfileIsGenericV2 && omnigentExecutionReadinessQuery.isFetching) : providerProfilesQuery.isPlaceholderData}
                 >
-                  {providerProfilesQuery.isPlaceholderData ? (
+                  {runtime !== "omnigent" && providerProfilesQuery.isPlaceholderData ? (
                     <option value="">Loading profiles…</option>
                   ) : (
-                    providerOptions.map((option) => (
-                      <option key={option.id} value={option.id}>
-                        {option.isDefault
-                          ? `${option.label} (Default)`
-                          : option.label}
-                      </option>
-                    ))
+                    <>
+                      {runtime === "omnigent" && providerProfile && !providerOptions.some((option) => option.id === providerProfile) ? (
+                        <option value={providerProfile} disabled>
+                          {historicalOmnigentProviderProfile?.label || providerProfile} (Unavailable — replacement required)
+                        </option>
+                      ) : null}
+                      {providerOptions.map((option) => (
+                        <option key={option.id} value={option.id}>
+                          {option.isDefault
+                            ? `${option.label} (Default)`
+                            : option.label}
+                        </option>
+                      ))}
+                    </>
                   )}
                 </select>
               </label>
@@ -12919,7 +13653,80 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           ) : null}
         </div>
 
-        <div className="grid-2" aria-label="Workflow model tier intent">
+        {runtime.trim().toLowerCase() === "omnigent" && (omnigentProfiles.length > 0 || Boolean(selectedGenericOmnigentTarget)) ? (
+          <div className="grid-2" aria-label="Omnigent execution target">
+            <label>
+              Execution target
+              <select
+                name="omnigentExecutionTargetRef"
+                value={omnigentExecutionTargetRef}
+                onChange={(event) => {
+                  const ref = event.target.value;
+                  setOmnigentExecutionTargetRef(ref);
+                  setOmnigentLaunchPolicyAuthored(false);
+                  const profile = omnigentProfiles.find((item) => item.ref === ref);
+                  if (profile?.defaultPolicyRef) {
+                    setOmnigentLaunchPolicyRef(profile.defaultPolicyRef);
+                  }
+                }}
+              >
+                {!selectableOmnigentProfiles.some((profile) => profile.ref === omnigentExecutionTargetRef) && omnigentExecutionTargetRef ? (
+                  <option value={omnigentExecutionTargetRef} disabled>
+                    {omnigentExecutionTargetRef} (Unavailable — replacement required)
+                  </option>
+                ) : null}
+                {selectableOmnigentProfiles.map((profile) => (
+                  <option key={profile.ref} value={profile.ref}>
+                    {profile.displayName || profile.ref}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Host policy
+              <select
+                name="omnigentLaunchPolicyRef"
+                value={omnigentLaunchPolicyRef}
+                onChange={(event) => {
+                  setOmnigentLaunchPolicyRef(event.target.value);
+                  setOmnigentLaunchPolicyAuthored(true);
+                }}
+              >
+                {!selectableOmnigentPolicies.some((policy) => policy.ref === omnigentLaunchPolicyRef) && omnigentLaunchPolicyRef ? (
+                  <option value={omnigentLaunchPolicyRef} disabled>
+                    {omnigentLaunchPolicyRef} (Unavailable — replacement required)
+                  </option>
+                ) : null}
+                {selectableOmnigentPolicies.map((policy) => (
+                  <option key={policy.ref} value={policy.ref}>
+                    {policy.displayName}
+                    {policy.isDefault ? " (Default)" : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        ) : null}
+
+        {runtime.trim().toLowerCase() === "omnigent" ? (
+          <>
+            {!omnigentSelectionEligible && omnigentSelectionGateReason ? (
+              <div className="notice error small" role="alert">
+                Omnigent cannot be submitted: {omnigentSelectionGateReason}
+              </div>
+            ) : null}
+            <div className="notice small" aria-label="Effective Omnigent selection">
+              <div>Runtime: {selectedProfileIsGenericV2 ? selectedOmnigentAgentProfile?.displayName || "Omnigent" : "Codex via Omnigent"}</div>
+              <div>Provider Profile: {providerOptions.find((option) => option.id === providerProfile)?.label || historicalOmnigentProviderProfile?.label || providerProfile || "Not selected"}</div>
+              <div>Host mode: {selectedOmnigentLaunchPolicy?.hostMode === "on_demand_docker" ? "On-demand Docker" : selectedOmnigentLaunchPolicy?.hostMode === "static_compose" ? "Static Compose" : "Not selected"}</div>
+              <div>Policy: {omnigentLaunchPolicyRef || "Not selected"}</div>
+              <div>Repository: {repository.trim() || "Not selected"}</div>
+            </div>
+          </>
+        ) : null}
+
+        {selectedProfileSupportsModelControls ? (
+        <><div className="grid-2" aria-label="Workflow model tier intent">
           <label>
             Model tier intent
             <input
@@ -12958,9 +13765,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               </span>
             ) : null}
           </div>
+        ) : null}</>
         ) : null}
 
-        <div className="grid-2">
+        {selectedProfileSupportsModelControls ? (<div className="grid-2">
           <label>
             Hard override model
             <input
@@ -12989,7 +13797,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               }}
             />
           </label>
-        </div>
+        </div>) : null}
 
         </section>
 
@@ -13051,9 +13859,19 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               type="checkbox"
               checked={showAdvancedStepOptions}
               onChange={(event) => {
-                setShowAdvancedStepOptions(event.target.checked);
+                const advancedEnabled = event.target.checked;
+                setShowAdvancedStepOptions(advancedEnabled);
+                if (!advancedEnabled) {
+                  // Turning Advanced mode off clears context retrieval (RAG)
+                  // authoring, the same way hiding skill args clears them, so
+                  // the retained state matches the unauthored policy that is
+                  // actually submitted. Re-enabling the toggle then cannot
+                  // silently restore a retrieval policy the operator can no
+                  // longer see.
+                  setContextRetrieval(defaultContextRetrievalAuthoring());
+                }
                 updateDashboardPreferences({
-                  createExpertMode: event.target.checked,
+                  createExpertMode: advancedEnabled,
                 });
               }}
             />
@@ -13078,11 +13896,31 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             role="note"
           >
             <p className="small">
-              Adds skill args and required capabilities to each step. Optional
-              worker routing overrides; runtime, publish mode, skills, and
-              presets already add the common capabilities automatically.
+              Shows optional Skill inputs, skill args, required capabilities,
+              worker routing overrides, and context retrieval (RAG). Runtime,
+              publish mode, skills, and presets already add common capabilities
+              automatically.
             </p>
           </div>
+        ) : null}
+        {/*
+          Context retrieval (RAG) authoring is an advanced control: the guided
+          path relies on deployment retrieval policy, so the disclosure only
+          appears in Advanced mode. Submission mirrors Priority / Max Attempts
+          and uses the unauthored default while the controls are hidden; the
+          rerun/edit and remediation reconstruction paths reveal Advanced mode
+          whenever an inherited source already carries authored retrieval.
+        */}
+        {showAdvancedStepOptions ? (
+          <details className="queue-context-retrieval-disclosure">
+            <summary>Context retrieval (RAG)</summary>
+            <ContextRetrievalControls
+              value={contextRetrieval}
+              onChange={setContextRetrieval}
+              ceilings={retrievalCeilings}
+              description="Choose which collections the run may search and whether the session may request additional context during the run. Requests are always bounded by deployment policy."
+            />
+          </details>
         ) : null}
         </section>
 
@@ -13425,14 +14263,14 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                     }`
                   : "queue-submit-primary queue-submit-primary--with-arrow"
               }
-              disabled={isTemporalFormBlocked}
-              aria-disabled={isSubmitting || isTemporalFormBlocked}
+              disabled={isSubmitBlocked}
+              aria-disabled={isSubmitting || isSubmitBlocked}
               aria-busy={isSubmitting}
               aria-label={primaryCta}
               title={primaryCtaTooltip}
               onPointerDown={(event) => {
                 if (event.button !== 0) return;
-                if (isTemporalFormBlocked) return;
+                if (isSubmitBlocked) return;
                 const rect =
                   submitButtonRef.current?.getBoundingClientRect() ?? null;
                 setSubmitRippleRect(rect);
@@ -13453,12 +14291,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                     data-submit-icon="arrow"
                   >
                     <ArrowRightIcon />
-                  </span>
-                  <span
-                    className="queue-submit-primary-arrow-glyph queue-submit-primary-arrow-glyph--check"
-                    data-submit-icon="check"
-                  >
-                    <CheckIcon />
                   </span>
                 </span>
               ) : (

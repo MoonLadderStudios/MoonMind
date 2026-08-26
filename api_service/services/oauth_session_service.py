@@ -7,6 +7,36 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+
+async def get_oauth_session_workflow_status(session_id: str) -> str | None:
+    """Return the authoritative Temporal status for an OAuth session workflow.
+
+    ``None`` means the deterministic workflow ID does not exist. Other
+    inspection failures are surfaced so callers fail closed instead of
+    treating a database projection as authoritative.
+    """
+    from moonmind.workflows.temporal.client import TemporalClientAdapter
+
+    workflow_id = f"oauth-session:{session_id}"
+    try:
+        adapter = TemporalClientAdapter()
+        client = await adapter.get_client()
+        description = await client.get_workflow_handle(workflow_id).describe()
+    except Exception as exc:
+        if getattr(getattr(exc, "status", None), "name", None) == "NOT_FOUND":
+            return None
+        raise RuntimeError(
+            f"Failed to inspect OAuth session workflow {workflow_id}"
+        ) from exc
+
+    status_name = getattr(getattr(description, "status", None), "name", None)
+    if not isinstance(status_name, str) or not status_name:
+        raise RuntimeError(
+            f"OAuth session workflow {workflow_id} returned no execution status"
+        )
+    return status_name
+
+
 async def start_oauth_session_workflow(session_model: Any) -> None:
     """Start the Temporal workflow for a new OAuth session.
 
@@ -22,6 +52,14 @@ async def start_oauth_session_workflow(session_model: Any) -> None:
 
     session_id: str = session_model.session_id
     workflow_id = f"oauth-session:{session_id}"
+    metadata = session_model.metadata_json or {}
+    maintenance_purpose = str(metadata.get("maintenance_purpose") or "oauth_connect")
+    if maintenance_purpose not in {
+        "oauth_connect",
+        "oauth_reconnect",
+        "credential_repair",
+    }:
+        maintenance_purpose = "oauth_connect"
 
     try:
         adapter = TemporalClientAdapter()
@@ -38,18 +76,18 @@ async def start_oauth_session_workflow(session_model: Any) -> None:
                 "session_transport": session_model.session_transport or "none",
                 "requested_by_user_id": session_model.requested_by_user_id or "",
                 "profile_settings": session_model.metadata_json or {},
+                "maintenance_purpose": maintenance_purpose,
             },
             id=workflow_id,
             task_queue=get_workflow_task_queue(),
         )
         logger.info("Started OAuth session workflow %s", workflow_id)
     except Exception as exc:
-        logger.exception(
-            "Failed to start OAuth session workflow for %s", session_id
-        )
+        logger.exception("Failed to start OAuth session workflow for %s", session_id)
         raise RuntimeError(
             f"Failed to start OAuth session workflow {workflow_id}"
         ) from exc
+
 
 async def cancel_oauth_session_workflow(session_id: str) -> None:
     """Cancel an existing OAuth session Temporal workflow.
@@ -68,9 +106,8 @@ async def cancel_oauth_session_workflow(session_id: str) -> None:
         await handle.signal("cancel")
         logger.info("Sent cancel signal to OAuth session workflow %s", workflow_id)
     except Exception:
-        logger.exception(
-            "Failed to cancel OAuth session workflow %s", session_id
-        )
+        logger.exception("Failed to cancel OAuth session workflow %s", session_id)
+
 
 async def complete_oauth_session_workflow(session_id: str) -> None:
     """Signal that the API has already verified and finalized a session."""
@@ -92,6 +129,7 @@ async def complete_oauth_session_workflow(session_id: str) -> None:
             "Failed to mark OAuth session workflow %s complete", session_id
         )
 
+
 async def fail_oauth_session_workflow(session_id: str, reason: str) -> None:
     """Signal an OAuth session workflow that the terminal failed externally."""
     from moonmind.workflows.temporal.client import TemporalClientAdapter
@@ -105,6 +143,4 @@ async def fail_oauth_session_workflow(session_id: str, reason: str) -> None:
         await handle.signal("fail", reason)
         logger.info("Sent fail signal to OAuth session workflow %s", workflow_id)
     except Exception:
-        logger.exception(
-            "Failed to mark OAuth session workflow %s failed", session_id
-        )
+        logger.exception("Failed to mark OAuth session workflow %s failed", session_id)

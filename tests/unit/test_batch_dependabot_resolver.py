@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import runpy
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -22,6 +25,37 @@ def _load_module() -> dict[str, Any]:
             / "batch_dependabot_resolver.py"
         )
     )
+
+
+def _helper_path() -> Path:
+    return (
+        Path(__file__).resolve().parents[2]
+        / ".agents"
+        / "skills"
+        / "batch-dependabot-resolver"
+        / "bin"
+        / "batch_dependabot_resolver.py"
+    )
+
+
+def test_packaged_helper_starts_without_importing_moonmind(
+    tmp_path: Path,
+) -> None:
+    helper_path = _helper_path()
+    helper_source = helper_path.read_text(encoding="utf-8")
+    assert "from moonmind" not in helper_source
+    assert "import moonmind" not in helper_source
+    result = subprocess.run(
+        [sys.executable, str(helper_path), "--help"],
+        cwd=tmp_path,
+        env={**os.environ, "PYTHONPATH": ""},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--repo" in result.stdout
 
 
 def _dependabot_pr(**overrides: Any) -> dict[str, Any]:
@@ -49,7 +83,11 @@ def _args(**overrides: Any) -> Any:
         "max_attempts": 3,
         "priority": 0,
         "package_managers": [],
-        "title_regex": r"^Bump .+ from \S+ to \S+$",
+        "title_regex": (
+            r"^(?!.* from .* from )(?!.* to .* to )"
+            r"(?:Bump|[A-Za-z][A-Za-z0-9_-]*\(deps(?:-dev)?\): bump) "
+            r".+ from \S+ to \S+(?: in /.+)?$"
+        ),
         "include_security_updates": True,
         "max_prs": None,
         "dry_run": False,
@@ -116,8 +154,38 @@ def test_title_matches_default_regex() -> None:
     assert module["_title_matches"](
         "Bump eslint from 8.0.0 to 9.0.0 in /frontend", pattern
     )
+    assert module["_title_matches"](
+        "Chore(deps): bump actions/setup-node from 6 to 7", pattern
+    )
+    assert module["_title_matches"](
+        "chore(deps): bump boto3 from 1.43.46 to 1.43.51", pattern
+    )
+    assert module["_title_matches"](
+        "Build(deps): bump ubuntu from 24.04 to 26.04 "
+        "in /docker/actions-runner-control",
+        pattern,
+    )
+    assert module["_title_matches"](
+        "build(deps-dev): bump pytest from 8.0.0 to 9.0.0", pattern
+    )
     assert not module["_title_matches"]("Bump the pip group with 2 updates", pattern)
+    assert not module["_title_matches"](
+        "Deps: bump anthropic from 0.105.2 to 0.107.1", pattern
+    )
+    assert not module["_title_matches"](
+        "Build(deps): bump foo from 1 to 2 and bar from 3 to 4", pattern
+    )
     assert not module["_title_matches"]("Refactor things", pattern)
+
+
+def test_likely_version_bump_title_detects_filter_contract_drift() -> None:
+    module = _load_module()
+    assert module["_looks_like_version_bump_title"](
+        "Deps: bump package from 1.0.0 to 2.0.0"
+    )
+    assert not module["_looks_like_version_bump_title"](
+        "Bump the pip group with 2 updates"
+    )
 
 
 def test_infer_repo_from_remote_returns_none_when_git_remote_unavailable(
@@ -448,6 +516,30 @@ def test_partition_package_manager_filter() -> None:
     assert (skipped[0]["pr"], skipped[0]["reason"]) == (2, "package-manager-filtered")
 
 
+def test_partition_respects_intentionally_narrow_title_override() -> None:
+    module = _load_module()
+    prs = [
+        _dependabot_pr(
+            number=1,
+            title="Deps: bump anthropic from 1.0.0 to 2.0.0",
+            headRefOid="s1",
+        )
+    ]
+    queue_requests, skipped, _ = _partition(
+        module,
+        prs,
+        title_regex=r"^Bump .+ from \S+ to \S+$",
+    )
+    assert queue_requests == []
+    assert skipped == [
+        {
+            "pr": 1,
+            "branch": "dependabot/pip/anthropic-0.107.1",
+            "reason": "title-mismatch",
+        }
+    ]
+
+
 def test_partition_security_update_excluded_when_disabled() -> None:
     module = _load_module()
     prs = [
@@ -475,6 +567,35 @@ def test_would_queue_records_carry_idempotency_keys() -> None:
     records = module["_would_queue_records"](queue_requests)
     assert records[0]["pr"] == 7
     assert records[0]["idempotencyKey"].startswith("batch-dependabot-resolver:")
+
+
+def test_write_artifacts_uses_unique_temporary_names(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    entropy = iter([b"first1", b"second"])
+    temporary_names: list[str] = []
+    original_replace = module["os"].replace
+
+    monkeypatch.setattr(module["os"], "urandom", lambda _size: next(entropy))
+
+    def capture_replace(source: str | Path, destination: str | Path) -> None:
+        temporary_names.append(Path(source).name)
+        original_replace(source, destination)
+
+    monkeypatch.setattr(module["os"], "replace", capture_replace)
+    result_path = tmp_path / "result.json"
+
+    module["_write_artifacts"](result_path, {"attempt": 1})
+    module["_write_artifacts"](result_path, {"attempt": 2})
+
+    assert temporary_names == [
+        ".result.json.666972737431.tmp",
+        ".result.json.7365636f6e64.tmp",
+    ]
+    assert json.loads(result_path.read_text(encoding="utf-8")) == {"attempt": 2}
+    assert list(tmp_path.glob(".result.json.*.tmp")) == []
 
 
 def test_write_run_artifacts_emits_no_op_on_zero_match(tmp_path: Path) -> None:
@@ -528,6 +649,34 @@ def test_write_run_artifacts_skips_no_op_on_errors(tmp_path: Path) -> None:
     assert outcome["reason"] == "child_workflow_queue_failed"
 
 
+def test_write_run_artifacts_fails_on_default_title_contract_drift(
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    payload = {
+        "dryRun": False,
+        "requested": 1,
+        "created": 0,
+        "queued": [],
+        "wouldQueue": [],
+        "skipped": [
+            {
+                "pr": 9,
+                "branch": "dependabot/pip/x",
+                "reason": "title-mismatch",
+                "likelyVersionBump": True,
+            }
+        ],
+        "errors": [],
+        "diagnostics": {"titleContractDriftPrs": [9]},
+    }
+    module["_write_run_artifacts"](tmp_path, payload)
+    outcome = json.loads((tmp_path / "skill_outcome.json").read_text())
+    assert outcome["status"] == "failed"
+    assert outcome["reason"] == "dependabot_title_contract_drift"
+    assert outcome["evidence"]["titleContractDriftPrs"] == [9]
+
+
 # ---------------------------------------------------------------------------
 # Runtime selection inheritance (FR-009)
 # ---------------------------------------------------------------------------
@@ -568,6 +717,49 @@ def test_resolve_runtime_selection_prefers_explicit(tmp_path: Path) -> None:
         _args(task_context_path=str(task_context), runtime_mode="gemini")
     )
     assert runtime.mode == "gemini"
+
+
+def test_execution_fanout_token_prefers_lease_owned_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_module()
+    token_file = tmp_path / "execution-fanout"
+    token_file.write_text("scoped-capability\n", encoding="utf-8")
+    monkeypatch.setenv(
+        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE", str(token_file)
+    )
+    monkeypatch.setenv(
+        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN", "broader-environment-value"
+    )
+
+    assert module["_read_execution_fanout_token"]() == "scoped-capability"
+
+
+def test_execution_fanout_token_file_fails_closed_when_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_module()
+    monkeypatch.setenv(
+        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE",
+        str(tmp_path / "missing-capability"),
+    )
+
+    with pytest.raises(RuntimeError, match="capability file is unavailable"):
+        module["_read_execution_fanout_token"]()
+
+
+def test_default_artifacts_dir_ignores_missing_parent_task_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_module()
+    workspace = tmp_path / "workspaces" / "run"
+    workspace.mkdir(parents=True)
+    monkeypatch.chdir(workspace)
+    monkeypatch.delenv("MOONMIND_SESSION_ARTIFACT_SPOOL_PATH", raising=False)
+    monkeypatch.delenv("MOONMIND_TASK_CONTEXT_PATH", raising=False)
+    monkeypatch.delenv("TASK_CONTEXT_PATH", raising=False)
+
+    assert module["_resolve_artifacts_dir"]("artifacts") == Path("artifacts")
 
 
 # ---------------------------------------------------------------------------

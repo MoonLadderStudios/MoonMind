@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import (
@@ -28,6 +28,22 @@ from moonmind.schemas.checkpoint_branch_models import (
     CheckpointBranchStateUpdateModel,
     CheckpointBranchTurnCreateModel,
     StepExecutionBranchMetadataModel,
+)
+from moonmind.workflows.temporal.remediation_workspace_head import (
+    REMEDIATION_HEAD_MISMATCH,
+    REMEDIATION_HEAD_STALE_VERSION,
+    RemediationAttemptInput,
+    RemediationAttemptOutput,
+    RemediationHeadError,
+    RemediationHeadStatus,
+    RemediationWorkspaceHead,
+    VerificationEvidence,
+    WorkspaceMaterializationEvidence,
+    advance_head,
+    apply_verification,
+    authorize_materialization,
+    mark_terminal,
+    rollback_head,
 )
 from moonmind.statuses.checkpoint_branch import (
     CheckpointBranchState,
@@ -76,6 +92,360 @@ class CheckpointBranchService:
 
     def __init__(self, session: AsyncSession):
         self._session = session
+
+    @staticmethod
+    def _remediation_head(branch: WorkflowCheckpointBranch) -> RemediationWorkspaceHead:
+        if not all(
+            (
+                branch.remediation_loop_id,
+                branch.source_checkpoint_ref,
+                branch.source_checkpoint_digest,
+                branch.current_head_checkpoint_ref,
+                branch.current_head_checkpoint_digest,
+                branch.current_head_version,
+                branch.remediation_head_status,
+            )
+        ):
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_MISMATCH,
+                "checkpoint branch has no complete remediation head authority",
+            )
+        return RemediationWorkspaceHead(
+            loopId=branch.remediation_loop_id,
+            branchRef=f"checkpoint-branch:{branch.branch_id}",
+            rootCheckpointRef=branch.source_checkpoint_ref,
+            rootWorkspaceDigest=branch.source_checkpoint_digest,
+            headCheckpointRef=branch.current_head_checkpoint_ref,
+            headWorkspaceDigest=branch.current_head_checkpoint_digest,
+            headStepExecutionId=branch.current_head_step_execution_id,
+            headAttemptOrdinal=branch.current_head_attempt_ordinal or 0,
+            headVersion=branch.current_head_version,
+            latestVerificationRef=branch.latest_verification_ref,
+            latestVerificationVerdict=branch.latest_verification_verdict,
+            status=branch.remediation_head_status,
+            remainingWorkRef=(branch.artifact_refs or {}).get(
+                "remediationRemainingWork"
+            ),
+        )
+
+    async def authorize_remediation_materialization(
+        self,
+        *,
+        workflow_id: str,
+        branch_id: str,
+        attempt: RemediationAttemptInput,
+        evidence: WorkspaceMaterializationEvidence,
+        expected_owner_step_execution_id: str,
+    ) -> RemediationWorkspaceHead:
+        """Authorize one live reuse or cold restore from persisted head authority.
+
+        The destination path deliberately does not enter this boundary.  Runtime
+        code must first produce checkpoint, digest, version, loop, and owner
+        evidence; only an exact match may be handed to the AgentRun.
+        """
+
+        branch = await self._get_branch(workflow_id=workflow_id, branch_id=branch_id)
+        head = self._remediation_head(branch)
+        authorize_materialization(
+            head,
+            attempt,
+            evidence,
+            expected_owner_step_execution_id=expected_owner_step_execution_id,
+        )
+        return head
+
+    async def initialize_remediation_head(
+        self, *, workflow_id: str, branch_id: str, loop_id: str
+    ) -> RemediationWorkspaceHead:
+        """Initialize root authority once from persisted checkpoint evidence."""
+
+        branch = await self._get_branch(workflow_id=workflow_id, branch_id=branch_id)
+        if branch.remediation_loop_id:
+            if branch.remediation_loop_id != loop_id:
+                raise RemediationHeadError(
+                    REMEDIATION_HEAD_MISMATCH, "branch is owned by another remediation loop"
+                )
+            return self._remediation_head(branch)
+        if not branch.source_checkpoint_digest:
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_MISMATCH,
+                "root checkpoint digest is required for remediation authority",
+            )
+        branch.remediation_loop_id = loop_id
+        branch.current_head_checkpoint_ref = branch.source_checkpoint_ref
+        branch.current_head_checkpoint_digest = branch.source_checkpoint_digest
+        branch.current_head_version = 1
+        branch.current_head_attempt_ordinal = 0
+        branch.remediation_head_status = RemediationHeadStatus.CANDIDATE.value
+        await self._session.flush()
+        return self._remediation_head(branch)
+
+    async def advance_remediation_head(
+        self,
+        *,
+        workflow_id: str,
+        branch_id: str,
+        attempt: RemediationAttemptInput,
+        output: RemediationAttemptOutput,
+        step_execution_id: str,
+        transition_id: str,
+    ) -> RemediationWorkspaceHead:
+        """Atomically CAS a captured candidate and persist idempotency evidence."""
+
+        branch = await self._get_branch(workflow_id=workflow_id, branch_id=branch_id)
+        head = self._remediation_head(branch)
+        artifact_kind = f"remediation_transition_{transition_id}"
+        existing = (
+            await self._session.execute(
+                select(WorkflowCheckpointBranchArtifact).where(
+                    WorkflowCheckpointBranchArtifact.branch_id == branch_id,
+                    WorkflowCheckpointBranchArtifact.artifact_kind == artifact_kind,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            if existing.artifact_ref != output.attempt_evidence_ref:
+                raise RemediationHeadError(
+                    REMEDIATION_HEAD_STALE_VERSION,
+                    "transition identity was reused with different evidence",
+                )
+            return head
+
+        updated, _transition = advance_head(
+            head,
+            attempt,
+            output,
+            step_execution_id=step_execution_id,
+            transition_id=transition_id,
+        )
+        if updated != head:
+            result = await self._session.execute(
+                update(WorkflowCheckpointBranch)
+                .where(
+                    WorkflowCheckpointBranch.workflow_id == workflow_id,
+                    WorkflowCheckpointBranch.branch_id == branch_id,
+                    WorkflowCheckpointBranch.current_head_version
+                    == attempt.expected_head_version,
+                    WorkflowCheckpointBranch.current_head_checkpoint_ref
+                    == attempt.base_checkpoint_ref,
+                    WorkflowCheckpointBranch.current_head_checkpoint_digest
+                    == attempt.expected_base_digest,
+                )
+                .values(
+                    current_head_checkpoint_ref=updated.head_checkpoint_ref,
+                    current_head_checkpoint_digest=updated.head_workspace_digest,
+                    current_head_step_execution_id=updated.head_step_execution_id,
+                    current_head_attempt_ordinal=updated.head_attempt_ordinal,
+                    current_head_version=updated.head_version,
+                    remediation_head_status=updated.status.value,
+                    latest_verification_ref=None,
+                    latest_verification_verdict=None,
+                )
+            )
+            if result.rowcount != 1:
+                raise RemediationHeadError(
+                    REMEDIATION_HEAD_STALE_VERSION,
+                    "remediation head was concurrently advanced",
+                )
+            await self._session.refresh(branch)
+        await self.record_artifact(
+            branch_id=branch_id,
+            artifact_ref=output.attempt_evidence_ref,
+            artifact_kind=artifact_kind,
+        )
+        return self._remediation_head(branch)
+
+    async def record_remediation_verification(
+        self,
+        *,
+        workflow_id: str,
+        branch_id: str,
+        evidence: VerificationEvidence,
+    ) -> RemediationWorkspaceHead:
+        """Persist the authoritative verifier result for the exact current head."""
+
+        branch = await self._get_branch(workflow_id=workflow_id, branch_id=branch_id)
+        head = self._remediation_head(branch)
+        updated = apply_verification(head, evidence)
+        artifact_kind = f"remediation_verification_v{evidence.input_head_version}"
+        existing = (
+            await self._session.execute(
+                select(WorkflowCheckpointBranchArtifact).where(
+                    WorkflowCheckpointBranchArtifact.branch_id == branch_id,
+                    WorkflowCheckpointBranchArtifact.artifact_kind == artifact_kind,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            if existing.artifact_ref != evidence.verifier_artifact_ref:
+                raise RemediationHeadError(
+                    REMEDIATION_HEAD_STALE_VERSION,
+                    "verification version was reused with different evidence",
+                )
+            return head
+        result = await self._session.execute(
+            update(WorkflowCheckpointBranch)
+            .where(
+                WorkflowCheckpointBranch.workflow_id == workflow_id,
+                WorkflowCheckpointBranch.branch_id == branch_id,
+                WorkflowCheckpointBranch.current_head_version
+                == evidence.input_head_version,
+                WorkflowCheckpointBranch.current_head_checkpoint_ref
+                == evidence.input_head_ref,
+                WorkflowCheckpointBranch.current_head_checkpoint_digest
+                == evidence.input_head_digest,
+            )
+            .values(
+                remediation_head_status=updated.status.value,
+                latest_verification_ref=updated.latest_verification_ref,
+                latest_verification_verdict=updated.latest_verification_verdict,
+            )
+        )
+        if result.rowcount != 1:
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_STALE_VERSION,
+                "remediation head advanced while verification was running",
+            )
+        await self.record_artifact(
+            branch_id=branch_id,
+            artifact_ref=evidence.verifier_artifact_ref,
+            artifact_kind=artifact_kind,
+        )
+        await self._session.refresh(branch)
+        return self._remediation_head(branch)
+
+    async def mark_remediation_terminal(
+        self,
+        *,
+        workflow_id: str,
+        branch_id: str,
+        remaining_work_ref: str,
+        expected_head_ref: str,
+        expected_head_digest: str,
+        expected_head_version: int,
+    ) -> RemediationWorkspaceHead:
+        """Preserve the last valid candidate while recording terminal remaining work."""
+
+        branch = await self._get_branch(workflow_id=workflow_id, branch_id=branch_id)
+        head = self._remediation_head(branch)
+        if (
+            head.head_checkpoint_ref,
+            head.head_workspace_digest,
+            head.head_version,
+        ) != (expected_head_ref, expected_head_digest, expected_head_version):
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_STALE_VERSION,
+                "remediation head advanced before terminal remaining work was recorded",
+            )
+        updated = mark_terminal(head, remaining_work_ref)
+        result = await self._session.execute(
+            update(WorkflowCheckpointBranch)
+            .where(
+                WorkflowCheckpointBranch.workflow_id == workflow_id,
+                WorkflowCheckpointBranch.branch_id == branch_id,
+                WorkflowCheckpointBranch.current_head_version == expected_head_version,
+                WorkflowCheckpointBranch.current_head_checkpoint_ref == expected_head_ref,
+                WorkflowCheckpointBranch.current_head_checkpoint_digest == expected_head_digest,
+            )
+            .values(
+                remediation_head_status=updated.status.value,
+                artifact_refs={
+                    **(branch.artifact_refs or {}),
+                    "remediationRemainingWork": updated.remaining_work_ref,
+                },
+            )
+        )
+        if result.rowcount != 1:
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_STALE_VERSION,
+                "remediation head advanced before terminal remaining work was recorded",
+            )
+        await self.record_artifact(
+            branch_id=branch_id,
+            artifact_ref=remaining_work_ref,
+            artifact_kind=f"remediation_terminal_v{updated.head_version}",
+        )
+        await self._session.flush()
+        return updated
+
+    async def rollback_remediation_head(
+        self,
+        *,
+        workflow_id: str,
+        branch_id: str,
+        expected_head_version: int,
+        checkpoint_ref: str,
+        workspace_digest: str,
+        evidence_ref: str,
+        transition_id: str,
+    ) -> RemediationWorkspaceHead:
+        """Atomically roll back a head and retain append-only supersession evidence."""
+
+        branch = await self._get_branch(workflow_id=workflow_id, branch_id=branch_id)
+        head = self._remediation_head(branch)
+        artifact_kind = f"remediation_rollback_{transition_id}"
+        existing = (
+            await self._session.execute(
+                select(WorkflowCheckpointBranchArtifact).where(
+                    WorkflowCheckpointBranchArtifact.branch_id == branch_id,
+                    WorkflowCheckpointBranchArtifact.artifact_kind == artifact_kind,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            if (
+                existing.artifact_ref != evidence_ref
+                or head.head_checkpoint_ref != checkpoint_ref
+                or head.head_workspace_digest != workspace_digest
+                or head.head_version != expected_head_version + 1
+            ):
+                raise RemediationHeadError(
+                    REMEDIATION_HEAD_STALE_VERSION,
+                    "rollback transition identity was reused with different evidence or target",
+                )
+            return head
+        if head.head_version != expected_head_version:
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_STALE_VERSION, "remediation head was concurrently advanced"
+            )
+        updated, _transition = rollback_head(
+            head,
+            checkpoint_ref=checkpoint_ref,
+            workspace_digest=workspace_digest,
+            evidence_ref=evidence_ref,
+            transition_id=transition_id,
+        )
+        result = await self._session.execute(
+            update(WorkflowCheckpointBranch)
+            .where(
+                WorkflowCheckpointBranch.workflow_id == workflow_id,
+                WorkflowCheckpointBranch.branch_id == branch_id,
+                WorkflowCheckpointBranch.current_head_version == expected_head_version,
+                WorkflowCheckpointBranch.current_head_checkpoint_ref
+                == head.head_checkpoint_ref,
+                WorkflowCheckpointBranch.current_head_checkpoint_digest
+                == head.head_workspace_digest,
+            )
+            .values(
+                current_head_checkpoint_ref=updated.head_checkpoint_ref,
+                current_head_checkpoint_digest=updated.head_workspace_digest,
+                current_head_version=updated.head_version,
+                remediation_head_status=updated.status.value,
+                latest_verification_ref=None,
+                latest_verification_verdict=None,
+            )
+        )
+        if result.rowcount != 1:
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_STALE_VERSION, "remediation head was concurrently advanced"
+            )
+        await self.record_artifact(
+            branch_id=branch_id,
+            artifact_ref=evidence_ref,
+            artifact_kind=artifact_kind,
+        )
+        await self._session.refresh(branch)
+        return self._remediation_head(branch)
 
     async def _get_branch(
         self,
@@ -319,15 +689,10 @@ class CheckpointBranchService:
                 "runtimeContextPolicy": model.runtime_context_policy,
                 "instructionRef": model.instruction_ref,
                 "instructionDigest": model.instruction_digest,
-                "contextBundleRef": model.context_bundle_ref,
-                "createdStepExecutionId": model.created_step_execution_id,
-                "runtimeAgentRunId": model.runtime_agent_run_id,
-                "providerSessionId": model.provider_session_id,
                 "idempotencyKey": model.idempotency_key,
                 "status": "created",
             }
         )
-        branch.current_head_step_execution_id = turn.created_step_execution_id
         branch.current_head_checkpoint_ref = turn.source_checkpoint_ref
         await self._session.flush()
         await self._session.refresh(branch)
@@ -390,10 +755,6 @@ class CheckpointBranchService:
                 "runtimeContextPolicy": runtime_context_policy,
                 "instructionRef": model.instruction_ref,
                 "instructionDigest": model.instruction_digest,
-                "contextBundleRef": model.context_bundle_ref,
-                "createdStepExecutionId": model.created_step_execution_id,
-                "runtimeAgentRunId": model.runtime_agent_run_id,
-                "providerSessionId": model.provider_session_id,
                 "idempotencyKey": model.idempotency_key,
                 "status": "created",
             }
@@ -401,7 +762,6 @@ class CheckpointBranchService:
         branch.state = CheckpointBranchState.ACTIVE.value
         branch.workspace_policy = workspace_policy
         branch.runtime_context_policy = runtime_context_policy
-        branch.current_head_step_execution_id = turn.created_step_execution_id
         branch.current_head_checkpoint_ref = turn.source_checkpoint_ref
         await self._session.flush()
         return turn
@@ -482,15 +842,10 @@ class CheckpointBranchService:
                 "runtimeContextPolicy": model.runtime_context_policy,
                 "instructionRef": model.instruction_ref,
                 "instructionDigest": model.instruction_digest,
-                "contextBundleRef": model.context_bundle_ref,
-                "createdStepExecutionId": model.created_step_execution_id,
-                "runtimeAgentRunId": model.runtime_agent_run_id,
-                "providerSessionId": model.provider_session_id,
                 "idempotencyKey": model.idempotency_key,
                 "status": "created",
             }
         )
-        child.current_head_step_execution_id = turn.created_step_execution_id
         child.current_head_checkpoint_ref = turn.source_checkpoint_ref
         await self._session.flush()
         await self._session.refresh(child)
@@ -655,7 +1010,7 @@ class CheckpointBranchService:
         branch = await self._get_branch(workflow_id=workflow_id, branch_id=branch_id)
         return await self._branch_graph(branch)
 
-    async def launch_turn(
+    async def claim_turn_execution(
         self,
         *,
         workflow_id: str,
@@ -663,16 +1018,18 @@ class CheckpointBranchService:
         branch_turn_id: str,
         context_bundle_ref: str,
         step_execution_manifest_ref: str,
-        checkpoint_ref: str | None,
         diagnostics_ref: str,
-        idempotency_key: str,
-        created_step_execution_id: str | None = None,
-        runtime_agent_run_id: str | None = None,
-        provider_session_id: str | None = None,
-        agent_request_ref: str | None = None,
-        agent_result_ref: str | None = None,
+        launch_idempotency_key: str,
+        created_step_execution_id: str,
+        runtime_agent_run_id: str,
+        agent_request_ref: str,
+        execution_workflow_id: str,
     ) -> WorkflowCheckpointBranchTurn:
-        """Launch one persisted branch turn as semantic runtime evidence."""
+        """Persist server-owned identities before branch runtime side effects.
+
+        Only the branch-turn execution owner calls this method.  Public write
+        contracts cannot supply any of these identities or evidence refs.
+        """
 
         branch = await self._get_branch(workflow_id=workflow_id, branch_id=branch_id)
         if branch.state in {
@@ -693,19 +1050,16 @@ class CheckpointBranchService:
             branch_id=branch.branch_id,
             branch_turn_id=turn.branch_turn_id,
         )
-        if idempotency_key.strip() != expected_key:
+        if launch_idempotency_key.strip() != expected_key:
             raise ValueError(
                 "branch turn launch idempotency key must include workflow, "
                 "branch, and branch turn identity"
             )
-        if not created_step_execution_id:
-            raise ValueError("branch turn launch requires Step Execution evidence")
         launch_values = {
             "context_bundle_ref": context_bundle_ref,
             "step_execution_manifest_ref": step_execution_manifest_ref,
             "created_step_execution_id": created_step_execution_id,
             "runtime_agent_run_id": runtime_agent_run_id,
-            "provider_session_id": provider_session_id,
         }
         self._require_launch_replay_matches(turn, launch_values)
 
@@ -718,14 +1072,17 @@ class CheckpointBranchService:
         turn.runtime_agent_run_id = (
             runtime_agent_run_id.strip() if runtime_agent_run_id else None
         )
-        turn.provider_session_id = (
-            provider_session_id.strip() if provider_session_id else None
-        )
-        turn.status = CheckpointBranchTurnState.RUNNING.value
-        turn.started_at = turn.started_at or now
+        # Preparing is truthful until the durable owner workflow starts the
+        # canonical AgentRun child.  Session/host/lease identity stays empty
+        # until the Omnigent coordinator supplies terminal evidence.
+        turn.status = CheckpointBranchTurnState.PREPARING.value
         turn.diagnostics = {
             **(turn.diagnostics or {}),
             "launchIdempotencyKey": expected_key,
+            "executionWorkflowId": execution_workflow_id,
+            "executionOwner": "MoonMind.CheckpointBranchTurn",
+            "deliveryStage": "preparing",
+            "verificationPending": True,
             "stepExecutionManifestBranch": StepExecutionBranchMetadataModel(
                 branchId=branch.branch_id,
                 branchTurnId=turn.branch_turn_id,
@@ -740,24 +1097,18 @@ class CheckpointBranchService:
             "branchTurnArtifacts": {
                 "contextBundleRef": context_bundle_ref,
                 "stepExecutionManifestRef": step_execution_manifest_ref,
-                "checkpointRef": checkpoint_ref,
                 "diagnosticsRef": diagnostics_ref,
                 "agentRequestRef": agent_request_ref,
-                "agentResultRef": agent_result_ref,
             },
         }
-        branch.state = CheckpointBranchState.ACTIVE.value
+        branch.state = CheckpointBranchState.PREPARING.value
         branch.current_head_step_execution_id = turn.created_step_execution_id
-        if checkpoint_ref:
-            branch.current_head_checkpoint_ref = checkpoint_ref.strip()
         branch.artifact_refs = {
             **(branch.artifact_refs or {}),
             "latestBranchTurnContextBundle": context_bundle_ref,
             "latestBranchTurnManifest": step_execution_manifest_ref,
             "latestBranchTurnDiagnostics": diagnostics_ref,
         }
-        if checkpoint_ref:
-            branch.artifact_refs["latestBranchTurnCheckpoint"] = checkpoint_ref
         if turn.instruction_ref.startswith("artifact://"):
             await self._upsert_turn_artifact(
                 branch_id=branch.branch_id,
@@ -778,34 +1129,214 @@ class CheckpointBranchService:
                 artifact_kind="runtime.branch_turn.agent_request.json",
                 artifact_ref=agent_request_ref,
             )
-        if agent_result_ref:
-            await self._upsert_turn_artifact(
-                branch_id=branch.branch_id,
-                branch_turn_id=turn.branch_turn_id,
-                artifact_kind="runtime.branch_turn.agent_result.json",
-                artifact_ref=agent_result_ref,
-            )
         await self._upsert_turn_artifact(
             branch_id=branch.branch_id,
             branch_turn_id=turn.branch_turn_id,
             artifact_kind="output.branch_turn.step_execution_manifest.json",
             artifact_ref=step_execution_manifest_ref,
         )
-        if checkpoint_ref:
-            await self._upsert_turn_artifact(
-                branch_id=branch.branch_id,
-                branch_turn_id=turn.branch_turn_id,
-                artifact_kind="output.branch_turn.checkpoint.json",
-                artifact_ref=checkpoint_ref,
-            )
         await self._upsert_turn_artifact(
             branch_id=branch.branch_id,
             branch_turn_id=turn.branch_turn_id,
-            artifact_kind="output.branch_turn.diagnostics.json",
+            artifact_kind="output.branch_turn.launch_diagnostics.json",
             artifact_ref=diagnostics_ref,
         )
         await self._session.flush()
         await self._session.refresh(turn)
+        return turn
+
+    async def lock_turn_execution(
+        self,
+        *,
+        workflow_id: str,
+        branch_id: str,
+        branch_turn_id: str,
+    ) -> tuple[WorkflowCheckpointBranch, WorkflowCheckpointBranchTurn]:
+        """Serialize launch/finalization against the durable turn identity.
+
+        The lock is held by the caller's transaction.  Artifact IO must use a
+        separate transaction so it cannot accidentally release this authority
+        boundary before the branch graph is updated.
+        """
+
+        branch = (
+            await self._session.execute(
+                select(WorkflowCheckpointBranch)
+                .where(
+                    WorkflowCheckpointBranch.branch_id == branch_id,
+                    WorkflowCheckpointBranch.workflow_id == workflow_id,
+                )
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        if branch is None:
+            raise ValueError("checkpoint branch was not found")
+        turn = (
+            await self._session.execute(
+                select(WorkflowCheckpointBranchTurn)
+                .where(
+                    WorkflowCheckpointBranchTurn.branch_turn_id == branch_turn_id,
+                    WorkflowCheckpointBranchTurn.branch_id == branch_id,
+                )
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        if turn is None:
+            raise ValueError("checkpoint branch turn was not found")
+        return branch, turn
+
+    async def mark_turn_running(
+        self,
+        *,
+        workflow_id: str,
+        branch_id: str,
+        branch_turn_id: str,
+        runtime_agent_run_id: str,
+    ) -> WorkflowCheckpointBranchTurn:
+        """Record that the canonical AgentRun child is about to dispatch."""
+
+        branch = await self._get_branch(workflow_id=workflow_id, branch_id=branch_id)
+        turn = await self._require_turn_on_branch(
+            branch_id=branch_id,
+            branch_turn_id=branch_turn_id,
+            relation="branchTurnId",
+        )
+        if turn.runtime_agent_run_id != runtime_agent_run_id:
+            raise ValueError("branch turn Agent Run identity does not match claim")
+        turn.status = CheckpointBranchTurnState.RUNNING.value
+        turn.started_at = turn.started_at or datetime.now(UTC)
+        turn.diagnostics = {
+            **(turn.diagnostics or {}),
+            "deliveryStage": "running",
+            "verificationPending": True,
+        }
+        branch.state = CheckpointBranchState.ACTIVE.value
+        await self._session.flush()
+        return turn
+
+    async def finalize_turn_execution(
+        self,
+        *,
+        workflow_id: str,
+        branch_id: str,
+        branch_turn_id: str,
+        outcome: str,
+        agent_result_ref: str,
+        diagnostics_ref: str,
+        checkpoint_ref: str | None = None,
+        checkpoint_digest: str | None = None,
+        provider_session_id: str | None = None,
+        terminal_ref: str | None = None,
+        output_refs: list[str] | None = None,
+        terminal_disposition: str | None = None,
+    ) -> WorkflowCheckpointBranchTurn:
+        """Persist truthful terminal delivery and verifier-handoff evidence."""
+
+        branch = await self._get_branch(workflow_id=workflow_id, branch_id=branch_id)
+        turn = await self._require_turn_on_branch(
+            branch_id=branch_id,
+            branch_turn_id=branch_turn_id,
+            relation="branchTurnId",
+        )
+        normalized = outcome.strip().lower()
+        existing_diagnostics = dict(turn.diagnostics or {})
+        if existing_diagnostics.get("agentResultRef"):
+            replay_values = {
+                "agentResultRef": agent_result_ref,
+                "diagnosticsRef": diagnostics_ref,
+                "terminalRef": terminal_ref,
+                "outputRefs": list(output_refs or []),
+                "terminalDisposition": terminal_disposition
+                or existing_diagnostics.get("terminalDisposition"),
+            }
+            for field_name, expected in replay_values.items():
+                if existing_diagnostics.get(field_name) != expected:
+                    raise ValueError(
+                        f"immutable terminal field {field_name} cannot be changed"
+                    )
+            if turn.provider_session_id != provider_session_id:
+                raise ValueError(
+                    "immutable terminal field provider_session_id cannot be changed"
+                )
+            if checkpoint_ref and branch.current_head_checkpoint_ref != checkpoint_ref:
+                raise ValueError(
+                    "immutable terminal field checkpoint_ref cannot be changed"
+                )
+            if (
+                checkpoint_digest
+                and branch.current_head_checkpoint_digest != checkpoint_digest
+            ):
+                raise ValueError(
+                    "immutable terminal field checkpoint_digest cannot be changed"
+                )
+            return turn
+        if normalized == "succeeded":
+            turn.status = CheckpointBranchTurnState.CHECKING.value
+            branch.state = CheckpointBranchState.ACTIVE.value
+            delivery_stage = "delivered_verification_pending"
+            verification_pending = True
+        elif normalized == "canceled":
+            turn.status = CheckpointBranchTurnState.CANCELED.value
+            branch.state = CheckpointBranchState.BLOCKED.value
+            delivery_stage = "canceled"
+            verification_pending = False
+        elif normalized == "blocked":
+            turn.status = CheckpointBranchTurnState.BLOCKED.value
+            branch.state = CheckpointBranchState.BLOCKED.value
+            delivery_stage = "blocked"
+            verification_pending = False
+        else:
+            turn.status = CheckpointBranchTurnState.FAILED.value
+            branch.state = CheckpointBranchState.FAILED.value
+            delivery_stage = "failed"
+            verification_pending = False
+        turn.provider_session_id = provider_session_id
+        turn.completed_at = turn.completed_at or datetime.now(UTC)
+        turn.diagnostics = {
+            **(turn.diagnostics or {}),
+            "deliveryStage": delivery_stage,
+            "verificationPending": verification_pending,
+            "terminalRef": terminal_ref,
+            "outputRefs": list(output_refs or []),
+            "agentResultRef": agent_result_ref,
+            "diagnosticsRef": diagnostics_ref,
+            "terminalDisposition": terminal_disposition or delivery_stage,
+        }
+        if checkpoint_ref:
+            branch.current_head_checkpoint_ref = checkpoint_ref
+            branch.current_head_checkpoint_digest = checkpoint_digest
+            branch.current_head_version = (branch.current_head_version or 0) + 1
+            branch.current_head_attempt_ordinal = (
+                branch.current_head_attempt_ordinal or 0
+            ) + 1
+        branch.artifact_refs = {
+            **(branch.artifact_refs or {}),
+            "latestBranchTurnResult": agent_result_ref,
+            "latestBranchTurnDiagnostics": diagnostics_ref,
+        }
+        if checkpoint_ref:
+            branch.artifact_refs["latestBranchTurnCheckpoint"] = checkpoint_ref
+        for kind, ref, digest in (
+            ("runtime.branch_turn.agent_result.json", agent_result_ref, None),
+            ("output.branch_turn.diagnostics.json", diagnostics_ref, None),
+            (
+                "output.branch_turn.checkpoint.json",
+                checkpoint_ref,
+                checkpoint_digest,
+            ),
+            ("output.branch_turn.terminal.json", terminal_ref, None),
+        ):
+            if ref:
+                await self._upsert_turn_artifact(
+                    branch_id=branch_id,
+                    branch_turn_id=branch_turn_id,
+                    artifact_kind=kind,
+                    artifact_ref=ref,
+                    digest=digest,
+                )
+        await self._session.flush()
         return turn
 
     @staticmethod
@@ -830,6 +1361,7 @@ class CheckpointBranchService:
         branch_turn_id: str,
         artifact_kind: str,
         artifact_ref: str,
+        digest: str | None = None,
     ) -> WorkflowCheckpointBranchArtifact:
         artifact_ref = artifact_ref.strip()
         result = await self._session.execute(
@@ -841,16 +1373,21 @@ class CheckpointBranchService:
         )
         existing = result.scalar_one_or_none()
         if existing is not None:
-            if existing.artifact_ref != artifact_ref:
+            if existing.artifact_ref != artifact_ref or (
+                digest is not None and existing.digest not in {None, digest}
+            ):
                 raise ValueError(
                     f"immutable launch artifact {artifact_kind} cannot be changed"
                 )
+            if digest is not None and existing.digest is None:
+                existing.digest = digest
             return existing
         artifact = WorkflowCheckpointBranchArtifact(
             branch_id=branch_id,
             branch_turn_id=branch_turn_id,
             artifact_kind=artifact_kind,
             artifact_ref=artifact_ref,
+            digest=digest,
         )
         self._session.add(artifact)
         await self._session.flush()
@@ -865,10 +1402,6 @@ class CheckpointBranchService:
             if isinstance(payload, CheckpointBranchTurnCreateModel)
             else CheckpointBranchTurnCreateModel.model_validate(payload)
         )
-        if model.created_step_execution_id in {model.branch_id, model.branch_turn_id}:
-            raise ValueError(
-                "branch turn Step Execution id must differ from branch and turn ids"
-            )
         if model.parent_turn_id:
             await self._require_turn_on_branch(
                 branch_id=model.branch_id,
@@ -892,10 +1425,6 @@ class CheckpointBranchService:
             ).value,
             instruction_ref=model.instruction_ref,
             instruction_digest=model.instruction_digest,
-            context_bundle_ref=model.context_bundle_ref,
-            created_step_execution_id=model.created_step_execution_id,
-            runtime_agent_run_id=model.runtime_agent_run_id,
-            provider_session_id=model.provider_session_id,
             idempotency_key=model.idempotency_key,
             status=CheckpointBranchTurnState(model.status).value,
         )
@@ -952,6 +1481,78 @@ class CheckpointBranchService:
         await self._session.flush()
         await self._session.refresh(record)
         return record
+
+    async def configure_server_launch_authority(
+        self,
+        *,
+        workflow_id: str,
+        branch_id: str,
+        branch_turn_id: str,
+        repository: str,
+        base_branch: str,
+        base_commit: str,
+        work_branch: str,
+        provider_profile_ref: str | None,
+        remediation_context_ref: str | None = None,
+    ) -> None:
+        """Persist server-resolved launch selection without runtime identities."""
+
+        branch = await self._get_branch(workflow_id=workflow_id, branch_id=branch_id)
+        turn = await self._require_turn_on_branch(
+            branch_id=branch_id,
+            branch_turn_id=branch_turn_id,
+            relation="branchTurnId",
+        )
+        branch.git_repository = repository.strip()
+        branch.git_base_branch = base_branch.strip()
+        branch.git_base_commit = base_commit.strip()
+        branch.git_work_branch = work_branch.strip()
+        branch.diagnostics = {
+            **(branch.diagnostics or {}),
+            "runtimeSelection": {
+                **dict((branch.diagnostics or {}).get("runtimeSelection") or {}),
+                "providerProfileRef": (
+                    provider_profile_ref.strip() if provider_profile_ref else None
+                ),
+                "runtimeContextPolicy": "fresh_agent_run",
+                "publishMode": "none",
+                "gitWorkBranch": work_branch.strip(),
+            },
+        }
+        if remediation_context_ref:
+            turn.diagnostics = {
+                **(turn.diagnostics or {}),
+                "remediationContextRef": remediation_context_ref.strip(),
+            }
+            await self._upsert_turn_artifact(
+                branch_id=branch_id,
+                branch_turn_id=branch_turn_id,
+                artifact_kind="input.branch_turn.remediation_context.json",
+                artifact_ref=remediation_context_ref,
+            )
+        existing = await self._session.get(
+            WorkflowCheckpointBranchGitBinding, branch_id
+        )
+        if existing is None:
+            await self.record_git_binding(
+                CheckpointBranchGitBindingInput(
+                    branch_id=branch_id,
+                    repository=repository,
+                    base_branch=base_branch,
+                    base_commit=base_commit,
+                    work_branch=work_branch,
+                    workspace_policy=branch.workspace_policy,
+                    creation_mode="remediation",
+                )
+            )
+        elif (
+            existing.repository,
+            existing.base_branch,
+            existing.base_commit,
+            existing.work_branch,
+        ) != (repository, base_branch, base_commit, work_branch):
+            raise ValueError("existing git binding differs from launch authority")
+        await self._session.flush()
 
     async def record_artifact(
         self,

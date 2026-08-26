@@ -12,6 +12,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from moonmind.config.settings import settings as app_settings
 from moonmind.utils.logging import redact_sensitive_text
 
+# Stable, non-sensitive reference for the outbound scan policy/pattern set. It is
+# recorded as bounded scan evidence (not the detected values) so a durable audit
+# can name which scanner policy produced an allow/block/error outcome.
+OUTBOUND_SCAN_POLICY_REF = "moonmind.security.outbound_scan.v1"
+
 
 class OutboundScanDecision(StrEnum):
     """Allow/block decision returned before an external side effect."""

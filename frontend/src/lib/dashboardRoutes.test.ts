@@ -4,9 +4,12 @@ import {
   DASHBOARD_DESTINATIONS,
   DASHBOARD_REACT_ROUTE_PATHS,
   destinationState,
+  destinationForPath,
   matchesDashboardDestinationRegistry,
   payloadForDashboardRoute,
   resolveDashboardRoute,
+  visiblePrimaryDestinations,
+  visibleSystemDestinations,
 } from './dashboardRoutes';
 
 describe('dashboard route resolution', () => {
@@ -19,7 +22,7 @@ describe('dashboard route resolution', () => {
     expect(DASHBOARD_REACT_ROUTE_PATHS).toEqual(
       Array.from(new Set(DASHBOARD_DESTINATIONS.flatMap(({ pathPatterns }) => pathPatterns))),
     );
-    expect(DASHBOARD_DESTINATIONS.find(({ key }) => key === 'skills')?.displayMode).toBeUndefined();
+    expect(DASHBOARD_DESTINATIONS.find(({ key }) => key === 'skills')?.displayMode).toBe('skills-list');
   });
 
   it('derives shown, hidden, and unavailable states from capability data', () => {
@@ -27,6 +30,41 @@ describe('dashboard route resolution', () => {
     expect(destinationState(skills, { features: { skills: true } })).toBe('shown');
     expect(destinationState(skills, { features: {} })).toBe('hidden');
     expect(destinationState(skills, { features: { skills: false } })).toBe('unavailable');
+  });
+
+  it('preserves registry order while grouping enabled navigation destinations', () => {
+    const features = Object.fromEntries(DASHBOARD_DESTINATIONS.map(({ capabilityKey }) => [capabilityKey, true]));
+    features.omnigentPolicies = false;
+    const info = { features };
+    expect(visiblePrimaryDestinations(info).map(({ key }) => key)).toEqual([
+      'workflows', 'create',
+    ]);
+    expect(visibleSystemDestinations(info).map(({ key }) => key)).toEqual([
+      'recurring', 'skills', 'manifests', 'omnigent-agents', 'remediation', 'artifacts', 'settings',
+    ]);
+  });
+
+  it('keeps baseline primary navigation visible while UI capabilities are unavailable', () => {
+    expect(visiblePrimaryDestinations(null).map(({ key }) => key)).toEqual([
+      'workflows', 'create',
+    ]);
+    expect(visibleSystemDestinations(null)).toEqual([]);
+  });
+
+  it.each([
+    ['/manifests/default', 'manifests'],
+    ['/artifacts/run/1', 'artifacts'],
+    ['/observability/run/1', 'artifacts'],
+    ['/remediations/mm:1', 'remediation'],
+    ['/settings/providers', 'settings'],
+    ['/schedules', 'recurring'],
+    ['/schedules/nightly%3Abuild', 'recurring'],
+    ['/skills', 'skills'],
+    ['/skills/speckit-orchestrate', 'skills'],
+  ])('resolves %s to the active System destination', (path, key) => {
+    const destination = destinationForPath(path);
+    expect(destination?.key).toBe(key);
+    expect(destination?.navigationGroup).not.toBe('primary');
   });
 
   it('detects backend destination inventory drift', () => {
@@ -118,8 +156,16 @@ describe('dashboard route resolution', () => {
     });
   });
 
-  it.each(['/schedules', '/manifests'])('uses the fluid shell for the %s collection', (path) => {
+  it.each(['/schedules', '/manifests', '/skills'])('uses the fluid shell for the %s collection', (path) => {
     expect(resolveDashboardRoute(path)?.dataWidePanel).toBe(true);
+  });
+
+  it('resolves skill detail routes into the fluid skills page', () => {
+    expect(resolveDashboardRoute('/skills/speckit-orchestrate')).toEqual({
+      page: 'skills',
+      dataWidePanel: true,
+      currentPath: '/skills/speckit-orchestrate',
+    });
   });
 
   it('resolves the remediation collection as a data-wide route', () => {

@@ -17,8 +17,66 @@ import {
   readRecurringScheduleFocusRequest,
 } from '../lib/recurringScheduleFocus';
 import { formatStatusLabel } from '../utils/formatters';
+import { ContextRetrievalControls } from '../components/ContextRetrievalControls';
+import {
+  type ContextRetrievalAuthoring,
+  compileContextRetrievalParameters,
+  parseContextRetrievalParameters,
+  retrievalCeilingsFromRuntimeConfig,
+} from '../lib/contextRetrievalAuthoring';
 
 const SCHEDULES_MOBILE_MEDIA_QUERY = '(max-width: 720px)';
+
+/**
+ * Sync context-retrieval authoring into a schedule's raw target JSON
+ * (MoonMind#3514). The target's `initialParameters` carries the run params, so
+ * `rag` / `followUpRetrieval` live there. Returns the parsed authoring value and
+ * a writer that produces an updated target-JSON string, or null when the JSON
+ * cannot be parsed (the raw textarea then remains the sole editor).
+ */
+function readScheduleContextRetrieval(
+  targetJson: string,
+): { value: ContextRetrievalAuthoring; parsed: Record<string, unknown> } | null {
+  try {
+    const parsed = JSON.parse(targetJson);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return null;
+    }
+    const target = parsed as Record<string, unknown>;
+    const initialParameters =
+      target.initialParameters && typeof target.initialParameters === 'object'
+        ? (target.initialParameters as Record<string, unknown>)
+        : {};
+    return {
+      value: parseContextRetrievalParameters(initialParameters),
+      parsed: target,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeScheduleContextRetrieval(
+  target: Record<string, unknown>,
+  value: ContextRetrievalAuthoring,
+): string {
+  const compiled = compileContextRetrievalParameters(value);
+  const initialParameters: Record<string, unknown> = {
+    ...(target.initialParameters && typeof target.initialParameters === 'object'
+      ? (target.initialParameters as Record<string, unknown>)
+      : {}),
+  };
+  // Replace both keys so clearing a control removes stale config.
+  delete initialParameters.rag;
+  delete initialParameters.followUpRetrieval;
+  if (compiled.rag) {
+    initialParameters.rag = compiled.rag;
+  }
+  if (compiled.followUpRetrieval) {
+    initialParameters.followUpRetrieval = compiled.followUpRetrieval;
+  }
+  return JSON.stringify({ ...target, initialParameters }, null, 2);
+}
 
 const ScheduleSchema = z.object({
   id: z.string(),
@@ -37,6 +95,7 @@ const ScheduleSchema = z.object({
   target: z.record(z.string(), z.unknown()).optional(),
   policy: z.record(z.string(), z.unknown()).optional(),
   temporalScheduleId: z.string().nullable().optional(),
+  version: z.number().int().positive(),
   updatedAt: z.string().optional(),
 }).passthrough();
 
@@ -144,6 +203,7 @@ const SchedulesBootDataSchema = z
           })
           .partial()
           .optional(),
+        system: z.object({ retrievalAuthoring: z.record(z.string(), z.unknown()).optional() }).partial().optional(),
       })
       .partial()
       .optional(),
@@ -815,6 +875,9 @@ function buildSchedulePatchPayload(schedule: Schedule, form: ScheduleEditForm): 
   if (stableJson(target) !== stableJson(schedule.target || {})) {
     payload.target = target;
   }
+  if (Object.keys(payload).length > 0) {
+    payload.version = schedule.version;
+  }
   return payload;
 }
 
@@ -960,6 +1023,9 @@ function ScheduleDetailPage({
   onSidebarRetry?: () => void;
 }) {
   const queryClient = useQueryClient();
+  const retrievalCeilings = retrievalCeilingsFromRuntimeConfig(
+    scheduleBootData(payload)?.dashboardConfig?.system?.retrievalAuthoring,
+  );
   const [isEditing, setIsEditing] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [editForm, setEditForm] = useState<ScheduleEditForm | null>(null);
@@ -1071,12 +1137,12 @@ function ScheduleDetailPage({
   });
 
   const pauseResumeMutation = useMutation({
-    mutationFn: async (enabled: boolean) => {
+    mutationFn: async ({ enabled, version }: { enabled: boolean; version: number }) => {
       const response = await fetch(updateEndpoint, {
         method: 'PATCH',
         credentials: 'include',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ enabled }),
+        body: JSON.stringify({ enabled, version }),
       });
       if (!response.ok) {
         throw new Error(`Failed to ${enabled ? 'resume' : 'pause'} schedule: ${response.statusText}`);
@@ -1242,7 +1308,10 @@ function ScheduleDetailPage({
           <button
             type="button"
             className="secondary"
-            onClick={() => pauseResumeMutation.mutate(!schedule.enabled)}
+            onClick={() => pauseResumeMutation.mutate({
+              enabled: !schedule.enabled,
+              version: schedule.version,
+            })}
             disabled={pauseResumeMutation.isPending || isEditing || updateMutation.isPending || !actions?.canEdit}
             title={!actions?.canEdit ? actions?.editReason : undefined}
           >
@@ -1447,6 +1516,40 @@ function ScheduleDetailPage({
                 />
                 {visibleFormErrors.targetJson && <span className="schedules-field-error">{visibleFormErrors.targetJson}</span>}
               </label>
+              {(() => {
+                const retrieval = readScheduleContextRetrieval(currentForm.targetJson);
+                if (!retrieval) {
+                  return (
+                    <p className="small">
+                      Edit the target JSON above to configure context retrieval; the
+                      assisted controls appear once the JSON is valid.
+                    </p>
+                  );
+                }
+                return (
+                  <details className="schedules-context-retrieval">
+                    <summary>Context retrieval (RAG)</summary>
+                    <ContextRetrievalControls
+                      value={retrieval.value}
+                      ceilings={retrievalCeilings}
+                      onChange={(next) => {
+                        const targetJson = writeScheduleContextRetrieval(
+                          retrieval.parsed,
+                          next,
+                        );
+                        setEditForm((previous) =>
+                          previous ? { ...previous, targetJson } : null,
+                        );
+                        setSubmitErrors((previous) => ({
+                          ...previous,
+                          targetJson: undefined,
+                        }));
+                      }}
+                      description="These controls edit the recurring run's context retrieval policy within deployment ceilings and stay in sync with the target JSON above."
+                    />
+                  </details>
+                );
+              })()}
               <label className="schedules-checkbox-label">
                 <input
                   type="checkbox"
@@ -1737,7 +1840,7 @@ function ScheduleRowActions({
         method: 'PATCH',
         credentials: 'include',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ enabled }),
+        body: JSON.stringify({ enabled, version: schedule.version }),
       });
       if (!response.ok) {
         throw new Error(

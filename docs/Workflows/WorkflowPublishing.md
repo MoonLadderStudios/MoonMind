@@ -25,6 +25,12 @@ metadata:
 
 The built-in repository auto-publish skills are `pr-resolver`, `fix-comments`, `fix-ci`, and `fix-merge-conflicts`. The backend may retain a narrow migration fallback when metadata is temporarily unavailable, but catalog metadata is authoritative when present.
 
+Publishing does not choose an implementation host. In particular,
+`publish.mode = auto` grants the selected skill agent-owned publishing authority
+and requires evidence; it does not select or authorize a native semantic
+implementation. `pr-resolver` always executes its resolved Skill bundle through
+the ordinary agent runtime path.
+
 Resolution rules:
 
 - Omitted publish mode resolves to `auto` for auto-publish-capable skills.
@@ -33,18 +39,35 @@ Resolution rules:
 - `branch` and `pr` are invalid for auto-publish-capable skills unless that skill explicitly opts into MoonMind-managed publishing.
 - `auto` is invalid for tasks that do not declare agent-owned publishing capability.
 
-Every successful auto run must produce `artifacts/publish_result.json` with `schemaVersion = "moonmind.publish.auto.v1"`, `mode = "auto"`, `owner = "agent"`, the selected skill id, status, action, repository, branch, local and remote head fields, remote verification status, push/merge booleans, optional PR URL, optional blocked reason, and verification commands.
+Every successful auto run must produce `artifacts/publish_result.json` with `schemaVersion = "moonmind.publish.auto.v1"`, `mode = "auto"`, `owner = "agent"`, the selected skill id, the current `executionRef`, status, action, repository, branch, local and remote head fields, remote verification status, push/merge booleans, optional PR URL, optional blocked reason, and verification commands. MoonMind accepts the evidence only when `executionRef` exactly matches the terminal contract; evidence from another attempt or restored workspace is stale even when the Skill and remote head match.
+
+Resolving `publish.mode = auto` on a runtime with MoonMind-local workspace
+authority compiles that file into an execution-bound terminal contract for every
+auto-publish-capable Skill. An external-provider workspace must use its
+provider-owned result handoff and must not receive a `workspace_json` contract it
+cannot satisfy. A managed process exit, provider completion, or assistant claim
+cannot complete a compiled AgentRun until the contract is validated. Missing,
+malformed, or stale evidence receives bounded continuation while the original
+workspace and resolved Skill snapshot remain authoritative. If continuation
+exhausts after repository work, MoonMind attempts terminal checkpoint
+publication to an isolated recovery branch before cleanup; the run remains
+failed and the saved branch is recovery evidence only.
 
 Built-in auto-publish skills produce this evidence through the portable helper:
 
 ```bash
-python3 .agents/skills/_shared/publish_evidence.py write-pushed \
+python3 "${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/_shared/publish_evidence.py" write-pushed \
   --skill-id <skill> \
   --repo <owner/repo> \
   --branch <branch>
 ```
 
 The helper also supports `write-merged`, `write-no-op`, `write-blocked`, `write-failed`, and `from-pr-resolver-result`. It has no Temporal, database, or service-layer imports and can run in a local checkout outside MoonMind.
+
+Inside a managed runtime, Skills resolve the helper from
+`$MOONMIND_ACTIVE_SKILLS_DIR/_shared/publish_evidence.py`. The `.agents/skills`
+path is only the portable local fallback; a repository-owned path must not hide
+the immutable run snapshot.
 
 Allowed status values are `verified`, `no_op_verified`, `blocked`, and `failed`. Allowed action values are `none`, `commit`, `push`, `merge`, `commit_and_push`, and `push_and_merge`.
 
@@ -61,6 +84,13 @@ Finish outcome mapping is evidence-driven:
 - verified no-op -> `NO_COMMIT`, not `PUBLISH_DISABLED`;
 - blocked or failed evidence -> publish-stage failure/block;
 - missing evidence -> publish-stage failure with `auto_publish_evidence_missing`.
+
+Native resolver terminal publication returns artifact references at the child
+result boundary. The parent must load `publishEvidence` from either the direct
+result field or `outputRefs` before determining its finish outcome. A terminal
+projection row that has not yet been created is auxiliary lag: Temporal history
+and terminal artifacts remain authoritative, and projection lag must not replace
+a verified merge with a finalization failure.
 
 ### Non-Repository Side-Effect Outcomes
 
@@ -92,6 +122,14 @@ Example:
 ### `pr`
 
 For PR publication, the authored `branch` is the selected repository branch and PR base. MoonMind creates or obtains a runtime-generated work branch for the PR head, pushes changes there, and creates a pull request back to the authored base branch.
+
+An agent-runtime Step with `publishMode = branch` or `publishMode = pr` has
+repository write authority by default. The runtime records that effective
+`repositoryOperation = write` in the durable plan. When an earlier Step has
+already published the cumulative candidate, a downstream publishing Step starts
+from that verified candidate head but continues to compare and publish against
+the original authored base branch; the candidate branch must never become its
+own publication base.
 
 When merge automation is explicitly enabled for a PR-publishing Workflow Execution, successful PR publication starts a parent-owned `MoonMind.MergeAutomation` child workflow. The original `MoonMind.UserWorkflow` remains in `awaiting_external` while merge automation waits for configured external readiness signals and runs `pr-resolver` with publish mode `auto`; downstream dependencies on the original Workflow Execution are satisfied only after merge automation succeeds.
 
@@ -178,12 +216,38 @@ If no PR head branch can be resolved for `publishMode: pr`, the workflow raises 
 
 ## Post-Agent Git Push
 
-After a managed agent subprocess completes successfully, the infrastructure performs a deterministic `git push` of the work branch. This is **not** delegated to the agent via prompt instructions — it is an infrastructure guarantee.
+For `publishMode = branch` or `publishMode = pr`, after a managed agent
+subprocess completes successfully, the infrastructure performs a deterministic
+`git push` of the work branch. This is **not** delegated to the agent via prompt
+instructions — it is an infrastructure guarantee.
+
+This publisher never runs for `publishMode = auto`. Auto mode is agent-owned;
+MoonMind validates the Skill's evidence and may publish only an isolated
+terminal recovery checkpoint after a controlled failure. A recovery checkpoint
+must never be confused with normal auto publication or turn a failed objective
+into success.
 
 GitHub publishing resolves credentials through the canonical GitHub resolver
 before the push. The push command receives `GITHUB_TOKEN`, `GH_TOKEN`, and
 `GIT_TERMINAL_PROMPT=0` in its subprocess environment when a token is available,
 so managed publishing does not depend on machine-level git credential caches.
+
+The managed push activity is the authority for whether a publishable repository
+candidate exists. After a successful push (including an already-current remote
+branch), it emits `acceptedRepositoryEvidence` with the work branch, base branch,
+head commit, commits-ahead count, authorization/contamination disposition, and
+remote-verification result. Verification Steps and terminal workflow gates
+consume that typed envelope instead of reconstructing publication feasibility
+from raw `push_*` metadata or agent prose. If the activity cannot produce a
+complete, internally consistent envelope, draft and ready-for-review publication
+remain blocked with an explicit artifact-backed handoff.
+
+Before measuring commits, the activity refreshes the exact `origin/<base>`
+tracking ref used as the publication base. After pushing, it queries the live
+remote branch and requires its head to equal the local candidate head. A base
+refresh failure, remote-head mismatch, or indeterminate commits-ahead count
+downgrades the raw push result to a failed publication result; it never emits
+accepted evidence or permits native PR creation from that incomplete state.
 
 ### Safety Guard
 
@@ -283,7 +347,7 @@ Provider-native publishing may supply pull request metadata directly when the pr
 
 Workflows that include MoonSpec verification gates must use the latest structured verification verdict to decide publication eligibility.
 
-`FULLY_IMPLEMENTED` permits PR publication and downstream trusted side effects. `ADDITIONAL_WORK_NEEDED` keeps the workflow in the bounded remediation loop while a later MoonSpec remediation step remains. Once that retry budget is exhausted, `ADDITIONAL_WORK_NEEDED` blocks publication.
+`FULLY_IMPLEMENTED` permits PR publication and downstream trusted side effects. `ADDITIONAL_WORK_NEEDED` keeps the workflow in the bounded remediation loop while a later MoonSpec remediation step remains. Once that retry budget is exhausted, a workflow whose publish mode is `pr` opens a draft pull request annotated with the remaining-work verdict and verification report, then fails with `attention_required: true` and skips downstream promotion or trusted handoff steps. The draft is recoverability evidence, not a successful terminal outcome. A pushed branch or created draft pull request must never be classified as `no_commit`.
 
 Non-retryable blocking verdicts, including `NO_DETERMINATION`, `BLOCKED`, and `FAILED_UNRECOVERABLE`, block publication without waiting for additional remediation attempts unless the workflow explicitly models the missing evidence as recoverable work inside the same bounded plan.
 
@@ -305,7 +369,7 @@ The gate distinguishes a verifier judgment from a malformed verdict envelope:
   the verifier can rewrite its structured JSON. Remediation implement cycles
   are never spent on a malformed verdict envelope.
 
-When MoonSpec verification blocks publication, the workflow records
+When MoonSpec verification blocks publication without a permitted draft handoff, the workflow records
 `publicationBlockedBy: "moonspec_verify"` in publish context, preserves the
 latest verification report and evidence refs, writes a compact
 `failureSummary.type = "moonspec_verification_gate"` block in
@@ -320,8 +384,9 @@ or `NO_DETERMINATION` produced by a degraded/malformed gate payload — publishe
 a **draft** pull request annotated with a "MoonSpec verification incomplete"
 section and the verification report ref, and the run completes with
 `attention_required: true` and a distinct summary instead of failing.
-Implementation-gap verdicts (`ADDITIONAL_WORK_NEEDED`, `FAILED_UNRECOVERABLE`)
-and verifier-declared `NO_DETERMINATION` always remain fail-closed.
+`FAILED_UNRECOVERABLE` and verifier-declared `NO_DETERMINATION` remain
+fail-closed. `ADDITIONAL_WORK_NEEDED` uses the automatic draft handoff described
+above only after the bounded remediation budget is exhausted.
 
 ### Agent Instructions
 

@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
+from temporalio import workflow
 
 from api_service.db.models import Base
 from moonmind.config.settings import settings
@@ -32,16 +36,28 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
-from moonmind.workflows.temporal.activity_runtime import TemporalProposalActivities
+from moonmind.workflows.temporal import activity_runtime
+from moonmind.workflows.temporal.activity_runtime import (
+    TemporalActivityRuntimeError,
+    TemporalProposalActivities,
+)
 from moonmind.workflows.temporal.activity_runtime import TemporalAgentRuntimeActivities
 from moonmind.workflows.temporal.activity_runtime import TemporalManifestActivities
+from moonmind.workflows.temporal.publish_auto_evidence import parse_auto_publish_evidence
 from moonmind.workflows.agent_skills.agent_skills_activities import AgentSkillsActivities
 from moonmind.workflows.temporal.workers import (
     build_all_worker_topologies,
     build_worker_activity_bindings,
+    build_worker_spec,
+    build_worker_topology,
     describe_configured_worker,
     list_registered_workflow_types,
 )
+from moonmind.workflows.temporal.workflow_registry import (
+    workflow_fleet_activity_handlers,
+    workflow_fleet_workflow_classes,
+)
+
 
 async def _artifact_service(
     tmp_path: Path,
@@ -93,18 +109,213 @@ def test_build_all_worker_topologies_covers_canonical_fleets():
     )
     assert topologies[DEPLOYMENT_FLEET].activity_types == ("mm.tool.execute",)
 
+
+def test_workflow_worker_startup_rejects_unroutable_activity_handler(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(
+        activity_runtime._ACTIVITY_HANDLER_ATTRS,
+        "agent_runtime.unroutable_test_handler",
+        ("agent_runtime", "unroutable_test_handler"),
+    )
+
+    with pytest.raises(
+        TemporalActivityRuntimeError,
+        match="handlers without catalog routes: agent_runtime.unroutable_test_handler",
+    ):
+        build_worker_topology(fleet=WORKFLOW_FLEET)
+
+
 def test_registered_workflow_types_include_manifest_ingest():
     assert list_registered_workflow_types() == (
         "MoonMind.UserWorkflow",
+        "MoonMind.ContainerJob",
         "MoonMind.ManifestIngest",
+        "MoonMind.ControlStopContinuation",
         "MoonMind.ProviderProfileManager",
         "MoonMind.AgentSession",
         "MoonMind.ManagedSessionReconcile",
         "MoonMind.ManagedRuntimeWorkspaceCleanup",
         "MoonMind.AgentRun",
+        "MoonMind.OmnigentSession",
+        "MoonMind.CheckpointBranchTurn",
         "MoonMind.OAuthSession",
+        "MoonMind.OmnigentOAuthHostJanitor",
         "MoonMind.MergeAutomation",
+        "MoonMind.PRResolver",
+        "MoonMind.PublicationRecoveryV1",
     )
+
+
+def test_publication_recovery_activity_routes_are_registered_by_authority() -> None:
+    expected = {
+        "integrations": {
+            "publication_recovery.observe",
+            "publication_recovery.publish",
+            "publication_recovery.verify",
+        },
+        "agent_runtime": {
+            "publication_recovery.restore_candidate",
+            "publication_recovery.cleanup",
+        },
+        "artifacts": {"publication_recovery.persist_result"},
+    }
+
+    for fleet, activity_types in expected.items():
+        topology = build_worker_topology(fleet=fleet)
+        assert activity_types <= set(topology.activity_types)
+
+
+def test_advertised_workflow_types_match_production_worker_classes():
+    registered_class_names = tuple(
+        workflow._Definition.must_from_class(workflow_class).name
+        for workflow_class in workflow_fleet_workflow_classes()
+    )
+
+    assert registered_class_names == list_registered_workflow_types()
+
+
+def test_production_worker_classes_are_cached():
+    assert workflow_fleet_workflow_classes() is workflow_fleet_workflow_classes()
+
+
+def test_executable_worker_spec_drives_registration_and_stable_identity() -> None:
+    topology = build_worker_topology(fleet=WORKFLOW_FLEET)
+    kwargs = {
+        "topology": topology,
+        "workflows": workflow_fleet_workflow_classes(),
+        "activities": workflow_fleet_activity_handlers(),
+        "environ": {
+            "MOONMIND_BUILD_SHA": "abc123",
+            "MOONMIND_IMAGE_DIGEST": "sha256:image",
+            "TEMPORAL_WORKER_DEPLOYMENT_NAME": "moonmind-test",
+            "TEMPORAL_WORKER_VERSIONING_ENABLED": "true",
+        },
+    }
+    first = build_worker_spec(**kwargs)
+    second = build_worker_spec(**kwargs)
+    assert first.registry_fingerprint == second.registry_fingerprint
+    assert first.workflow_types == list_registered_workflow_types()
+    assert "MoonMind.PRResolver" in first.readiness_payload()["workflowTypes"]
+    assert "MoonMind.PublicationRecoveryV1" in first.readiness_payload()[
+        "workflowTypes"
+    ]
+    assert first.versioning_enabled is True
+    assert first.build_id == "abc123"
+
+    alternate_lane = build_worker_spec(
+        topology=replace(topology, task_queues=("mm.workflow.merge_automation",)),
+        workflows=workflow_fleet_workflow_classes(),
+        activities=workflow_fleet_activity_handlers(),
+        environ=kwargs["environ"],
+    )
+    assert alternate_lane.registry_fingerprint == first.registry_fingerprint
+
+
+def test_production_worker_spec_requires_immutable_release_identity() -> None:
+    topology = build_worker_topology(fleet=WORKFLOW_FLEET)
+    with pytest.raises(ValueError, match="MOONMIND_BUILD_SHA"):
+        build_worker_spec(
+            topology=topology,
+            workflows=workflow_fleet_workflow_classes(),
+            activities=workflow_fleet_activity_handlers(),
+            environ={"MOONMIND_DEPLOYMENT_MODE": "production"},
+        )
+
+
+def test_production_worker_spec_requires_temporal_worker_versioning() -> None:
+    topology = build_worker_topology(fleet=WORKFLOW_FLEET)
+    with pytest.raises(ValueError, match="TEMPORAL_WORKER_VERSIONING_ENABLED"):
+        build_worker_spec(
+            topology=topology,
+            workflows=workflow_fleet_workflow_classes(),
+            activities=workflow_fleet_activity_handlers(),
+            environ={
+                "MOONMIND_DEPLOYMENT_MODE": "production",
+                "MOONMIND_BUILD_SHA": "abc123",
+            },
+        )
+
+
+def test_recorded_worker_versions_keep_distinct_builds_during_replay_window() -> None:
+    topology = build_worker_topology(fleet=WORKFLOW_FLEET)
+    workflows = workflow_fleet_workflow_classes()
+    activities = workflow_fleet_activity_handlers()
+    common = {
+        "MOONMIND_DEPLOYMENT_MODE": "production",
+        "TEMPORAL_WORKER_VERSIONING_ENABLED": "true",
+        "TEMPORAL_WORKER_DEPLOYMENT_NAME": "moonmind-workflow-fleet",
+    }
+
+    recorded = build_worker_spec(
+        topology=topology,
+        workflows=workflows,
+        activities=activities,
+        environ={**common, "MOONMIND_BUILD_SHA": "recorded-build"},
+    )
+    replacement = build_worker_spec(
+        topology=topology,
+        workflows=workflows,
+        activities=activities,
+        environ={**common, "MOONMIND_BUILD_SHA": "replacement-build"},
+    )
+
+    assert recorded.deployment_id == replacement.deployment_id
+    assert recorded.build_id == "recorded-build"
+    assert replacement.build_id == "replacement-build"
+    assert recorded.versioning_enabled is True
+    assert replacement.versioning_enabled is True
+    assert recorded.readiness_payload()["workflowTypes"] == (
+        replacement.readiness_payload()["workflowTypes"]
+    )
+
+
+def test_pr_resolver_terminal_publication_is_idempotent(tmp_path: Path):
+    async def _run() -> None:
+        service, session, engine = await _artifact_service(tmp_path)
+        try:
+            activities = TemporalArtifactActivities(service)
+            request = {
+                "principal": "resolver-user",
+                "idempotencyKey": "resolver:wf:terminal:merged",
+                "executionRef": {
+                    "namespace": "default",
+                    "workflow_id": "resolver-wf",
+                    "run_id": "resolver-run",
+                },
+                "terminalResult": {
+                    "status": "merged",
+                    "mergeAutomationDisposition": "merged",
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "prUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/3150",
+                    "verifiedHeadSha": "abc",
+                    "reasonCode": "merged",
+                },
+            }
+
+            first = await activities.pr_resolver_write_terminal_result(request)
+            second = await activities.pr_resolver_write_terminal_result(request)
+
+            assert second == first
+            _artifact, publish_payload = await service.read(
+                artifact_id=first["publishEvidenceRef"],
+                principal="resolver-user",
+            )
+            evidence = parse_auto_publish_evidence(publish_payload)
+            assert evidence.merged is True
+            assert evidence.action == "merge"
+            artifacts = await service.list_for_execution(
+                namespace="default",
+                workflow_id="resolver-wf",
+                run_id="resolver-run",
+                principal="resolver-user",
+            )
+            assert len(artifacts) == 2
+        finally:
+            await session.close()
+            await engine.dispose()
+
+    asyncio.run(_run())
 
 def test_describe_configured_worker_uses_temporal_worker_fleet_override():
     temporal_settings = settings.temporal.model_copy(

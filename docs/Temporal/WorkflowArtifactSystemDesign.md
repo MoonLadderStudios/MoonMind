@@ -1,8 +1,9 @@
 # Workflow Artifact System Design
 
+**Document Class:** Canonical declarative
 Status: Draft 
 Owners: MoonMind Platform 
-Last updated: 2026-04-04
+Last updated: 2026-08-10
 
 **Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 
@@ -281,6 +282,18 @@ Example:
 moonmind/artifacts/2026/03/30/art_01J9Z9F7QZK2K0YQ3B1T2N0R4P
 ```
 
+Immutable checkpoint payloads use a content-addressed blob key:
+
+```text
+<namespace>/blobs/<checkpoint-scope>/sha256/<prefix>/<sha256>
+```
+
+Each checkpoint boundary still receives its own logical `artifact_id`, owner,
+links, retention class, expiry, and pin state. Logical artifact rows may share
+the same storage key only when the trusted publisher computed identical bytes
+for the same checkpoint scope. Lifecycle deletion locks all rows for the shared
+key and removes the blob only after the final logical reference is hard-deleted.
+
 ## 7.3 Integrity
 
 Store and validate:
@@ -297,6 +310,8 @@ Artifacts are immutable after completion:
 * no overwrite
 * no in-place mutation
 * any content change creates a new artifact ID
+* equal checkpoint content may reuse an immutable storage blob without reusing
+  or weakening the logical artifact record
 
 ---
 
@@ -655,7 +670,12 @@ A lifecycle manager periodically:
 3. updates metadata state
 4. preserves tombstones where audit/history policy requires them
 
-This periodic work may be triggered by a Temporal Schedule that starts a cleanup workflow.
+The hourly `MoonMind.ManagedRuntimeWorkspaceCleanup` operational workflow invokes
+`artifact.lifecycle_sweep` after its workspace pass. The artifact Activity remains
+the authority for expiry, pin protection, soft deletion, hard deletion, storage
+mutation, and durable metadata. A lifecycle failure marks that maintenance run
+degraded and is retried by the next schedule rather than overwriting successful
+workspace cleanup evidence.
 
 Deletion must be idempotent.
 

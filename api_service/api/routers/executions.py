@@ -5,34 +5,62 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import copy
 import hashlib
 import json
 import logging
 import os
 import re
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, Optional
 from urllib.parse import quote, urlsplit
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 logger = logging.getLogger(__name__)
 
 from functools import lru_cache
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response, status
-from pydantic import BaseModel, Field, ValidationError
+from fastapi import (
+    APIRouter,
+    Body,
+    Depends,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    status,
+)
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from temporalio.api.enums.v1 import IndexedValueType
 from temporalio.api.operatorservice.v1 import ListSearchAttributesRequest
 from temporalio.client import Client
 from temporalio.service import RPCError
 
-from api_service.auth_providers import get_current_user
+from api_service.api.dependencies import resolve_template_scope_for_user
+from api_service.api.execution_fanout import (
+    EXECUTION_FANOUT_HEADER,
+    enforce_fanout_child_visibility,
+    resolve_execution_fanout_capability,
+    resolve_execution_request_authority,
+)
+from api_service.auth_providers import get_current_user, get_current_user_optional
 from api_service.core import sync as execution_sync
-from api_service.db.base import get_async_session
+from api_service.db import models as db_models
+from api_service.db.base import async_session_maker, get_async_session
 from api_service.db.models import (
     AgentSkillDefinition,
     ManagedAgentProviderProfile,
@@ -51,9 +79,24 @@ from api_service.db.models import (
     WorkflowCheckpointBranchTurn,
 )
 from api_service.services.checkpoint_branches import prepare_checkpoint_branch_workspace
+from api_service.services.omnigent_agent_profile_selection import (
+    compile_agent_profile_snapshot_parameters,
+    refresh_managed_bootstrap_snapshot,
+    resolve_agent_profile_snapshot,
+    resolve_default_agent_profile_snapshot,
+)
+from api_service.services.control_stop_continuation import (
+    SqlControlStopContinuationRepository,
+    TemporalControlStopContinuationStarter,
+)
 from api_service.services.checkpoint_branch_service import (
     CheckpointBranchService,
-    build_branch_turn_launch_idempotency_key,
+)
+from api_service.services.checkpoint_branch_turn_execution import (
+    CheckpointBranchTurnExecutionOwner,
+    CheckpointBranchTurnLaunchError,
+    checkpoint_branch_turn_owner_operational,
+    get_checkpoint_branch_artifact_service,
 )
 from moonmind.config.settings import settings
 from moonmind.statuses.compat import (
@@ -62,21 +105,35 @@ from moonmind.statuses.compat import (
 )
 from moonmind.utils.metrics import get_metrics_emitter
 from moonmind.workflows.report_output import normalize_report_output_primary_path
+from moonmind.workflows.executions.preset_expansion import (
+    expand_preset_for_child_run,
+    has_unexpanded_task_template,
+)
+from moonmind.workflows.executions.routing import _coerce_bool
 from moonmind.workflows.executions.title_derivation import (
     is_generic_title,
     synthesize_workflow_title,
 )
-from moonmind.workflows.executions.routing import _coerce_bool
+from moonmind.workflows.temporal.remediation_actions import (
+    RemediationCapabilityContext,
+    remediation_action_capability_matrix,
+    remediation_action_kinds,
+)
+from moonmind.workflows.temporal.remediation_verification import (
+    verification_backend_operational,
+)
+from api_service.services.remediation_actions import build_remediation_action_executor
 from moonmind.runtime_intent import (
     RuntimeIntentValidationError,
     validate_runtime_tier_intent,
 )
+from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
 from moonmind.schemas.manifest_ingest_models import (
     ManifestNodePageModel,
     ManifestStatusSnapshotModel,
 )
 from moonmind.schemas.temporal_artifact_models import ArtifactRefModel
-from moonmind.utils.logging import redact_sensitive_text
+from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
 from moonmind.schemas.temporal_models import (
     CancelExecutionRequest,
     ConfigureIntegrationMonitoringRequest,
@@ -105,9 +162,11 @@ from moonmind.schemas.temporal_models import (
     ExecutionSkillProvenanceModel,
     ExecutionSkillRuntimeModel,
     FailedRunRecoveryManifestModel,
+    RecoverExecutionResponse,
     RecoverFromFailedStepRequest,
     RecoverFromFailedStepResponse,
     RecoverFromSelectedStepRequest,
+    RecoveryEligibilityDiagnosticModel,
     WorkflowInputSnapshotDescriptorModel,
     PollIntegrationRequest,
     RescheduleExecutionRequest,
@@ -126,6 +185,7 @@ from moonmind.schemas.temporal_models import (
     AGENT_RUN_ID_SEARCH_ATTR_KEYS,
     normalize_dependency_ids,
 )
+from moonmind.schemas.workflow_recovery_models import WorkflowRecoveryTargetModel
 from moonmind.schemas.checkpoint_branch_models import (
     CheckpointBranchArchiveRequest,
     CheckpointBranchApiSourceModel,
@@ -146,8 +206,6 @@ from moonmind.schemas.checkpoint_branch_models import (
 )
 from moonmind.workflows.checkpoint_branches import (
     CheckpointBranchGitBindingError,
-    CheckpointBranchContextBundleError,
-    build_checkpoint_branch_turn_context_bundle,
 )
 from moonmind.workflows.temporal import (
     TemporalExecutionNotFoundError,
@@ -160,6 +218,8 @@ from moonmind.workflows.temporal.step_ledger import build_initial_step_rows
 from moonmind.workflows.temporal.title_search import tokenize_title
 from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactAuthorizationError,
+    TemporalArtifactNotFoundError,
+    TemporalArtifactStateError,
     build_artifact_ref,
 )
 from moonmind.workflows.temporal.report_artifacts import build_report_projection_summary
@@ -180,12 +240,57 @@ from moonmind.workflows.executions.preset_goal_scheduler import (
     workflow_is_already_authored,
 )
 from moonmind.workflows.executions.runtime_defaults import normalize_runtime_id
+from moonmind.omnigent.cutover import effective_phase, select_runtime
+from moonmind.omnigent.bridge_store import (
+    BridgeChatBindingAmbiguousError,
+    BridgeProjectionAmbiguousError,
+    OmnigentBridgeSessionStore,
+    _chat_binding_logical_step_id,
+)
+from api_service.services.linked_continuation import (
+    LinkedContinuationConflict,
+    RELATIONSHIP_TYPE_LINKED_CONTINUATION,
+    SqlLinkedContinuationRepository,
+    compute_request_digest,
+)
+from moonmind.omnigent.native_ui import evaluate_native_ui_compatibility
+from moonmind.omnigent.settings import (
+    resolved_native_ui_serving_enabled,
+    resolved_native_ui_version,
+)
+from moonmind.workflows.executions.runtime_capabilities import (
+    resolve_runtime_execution_capabilities,
+)
+from moonmind.workflows.executions.checkpoint_resume_admission import (
+    CheckpointResumeReadiness,
+    evaluate_checkpoint_resume_admission,
+    rollout_policy_from_settings,
+)
+from moonmind.workflows.executions.checkpoint_promotion import (
+    bounded_checkpoint_metric_tags,
+)
 from moonmind.workflows.executions.runtime_inheritance import (
+    ExecutionPrincipal,
     RuntimeInheritanceError,
     apply_inherited_runtime_to_payload,
+    extract_inheritance_directive,
     resolve_child_runtime_inheritance,
 )
+from moonmind.workflows.temporal.publication_recovery import (
+    PublicationRecoveryContract,
+    PublicationRecoveryRolloutPolicy,
+    publication_action_eligibility,
+    publication_recovery_workflow_id,
+)
 from moonmind.services.skill_step_inputs import validate_skill_step_inputs
+from moonmind.services.control_stop_continuation import (
+    admit_control_stop_continuation,
+)
+from moonmind.workflows.executions.control_stop_continuation import (
+    ContinuationBudgetGrant,
+    ControlStopContinuationContract,
+    ControlStopContinuationError,
+)
 from api_service.api.execution_principal import (
     execution_principal_dependency,
     resolve_execution_principal,
@@ -202,6 +307,13 @@ from moonmind.workflows.executions.execution_contract import (
     reject_workflow_capability_identity_versions,
     resolve_publish_mode_for_skill,
 )
+from moonmind.workflows.executions.repository_contract import (
+    RepositoryContractError,
+    compile_repository_target,
+    github_repository_name_from_value,
+    repository_branch_from_value,
+    repository_name_from_value,
+)
 from api_service.api.schemas import CreateJobRequest
 from moonmind.workflows import get_temporal_artifact_service
 
@@ -213,10 +325,14 @@ _SUPPORTED_TASK_RUNTIMES = frozenset({
     "claude_code",
     "codex_cloud",
     "jules",
+    "omnigent",
     # Legacy aliases accepted and normalized below.
     "codex",
     "claude",
 })
+_GITHUB_ONLY_REPOSITORY_SKILLS = frozenset(
+    {"batch-pr-resolver", "pr-resolver"}
+)
 _TEMPORAL_SCOPE_QUERIES = {
     "default": 'WorkflowType="MoonMind.UserWorkflow" AND mm_entry="user_workflow"',
 }
@@ -477,6 +593,35 @@ class RemediationApprovalStateModel(BaseModel):
     decisionAt: datetime | None = None
     canDecide: bool = False
     auditRef: str | None = None
+    approvalRef: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    requestDigest: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    parameterDigest: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    requestingActor: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    requestedAt: datetime | None = Field(default=None, exclude_if=lambda value: value is None)
+    expiresAt: datetime | None = Field(default=None, exclude_if=lambda value: value is None)
+    rationale: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    status: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    decidedAt: datetime | None = Field(default=None, exclude_if=lambda value: value is None)
+    consumedAt: datetime | None = Field(default=None, exclude_if=lambda value: value is None)
+    consumedByActionId: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    expectedTargetState: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    checkpointRef: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    stepExecutionId: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    bridgeSessionId: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    omnigentSessionId: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    hostRef: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    hostLeaseRef: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    providerProfileLeaseRef: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    credentialGeneration: int | None = Field(default=None, exclude_if=lambda value: value is None)
+    policyRef: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    policyDigest: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    policySnapshotRef: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    securityProfileRef: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    artifactRefs: dict[str, str] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
 class RemediationLiveObservationModel(BaseModel):
     status: str | None = None
@@ -491,15 +636,202 @@ class RemediationLockOutcomeModel(BaseModel):
     holder: str | None = None
     releasedAt: datetime | str | None = None
 
+class RemediationNextActionBaselineModel(BaseModel):
+    checkpointRef: str
+    workspaceDigest: str
+    headVersion: int
+
+
+class RemediationCheckpointBranchTurnLinkModel(BaseModel):
+    branchTurnId: str
+    parentTurnId: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    status: str
+    createdStepExecutionId: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    runtimeAgentRunId: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    providerSessionId: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    instructionRef: str
+    instructionDigest: str
+    sourceCheckpointRef: str
+    contextBundleRef: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    stepExecutionManifestRef: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    gitWorkBranch: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    startedAt: datetime | str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    completedAt: datetime | str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    createdAt: datetime | str
+    updatedAt: datetime | str
+    outputArtifacts: dict[str, str] = Field(default_factory=dict)
+    comparisonArtifacts: dict[str, str] = Field(default_factory=dict)
+
+
 class RemediationCheckpointBranchLinkModel(BaseModel):
     workflowId: str
     branchId: str
     branchTurnId: str | None = None
+    logicalStepId: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    branchState: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    workspacePolicy: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    runtimeContextPolicy: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    gitBaseBranch: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    gitWorkBranch: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    currentHeadCommit: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    pullRequestUrl: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    publishStatus: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    promotionEvidence: dict[str, Any] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    archiveReason: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    promotedAt: datetime | str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    archivedAt: datetime | str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    turnState: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    runtimeAgentRunId: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    providerSessionId: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    instructionRef: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    turnStartedAt: datetime | str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    turnCompletedAt: datetime | str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    outputArtifacts: dict[str, str] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    comparisonArtifacts: dict[str, str] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    turns: list[RemediationCheckpointBranchTurnLinkModel] = Field(
+        default_factory=list
+    )
     operation: str | None = None
     idempotencyKey: str | None = None
     checkpointRef: str | None = None
     contextArtifactRef: str | None = None
+    loopId: str | None = None
+    rootCheckpointRef: str | None = None
+    rootWorkspaceDigest: str | None = None
+    headCheckpointRef: str | None = None
+    headWorkspaceDigest: str | None = None
+    headStepExecutionId: str | None = None
+    headAttemptOrdinal: int | None = None
+    headVersion: int | None = None
+    headStatus: str | None = None
+    latestVerificationRef: str | None = None
+    latestVerificationVerdict: str | None = None
+    supersedesCheckpointRef: str | None = None
+    remainingWorkRef: str | None = None
+    nextActionBaseline: RemediationNextActionBaselineModel | None = None
     createdAt: datetime | str | None = None
+
+    @field_validator(
+        "rootCheckpointRef",
+        "headCheckpointRef",
+        "latestVerificationRef",
+        "supersedesCheckpointRef",
+        "remainingWorkRef",
+    )
+    @classmethod
+    def remediation_refs_are_artifact_refs(cls, value: str | None) -> str | None:
+        if value is not None and not value.startswith("artifact://"):
+            raise ValueError("remediation head references must be artifact refs")
+        return value
+
+    @field_validator("rootWorkspaceDigest", "headWorkspaceDigest")
+    @classmethod
+    def remediation_digests_are_sha256(cls, value: str | None) -> str | None:
+        if value is not None and not value.startswith("sha256:"):
+            raise ValueError("remediation workspace digests must be sha256 digests")
+        return value
+
+    @model_validator(mode="after")
+    def next_baseline_matches_head(self) -> "RemediationCheckpointBranchLinkModel":
+        baseline = self.nextActionBaseline
+        if baseline is not None and baseline.model_dump() != {
+            "checkpointRef": self.headCheckpointRef,
+            "workspaceDigest": self.headWorkspaceDigest,
+            "headVersion": self.headVersion,
+        }:
+            raise ValueError("next action baseline must match the persisted head")
+        return self
+
+class RemediationActionCapabilityModel(BaseModel):
+    actionKind: str
+    requestable: bool
+    dryRunSupported: bool
+    executionBackendReady: bool
+    approvalBackendReady: bool
+    verificationBackendReady: bool
+    supportedTargetRuntimes: list[str]
+    supportedHostModes: list[str]
+    requiredEvidenceClasses: list[str]
+    blockedReasons: list[str]
+
+
+class RemediationOperatorControlsModel(BaseModel):
+    canCancel: bool = False
+    canTakeOver: bool = False
+    canResume: bool = False
+    paused: bool = False
+    disabledReasons: dict[str, str] = Field(default_factory=dict)
+
+
+class RemediationLifecycleArtifactModel(BaseModel):
+    artifactRef: str
+    artifactType: str
+    status: str
+    label: str | None = None
+    createdAt: datetime | str | None = None
+    expiresAt: datetime | str | None = None
+    freshness: str
+    bounded: bool = True
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
 
 class RemediationLinkSummaryModel(BaseModel):
     remediationWorkflowId: str
@@ -512,11 +844,19 @@ class RemediationLinkSummaryModel(BaseModel):
     activeLockScope: str | None = None
     activeLockHolder: str | None = None
     latestActionSummary: str | None = None
+    # ``deliveryStatus`` is the latest action delivery/application status;
+    # ``resolution`` is the terminal remediation lifecycle resolution. They are
+    # distinct projections (issue #3622) and must never share a column.
+    deliveryStatus: str | None = None
+    verificationOutcome: str | None = None
     resolution: str | None = None
     contextArtifactRef: str | None = None
     selectedSteps: list[str] | None = None
     currentTargetState: str | None = None
     allowedActions: list[str] | None = None
+    actionCapabilities: list[RemediationActionCapabilityModel] = Field(
+        default_factory=list
+    )
     evidenceDegraded: bool | None = None
     unavailableEvidenceClasses: list[str] | None = None
     liveObservation: RemediationLiveObservationModel | None = None
@@ -524,6 +864,39 @@ class RemediationLinkSummaryModel(BaseModel):
     approvalState: RemediationApprovalStateModel | None = None
     checkpointBranches: list[RemediationCheckpointBranchLinkModel] = Field(
         default_factory=list
+    )
+    authoredContract: dict[str, Any] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    selectedStepEvidence: list[dict[str, Any]] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    contextGeneratedAt: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    contextEvidenceAvailability: list[dict[str, Any]] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    contextBoundedness: dict[str, Any] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    diagnosisHints: list[str] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    lifecycleArtifacts: list[RemediationLifecycleArtifactModel] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    latestActionRequest: dict[str, Any] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    latestActionResult: dict[str, Any] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    lifecycleSummary: dict[str, Any] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    operatorControls: RemediationOperatorControlsModel | None = Field(
+        default=None, exclude_if=lambda value: value is None
     )
     createdAt: datetime
     updatedAt: datetime
@@ -543,6 +916,7 @@ class RemediationCollectionItemModel(BaseModel):
     authorityMode: str
     mode: str
     latestActionSummary: str | None = None
+    deliveryStatus: str | None = None
     resolution: str | None = None
     createdAt: datetime
     updatedAt: datetime
@@ -561,7 +935,18 @@ class RemediationApprovalDecisionResponse(BaseModel):
     requestId: str
     decision: str
 
+
+class PublicationRecoveryResponse(BaseModel):
+    sourceWorkflowId: str
+    sourceRunId: str
+    workflowId: str
+    runId: str
+    publicationIdempotencyKey: str
+    rolloutGeneration: str
+
 class RemediationCheckpointBranchRepairRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
     checkpointRef: str
     instructions: CheckpointBranchInstructionsModel
     idempotencyKey: str = Field(..., min_length=1, max_length=512)
@@ -574,6 +959,10 @@ class RemediationCheckpointBranchRepairRequest(BaseModel):
     runtimeContextPolicy: Literal["fresh_agent_run"] = "fresh_agent_run"
     gitWorkBranch: str | None = None
     maxBudgetUsd: float | None = None
+    provider_profile_ref: str | None = Field(
+        None, alias="providerProfileRef", min_length=1, max_length=255
+    )
+    agent_profile: dict[str, Any] | None = Field(None, alias="agentProfile")
 _PROTECTED_BRANCH_REFS = {"head", "main", "master", "develop", "trunk", "prod", "production"}
 _SAFE_PROMOTION_SIDE_EFFECT_STATES = {
     "none",
@@ -615,7 +1004,13 @@ def _new_checkpoint_branch_turn_id() -> str:
     return f"cbt_{uuid4().hex[:24]}"
 
 
-def _instruction_identity(instructions: Any) -> tuple[str, str]:
+async def _instruction_identity(
+    *,
+    session: AsyncSession,
+    user: User,
+    instructions: Any,
+    branch_turn_id: str,
+) -> tuple[str, str]:
     instruction_ref = str(getattr(instructions, "instruction_ref", "") or "").strip()
     instruction_digest = str(
         getattr(instructions, "instruction_digest", "") or ""
@@ -623,10 +1018,12 @@ def _instruction_identity(instructions: Any) -> tuple[str, str]:
     text = str(getattr(instructions, "text", "") or "")
     if instruction_ref and instruction_digest:
         return instruction_ref, instruction_digest
-    digest = f"sha256:{hashlib.sha256(text.encode()).hexdigest()}"
-    return (
-        f"inline://checkpoint-branch-instruction/{digest.removeprefix('sha256:')}",
-        digest,
+    return await CheckpointBranchTurnExecutionOwner(
+        session,
+        principal=_owner_id(user),
+    ).persist_instruction_text(
+        text=text,
+        branch_turn_id=branch_turn_id,
     )
 
 
@@ -716,9 +1113,11 @@ def _checkpoint_branch_git_context(record: Any) -> dict[str, Any]:
         git_payload = params.get("git")
     if not isinstance(git_payload, Mapping):
         git_payload = {}
+    repository_target = params.get("repository")
 
     repository = (
-        _coerce_temporal_scalar(git_payload.get("repository"))
+        repository_name_from_value(repository_target)
+        or _coerce_temporal_scalar(git_payload.get("repository"))
         or _coerce_temporal_scalar(task_payload.get("repository"))
         or _coerce_temporal_scalar(workflow_payload.get("repository"))
         or _coerce_temporal_scalar(params.get("repository"))
@@ -729,7 +1128,8 @@ def _checkpoint_branch_git_context(record: Any) -> dict[str, Any]:
         or _coerce_temporal_scalar(memo.get("repository"))
     )
     base_branch = (
-        _coerce_temporal_scalar(git_payload.get("baseBranch"))
+        repository_branch_from_value(repository_target)
+        or _coerce_temporal_scalar(git_payload.get("baseBranch"))
         or _coerce_temporal_scalar(git_payload.get("startingBranch"))
         or _coerce_temporal_scalar(git_payload.get("branch"))
         or _coerce_temporal_scalar(task_payload.get("startingBranch"))
@@ -788,22 +1188,44 @@ def _checkpoint_branch_git_context(record: Any) -> dict[str, Any]:
 
 
 async def _write_checkpoint_branch_preparation_artifact(
+    *,
+    session: AsyncSession,
+    principal: str,
+    workflow_id: str,
+    run_id: str,
+    namespace: str,
     artifact_kind: str,
     payload: Mapping[str, Any],
     content_type: str,
 ) -> tuple[str, str]:
-    digest = _operation_digest(
-        {
-            "artifactKind": artifact_kind,
-            "contentType": content_type,
-            "payload": payload,
-        }
+    body = json.dumps(dict(payload), sort_keys=True, separators=(",", ":")).encode()
+    digest = f"sha256:{hashlib.sha256(body).hexdigest()}"
+    artifact_service = get_checkpoint_branch_artifact_service(session)
+    artifact, _upload = await artifact_service.create(
+        principal=principal,
+        content_type=content_type,
+        size_bytes=len(body),
+        sha256=digest.removeprefix("sha256:"),
+        retention_class=TemporalArtifactRetentionClass.LONG,
+        link={
+            "namespace": namespace,
+            "workflow_id": workflow_id,
+            "run_id": run_id,
+            "link_type": "checkpoint_branch.preparation",
+            "label": artifact_kind,
+        },
+        metadata_json={
+            "artifact_kind": artifact_kind,
+            "issue": "MoonLadderStudios/MoonMind#3621",
+        },
     )
-    artifact_ref = (
-        "artifact://checkpoint-branch-preparation/"
-        f"{digest.removeprefix('sha256:')}/{artifact_kind}"
+    await artifact_service.write_complete(
+        artifact_id=artifact.artifact_id,
+        principal=principal,
+        payload=body,
+        content_type=content_type,
     )
-    return artifact_ref, digest
+    return f"artifact://{artifact.artifact_id}", digest
 
 
 def _checkpoint_branch_operation_artifact_ref(
@@ -876,15 +1298,39 @@ async def _prepare_checkpoint_branch_launch(
     idempotency_key: str,
     instruction_ref: str,
     instruction_digest: str,
+    principal: str,
     requested_work_branch: str | None = None,
     parent_branch_id: str | None = None,
     parent_turn_id: str | None = None,
     source_run_id: str | None = None,
     source_execution_ordinal: int | None = None,
     source_checkpoint_boundary: str = "after_execution",
+    follow_up_retrieval: Mapping[str, Any] | None = None,
 ) -> None:
+    bounded_follow_up_retrieval = _bound_branch_follow_up_retrieval(
+        follow_up_retrieval
+    )
     git_context = _checkpoint_branch_git_context(record)
     try:
+        async def write_preparation_artifact(
+            artifact_kind: str,
+            artifact_payload: Mapping[str, Any],
+            content_type: str,
+        ) -> tuple[str, str]:
+            return await _write_checkpoint_branch_preparation_artifact(
+                session=session,
+                principal=principal,
+                workflow_id=workflow_id,
+                run_id=source_run_id or str(getattr(record, "run_id", "")),
+                namespace=str(
+                    getattr(record, "namespace", None)
+                    or settings.temporal.namespace
+                ),
+                artifact_kind=artifact_kind,
+                payload=artifact_payload,
+                content_type=content_type,
+            )
+
         await prepare_checkpoint_branch_workspace(
             session=session,
             binding_input={
@@ -908,7 +1354,7 @@ async def _prepare_checkpoint_branch_launch(
             current_ref=git_context["currentRef"],
             instruction_ref=instruction_ref,
             instruction_digest=instruction_digest,
-            artifact_writer=_write_checkpoint_branch_preparation_artifact,
+            artifact_writer=write_preparation_artifact,
             source_checkpoint_boundary=source_checkpoint_boundary,
             root_workflow_id=workflow_id,
             source_run_id=source_run_id,
@@ -916,12 +1362,58 @@ async def _prepare_checkpoint_branch_launch(
             parent_branch_id=parent_branch_id,
             parent_turn_id=parent_turn_id,
             runtime_context_policy=runtime_context_policy,
+            follow_up_retrieval=bounded_follow_up_retrieval,
         )
     except CheckpointBranchGitBindingError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={"code": exc.failure_code, "reason": exc.failure_code},
         ) from exc
+
+
+def _bound_branch_follow_up_retrieval(
+    authored: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Narrow a branch-turn override to deployment-owned retrieval ceilings."""
+
+    if authored is None:
+        return None
+    bounded = dict(authored)
+    budgets = bounded.pop("budgets", None)
+    if isinstance(budgets, Mapping):
+        if "maxContextTokens" not in bounded:
+            bounded["maxContextTokens"] = budgets.get("tokens")
+        if "latencyMs" not in bounded:
+            bounded["latencyMs"] = budgets.get("latency_ms")
+    allowed = tuple(
+        item.strip()
+        for item in os.getenv(
+            "MOONMIND_FOLLOWUP_RETRIEVAL_COLLECTIONS", "repo,docs"
+        ).split(",")
+        if item.strip()
+    )
+    requested = list(dict.fromkeys(bounded.get("collections") or []))
+    if not all(isinstance(item, str) and item in allowed for item in requested):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "retrieval_collections_exceed_server_policy"},
+        )
+    bounded["collections"] = requested
+    ceilings = {
+        "topK": ("MAX_TOP_K", 8),
+        "maxContextTokens": ("MAX_CONTEXT_TOKENS", 8192),
+        "maxQueries": ("MAX_QUERIES", 12),
+        "latencyMs": ("MAX_LATENCY_MS", 5000),
+        "maxLifetimeSeconds": ("MAX_LIFETIME_SECONDS", 900),
+    }
+    for field, (env_suffix, default) in ceilings.items():
+        value = bounded.get(field)
+        if isinstance(value, int) and not isinstance(value, bool):
+            bounded[field] = min(
+                value,
+                int(os.getenv(f"MOONMIND_FOLLOWUP_RETRIEVAL_{env_suffix}", default)),
+            )
+    return bounded
 
 
 def _branch_comparison_record(
@@ -1241,53 +1733,6 @@ def _require_branch_turn_immutable_snapshot(
             )
 
 
-def _branch_turn_artifact_ref(
-    *,
-    branch_turn_id: str,
-    artifact_name: str,
-    payload_digest: str,
-) -> str:
-    return (
-        f"artifact://checkpoint-branch-turns/{branch_turn_id}/"
-        f"{artifact_name}/{payload_digest.removeprefix('sha256:')}.json"
-    )
-
-
-def _branch_turn_launch_manifest_payload(
-    *,
-    workflow_id: str,
-    branch: WorkflowCheckpointBranch,
-    turn: WorkflowCheckpointBranchTurn,
-    payload: CheckpointBranchTurnLaunchRequest,
-    context_bundle_ref: str,
-) -> dict[str, Any]:
-    return {
-        "workflowId": workflow_id,
-        "runId": branch.source_run_id,
-        "logicalStepId": branch.logical_step_id,
-        "executionOrdinal": branch.source_execution_ordinal,
-        "stepExecutionId": payload.created_step_execution_id,
-        "reason": "checkpoint_branch",
-        "status": "running",
-        "branch": {
-            "branchId": branch.branch_id,
-            "branchTurnId": turn.branch_turn_id,
-            "rootCheckpointRef": turn.source_checkpoint_ref,
-            "sourceStateKind": turn.source_state_kind,
-            "sourceStateRef": turn.source_state_ref,
-            "sourceStateDigest": turn.source_state_digest,
-            "parentBranchId": branch.parent_branch_id,
-            "parentTurnId": turn.parent_turn_id or branch.parent_turn_id,
-            "gitWorkBranch": branch.git_work_branch or turn.git_work_branch,
-        },
-        "inputs": {
-            "instructionRef": turn.instruction_ref,
-            "instructionDigest": turn.instruction_digest,
-            "contextBundleRef": context_bundle_ref,
-        },
-    }
-
-
 def _is_protected_ref(ref: str | None) -> bool:
     normalized = str(ref or "").strip().removeprefix("refs/heads/").lower()
     return normalized in _PROTECTED_BRANCH_REFS or normalized.startswith("release/")
@@ -1603,6 +2048,14 @@ def _enum_value(value: object | None) -> str | None:
 @lru_cache(maxsize=1)
 def get_temporal_client_adapter() -> TemporalClientAdapter:
     return TemporalClientAdapter()
+
+
+def get_control_stop_continuation_starter(
+    adapter: TemporalClientAdapter = Depends(get_temporal_client_adapter),
+) -> TemporalControlStopContinuationStarter:
+    """Compose the production continuation starter from the shared Temporal adapter."""
+
+    return TemporalControlStopContinuationStarter(adapter)
 
 async def get_temporal_client(
     adapter: TemporalClientAdapter = Depends(get_temporal_client_adapter),
@@ -3427,7 +3880,6 @@ def _serialize_execution_list_item(record) -> ExecutionListItemModel:
         memo=memo,
         finish_summary=finish_summary if isinstance(finish_summary, Mapping) else None,
     )
-
     started_at = getattr(record, "started_at", None)
     updated_at = getattr(record, "updated_at", None) or started_at or datetime.now(UTC)
     created_at = getattr(record, "created_at", None) or started_at or updated_at
@@ -3742,13 +4194,15 @@ def _serialize_execution(
 
     publish_payload = _normalize_publish_payload(task_payload.get("publish"))
 
-    # Precedence: task.git.startingBranch > task.startingBranch > params.startingBranch
-    starting_branch = str(
-        git_payload.get("startingBranch")
-        or task_payload.get("startingBranch")
-        or params.get("startingBranch")
-        or ""
-    ).strip() or None
+    # Precedence: task.git.startingBranch > task.git.branch >
+    # task.startingBranch > params.startingBranch
+    starting_branch = (
+        _coerce_temporal_scalar(git_payload.get("startingBranch"))
+        or _coerce_temporal_scalar(git_payload.get("branch"))
+        or _coerce_temporal_scalar(task_payload.get("startingBranch"))
+        or _coerce_temporal_scalar(params.get("startingBranch"))
+        or None
+    )
     # Only show the "(default)" fallback when git context exists in the payload.
     has_git_context = bool(git_payload) or any(
         task_payload.get(k) or params.get(k)
@@ -3865,6 +4319,38 @@ def _serialize_execution(
     created_at = getattr(record, "created_at", None) or started_at or record.updated_at
     scheduled_for = getattr(record, "scheduled_for", None)
 
+    recovery_eligibility = _project_recovery_eligibility(record, target_runtime)
+    omnigent_execution_plan = params.get("omnigentExecutionPlan")
+    if not isinstance(omnigent_execution_plan, Mapping):
+        plan_ref = str(memo.get("omnigent_execution_plan_ref") or "").strip()
+        plan_digest = str(
+            memo.get("omnigent_execution_plan_digest") or ""
+        ).strip()
+        plan_artifact = str(
+            memo.get("omnigent_execution_plan_artifact_ref") or ""
+        ).strip()
+        omnigent_execution_plan = (
+            {
+                "planRef": plan_ref,
+                "planDigest": plan_digest,
+                "planArtifactRef": plan_artifact,
+            }
+            if plan_ref and plan_digest and plan_artifact
+            else None
+        )
+    runtime_binding_ref = str(memo.get("omnigent_runtime_binding_ref") or "").strip()
+    omnigent_runtime_binding = (
+        {
+            "runtimeBindingRef": runtime_binding_ref,
+            "revision": memo.get("omnigent_runtime_binding_revision"),
+            "fencingGeneration": memo.get(
+                "omnigent_runtime_binding_fencing_generation"
+            ),
+            "state": memo.get("omnigent_runtime_binding_state"),
+        }
+        if runtime_binding_ref
+        else None
+    )
     return ExecutionModel(
         task_id=None,
         agent_run_id=agent_run_id,
@@ -3896,6 +4382,12 @@ def _serialize_execution(
         input_parameters=params,
         input_artifact_ref=getattr(record, "input_ref", None),
         task_input_snapshot=_workflow_input_snapshot_descriptor_from_record(record),
+        omnigent_execution_plan=(
+            dict(omnigent_execution_plan)
+            if isinstance(omnigent_execution_plan, Mapping)
+            else None
+        ),
+        omnigent_runtime_binding=omnigent_runtime_binding,
         target_runtime=target_runtime,
         target_skill=target_skill,
         model=param_model,
@@ -3907,6 +4399,7 @@ def _serialize_execution(
         priority=priority,
         starting_branch=starting_branch,
         target_branch=target_branch,
+        output_branch=_verified_output_branch(finish_summary),
         repository=repository,
         pr_url=pr_url,
         publish_mode=publish_mode,
@@ -3946,6 +4439,7 @@ def _serialize_execution(
         steps_href=steps_href,
         actions=actions,
         resume=resume_summary,
+        recovery_eligibility=recovery_eligibility,
         related_runs=related_runs,
         recurrence=_execution_recurrence_provenance(params, memo),
         target_diagnostics=target_diagnostics,
@@ -3987,6 +4481,51 @@ def _finish_summary_from_memo(memo: Mapping[str, Any]) -> dict[str, Any] | None:
     if isinstance(finish_summary, Mapping):
         return dict(finish_summary)
     return None
+
+
+def _verified_output_branch(
+    finish_summary: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Project only independently verified publication evidence."""
+    if not isinstance(finish_summary, Mapping):
+        return None
+    publish = finish_summary.get("publish")
+    context = finish_summary.get("publishContext")
+    if not isinstance(publish, Mapping):
+        publish = {}
+    if not isinstance(context, Mapping):
+        context = {}
+    terminal = publish.get("terminalPublication")
+    if not isinstance(terminal, Mapping):
+        terminal = context.get("terminalPublication")
+    source = terminal if isinstance(terminal, Mapping) else {**context, **publish}
+    remote_verified = source.get("remoteVerified") is True
+    status_value = str(source.get("status") or publish.get("status") or "").strip()
+    if not remote_verified or status_value not in {"pushed", "already_published", "published"}:
+        return None
+    name = str(
+        source.get("branchName")
+        or source.get("branch")
+        or context.get("branch")
+        or ""
+    ).strip()
+    if not name:
+        return None
+    intent_value = source.get("intent")
+    if intent_value not in {"normal", "terminal_checkpoint"}:
+        intent_value = "normal"
+    result: dict[str, Any] = {
+        "name": name,
+        "headSha": source.get("headSha") or context.get("headSha"),
+        "baseBranch": source.get("baseBranch") or context.get("baseRef"),
+        "intent": intent_value,
+        "status": status_value,
+        "evidenceRef": source.get("evidenceRef"),
+    }
+    url = source.get("branchUrl")
+    if isinstance(url, str) and url.startswith("https://github.com/"):
+        result["url"] = url
+    return {key: value for key, value in result.items() if value not in (None, "")}
 
 
 def _proposal_summary_from_memo(memo: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -4354,6 +4893,49 @@ def _recovery_manifest_summary_from_record(record) -> Mapping[str, Any]:
     return recovery_manifest if isinstance(recovery_manifest, Mapping) else {}
 
 
+def _project_recovery_eligibility(
+    record, target_runtime: str | None
+) -> RecoveryEligibilityDiagnosticModel | None:
+    raw = _recovery_manifest_summary_from_record(record).get("recoveryEligibility")
+    if not isinstance(raw, Mapping):
+        return None
+    projected = dict(raw)
+    flags = settings.feature_flags
+    projected_runtime = normalize_runtime_id(target_runtime or "codex_cli")
+    try:
+        capabilities = resolve_runtime_execution_capabilities(projected_runtime)
+    except ValueError:
+        capabilities = None
+    projected.update(
+        runtimeId=projected_runtime,
+        deploymentGeneration=(
+            str(flags.checkpoint_resume_deployment_generation or "").strip()
+            or "unavailable"
+        ),
+        capabilitySetVersion=(
+            capabilities.capability_set_version if capabilities else None
+        ),
+        capabilityDigest=(capabilities.capability_digest if capabilities else None),
+        checkpointKind="worktree_archive",
+        promotionState=flags.checkpoint_resume_promotion_state,
+    )
+    if (
+        flags.checkpoint_resume_promotion_state
+        in {"disabled", "shadow_capture", "shadow_restore", "paused"}
+        or not flags.checkpoint_resume_action_enabled
+    ):
+        projected.update(
+            eligible=False,
+            defaultAction="full_retry",
+            disabledReasonCode="rollout_action_hidden",
+            operatorGuidance="full_retry",
+        )
+    try:
+        return RecoveryEligibilityDiagnosticModel.model_validate(projected)
+    except ValidationError:
+        return None
+
+
 def _nested_recovery_manifest_text(
     manifest: Mapping[str, Any],
     block_key: str,
@@ -4680,6 +5262,31 @@ def _build_related_runs(
                 )
             )
 
+    # Linked "Continue in a new workflow" lineage (MoonLadderStudios/MoonMind#3641):
+    # the continuation Workflow presents the terminal source it was continued
+    # from, distinct from recovery/rerun/remediation relationships.
+    continuation_source = params.get("continuationSource")
+    if isinstance(continuation_source, Mapping):
+        source_workflow_id = str(
+            continuation_source.get("sourceWorkflowId")
+            or continuation_source.get("source_workflow_id")
+            or ""
+        ).strip()
+        if source_workflow_id:
+            source_run_id = str(
+                continuation_source.get("sourceRunId")
+                or continuation_source.get("source_run_id")
+                or ""
+            ).strip() or None
+            related_runs.append(
+                ExecutionRelatedRunModel(
+                    workflowId=source_workflow_id,
+                    runId=source_run_id,
+                    relationship="Continued from",
+                    href=_related_run_href(source_workflow_id),
+                )
+            )
+
     task_payload = _workflow_payload_from_parameters(params)
     comparison_source = task_payload.get("comparison")
     if isinstance(comparison_source, Mapping):
@@ -4773,15 +5380,88 @@ def _execution_record_visible_to_user(
     return record_owner_type == "user" and record_owner_id == _owner_id(user)
 
 
+async def _append_linked_continuations(
+    execution: ExecutionModel,
+    hydrated: list[ExecutionRelatedRunModel],
+    *,
+    session: AsyncSession,
+    user: User | None,
+) -> None:
+    """Surface the source-side view of linked continuations (#3641 §6).
+
+    A terminal source Workflow presents each linked continuation it produced
+    (distinct from the continuation-side "Continued from" relationship, which is
+    already carried on the continuation's own parameters). Only relationships
+    whose destination remains visible to the caller are shown, and the original
+    terminal outcome is left unchanged.
+    """
+
+    existing_ids = {related_run.workflow_id for related_run in hydrated}
+    repository = SqlLinkedContinuationRepository(session)
+    try:
+        # Read inside a savepoint so a failed lookup (e.g. the table is absent in
+        # a minimal test session) rolls back only this bounded enrichment and
+        # never poisons the outer describe transaction.
+        async with session.begin_nested():
+            continuations = list(
+                await repository.list_for_source(execution.workflow_id)
+            )
+    except Exception as exc:  # noqa: BLE001 - display enrichment is best-effort
+        # Never let the source-side relationship projection break describe: a
+        # transient store/session issue degrades this bounded enrichment only.
+        logger.debug(
+            "Skipping linked-continuation projection for %s: %s",
+            execution.workflow_id,
+            exc,
+        )
+        return
+    for record in continuations:
+        destination_id = str(record.destination_workflow_id or "").strip()
+        if not destination_id or destination_id in existing_ids:
+            continue
+        try:
+            destination = await session.get(TemporalExecutionRecord, destination_id)
+        except Exception:  # noqa: BLE001 - one bounded hydration failure surface
+            destination = None
+        if destination is None:
+            continue
+        if (
+            user is not None
+            and not _is_execution_admin(user)
+            and not _execution_record_visible_to_user(destination, user)
+        ):
+            continue
+        metadata = _execution_related_run_metadata(destination)
+        hydrated.append(
+            ExecutionRelatedRunModel(
+                workflowId=destination_id,
+                runId=record.destination_run_id,
+                relationship="Continued in a new workflow",
+                status=metadata.get("status"),
+                createdAt=record.created_at,
+                href=_related_run_href(destination_id),
+            )
+        )
+        existing_ids.add(destination_id)
+
+
 async def _hydrate_related_run_metadata(
     execution: ExecutionModel,
     *,
     session: AsyncSession | None,
     user: User | None = None,
 ) -> ExecutionModel:
-    if session is None or not execution.related_runs:
+    if session is None:
         return execution
-    hydrated: list[ExecutionRelatedRunModel] = []
+    if not execution.related_runs:
+        hydrated: list[ExecutionRelatedRunModel] = []
+        await _append_linked_continuations(
+            execution, hydrated, session=session, user=user
+        )
+        if not hydrated:
+            return execution
+        return execution.model_copy(update={"related_runs": hydrated})
+    hydrated = []
     for related_run in execution.related_runs:
         try:
             record = await session.get(TemporalExecutionRecord, related_run.workflow_id)
@@ -4815,6 +5495,7 @@ async def _hydrate_related_run_metadata(
                 }
             )
         )
+    await _append_linked_continuations(execution, hydrated, session=session, user=user)
     return execution.model_copy(update={"related_runs": hydrated})
 
 def _target_diagnostics_block(
@@ -6372,7 +7053,8 @@ def _recovery_eligibility_payload(manifest: StepExecutionManifestModel) -> dict[
     if diagnostics and _is_environment_blocked_manifest(manifest):
         return {
             "eligible": False,
-            "defaultAction": "environment_fix",
+            "requestedAction": "resume_from_workspace_checkpoint",
+            "defaultAction": "fix_environment",
             "disabledReasonCode": "environment_invalid",
             "requiredBoundary": required_boundary,
             "checkpointRef": None,
@@ -6394,14 +7076,15 @@ def _recovery_eligibility_payload(manifest: StepExecutionManifestModel) -> dict[
         }
     if checkpoint_ref:
         return {
-            "eligible": True,
-            "defaultAction": "resume_from_checkpoint",
-            "disabledReasonCode": None,
-            "requiredBoundary": required_boundary,
+            "eligible": False,
+            "requestedAction": "resume_from_workspace_checkpoint",
+            "defaultAction": "full_retry",
+            "disabledReasonCode": "CHECKPOINT_CAPABILITY_SNAPSHOT_MISSING",
+            "checkpointBoundary": required_boundary,
             "checkpointRef": checkpoint_ref,
             "sourceWorkflowId": source_workflow_id,
             "sourceRunId": source_run_id,
-            "operatorGuidance": "resume",
+            "operatorGuidance": "full_retry",
             "evidence": [
                 _evidence_ref_status(
                     category="checkpoint",
@@ -6414,9 +7097,10 @@ def _recovery_eligibility_payload(manifest: StepExecutionManifestModel) -> dict[
         }
     return {
         "eligible": False,
+        "requestedAction": "resume_from_workspace_checkpoint",
         "defaultAction": "full_retry",
-        "disabledReasonCode": "missing_required_checkpoint_boundary",
-        "requiredBoundary": required_boundary,
+        "disabledReasonCode": "CHECKPOINT_ARTIFACT_INVALID",
+        "checkpointBoundary": required_boundary,
         "checkpointRef": None,
         "sourceWorkflowId": source_workflow_id,
         "sourceRunId": source_run_id,
@@ -6668,6 +7352,24 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
     raw_state = str(record.state.value).strip().lower()
     workflow_type_value = _enum_value(getattr(record, "workflow_type", None))
     memo = dict(getattr(record, "memo", None) or {})
+    persisted_finish_summary = getattr(record, "finish_summary_json", None)
+    finish_summary = (
+        dict(persisted_finish_summary)
+        if isinstance(persisted_finish_summary, Mapping)
+        else (_finish_summary_from_memo(memo) or {})
+    )
+    control_stop = (
+        finish_summary.get("controlStop")
+        if isinstance(finish_summary, Mapping)
+        else None
+    )
+    control_stop = control_stop if isinstance(control_stop, Mapping) else {}
+    metrics = control_stop.get("metrics")
+    metrics = metrics if isinstance(metrics, Mapping) else {}
+    auxiliary_outcomes = control_stop.get("auxiliaryOutcomes")
+    auxiliary_outcomes = (
+        auxiliary_outcomes if isinstance(auxiliary_outcomes, Mapping) else {}
+    )
     waiting_reason = (
         str(getattr(record, "waiting_reason", "") or "").strip()
         or str(memo.get("waiting_reason") or "").strip()
@@ -6785,6 +7487,25 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         and resume_evidence_disabled_reason is None
     ):
         enabled = enabled | {"can_failed_step_resume"}
+    git_publication = auxiliary_outcomes.get("gitPublication")
+    if raw_state == "failed":
+        enabled = enabled | {"can_full_retry"}
+        if bool(metrics.get("remediationAdmitted")):
+            enabled = enabled | {"can_continue_remediation"}
+        publication_contract = (
+            git_publication.get("recoveryContract")
+            if isinstance(git_publication, Mapping)
+            else None
+        )
+        publication_eligible, _ = publication_action_eligibility(
+            publication_contract
+        )
+        if (
+            isinstance(git_publication, Mapping)
+            and git_publication.get("status") == "failed"
+            and publication_eligible
+        ):
+            enabled = enabled | {"can_retry_publication"}
     capability_values = {
         "can_set_title": "canSetTitle",
         "can_update_inputs": "canUpdateInputs",
@@ -6794,6 +7515,9 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         "can_pause": "canPause",
         "can_resume": "canResume",
         "can_failed_step_resume": "canResumeFromFailedStep",
+        "can_continue_remediation": "canContinueRemediation",
+        "can_retry_publication": "canRetryPublication",
+        "can_full_retry": "canFullRetry",
         "can_cancel": "canCancel",
         "can_reject": "canReject",
         "can_send_message": "canSendMessage",
@@ -6835,7 +7559,96 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         if field_name == "can_pause" and is_operator_paused:
             disabled_reasons[alias] = "already_paused"
             continue
+        if field_name == "can_continue_remediation" and raw_state == "failed":
+            disabled_reasons[alias] = (
+                "remediation_not_admitted"
+                if control_stop.get("kind") == "workflow_gate"
+                else "control_stop_not_available"
+            )
+            continue
+        if field_name == "can_retry_publication" and raw_state == "failed":
+            git_publication = auxiliary_outcomes.get("gitPublication")
+            if not isinstance(git_publication, Mapping):
+                disabled_reasons[alias] = "publication_retry_not_applicable"
+            elif git_publication.get("status") != "failed":
+                disabled_reasons[alias] = "publication_not_failed"
+            else:
+                _, reason = publication_action_eligibility(
+                    git_publication.get("recoveryContract")
+                )
+                disabled_reasons[alias] = (
+                    reason or "publication_retry_not_eligible"
+                )
+            continue
         disabled_reasons[alias] = "state_not_eligible"
+    common_control_stop_evidence = {
+        "candidateRef": control_stop.get("workspaceHeadRef"),
+        "remainingWorkRef": control_stop.get("remainingWorkRef"),
+    }
+    continuation_evidence = {
+        **common_control_stop_evidence,
+        **{
+            destination: control_stop[source]
+            for source, destination in (
+                ("controlStopId", "controlStopId"),
+                ("sourceBudget", "sourceBudget"),
+                ("continuationBudgetGrant", "continuationBudget"),
+                ("destinationWorkflowId", "destinationWorkflowId"),
+                ("restorationEvidenceRef", "restorationEvidenceRef"),
+                ("restorationEvidenceDigest", "restorationEvidenceDigest"),
+                ("hostSessionLifecycle", "hostSessionLifecycle"),
+            )
+            if source in control_stop
+        },
+    }
+    action_evidence = {
+        **{
+            action: (
+                continuation_evidence
+                if action == "continueRemediation"
+                else common_control_stop_evidence
+            )
+            for action in (
+                "editForRerun",
+                "fullRetry",
+                "continueRemediation",
+            )
+            if control_stop
+        },
+        **(
+            {
+                "retryPublication": {
+                    "candidateRef": (
+                        git_publication.get("recoveryContract", {})
+                        .get("continuation", {})
+                        .get("candidateRef")
+                    ),
+                    "publicationIntent": git_publication.get(
+                        "recoveryContract", {}
+                    ).get("intent"),
+                    "publicationRecoveryWorkflowId": git_publication.get(
+                        "recoveryWorkflowId"
+                    ),
+                    "publicationResult": git_publication.get(
+                        "recoveryResult"
+                    ),
+                }
+            }
+            if isinstance(git_publication, Mapping)
+            else {}
+        ),
+    }
+    if workflow_type_value == "MoonMind.PublicationRecoveryV1":
+        action_evidence["publicationRecovery"] = {
+            "sourceWorkflowId": memo.get("source_workflow_id"),
+            "sourceRunId": memo.get("source_run_id"),
+            "semanticContext": memo.get("publication_semantic_context"),
+            "phase": memo.get("publication_recovery_phase", "contract_validation"),
+            "result": memo.get("publication_recovery_result"),
+            "publicationOutcome": memo.get("publication_outcome"),
+            "implementationRerun": False,
+            "verificationRerun": False,
+        }
     return ExecutionActionCapabilityModel(
         can_set_title="can_set_title" in enabled,
         can_update_inputs="can_update_inputs" in enabled,
@@ -6845,6 +7658,10 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         can_pause="can_pause" in enabled,
         can_resume="can_resume" in enabled,
         can_failed_step_resume="can_failed_step_resume" in enabled,
+        can_continue_remediation="can_continue_remediation" in enabled,
+        can_retry_publication="can_retry_publication" in enabled,
+        can_full_retry="can_full_retry" in enabled,
+        action_evidence=action_evidence,
         can_cancel="can_cancel" in enabled,
         can_reject="can_reject" in enabled,
         can_send_message="can_send_message" in enabled,
@@ -7402,6 +8219,7 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
         "model",
         "effort",
         "providerProfile",
+        "agentProfile",
         "profileId",
         "repository",
         "repo",
@@ -7443,6 +8261,17 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
             if isinstance(value, str) and value.strip():
                 normalized_step[key] = value.strip()
         normalized_step["id"] = _task_step_id_from_payload(step_payload, index)
+
+        repository_operation = step_payload.get("repositoryOperation")
+        if repository_operation is not None:
+            if not isinstance(repository_operation, str) or (
+                normalized_repository_operation := repository_operation.strip().lower()
+            ) not in {"read", "write"}:
+                raise _invalid_workflow_request(
+                    f"payload.workflow.steps[{index}].repositoryOperation must be "
+                    "one of: read, write."
+                )
+            normalized_step["repositoryOperation"] = normalized_repository_operation
 
         normalized_skills = _normalize_task_skill_selectors(
             step_payload.get("skills"),
@@ -7501,6 +8330,9 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                 value = validated_runtime.get(key)
                 if isinstance(value, Mapping):
                     normalized_runtime[key] = dict(value)
+            omnigent = validated_runtime.get("omnigent")
+            if isinstance(omnigent, Mapping):
+                normalized_runtime["omnigent"] = dict(omnigent)
             if normalized_runtime:
                 normalized_step["runtime"] = normalized_runtime
 
@@ -7655,6 +8487,7 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "inputAttachments",
                 "input_attachments",
                 "runtime",
+                "repositoryOperation",
                 "diagnostics",
                 "skill",
                 "skills",
@@ -7803,6 +8636,36 @@ async def _enrich_deployment_skill_metadata(
         if isinstance(metadata, Mapping):
             _copy_trusted_skill_publish_metadata(metadata=metadata, target=skill)
     return metadata_by_skill
+
+
+def _merge_deployment_skill_required_capabilities(
+    required_capabilities: list[str],
+    metadata_by_skill: Mapping[str, Mapping[str, Any]],
+) -> list[str]:
+    """Flatten trusted deployment Skill requirements into the canonical plane."""
+
+    merged: list[str] = []
+    seen: set[str] = set()
+
+    def append(values: list[str]) -> None:
+        for value in values:
+            capability = value.strip().lower()
+            if capability and capability not in seen:
+                seen.add(capability)
+                merged.append(capability)
+
+    append(required_capabilities)
+    for skill_name in sorted(metadata_by_skill):
+        metadata = metadata_by_skill[skill_name]
+        append(
+            _coerce_string_list(
+                metadata.get("required_capabilities"),
+                field_name=(
+                    f"deployment skill '{skill_name}' metadata.required_capabilities"
+                ),
+            )
+        )
+    return merged
 
 
 async def _resolve_step_runtime_selections(
@@ -7972,8 +8835,62 @@ async def _expand_goal_preset_for_workflow_submission(
     task_payload: dict[str, Any],
     request_payload: Mapping[str, Any],
     session: Any,
-    user_id: Any,
+    user: Any,
 ) -> None:
+    if has_unexpanded_task_template({"workflow": task_payload}):
+        from api_service.services.presets.catalog import (
+            PresetNotFoundError,
+            PresetValidationError,
+        )
+
+        template_payload = dict(task_payload.get("taskTemplate") or {})
+        template_scope, template_scope_ref = resolve_template_scope_for_user(
+            user=user,
+            scope=str(template_payload.get("scope") or "global"),
+            scope_ref=(
+                template_payload.get("scopeRef")
+                or template_payload.get("scope_ref")
+            ),
+            write=False,
+        )
+        template_payload["scope"] = template_scope
+        if template_scope_ref is None:
+            template_payload.pop("scopeRef", None)
+            template_payload.pop("scope_ref", None)
+        else:
+            template_payload["scopeRef"] = template_scope_ref
+            template_payload.pop("scope_ref", None)
+        task_payload["taskTemplate"] = template_payload
+        try:
+            expanded_parameters = await expand_preset_for_child_run(
+                session=session,
+                initial_parameters={
+                    "workflow": task_payload,
+                    "repository": request_payload.get("repository"),
+                    "targetRuntime": request_payload.get("targetRuntime"),
+                },
+                allow_goal_schedule=False,
+                user_id=getattr(user, "id", None),
+            )
+        except PresetNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "code": "template_not_found",
+                    "message": str(exc),
+                },
+            ) from exc
+        except (PresetValidationError, RuntimeError) as exc:
+            raise _invalid_workflow_request(str(exc)) from exc
+        expanded_task = expanded_parameters.get("workflow")
+        if not isinstance(expanded_task, Mapping):
+            raise _invalid_workflow_request(
+                "Explicit preset expansion did not produce a workflow payload."
+            )
+        task_payload.clear()
+        task_payload.update(expanded_task)
+        return
+
     if workflow_is_already_authored(task_payload):
         return
 
@@ -7995,10 +8912,18 @@ async def _expand_goal_preset_for_workflow_submission(
     )
     template_inputs = {**schedule.inputs, **existing_inputs}
     context: dict[str, Any] = {}
-    repository = request_payload.get("repository") or task_payload.get("repository")
-    if isinstance(repository, str) and repository.strip():
-        context["repository"] = repository.strip()
-        context["repo"] = repository.strip()
+    nested_repository = task_payload.get("repository")
+    if isinstance(nested_repository, Mapping):
+        raise _invalid_workflow_request(
+            "payload.workflow.repository must not contain a repository target; "
+            "use payload.repository."
+        )
+    repository = repository_name_from_value(request_payload.get("repository"))
+    if not repository:
+        repository = repository_name_from_value(nested_repository)
+    if repository:
+        context["repository"] = repository
+        context["repo"] = repository
     runtime_payload = (
         task_payload.get("runtime") if isinstance(task_payload.get("runtime"), Mapping) else {}
     )
@@ -8017,7 +8942,7 @@ async def _expand_goal_preset_for_workflow_submission(
         "inputs": template_inputs,
         "context": context,
         "options": ExpandOptions(should_enforce_step_limit=True),
-        "user_id": user_id,
+        "user_id": getattr(user, "id", None),
     }
     try:
         expanded = await catalog.expand_template(**expand_kwargs)
@@ -8287,6 +9212,49 @@ def _validate_pr_base_branch_submission(
             )
 
 
+def _validate_remediation_branch_submission(
+    *, task_payload: Mapping[str, Any], git_payload: Mapping[str, Any]
+) -> None:
+    remediation = task_payload.get("remediation")
+    if not isinstance(remediation, Mapping):
+        return
+    for field_name, value in (
+        ("payload.workflow.git.branch", git_payload.get("branch")),
+        (
+            "payload.workflow.git.startingBranch",
+            git_payload.get("startingBranch"),
+        ),
+        ("payload.workflow.branch", task_payload.get("branch")),
+        ("payload.workflow.startingBranch", task_payload.get("startingBranch")),
+    ):
+        branch = str(value or "")
+        if not branch:
+            continue
+        try:
+            TemporalExecutionService._validate_remediation_git_branch(
+                branch, path=field_name, allow_protected=True
+            )
+        except TemporalExecutionValidationError as exc:
+            raise _invalid_workflow_request(str(exc)) from exc
+
+    checkpoint_policy = remediation.get("checkpointBranchPolicy")
+    if not isinstance(checkpoint_policy, Mapping):
+        return
+    work_branch = str(checkpoint_policy.get("gitWorkBranch") or "")
+    if not work_branch:
+        return
+    try:
+        TemporalExecutionService._validate_remediation_git_branch(
+            work_branch,
+            path=(
+                "payload.workflow.remediation.checkpointBranchPolicy.gitWorkBranch"
+            ),
+            allow_protected=False,
+        )
+    except TemporalExecutionValidationError as exc:
+        raise _invalid_workflow_request(str(exc)) from exc
+
+
 def _normalize_merge_automation_payload(raw_merge_automation: Any) -> dict[str, Any]:
     return _coerce_mapping(raw_merge_automation)
 
@@ -8394,88 +9362,14 @@ def _normalize_task_tool(task_payload: dict[str, Any]) -> dict[str, Any] | None:
     _copy_skill_contract_metadata(source=selected_payload, target=normalized)
     return normalized
 
-_PENTEST_TOOL_NAME = "security.pentest.run"
-_PENTEST_ALLOWED_ROLES = frozenset({"admin", "security_operator"})
-_PENTEST_PRIVILEGED_INPUT_FIELDS = frozenset(
-    {
-        "image",
-        "runner_image",
-        "provider_secret",
-        "provider_secret_ref",
-        "provider_secret_id",
-        "provider_runtime_state",
-        "secret",
-        "secrets",
-        "env",
-        "environment",
-        "environment_variables",
-        "network",
-        "network_mode",
-        "mount",
-        "mounts",
-        "host_mount",
-        "host_mounts",
-        "capability",
-        "capabilities",
-        "docker_args",
-        "docker",
-        "command",
-        "raw_command",
-        "args",
-    }
-)
 
 def _tool_payload_name(payload: Mapping[str, Any] | None) -> str:
     if not isinstance(payload, Mapping):
         return ""
     return str(payload.get("name") or payload.get("id") or "").strip()
 
-def _is_pentest_tool_payload(payload: Mapping[str, Any] | None) -> bool:
-    return _tool_payload_name(payload).lower() == _PENTEST_TOOL_NAME
 
-def _pentest_input_payloads_for_submission(
-    *,
-    task_payload: Mapping[str, Any],
-    normalized_tool: Mapping[str, Any] | None,
-    normalized_steps: list[dict[str, Any]],
-) -> list[Mapping[str, Any]]:
-    payloads: list[Mapping[str, Any]] = []
-    if _is_pentest_tool_payload(normalized_tool):
-        if isinstance(normalized_tool.get("inputs"), Mapping):
-            payloads.append(normalized_tool["inputs"])
-        if isinstance(task_payload.get("inputs"), Mapping):
-            payloads.append(task_payload["inputs"])
 
-    for step in normalized_steps:
-        step_tool = step.get("tool") if isinstance(step.get("tool"), Mapping) else None
-        step_skill = (
-            step.get("skill") if isinstance(step.get("skill"), Mapping) else None
-        )
-        selected = step_tool if _is_pentest_tool_payload(step_tool) else step_skill
-        if not _is_pentest_tool_payload(selected):
-            continue
-        for key in ("inputs", "args"):
-            value = selected.get(key) if isinstance(selected, Mapping) else None
-            if isinstance(value, Mapping):
-                payloads.append(value)
-    return payloads
-
-def _submission_contains_pentest_tool(
-    *,
-    task_payload: Mapping[str, Any],
-    normalized_tool: Mapping[str, Any] | None,
-    normalized_steps: list[dict[str, Any]],
-) -> bool:
-    if _is_pentest_tool_payload(normalized_tool):
-        return True
-    for step in normalized_steps:
-        step_tool = step.get("tool") if isinstance(step.get("tool"), Mapping) else None
-        step_skill = (
-            step.get("skill") if isinstance(step.get("skill"), Mapping) else None
-        )
-        if _is_pentest_tool_payload(step_tool) or _is_pentest_tool_payload(step_skill):
-            return True
-    return False
 
 def _normalize_user_role_name(value: Any) -> str:
     if isinstance(value, Mapping):
@@ -8566,54 +9460,14 @@ def _effective_user_roles(user: Any, request: Any | None = None) -> set[str]:
         roles.add("admin")
     return roles
 
-def _validate_pentest_submission_boundary(
-    *,
-    task_payload: Mapping[str, Any],
-    normalized_tool: Mapping[str, Any] | None,
-    normalized_steps: list[dict[str, Any]],
-    user: Any,
-    request: Any | None = None,
-) -> None:
-    if not _submission_contains_pentest_tool(
-        task_payload=task_payload,
-        normalized_tool=normalized_tool,
-        normalized_steps=normalized_steps,
-    ):
-        return
-
-    if not settings.pentest.enabled:
-        raise _invalid_workflow_request(
-            "security.pentest.run submission is disabled by MOONMIND_PENTEST_ENABLED."
-        )
-
-    user_roles = _effective_user_roles(user, request=request)
-    if user_roles.isdisjoint(_PENTEST_ALLOWED_ROLES):
-        raise _invalid_workflow_request(
-            "security.pentest.run submission requires an admin or security_operator role."
-        )
-
-    for inputs in _pentest_input_payloads_for_submission(
-        task_payload=task_payload,
-        normalized_tool=normalized_tool,
-        normalized_steps=normalized_steps,
-    ):
-        blocked = sorted(
-            str(key)
-            for key in inputs.keys()
-            if str(key).strip().lower() in _PENTEST_PRIVILEGED_INPUT_FIELDS
-        )
-        if blocked:
-            raise _invalid_workflow_request(
-                "security.pentest.run submission contains privileged input fields "
-                f"that are not user-editable: {', '.join(blocked)}."
-            )
 
 _PR_RESOLVER_SELECTOR_ERROR = (
-    "pr-resolver workflow requires a structured PR selector: "
-    "payload.workflow.inputs.pr, payload.workflow.inputs.branch, "
-    "payload.workflow.tool.inputs.pr/branch, or "
-    "payload.workflow.git.startingBranch, or a non-default "
-    "payload.workflow.git.branch."
+    "pr-resolver requires an explicit pull request selector. In the dashboard, "
+    "select the pr-resolver Skill and fill in Pull request with a PR number, PR "
+    "URL, or head branch. API callers can set payload.task.inputs.pr (or "
+    "payload.workflow.inputs.pr); Skill/Tool inputs named pr or branch, "
+    "git.startingBranch, and a non-default git.branch are also accepted. A "
+    "default checkout branch such as main does not identify a PR."
 )
 _PR_RESOLVER_DEFAULT_BRANCH_NAMES = frozenset(
     {"main", "master", "develop", "development", "trunk"}
@@ -8749,14 +9603,17 @@ def _derive_task_title(
     normalized_steps: Sequence[Mapping[str, Any]] = (),
 ) -> str | None:
     current_title = str(task_payload.get("title") or "").strip()
-    if current_title and not is_generic_title(current_title):
-        return current_title[:_MAX_TASK_TITLE_LENGTH]
     instructions = str(task_payload.get("instructions") or "").strip()
     has_tool_context = normalized_tool is not None or any(
         isinstance(task_payload.get(key), Mapping)
         for key in ("tool", "skill", "workflow")
     )
-    if instructions and not has_tool_context and not normalized_steps:
+    if (
+        instructions
+        and not has_tool_context
+        and not normalized_steps
+        and (not current_title or is_generic_title(current_title))
+    ):
         normalized = " ".join(instructions[: _MAX_TASK_TITLE_LENGTH * 2].split())
         if normalized:
             return normalized[:_MAX_TASK_TITLE_LENGTH]
@@ -9577,6 +10434,180 @@ def _workflow_payload_from_parameters(parameters: Mapping[str, Any]) -> dict[str
     return {}
 
 
+def _normalize_submitted_repository(
+    value: object,
+) -> tuple[str | dict[str, Any] | None, str | None]:
+    """Validate repository authoring while retaining its scalar projection."""
+
+    if value is None:
+        return None, None
+    if isinstance(value, str):
+        repository = value.strip()
+        return (repository, repository) if repository else (None, None)
+
+    try:
+        target = compile_repository_target(value)
+    except RepositoryContractError as exc:
+        raise _invalid_workflow_request(
+            f"payload.repository is invalid: {exc}"
+        ) from exc
+
+    return (
+        target.model_dump(by_alias=True, mode="json", exclude_none=True),
+        target.repository.name,
+    )
+
+
+def _selected_repository_skill_names(
+    task_payload: Mapping[str, Any],
+) -> set[str]:
+    names: set[str] = set()
+    candidates: list[object] = [task_payload.get("tool"), task_payload.get("skill")]
+    steps = task_payload.get("steps")
+    if isinstance(steps, list):
+        for step in steps:
+            if isinstance(step, Mapping):
+                candidates.extend((step.get("tool"), step.get("skill")))
+    for candidate in candidates:
+        if not isinstance(candidate, Mapping):
+            continue
+        name = str(candidate.get("name") or candidate.get("id") or "").strip()
+        if name:
+            names.add(name)
+    return names
+
+
+def _selected_github_issue_repositories(
+    task_payload: Mapping[str, Any],
+) -> set[str]:
+    input_payloads: list[Mapping[str, Any]] = []
+
+    def collect_binding_inputs(binding: object) -> None:
+        if not isinstance(binding, Mapping):
+            return
+        inputs = binding.get("inputs")
+        if not isinstance(inputs, Mapping):
+            inputs = binding.get("args")
+        if isinstance(inputs, Mapping):
+            input_payloads.append(inputs)
+
+    task_inputs = task_payload.get("inputs")
+    if isinstance(task_inputs, Mapping):
+        input_payloads.append(task_inputs)
+    collect_binding_inputs(task_payload.get("tool"))
+    collect_binding_inputs(task_payload.get("skill"))
+
+    steps = task_payload.get("steps")
+    if isinstance(steps, list):
+        for step in steps:
+            if not isinstance(step, Mapping):
+                continue
+            collect_binding_inputs(step.get("tool"))
+            collect_binding_inputs(step.get("skill"))
+
+    applied_templates = task_payload.get("appliedStepTemplates")
+    if isinstance(applied_templates, list):
+        for template in applied_templates:
+            if not isinstance(template, Mapping):
+                continue
+            template_inputs = template.get("inputs")
+            if isinstance(template_inputs, Mapping):
+                input_payloads.append(template_inputs)
+
+    repositories_by_identity: dict[str, str] = {}
+    for inputs in input_payloads:
+        issue = inputs.get("github_issue")
+        if not isinstance(issue, Mapping):
+            continue
+        repository = str(issue.get("repository") or "").strip()
+        if repository:
+            repositories_by_identity.setdefault(repository.casefold(), repository)
+    return set(repositories_by_identity.values())
+
+
+def _validate_github_issue_repository_authority(
+    *,
+    repository_payload: str | Mapping[str, Any] | None,
+    task_payload: Mapping[str, Any],
+) -> None:
+    submitted_repository = repository_name_from_value(repository_payload)
+    issue_repositories = _selected_github_issue_repositories(task_payload)
+    if not issue_repositories:
+        return
+    if len(issue_repositories) > 1:
+        raise _invalid_workflow_request(
+            "GitHub issue inputs target multiple repositories: "
+            + ", ".join(sorted(issue_repositories))
+            + ". Submit one repository authority per workflow."
+        )
+    issue_repository = next(iter(issue_repositories))
+    if not submitted_repository:
+        raise _invalid_workflow_request(
+            "payload.repository is required when GitHub issue inputs select "
+            f"repository '{issue_repository}'."
+        )
+    submitted_identity = (
+        github_repository_name_from_value(submitted_repository)
+        or submitted_repository
+    ).casefold()
+    issue_identity = (
+        github_repository_name_from_value(issue_repository) or issue_repository
+    ).casefold()
+    if issue_identity == submitted_identity:
+        return
+    raise _invalid_workflow_request(
+        f"payload.repository '{submitted_repository}' does not match the GitHub "
+        f"issue repository '{issue_repository}'. Choose the issue repository as "
+        "the workflow repository before submission."
+    )
+
+
+def _validate_repository_submission_compatibility(
+    *,
+    repository_payload: str | Mapping[str, Any] | None,
+    task_payload: Mapping[str, Any],
+    publish_payload: Mapping[str, Any] | None = None,
+) -> None:
+    nested_repository = task_payload.get("repository")
+    if isinstance(nested_repository, Mapping):
+        raise _invalid_workflow_request(
+            "payload.workflow.repository must not contain a repository target; "
+            "use payload.repository."
+        )
+    _validate_github_issue_repository_authority(
+        repository_payload=repository_payload,
+        task_payload=task_payload,
+    )
+    if not isinstance(repository_payload, Mapping):
+        return
+    if "git" in task_payload:
+        raise _invalid_workflow_request(
+            "payload.workflow.git is not accepted with a provider-discriminated "
+            "payload.repository target."
+        )
+
+    provider = str(repository_payload.get("provider") or "").strip().lower()
+    if provider == "lore":
+        incompatible = sorted(
+            _selected_repository_skill_names(task_payload)
+            & _GITHUB_ONLY_REPOSITORY_SKILLS
+        )
+        if incompatible:
+            raise _invalid_workflow_request(
+                "Lore repository targets do not support GitHub-only Skills: "
+                + ", ".join(incompatible)
+                + "."
+            )
+
+    if repository_payload.get("revision") is not None and publish_payload is not None:
+        publish_mode = str(publish_payload.get("mode") or "").strip().lower()
+        if publish_mode != "none":
+            raise _invalid_workflow_request(
+                "payload.repository.revision is allowed only when "
+                "payload.workflow.publish.mode='none'."
+            )
+
+
 async def _create_execution_from_workflow_request(
     *,
     request: CreateJobRequest,
@@ -9617,14 +10648,16 @@ async def _create_execution_from_workflow_request(
     # consumes targetRuntime / task.runtime fields.  When inheritance applies,
     # we stamp the parent's effective runtime onto the request payload so the
     # rest of the create path sees it exactly as it would an explicit request.
-    principal = await resolve_execution_principal(
-        user=user,
-        service=service,
-        request=(principal_context or {}).get("request"),
-        workflow_id_header=(principal_context or {}).get("workflow_id_header"),
-        run_id_header=(principal_context or {}).get("run_id_header"),
-        agent_run_id_header=(principal_context or {}).get("agent_run_id_header"),
-    )
+    principal = (principal_context or {}).get("verified_principal")
+    if not isinstance(principal, ExecutionPrincipal):
+        principal = await resolve_execution_principal(
+            user=user,
+            service=service,
+            request=(principal_context or {}).get("request"),
+            workflow_id_header=(principal_context or {}).get("workflow_id_header"),
+            run_id_header=(principal_context or {}).get("run_id_header"),
+            agent_run_id_header=(principal_context or {}).get("agent_run_id_header"),
+        )
     try:
         inherited = await resolve_child_runtime_inheritance(
             request_payload=payload,
@@ -9643,6 +10676,28 @@ async def _create_execution_from_workflow_request(
             task_payload=task_payload,
             inherited=inherited,
         )
+
+    repository_payload, repository = _normalize_submitted_repository(
+        payload.get("repository")
+    )
+    if repository_payload is None:
+        payload.pop("repository", None)
+    else:
+        payload["repository"] = repository_payload
+    early_publish_payload: Mapping[str, Any] | None = None
+    if isinstance(repository_payload, Mapping) and repository_payload.get(
+        "revision"
+    ) is not None:
+        early_publish_payload = _resolve_workflow_publish_payload(
+            payload=payload,
+            task_payload=task_payload,
+            normalized_tool=_normalize_task_tool(task_payload),
+        )
+    _validate_repository_submission_compatibility(
+        repository_payload=repository_payload,
+        task_payload=task_payload,
+        publish_payload=early_publish_payload,
+    )
 
     # --- Schedule routing ---
     schedule: ScheduleParameters | None = None
@@ -9691,7 +10746,7 @@ async def _create_execution_from_workflow_request(
             task_payload=task_payload,
             request_payload=payload,
             session=session,
-            user_id=user.id,
+            user=user,
         )
         _reject_submit_version_identity(task_payload)
 
@@ -9711,12 +10766,6 @@ async def _create_execution_from_workflow_request(
             if index < len(normalized_steps):
                 normalized_steps[index]["inputAttachments"] = refs
 
-    raw_repository = payload.get("repository")
-    if raw_repository is not None and not isinstance(raw_repository, str):
-        raise _invalid_workflow_request("payload.repository must be a string.")
-    repository = raw_repository.strip() if isinstance(raw_repository, str) else None
-    if repository == "":
-        repository = None
     integration = (
         str(
             payload.get("integration")
@@ -9759,17 +10808,14 @@ async def _create_execution_from_workflow_request(
         payload.get("report_output"),
     )
     normalized_tool = _normalize_task_tool(task_payload)
-    _validate_pentest_submission_boundary(
-        task_payload=task_payload,
-        normalized_tool=normalized_tool,
-        normalized_steps=normalized_steps,
-        user=user,
-        request=(principal_context or {}).get("request"),
-    )
     deployment_skill_metadata = await _enrich_deployment_skill_metadata(
         session=session,
         normalized_tool=normalized_tool,
         steps=normalized_steps,
+    )
+    required_capabilities = _merge_deployment_skill_required_capabilities(
+        required_capabilities,
+        deployment_skill_metadata,
     )
     publish_skill_id = _workflow_publish_skill_id(task_payload, normalized_tool)
     publish_skill_metadata = deployment_skill_metadata.get(
@@ -9794,6 +10840,11 @@ async def _create_execution_from_workflow_request(
         normalized_tool=normalized_tool,
         skill_publish_metadata=publish_metadata,
         skill_side_effect_metadata=side_effect_metadata,
+    )
+    _validate_repository_submission_compatibility(
+        repository_payload=repository_payload,
+        task_payload=task_payload,
+        publish_payload=publish_payload,
     )
     normalized_task_skills = _normalize_task_skill_selectors(
         task_payload.get("skills"),
@@ -9885,6 +10936,10 @@ async def _create_execution_from_workflow_request(
         task_payload=task_payload,
         git_payload=git_payload,
     )
+    _validate_remediation_branch_submission(
+        task_payload=task_payload,
+        git_payload=git_payload,
+    )
     if git_payload:
         normalized_git_payload: dict[str, str] = {}
         for git_key in ("startingBranch", "branch"):
@@ -9920,19 +10975,32 @@ async def _create_execution_from_workflow_request(
         normalized_tool=normalized_tool,
         normalized_steps=normalized_steps,
     )
-    if derived_task_title and (
-        "title" not in normalized_task_for_planner
-        or is_generic_title(normalized_task_for_planner.get("title"))
-    ):
+    if derived_task_title:
         normalized_task_for_planner["title"] = derived_task_title
 
     # --- Model resolution ---
-    raw_target_runtime = (
-        payload.get("targetRuntime")
-        or runtime_payload.get("mode")
-        or settings.workflow.default_runtime
-        or ""
+    runtime_was_authored = runtime_payload.get("authored") is not False
+    authored_runtime = (
+        (payload.get("targetRuntime") or runtime_payload.get("mode"))
+        if runtime_was_authored
+        else None
     )
+    try:
+        cutover_status = effective_phase()
+        cutover_selection = select_runtime(
+            authored_runtime=authored_runtime,
+            configured_default=settings.workflow.default_runtime,
+            phase=cutover_status.phase,
+            submission_kind=(
+                "schedule"
+                if task_payload.get("presetSchedule") or scheduled_for_dt is not None
+                else "create"
+            ),
+            release_status=cutover_status,
+        )
+    except ValueError as exc:
+        raise _invalid_workflow_request(str(exc)) from exc
+    raw_target_runtime = cutover_selection.runtime_id
     raw_profile_id = str(
         runtime_payload.get("providerProfileRef")
         or runtime_payload.get("profileId")
@@ -9958,7 +11026,7 @@ async def _create_execution_from_workflow_request(
         if normalized_rt not in _SUPPORTED_TASK_RUNTIMES:
             raise _invalid_workflow_request(
                 f"Unsupported targetRuntime: {raw_target_runtime!r}. "
-                "Must be one of: codex_cli, claude_code, codex_cloud, jules."
+                "Must be one of: codex_cli, claude_code, codex_cloud, jules, omnigent."
             )
         canonical_target_runtime = normalized_rt
 
@@ -10026,7 +11094,7 @@ async def _create_execution_from_workflow_request(
 
     initial_parameters = {
         "requestType": request.type,
-        "repository": repository,
+        "repository": repository_payload,
         "requiredCapabilities": required_capabilities,
         "priority": request.priority,
         "maxAttempts": request.max_attempts,
@@ -10038,7 +11106,19 @@ async def _create_execution_from_workflow_request(
         "effort": resolved_effort,
         "publishMode": publish_payload["mode"],
         "stepCount": step_count,
+        "runtimeCutover": cutover_selection.as_dict(),
     }
+    if principal.is_workflow_principal:
+        initial_parameters["parentWorkflowId"] = principal.workflow_id
+    if isinstance(payload.get("omnigent"), Mapping):
+        initial_parameters["omnigent"] = dict(payload["omnigent"])
+    # Context retrieval (RAG) authoring: initial ContextPack overrides (#3513)
+    # and in-session follow-up retrieval policy (#3514). Lifted here next to the
+    # omnigent block so the authored values reach the run's initial parameters.
+    if isinstance(payload.get("rag"), Mapping):
+        initial_parameters["rag"] = dict(payload["rag"])
+    if isinstance(payload.get("followUpRetrieval"), Mapping):
+        initial_parameters["followUpRetrieval"] = dict(payload["followUpRetrieval"])
     if "modelTier" in runtime_payload:
         initial_parameters["modelTier"] = runtime_payload.get("modelTier")
     if "tierFallback" in runtime_payload:
@@ -10079,6 +11159,216 @@ async def _create_execution_from_workflow_request(
         )
     initial_parameters = skill_validation.parameters
 
+    # Reserve the canonical identity before launch so profile readiness and the
+    # immutable effective snapshot are persisted in the same transaction as the
+    # execution record.  A failed resolution never starts Temporal work.
+    create_idempotency_key = str(
+        task_payload.get("idempotencyKey") or payload.get("idempotencyKey") or ""
+    ).strip()
+    reserved_workflow_id = (
+        f"mm:{uuid5(NAMESPACE_URL, f'{user.id}:user-workflow:{create_idempotency_key}')}"
+        if create_idempotency_key
+        else f"mm:{uuid4()}"
+    )
+    if (
+        canonical_target_runtime == "omnigent"
+        and create_idempotency_key
+        and session is not None
+    ):
+        existing_execution = await session.get(
+            TemporalExecutionCanonicalRecord,
+            reserved_workflow_id,
+        )
+        if existing_execution is not None:
+            # Idempotent retries return the already-admitted authority before
+            # any current profile/default/catalog resolution can produce a new
+            # plan or duplicate an Agent Profile usage row.
+            return _serialize_execution(existing_execution)
+    agent_profile_selection = payload.get("agentProfile")
+    selected_provider_profile = None
+    if agent_profile_selection is None and isinstance(runtime_payload, Mapping):
+        agent_profile_selection = runtime_payload.get("agentProfile")
+    if (
+        agent_profile_selection is not None
+        and canonical_target_runtime != "omnigent"
+    ):
+        raise _invalid_workflow_request(
+            "agentProfile is supported only for targetRuntime='omnigent'."
+        )
+    if canonical_target_runtime == "omnigent":
+        if agent_profile_selection is not None and not isinstance(
+            agent_profile_selection, Mapping
+        ):
+            raise _invalid_workflow_request("agentProfile must be an object.")
+        explicit_agent_profile = agent_profile_selection is not None
+        if explicit_agent_profile:
+            agent_profile_selection = dict(agent_profile_selection)
+        authored_omnigent = payload.get("omnigent")
+        authored_launch_policy_ref = (
+            str(authored_omnigent.get("launchPolicyRef") or "").strip()
+            if isinstance(authored_omnigent, Mapping)
+            else ""
+        )
+        selected_launch_policy_ref = str(
+            (agent_profile_selection or {}).get("launchPolicyRef") or ""
+        ).strip()
+        if (
+            authored_launch_policy_ref
+            and selected_launch_policy_ref
+            and authored_launch_policy_ref != selected_launch_policy_ref
+        ):
+            raise _invalid_workflow_request(
+                "agentProfile.launchPolicyRef must match omnigent.launchPolicyRef."
+            )
+        if authored_launch_policy_ref and explicit_agent_profile:
+            agent_profile_selection["launchPolicyRef"] = (
+                authored_launch_policy_ref
+            )
+        consumer_type = (
+            "remediation" if task_payload.get("remediation") else "workflow"
+        )
+        if explicit_agent_profile:
+            profile_snapshot = await resolve_agent_profile_snapshot(
+                session,
+                selection=agent_profile_selection,
+                consumer_type=consumer_type,
+                consumer_id=reserved_workflow_id,
+                user=user,
+            )
+        else:
+            profile_snapshot = await resolve_default_agent_profile_snapshot(
+                session,
+                provider_profile_ref=(
+                    raw_profile_id if _provider_profile is not None else None
+                ),
+                launch_policy_ref=authored_launch_policy_ref or None,
+                consumer_type=consumer_type,
+                consumer_id=reserved_workflow_id,
+                user=user,
+            )
+        authored_execution_target_ref = (
+            str(authored_omnigent.get("executionTargetRef") or "").strip()
+            if isinstance(authored_omnigent, Mapping)
+            else ""
+        )
+        resolved_execution_target_ref = str(
+            profile_snapshot.get("executionProfileRef") or ""
+        ).strip()
+        # Generic (v2) Agent Profiles advertise readiness targets as the
+        # profile identity (`profileId@version`), while their compiled plan
+        # carries the host realizer ref. Legacy profiles advertise the
+        # execution-profile ref directly. Both forms resolve unambiguously.
+        resolved_target_refs = {
+            resolved_execution_target_ref,
+            f"{profile_snapshot.get('profileId')}@{profile_snapshot.get('version')}",
+        }
+        if (
+            authored_execution_target_ref
+            and authored_execution_target_ref not in resolved_target_refs
+        ):
+            raise _invalid_workflow_request(
+                "omnigent.executionTargetRef must match the selected "
+                "Agent Profile executionProfileRef."
+            )
+        initial_parameters = compile_agent_profile_snapshot_parameters(
+            initial_parameters,
+            snapshot=profile_snapshot,
+        )
+        selected_provider_profile = await session.get(
+            ManagedAgentProviderProfile,
+            str(profile_snapshot["providerProfileRef"]),
+        )
+        if selected_provider_profile is None:
+            raise _invalid_workflow_request(
+                "Selected Provider Profile disappeared before plan compilation."
+            )
+
+    persisted_omnigent_plan = None
+    prelaunch_task_input_snapshot_ref = ""
+    if canonical_target_runtime == "omnigent":
+        if session is None:
+            raise _invalid_workflow_request(
+                "Omnigent execution-plan compilation requires durable storage."
+            )
+        profile_snapshot = initial_parameters.get("agentProfileSnapshot")
+        if not isinstance(profile_snapshot, Mapping):
+            raise _invalid_workflow_request(
+                "External Omnigent execution requires a launch-ready agentProfile."
+            )
+        if selected_provider_profile is None:
+            raise _invalid_workflow_request(
+                "External Omnigent execution requires a selected Provider Profile."
+            )
+        from api_service.db.base import async_session_maker
+        from api_service.services.omnigent_execution_plan_service import (
+            compile_and_persist_execution_plan,
+            persist_json_artifact,
+        )
+
+        snapshot_source, snapshot_task = _snapshot_source_payload_from_parameters(
+            initial_parameters
+        )
+        if not snapshot_task:
+            raise _invalid_workflow_request(
+                "Omnigent execution requires an immutable task input snapshot."
+            )
+        task_snapshot_payload = _build_original_workflow_input_snapshot_payload(
+            source_kind="create",
+            payload=snapshot_source,
+            task_payload=snapshot_task,
+            attachment_refs=attachment_index,
+        )
+        artifact_service = get_temporal_artifact_service(session)
+        principal_id = str(getattr(user, "id", "") or "system")
+        (
+            prelaunch_task_input_snapshot_ref,
+            prelaunch_task_input_snapshot_digest,
+        ) = await persist_json_artifact(
+            artifact_service=artifact_service,
+            principal=principal_id,
+            artifact_class="original_task_input_snapshot",
+            payload=task_snapshot_payload,
+        )
+        try:
+            persisted_omnigent_plan = await compile_and_persist_execution_plan(
+                session_factory=async_session_maker,
+                artifact_service=artifact_service,
+                principal=principal_id,
+                workflow_id=reserved_workflow_id,
+                agent_profile_snapshot=profile_snapshot,
+                provider_profile=selected_provider_profile,
+                initial_parameters=initial_parameters,
+                authored_request_ref=prelaunch_task_input_snapshot_ref,
+                authored_request_digest=prelaunch_task_input_snapshot_digest,
+                task_input_snapshot_ref=prelaunch_task_input_snapshot_ref,
+                task_input_snapshot_digest=prelaunch_task_input_snapshot_digest,
+                db_session=session,
+            )
+        except Exception as exc:
+            from moonmind.omnigent.harness_platform.failures import (
+                HarnessPlatformError,
+            )
+
+            if not isinstance(exc, (HarnessPlatformError, ValueError)):
+                raise
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={
+                    "code": getattr(
+                        exc, "code", "omnigent_execution_plan_invalid"
+                    ),
+                    "message": str(exc),
+                },
+            ) from exc
+        initial_parameters["omnigentExecutionPlan"] = (
+            persisted_omnigent_plan.binding.model_dump(
+                mode="json", by_alias=True, exclude_none=True
+            )
+        )
+        initial_parameters["resolvedSkillsetRef"] = (
+            persisted_omnigent_plan.resolved_skillset_ref
+        )
+
     try:
         start_contract = resolve_user_workflow_start_contract(settings.temporal)
         record = await service.create_execution(
@@ -10097,6 +11387,7 @@ async def _create_execution_from_workflow_request(
             summary=_derive_workflow_summary(task_payload, input_artifact_ref),
             start_delay=start_delay,
             scheduled_for=scheduled_for_dt,
+            _workflow_id=reserved_workflow_id,
         )
     except TemporalExecutionValidationError as exc:
         message = str(exc)
@@ -10113,16 +11404,52 @@ async def _create_execution_from_workflow_request(
         record=record,
         attachment_refs=attachment_index,
     )
-
-    snapshot_ref = await _persist_original_workflow_input_snapshot_from_parameters(
-        session=session,
-        record=record,
-        user=user,
-        parameters=initial_parameters,
-        attachment_refs=attachment_index,
-        source_kind="create",
-        input_artifact_ref=input_artifact_ref,
-    )
+    if persisted_omnigent_plan is not None:
+        snapshot_ref = prelaunch_task_input_snapshot_ref
+        records_to_bind = [record]
+        if isinstance(record, TemporalExecutionRecord):
+            canonical_record = await session.get(
+                TemporalExecutionCanonicalRecord, record.workflow_id
+            )
+            if canonical_record is not None:
+                records_to_bind.append(canonical_record)
+        for target_record in records_to_bind:
+            memo = dict(getattr(target_record, "memo", None) or {})
+            memo.update(
+                {
+                    "task_input_snapshot_ref": snapshot_ref,
+                    "task_input_snapshot_version": _WORKFLOW_INPUT_SNAPSHOT_VERSION,
+                    "task_input_snapshot_source_kind": "create",
+                    "omnigent_execution_plan_ref": (
+                        persisted_omnigent_plan.binding.plan_ref
+                    ),
+                    "omnigent_execution_plan_digest": (
+                        persisted_omnigent_plan.binding.plan_digest
+                    ),
+                    "omnigent_execution_plan_artifact_ref": (
+                        persisted_omnigent_plan.binding.plan_artifact_ref
+                    ),
+                }
+            )
+            target_record.memo = memo
+            refs = list(getattr(target_record, "artifact_refs", None) or [])
+            for artifact_ref in (
+                snapshot_ref,
+                *persisted_omnigent_plan.artifact_refs,
+            ):
+                if artifact_ref not in refs:
+                    refs.append(artifact_ref)
+            target_record.artifact_refs = refs
+    else:
+        snapshot_ref = await _persist_original_workflow_input_snapshot_from_parameters(
+            session=session,
+            record=record,
+            user=user,
+            parameters=initial_parameters,
+            attachment_refs=attachment_index,
+            source_kind="create",
+            input_artifact_ref=input_artifact_ref,
+        )
     if snapshot_ref:
         await session.commit()
     if isinstance(record, (TemporalExecutionRecord, TemporalExecutionCanonicalRecord)):
@@ -10349,20 +11676,30 @@ async def _resolve_recurring_runtime_metadata(
                     step_runtime,
                     field_name=f"payload.workflow.steps[{index}].runtime",
                 )
-    raw_target_runtime = (
+    authored_runtime = (
         request_payload.get("targetRuntime")
         or parameter_payload.get("targetRuntime")
         or runtime_payload.get("mode")
-        or settings.workflow.default_runtime
-        or ""
     )
+    try:
+        cutover_status = effective_phase()
+        cutover_selection = select_runtime(
+            authored_runtime=authored_runtime,
+            configured_default=settings.workflow.default_runtime,
+            phase=cutover_status.phase,
+            submission_kind="schedule",
+            release_status=cutover_status,
+        )
+    except ValueError as exc:
+        raise _invalid_workflow_request(str(exc)) from exc
+    raw_target_runtime = cutover_selection.runtime_id
     canonical_target_runtime: str | None = None
     if raw_target_runtime:
         normalized_rt = normalize_runtime_id(raw_target_runtime)
         if normalized_rt not in _SUPPORTED_TASK_RUNTIMES:
             raise _invalid_workflow_request(
                 f"Unsupported targetRuntime: {raw_target_runtime!r}. "
-                "Must be one of: codex_cli, claude_code, codex_cloud, jules."
+                "Must be one of: codex_cli, claude_code, codex_cloud, jules, omnigent."
             )
         canonical_target_runtime = normalized_rt
 
@@ -10429,6 +11766,7 @@ async def _resolve_recurring_runtime_metadata(
         "model": resolved_model,
         "requestedModel": raw_requested_model,
         "modelSource": model_source,
+        "runtimeCutover": cutover_selection.as_dict(),
     }
     if model_tier_resolution is not None:
         metadata["modelTierResolution"] = model_tier_resolution
@@ -10458,6 +11796,8 @@ def _stamp_recurring_runtime_metadata(
 
     if runtime_metadata.get("targetRuntime"):
         initial_parameters["targetRuntime"] = runtime_metadata["targetRuntime"]
+    if isinstance(runtime_metadata.get("runtimeCutover"), Mapping):
+        initial_parameters["runtimeCutover"] = dict(runtime_metadata["runtimeCutover"])
     if runtime_metadata.get("model"):
         initial_parameters["model"] = runtime_metadata["model"]
     if runtime_metadata.get("requestedModel") is not None:
@@ -10551,6 +11891,10 @@ def _build_recurring_target(
                 target["initialParameters"],
                 runtime_metadata,
             )
+            if isinstance(target_payload.get("omnigent"), Mapping):
+                target["initialParameters"]["omnigent"] = dict(
+                    target_payload["omnigent"]
+                )
         for source_keys, target_key in (
             (("title",), "title"),
             (("inputArtifactRef", "input_artifact_ref"), "inputArtifactRef"),
@@ -10647,6 +11991,11 @@ async def _handle_recurring_schedule(
         request_payload,
         runtime_metadata=runtime_metadata,
     )
+    agent_profile_selection = request_payload.get("agentProfile")
+    if agent_profile_selection is not None and not isinstance(
+        agent_profile_selection, Mapping
+    ):
+        raise _invalid_workflow_request("agentProfile must be an object.")
     try:
         definition = await svc.create_definition(
             name=schedule.name or "Inline schedule",
@@ -10660,6 +12009,8 @@ async def _handle_recurring_schedule(
             owner_user_id=user.id,
             target=target,
             policy=schedule.policy,
+            agent_profile_selection=agent_profile_selection,
+            actor=user,
         )
     except RecurringWorkflowValidationError as exc:
         raise HTTPException(
@@ -10814,6 +12165,8 @@ async def create_remediation_execution(
         "publish_mode",
         "profileId",
         "providerProfile",
+        "agentProfile",
+        "omnigent",
         "idempotencyKey",
         "schedule",
         "runtimeInheritance",
@@ -10889,10 +12242,41 @@ def _remediation_approval_state_from_link(
     *,
     authority_mode: str,
     status_value: str,
+    actor: str | None = None,
+    actor_can_approve_high_risk: bool = False,
 ) -> RemediationApprovalStateModel | None:
     raw_state = getattr(link, "approval_state", None)
     if isinstance(raw_state, dict):
-        return RemediationApprovalStateModel.model_validate(raw_state)
+        projected = dict(raw_state)
+        approval_status = str(projected.get("status") or "pending")
+        expires_at = projected.get("expiresAt")
+        if approval_status == "pending" and expires_at:
+            try:
+                parsed_expiration = datetime.fromisoformat(str(expires_at))
+                if parsed_expiration.tzinfo is None:
+                    parsed_expiration = parsed_expiration.replace(tzinfo=UTC)
+                if parsed_expiration <= datetime.now(UTC):
+                    approval_status = "expired"
+                    projected["status"] = "expired"
+            except ValueError:
+                approval_status = "stale"
+                projected["status"] = "stale"
+        projected.setdefault("decision", approval_status)
+        if projected.get("decision") == "pending" and approval_status != "pending":
+            projected["decision"] = approval_status
+        reviewer_eligible = not (
+            projected.get("reviewerRule") == "high_risk_reviewer"
+            and not actor_can_approve_high_risk
+        )
+        requesting_actor = str(projected.get("requestingActor") or "").strip()
+        if actor and requesting_actor and actor == requesting_actor:
+            reviewer_eligible = False
+        projected["canDecide"] = bool(
+            projected.get("canDecide", True)
+            and approval_status == "pending"
+            and reviewer_eligible
+        )
+        return RemediationApprovalStateModel.model_validate(projected)
 
     approval_pending = status_value in _PENDING_REMEDIATION_APPROVAL_STATUSES
     if authority_mode != "approval_gated":
@@ -10909,14 +12293,73 @@ def _remediation_approval_state_from_link(
         canDecide=approval_pending,
     )
 
-def _serialize_remediation_link_summary(link: Any) -> RemediationLinkSummaryModel:
+def _serialize_remediation_link_summary(
+    link: Any,
+    *,
+    actor: str | None = None,
+    actor_can_approve_high_risk: bool = False,
+) -> RemediationLinkSummaryModel:
     authority_mode = str(getattr(link, "authority_mode", "") or "")
     status_value = str(getattr(link, "status", "") or "")
     approval_state = _remediation_approval_state_from_link(
         link,
         authority_mode=authority_mode,
         status_value=status_value,
+        actor=actor,
+        actor_can_approve_high_risk=actor_can_approve_high_risk,
     )
+
+    policy_actions = _bounded_string_list(getattr(link, "allowed_actions", None))
+    target_state = str(getattr(link, "current_target_state", "") or "").strip()
+    unavailable_evidence = set(
+        _bounded_string_list(getattr(link, "unavailable_evidence_classes", None)) or []
+    )
+    known_evidence = {
+        "execution_state",
+        "workflow_history",
+        "target_identity",
+        "action_result",
+        "continuity_boundary",
+    } - unavailable_evidence
+    approval_backend_ready = authority_mode in {"admin_auto", "approval_gated"}
+    executor = build_remediation_action_executor()
+    backend_readiness = {
+        action_kind: action_kind in executor._adapters
+        for action_kind in (row["actionKind"] for row in remediation_action_capability_matrix())
+    }
+    checkpoint_action = "checkpoint_branch.create_from_remediation_context"
+    checkpoint_owner_ready = bool(
+        getattr(link, "checkpoint_branch_owner_ready", False)
+    )
+    checkpoint_verifier_ready = bool(
+        getattr(link, "checkpoint_branch_verifier_ready", False)
+    )
+    backend_readiness[checkpoint_action] = (
+        checkpoint_owner_ready and checkpoint_verifier_ready
+    )
+    verifier_readiness = {
+        str(row["actionKind"]): True
+        for row in remediation_action_capability_matrix()
+    }
+    verifier_readiness[checkpoint_action] = checkpoint_verifier_ready
+    capability_context = RemediationCapabilityContext(
+        target_runtime=(str(getattr(link, "target_runtime", "") or "").strip() or None),
+        host_mode=(str(getattr(link, "host_mode", "") or "").strip() or None),
+        target_state_eligible=target_state.lower() not in {"unknown", "missing"},
+        current_evidence_classes=tuple(sorted(known_evidence)),
+        require_current_evidence=bool(getattr(link, "evidence_degraded", False)),
+        # Missing persisted policy projection is not permission to advertise
+        # every catalog action. Fail closed until the owning projection supplies
+        # the immutable target-policy intersection.
+        policy_allowed_action_kinds=tuple(policy_actions or ()),
+        caller_allowed_action_kinds=tuple(policy_actions or ()),
+        execution_backend_readiness=backend_readiness,
+        approval_backend_ready=approval_backend_ready,
+        verification_backend_readiness=verifier_readiness,
+    )
+    capability_matrix = [
+        dict(row) for row in remediation_action_capability_matrix(context=capability_context)
+    ]
 
     return RemediationLinkSummaryModel(
         remediationWorkflowId=str(getattr(link, "remediation_workflow_id", "")),
@@ -10929,11 +12372,18 @@ def _serialize_remediation_link_summary(link: Any) -> RemediationLinkSummaryMode
         activeLockScope=getattr(link, "active_lock_scope", None),
         activeLockHolder=getattr(link, "active_lock_holder", None),
         latestActionSummary=getattr(link, "latest_action_summary", None),
-        resolution=getattr(link, "outcome", None),
+        deliveryStatus=getattr(link, "outcome", None),
+        verificationOutcome=getattr(link, "verification_outcome", None),
+        resolution=getattr(link, "resolution", None),
         contextArtifactRef=getattr(link, "context_artifact_ref", None),
         selectedSteps=_bounded_string_list(getattr(link, "selected_steps", None)),
         currentTargetState=getattr(link, "current_target_state", None),
-        allowedActions=_bounded_string_list(getattr(link, "allowed_actions", None)),
+        allowedActions=[
+            str(row["actionKind"])
+            for row in capability_matrix
+            if row["requestable"] is True
+        ],
+        actionCapabilities=capability_matrix,
         evidenceDegraded=getattr(link, "evidence_degraded", None),
         unavailableEvidenceClasses=_bounded_string_list(
             getattr(link, "unavailable_evidence_classes", None)
@@ -10946,9 +12396,481 @@ def _serialize_remediation_link_summary(link: Any) -> RemediationLinkSummaryMode
         checkpointBranches=_bounded_checkpoint_branch_links(
             getattr(link, "checkpoint_branch_links", None)
         ),
+        authoredContract=getattr(link, "authored_contract", None),
+        selectedStepEvidence=getattr(link, "selected_step_evidence", None),
+        contextGeneratedAt=getattr(link, "context_generated_at", None),
+        contextEvidenceAvailability=getattr(
+            link, "context_evidence_availability", None
+        ),
+        contextBoundedness=getattr(link, "context_boundedness", None),
+        diagnosisHints=_bounded_string_list(getattr(link, "diagnosis_hints", None)),
+        lifecycleArtifacts=getattr(link, "lifecycle_artifacts", None),
+        latestActionRequest=getattr(link, "latest_action_request", None),
+        latestActionResult=getattr(link, "latest_action_result", None),
+        lifecycleSummary=getattr(link, "lifecycle_summary", None),
+        operatorControls=getattr(link, "operator_controls", None),
         createdAt=getattr(link, "created_at", None),
         updatedAt=getattr(link, "updated_at", None),
     )
+
+
+_REMEDIATION_LIFECYCLE_ARTIFACT_TYPES = frozenset(
+    {
+        "remediation.context",
+        "remediation.plan",
+        "remediation.attempt",
+        "remediation.approval_request",
+        "remediation.approval_decision",
+        "remediation.action_request",
+        "remediation.action_result",
+        "remediation.verification",
+        "remediation.audit_event",
+        "remediation.target_annotation",
+        "remediation.decision_log",
+        "remediation.summary",
+    }
+)
+_REMEDIATION_ARTIFACT_METADATA_KEYS = frozenset(
+    {
+        "artifact_type",
+        "schemaVersion",
+        "name",
+        "targetWorkflowId",
+        "targetRunId",
+        "remediationWorkflowId",
+        "remediationRunId",
+        "actionId",
+        "actionKind",
+        "status",
+        "outcome",
+        "resolution",
+        "verificationOutcome",
+        "phase",
+        "riskTier",
+        "bounded",
+    }
+)
+
+
+def _bounded_remediation_projection(
+    value: Any, *, depth: int = 0, max_string_length: int = 8_000
+) -> Any:
+    """Return a redacted, compact browser projection of canonical JSON evidence."""
+
+    if depth > 6:
+        return "[bounded]"
+    redacted = redact_sensitive_payload(value)
+    if isinstance(redacted, Mapping):
+        return {
+            str(key)[:128]: _bounded_remediation_projection(
+                item, depth=depth + 1, max_string_length=max_string_length
+            )
+            for key, item in list(redacted.items())[:50]
+        }
+    if isinstance(redacted, list | tuple):
+        return [
+            _bounded_remediation_projection(
+                item, depth=depth + 1, max_string_length=max_string_length
+            )
+            for item in redacted[:50]
+        ]
+    if isinstance(redacted, str):
+        if len(redacted) <= max_string_length:
+            return redacted
+        return f"{redacted[:max_string_length]}… [bounded]"
+    if redacted is None or isinstance(redacted, bool | int | float):
+        return redacted
+    return str(redacted)[:max_string_length]
+
+
+def _authored_remediation_contract(
+    parameters: Mapping[str, Any], workflow: Mapping[str, Any]
+) -> dict[str, Any]:
+    remediation = workflow.get("remediation")
+    remediation = remediation if isinstance(remediation, Mapping) else {}
+    profile_snapshot = parameters.get("agentProfileSnapshot")
+    profile_snapshot = (
+        profile_snapshot if isinstance(profile_snapshot, Mapping) else {}
+    )
+    profile_fields = {
+        key: profile_snapshot[key]
+        for key in (
+            "profileId",
+            "version",
+            "digest",
+            "providerProfileRef",
+            "executionTargetRef",
+            "launchPolicyRef",
+            "model",
+            "effort",
+        )
+        if key in profile_snapshot
+    }
+    contract = {
+        "instructions": workflow.get("instructions"),
+        "repository": parameters.get("repository"),
+        "startingBranch": (
+            (workflow.get("git") or {}).get("startingBranch")
+            if isinstance(workflow.get("git"), Mapping)
+            else workflow.get("startingBranch") or workflow.get("branch")
+        ),
+        "runtime": workflow.get("runtime"),
+        "targetRuntime": parameters.get("targetRuntime"),
+        "agentProfileSnapshot": profile_fields or None,
+        "omnigent": parameters.get("omnigent"),
+        "retrieval": {
+            "rag": parameters.get("rag"),
+            "followUpRetrieval": parameters.get("followUpRetrieval"),
+        },
+        "publish": workflow.get("publish") or parameters.get("publish"),
+        "remediation": remediation,
+    }
+    return _bounded_remediation_projection(
+        {key: value for key, value in contract.items() if value is not None}
+    )
+
+
+def _selected_step_labels(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    labels: list[str] = []
+    for item in value[:25]:
+        if not isinstance(item, Mapping):
+            continue
+        label = str(
+            item.get("logicalStepId")
+            or item.get("checkpointRef")
+            or item.get("agentRunId")
+            or ""
+        ).strip()
+        if label and label not in labels:
+            labels.append(label)
+    return labels
+
+
+def _context_evidence_availability_projection(
+    value: Any, *, generated_at: str | None
+) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    projection: list[dict[str, Any]] = []
+    for entry in value[:50]:
+        if not isinstance(entry, Mapping):
+            continue
+        projected_entry = dict(entry)
+        projected_entry.setdefault("bounded", True)
+        projected_entry.setdefault(
+            "freshness", "source_reported" if generated_at else "unknown"
+        )
+        if generated_at:
+            projected_entry.setdefault("observedAt", generated_at)
+        entry_status = str(projected_entry.get("status") or "unknown")
+        if entry_status not in {"available", "active"}:
+            projected_entry.setdefault(
+                "degradedReason",
+                projected_entry.get("reason")
+                or projected_entry.get("fallback")
+                or f"evidence status is {entry_status}",
+            )
+        projection.append(projected_entry)
+    return projection
+
+
+async def _attach_remediation_artifact_projection(
+    link: Any, *, session: AsyncSession, principal: str
+) -> None:
+    result = await session.execute(
+        select(db_models.TemporalArtifactLink, db_models.TemporalArtifact)
+        .join(
+            db_models.TemporalArtifact,
+            db_models.TemporalArtifact.artifact_id
+            == db_models.TemporalArtifactLink.artifact_id,
+        )
+        .where(
+            db_models.TemporalArtifactLink.workflow_id
+            == str(getattr(link, "remediation_workflow_id", "")),
+            db_models.TemporalArtifactLink.run_id
+            == str(getattr(link, "remediation_run_id", "")),
+            db_models.TemporalArtifactLink.link_type.in_(
+                _REMEDIATION_LIFECYCLE_ARTIFACT_TYPES
+            ),
+        )
+        .order_by(db_models.TemporalArtifactLink.created_at.desc())
+        .limit(50)
+    )
+    rows = list(result.all())
+    now = datetime.now(UTC)
+    lifecycle_artifacts: list[dict[str, Any]] = []
+    latest_by_type: dict[str, Any] = {}
+    for artifact_link, artifact in rows:
+        artifact_type = str(artifact_link.link_type or "").strip()
+        latest_by_type.setdefault(artifact_type, artifact)
+        metadata = (
+            artifact.metadata_json
+            if isinstance(artifact.metadata_json, Mapping)
+            else {}
+        )
+        expires_at = getattr(artifact, "expires_at", None)
+        if expires_at is None:
+            freshness = "durable"
+        else:
+            comparable_expiration = expires_at
+            if comparable_expiration.tzinfo is None:
+                comparable_expiration = comparable_expiration.replace(tzinfo=UTC)
+            freshness = "expired" if comparable_expiration <= now else "current"
+        lifecycle_artifacts.append(
+            {
+                "artifactRef": artifact.artifact_id,
+                "artifactType": artifact_type,
+                "status": _enum_value(getattr(artifact, "status", None)),
+                "label": artifact_link.label,
+                "createdAt": artifact_link.created_at,
+                "expiresAt": expires_at,
+                "freshness": freshness,
+                "bounded": True,
+                "metadata": _bounded_remediation_projection(
+                    {
+                        key: metadata[key]
+                        for key in _REMEDIATION_ARTIFACT_METADATA_KEYS
+                        if key in metadata
+                    }
+                ),
+            }
+        )
+    link.lifecycle_artifacts = lifecycle_artifacts or None
+
+    artifact_service = get_temporal_artifact_service(session)
+    for artifact_type, attribute in (
+        ("remediation.action_request", "latest_action_request"),
+        ("remediation.action_result", "latest_action_result"),
+        ("remediation.summary", "lifecycle_summary"),
+    ):
+        artifact = latest_by_type.get(artifact_type)
+        if artifact is None:
+            continue
+        try:
+            _, body = await artifact_service.read(
+                artifact_id=artifact.artifact_id,
+                principal=principal,
+            )
+            decoded = json.loads((body or b"").decode("utf-8"))
+        except (
+            TemporalArtifactAuthorizationError,
+            TemporalArtifactNotFoundError,
+            TemporalArtifactStateError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+        ):
+            continue
+        if isinstance(decoded, Mapping):
+            setattr(link, attribute, _bounded_remediation_projection(decoded))
+
+
+async def _attach_remediation_capability_projection(
+    link: Any, *, session: AsyncSession, principal: str
+) -> None:
+    """Resolve exact-target inputs that are intentionally absent from the link row."""
+
+    target = await session.get(
+        db_models.TemporalExecutionCanonicalRecord,
+        str(getattr(link, "target_workflow_id", "")),
+    )
+    remediation = await session.get(
+        db_models.TemporalExecutionCanonicalRecord,
+        str(getattr(link, "remediation_workflow_id", "")),
+    )
+    if target is None or remediation is None:
+        link.current_target_state = "missing"
+        link.allowed_actions = ()
+        link.evidence_degraded = True
+        link.unavailable_evidence_classes = ("target_identity",)
+        return
+
+    link.current_target_state = _enum_value(getattr(target, "state", None))
+    target_parameters = dict(getattr(target, "parameters", None) or {})
+    target_workflow = target_parameters.get("workflow") or target_parameters.get(
+        "task"
+    )
+    target_workflow = target_workflow if isinstance(target_workflow, Mapping) else {}
+    runtime = target_workflow.get("runtime")
+    runtime = runtime if isinstance(runtime, Mapping) else {}
+    search_attributes = dict(getattr(target, "search_attributes", None) or {})
+    link.target_runtime = (
+        str(
+            runtime.get("mode")
+            or target_parameters.get("targetRuntime")
+            or search_attributes.get("mm_target_runtime")
+            or ""
+        ).strip()
+        or None
+    )
+
+    remediation_parameters = dict(getattr(remediation, "parameters", None) or {})
+    remediation_workflow = remediation_parameters.get(
+        "workflow"
+    ) or remediation_parameters.get("task")
+    remediation_workflow = (
+        remediation_workflow if isinstance(remediation_workflow, Mapping) else {}
+    )
+    link.authored_contract = _authored_remediation_contract(
+        remediation_parameters, remediation_workflow
+    )
+    policy = remediation_workflow.get("remediation")
+    policy = policy if isinstance(policy, Mapping) else {}
+    link.allowed_actions = (
+        remediation_action_kinds()
+        if policy.get("actionPolicyRef") == "admin_healer_default"
+        else ()
+    )
+
+    bridge = (
+        await session.execute(
+            select(db_models.OmnigentBridgeSession)
+            .where(
+                db_models.OmnigentBridgeSession.moonmind_workflow_id
+                == link.target_workflow_id,
+                db_models.OmnigentBridgeSession.moonmind_run_id == link.target_run_id,
+            )
+            .order_by(db_models.OmnigentBridgeSession.updated_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    launch = (
+        bridge.effective_launch_snapshot_json
+        if bridge is not None
+        and isinstance(bridge.effective_launch_snapshot_json, Mapping)
+        else {}
+    )
+    link.host_mode = str(launch.get("hostMode") or "").strip() or None
+    link.evidence_degraded = False
+    link.unavailable_evidence_classes = ()
+    link.checkpoint_branch_owner_ready = bool(
+        bridge is not None
+        and checkpoint_branch_turn_owner_operational()
+        and all(
+            str(launch.get(field) or "").strip()
+            for field in (
+                "providerProfileId",
+                "executionProfileRef",
+                "launchPolicyRef",
+            )
+        )
+    )
+    # The verifier is an independent authority boundary. Keep its readiness
+    # separate so graph/executor availability cannot advertise repair proof.
+    link.checkpoint_branch_verifier_ready = verification_backend_operational(
+        "checkpoint_branch.create_from_remediation_context"
+    )
+    actions = _build_action_capabilities(remediation)
+    link.operator_controls = {
+        "canCancel": bool(actions.can_cancel),
+        # Takeover is intentionally the durable workflow Pause signal. It does
+        # not transfer host credentials or grant a raw runtime/session handle.
+        "canTakeOver": bool(actions.can_pause),
+        "canResume": bool(actions.can_resume),
+        "paused": bool(getattr(remediation, "paused", False)),
+        "disabledReasons": dict(actions.disabled_reasons or {}),
+    }
+    lock_state = getattr(link, "mutation_guard_lock_state", None)
+    if isinstance(lock_state, Mapping):
+        link.lock_outcome = {
+            "state": lock_state.get("state") or lock_state.get("status"),
+            "holder": lock_state.get("holder") or link.active_lock_holder,
+            "releasedAt": lock_state.get("releasedAt"),
+        }
+
+    target_policy = policy.get("target")
+    target_policy = target_policy if isinstance(target_policy, Mapping) else {}
+    authored_selectors = target_policy.get("stepSelectors")
+    if isinstance(authored_selectors, list):
+        link.selected_step_evidence = _bounded_remediation_projection(
+            authored_selectors[:25]
+        )
+        link.selected_steps = _selected_step_labels(authored_selectors)
+
+    if link.context_artifact_ref:
+        try:
+            context = await _read_remediation_context_payload(
+                session=session,
+                context_artifact_ref=link.context_artifact_ref,
+                target_workflow_id=link.target_workflow_id,
+                target_run_id=link.target_run_id,
+                principal=principal,
+            )
+        except (
+            HTTPException,
+            TemporalArtifactAuthorizationError,
+            TemporalArtifactNotFoundError,
+        ):
+            link.evidence_degraded = True
+            link.unavailable_evidence_classes = ("remediation_context",)
+        else:
+            selected_steps = context.get("selectedSteps")
+            if isinstance(selected_steps, list):
+                link.selected_step_evidence = _bounded_remediation_projection(
+                    selected_steps[:25]
+                )
+                link.selected_steps = _selected_step_labels(selected_steps)
+            evidence = context.get("evidence")
+            evidence = evidence if isinstance(evidence, Mapping) else {}
+            availability = evidence.get("availability")
+            omnigent_index = evidence.get("omnigentIndex")
+            raw_availability = [
+                *(
+                    availability
+                    if isinstance(availability, list)
+                    else []
+                ),
+                *(
+                    omnigent_index
+                    if isinstance(omnigent_index, list)
+                    else []
+                ),
+            ]
+            link.context_generated_at = str(context.get("generatedAt") or "") or None
+            combined_availability = _context_evidence_availability_projection(
+                raw_availability,
+                generated_at=link.context_generated_at,
+            )
+            link.context_evidence_availability = _bounded_remediation_projection(
+                combined_availability
+            )
+            boundedness = context.get("boundedness")
+            if isinstance(boundedness, Mapping):
+                link.context_boundedness = _bounded_remediation_projection(
+                    boundedness
+                )
+            link.diagnosis_hints = _bounded_string_list(
+                evidence.get("diagnosisHints")
+            )
+            link.evidence_degraded = bool(evidence.get("evidenceDegraded"))
+            link.unavailable_evidence_classes = tuple(
+                _bounded_string_list(
+                    evidence.get("unavailableEvidenceClasses")
+                )
+                or ()
+            )
+            live_follow = context.get("liveFollow")
+            if isinstance(live_follow, Mapping):
+                resume_cursor = live_follow.get("resumeCursor")
+                link.live_observation = {
+                    "status": live_follow.get("status"),
+                    "label": live_follow.get("mode"),
+                    "sequenceCursor": (
+                        json.dumps(resume_cursor, sort_keys=True)
+                        if isinstance(resume_cursor, Mapping)
+                        else None
+                    ),
+                    "reconnectState": (
+                        "available" if live_follow.get("supported") else "unavailable"
+                    ),
+                    "fallbackReason": live_follow.get("reason"),
+                }
+
+    await _attach_remediation_artifact_projection(
+        link, session=session, principal=principal
+    )
+
 
 def _remediation_approval_request_id(remediation_workflow_id: str) -> str:
     return f"{remediation_workflow_id}:approval"
@@ -11092,7 +13014,8 @@ async def list_remediation_collection(
             authorityMode=link.authority_mode,
             mode=link.mode,
             latestActionSummary=link.latest_action_summary,
-            resolution=link.outcome,
+            deliveryStatus=link.outcome,
+            resolution=link.resolution,
             createdAt=link.created_at,
             updatedAt=link.updated_at,
         )
@@ -11111,6 +13034,7 @@ async def list_execution_remediations(
     workflow_id: str,
     direction: str = Query("inbound"),
     service: TemporalExecutionService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
     user: User = Depends(get_current_user()),
 ) -> RemediationLinksResponseModel:
     if direction not in {"inbound", "outbound"}:
@@ -11128,9 +13052,28 @@ async def list_execution_remediations(
     else:
         links = await service.list_remediation_targets(workflow_id)
 
+    await asyncio.gather(
+        *(
+            _attach_remediation_capability_projection(
+                link,
+                session=session,
+                principal=_owner_id(user) or "system",
+            )
+            for link in links
+        )
+    )
     return RemediationLinksResponseModel(
         direction=direction,
-        items=[_serialize_remediation_link_summary(link) for link in links],
+        items=[
+            _serialize_remediation_link_summary(
+                link,
+                actor=str(getattr(user, "email", "") or "").strip() or None,
+                actor_can_approve_high_risk=bool(
+                    getattr(user, "is_superuser", False)
+                ),
+            )
+            for link in links
+        ],
     )
 
 @router.post(
@@ -11243,6 +13186,8 @@ async def create_remediation_checkpoint_branch(
             "runtimeContextPolicy": runtime_context_policy,
             "gitWorkBranch": payload.gitWorkBranch,
             "maxBudgetUsd": payload.maxBudgetUsd,
+            "providerProfileRef": payload.provider_profile_ref,
+            "agentProfile": payload.agent_profile,
         }
     )
     existing_op = await session.execute(
@@ -11266,11 +13211,52 @@ async def create_remediation_checkpoint_branch(
             workflow_id=link.target_workflow_id,
             branch_id=str(operation.branch_id),
         )
+        existing_turn = await session.get(
+            WorkflowCheckpointBranchTurn, operation.branch_turn_id
+        )
+        if existing_turn is not None:
+            try:
+                await CheckpointBranchTurnExecutionOwner(
+                    session, principal=_owner_id(user)
+                ).launch(
+                    workflow_id=link.target_workflow_id,
+                    branch_id=branch.branch_id,
+                    branch_turn_id=existing_turn.branch_turn_id,
+                    intent={"idempotencyKey": payload.idempotencyKey},
+                )
+            except CheckpointBranchTurnLaunchError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={"code": exc.code, "reason": exc.reason},
+                ) from exc
         return _branch_to_model(branch)
 
-    instruction_ref, instruction_digest = _instruction_identity(payload.instructions)
     branch_id = _new_checkpoint_branch_id()
     branch_turn_id = _new_checkpoint_branch_turn_id()
+    instruction_ref, instruction_digest = await _instruction_identity(
+        session=session,
+        user=user,
+        instructions=payload.instructions,
+        branch_turn_id=branch_turn_id,
+    )
+    agent_profile_snapshot = None
+    if payload.agent_profile is not None:
+        selection = dict(payload.agent_profile)
+        if payload.provider_profile_ref:
+            selected_ref = selection.get("providerProfileRef")
+            if selected_ref and selected_ref != payload.provider_profile_ref:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="agent profile and branch Provider Profile selections conflict",
+                )
+            selection["providerProfileRef"] = payload.provider_profile_ref
+        agent_profile_snapshot = await resolve_agent_profile_snapshot(
+            session,
+            selection=selection,
+            consumer_type="checkpoint",
+            consumer_id=branch_id,
+            user=user,
+        )
     await _prepare_checkpoint_branch_launch(
         session=session,
         record=target_record,
@@ -11286,6 +13272,7 @@ async def create_remediation_checkpoint_branch(
         idempotency_key=payload.idempotencyKey,
         instruction_ref=instruction_ref,
         instruction_digest=instruction_digest,
+        principal=_owner_id(user),
         requested_work_branch=payload.gitWorkBranch,
         source_run_id=link.target_run_id,
         source_execution_ordinal=source.execution_ordinal,
@@ -11308,7 +13295,46 @@ async def create_remediation_checkpoint_branch(
         "remediationWorkflowId": workflow_id,
         "remediationContextRef": link.context_artifact_ref,
         "repairActionKind": "checkpoint_branch.create_from_remediation_context",
+        "runtimeSelection": {
+            "providerProfileRef": payload.provider_profile_ref,
+            "maxBudgetUsd": payload.maxBudgetUsd,
+            "runtimeContextPolicy": runtime_context_policy,
+            "publishMode": "none",
+            "gitWorkBranch": payload.gitWorkBranch,
+            "agentProfile": (
+                {
+                    "profileId": agent_profile_snapshot["profileId"],
+                    "version": agent_profile_snapshot["version"],
+                    "digest": agent_profile_snapshot["digest"],
+                }
+                if agent_profile_snapshot
+                else None
+            ),
+            "agentProfileSnapshot": agent_profile_snapshot,
+        },
     }
+    turn = await session.get(WorkflowCheckpointBranchTurn, branch_turn_id)
+    if turn is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "invalid_binding", "reason": "branch_turn_missing"},
+        )
+    turn.diagnostics = {
+        **(turn.diagnostics or {}),
+        "remediationContextRef": link.context_artifact_ref,
+        **(
+            {"maxBudgetUsd": payload.maxBudgetUsd}
+            if payload.maxBudgetUsd is not None
+            else {}
+        ),
+    }
+    await _record_checkpoint_branch_artifact_ref(
+        session=session,
+        branch_id=branch_id,
+        branch_turn_id=branch_turn_id,
+        artifact_kind="input.branch_turn.remediation_context.json",
+        artifact_ref=link.context_artifact_ref,
+    )
     session.add(
         WorkflowCheckpointBranchOperation(
             workflow_id=link.target_workflow_id,
@@ -11329,11 +13355,28 @@ async def create_remediation_checkpoint_branch(
                     "actionKind": "checkpoint_branch.create_from_remediation_context",
                     "runtimeContextPolicy": runtime_context_policy,
                 },
+                "runtimeSelection": dict(
+                    branch.diagnostics.get("runtimeSelection") or {}
+                ),
             },
         )
     )
     link.latest_action_summary = f"Created checkpoint branch {branch_id}."
     await session.commit()
+    try:
+        await CheckpointBranchTurnExecutionOwner(
+            session, principal=_owner_id(user)
+        ).launch(
+            workflow_id=link.target_workflow_id,
+            branch_id=branch_id,
+            branch_turn_id=branch_turn_id,
+            intent={"idempotencyKey": payload.idempotencyKey},
+        )
+    except CheckpointBranchTurnLaunchError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": exc.code, "reason": exc.reason},
+        ) from exc
     await session.refresh(branch)
     return _branch_to_model(branch)
 
@@ -11364,6 +13407,7 @@ async def record_remediation_approval_decision(
             decision=payload.decision,
             comment=payload.comment,
             actor=getattr(user, "email", None) or str(getattr(user, "id", "")),
+            actor_can_approve_high_risk=bool(getattr(user, "is_superuser", False)),
         )
     except TemporalExecutionValidationError as exc:
         raise HTTPException(
@@ -11375,14 +13419,61 @@ async def record_remediation_approval_decision(
         ) from exc
     return RemediationApprovalDecisionResponse.model_validate(result)
 
+def _validate_execution_fanout_create_request(
+    request_body: Mapping[str, Any],
+    *,
+    parent_workflow_id: str,
+) -> None:
+    """Require the bounded child shape accepted from an isolated runtime."""
+
+    def _reject(message: str, *, code: str = "invalid_execution_fanout_request") -> None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={"code": code, "message": message},
+        )
+
+    request_type = str(request_body.get("type") or "").strip().lower()
+    if request_type not in {"task", "workflow"}:
+        _reject("Execution fan-out accepts task or workflow child requests only.")
+    payload = request_body.get("payload")
+    if not isinstance(payload, Mapping):
+        _reject("Execution fan-out requires a payload object.")
+    task_node = payload.get("task")
+    workflow_node = payload.get("workflow")
+    if isinstance(task_node, Mapping) == isinstance(workflow_node, Mapping):
+        _reject("Execution fan-out requires exactly one child task or workflow.")
+    child = task_node if isinstance(task_node, Mapping) else workflow_node
+    assert isinstance(child, Mapping)
+    if request_body.get("schedule") is not None or payload.get("schedule") is not None:
+        _reject("Execution fan-out cannot create recurring or delayed schedules.")
+    try:
+        directive, requested_parent = extract_inheritance_directive(payload, child)
+    except RuntimeInheritanceError as exc:
+        _reject(str(exc), code=exc.code)
+    if directive != "caller":
+        _reject('Execution fan-out requires runtimeInheritance="caller".')
+    if requested_parent and requested_parent != parent_workflow_id:
+        _reject(
+            "Execution fan-out parentWorkflowId must match the capability parent.",
+            code="execution_fanout_parent_mismatch",
+        )
+    idempotency_key = str(
+        child.get("idempotencyKey") or payload.get("idempotencyKey") or ""
+    ).strip()
+    if not idempotency_key:
+        _reject("Execution fan-out requires an idempotencyKey.")
+
+
 @router.post("", response_model=ExecutionModel | ScheduleCreatedResponse, status_code=status.HTTP_201_CREATED)
 async def create_execution(
     payload: dict[str, Any] = Body(...),
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
-    user: User = Depends(get_current_user()),
+    user: User | None = Depends(get_current_user_optional()),
     _submit_enabled: None = Depends(_ensure_submit_enabled),
     principal_context: dict[str, Any] = Depends(execution_principal_dependency),
+    authorization: str | None = Header(None, alias="Authorization"),
+    execution_fanout: str | None = Header(None, alias=EXECUTION_FANOUT_HEADER),
 ) -> ExecutionModel | ScheduleCreatedResponse:
     from moonmind.config.settings import settings
 
@@ -11396,6 +13487,27 @@ async def create_execution(
                 "Enable Temporal submission to proceed.",
             },
         )
+
+    capability = resolve_execution_fanout_capability(
+        marker=execution_fanout,
+        authorization=authorization,
+    )
+    if capability is not None:
+        _validate_execution_fanout_create_request(
+            payload,
+            parent_workflow_id=capability.parent_workflow_id,
+        )
+    authority = await resolve_execution_request_authority(
+        user=user,
+        service=service,
+        capability=capability,
+    )
+    user = authority.user
+    if authority.principal is not None:
+        principal_context = {
+            **principal_context,
+            "verified_principal": authority.principal,
+        }
 
     try:
         if "type" in payload and "payload" in payload:
@@ -11431,6 +13543,22 @@ async def create_execution(
                     "code": "invalid_skill_step_inputs",
                     "message": "Skill step inputs failed validation.",
                     "errors": skill_validation.error_dicts(),
+                },
+            )
+
+        raw_direct_runtime = str(
+            skill_validation.parameters.get("targetRuntime") or ""
+        ).strip()
+        if raw_direct_runtime and normalize_runtime_id(raw_direct_runtime) == "omnigent":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={
+                    "code": "omnigent_product_boundary_required",
+                    "message": (
+                        "Omnigent execution must use the task/workflow request "
+                        "envelope so Agent Profile resolution and immutable plan "
+                        "persistence complete before scheduling."
+                    ),
                 },
             )
 
@@ -12714,11 +14842,52 @@ async def create_checkpoint_branch(
             workflow_id=workflow_id,
             branch_id=str(operation.branch_id),
         )
+        existing_turn = await session.get(
+            WorkflowCheckpointBranchTurn, operation.branch_turn_id
+        )
+        if existing_turn is not None:
+            try:
+                await CheckpointBranchTurnExecutionOwner(
+                    session, principal=_owner_id(user)
+                ).launch(
+                    workflow_id=workflow_id,
+                    branch_id=branch.branch_id,
+                    branch_turn_id=existing_turn.branch_turn_id,
+                    intent={"idempotencyKey": payload.idempotency_key},
+                )
+            except CheckpointBranchTurnLaunchError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={"code": exc.code, "reason": exc.reason},
+                ) from exc
         return _branch_to_model(branch)
 
-    instruction_ref, instruction_digest = _instruction_identity(payload.instructions)
     branch_id = _new_checkpoint_branch_id()
     branch_turn_id = _new_checkpoint_branch_turn_id()
+    instruction_ref, instruction_digest = await _instruction_identity(
+        session=session,
+        user=user,
+        instructions=payload.instructions,
+        branch_turn_id=branch_turn_id,
+    )
+    agent_profile_snapshot = None
+    if payload.agent_profile is not None:
+        selection = dict(payload.agent_profile)
+        if payload.provider_profile_ref:
+            selected_ref = selection.get("providerProfileRef")
+            if selected_ref and selected_ref != payload.provider_profile_ref:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="agent profile and branch Provider Profile selections conflict",
+                )
+            selection["providerProfileRef"] = payload.provider_profile_ref
+        agent_profile_snapshot = await resolve_agent_profile_snapshot(
+            session,
+            selection=selection,
+            consumer_type="checkpoint",
+            consumer_id=branch_id,
+            user=user,
+        )
     await _prepare_checkpoint_branch_launch(
         session=session,
         record=record,
@@ -12734,10 +14903,12 @@ async def create_checkpoint_branch(
         idempotency_key=payload.idempotency_key,
         instruction_ref=instruction_ref,
         instruction_digest=instruction_digest,
+        principal=_owner_id(user),
         requested_work_branch=payload.git_work_branch,
         source_run_id=payload.source.run_id,
         source_execution_ordinal=payload.source.execution_ordinal,
         source_checkpoint_boundary=payload.source.checkpoint_boundary,
+        follow_up_retrieval=payload.follow_up_retrieval,
     )
     branch = await session.get(WorkflowCheckpointBranch, branch_id)
     if branch is None:
@@ -12751,6 +14922,31 @@ async def create_checkpoint_branch(
     branch.publish_status = "unpublished"
     branch.idempotency_key = payload.idempotency_key
     branch.created_by = getattr(user, "email", None) or _owner_id(user)
+    # Runtime selectors are authored branch input. Persist the exact effective
+    # selection with the branch so launch/retry never has to trust transient UI
+    # state or mutate the source workflow's immutable runtime selection.
+    branch.diagnostics = {
+        **(branch.diagnostics or {}),
+        "runtimeSelection": {
+            "providerProfileRef": payload.provider_profile_ref,
+            "executionProfileRef": payload.execution_profile_ref,
+            "model": payload.model,
+            "effort": payload.effort,
+            "maxBudgetUsd": payload.max_budget_usd,
+            "runtimeContextPolicy": payload.runtime_context_policy,
+            "publishMode": payload.publish_mode,
+            "gitWorkBranch": payload.git_work_branch,
+            "agentProfile": (
+                {
+                    "profileId": agent_profile_snapshot["profileId"],
+                    "version": agent_profile_snapshot["version"],
+                    "digest": agent_profile_snapshot["digest"],
+                }
+                if agent_profile_snapshot else None
+            ),
+            "agentProfileSnapshot": agent_profile_snapshot,
+        },
+    }
     session.add(
         WorkflowCheckpointBranchOperation(
             workflow_id=workflow_id,
@@ -12766,6 +14962,20 @@ async def create_checkpoint_branch(
         )
     )
     await session.commit()
+    try:
+        await CheckpointBranchTurnExecutionOwner(
+            session, principal=_owner_id(user)
+        ).launch(
+            workflow_id=workflow_id,
+            branch_id=branch_id,
+            branch_turn_id=branch_turn_id,
+            intent={"idempotencyKey": payload.idempotency_key},
+        )
+    except CheckpointBranchTurnLaunchError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": exc.code, "reason": exc.reason},
+        ) from exc
     await session.refresh(branch)
     return _branch_to_model(branch)
 
@@ -12826,31 +15036,11 @@ async def launch_checkpoint_branch_turn(
     user: User = Depends(get_current_user()),
 ) -> CheckpointBranchTurnModel:
     await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
-    branch = await _load_checkpoint_branch(
-        session, workflow_id=workflow_id, branch_id=branch_id
-    )
-    turn_result = await session.execute(
-        select(WorkflowCheckpointBranchTurn).where(
-            WorkflowCheckpointBranchTurn.branch_turn_id == branch_turn_id,
-            WorkflowCheckpointBranchTurn.branch_id == branch.branch_id,
-        )
-    )
-    turn = turn_result.scalar_one_or_none()
-    if turn is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "checkpoint_branch_turn_not_found"},
-        )
-    launch_key = build_branch_turn_launch_idempotency_key(
-        workflow_id=workflow_id,
-        branch_id=branch.branch_id,
-        branch_turn_id=turn.branch_turn_id,
-    )
     request_digest = _scoped_operation_digest(
         payload,
         scope={
-            "branchId": branch.branch_id,
-            "branchTurnId": turn.branch_turn_id,
+            "branchId": branch_id,
+            "branchTurnId": branch_turn_id,
             "operation": "checkpoint_branch.turn.launch",
         },
     )
@@ -12858,144 +15048,130 @@ async def launch_checkpoint_branch_turn(
         await session.execute(
             select(WorkflowCheckpointBranchOperation).where(
                 WorkflowCheckpointBranchOperation.workflow_id == workflow_id,
-                WorkflowCheckpointBranchOperation.idempotency_key == launch_key,
+                WorkflowCheckpointBranchOperation.idempotency_key
+                == payload.idempotency_key,
             )
         )
     ).scalar_one_or_none()
     if existing_op is not None:
         if (
             existing_op.operation != "checkpoint_branch.turn.launch"
-            or existing_op.branch_id != branch.branch_id
-            or existing_op.branch_turn_id != turn.branch_turn_id
+            or existing_op.branch_id != branch_id
+            or existing_op.branch_turn_id != branch_turn_id
             or existing_op.request_digest != request_digest
         ):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail={"code": "idempotency_key_conflict"},
             )
-        _require_branch_turn_immutable_snapshot(
-            turn,
-            existing_op.response_payload.get("immutableLaunchFields"),
-        )
-        return _turn_to_model(turn)
+        replayed = await session.get(WorkflowCheckpointBranchTurn, branch_turn_id)
+        if replayed is None or replayed.branch_id != branch_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "branch_turn_launch_state_missing"},
+            )
+        # A durable pre-claim intentionally contains the pre-launch snapshot.
+        # If the process crashed after the owner persisted runtime identities,
+        # let that owner recover/reattach before replacing the ledger response.
+        # Completed ledger records still require an exact immutable replay.
+        if existing_op.response_payload.get("claimState") != "claimed":
+            _require_branch_turn_immutable_snapshot(
+                replayed, existing_op.response_payload.get("immutableLaunchFields")
+            )
+        try:
+            replayed = await CheckpointBranchTurnExecutionOwner(
+                session,
+                principal=_owner_id(user),
+            ).launch(
+                workflow_id=workflow_id,
+                branch_id=branch_id,
+                branch_turn_id=branch_turn_id,
+                intent=payload,
+            )
+        except CheckpointBranchTurnLaunchError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": exc.code, "reason": exc.reason},
+            ) from exc
+        existing_op.response_payload = {
+            "branchId": branch_id,
+            "branchTurnId": branch_turn_id,
+            "contextBundleRef": replayed.context_bundle_ref,
+            "stepExecutionManifestRef": replayed.step_execution_manifest_ref,
+            "immutableLaunchFields": _branch_turn_immutable_snapshot(replayed),
+        }
+        await session.commit()
+        return _turn_to_model(replayed)
 
-    _validate_branch_turn_launch_policy(branch, turn)
-
-    context_payload = {
-        "workflowId": workflow_id,
-        "runId": branch.source_run_id,
-        "logicalStepId": branch.logical_step_id,
-        "executionOrdinal": branch.source_execution_ordinal,
-        "branch": {
-            "branchId": branch.branch_id,
-            "branchTurnId": turn.branch_turn_id,
-            "sourceCheckpointRef": turn.source_checkpoint_ref,
-            "sourceStateKind": turn.source_state_kind,
-            "sourceStateRef": turn.source_state_ref,
-            "sourceStateDigest": turn.source_state_digest,
-            "parentBranchId": branch.parent_branch_id,
-            "parentTurnId": turn.parent_turn_id or branch.parent_turn_id,
-            "gitWorkBranch": branch.git_work_branch or turn.git_work_branch,
-        },
-        "workspacePolicy": turn.workspace_policy,
-        "workspaceBaseline": payload.workspace_baseline
-        or {
-            "kind": "checkpoint_ref",
-            "checkpointRef": turn.source_checkpoint_ref,
-        },
-        "instructionRefs": [turn.instruction_ref],
-        "instructionDigests": [turn.instruction_digest],
-        "priorEvidenceRefs": payload.prior_evidence_refs,
-        "boundedSummaries": payload.bounded_summaries,
-        "builderMetadata": payload.builder_metadata
-        or {
-            "version": "checkpoint-branch-launch-api-v1",
-            "digest": "sha256:checkpoint-branch-launch-api-v1",
-        },
-    }
-    try:
-        context_bundle = build_checkpoint_branch_turn_context_bundle(context_payload)
-    except CheckpointBranchContextBundleError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"code": "invalid_branch_turn_context", "reason": str(exc)},
-        ) from exc
-    context_digest = _operation_digest(context_bundle)
-    context_bundle_ref = _branch_turn_artifact_ref(
-        branch_turn_id=turn.branch_turn_id,
-        artifact_name="context-bundle",
-        payload_digest=context_digest,
-    )
-    manifest_payload = _branch_turn_launch_manifest_payload(
-        workflow_id=workflow_id,
-        branch=branch,
-        turn=turn,
-        payload=payload,
-        context_bundle_ref=context_bundle_ref,
-    )
-    manifest_digest = _operation_digest(manifest_payload)
-    manifest_ref = _branch_turn_artifact_ref(
-        branch_turn_id=turn.branch_turn_id,
-        artifact_name="step-execution-manifest",
-        payload_digest=manifest_digest,
-    )
-    diagnostics_ref = (
-        payload.diagnostics_ref
-        or _branch_turn_artifact_ref(
-            branch_turn_id=turn.branch_turn_id,
-            artifact_name="diagnostics",
-            payload_digest=_operation_digest(
-                {
-                    "workflowId": workflow_id,
-                    "branchId": branch.branch_id,
-                    "branchTurnId": turn.branch_turn_id,
-                    "launchIdempotencyKey": launch_key,
-                }
-            ),
-        )
-    )
-    try:
-        launched = await CheckpointBranchService(session).launch_turn(
-            workflow_id=workflow_id,
-            branch_id=branch.branch_id,
-            branch_turn_id=turn.branch_turn_id,
-            context_bundle_ref=context_bundle_ref,
-            step_execution_manifest_ref=manifest_ref,
-            checkpoint_ref=None,
-            diagnostics_ref=diagnostics_ref,
-            idempotency_key=launch_key,
-            created_step_execution_id=payload.created_step_execution_id,
-            runtime_agent_run_id=payload.runtime_agent_run_id,
-            provider_session_id=payload.provider_session_id,
-            agent_request_ref=payload.runtime_request_ref,
-            agent_result_ref=payload.runtime_result_ref,
-        )
-    except ValueError as exc:
+    pending_turn = await session.get(WorkflowCheckpointBranchTurn, branch_turn_id)
+    if pending_turn is None or pending_turn.branch_id != branch_id:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail={"code": "branch_turn_launch_rejected", "reason": str(exc)},
+            detail={"code": "branch_turn_launch_state_missing"},
+        )
+    launch_operation = WorkflowCheckpointBranchOperation(
+        workflow_id=workflow_id,
+        branch_id=branch_id,
+        branch_turn_id=branch_turn_id,
+        operation="checkpoint_branch.turn.launch",
+        idempotency_key=payload.idempotency_key,
+        request_digest=request_digest,
+        response_payload={
+            "branchId": branch_id,
+            "branchTurnId": branch_turn_id,
+            "immutableLaunchFields": _branch_turn_immutable_snapshot(pending_turn),
+            "claimState": "claimed",
+        },
+    )
+    session.add(launch_operation)
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raced_op = (
+            await session.execute(
+                select(WorkflowCheckpointBranchOperation).where(
+                    WorkflowCheckpointBranchOperation.workflow_id == workflow_id,
+                    WorkflowCheckpointBranchOperation.idempotency_key
+                    == payload.idempotency_key,
+                )
+            )
+        ).scalar_one_or_none()
+        if raced_op is None or (
+            raced_op.operation != "checkpoint_branch.turn.launch"
+            or raced_op.branch_id != branch_id
+            or raced_op.branch_turn_id != branch_turn_id
+            or raced_op.request_digest != request_digest
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "idempotency_key_conflict"},
+            )
+        launch_operation = raced_op
+
+    try:
+        launched = await CheckpointBranchTurnExecutionOwner(
+            session,
+            principal=_owner_id(user),
+        ).launch(
+            workflow_id=workflow_id,
+            branch_id=branch_id,
+            branch_turn_id=branch_turn_id,
+            intent=payload,
+        )
+    except CheckpointBranchTurnLaunchError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": exc.code, "reason": exc.reason},
         ) from exc
 
-    session.add(
-        WorkflowCheckpointBranchOperation(
-            workflow_id=workflow_id,
-            branch_id=branch.branch_id,
-            branch_turn_id=turn.branch_turn_id,
-            operation="checkpoint_branch.turn.launch",
-            idempotency_key=launch_key,
-            request_digest=request_digest,
-            response_payload={
-                "branchId": branch.branch_id,
-                "branchTurnId": turn.branch_turn_id,
-                "contextBundleRef": context_bundle_ref,
-                "stepExecutionManifestRef": manifest_ref,
-                "diagnosticsRef": diagnostics_ref,
-                "contextBundle": context_bundle,
-                "manifest": manifest_payload,
-                "immutableLaunchFields": _branch_turn_immutable_snapshot(launched),
-            },
-        )
-    )
+    launch_operation.response_payload = {
+        "branchId": branch_id,
+        "branchTurnId": branch_turn_id,
+        "contextBundleRef": launched.context_bundle_ref,
+        "stepExecutionManifestRef": launched.step_execution_manifest_ref,
+        "immutableLaunchFields": _branch_turn_immutable_snapshot(launched),
+    }
     await session.commit()
     await session.refresh(launched)
     return _turn_to_model(launched)
@@ -13009,6 +15185,7 @@ async def _record_branch_turn_operation(
     payload: CheckpointBranchContinueRequest,
     operation_name: str,
     session: AsyncSession,
+    user: User,
     parent_turn_id: str | None = None,
 ) -> CheckpointBranchTurnModel:
     _validate_branch_policy(
@@ -13048,12 +15225,31 @@ async def _record_branch_turn_operation(
             )
         )
         turn = result.scalar_one()
-        return _turn_to_model(turn)
+        try:
+            launched = await CheckpointBranchTurnExecutionOwner(
+                session, principal=_owner_id(user)
+            ).launch(
+                workflow_id=workflow_id,
+                branch_id=branch.branch_id,
+                branch_turn_id=turn.branch_turn_id,
+                intent={"idempotencyKey": payload.idempotency_key},
+            )
+        except CheckpointBranchTurnLaunchError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": exc.code, "reason": exc.reason},
+            ) from exc
+        return _turn_to_model(launched)
 
-    instruction_ref, instruction_digest = _instruction_identity(payload.instructions)
     branch_turn_id = _new_checkpoint_branch_turn_id()
-    source_checkpoint_ref = (
-        branch.current_head_checkpoint_ref or branch.source_checkpoint_ref
+    instruction_ref, instruction_digest = await _instruction_identity(
+        session=session,
+        user=user,
+        instructions=payload.instructions,
+        branch_turn_id=branch_turn_id,
+    )
+    source_checkpoint_ref, source_checkpoint_digest, accepted_parent_turn_id = (
+        await _require_accepted_branch_head(session=session, branch=branch)
     )
     await _prepare_checkpoint_branch_launch(
         session=session,
@@ -13062,7 +15258,7 @@ async def _record_branch_turn_operation(
         branch_id=branch.branch_id,
         branch_turn_id=branch_turn_id,
         source_checkpoint_ref=source_checkpoint_ref,
-        source_checkpoint_digest=branch.source_checkpoint_digest,
+        source_checkpoint_digest=source_checkpoint_digest,
         logical_step_id=branch.logical_step_id,
         label=payload.label or branch.label,
         workspace_policy=payload.workspace_policy,
@@ -13070,12 +15266,14 @@ async def _record_branch_turn_operation(
         idempotency_key=payload.idempotency_key,
         instruction_ref=instruction_ref,
         instruction_digest=instruction_digest,
+        principal=_owner_id(user),
         requested_work_branch=branch.git_work_branch,
         parent_branch_id=branch.parent_branch_id,
-        parent_turn_id=parent_turn_id,
+        parent_turn_id=parent_turn_id or accepted_parent_turn_id,
         source_run_id=branch.source_run_id,
         source_execution_ordinal=branch.source_execution_ordinal,
         source_checkpoint_boundary=branch.source_checkpoint_boundary,
+        follow_up_retrieval=payload.follow_up_retrieval,
     )
     turn = await session.get(WorkflowCheckpointBranchTurn, branch_turn_id)
     if turn is None:
@@ -13087,6 +15285,11 @@ async def _record_branch_turn_operation(
     branch.label = payload.label or branch.label
     branch.workspace_policy = payload.workspace_policy
     branch.runtime_context_policy = payload.runtime_context_policy
+    if payload.max_budget_usd is not None:
+        turn.diagnostics = {
+            **(turn.diagnostics or {}),
+            "maxBudgetUsd": payload.max_budget_usd,
+        }
     session.add(
         WorkflowCheckpointBranchOperation(
             workflow_id=workflow_id,
@@ -13102,8 +15305,21 @@ async def _record_branch_turn_operation(
         )
     )
     await session.commit()
-    await session.refresh(turn)
-    return _turn_to_model(turn)
+    try:
+        launched = await CheckpointBranchTurnExecutionOwner(
+            session, principal=_owner_id(user)
+        ).launch(
+            workflow_id=workflow_id,
+            branch_id=branch.branch_id,
+            branch_turn_id=turn.branch_turn_id,
+            intent={"idempotencyKey": payload.idempotency_key},
+        )
+    except CheckpointBranchTurnLaunchError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": exc.code, "reason": exc.reason},
+        ) from exc
+    return _turn_to_model(launched)
 
 
 @router.post(
@@ -13132,6 +15348,65 @@ async def continue_checkpoint_branch(
         payload=payload,
         operation_name="checkpoint_branch.continue",
         session=session,
+        user=user,
+    )
+
+
+async def _require_accepted_branch_head(
+    *, session: AsyncSession, branch: WorkflowCheckpointBranch
+) -> tuple[str, str | None, str]:
+    """Resolve only a terminal, server-captured branch head for new work."""
+
+    head_step_id = str(branch.current_head_step_execution_id or "").strip()
+    head_checkpoint_ref = str(branch.current_head_checkpoint_ref or "").strip()
+    if not head_step_id or not head_checkpoint_ref:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "branch_head_not_accepted",
+                "reason": "branch has no terminal server-owned head",
+            },
+        )
+    turn = (
+        await session.execute(
+            select(WorkflowCheckpointBranchTurn).where(
+                WorkflowCheckpointBranchTurn.branch_id == branch.branch_id,
+                WorkflowCheckpointBranchTurn.created_step_execution_id
+                == head_step_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if turn is None or turn.status not in {"checking", "succeeded"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "branch_head_not_accepted",
+                "reason": "latest branch turn has no terminal result",
+            },
+        )
+    checkpoint = (
+        await session.execute(
+            select(WorkflowCheckpointBranchArtifact).where(
+                WorkflowCheckpointBranchArtifact.branch_id == branch.branch_id,
+                WorkflowCheckpointBranchArtifact.branch_turn_id
+                == turn.branch_turn_id,
+                WorkflowCheckpointBranchArtifact.artifact_kind
+                == "output.branch_turn.checkpoint.json",
+            )
+        )
+    ).scalar_one_or_none()
+    if checkpoint is None or checkpoint.artifact_ref != head_checkpoint_ref:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "branch_head_checkpoint_unavailable",
+                "reason": "terminal branch head checkpoint authority is missing",
+            },
+        )
+    return (
+        head_checkpoint_ref,
+        branch.current_head_checkpoint_digest,
+        turn.branch_turn_id,
     )
 
 
@@ -13177,16 +15452,35 @@ async def fork_checkpoint_branch(
                 status_code=status.HTTP_409_CONFLICT,
                 detail={"code": "invalid_parent_turn"},
             )
-    fork_source_ref = (
-        parent_turn.source_checkpoint_ref
-        if parent_turn is not None
-        else parent.current_head_checkpoint_ref or parent.source_checkpoint_ref
-    )
-    fork_source_digest = (
-        parent_turn.source_checkpoint_digest
-        if parent_turn is not None
-        else parent.source_checkpoint_digest
-    )
+    if parent_turn is not None:
+        parent_checkpoint = (
+            await session.execute(
+                select(WorkflowCheckpointBranchArtifact).where(
+                    WorkflowCheckpointBranchArtifact.branch_id == parent.branch_id,
+                    WorkflowCheckpointBranchArtifact.branch_turn_id
+                    == parent_turn.branch_turn_id,
+                    WorkflowCheckpointBranchArtifact.artifact_kind
+                    == "output.branch_turn.checkpoint.json",
+                )
+            )
+        ).scalar_one_or_none()
+        if parent_checkpoint is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "parent_turn_checkpoint_unavailable",
+                    "reason": "parent turn has no terminal checkpoint authority",
+                },
+            )
+        fork_source_ref = parent_checkpoint.artifact_ref
+        fork_source_digest = parent_checkpoint.digest
+        selected_parent_turn_id = parent_turn.branch_turn_id
+    else:
+        (
+            fork_source_ref,
+            fork_source_digest,
+            selected_parent_turn_id,
+        ) = await _require_accepted_branch_head(session=session, branch=parent)
     request_digest = _scoped_operation_digest(
         payload, scope={"parentBranchId": parent.branch_id}
     )
@@ -13212,11 +15506,34 @@ async def fork_checkpoint_branch(
             workflow_id=workflow_id,
             branch_id=str(operation.branch_id),
         )
+        existing_turn = await session.get(
+            WorkflowCheckpointBranchTurn, operation.branch_turn_id
+        )
+        if existing_turn is not None:
+            try:
+                await CheckpointBranchTurnExecutionOwner(
+                    session, principal=_owner_id(user)
+                ).launch(
+                    workflow_id=workflow_id,
+                    branch_id=branch.branch_id,
+                    branch_turn_id=existing_turn.branch_turn_id,
+                    intent={"idempotencyKey": payload.idempotency_key},
+                )
+            except CheckpointBranchTurnLaunchError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={"code": exc.code, "reason": exc.reason},
+                ) from exc
         return _branch_to_model(branch)
 
-    instruction_ref, instruction_digest = _instruction_identity(payload.instructions)
     forked_branch_id = _new_checkpoint_branch_id()
     branch_turn_id = _new_checkpoint_branch_turn_id()
+    instruction_ref, instruction_digest = await _instruction_identity(
+        session=session,
+        user=user,
+        instructions=payload.instructions,
+        branch_turn_id=branch_turn_id,
+    )
     await _prepare_checkpoint_branch_launch(
         session=session,
         record=record,
@@ -13232,11 +15549,13 @@ async def fork_checkpoint_branch(
         idempotency_key=payload.idempotency_key,
         instruction_ref=instruction_ref,
         instruction_digest=instruction_digest,
+        principal=_owner_id(user),
         parent_branch_id=parent.branch_id,
-        parent_turn_id=payload.parent_turn_id,
+        parent_turn_id=selected_parent_turn_id,
         source_run_id=parent.source_run_id,
         source_execution_ordinal=parent.source_execution_ordinal,
         source_checkpoint_boundary=parent.source_checkpoint_boundary,
+        follow_up_retrieval=payload.follow_up_retrieval,
     )
     forked = await session.get(WorkflowCheckpointBranch, forked_branch_id)
     if forked is None:
@@ -13251,6 +15570,38 @@ async def fork_checkpoint_branch(
     forked.publish_status = "unpublished"
     forked.idempotency_key = payload.idempotency_key
     forked.created_by = getattr(user, "email", None) or _owner_id(user)
+    inherited_selection = copy.deepcopy(
+        dict((parent.diagnostics or {}).get("runtimeSelection") or {})
+    )
+    inherited_selection["runtimeContextPolicy"] = payload.runtime_context_policy
+    inherited_selection["gitWorkBranch"] = forked.git_work_branch
+    if payload.max_budget_usd is not None:
+        inherited_selection["maxBudgetUsd"] = payload.max_budget_usd
+    forked.diagnostics = {
+        **(forked.diagnostics or {}),
+        "runtimeSelection": inherited_selection,
+    }
+    parent_profile_usage = (
+        await session.execute(
+            select(db_models.OmnigentAgentProfileUsage).where(
+                db_models.OmnigentAgentProfileUsage.consumer_type == "checkpoint",
+                db_models.OmnigentAgentProfileUsage.consumer_id == parent.branch_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if parent_profile_usage is not None:
+        session.add(
+            db_models.OmnigentAgentProfileUsage(
+                consumer_type="checkpoint",
+                consumer_id=forked_branch_id,
+                profile_id=parent_profile_usage.profile_id,
+                version=parent_profile_usage.version,
+                digest=parent_profile_usage.digest,
+                effective_snapshot=copy.deepcopy(
+                    parent_profile_usage.effective_snapshot
+                ),
+            )
+        )
     session.add(
         WorkflowCheckpointBranchOperation(
             workflow_id=workflow_id,
@@ -13266,6 +15617,20 @@ async def fork_checkpoint_branch(
         )
     )
     await session.commit()
+    try:
+        await CheckpointBranchTurnExecutionOwner(
+            session, principal=_owner_id(user)
+        ).launch(
+            workflow_id=workflow_id,
+            branch_id=forked_branch_id,
+            branch_turn_id=branch_turn_id,
+            intent={"idempotencyKey": payload.idempotency_key},
+        )
+    except CheckpointBranchTurnLaunchError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": exc.code, "reason": exc.reason},
+        ) from exc
     await session.refresh(forked)
     return _branch_to_model(forked)
 
@@ -13755,10 +16120,37 @@ async def describe_execution(
     response: Response,
     source: Optional[str] = Query(None),
     service: TemporalExecutionService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
+    user: User | None = Depends(get_current_user_optional()),
     session: AsyncSession = Depends(get_async_session),
     temporal_client: Client = Depends(get_temporal_client),
+    authorization: str | None = Header(None, alias="Authorization"),
+    execution_fanout: str | None = Header(None, alias=EXECUTION_FANOUT_HEADER),
 ) -> ExecutionModel:
+    capability = resolve_execution_fanout_capability(
+        marker=execution_fanout,
+        authorization=authorization,
+    )
+    authority = await resolve_execution_request_authority(
+        user=user,
+        service=service,
+        capability=capability,
+    )
+    user = authority.user
+    if capability is not None:
+        if source is not None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={
+                    "code": "invalid_execution_fanout_describe_request",
+                    "message": "Execution fan-out describe does not accept source overrides.",
+                },
+            )
+        await enforce_fanout_child_visibility(
+            service=service,
+            workflow_id=workflow_id,
+            authority=authority,
+        )
+
     canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
 
     source_is_temporal = source == "temporal"
@@ -13859,6 +16251,1275 @@ async def describe_execution(
             execution = execution.model_copy(update={"agent_run_id": agent_run_id})
     return execution
 
+
+def _chat_binding_alias(value: str) -> str:
+    parts = value.split("_")
+    return parts[0] + "".join(part.title() for part in parts[1:])
+
+
+class WorkflowChatBinding(BaseModel):
+    """Browser-safe native Workflow Chat binding (MoonLadderStudios/MoonMind#3633).
+
+    Maps one visible Workflow Execution to one server-owned Omnigent session
+    through the opaque ``chatBindingId``. Provider session, bridge session,
+    endpoint, host, runner, credential, profile, policy, and workspace
+    identities are deliberately absent: they stay server-side and are only
+    exposed through separately authorized diagnostic routes
+    (docs/UI/WorkflowChatPanel.md §5, OmnigentBridge.md §15).
+    """
+
+    model_config = ConfigDict(
+        alias_generator=_chat_binding_alias, populate_by_name=True
+    )
+
+    chat_binding_id: str = ""
+    workflow_id: str
+    run_id: str | None = None
+    logical_step_id: str | None = None
+    step_execution_id: str | None = None
+    chat_url: str = ""
+    api_base: str = ""
+    state: Literal["starting", "available", "ended", "unavailable"]
+    read_only: bool
+    capabilities: dict[str, bool] = Field(default_factory=dict)
+    unavailable_reason: str | None = None
+
+
+@router.get("/{workflow_id}/chat-binding", response_model=WorkflowChatBinding)
+async def resolve_workflow_chat_binding(
+    workflow_id: str,
+    response: Response,
+    service: TemporalExecutionService = Depends(_get_service),
+    user: User = Depends(get_current_user()),
+) -> WorkflowChatBinding:
+    """Resolve the authorized, browser-safe native Workflow Chat binding.
+
+    MoonLadderStudios/MoonMind#3633. The caller is authorized against the
+    Workflow *before* any binding information is returned; possession of a
+    binding id is never treated as authorization. The server generates the
+    binding-scoped ``chatUrl`` and ``apiBase`` — the browser must not author an
+    upstream route, provider session id, or endpoint.
+    """
+
+    canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
+    # Authorize against the Workflow first (OmnigentBridge.md §16 rule 1); an
+    # unknown/deleted/unauthorized Workflow fails here without revealing whether
+    # any provider session exists.
+    await _get_owned_execution(
+        service=service,
+        workflow_id=canonical_workflow_id,
+        user=user,
+    )
+    if alias_used:
+        _mark_execution_alias_usage(
+            response,
+            raw_identifier=workflow_id,
+            canonical_identifier=canonical_workflow_id,
+        )
+
+    store = OmnigentBridgeSessionStore(async_session_maker)
+    try:
+        resolution = await store.resolve_chat_binding(
+            workflow_id=canonical_workflow_id
+        )
+    except BridgeChatBindingAmbiguousError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "omnigent_chat_binding_ambiguous",
+                "message": (
+                    "The Workflow has multiple active chat-capable sessions."
+                ),
+            },
+        ) from exc
+
+    # Project native-UI serving readiness into the binding before advertising a
+    # live ``chatUrl``. When native serving is disabled or the running version is
+    # not known-compatible, the scoped UI route fails closed to a 503, so the
+    # binding must surface ``unavailable`` (and drop ``chatUrl``) instead — that
+    # is what selects the documented read-only compatibility fallback in the
+    # browser rather than an iframe pointed at the router's 503 page
+    # (MoonLadderStudios/MoonMind#3638 requirement 7, WorkflowChatPanel.md §11).
+    serving_enabled = resolved_native_ui_serving_enabled()
+    native_ui = evaluate_native_ui_compatibility(
+        resolved_native_ui_version(),
+        enabled=serving_enabled,
+    )
+
+    chat_url = ""
+    api_base = ""
+    state = resolution.state
+    unavailable_reason = resolution.unavailable_reason
+    if resolution.chat_binding_id and native_ui.ready:
+        # Server-owned, binding-scoped navigation targets. The browser never
+        # substitutes the upstream route (docs/UI/WorkflowChatPanel.md §4).
+        chat_url = (
+            f"/omnigent-ui/workflow-chat/{resolution.chat_binding_id}?embedded=1"
+        )
+        api_base = (
+            f"/api/workflow-chat-bindings/{resolution.chat_binding_id}/omnigent"
+        )
+    elif resolution.chat_binding_id and not native_ui.ready:
+        # A binding exists but the native UI cannot be served: mark the surface
+        # unavailable so the browser shows the read-only compatibility fallback
+        # instead of an iframe pointed at the scoped route's 503 page.
+        state = "unavailable"
+        unavailable_reason = (
+            "native_ui_serving_disabled"
+            if not serving_enabled
+            else native_ui.reason or "native_ui_unavailable"
+        )
+
+    return WorkflowChatBinding(
+        chat_binding_id=resolution.chat_binding_id or "",
+        workflow_id=canonical_workflow_id,
+        run_id=resolution.run_id,
+        logical_step_id=resolution.logical_step_id,
+        step_execution_id=resolution.step_execution_id,
+        chat_url=chat_url,
+        api_base=api_base,
+        state=state,
+        read_only=resolution.read_only,
+        capabilities=resolution.capabilities,
+        unavailable_reason=unavailable_reason,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Terminal captured evidence + linked "Continue in a new workflow"
+# (MoonLadderStudios/MoonMind#3641)
+#
+# After native Omnigent work ends, MoonMind keeps the terminal transcript
+# read-only, exposes the immutable MoonMind-captured evidence directly, and
+# offers an explicit, authorized linked continuation that creates a *new*
+# Workflow Execution through the ordinary create path — never mutating the
+# terminal source session, its Step ledger, artifacts, or publication result,
+# and never routing the intent through the native composer / SubmitChatInstruction.
+# ---------------------------------------------------------------------------
+
+# Terminal ``ExecutionModel.status`` values. A linked continuation may only be
+# authored from a terminal source (issue §7: "source is not terminal" fails
+# closed) — a still-idle or still-reachable session is never inferred writeable.
+_TERMINAL_EXECUTION_STATUSES: frozenset[str] = frozenset(
+    {"completed", "failed", "canceled"}
+)
+
+# Ordered (camelCase label, bridge-session column, kind) for the named terminal
+# evidence refs surfaced by **View captured evidence**. These are MoonMind
+# artifact refs, never provider-native paths or live upstream file ids.
+_CAPTURED_EVIDENCE_REF_FIELDS: tuple[tuple[str, str, str], ...] = (
+    ("finalSnapshotRef", "final_snapshot_ref", "final_snapshot"),
+    ("initialSnapshotRef", "initial_snapshot_ref", "initial_snapshot"),
+    ("captureManifestRef", "capture_manifest_ref", "capture_manifest"),
+    ("diagnosticsRef", "diagnostics_ref", "diagnostics"),
+    ("rawEventsRef", "raw_events_ref", "raw_event_journal"),
+    ("normalizedEventsRef", "normalized_events_ref", "normalized_event_journal"),
+    ("externalStateRef", "external_state_ref", "external_state"),
+)
+
+_CAPTURED_EVIDENCE_LABELS: dict[str, str] = {
+    "final_snapshot": "Final snapshot",
+    "initial_snapshot": "Initial snapshot",
+    "capture_manifest": "Capture manifest",
+    "diagnostics": "Diagnostics",
+    "raw_event_journal": "Raw event journal",
+    "normalized_event_journal": "Normalized event journal",
+    "external_state": "External / checkpoint state",
+    "finish_summary": "Finish summary",
+    "output_artifact": "Output artifact",
+}
+
+
+@dataclass(frozen=True)
+class _SourceCapturedEvidence:
+    """Authorized, browser-safe MoonMind evidence resolved for one Workflow.
+
+    Only MoonMind-owned artifact refs and bounded text; the provider session id,
+    host/runner id, upstream endpoint, credential, and workspace path stay
+    server-side.
+    """
+
+    available: bool
+    named_refs: dict[str, str]
+    additional_refs: list[str]
+    finish_summary_ref: str | None
+    final_snapshot_ref: str | None
+    capture_manifest_ref: str | None
+    summary: str | None
+    logical_step_id: str | None
+    step_execution_id: str | None
+    incomplete_reason: str | None
+
+    @property
+    def authorized_refs(self) -> frozenset[str]:
+        refs = set(self.named_refs.values())
+        refs.update(self.additional_refs)
+        if self.finish_summary_ref:
+            refs.add(self.finish_summary_ref)
+        return frozenset(ref for ref in refs if ref)
+
+
+def _coerce_evidence_ref(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+async def _resolve_source_captured_evidence(
+    *, workflow_id: str, run_id: str | None
+) -> _SourceCapturedEvidence:
+    """Resolve immutable MoonMind evidence captured for a terminal Workflow.
+
+    Reuses the durable Omnigent bridge projection (the canonical evidence
+    boundary): its terminal refs are MoonMind artifact refs the existing
+    artifact authorization/preview/download contracts already serve. A Workflow
+    with no bridge projection (or no terminal artifacts) resolves to an
+    ``available=False`` envelope with a stable reason rather than an error.
+    """
+
+    store = OmnigentBridgeSessionStore(async_session_maker)
+    try:
+        row = await store.resolve_projection_session(
+            workflow_id=workflow_id, run_id=(run_id or None)
+        )
+    except BridgeProjectionAmbiguousError:
+        row = None
+    if row is None:
+        return _SourceCapturedEvidence(
+            available=False,
+            named_refs={},
+            additional_refs=[],
+            finish_summary_ref=None,
+            final_snapshot_ref=None,
+            capture_manifest_ref=None,
+            summary=None,
+            logical_step_id=None,
+            step_execution_id=None,
+            incomplete_reason="no_captured_evidence",
+        )
+
+    terminal_refs = dict(getattr(row, "terminal_refs", None) or {})
+    named_refs: dict[str, str] = {}
+    for label, column, _kind in _CAPTURED_EVIDENCE_REF_FIELDS:
+        ref = _coerce_evidence_ref(getattr(row, column, None))
+        if ref:
+            named_refs[label] = ref
+
+    additional_refs: list[str] = []
+    for candidate in terminal_refs.get("outputRefs") or []:
+        ref = _coerce_evidence_ref(candidate)
+        if ref and ref not in named_refs.values():
+            additional_refs.append(ref)
+
+    finish_summary_ref = _coerce_evidence_ref(terminal_refs.get("finishSummaryRef"))
+    summary = str(terminal_refs.get("summary") or "")[:2000] or None
+    has_any = bool(named_refs or additional_refs or finish_summary_ref)
+    return _SourceCapturedEvidence(
+        available=has_any,
+        named_refs=named_refs,
+        additional_refs=additional_refs,
+        finish_summary_ref=finish_summary_ref,
+        final_snapshot_ref=named_refs.get("finalSnapshotRef"),
+        capture_manifest_ref=named_refs.get("captureManifestRef"),
+        summary=summary,
+        # Preserve the exact Step lineage for step-bound sessions: the logical
+        # step id lives on the bridge projection's ``metadata_`` and is read by
+        # the same resolver the chat binding uses, so continuations carry
+        # ``sourceLogicalStepId`` instead of silently dropping it (#3641 §6).
+        logical_step_id=_chat_binding_logical_step_id(row),
+        step_execution_id=(
+            str(getattr(row, "step_execution_id", "") or "").strip() or None
+        ),
+        incomplete_reason=None if has_any else "no_terminal_artifacts_captured",
+    )
+
+
+class CapturedEvidenceItemModel(BaseModel):
+    """One authorized MoonMind evidence artifact ref (browser-safe)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    label: str
+    kind: str
+    artifact_ref: str = Field(alias="artifactRef")
+
+
+class CapturedEvidenceModel(BaseModel):
+    """Immutable MoonMind-captured evidence for **View captured evidence**."""
+
+    model_config = ConfigDict(
+        alias_generator=_chat_binding_alias, populate_by_name=True
+    )
+
+    workflow_id: str
+    run_id: str | None = None
+    available: bool
+    items: list[CapturedEvidenceItemModel] = Field(default_factory=list)
+    summary: str | None = None
+    unavailable_reason: str | None = None
+
+
+def _captured_evidence_items(
+    evidence: _SourceCapturedEvidence,
+) -> list[CapturedEvidenceItemModel]:
+    items: list[CapturedEvidenceItemModel] = []
+    for label, _column, kind in _CAPTURED_EVIDENCE_REF_FIELDS:
+        ref = evidence.named_refs.get(label)
+        if ref:
+            items.append(
+                CapturedEvidenceItemModel(
+                    label=_CAPTURED_EVIDENCE_LABELS.get(kind, kind),
+                    kind=kind,
+                    artifactRef=ref,
+                )
+            )
+    if evidence.finish_summary_ref:
+        items.append(
+            CapturedEvidenceItemModel(
+                label=_CAPTURED_EVIDENCE_LABELS["finish_summary"],
+                kind="finish_summary",
+                artifactRef=evidence.finish_summary_ref,
+            )
+        )
+    for ref in evidence.additional_refs:
+        items.append(
+            CapturedEvidenceItemModel(
+                label=_CAPTURED_EVIDENCE_LABELS["output_artifact"],
+                kind="output_artifact",
+                artifactRef=ref,
+            )
+        )
+    return items
+
+
+@router.get(
+    "/{workflow_id}/captured-evidence",
+    response_model=CapturedEvidenceModel,
+    response_model_exclude_none=True,
+)
+async def get_workflow_captured_evidence(
+    workflow_id: str,
+    service: TemporalExecutionService = Depends(_get_service),
+    user: User = Depends(get_current_user()),
+) -> CapturedEvidenceModel:
+    """Return the immutable MoonMind evidence captured for a Workflow (§10, #3641).
+
+    The caller is authorized against the Workflow first; possession of a chat
+    binding id is never authorization. Returned refs are MoonMind artifact refs
+    served by the existing artifact authorization/preview/download contracts —
+    never provider-native paths or live upstream resource ids.
+    """
+
+    execution = await _get_owned_execution(
+        service=service, workflow_id=workflow_id, user=user
+    )
+    run_id = str(getattr(execution, "run_id", "") or "").strip() or None
+    evidence = await _resolve_source_captured_evidence(
+        workflow_id=execution.workflow_id, run_id=run_id
+    )
+    return CapturedEvidenceModel(
+        workflow_id=execution.workflow_id,
+        run_id=run_id,
+        available=evidence.available,
+        items=_captured_evidence_items(evidence),
+        summary=evidence.summary,
+        unavailable_reason=evidence.incomplete_reason,
+    )
+
+
+def _evidence_download_filename(artifact_ref: str) -> str:
+    """A browser-safe download filename derived from an evidence ref."""
+
+    tail = artifact_ref.rstrip("/").rsplit("/", 1)[-1]
+    tail = tail.removeprefix("artifact://").strip()
+    return tail or "captured-evidence"
+
+
+@router.get("/{workflow_id}/captured-evidence/download")
+async def download_workflow_captured_evidence(
+    workflow_id: str,
+    ref: str = Query(..., alias="ref"),
+    service: TemporalExecutionService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(get_current_user()),
+) -> Response:
+    """Stream one authorized MoonMind captured-evidence artifact (§10, #3641).
+
+    Production Omnigent evidence refs are gateway refs
+    (``artifact://omnigent/<correlation>/<name>``) that the generic Temporal
+    artifact download route cannot serve — the nested path never routes and no
+    ``TemporalArtifact`` row exists — so a real captured-evidence link 404s. This
+    workflow-scoped route authorizes the caller against the Workflow, confirms
+    the requested ref is one of that Workflow's authorized evidence refs
+    (possession of a ref is never authorization), then reads it through the same
+    scheme-aware boundary the runtime uses: the Omnigent artifact gateway for
+    ``artifact://omnigent/`` refs, and the Temporal artifact service otherwise.
+    An unauthorized ref returns 404 without revealing whether it exists.
+    """
+
+    execution = await _get_owned_execution(
+        service=service, workflow_id=workflow_id, user=user
+    )
+    run_id = str(getattr(execution, "run_id", "") or "").strip() or None
+    evidence = await _resolve_source_captured_evidence(
+        workflow_id=execution.workflow_id, run_id=run_id
+    )
+    requested = (ref or "").strip()
+    if not requested or requested not in evidence.authorized_refs:
+        # Non-enumerating: an unauthorized or unknown ref is indistinguishable
+        # from a missing one, so a caller cannot probe for hidden artifacts.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "captured_evidence_not_found",
+                "message": "No such captured evidence for this workflow.",
+            },
+        )
+
+    filename = _evidence_download_filename(requested)
+    if requested.startswith("artifact://omnigent/"):
+        # MoonMind-owned gateway ref: read the bytes through the same gateway the
+        # activity runtime uses (moonmind.workflows...activity_runtime._read_bytes)
+        # rather than the Temporal-artifact route, which has no row for it.
+        from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
+
+        try:
+            payload = await LocalOmnigentArtifactGateway().read_bytes(requested)
+        except FileNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "code": "captured_evidence_not_found",
+                    "message": "No such captured evidence for this workflow.",
+                },
+            ) from exc
+    else:
+        artifact_id = _artifact_id_from_ref(requested)
+        if not artifact_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "code": "captured_evidence_not_found",
+                    "message": "No such captured evidence for this workflow.",
+                },
+            )
+        artifact_service = get_temporal_artifact_service(session)
+        try:
+            _artifact, payload = await artifact_service.read(
+                artifact_id=artifact_id,
+                principal=str(getattr(user, "id", "") or "system"),
+                allow_restricted_raw=True,
+            )
+        except (PermissionError, TemporalArtifactAuthorizationError) as exc:
+            # The Workflow-level authorization above already gated access; a
+            # store-level denial still fails closed as not-found (non-enumerating).
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "code": "captured_evidence_not_found",
+                    "message": "No such captured evidence for this workflow.",
+                },
+            ) from exc
+        except TemporalArtifactNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "code": "captured_evidence_not_found",
+                    "message": "No such captured evidence for this workflow.",
+                },
+            ) from exc
+
+    return Response(
+        content=payload,
+        media_type="application/octet-stream",
+        headers={"content-disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# Durable single-put limit; a source evidence artifact larger than this cannot be
+# copied into a durable Temporal artifact via write_complete, so it is skipped.
+_CONTINUATION_EVIDENCE_MAX_BYTES = 10 * 1024 * 1024
+
+
+def _evidence_attachment_content_type(filename: str) -> str:
+    lowered = filename.lower()
+    if lowered.endswith(".json"):
+        return "application/json"
+    if lowered.endswith((".txt", ".md", ".log")):
+        return "text/plain"
+    return "application/octet-stream"
+
+
+async def _read_continuation_evidence_bytes(
+    *, artifact_service: Any, principal: str, ref: str
+) -> bytes | None:
+    """Read one authorized source evidence ref's bytes, scheme-aware.
+
+    Mirrors the runtime's scheme dispatch: the Omnigent artifact gateway serves
+    ``artifact://omnigent/`` refs; the Temporal artifact service serves durable
+    ``art_`` refs. Returns ``None`` (skip) when the ref cannot be read.
+    """
+
+    if ref.startswith("artifact://omnigent/"):
+        from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
+
+        try:
+            return await LocalOmnigentArtifactGateway().read_bytes(ref)
+        except FileNotFoundError:
+            return None
+    artifact_id = _artifact_id_from_ref(ref)
+    if not artifact_id:
+        return None
+    try:
+        _artifact, body = await artifact_service.read(
+            artifact_id=artifact_id,
+            principal=principal,
+            allow_restricted_raw=True,
+        )
+        return body
+    except (
+        PermissionError,
+        TemporalArtifactAuthorizationError,
+        TemporalArtifactNotFoundError,
+    ):
+        return None
+
+
+async def _materialize_continuation_source_attachments(
+    *, session: AsyncSession, user: User, refs: list[str]
+) -> list[dict[str, Any]]:
+    """Copy authorized source evidence refs into durable input attachments.
+
+    The pinned source evidence refs (production Omnigent gateway refs, in
+    particular) are not readable by the destination agent's prepared-input
+    boundary, which materializes only durable Temporal artifacts linked to the
+    destination workflow (#3641 §6, review "inject selected continuation
+    evidence into execution context"). Copy each authorized selected ref into a
+    durable ``LONG`` artifact and return ``inputAttachments`` entries; the caller
+    injects them into the destination's ``workflow`` payload (the same shape the
+    ordinary create path uses) and links them to the destination workflow after
+    it is created. Unreadable or oversized refs are skipped rather than failing
+    the whole continuation — they remain pinned for display.
+    """
+
+    if not refs:
+        return []
+    artifact_service = get_temporal_artifact_service(session)
+    principal = str(getattr(user, "id", "") or "system")
+    attachments: list[dict[str, Any]] = []
+    for ref in refs:
+        body = await _read_continuation_evidence_bytes(
+            artifact_service=artifact_service, principal=principal, ref=ref
+        )
+        if body is None or len(body) > _CONTINUATION_EVIDENCE_MAX_BYTES:
+            continue
+        filename = _evidence_download_filename(ref)
+        content_type = _evidence_attachment_content_type(filename)
+        artifact, _upload = await artifact_service.create(
+            principal=principal,
+            content_type=content_type,
+            size_bytes=len(body),
+            retention_class=TemporalArtifactRetentionClass.LONG,
+            metadata_json={
+                "artifact_class": "linked_continuation_source_evidence",
+                "source_ref": ref,
+            },
+        )
+        completed = await artifact_service.write_complete(
+            artifact_id=artifact.artifact_id,
+            principal=principal,
+            payload=body,
+            content_type=content_type,
+        )
+        attachments.append(
+            {
+                "artifactId": completed.artifact_id,
+                "filename": filename,
+                "contentType": content_type,
+                "sizeBytes": len(body),
+            }
+        )
+    return attachments
+
+
+class ContinueInNewWorkflowRequest(BaseModel):
+    """Authored intent + selected source evidence for a linked continuation.
+
+    The browser authors only new intent and bounded choices appropriate to
+    normal Workflow creation, plus which *already-authorized* source artifact
+    refs to carry. It never authors the source run, provider session, host,
+    profile, credential, workspace path, or evidence ownership — the server pins
+    all of that from the terminal source (issue §3).
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    idempotency_key: str = Field(
+        alias="idempotencyKey", min_length=1, max_length=512
+    )
+    title: str | None = Field(None, alias="title", max_length=500)
+    instructions: str | None = Field(None, alias="instructions")
+    initial_parameters: dict[str, Any] = Field(
+        default_factory=dict, alias="initialParameters"
+    )
+    selected_source_artifact_refs: list[str] = Field(
+        default_factory=list, alias="selectedSourceArtifactRefs"
+    )
+    bounded_purpose: str | None = Field(
+        None, alias="boundedPurpose", max_length=2000
+    )
+
+
+class ContinueInNewWorkflowResponse(BaseModel):
+    """Stable linked destination for both first and duplicate submissions."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    source_workflow_id: str = Field(alias="sourceWorkflowId")
+    source_run_id: str = Field(alias="sourceRunId")
+    destination_workflow_id: str = Field(alias="destinationWorkflowId")
+    relationship_type: str = Field(alias="relationshipType")
+    created: bool
+    pinned_source_refs: dict[str, Any] = Field(
+        default_factory=dict, alias="pinnedSourceRefs"
+    )
+
+
+def _pinned_continuation_source(
+    *,
+    source_workflow_id: str,
+    source_run_id: str,
+    evidence: _SourceCapturedEvidence,
+    selected_refs: list[str],
+) -> dict[str, Any]:
+    """Build the server-pinned source lineage carried on the continuation.
+
+    Only server-owned, browser-safe identity + MoonMind evidence refs; the
+    browser never substitutes these.
+    """
+
+    pinned: dict[str, Any] = {
+        "relationshipType": RELATIONSHIP_TYPE_LINKED_CONTINUATION,
+        "sourceWorkflowId": source_workflow_id,
+        "sourceRunId": source_run_id,
+    }
+    if evidence.logical_step_id:
+        pinned["sourceLogicalStepId"] = evidence.logical_step_id
+    if evidence.step_execution_id:
+        pinned["sourceStepExecutionId"] = evidence.step_execution_id
+    if evidence.finish_summary_ref:
+        pinned["sourceFinishSummaryRef"] = evidence.finish_summary_ref
+    if evidence.final_snapshot_ref:
+        pinned["sourceFinalSnapshotRef"] = evidence.final_snapshot_ref
+    if evidence.capture_manifest_ref:
+        pinned["sourceCaptureManifestRef"] = evidence.capture_manifest_ref
+    if selected_refs:
+        pinned["selectedSourceArtifactRefs"] = sorted(set(selected_refs))
+    return pinned
+
+
+@router.post(
+    "/{workflow_id}/continue",
+    response_model=ContinueInNewWorkflowResponse,
+    response_model_exclude_none=True,
+    status_code=status.HTTP_201_CREATED,
+)
+async def continue_in_new_workflow(
+    workflow_id: str,
+    payload: ContinueInNewWorkflowRequest,
+    service: TemporalExecutionService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(get_current_user()),
+    _submit_enabled: None = Depends(_ensure_submit_enabled),
+) -> ContinueInNewWorkflowResponse:
+    """Create a linked continuation Workflow from a terminal source (#3641 §3-§7).
+
+    Reuses the ordinary create/compiler path so the continuation resolves fresh
+    authority (runtime, profile, credentials, policy) rather than inheriting the
+    source's stale credentials, capacity, or host/session identity, while pinning
+    the source lineage and authorized evidence refs. Idempotent on a stable
+    client key; duplicate requests return the same linked Workflow. The source
+    Workflow, its Step ledger, provider session, artifacts, and publication
+    result are never mutated, and no message is posted into the source session.
+    """
+
+    source = await _get_owned_execution(
+        service=service, workflow_id=workflow_id, user=user
+    )
+    if str(getattr(source, "status", "") or "") not in _TERMINAL_EXECUTION_STATUSES:
+        # Never infer writeability from an idle status or a still-reachable
+        # upstream session after the MoonMind Workflow is terminal (§1, §7).
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "continuation_source_not_terminal",
+                "message": (
+                    "A linked continuation can only be created from a terminal "
+                    "Workflow Execution."
+                ),
+            },
+        )
+    source_run_id = str(getattr(source, "run_id", "") or "").strip()
+    if not source_run_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "continuation_source_run_missing",
+                "message": "The source Workflow has no authoritative run to pin.",
+            },
+        )
+
+    canonical = await session.get(TemporalExecutionCanonicalRecord, source.workflow_id)
+    if canonical is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "continuation_source_unpinnable",
+                "message": (
+                    "The source Workflow could not be pinned for continuation."
+                ),
+            },
+        )
+
+    evidence = await _resolve_source_captured_evidence(
+        workflow_id=source.workflow_id, run_id=source_run_id
+    )
+    unauthorized = [
+        ref
+        for ref in payload.selected_source_artifact_refs
+        if ref not in evidence.authorized_refs
+    ]
+    if unauthorized:
+        # Non-enumerating: report the count, never which refs, so a caller cannot
+        # probe for the existence of hidden source artifacts (§7).
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "continuation_evidence_unauthorized",
+                "message": (
+                    "One or more selected source evidence refs are not authorized "
+                    "for this continuation."
+                ),
+                "unauthorizedCount": len(unauthorized),
+            },
+        )
+
+    pinned = _pinned_continuation_source(
+        source_workflow_id=source.workflow_id,
+        source_run_id=source_run_id,
+        evidence=evidence,
+        selected_refs=payload.selected_source_artifact_refs,
+    )
+
+    request_digest = compute_request_digest(
+        {
+            "sourceWorkflowId": source.workflow_id,
+            "sourceRunId": source_run_id,
+            "title": payload.title,
+            "instructions": payload.instructions,
+            "initialParameters": payload.initial_parameters,
+            "selectedSourceArtifactRefs": sorted(
+                set(payload.selected_source_artifact_refs)
+            ),
+            # ``boundedPurpose`` is authored request data persisted and displayed
+            # on the relationship, so a reused key with an edited purpose must be
+            # treated as a materially changed request (idempotency conflict)
+            # rather than silently returning the first destination (#3641 §5).
+            "boundedPurpose": payload.bounded_purpose,
+        }
+    )
+
+    repository = SqlLinkedContinuationRepository(session)
+    try:
+        reservation = await repository.reserve_or_get(
+            source_workflow_id=source.workflow_id,
+            source_run_id=source_run_id,
+            idempotency_key=payload.idempotency_key,
+            request_digest=request_digest,
+            pinned_source_refs=pinned,
+            source_logical_step_id=evidence.logical_step_id,
+            source_step_execution_id=evidence.step_execution_id,
+            created_by=str(user.id),
+            bounded_purpose=payload.bounded_purpose,
+        )
+    except LinkedContinuationConflict as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "continuation_idempotency_conflict",
+                "message": str(exc),
+            },
+        ) from exc
+
+    if reservation.already_finalized:
+        # Duplicate request after a successful create: return the same linked
+        # Workflow rather than creating a second one (§5).
+        return ContinueInNewWorkflowResponse(
+            sourceWorkflowId=source.workflow_id,
+            sourceRunId=source_run_id,
+            destinationWorkflowId=reservation.destination_workflow_id,
+            relationshipType=RELATIONSHIP_TYPE_LINKED_CONTINUATION,
+            created=False,
+            pinnedSourceRefs=dict(reservation.record.pinned_source_refs or {}),
+        )
+
+    # Persist the reservation (and its pinned destination id) before the external
+    # create side effect. If the create then fails or is interrupted, a retry with
+    # the same key re-drives the ordinary create path to the *same* reserved id
+    # (create idempotency reconciles it) rather than forking a second Workflow
+    # (§5, §7 "create submission fails after relationship reservation").
+    await session.commit()
+
+    # Author the destination through the ordinary create path. Inherit the
+    # source's authored choices (sanitized like a rerun), layer operator-authored
+    # overrides, then pin the source lineage so both Workflows present the linked
+    # relationship. Fresh authority (runtime/profile/credential/policy) is
+    # resolved by ``create_execution`` — nothing is silently inherited stale.
+    initial_params = service._full_rerun_parameters(canonical.parameters or {})
+    if payload.initial_parameters:
+        initial_params.update(payload.initial_parameters)
+    source_plan_payload = (canonical.parameters or {}).get(
+        "omnigentExecutionPlan"
+    )
+    candidate_plan_payload = initial_params.get("omnigentExecutionPlan")
+    if isinstance(source_plan_payload, Mapping):
+        try:
+            source_plan = OmnigentExecutionPlanBinding.model_validate(
+                source_plan_payload
+            )
+            candidate_plan = OmnigentExecutionPlanBinding.model_validate(
+                candidate_plan_payload
+            )
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "continuation_execution_plan_conflict",
+                    "message": (
+                        "The linked continuation must reuse the source "
+                        "Workflow's immutable Omnigent execution plan."
+                    ),
+                },
+            ) from exc
+        if candidate_plan != source_plan:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "continuation_execution_plan_conflict",
+                    "message": (
+                        "The linked continuation must reuse the source "
+                        "Workflow's immutable Omnigent execution plan."
+                    ),
+                },
+            )
+    elif isinstance(candidate_plan_payload, Mapping):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "continuation_execution_plan_conflict",
+                "message": (
+                    "A linked continuation cannot introduce authored "
+                    "Omnigent execution-plan authority."
+                ),
+            },
+        )
+    if payload.instructions:
+        workflow_payload = initial_params.get("workflow")
+        if not isinstance(workflow_payload, dict):
+            workflow_payload = initial_params.get("task")
+        if isinstance(workflow_payload, dict):
+            workflow_payload["instructions"] = payload.instructions
+            initial_params["workflow"] = workflow_payload
+            initial_params.pop("task", None)
+        else:
+            initial_params.setdefault("workflow", {})["instructions"] = (
+                payload.instructions
+            )
+    initial_params["continuationSource"] = pinned
+
+    # Materialize the authorized selected source evidence into durable input
+    # attachments so the destination agent can actually read it. Storing the refs
+    # only under ``continuationSource`` is not enough — no runtime consumer reads
+    # that key, and the prepared-input boundary materializes only durable
+    # Temporal artifacts linked to the destination workflow. Attach them under the
+    # ``workflow`` payload's ``inputAttachments`` (the same shape the ordinary
+    # create path uses) and link them to the destination workflow after it is
+    # created (#3641 §6).
+    source_attachments = await _materialize_continuation_source_attachments(
+        session=session, user=user, refs=payload.selected_source_artifact_refs
+    )
+    if source_attachments:
+        workflow_payload = initial_params.get("workflow")
+        if not isinstance(workflow_payload, dict):
+            workflow_payload = {}
+        existing_attachments = workflow_payload.get("inputAttachments")
+        merged_attachments = (
+            list(existing_attachments)
+            if isinstance(existing_attachments, list)
+            else []
+        )
+        merged_attachments.extend(source_attachments)
+        workflow_payload["inputAttachments"] = merged_attachments
+        initial_params["workflow"] = workflow_payload
+        initial_params.pop("task", None)
+
+    reserved_workflow_id = reservation.destination_workflow_id
+    # Scope the ordinary create idempotency key to the same authority boundary as
+    # the relationship reservation — (source_workflow_id, source_run_id,
+    # idempotency_key) — so a later terminal run of the same source that reuses a
+    # client key cannot collide with an earlier run's create reservation. The raw
+    # ``continue:{workflow}:{run}:{key}`` join can exceed the ``String(128)``
+    # ``create_idempotency_key`` column (the request key alone is up to 512
+    # chars), which would raise a truncation error *after* the reservation is
+    # committed, so derive a bounded, deterministic digest instead (#3641 §5, §7).
+    create_idempotency_key = "continue:" + compute_request_digest(
+        {
+            "sourceWorkflowId": source.workflow_id,
+            "sourceRunId": source_run_id,
+            "idempotencyKey": payload.idempotency_key,
+        }
+    )
+    try:
+        record = await service.create_execution(
+            workflow_type=canonical.workflow_type.value,
+            owner_id=canonical.owner_id or user.id,
+            owner_type=canonical.owner_type.value if canonical.owner_type else "user",
+            title=payload.title
+            or (canonical.memo.get("title") if canonical.memo else None),
+            input_artifact_ref=canonical.input_ref,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters=initial_params,
+            idempotency_key=create_idempotency_key,
+            repository=None,
+            integration=None,
+            _workflow_id=reserved_workflow_id,
+        )
+    except TemporalExecutionValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "continuation_validation_failed",
+                "message": str(exc),
+            },
+        ) from exc
+
+    await repository.finalize(
+        reservation.record,
+        destination_run_id=str(getattr(record, "run_id", "") or "").strip() or None,
+    )
+    # Link the materialized evidence attachments to the destination workflow now
+    # that it exists, so the agent's prepared-input authorization gate (which
+    # requires an ``input.attachment`` link matching the running workflow id)
+    # accepts them (#3641 §6).
+    if source_attachments:
+        await _attach_input_attachment_artifacts_to_execution(
+            session=session,
+            record=record,
+            attachment_refs=source_attachments,
+        )
+    if isinstance(initial_params.get("omnigentExecutionPlan"), Mapping):
+        # A linked continuation is governed by the original plan's frozen
+        # continuation policy. Preserve its task snapshot authority; the new
+        # turn instruction and selected source evidence remain separate,
+        # explicitly linked continuation inputs rather than silently becoming a
+        # second plan compiled from current defaults.
+        await _reuse_original_task_input_snapshot_from_source(
+            session=session,
+            source_record=canonical,
+            target_record=record,
+        )
+        source_memo = dict(canonical.memo or {})
+        target_memo = dict(getattr(record, "memo", None) or {})
+        for key in (
+            "omnigent_execution_plan_ref",
+            "omnigent_execution_plan_digest",
+            "omnigent_execution_plan_artifact_ref",
+        ):
+            if source_memo.get(key) is not None:
+                target_memo[key] = source_memo[key]
+        record.memo = target_memo
+    else:
+        await _persist_original_workflow_input_snapshot_from_parameters(
+            session=session,
+            record=record,
+            user=user,
+            parameters=dict(initial_params),
+            source_kind="linked_continuation",
+            source_workflow_id=source.workflow_id,
+            source_run_id=source_run_id,
+            input_artifact_ref=canonical.input_ref,
+        )
+    await session.commit()
+
+    return ContinueInNewWorkflowResponse(
+        sourceWorkflowId=source.workflow_id,
+        sourceRunId=source_run_id,
+        destinationWorkflowId=record.workflow_id,
+        relationshipType=RELATIONSHIP_TYPE_LINKED_CONTINUATION,
+        created=True,
+        pinnedSourceRefs=pinned,
+    )
+
+
+class LinkedContinuationSummaryModel(BaseModel):
+    """One durable linked-continuation relationship for source/target display."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    relationship_type: str = Field(alias="relationshipType")
+    source_workflow_id: str = Field(alias="sourceWorkflowId")
+    source_run_id: str = Field(alias="sourceRunId")
+    destination_workflow_id: str = Field(alias="destinationWorkflowId")
+    destination_run_id: str | None = Field(None, alias="destinationRunId")
+    status: str | None = None
+    title: str | None = None
+    created_by: str | None = Field(None, alias="createdBy")
+    bounded_purpose: str | None = Field(None, alias="boundedPurpose")
+    created_at: datetime | None = Field(None, alias="createdAt")
+
+
+class LinkedContinuationLinksResponseModel(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    direction: Literal["inbound", "outbound"]
+    items: list[LinkedContinuationSummaryModel] = Field(default_factory=list)
+
+
+@router.get(
+    "/{workflow_id}/continuations",
+    response_model=LinkedContinuationLinksResponseModel,
+)
+async def list_execution_continuations(
+    workflow_id: str,
+    direction: str = Query("outbound"),
+    service: TemporalExecutionService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(get_current_user()),
+) -> LinkedContinuationLinksResponseModel:
+    """List durable linked-continuation relationships for a Workflow (#3641 §6).
+
+    ``outbound`` lists the linked continuations created *from* this Workflow (the
+    source-side view); ``inbound`` names the source this Workflow was continued
+    *from* (the continuation-side view). Both directions keep the original and
+    new terminal outcomes distinct and only surface relationships whose two
+    executions remain visible to the caller.
+    """
+
+    if direction not in {"inbound", "outbound"}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "invalid_continuation_direction",
+                "message": "direction must be 'inbound' or 'outbound'.",
+            },
+        )
+
+    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+    repository = SqlLinkedContinuationRepository(session)
+
+    async def _visible_status(candidate_workflow_id: str) -> str | None:
+        try:
+            execution = await _get_owned_execution(
+                service=service, workflow_id=candidate_workflow_id, user=user
+            )
+        except HTTPException as exc:
+            if exc.status_code == status.HTTP_404_NOT_FOUND:
+                return None
+            raise
+        return str(getattr(execution, "status", "") or "") or None
+
+    items: list[LinkedContinuationSummaryModel] = []
+    if direction == "outbound":
+        for record in await repository.list_for_source(workflow_id):
+            destination_id = str(record.destination_workflow_id or "").strip()
+            if not destination_id:
+                continue
+            destination_status = await _visible_status(destination_id)
+            if destination_status is None:
+                continue
+            items.append(
+                LinkedContinuationSummaryModel(
+                    relationshipType=record.relationship_type,
+                    sourceWorkflowId=record.source_workflow_id,
+                    sourceRunId=record.source_run_id,
+                    destinationWorkflowId=destination_id,
+                    destinationRunId=record.destination_run_id,
+                    status=destination_status,
+                    createdBy=record.created_by,
+                    boundedPurpose=record.bounded_purpose,
+                    createdAt=record.created_at,
+                )
+            )
+    else:
+        record = await repository.get_for_destination(workflow_id)
+        if record is not None:
+            source_status = await _visible_status(record.source_workflow_id)
+            if source_status is not None:
+                items.append(
+                    LinkedContinuationSummaryModel(
+                        relationshipType=record.relationship_type,
+                        sourceWorkflowId=record.source_workflow_id,
+                        sourceRunId=record.source_run_id,
+                        destinationWorkflowId=str(record.destination_workflow_id or ""),
+                        destinationRunId=record.destination_run_id,
+                        status=source_status,
+                        createdBy=record.created_by,
+                        boundedPurpose=record.bounded_purpose,
+                        createdAt=record.created_at,
+                    )
+                )
+
+    return LinkedContinuationLinksResponseModel(direction=direction, items=items)
+
+
+class ContinueRemediationBudgetProposal(BaseModel):
+    """Operator-selected limits bounded by the server-owned grant."""
+
+    model_config = {"populate_by_name": True, "extra": "forbid"}
+
+    max_attempts: int = Field(alias="maxAttempts", ge=1)
+    max_consecutive_no_progress_attempts: int = Field(
+        alias="maxConsecutiveNoProgressAttempts", ge=1
+    )
+
+
+class ContinueRemediationRequest(BaseModel):
+    """Select the frozen control-stop evidence owned by the source execution."""
+
+    model_config = {"populate_by_name": True, "extra": "forbid"}
+
+    proposed_continuation_budget: ContinueRemediationBudgetProposal | None = Field(
+        None, alias="proposedContinuationBudget"
+    )
+    instruction_changes_ref: str | None = Field(
+        None, alias="instructionChangesRef", min_length=1
+    )
+    instruction_changes_digest: str | None = Field(
+        None, alias="instructionChangesDigest", min_length=1
+    )
+
+    @model_validator(mode="after")
+    def _paired_instruction_changes(self) -> "ContinueRemediationRequest":
+        if bool(self.instruction_changes_ref) != bool(
+            self.instruction_changes_digest
+        ):
+            raise ValueError(
+                "instruction changes require both a reference and digest"
+            )
+        return self
+
+
+class ContinueRemediationResponse(BaseModel):
+    """Stable linked destination returned for both first and duplicate submissions."""
+
+    model_config = {"populate_by_name": True}
+
+    source_workflow_id: str = Field(alias="sourceWorkflowId")
+    source_run_id: str = Field(alias="sourceRunId")
+    control_stop_id: str = Field(alias="controlStopId")
+    destination_workflow_id: str = Field(alias="destinationWorkflowId")
+    workspace_head_ref: str = Field(alias="workspaceHeadRef")
+    remaining_work_ref: str = Field(alias="remainingWorkRef")
+    created: bool
+
+
+@router.post(
+    "/{workflow_id}/actions/continue-remediation",
+    response_model=ContinueRemediationResponse,
+    response_model_exclude_none=True,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def continue_remediation(
+    workflow_id: str,
+    payload: ContinueRemediationRequest,
+    service: TemporalExecutionService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(get_current_user()),
+    starter: TemporalControlStopContinuationStarter = Depends(
+        get_control_stop_continuation_starter
+    ),
+    _actions_enabled: None = Depends(_ensure_actions_enabled),
+) -> ContinueRemediationResponse:
+    """Admit one deterministic continuation from authoritative frozen evidence."""
+
+    continuation_metrics = get_metrics_emitter()
+    continuation_metrics.increment(
+        "control_stop_continuation.admission_total",
+        tags={"outcome": "attempt"},
+    )
+    source = await _get_owned_execution(
+        service=service,
+        workflow_id=workflow_id,
+        user=user,
+    )
+    source_run_id = str(getattr(source, "run_id", "") or "").strip()
+    if not source_run_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "control_stop_source_run_missing",
+                "message": "The source execution has no authoritative run identity.",
+            },
+        )
+
+    try:
+        repository = SqlControlStopContinuationRepository(session)
+        control_stop_id, evidence = await repository.load_source_identity(
+            source_workflow_id=source.workflow_id,
+            source_run_id=source_run_id,
+        )
+        contract = ControlStopContinuationContract.model_validate(
+            dict(evidence.contract_payload)
+        )
+        selected_budget = contract.continuation_budget
+        if payload.proposed_continuation_budget is not None:
+            selected_budget = ContinuationBudgetGrant(
+                grantId=contract.continuation_budget.grant_id,
+                maxAttempts=payload.proposed_continuation_budget.max_attempts,
+                maxConsecutiveNoProgressAttempts=(
+                    payload.proposed_continuation_budget
+                    .max_consecutive_no_progress_attempts
+                ),
+            )
+        reservation = await admit_control_stop_continuation(
+            source_workflow_id=source.workflow_id,
+            source_run_id=source_run_id,
+            control_stop_id=control_stop_id,
+            continuation_budget=selected_budget,
+            instruction_changes_ref=payload.instruction_changes_ref,
+            instruction_changes_digest=payload.instruction_changes_digest,
+            repository=repository,
+            starter=starter,
+        )
+    except (ControlStopContinuationError, ValidationError) as exc:
+        continuation_metrics.increment(
+            "control_stop_continuation.admission_total",
+            tags={"outcome": "rejected"},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "control_stop_continuation_rejected",
+                "message": str(exc),
+            },
+        ) from exc
+
+    continuation_metrics.increment(
+        "control_stop_continuation.admission_total",
+        tags={"outcome": "created" if reservation.created else "reconciled"},
+    )
+    return ContinueRemediationResponse(
+        sourceWorkflowId=reservation.source_workflow_id,
+        sourceRunId=reservation.source_run_id,
+        controlStopId=reservation.control_stop_id,
+        destinationWorkflowId=reservation.destination_workflow_id,
+        workspaceHeadRef=reservation.workspace_head_ref,
+        remainingWorkRef=reservation.remaining_work_ref,
+        created=reservation.created,
+    )
+
+
 @router.post(
     "/{workflow_id}/update",
     response_model=UpdateExecutionResponse,
@@ -13879,6 +17540,32 @@ async def update_execution(
         user=user,
     )
     is_task_editing_update = payload.update_name in _TASK_EDITING_UPDATE_NAMES
+    recorded_plan = (
+        (getattr(record, "parameters", None) or {}).get("omnigentExecutionPlan")
+        if isinstance(getattr(record, "parameters", None), Mapping)
+        else None
+    )
+    exact_plan_rerun = (
+        payload.update_name == "RequestRerun"
+        and payload.input_artifact_ref is None
+        and payload.plan_artifact_ref is None
+        and payload.parameters_patch is None
+    )
+    if (
+        is_task_editing_update
+        and isinstance(recorded_plan, Mapping)
+        and not exact_plan_rerun
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "omnigent_execution_plan_replacement_required",
+                "message": (
+                    "Editing an admitted Omnigent execution requires a new "
+                    "execution so immutable plan authority can be recompiled."
+                ),
+            },
+        )
     if is_task_editing_update:
         _emit_task_editing_metric(
             "submit_attempt",
@@ -14323,7 +18010,15 @@ async def rerun_execution(
     # Use canonical parameters with rerun-specific sanitization to avoid carrying
     # task dependency edges and recovery metadata from a prior execution.
     initial_params = service._full_rerun_parameters(canonical.parameters or {})
-
+    reserved_workflow_id = f"mm:{_uuid4()}"
+    if not isinstance(initial_params.get("omnigentExecutionPlan"), Mapping):
+        initial_params = await refresh_managed_bootstrap_snapshot(
+            session,
+            parameters=initial_params,
+            consumer_type="workflow",
+            consumer_id=reserved_workflow_id,
+            user=user,
+        )
     # Generate a new idempotency key based on the original workflow ID
     new_idempotency_key = f"rerun:{workflow_id}:{_uuid4()}"
 
@@ -14341,6 +18036,7 @@ async def rerun_execution(
             idempotency_key=new_idempotency_key,
             repository=None,
             integration=None,
+            _workflow_id=reserved_workflow_id,
         )
     except TemporalExecutionValidationError as exc:
         raise HTTPException(
@@ -14351,16 +18047,33 @@ async def rerun_execution(
             },
         ) from exc
 
-    snapshot_ref = await _persist_original_workflow_input_snapshot_from_parameters(
-        session=session,
-        record=record,
-        user=user,
-        parameters=dict(initial_params),
-        source_kind="rerun",
-        source_workflow_id=canonical.workflow_id,
-        source_run_id=canonical.run_id,
-        input_artifact_ref=canonical.input_ref,
-    )
+    if isinstance(initial_params.get("omnigentExecutionPlan"), Mapping):
+        snapshot_ref = await _reuse_original_task_input_snapshot_from_source(
+            session=session,
+            source_record=canonical,
+            target_record=record,
+        )
+        source_memo = dict(canonical.memo or {})
+        target_memo = dict(getattr(record, "memo", None) or {})
+        for key in (
+            "omnigent_execution_plan_ref",
+            "omnigent_execution_plan_digest",
+            "omnigent_execution_plan_artifact_ref",
+        ):
+            if source_memo.get(key) is not None:
+                target_memo[key] = source_memo[key]
+        record.memo = target_memo
+    else:
+        snapshot_ref = await _persist_original_workflow_input_snapshot_from_parameters(
+            session=session,
+            record=record,
+            user=user,
+            parameters=dict(initial_params),
+            source_kind="rerun",
+            source_workflow_id=canonical.workflow_id,
+            source_run_id=canonical.run_id,
+            input_artifact_ref=canonical.input_ref,
+        )
 
     canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
     if alias_used:
@@ -14493,6 +18206,270 @@ def _reject_recovery_contract_mismatch(
         )
 
 
+def _checkpoint_resume_admission_for_request(
+    *, canonical: TemporalExecutionCanonicalRecord,
+    checkpoint_payload: Mapping[str, Any], repository: str | None,
+):
+    """Revalidate mutable rollout/readiness once, immediately before creation."""
+
+    params = canonical.parameters if isinstance(canonical.parameters, Mapping) else {}
+    workflow = params.get("workflow") if isinstance(params.get("workflow"), Mapping) else {}
+    runtime = workflow.get("runtime") if isinstance(workflow.get("runtime"), Mapping) else {}
+    runtime_id = normalize_runtime_id(
+        params.get("targetRuntime")
+        or runtime.get("mode")
+        or runtime.get("id")
+        or runtime.get("runtimeId")
+        or params.get("runtimeId")
+        or ""
+    )
+    capabilities = resolve_runtime_execution_capabilities(runtime_id)
+    flags = settings.feature_flags
+    generation = str(flags.checkpoint_resume_deployment_generation or "").strip()
+    readiness = CheckpointResumeReadiness(
+        runtimeId=runtime_id,
+        deploymentGeneration=generation or "unavailable",
+        captureRouteReady=flags.checkpoint_resume_capture_route_ready,
+        restoreRouteReady=flags.checkpoint_resume_restore_route_ready,
+        artifactStoreReady=flags.checkpoint_resume_artifact_store_ready,
+        managedRunStoreReady=flags.checkpoint_resume_managed_run_store_ready,
+        capabilitySetVersion=capabilities.capability_set_version,
+        capabilityDigest=capabilities.capability_digest,
+        checkedAt=datetime.now(UTC),
+    )
+    workspace = checkpoint_payload.get("recoveryWorkspace")
+    workspace = workspace if isinstance(workspace, Mapping) else {}
+    raw_size = workspace.get("archiveBytes", checkpoint_payload.get("archiveBytes", 0))
+    try:
+        archive_bytes = int(raw_size)
+    except (TypeError, ValueError):
+        archive_bytes = 0
+    decision = evaluate_checkpoint_resume_admission(
+        capabilities=capabilities,
+        policy=rollout_policy_from_settings(flags),
+        readiness=readiness,
+        checkpoint_kind="worktree_archive",
+        checkpoint_boundary="before_recovery_restoration",
+        resume_phase="retry_restoration",
+        archive_bytes=archive_bytes,
+        owner_id=str(canonical.owner_id or "") or None,
+        repository=repository,
+    )
+    metric_tags = bounded_checkpoint_metric_tags(
+        runtime_id=runtime_id,
+        generation=readiness.deployment_generation,
+        outcome=decision.reason_code,
+    )
+    metrics = get_metrics_emitter()
+    metrics.increment("checkpoint_resume.eligibility_total", tags=metric_tags)
+    metrics.increment("checkpoint_resume.admission_total", tags=metric_tags)
+    if not decision.admitted:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "resume_not_available",
+                "message": "Checkpoint Resume is not admitted by current rollout readiness.",
+                "reason": decision.reason_code,
+            },
+        )
+    return decision
+
+
+def _canonical_execution_repository(
+    canonical: TemporalExecutionCanonicalRecord,
+) -> str | None:
+    params = canonical.parameters if isinstance(canonical.parameters, Mapping) else {}
+    task = params.get("task") if isinstance(params.get("task"), Mapping) else {}
+    value = params.get("repository") or task.get("repository")
+    candidate = str(value or "").strip()
+    return candidate or None
+
+
+def _csv_setting(value: str) -> tuple[str, ...]:
+    return tuple(item.strip() for item in value.split(",") if item.strip())
+
+
+def _publication_recovery_policy() -> PublicationRecoveryRolloutPolicy:
+    flags = settings.feature_flags
+    return PublicationRecoveryRolloutPolicy(
+        enabled=flags.publication_recovery_enabled,
+        shadow=flags.publication_recovery_shadow,
+        canaryRepositories=_csv_setting(
+            flags.publication_recovery_canary_repositories
+        ),
+        canaryOwnerIds=_csv_setting(flags.publication_recovery_canary_owner_ids),
+        allowedModes=_csv_setting(flags.publication_recovery_allowed_modes),
+        generation=flags.publication_recovery_generation,
+    )
+
+
+def _publication_recovery_contract_from_record(
+    canonical: TemporalExecutionCanonicalRecord,
+) -> PublicationRecoveryContract:
+    finish_summary = (
+        canonical.finish_summary_json
+        if isinstance(canonical.finish_summary_json, Mapping)
+        else {}
+    )
+    control_stop = finish_summary.get("controlStop")
+    control_stop = control_stop if isinstance(control_stop, Mapping) else {}
+    auxiliary = control_stop.get("auxiliaryOutcomes")
+    auxiliary = auxiliary if isinstance(auxiliary, Mapping) else {}
+    publication = auxiliary.get("gitPublication")
+    publication = publication if isinstance(publication, Mapping) else {}
+    payload = publication.get("recoveryContract")
+    eligible, reason = publication_action_eligibility(payload)
+    if publication.get("status") != "failed" or not eligible:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "publication_retry_not_available",
+                "message": "Publication recovery is not available for this execution.",
+                "reason": reason or "publication_not_failed",
+            },
+        )
+    try:
+        return PublicationRecoveryContract.model_validate(payload)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "publication_retry_not_available",
+                "message": "Publication recovery evidence is invalid.",
+                "reason": "publication_recovery_contract_invalid",
+            },
+        ) from exc
+
+
+@router.post(
+    "/{workflow_id}/retry-publication",
+    response_model=PublicationRecoveryResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def retry_execution_publication(
+    workflow_id: str,
+    service: TemporalExecutionService = Depends(_get_service),
+    adapter: TemporalClientAdapter = Depends(get_temporal_client_adapter),
+    user: User = Depends(get_current_user()),
+    _submit_enabled: None = Depends(_ensure_submit_enabled),
+) -> PublicationRecoveryResponse:
+    """Start or reconcile exactly one publication-only linked workflow."""
+
+    canonical = await _get_owned_execution(
+        service=service, workflow_id=workflow_id, user=user
+    )
+    contract = _publication_recovery_contract_from_record(canonical)
+    if (
+        contract.source_workflow_id != workflow_id
+        or contract.source_run_id != str(canonical.run_id or "")
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "publication_retry_not_available",
+                "message": "Publication recovery source identity does not match.",
+                "reason": "publication_source_mismatch",
+            },
+        )
+    policy = _publication_recovery_policy()
+    reason = policy.admission_reason(
+        repository=contract.intent.repository,
+        owner_id=_owner_id(user),
+        mode=contract.intent.mode,
+    )
+    if reason is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "publication_retry_not_admitted",
+                "message": "Publication recovery is not admitted by current rollout policy.",
+                "reason": reason,
+            },
+        )
+    destination_id = publication_recovery_workflow_id(contract)
+    started = await adapter.start_workflow(
+        workflow_type="MoonMind.PublicationRecoveryV1",
+        workflow_id=destination_id,
+        input_args=contract.model_dump(mode="json", by_alias=True),
+        memo={
+            "source_workflow_id": contract.source_workflow_id,
+            "source_run_id": contract.source_run_id,
+            "publication_idempotency_key": (
+                contract.continuation.publication_idempotency_key
+            ),
+            "publication_recovery_generation": policy.generation,
+            "publication_semantic_context": contract.target.semantic_context,
+            "publication_recovery_phase": "contract_validation",
+            "publication_no_implementation_rerun": True,
+            "publication_no_verification_rerun": True,
+        },
+    )
+    return PublicationRecoveryResponse(
+        sourceWorkflowId=contract.source_workflow_id,
+        sourceRunId=contract.source_run_id,
+        workflowId=started.workflow_id,
+        runId=started.run_id,
+        publicationIdempotencyKey=(
+            contract.continuation.publication_idempotency_key
+        ),
+        rolloutGeneration=policy.generation,
+    )
+
+
+@router.post(
+    "/{workflow_id}/recover",
+    response_model=RecoverExecutionResponse,
+    status_code=status.HTTP_201_CREATED,
+    response_model_exclude_none=True,
+)
+async def recover_execution(
+    workflow_id: str,
+    request: WorkflowRecoveryTargetModel = Body(...),
+    service: TemporalExecutionService = Depends(_get_service),
+    user: User = Depends(get_current_user()),
+    _submit_enabled: None = Depends(_ensure_submit_enabled),
+) -> RecoverExecutionResponse:
+    """Create a typed recovery destination without mutating its terminal source."""
+
+    canonical = await _get_owned_execution(
+        service=service, workflow_id=workflow_id, user=user
+    )
+    if request.source.workflow_id != canonical.workflow_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "recovery_not_available",
+                "message": "Typed recovery source workflow does not match.",
+                "reasons": ["RECOVERY_TARGET_IDENTITY_MISMATCH"],
+            },
+        )
+    try:
+        result = await service.create_typed_recovery_execution(
+            canonical,
+            recovery_target=request,
+        )
+    except TemporalExecutionRecoveryCheckpointError as exc:
+        reasons = [reason for reason in str(exc).split(",") if reason]
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "recovery_not_available",
+                "message": "Typed recovery admission failed.",
+                "reasons": reasons,
+            },
+        ) from exc
+    except TemporalExecutionValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "recovery_not_available",
+                "message": str(exc),
+                "reasons": ["RECOVERY_TARGET_IDENTITY_MISMATCH"],
+            },
+        ) from exc
+    return RecoverExecutionResponse.model_validate(result)
+
+
 @router.post(
     "/{workflow_id}/recover-from-failed-step",
     response_model=RecoverFromFailedStepResponse,
@@ -14553,6 +18530,11 @@ async def recover_execution_from_failed_step(
         canonical=canonical,
         checkpoint_payload=checkpoint_payload,
     )
+    admission = _checkpoint_resume_admission_for_request(
+        canonical=canonical,
+        checkpoint_payload=checkpoint_payload,
+        repository=_canonical_execution_repository(canonical),
+    )
     try:
         result = await service.create_failed_step_recovery_execution(
             canonical,
@@ -14561,6 +18543,7 @@ async def recover_execution_from_failed_step(
             checkpoint_payload=checkpoint_payload,
             failed_run_recovery_manifest_ref=manifest_ref,
             failed_run_recovery_manifest=manifest_payload,
+            admitted_checkpoint_resume_decision=admission,
         )
     except TemporalExecutionRecoveryCheckpointError as exc:
         raise HTTPException(
@@ -14663,6 +18646,11 @@ async def recover_execution_from_selected_step(
         canonical=canonical,
         checkpoint_payload=checkpoint_payload,
     )
+    admission = _checkpoint_resume_admission_for_request(
+        canonical=canonical,
+        checkpoint_payload=checkpoint_payload,
+        repository=_canonical_execution_repository(canonical),
+    )
     try:
         result = await service.create_failed_step_recovery_execution(
             canonical,
@@ -14672,6 +18660,7 @@ async def recover_execution_from_selected_step(
             failed_run_recovery_manifest_ref=manifest_ref,
             failed_run_recovery_manifest=manifest_payload,
             selected_start_step_id=request.selected_start_step_id,
+            admitted_checkpoint_resume_decision=admission,
         )
     except TemporalExecutionRecoveryCheckpointError as exc:
         raise HTTPException(

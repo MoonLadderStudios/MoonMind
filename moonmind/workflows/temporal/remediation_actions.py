@@ -12,15 +12,23 @@ import re
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db import models as db_models
 from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
+from moonmind.workflows.temporal.remediation_verification import (
+    verification_contract_for,
+)
+
+if TYPE_CHECKING:
+    from moonmind.workflows.temporal.remediation_context import (
+        RemediationLifecyclePublisher,
+    )
 
 _GUARD_STATE_RETENTION_SECONDS = 24 * 60 * 60
 _MAX_GUARD_STATE_ENTRIES = 2048
@@ -63,6 +71,7 @@ _RAW_ACCESS_ACTION_KINDS = frozenset(
 )
 _COMMON_REASON_INPUT = {
     "reason": {"type": "string", "required": False},
+    "expectedRunId": {"type": "string", "required": False},
 }
 _COMMON_AUDIT_PAYLOAD_SHAPE = {
     "actor": "string",
@@ -74,6 +83,18 @@ _COMMON_AUDIT_PAYLOAD_SHAPE = {
     "decision": "string",
     "timestamp": "string",
 }
+REMEDIATION_BRANCH_SENSITIVE_FIELDS = frozenset(
+    {
+        "instructions",
+        "runtime",
+        "model",
+        "providerProfile",
+        "launchPolicy",
+        "repositoryBranch",
+        "workspacePolicy",
+        "publishMode",
+    }
+)
 _ACTION_CATALOG: dict[str, dict[str, Any]] = {
     "execution.pause": {
         "risk": "medium",
@@ -117,8 +138,18 @@ _ACTION_CATALOG: dict[str, dict[str, Any]] = {
         "target_type": "checkpoint_branch",
         "input_metadata": {
             **_COMMON_REASON_INPUT,
+            "remediationWorkflowId": {"type": "string", "required": True},
             "remediationContextRef": {"type": "string", "required": True},
             "checkpointRef": {"type": "string", "required": True},
+            "instructionRef": {"type": "string", "required": True},
+            "instructionDigest": {"type": "string", "required": True},
+            "repository": {"type": "string", "required": True},
+            "baseBranch": {"type": "string", "required": True},
+            "baseCommit": {"type": "string", "required": True},
+            "gitWorkBranch": {"type": "string", "required": False},
+            "providerProfileRef": {"type": "string", "required": False},
+            "logicalStepId": {"type": "string", "required": True},
+            "executionOrdinal": {"type": "integer", "required": True},
             "runtimeContextPolicy": {
                 "type": "string",
                 "required": False,
@@ -210,7 +241,9 @@ _ACTION_CATALOG: dict[str, dict[str, Any]] = {
         "target_type": "provider_profile_lease",
         "input_metadata": {
             **_COMMON_REASON_INPUT,
-            "profileRef": {"type": "string", "required": False},
+            "providerProfileId": {"type": "string", "required": True},
+            "hostLeaseRef": {"type": "string", "required": True},
+            "expectedHostState": {"type": "string", "required": False},
         },
         "preconditions": ("target_visible", "lease_stale_or_orphaned"),
         "idempotency": "same target/action/profile key returns the prior decision",
@@ -220,7 +253,11 @@ _ACTION_CATALOG: dict[str, dict[str, Any]] = {
         "risk": "medium",
         "enabled": True,
         "target_type": "workload_container",
-        "input_metadata": _COMMON_REASON_INPUT,
+        "input_metadata": {
+            **_COMMON_REASON_INPUT,
+            "containerRef": {"type": "string", "required": True},
+            "expectedState": {"type": "string", "required": False},
+        },
         "preconditions": ("target_visible", "helper_container_owned_by_moonmind"),
         "idempotency": "same target/action/container key returns the prior decision",
         "verification_hint": "verify helper container health and target state",
@@ -229,16 +266,290 @@ _ACTION_CATALOG: dict[str, dict[str, Any]] = {
         "risk": "medium",
         "enabled": True,
         "target_type": "workload_container",
-        "input_metadata": _COMMON_REASON_INPUT,
+        "input_metadata": {
+            **_COMMON_REASON_INPUT,
+            "containerRef": {"type": "string", "required": True},
+            "expectedState": {"type": "string", "required": False},
+        },
         "preconditions": ("target_visible", "container_orphaned_by_policy"),
         "idempotency": "same target/action/container key returns the prior decision",
         "verification_hint": "verify orphan container is gone or no-op reason is recorded",
+    },
+    "host.drain": {
+        "risk": "medium",
+        "enabled": True,
+        "target_type": "omnigent_host",
+        "input_metadata": {
+            **_COMMON_REASON_INPUT,
+            "providerProfileId": {"type": "string", "required": True},
+            "hostLeaseRef": {"type": "string", "required": True},
+            "expectedHostState": {"type": "string", "required": True},
+        },
+        "preconditions": ("target_visible", "host_lease_owned", "expected_host_state"),
+        "idempotency": "same target/action/host-lease key returns the prior decision",
+        "verification_hint": "verify the lease-owned host rejects new sessions",
+    },
+    "host.stop": {
+        "risk": "high",
+        "enabled": True,
+        "target_type": "omnigent_host",
+        "input_metadata": {
+            **_COMMON_REASON_INPUT,
+            "providerProfileId": {"type": "string", "required": True},
+            "hostLeaseRef": {"type": "string", "required": True},
+            "expectedHostState": {"type": "string", "required": True},
+        },
+        "preconditions": ("target_visible", "host_lease_owned", "expected_host_state"),
+        "idempotency": "same target/action/host-lease key returns the prior decision",
+        "verification_hint": "verify the lease-owned host reaches stopped state",
+    },
+    "host.restart": {
+        "risk": "high",
+        "enabled": True,
+        "target_type": "omnigent_host",
+        "input_metadata": {
+            **_COMMON_REASON_INPUT,
+            "providerProfileId": {"type": "string", "required": True},
+            "hostLeaseRef": {"type": "string", "required": True},
+            "expectedHostState": {"type": "string", "required": True},
+        },
+        "preconditions": ("target_visible", "host_lease_owned", "expected_host_state"),
+        "idempotency": "same target/action/host-lease key returns the prior decision",
+        "verification_hint": "verify a new host generation becomes healthy",
+    },
+    "host.remove": {
+        "risk": "high",
+        "enabled": True,
+        "target_type": "omnigent_host",
+        "input_metadata": {
+            **_COMMON_REASON_INPUT,
+            "providerProfileId": {"type": "string", "required": True},
+            "hostLeaseRef": {"type": "string", "required": True},
+            "expectedHostState": {"type": "string", "required": True},
+        },
+        "preconditions": ("target_visible", "host_lease_owned", "host_removal_approved"),
+        "idempotency": "same target/action/host-lease key returns the prior decision",
+        "verification_hint": "verify the lease-owned host and binding are absent",
+    },
+    "host_lease.reconcile_stale": {
+        "risk": "medium",
+        "enabled": True,
+        "target_type": "host_lease",
+        "input_metadata": {
+            **_COMMON_REASON_INPUT,
+            "providerProfileId": {"type": "string", "required": True},
+            "hostLeaseRef": {"type": "string", "required": True},
+            "expectedHostState": {"type": "string", "required": False},
+        },
+        "preconditions": ("target_visible", "host_lease_stale_or_orphaned"),
+        "idempotency": "same target/action/host-lease key returns the prior decision",
+        "verification_hint": "verify host ownership and lease state are consistent",
+    },
+    "cleanup.request_janitor": {
+        "risk": "medium",
+        "enabled": True,
+        "target_type": "cleanup",
+        "input_metadata": {
+            **_COMMON_REASON_INPUT,
+            "cleanupRef": {"type": "string", "required": True},
+            "expectedState": {"type": "string", "required": False},
+        },
+        "preconditions": ("target_visible", "cleanup_owned_by_moonmind"),
+        "idempotency": "same target/action/cleanup key returns the prior decision",
+        "verification_hint": "verify a cleanup manifest reaches a terminal state",
+    },
+    "cleanup.verify": {
+        "risk": "low",
+        "enabled": True,
+        "target_type": "cleanup",
+        "input_metadata": _COMMON_REASON_INPUT,
+        "preconditions": ("target_visible",),
+        "idempotency": "same target/action/cleanup key returns the prior decision",
+        "verification_hint": "verify cleanup and janitor evidence are internally consistent",
+    },
+    "target.annotate": {
+        "risk": "low",
+        "enabled": True,
+        "target_type": "execution",
+        "input_metadata": _COMMON_REASON_INPUT,
+        "preconditions": ("target_visible",),
+        "idempotency": "same target/action/annotation key returns the prior decision",
+        "verification_hint": "verify the target links the remediation annotation",
+    },
+    "target.verify": {
+        "risk": "low",
+        "enabled": True,
+        "target_type": "execution",
+        "input_metadata": _COMMON_REASON_INPUT,
+        "preconditions": ("target_visible",),
+        "idempotency": "same target/action/verification key returns the prior decision",
+        "verification_hint": "verify target terminal evidence rather than assistant prose",
     },
 }
 _DEFAULT_AUTO_ALLOWED_RISK = "medium"
 _SUPPORTED_AUTHORITY_MODES = frozenset(
     {"observe_only", "approval_gated", "admin_auto"}
 )
+
+# Execution readiness is deliberately explicit and conservative. An action is
+# requestable only when both its owning mutation adapter and its authoritative
+# verifier are wired. Keeping unavailable identities in ``_ACTION_CATALOG``
+# lets policy and documentation expose a stable, bounded disabled reason without
+# advertising the action as executable (MoonLadderStudios/MoonMind#3624).
+_EXECUTION_BACKEND_READY = frozenset(
+    {
+        "execution.pause",
+        "execution.resume",
+        "execution.request_rerun_same_workflow",
+        "execution.start_fresh_rerun",
+        "checkpoint_branch.create_from_remediation_context",
+        "execution.cancel",
+        "execution.force_terminate",
+        "session.interrupt_turn",
+        "session.cancel",
+        "provider_profile.evict_stale_lease",
+        "workload.restart_helper_container",
+        "workload.reap_orphan_container",
+        "host.drain",
+        "host.stop",
+        "host.restart",
+        "host.remove",
+        "host_lease.reconcile_stale",
+    }
+)
+
+_OMNIGENT_ONLY_TARGETS = frozenset(
+    {
+        "managed_session",
+        "provider_profile_lease",
+        "workload_container",
+        "omnigent_host",
+        "host_lease",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class RemediationCapabilityContext:
+    """Live, exact-target inputs resolved by the owning service boundary."""
+
+    target_runtime: str | None = None
+    host_mode: str | None = None
+    target_state_eligible: bool = True
+    current_evidence_classes: Sequence[str] = field(default_factory=tuple)
+    require_current_evidence: bool = False
+    policy_allowed_action_kinds: Sequence[str] | None = None
+    caller_allowed_action_kinds: Sequence[str] | None = None
+    execution_backend_readiness: Mapping[str, bool] | None = None
+    approval_backend_ready: bool = True
+    verification_backend_readiness: Mapping[str, bool] | None = None
+
+
+def _action_support(action_kind: str) -> tuple[list[str], list[str]]:
+    from moonmind.workflows.executions.execution_contract import SUPPORTED_RUNTIME_MODES
+
+    target_type = str((_ACTION_CATALOG.get(action_kind) or {}).get("target_type") or "")
+    if target_type in _OMNIGENT_ONLY_TARGETS:
+        return ["omnigent"], ["static_compose", "on_demand_docker"]
+    return sorted(SUPPORTED_RUNTIME_MODES | {"temporal"}), []
+
+
+def remediation_action_capability(
+    action_kind: str,
+    *,
+    context: RemediationCapabilityContext | None = None,
+) -> Mapping[str, Any]:
+    """Evaluate one action against catalog and live exact-target readiness."""
+
+    normalized = str(action_kind or "").strip()
+    metadata = _ACTION_CATALOG.get(normalized)
+    contract = verification_contract_for(normalized)
+    catalog_enabled = bool(metadata and metadata.get("enabled"))
+    supported_runtimes, supported_host_modes = _action_support(normalized)
+    execution_ready = normalized in _EXECUTION_BACKEND_READY
+    verification_ready = contract.automatically_verifiable
+    approval_ready = catalog_enabled
+    if context is not None:
+        if context.execution_backend_readiness is not None:
+            execution_ready = execution_ready and bool(
+                context.execution_backend_readiness.get(normalized, False)
+            )
+        if context.verification_backend_readiness is not None:
+            verification_ready = verification_ready and bool(
+                context.verification_backend_readiness.get(normalized, False)
+            )
+        approval_ready = catalog_enabled and context.approval_backend_ready
+    blocked: list[str] = []
+    if not catalog_enabled:
+        blocked.append("action_not_in_enabled_catalog")
+    if not execution_ready:
+        blocked.append("execution_backend_unavailable")
+    if not approval_ready:
+        blocked.append("approval_backend_unavailable")
+    if not verification_ready:
+        blocked.append("authoritative_verifier_unavailable")
+    if context is not None:
+        policy = context.policy_allowed_action_kinds
+        if policy is not None and normalized not in set(policy):
+            blocked.append("target_policy_denied")
+        caller = context.caller_allowed_action_kinds
+        if caller is not None and normalized not in set(caller):
+            blocked.append("caller_permission_denied")
+        if not context.target_state_eligible:
+            blocked.append("target_state_ineligible")
+        if context.target_runtime and context.target_runtime not in supported_runtimes:
+            blocked.append("target_runtime_unsupported")
+        if (
+            context.host_mode
+            and supported_host_modes
+            and context.host_mode not in supported_host_modes
+        ):
+            blocked.append("host_mode_unsupported")
+        required = set(contract.before_evidence_classes)
+        available = set(context.current_evidence_classes)
+        if context.require_current_evidence and not required.issubset(available):
+            blocked.append("required_evidence_unavailable")
+    requestable = not blocked
+    return {
+        "requestable": requestable,
+        "dryRunSupported": False,
+        "executionBackendReady": execution_ready,
+        "approvalBackendReady": approval_ready,
+        "verificationBackendReady": verification_ready,
+        "supportedTargetRuntimes": supported_runtimes,
+        "supportedHostModes": supported_host_modes,
+        "requiredEvidenceClasses": list(
+            dict.fromkeys(
+                contract.before_evidence_classes + contract.after_evidence_classes
+            )
+        ),
+        "blockedReasons": blocked,
+    }
+
+
+def remediation_action_capability_matrix(
+    *, context: RemediationCapabilityContext | None = None
+) -> tuple[Mapping[str, Any], ...]:
+    """Return every catalog identity, including truthfully disabled actions."""
+
+    return tuple(
+        {
+            "actionKind": action_kind,
+            **remediation_action_capability(action_kind, context=context),
+        }
+        for action_kind in _ACTION_CATALOG
+    )
+
+
+def remediation_action_kinds() -> tuple[str, ...]:
+    """Return canonical identities with ready execution and verification owners."""
+
+    return tuple(
+        action_kind
+        for action_kind, metadata in _ACTION_CATALOG.items()
+        if metadata.get("enabled") is True
+        and remediation_action_capability(action_kind)["requestable"] is True
+    )
 _ABSOLUTE_PATH_PATTERN = re.compile(
     r"/(?:[A-Za-z0-9._:@+-]+/)*[A-Za-z0-9._:@+-]+"
 )
@@ -312,7 +623,7 @@ class RemediationActionAuthorityResult:
                     "resourceKind": _target_type(self.action_kind),
                 },
                 "riskTier": self.risk,
-                "dryRun": self.reason == "dry_run",
+                "dryRun": self.reason.startswith("dry_run"),
                 "idempotencyKey": self.idempotency_key,
                 "params": dict(self.redacted_parameters),
             },
@@ -501,8 +812,14 @@ class _LedgerEntry:
 class RemediationActionAuthorityService:
     """Evaluate remediation action requests against authority boundaries."""
 
-    def __init__(self, *, session: AsyncSession) -> None:
+    def __init__(
+        self,
+        *,
+        session: AsyncSession,
+        lifecycle_publisher: RemediationLifecyclePublisher | None = None,
+    ) -> None:
         self._session = session
+        self._lifecycle_publisher = lifecycle_publisher
         self._decisions: dict[tuple[str, str, str], RemediationActionAuthorityResult] = {}
         self._request_shapes: dict[tuple[str, str], str] = {}
 
@@ -511,6 +828,7 @@ class RemediationActionAuthorityService:
         *,
         permissions: RemediationPermissionSet,
         security_profile: RemediationSecurityProfile | None,
+        capability_context: RemediationCapabilityContext | None = None,
     ) -> tuple[Mapping[str, Any], ...]:
         """Return enabled action metadata allowed by caller permissions and profile."""
 
@@ -529,6 +847,16 @@ class RemediationActionAuthorityService:
                 continue
             if action_kind not in allowed_by_profile:
                 continue
+            live_context = capability_context or RemediationCapabilityContext()
+            live_context = replace(
+                live_context,
+                caller_allowed_action_kinds=tuple(allowed_by_profile),
+            )
+            capability = remediation_action_capability(
+                action_kind, context=live_context
+            )
+            if not capability["requestable"]:
+                continue
             actions.append(
                 {
                     "actionKind": action_kind,
@@ -540,6 +868,7 @@ class RemediationActionAuthorityService:
                     "verificationRequired": True,
                     "verificationHint": action_info["verification_hint"],
                     "auditPayloadShape": deepcopy(_COMMON_AUDIT_PAYLOAD_SHAPE),
+                    **capability,
                 }
             )
         return tuple(actions)
@@ -566,7 +895,7 @@ class RemediationActionAuthorityService:
             dry_run=dry_run,
         )
         cache_key = (workflow_id, idem, request_shape_hash)
-        if workflow_id and idem and cache_key in self._decisions:
+        if workflow_id and idem and not approval_ref and cache_key in self._decisions:
             return self._decisions[cache_key]
 
         if not workflow_id:
@@ -652,8 +981,224 @@ class RemediationActionAuthorityService:
             approval_ref=approval_ref,
         )
         self._request_shapes.setdefault(shape_key, request_shape_hash)
+        if result.decision == "approval_required":
+            await self._persist_approval_request(
+                link=link,
+                result=result,
+                request_shape_hash=request_shape_hash,
+                parameters=parameters,
+                requesting_principal=requesting_principal,
+                security_profile=security_profile,
+            )
+        elif approval_ref:
+            approval_error = self._validate_persisted_approval(
+                link=link,
+                approval_ref=approval_ref,
+                action_kind=normalized_action,
+                request_shape_hash=request_shape_hash,
+                parameter_digest=remediation_parameter_digest(
+                    _redact_payload(parameters or {})
+                ),
+            )
+            if approval_error is not None:
+                result = self._linked_result(
+                    link=link,
+                    action_kind=normalized_action,
+                    risk=result.risk,
+                    decision="denied",
+                    reason=approval_error,
+                    idempotency_key=idem,
+                    requesting_principal=requesting_principal,
+                    security_profile=security_profile,
+                    approval_ref=approval_ref,
+                    parameters=parameters,
+                )
         self._decisions[cache_key] = result
         return result
+
+    async def _persist_approval_request(
+        self, *, link: Any, result: RemediationActionAuthorityResult,
+        request_shape_hash: str, parameters: Mapping[str, Any] | None,
+        requesting_principal: str, security_profile: RemediationSecurityProfile | None,
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        request_id = f"{link.remediation_workflow_id}:approval:{request_shape_hash[:24]}"
+        raw_existing = getattr(link, "approval_state", None)
+        existing = raw_existing if isinstance(raw_existing, Mapping) else None
+        if existing is not None and existing.get("requestDigest") != request_shape_hash:
+            raise ValueError("approval_idempotency_conflict")
+        safe_parameters = redact_sensitive_payload(dict(parameters or {}))
+        target = await self._session.get(
+            db_models.TemporalExecutionCanonicalRecord, link.target_workflow_id
+        )
+        target_state = _enum_value(getattr(target, "state", None))
+        bridge = (
+            await self._session.execute(
+                select(db_models.OmnigentBridgeSession)
+                .where(
+                    db_models.OmnigentBridgeSession.moonmind_workflow_id
+                    == link.target_workflow_id,
+                    db_models.OmnigentBridgeSession.moonmind_run_id
+                    == link.target_run_id,
+                )
+                .order_by(db_models.OmnigentBridgeSession.updated_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        launch = (
+            bridge.effective_launch_snapshot_json
+            if bridge is not None
+            and isinstance(bridge.effective_launch_snapshot_json, Mapping)
+            else {}
+        )
+        policy = launch.get("policyAuthority")
+        policy_authority = policy if isinstance(policy, Mapping) else {}
+        parameter_digest = remediation_parameter_digest(
+            safe_parameters if isinstance(safe_parameters, Mapping) else {}
+        )
+        action_contract = _ACTION_CATALOG.get(result.action_kind, {})
+        action_preconditions = action_contract.get("preconditions")
+        preconditions = (
+            ", ".join(str(item) for item in action_preconditions)
+            if isinstance(action_preconditions, Sequence)
+            and not isinstance(action_preconditions, str | bytes)
+            else None
+        )
+        target_type = str(action_contract.get("target_type") or "resource")
+        approval_state = (
+            dict(existing)
+            if existing is not None
+            else {
+                "requestId": request_id,
+                "approvalRef": f"approval://remediation/{request_id}",
+                "requestDigest": request_shape_hash,
+                "parameterDigest": parameter_digest,
+                "remediationWorkflowId": link.remediation_workflow_id,
+                "remediationRunId": link.remediation_run_id,
+                "targetWorkflowId": link.target_workflow_id,
+                "targetRunId": link.target_run_id,
+                "actionKind": result.action_kind,
+                "riskTier": result.risk,
+                "redactedParameters": safe_parameters,
+                "expectedTargetState": target_state,
+                "preconditions": preconditions,
+                "blastRadius": (
+                    f"One {target_type} bound to pinned target run "
+                    f"{link.target_run_id}."
+                ),
+                "checkpointRef": _authority_parameter(parameters, "checkpointRef"),
+                "stepExecutionId": (
+                    getattr(bridge, "step_execution_id", None)
+                    or _authority_parameter(parameters, "stepExecutionId")
+                ),
+                "bridgeSessionId": getattr(bridge, "bridge_session_id", None),
+                "omnigentSessionId": getattr(bridge, "omnigent_session_id", None),
+                "hostRef": getattr(bridge, "omnigent_host_id", None),
+                "hostLeaseRef": getattr(bridge, "host_lease_ref", None),
+                "providerProfileLeaseRef": getattr(bridge, "provider_lease_id", None),
+                "credentialGeneration": getattr(bridge, "credential_generation", None),
+                "policyRef": policy_authority.get("policyRef"),
+                "policyDigest": policy_authority.get("policyDigest"),
+                "policySnapshotRef": policy_authority.get("snapshotRef"),
+                "securityProfileRef": getattr(security_profile, "profile_ref", None),
+                "approvalClass": "high_risk" if result.risk == "high" else "operator",
+                "reviewerRule": (
+                    "high_risk_reviewer" if result.risk == "high" else "operator"
+                ),
+                "requestingActor": requesting_principal,
+                "requestedAt": now.isoformat(),
+                "expiresAt": (now + timedelta(hours=1)).isoformat(),
+                "status": "pending",
+                "singleUse": True,
+            }
+        )
+        link.approval_state = approval_state
+        await self._session.commit()
+        if self._lifecycle_publisher is not None:
+            request_artifact = await self._lifecycle_publisher.publish_json_artifact(
+                remediation_workflow_id=link.remediation_workflow_id,
+                artifact_type="remediation.approval_request",
+                name=f"requests/remediation_approval-{request_id}.json",
+                payload={
+                    "schemaVersion": "v1",
+                    "approvalRef": approval_state["approvalRef"],
+                    "request": approval_state,
+                    "relatedArtifacts": dict(approval_state.get("artifactRefs") or {}),
+                },
+                target_workflow_id=link.target_workflow_id,
+                target_run_id=link.target_run_id,
+                principal="service:remediation-approval",
+            )
+            link.approval_state = {
+                **approval_state,
+                "artifactRefs": {
+                    **dict(approval_state.get("artifactRefs") or {}),
+                    "approvalRequest": request_artifact.artifact_id,
+                },
+            }
+            await self._session.commit()
+
+    @staticmethod
+    def _validate_persisted_approval(*, link: Any, approval_ref: str,
+        action_kind: str, request_shape_hash: str,
+        parameter_digest: str | None = None,
+        current_authority: Mapping[str, Any] | None = None) -> str | None:
+        raw_state = getattr(link, "approval_state", None)
+        state = raw_state if isinstance(raw_state, Mapping) else None
+        if state is None or state.get("approvalRef") != approval_ref:
+            return "approval_not_found"
+        status = str(state.get("status") or "")
+        if status != "approved":
+            return f"approval_{status or 'invalid'}"
+        try:
+            if datetime.fromisoformat(str(state["expiresAt"])) <= datetime.now(timezone.utc):
+                return "approval_expired"
+        except (KeyError, TypeError, ValueError):
+            return "approval_expiration_invalid"
+        if (
+            state.get("actionKind") != action_kind
+            or state.get("requestDigest") != request_shape_hash
+        ):
+            return "approval_action_mismatch"
+        if (
+            parameter_digest is not None
+            and state.get("parameterDigest") != parameter_digest
+        ):
+            return "approval_parameter_mismatch"
+        if state.get("targetRunId") != link.target_run_id:
+            return "approval_stale_target_state"
+        if current_authority is not None:
+            checks = (
+                ("expectedTargetState", "targetState", "approval_stale_target_state"),
+                ("checkpointRef", "checkpointRef", "approval_stale_checkpoint"),
+                ("stepExecutionId", "stepExecutionId", "approval_stale_checkpoint"),
+                ("bridgeSessionId", "bridgeSessionId", "approval_stale_bridge_session"),
+                ("omnigentSessionId", "omnigentSessionId", "approval_stale_session"),
+                ("hostRef", "hostRef", "approval_stale_host"),
+                ("hostLeaseRef", "hostLeaseRef", "approval_stale_host_lease"),
+                (
+                    "providerProfileLeaseRef",
+                    "providerProfileLeaseRef",
+                    "approval_stale_provider_profile_lease",
+                ),
+                (
+                    "credentialGeneration",
+                    "credentialGeneration",
+                    "approval_stale_credential_generation",
+                ),
+                ("policyRef", "policyRef", "approval_stale_policy"),
+                ("policyDigest", "policyDigest", "approval_stale_policy"),
+                ("policySnapshotRef", "policySnapshotRef", "approval_stale_policy"),
+                (
+                    "securityProfileRef",
+                    "securityProfileRef",
+                    "approval_stale_security_profile",
+                ),
+            )
+            for stored_key, current_key, reason in checks:
+                if state.get(stored_key) != current_authority.get(current_key):
+                    return reason
+        return None
 
     def _evaluate_with_link(
         self,
@@ -709,17 +1254,27 @@ class RemediationActionAuthorityService:
                 approval_ref=approval_ref,
                 parameters=parameters,
             )
-        parameter_error = _action_parameter_error(
-            action_info=action_info,
-            parameters=parameters,
-        )
-        if parameter_error is not None:
+        if dry_run:
             return self._linked_result(
                 link=link,
                 action_kind=action_kind,
                 risk=risk,
                 decision="denied",
-                reason=parameter_error,
+                reason="dry_run_unsupported",
+                idempotency_key=idempotency_key,
+                requesting_principal=requesting_principal,
+                security_profile=security_profile,
+                approval_ref=approval_ref,
+                parameters=parameters,
+            )
+        capability = remediation_action_capability(action_kind)
+        if not capability["requestable"]:
+            return self._linked_result(
+                link=link,
+                action_kind=action_kind,
+                risk=risk,
+                decision="denied",
+                reason=str(capability["blockedReasons"][0]),
                 idempotency_key=idempotency_key,
                 requesting_principal=requesting_principal,
                 security_profile=security_profile,
@@ -746,22 +1301,6 @@ class RemediationActionAuthorityService:
                 risk=risk,
                 decision="denied",
                 reason="unsupported_authority_mode",
-                idempotency_key=idempotency_key,
-                requesting_principal=requesting_principal,
-                security_profile=security_profile,
-                approval_ref=approval_ref,
-                parameters=parameters,
-            )
-        if dry_run:
-            decision: RemediationActionDecision = (
-                "dry_run_only" if authority_mode == "observe_only" else "allowed"
-            )
-            return self._linked_result(
-                link=link,
-                action_kind=action_kind,
-                risk=risk,
-                decision=decision,
-                reason="dry_run",
                 idempotency_key=idempotency_key,
                 requesting_principal=requesting_principal,
                 security_profile=security_profile,
@@ -801,6 +1340,24 @@ class RemediationActionAuthorityService:
                 parameters=parameters,
             )
 
+        parameter_error = _action_parameter_error(
+            action_info=action_info,
+            parameters=parameters,
+        )
+        if parameter_error is not None:
+            return self._linked_result(
+                link=link,
+                action_kind=action_kind,
+                risk=risk,
+                decision="denied",
+                reason=parameter_error,
+                idempotency_key=idempotency_key,
+                requesting_principal=requesting_principal,
+                security_profile=security_profile,
+                approval_ref=approval_ref,
+                parameters=parameters,
+            )
+
         if authority_mode == "approval_gated" and not approval_ref:
             return self._linked_result(
                 link=link,
@@ -827,19 +1384,9 @@ class RemediationActionAuthorityService:
                 approval_ref=approval_ref,
                 parameters=parameters,
             )
-        if approval_ref and risk == "high" and not permissions.can_approve_high_risk:
-            return self._linked_result(
-                link=link,
-                action_kind=action_kind,
-                risk=risk,
-                decision="denied",
-                reason="high_risk_approval_permission_required",
-                idempotency_key=idempotency_key,
-                requesting_principal=requesting_principal,
-                security_profile=security_profile,
-                approval_ref=approval_ref,
-                parameters=parameters,
-            )
+        # Reviewer authority is proven by the persisted decision, not inherited
+        # from the action requester. The authoritative record is resolved below
+        # before an executable result is returned.
 
         auto_allowed_risk = _DEFAULT_AUTO_ALLOWED_RISK
         if authority_mode == "admin_auto" and not approval_ref:
@@ -1906,6 +2453,11 @@ def _string_or_none(value: Any) -> str | None:
     text = str(value or "").strip()
     return text or None
 
+
+def _enum_value(value: Any) -> str | None:
+    raw = getattr(value, "value", value)
+    return _string_or_none(raw)
+
 def _int_or_zero(value: Any) -> int:
     try:
         return int(value)
@@ -2046,6 +2598,19 @@ def _authority_request_shape_hash(
     encoded = json.dumps(payload, sort_keys=True, default=str, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
+
+def remediation_parameter_digest(parameters: Mapping[str, Any] | None) -> str:
+    encoded = json.dumps(
+        parameters or {}, sort_keys=True, default=str, separators=(",", ":")
+    )
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _authority_parameter(
+    parameters: Mapping[str, Any] | None, key: str
+) -> Any | None:
+    return parameters.get(key) if isinstance(parameters, Mapping) else None
+
 def _action_parameter_error(
     *,
     action_info: Mapping[str, Any],
@@ -2134,7 +2699,31 @@ def _result_status(decision: RemediationActionDecision, reason: str) -> str:
         return "rejected"
     return "failed"
 
+
+def remediation_changes_require_checkpoint_branch(
+    *,
+    original: Mapping[str, Any],
+    proposed: Mapping[str, Any],
+) -> tuple[str, ...]:
+    """Return immutable-input choices that require a Checkpoint Branch turn.
+
+    Callers must route any non-empty result through
+    ``checkpoint_branch.create_from_remediation_context`` instead of mutating
+    or resuming the original execution input.
+    """
+
+    return tuple(
+        sorted(
+            field_name
+            for field_name in REMEDIATION_BRANCH_SENSITIVE_FIELDS
+            if original.get(field_name) != proposed.get(field_name)
+        )
+    )
+
+
 __all__ = [
+    "RemediationCapabilityContext",
+    "REMEDIATION_BRANCH_SENSITIVE_FIELDS",
     "RemediationActionAuthorityResult",
     "RemediationActionAuthorityService",
     "RemediationActionDecision",
@@ -2150,4 +2739,8 @@ __all__ = [
     "RemediationPermissionSet",
     "RemediationSecurityProfile",
     "RemediationTargetFreshnessDecision",
+    "remediation_action_capability",
+    "remediation_action_capability_matrix",
+    "remediation_action_kinds",
+    "remediation_changes_require_checkpoint_branch",
 ]

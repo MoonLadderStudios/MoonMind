@@ -2,26 +2,129 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from pydantic import ValidationError
 
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
+    AgentTerminalContract,
     AgentRuntimeStepExecutionLaunch,
     AgentRunResult,
     AgentRunStatus,
+    AuthVolumeRef,
+    CredentialMountRef,
     ManagedAgentRuntimeProfile,
     ManagedAgentProviderProfile,
     ManagedRuntimeProfile,
     MoonMindOpsRuntime,
+    OmnigentHostLease,
+    OmnigentOAuthHostBinding,
     LiveLogChunk,
     RuntimeCommandInvocation,
     RuntimeCommandRenderResult,
-    build_docker_sidecar_launch_plan,
     extract_durable_retrieval_metadata,
     is_terminal_agent_run_state,
     resolve_managed_runtime_workload_mode,
 )
+
+
+def _oauth_mount_ref() -> CredentialMountRef:
+    return CredentialMountRef(
+        authVolumeRef=AuthVolumeRef(
+            providerProfileId="codex_openai_oauth",
+            runtimeId="codex_cli",
+            providerId="openai",
+            volumeRef="codex_auth_volume",
+            credentialGeneration=3,
+            ownerUserId="user-1",
+        ),
+        targetPath="/home/app/.codex",
+    )
+
+
+def test_codex_oauth_host_contracts_preserve_only_secret_free_refs() -> None:
+    binding = OmnigentOAuthHostBinding(
+        bindingRef="binding-1",
+        providerProfileId="codex_openai_oauth",
+        endpointRef="default",
+        harness="codex-native",
+        credentialMountRef=_oauth_mount_ref(),
+    )
+    acquired_at = datetime(2026, 7, 12, tzinfo=UTC)
+    lease = OmnigentHostLease(
+        leaseId="host-lease-1",
+        providerProfileId="codex_openai_oauth",
+        providerLeaseId="provider-lease-1",
+        bindingRef=binding.binding_ref,
+        credentialGeneration=3,
+        status="ready",
+        acquiredAt=acquired_at,
+        lastHeartbeatAt=acquired_at,
+        expiresAt=acquired_at + timedelta(minutes=10),
+    )
+
+    assert binding.max_hosts == 1
+    assert binding.max_sessions_per_host == 1
+    assert binding.credential_mount_ref.runtime_uid == 1000
+    assert lease.credential_generation == 3
+    assert "token" not in str(binding.model_dump(mode="json")).lower()
+
+
+def test_codex_oauth_host_binding_rejects_cross_profile_mount() -> None:
+    with pytest.raises(ValidationError, match="must belong to providerProfileId"):
+        OmnigentOAuthHostBinding(
+            bindingRef="binding-1",
+            providerProfileId="another-profile",
+            endpointRef="default",
+            harness="codex-native",
+            credentialMountRef=_oauth_mount_ref(),
+        )
+
+
+def test_codex_oauth_mount_and_host_lease_fail_closed_on_unsafe_state() -> None:
+    mount = _oauth_mount_ref().model_dump(by_alias=True)
+    mount["targetPath"] = "relative/.codex"
+    with pytest.raises(ValidationError, match="targetPath must be absolute"):
+        CredentialMountRef.model_validate(mount)
+
+    mount = _oauth_mount_ref().model_dump(by_alias=True)
+    mount["runtimeUid"] = 2000
+    with pytest.raises(ValidationError, match="UID/GID 1000"):
+        CredentialMountRef.model_validate(mount)
+
+    acquired_at = datetime(2026, 7, 12, tzinfo=UTC)
+    with pytest.raises(ValidationError, match="expiresAt must be after acquiredAt"):
+        OmnigentHostLease(
+            leaseId="host-lease-1",
+            providerProfileId="codex_openai_oauth",
+            providerLeaseId="provider-lease-1",
+            bindingRef="binding-1",
+            credentialGeneration=1,
+            status="ready",
+            acquiredAt=acquired_at,
+            lastHeartbeatAt=acquired_at,
+            expiresAt=acquired_at,
+        )
+
+
+def test_terminal_contract_normalizes_backslash_separators() -> None:
+    contract = AgentTerminalContract(
+        contractId="batch_workflows_fanout.v1",
+        relativePath="artifacts\\result.json",
+        expectedSchemaVersion="v1",
+        executionRef="step-1",
+    )
+    assert contract.relative_path == "artifacts/result.json"
+
+    with pytest.raises(ValidationError, match="traversal-free"):
+        AgentTerminalContract(
+            contractId="batch_workflows_fanout.v1",
+            relativePath="..\\result.json",
+            expectedSchemaVersion="v1",
+            executionRef="step-1",
+        )
 
 
 def _removed_runtime_marker() -> str:
@@ -45,6 +148,21 @@ def test_agent_execution_request_requires_non_blank_idempotency_key() -> None:
             idempotencyKey="   ",
         )
 
+@pytest.mark.parametrize("agent_id", ["auto", "AUTO", " auto "])
+def test_agent_execution_request_decodes_historical_auto_selection_sentinel(
+    agent_id: str,
+) -> None:
+    """In-flight AgentRun inputs using the old sentinel remain replay-decodable."""
+
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId=agent_id,
+        correlationId="corr-1",
+        idempotencyKey="idem-1",
+    )
+
+    assert request.agent_id == agent_id.strip()
+
 def test_agent_execution_request_rejects_sensitive_parameter_keys() -> None:
     with pytest.raises(
         ValidationError, match="parameters must not contain raw credential keys"
@@ -57,6 +175,43 @@ def test_agent_execution_request_rejects_sensitive_parameter_keys() -> None:
             idempotencyKey="idem-1",
             parameters={"api_key": "should-not-be-accepted"},
         )
+
+
+def test_agent_execution_request_allows_bounded_retrieval_token_budget() -> None:
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="profile:omnigent-default",
+        correlationId="corr-1",
+        idempotencyKey="idem-1",
+        parameters={
+            "followUpRetrieval": {
+                "maxContextTokens": 500,
+                "latencyMs": 250,
+            }
+        },
+    )
+
+    assert request.parameters["followUpRetrieval"]["maxContextTokens"] == 500
+
+
+@pytest.mark.parametrize("value", [0, -1, True, "500"])
+def test_agent_execution_request_rejects_invalid_retrieval_token_budget(
+    value: object,
+) -> None:
+    with pytest.raises(
+        ValidationError,
+        match="followUpRetrieval.maxContextTokens must be a positive integer",
+    ):
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            executionProfileRef="profile:omnigent-default",
+            correlationId="corr-1",
+            idempotencyKey="idem-1",
+            parameters={"followUpRetrieval": {"maxContextTokens": value}},
+        )
+
 
 def test_agent_execution_request_accepts_compact_step_execution_launch_policy() -> None:
     request = AgentExecutionRequest(
@@ -322,14 +477,16 @@ def test_managed_agent_provider_profile_accepts_valid_per_profile_limits() -> No
         runtimeId="claude_code",
         credentialSource="oauth_volume",
         runtimeMaterializationMode="oauth_home",
-        maxParallelRuns=2,
+        volumeRef="claude_auth_volume",
+        volumeMountPath="/home/app/.claude",
+        maxParallelRuns=1,
         cooldownAfter429Seconds=120,
         enabled=True,
         authState="connected",
         disabledReason=None,
         rateLimitPolicy={"strategy": "provider_backoff"},
     )
-    assert profile.max_parallel_runs == 2
+    assert profile.max_parallel_runs == 1
     assert profile.cooldown_after_429_seconds == 120
 
 def test_managed_agent_provider_profile_clears_disabled_reason_when_enabled() -> None:
@@ -373,7 +530,7 @@ def test_codex_oauth_provider_profile_preserves_secret_free_refs_and_policy() ->
         runtimeMaterializationMode="oauth_home",
         volumeRef="codex_auth_volume",
         volumeMountPath="/home/app/.codex",
-        maxParallelRuns=3,
+        maxParallelRuns=1,
         cooldownAfter429Seconds=120,
         maxLeaseDurationSeconds=900,
         rateLimitPolicy={"strategy": "queue"},
@@ -382,7 +539,7 @@ def test_codex_oauth_provider_profile_preserves_secret_free_refs_and_policy() ->
     assert profile.provider_id == "openai"
     assert profile.volume_ref == "codex_auth_volume"
     assert profile.volume_mount_path == "/home/app/.codex"
-    assert profile.max_parallel_runs == 3
+    assert profile.max_parallel_runs == 1
     assert profile.cooldown_after_429_seconds == 120
     assert profile.max_lease_duration_seconds == 900
     assert profile.rate_limit_policy == {"strategy": "queue"}
@@ -847,9 +1004,9 @@ def test_extract_durable_retrieval_metadata_only_allows_boolean_contract_fields(
     }
 
 
-def _valid_docker_sidecar_profile() -> dict:
+def _valid_container_jobs_profile() -> dict:
     return {
-        "workloadMode": "docker-sidecar",
+        "workloadMode": "container-jobs",
         "workspace": {
             "volume": "agent_workspaces",
             "mountPath": "/work/agent_jobs",
@@ -857,97 +1014,25 @@ def _valid_docker_sidecar_profile() -> dict:
             "lifecycle": "session",
         },
         "agent": {
-            "image": "moonmind/managed-agent:2026-05-16",
+            "image": "moonmind/managed-agent:2026-08-04",
             "workspace": {"mountPath": "/work/agent_jobs"},
             "dockerClient": {
-                "enabled": True,
-                "composePlugin": True,
+                "enabled": False,
+                "composePlugin": False,
                 "daemonInAgent": False,
             },
-            "env": {
-                "DOCKER_HOST": "unix:///var/run/moonmind-docker/docker.sock",
-            },
+            "env": {},
             "mounts": [
                 {"name": "workspace", "mountPath": "/work/agent_jobs"},
-                {"name": "docker-socket", "mountPath": "/var/run/moonmind-docker"},
-            ],
-        },
-        "dockerSidecar": {
-            "enabled": True,
-            "mode": "dind",
-            "image": "docker:27-dind",
-            "socket": {
-                "path": "/var/run/moonmind-docker/docker.sock",
-                "volumeName": "docker-socket",
-            },
-            "storage": {
-                "volumeName": "docker-graph",
-                "mountPath": "/var/lib/docker",
-                "lifecycle": "session",
-                "daemonScope": "session",
-            },
-            "workspace": {"mountPath": "/work/agent_jobs"},
-            "security": {
-                "privileged": True,
-                "hostDockerSocket": "forbidden",
-                "moonmindDeploymentSecrets": "forbidden",
-            },
-            "mounts": [
-                {"name": "workspace", "mountPath": "/work/agent_jobs"},
-                {"name": "docker-socket", "mountPath": "/var/run/moonmind-docker"},
-                {"name": "docker-graph", "mountPath": "/var/lib/docker"},
-            ],
-            "optionalCaches": [
-                {
-                    "name": "pip-cache",
-                    "volumeName": "mm-cache-pip",
-                    "mountPath": "/cache/pip",
-                    "approvalRef": "deployment-approved-cache-pip",
-                }
             ],
         },
         "resources": {
             "session": {"maxRuntimeSeconds": 14400},
             "agent": {"cpu": "2", "memory": "4Gi"},
-            "dockerSidecar": {
-                "cpu": "4",
-                "memory": "8Gi",
-                "ephemeralStorage": "40Gi",
-            },
-            "nestedContainers": {
-                "defaultCpu": "2",
-                "defaultMemory": "4Gi",
-                "maxContainers": 16,
-            },
-        },
-        "cleanup": {
-            "idempotent": True,
-            "onSessionEnd": {
-                "stopSidecar": True,
-                "stopNestedContainers": True,
-                "removeDockerGraph": True,
-                "removeDockerSocket": True,
-                "preserveWorkspace": "retention_policy",
-            },
-            "onSidecarFailure": {
-                "markDockerCapabilityUnavailable": True,
-                "preserveAgentSession": True,
-            },
-            "onAgentFailure": {
-                "stopSidecar": True,
-                "preserveWorkspace": "retention_policy",
-            },
-        },
-        "readiness": {
-            "docker": {
-                "required": True,
-                "timeoutSeconds": 60,
-                "intervalSeconds": 2,
-            },
         },
         "labels": {
             "moonmind.kind": "managed-session",
-            "moonmind.workload_mode": "docker-sidecar",
+            "moonmind.workload_mode": "container-jobs",
         },
         "policy": {
             "hostDockerSocket": "forbidden",
@@ -959,85 +1044,32 @@ def _valid_docker_sidecar_profile() -> dict:
     }
 
 
-def test_managed_agent_runtime_profile_accepts_valid_docker_sidecar_contract() -> None:
-    profile = ManagedAgentRuntimeProfile.model_validate(_valid_docker_sidecar_profile())
-
-    assert profile.workload_mode == "docker-sidecar"
-    assert profile.agent.docker_client.enabled is True
-    assert (
-        profile.agent.env["DOCKER_HOST"]
-        == "unix:///var/run/moonmind-docker/docker.sock"
+def test_managed_agent_runtime_profile_accepts_container_jobs_contract() -> None:
+    profile = ManagedAgentRuntimeProfile.model_validate(
+        _valid_container_jobs_profile()
     )
-    assert profile.docker_sidecar is not None
-    assert profile.docker_sidecar.image == "docker:27-dind"
-    assert profile.resources.docker_sidecar is not None
-    assert profile.resources.docker_sidecar.ephemeral_storage == "40Gi"
-    assert profile.labels == {
-        "moonmind.kind": "managed-session",
-        "moonmind.workload_mode": "docker-sidecar",
-    }
-    assert profile.cleanup.on_session_end.remove_docker_graph is True
-    assert profile.policy.host_docker_socket == "forbidden"
-    assert profile.policy.shared_daemon_across_users == "forbidden"
-    assert profile.policy.moonmind_deployment_secrets_in_session == "forbidden"
+
+    assert profile.workload_mode == "container-jobs"
+    assert profile.agent.docker_client.enabled is False
+    assert profile.resources.session is not None
+    assert profile.resources.session.max_runtime_seconds == 14400
+    assert profile.labels["moonmind.workload_mode"] == "container-jobs"
 
 
 def test_managed_agent_runtime_profile_rejects_sensitive_label_keys() -> None:
-    payload = _valid_docker_sidecar_profile()
+    payload = _valid_container_jobs_profile()
     payload["labels"]["moonmind.session_token"] = "should-not-leak"
 
     with pytest.raises(ValidationError, match="labels must not receive deployment"):
         ManagedAgentRuntimeProfile.model_validate(payload)
 
 
-def test_managed_agent_runtime_profile_builds_mm695_sidecar_launch_plan() -> None:
-    profile = ManagedAgentRuntimeProfile.model_validate(_valid_docker_sidecar_profile())
-
-    plan = build_docker_sidecar_launch_plan(profile)
-
-    assert plan is not None
-    dumped = plan.model_dump(mode="json", by_alias=True)
-    assert dumped["issueKey"] == "MM-695"
-    assert dumped["applyLimitsOutsideNestedDaemon"] is True
-    assert dumped["resources"]["session"]["maxRuntimeSeconds"] == 14400
-    assert dumped["labels"] == {
-        "moonmind.kind": "managed-session",
-        "moonmind.workload_mode": "docker-sidecar",
-    }
-    assert dumped["resources"]["dockerSidecar"]["ephemeralStorage"] == "40Gi"
-    assert dumped["resources"]["nestedContainers"]["maxContainers"] == 16
-    assert dumped["cleanup"]["onSessionEnd"] == {
-        "stopSidecar": True,
-        "stopNestedContainers": True,
-        "removeDockerGraph": True,
-        "removeDockerSocket": True,
-        "preserveWorkspace": "retention_policy",
-    }
-    assert dumped["cleanup"]["onSidecarFailure"] == {
-        "markDockerCapabilityUnavailable": True,
-        "preserveAgentSession": True,
-    }
-    assert dumped["cleanup"]["onAgentFailure"] == {
-        "stopSidecar": True,
-        "preserveWorkspace": "retention_policy",
-    }
-    assert dumped["optionalCaches"] == [
-        {
-            "name": "pip-cache",
-            "volumeName": "mm-cache-pip",
-            "mountPath": "/cache/pip",
-            "approvalRef": "deployment-approved-cache-pip",
-            "readOnly": False,
-        }
-    ]
-
-
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [
         (
-            lambda p: p["agent"]["dockerClient"].update({"enabled": False}),
-            "agent.dockerClient.enabled must be true",
+            lambda p: p["agent"]["dockerClient"].update({"enabled": True}),
+            "dockerClient.enabled must be false",
         ),
         (
             lambda p: p["agent"]["dockerClient"].update({"daemonInAgent": True}),
@@ -1045,69 +1077,9 @@ def test_managed_agent_runtime_profile_builds_mm695_sidecar_launch_plan() -> Non
         ),
         (
             lambda p: p["agent"]["env"].update(
-                {"DOCKER_HOST": "unix:///tmp/docker.sock"}
+                {"DOCKER_HOST": "unix:///var/run/docker.sock"}
             ),
-            "DOCKER_HOST must point at dockerSidecar.socket.path",
-        ),
-        (
-            lambda p: p["dockerSidecar"]["workspace"].update(
-                {"mountPath": "/mnt/workspace"}
-            ),
-            "workspace mount paths must match",
-        ),
-        (
-            lambda p: p["agent"]["mounts"].append(
-                {"source": "/var/run/docker.sock", "mountPath": "/var/run/docker.sock"}
-            ),
-            "host Docker socket must not be mounted",
-        ),
-        (
-            lambda p: p["agent"]["env"].update({"OPENAI_API_KEY": "secret"}),
-            "must not receive deployment credentials",
-        ),
-        (
-            lambda p: p["policy"].update(
-                {"apiContainerWorkloadDockerSocketAccess": True}
-            ),
-            "API container must not have normal workload Docker socket access",
-        ),
-        (
-            lambda p: p["dockerSidecar"].update({"image": "docker:latest"}),
-            "sidecar image must be pinned",
-        ),
-        (
-            lambda p: p["dockerSidecar"]["storage"].update(
-                {"daemonScope": "shared"}
-            ),
-            "Docker daemon scope must be per session",
-        ),
-        (
-            lambda p: p["resources"]["dockerSidecar"].pop("ephemeralStorage"),
-            "resources.dockerSidecar.ephemeralStorage",
-        ),
-        (
-            lambda p: p["resources"].pop("nestedContainers"),
-            "resources.nestedContainers",
-        ),
-        (
-            lambda p: p["resources"]["nestedContainers"].update({"defaultCpu": "8"}),
-            "defaultCpu must not exceed",
-        ),
-        (
-            lambda p: p["cleanup"]["onSessionEnd"].update(
-                {"removeDockerGraph": False}
-            ),
-            "removeDockerGraph must be true",
-        ),
-        (
-            lambda p: p["cleanup"]["onSessionEnd"].update({"stopSidecar": False}),
-            "onSessionEnd.stopSidecar must be true",
-        ),
-        (
-            lambda p: p["cleanup"]["onSidecarFailure"].update(
-                {"preserveAgentSession": False}
-            ),
-            "preserveAgentSession must be true",
+            "DOCKER_HOST must not be set",
         ),
         (
             lambda p: p["agent"]["mounts"].append(
@@ -1117,25 +1089,35 @@ def test_managed_agent_runtime_profile_builds_mm695_sidecar_launch_plan() -> Non
         ),
         (
             lambda p: p["agent"]["mounts"].append(
-                {"source": "./cache", "mountPath": "/cache"}
+                {"source": "//var/run/docker.sock/", "mountPath": "/host/docker.sock"}
             ),
-            "arbitrary host path mounts are not allowed",
-        ),
-        (
-            lambda p: p["dockerSidecar"]["mounts"].append(
-                {"source": "../tmp", "mountPath": "/cache"}
-            ),
-            "arbitrary host path mounts are not allowed",
+            "host Docker socket must not be mounted",
         ),
     ],
 )
-def test_managed_agent_runtime_profile_rejects_unsafe_sidecar_invariants(
+def test_managed_agent_runtime_profile_rejects_raw_docker_access(
     mutate, message
 ) -> None:
-    payload = _valid_docker_sidecar_profile()
+    payload = _valid_container_jobs_profile()
     mutate(payload)
 
     with pytest.raises(ValidationError, match=message):
+        ManagedAgentRuntimeProfile.model_validate(payload)
+
+
+def test_managed_agent_runtime_profile_rejects_removed_sidecar_contract() -> None:
+    payload = _valid_container_jobs_profile()
+    payload["dockerSidecar"] = {"enabled": True}
+
+    with pytest.raises(ValidationError, match="dockerSidecar"):
+        ManagedAgentRuntimeProfile.model_validate(payload)
+
+
+def test_managed_agent_runtime_profile_rejects_removed_sidecar_mode() -> None:
+    payload = _valid_container_jobs_profile()
+    payload["workloadMode"] = "docker-sidecar"
+
+    with pytest.raises(ValidationError, match="workloadMode"):
         ManagedAgentRuntimeProfile.model_validate(payload)
 
 
@@ -1154,7 +1136,7 @@ def test_managed_agent_runtime_profile_rejects_unsafe_sidecar_invariants(
 def test_managed_agent_runtime_profile_forbids_mm694_policy_relaxation(
     policy_key, message
 ) -> None:
-    payload = _valid_docker_sidecar_profile()
+    payload = _valid_container_jobs_profile()
     payload["policy"][policy_key] = "allowed"
 
     with pytest.raises(ValidationError, match=message):
@@ -1208,156 +1190,44 @@ def test_moonmind_ops_runtime_rejects_duplicate_allowed_operations() -> None:
 
 
 def _valid_no_docker_profile() -> dict:
-    return {
-        "workloadMode": "no-docker",
-        "workspace": {
-            "volume": "agent_workspaces",
-            "mountPath": "/work/agent_jobs",
-            "lifecycle": "session",
-        },
-        "agent": {
-            "workspace": {"mountPath": "/work/agent_jobs"},
-            "dockerClient": {"enabled": False, "daemonInAgent": False},
-            "env": {},
-            "mounts": [{"name": "workspace", "mountPath": "/work/agent_jobs"}],
-        },
-        "policy": {
-            "hostDockerSocket": "forbidden",
-            "sharedDaemonAcrossUsers": "forbidden",
-            "moonmindDeploymentSecretsInSession": "forbidden",
-            "appContainerControlFromSession": "forbidden",
-        },
-    }
-
-
-def test_no_docker_profile_rejects_enabled_sidecar() -> None:
-    payload = _valid_no_docker_profile()
-    payload["dockerSidecar"] = {
-        "enabled": True,
-        "image": "docker:27-dind",
-        "socket": {
-            "path": "/var/run/moonmind-docker/docker.sock",
-            "volumeName": "docker-socket",
-        },
-        "storage": {
-            "volumeName": "docker-graph",
-            "mountPath": "/var/lib/docker",
-            "lifecycle": "session",
-            "daemonScope": "session",
-        },
-        "workspace": {"mountPath": "/work/agent_jobs"},
-    }
-    with pytest.raises(
-        ValidationError,
-        match="dockerSidecar.enabled must be false for no-docker profiles",
-    ):
-        ManagedAgentRuntimeProfile.model_validate(payload)
+    payload = _valid_container_jobs_profile()
+    payload["workloadMode"] = "no-docker"
+    payload["labels"]["moonmind.workload_mode"] = "no-docker"
+    return payload
 
 
 def test_no_docker_profile_rejects_docker_host_env() -> None:
     payload = _valid_no_docker_profile()
-    payload["agent"]["env"]["DOCKER_HOST"] = "unix:///var/run/moonmind-docker/docker.sock"
-    with pytest.raises(
-        ValidationError,
-        match="agent.env.DOCKER_HOST must not be set for no-docker profiles",
-    ):
-        ManagedAgentRuntimeProfile.model_validate(payload)
+    payload["agent"]["env"]["DOCKER_HOST"] = "unix:///var/run/docker.sock"
 
-
-def test_no_docker_profile_allows_disabled_sidecar() -> None:
-    payload = _valid_no_docker_profile()
-    payload["dockerSidecar"] = {"enabled": False}
-    profile = ManagedAgentRuntimeProfile.model_validate(payload)
-    assert profile.workload_mode == "no-docker"
-    assert profile.docker_sidecar is not None
-    assert profile.docker_sidecar.enabled is False
-
-
-def test_host_docker_socket_check_normalizes_paths() -> None:
-    payload = _valid_docker_sidecar_profile()
-    payload["agent"]["mounts"].append(
-        {"source": "//var/run/docker.sock/", "mountPath": "/host/docker.sock"}
-    )
-    with pytest.raises(
-        ValidationError, match="host Docker socket must not be mounted"
-    ):
+    with pytest.raises(ValidationError, match="DOCKER_HOST must not be set"):
         ManagedAgentRuntimeProfile.model_validate(payload)
 
 
 def test_no_docker_profile_cannot_be_raised_by_task_requested_mode() -> None:
     profile = ManagedAgentRuntimeProfile.model_validate(
-        {
-            "workloadMode": "no-docker",
-            "workspace": {
-                "volume": "agent_workspaces",
-                "mountPath": "/work/agent_jobs",
-                "lifecycle": "session",
-            },
-            "agent": {
-                "workspace": {"mountPath": "/work/agent_jobs"},
-                "dockerClient": {"enabled": False, "daemonInAgent": False},
-                "env": {},
-                "mounts": [{"name": "workspace", "mountPath": "/work/agent_jobs"}],
-            },
-            "policy": {
-                "hostDockerSocket": "forbidden",
-                "sharedDaemonAcrossUsers": "forbidden",
-                "moonmindDeploymentSecretsInSession": "forbidden",
-                "appContainerControlFromSession": "forbidden",
-            },
-        }
+        _valid_no_docker_profile()
     )
 
-    with pytest.raises(ValueError, match="workflow instructions cannot raise Docker capability"):
+    with pytest.raises(
+        ValueError,
+        match="workflow instructions cannot change workload capability",
+    ):
         resolve_managed_runtime_workload_mode(
             profile,
-            workflow_requested_workload_mode="docker-sidecar",
+            workflow_requested_workload_mode="container-jobs",
         )
 
 
 def _valid_kubernetes_job_profile(*, supported: bool = True) -> dict:
-    return {
-        "workloadMode": "kubernetes-job",
-        "workspace": {
-            "volume": "agent_workspaces",
-            "mountPath": "/work/agent_jobs",
-            "repoEnv": "MOONMIND_REPO_DIR",
-            "lifecycle": "session",
-        },
-        "agent": {
-            "image": "moonmind/managed-agent:2026-05-16",
-            "workspace": {"mountPath": "/work/agent_jobs"},
-            "dockerClient": {
-                "enabled": False,
-                "composePlugin": False,
-                "daemonInAgent": False,
-            },
-            "env": {},
-            "mounts": [
-                {"name": "workspace", "mountPath": "/work/agent_jobs"},
-            ],
-        },
-        "dockerSidecar": {"enabled": False},
-        "resources": {
-            "session": {"maxRuntimeSeconds": 14400},
-            "agent": {"cpu": "2", "memory": "4Gi"},
-        },
-        "labels": {
-            "moonmind.kind": "managed-session",
-            "moonmind.workload_mode": "kubernetes-job",
-        },
-        "policy": {
-            "hostDockerSocket": "forbidden",
-            "sharedDaemonAcrossUsers": "forbidden",
-            "moonmindDeploymentSecretsInSession": "forbidden",
-            "appContainerControlFromSession": "forbidden",
-            "apiContainerWorkloadDockerSocketAccess": False,
-            "kubernetesJobRuntimeSupported": supported,
-        },
-    }
+    payload = _valid_container_jobs_profile()
+    payload["workloadMode"] = "kubernetes-job"
+    payload["labels"]["moonmind.workload_mode"] = "kubernetes-job"
+    payload["policy"]["kubernetesJobRuntimeSupported"] = supported
+    return payload
 
 
-def test_mm698_kubernetes_job_profile_requires_explicit_deployment_support() -> None:
+def test_kubernetes_job_profile_requires_explicit_deployment_support() -> None:
     with pytest.raises(
         ValidationError,
         match="kubernetes-job requires explicit deployment support",
@@ -1367,77 +1237,11 @@ def test_mm698_kubernetes_job_profile_requires_explicit_deployment_support() -> 
         )
 
 
-def test_mm698_kubernetes_job_profile_is_backend_portable_when_supported() -> None:
+def test_kubernetes_job_profile_is_backend_portable_when_supported() -> None:
     profile = ManagedAgentRuntimeProfile.model_validate(
         _valid_kubernetes_job_profile()
     )
 
     assert profile.workload_mode == "kubernetes-job"
     assert profile.agent.docker_client.enabled is False
-    assert profile.docker_sidecar is not None
-    assert profile.docker_sidecar.enabled is False
-    assert profile.resources.docker_sidecar is None
-    assert profile.resources.nested_containers is None
     assert profile.labels["moonmind.workload_mode"] == "kubernetes-job"
-
-
-def test_mm698_kubernetes_job_profile_fails_fast_without_runtime_renderer() -> None:
-    profile = ManagedAgentRuntimeProfile.model_validate(
-        _valid_kubernetes_job_profile()
-    )
-
-    with pytest.raises(ValueError, match="cannot be launched until"):
-        build_docker_sidecar_launch_plan(profile)
-
-
-@pytest.mark.parametrize(
-    ("mutate", "message"),
-    [
-        (
-            lambda p: p["agent"]["dockerClient"].update({"enabled": True}),
-            "agent.dockerClient.enabled must be false for kubernetes-job",
-        ),
-        (
-            lambda p: p["agent"]["env"].update(
-                {"DOCKER_HOST": "unix:///var/run/moonmind-docker/docker.sock"}
-            ),
-            "DOCKER_HOST must not be set for kubernetes-job",
-        ),
-        (
-            lambda p: p["dockerSidecar"].update({"enabled": True}),
-            "dockerSidecar.enabled must be false for kubernetes-job",
-        ),
-        (
-            lambda p: p["resources"].update(
-                {
-                    "dockerSidecar": {
-                        "cpu": "4",
-                        "memory": "8Gi",
-                        "ephemeralStorage": "40Gi",
-                    }
-                }
-            ),
-            "resources.dockerSidecar must be omitted for kubernetes-job",
-        ),
-        (
-            lambda p: p["resources"].update(
-                {
-                    "nestedContainers": {
-                        "defaultCpu": "2",
-                        "defaultMemory": "4Gi",
-                        "maxContainers": 16,
-                    }
-                }
-            ),
-            "resources.nestedContainers must be omitted for kubernetes-job",
-        ),
-    ],
-)
-def test_mm698_kubernetes_job_profile_rejects_docker_sidecar_assumptions(
-    mutate, message
-) -> None:
-    payload = _valid_kubernetes_job_profile()
-    mutate(payload)
-
-    with pytest.raises(ValidationError, match=message):
-        ManagedAgentRuntimeProfile.model_validate(payload)

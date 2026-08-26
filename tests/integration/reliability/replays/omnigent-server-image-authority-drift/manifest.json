@@ -1,0 +1,25 @@
+{
+  "incidentWorkflowId": "mm:5a7916f9-8cea-478e-b270-ae2c5860d5aa",
+  "incidentRunId": "019ffefc-6c94-7eb2-ae8f-a455f9c6298a",
+  "failedChildWorkflowId": "mm:5a7916f9-8cea-478e-b270-ae2c5860d5aa:agent:node-1",
+  "failedChildRunId": "019ffefc-824f-7990-b3e5-00613e348f72",
+  "runtime": "omnigent",
+  "protocol": "profile-bound-codex",
+  "failureCode": "OMNIGENT_SERVER_IMAGE_MISMATCH",
+  "failureShape": "the mutable default Omnigent server tag advanced while the bootstrap-owned active policy retained the previous repository digest, and runtime attestation compared the container's configured tag text to immutable policy authority instead of binding the actual live image repository digest",
+  "launchPolicyRef": "codex-on-demand@2",
+  "configuredServerImageRef": "ghcr.io/omnigent-ai/omnigent-server:latest",
+  "persistedServerImageRef": "ghcr.io/omnigent-ai/omnigent-server@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "persistedHostImageRef": "ghcr.io/omnigent-ai/omnigent-host@sha256:2222222222222222222222222222222222222222222222222222222222222222",
+  "observedServerImageRef": "ghcr.io/omnigent-ai/omnigent-server@sha256:3333333333333333333333333333333333333333333333333333333333333333",
+  "observedHostImageRef": "ghcr.io/omnigent-ai/omnigent-host@sha256:4444444444444444444444444444444444444444444444444444444444444444",
+  "observedServerImageId": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+  "architecture": "arm64",
+  "eventScript": [
+    "bootstrap resolves mutable deployment image inputs",
+    "bootstrap creates a new immutable policy version and selects it as default",
+    "runtime resolves the live container image id and repository digests",
+    "runtime accepts only the repository digest authorized by the selected policy"
+  ],
+  "workspaceArtifacts": []
+}

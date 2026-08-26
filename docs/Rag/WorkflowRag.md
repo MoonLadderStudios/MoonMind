@@ -1,5 +1,8 @@
 # Workflow RAG – Managed Session Retrieval
 
+Omnigent retrieval scope and budgets come from the bound
+[policy snapshot](../Omnigent/PolicyAuthority.md).
+
 **Status:** Implemented
 **Owners:** MoonMind Engineering
 **Last Updated:** 2026-05-05
@@ -143,6 +146,37 @@ This retrieval path does not route through a separate generative LLM summarizati
 Codex CLI and Claude Code are the current reference managed-session implementations.
 
 In the current Codex runtime strategy, `prepare_workspace()` invokes `ContextInjectionService` before the command is built. `ContextInjectionService` resolves retrieval, persists a context artifact under `artifacts/context/`, prepends the retrieved context to `instruction_ref`, and adds safety framing that treats retrieved text as untrusted reference data.
+
+### Profile-bound Omnigent initial context
+
+For a RAG-enabled profile-bound Omnigent execution, MoonMind resolves initial
+context after the durable bridge/session binding exists but before the
+first-message digest is prepared. Authored settings and any query override are
+resolved into the immutable execution request; repository, tenant, collection,
+run, workspace, and overlay filters remain policy-scoped. The gateway transport
+is preferred when MoonMind owns embedding or vector-store credentials, so those
+credentials never enter the stock Omnigent host.
+
+MoonMind persists the full `ContextPack` as an artifact and renders only its
+bounded, safety-framed `context_text` into the existing first user message. It
+does not create a second context message. The bridge persists a compact
+`initialRetrieval` projection containing the pack ref, transport, result count,
+truncation, mode/reason, prepared-message ref and digest, consumption flag, and
+final first-message digest. Step Execution input evidence and `contextRefs`
+refer to the same canonical artifact.
+
+The prepared message artifact is written before the first-message digest and
+idempotency state are committed. Activity retry reads that exact artifact; it
+does not rerun retrieval. A different context or message for the same committed
+idempotency key fails as a digest mismatch.
+
+Required retrieval fails the step when its configured transport is unavailable.
+Optional retrieval may continue disabled, use bounded local workspace fallback
+when policy authorizes it, or use stale canonical context only when freshness
+policy permits it. Disabled, denied, unavailable, truncated, and fallback
+outcomes are explicit in the ContextPack/retrieval artifact, bridge lifecycle,
+Step Execution, and Workflow Detail. No fallback may broaden repository,
+tenant, collection, run, workspace, or overlay authority.
 
 If retrieval is unavailable or skipped for allowed reasons, local workspace fallback search may be used instead.
 

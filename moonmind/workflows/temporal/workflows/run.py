@@ -1,11 +1,12 @@
 import asyncio
 import dataclasses
+import hashlib
 import json
 import logging
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timedelta
-from typing import Any, Optional, TypedDict
+from typing import Any, Optional, TypedDict, cast
 
 from temporalio import exceptions, workflow
 from temporalio.common import RetryPolicy, SearchAttributeKey, SearchAttributePair
@@ -13,15 +14,32 @@ from temporalio.exceptions import CancelledError
 from temporalio.workflow import ActivityCancellationType, ChildWorkflowCancellationType
 
 with workflow.unsafe.imports_passed_through():
+    from pydantic import ValidationError
     from collections.abc import Mapping as WorkflowMapping
 
     from moonmind.schemas.agent_runtime_models import (
+        AUTO_RUNTIME_SENTINEL,
         AgentExecutionRequest,
+        RepositoryOutcomePolicy,
+    )
+    from moonmind.omnigent.stock_agents import (
+        CLAUDE_STOCK_AGENT_NAME,
+        CODEX_STOCK_AGENT_NAME,
+    )
+    from moonmind.omnigent.workspace_intent import (
+        authored_repository_source,
+        authored_starting_branch,
     )
     from api_service.services.provider_profile_readiness import (
         provider_profile_launch_ready_from_payload,
     )
-    from moonmind.schemas.agent_skill_models import SkillSelector
+    from moonmind.schemas.agent_skill_models import ResolvedSkillSet, SkillSelector
+    from moonmind.schemas.container_job_models import (
+        ContainerJobState,
+        ContainerJobSubmitRequest,
+        OwnerIdentity,
+    )
+    from moonmind.workloads.tool_bridge import CONTAINER_RUN_JOB_TOOL
     from moonmind.schemas.managed_session_models import (
         CodexManagedSessionBinding,
         CodexManagedSessionClearRequest,
@@ -61,13 +79,16 @@ with workflow.unsafe.imports_passed_through():
         build_execution_context_bundle,
         build_prepared_input_manifest,
         build_recovery_prepared_artifact_refs,
-        merge_prepared_input_refs,
         merge_prepared_raw_input_refs,
         select_step_prepared_context,
     )
     from moonmind.workflows.agent_skills.selection import selected_agent_skill
     from moonmind.config.settings import settings
-    from moonmind.utils.logging import scrub_github_tokens
+    from moonmind.utils.logging import (
+        redact_sensitive_payload,
+        redact_sensitive_text,
+        scrub_github_tokens,
+    )
     from moonmind.workflows.temporal.jira_agent_skills import (
         JIRA_AGENT_SKILLS,
         JIRA_BACKED_AGENT_SKILLS,
@@ -79,8 +100,19 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.workflows.executions.execution_contract import (
         build_effective_workflow_skill_selectors,
     )
+    from moonmind.workflows.executions.repository_contract import (
+        repository_name_from_value,
+    )
     from moonmind.workflows.temporal.workflows.provider_profile_manager import (
         workflow_id_for_runtime,
+    )
+    from moonmind.workflows.temporal.workflows.pr_resolver import (
+        build_pr_resolver_start_input,
+        pr_resolver_identity_selector,
+    )
+    from moonmind.workflows.temporal.native_skill_bindings import (
+        evaluate_pr_resolver_native_binding,
+        require_skill_owned_pr_resolver_execution,
     )
     from moonmind.schemas.temporal_models import (
         DependencyResolvedSignalPayload,
@@ -98,15 +130,50 @@ with workflow.unsafe.imports_passed_through():
         StepExecutionCheckpointBoundary,
         build_step_checkpoint_id,
     )
+    from moonmind.workflows.executions.runtime_capabilities import (
+        RuntimeCapabilityError,
+        RuntimeExecutionCapabilities,
+        resolve_runtime_execution_capabilities,
+    )
     from moonmind.workflows.temporal.checkpoint_policy import (
         resolve_checkpoint_policy,
     )
     from moonmind.workflows.temporal.managed_session_errors import (
         is_managed_session_locator_mismatch_error,
     )
+    from moonmind.workflows.temporal.remediation_workspace_head import (
+        REMEDIATION_HEAD_MISMATCH,
+        REMEDIATION_HEAD_RESTORE_INVALID,
+        RemediationAttemptInput,
+        RemediationAttemptOutput,
+        RemediationHeadError,
+        RemediationWorkspaceHead,
+        advance_head,
+        freeze_attempt_input,
+        project_head,
+    )
+    from moonmind.workflows.temporal.recovery_entry import (
+        compile_recovery_entry_policy,
+    )
+    from moonmind.workflows.temporal.remediation_loop import (
+        apply_continuation_decision,
+        capture_remediation_candidate,
+        decide_remediation_continuation,
+        ConsumedRemediationBudgets,
+        RemediationLoopPhase,
+        RemediationLoopSpec,
+        RemediationLoopState,
+        materialize_attempt_nodes,
+        project_remediation_loop,
+        record_semantic_progress,
+        record_verification_evidence,
+        resolve_loop_runtime,
+        should_continue_as_new,
+        start_remediation_attempt,
+        start_verification,
+        validate_remediation_loop_agent_instructions,
+    )
 
-from moonmind.workflows.skills.skill_plan_contracts import parse_plan_definition
-from moonmind.workflows.skills.tool_registry import ToolRegistrySnapshot, parse_tool_registry
 from moonmind.workflows.skills.approval_policy import (
     ReviewRequest,
     StepGateResult,
@@ -115,24 +182,59 @@ from moonmind.workflows.skills.approval_policy import (
     parse_step_gate_result,
     recommended_next_actions,
 )
+from moonmind.workflows.skills.skill_plan_contracts import parse_plan_definition
 from moonmind.workflows.skills.tool_plan_contracts import REVIEW_VERDICTS
-from moonmind.workflows.temporal.step_ledger import (
-    TERMINAL_STEP_STATUSES,
-    build_initial_step_rows,
-    build_progress_summary,
-    build_step_ledger_snapshot,
-    clear_step_checkpoint_evidence,
-    invalidate_downstream_steps_for_changed_output,
-    mark_step_execution_manifest_evidence,
-    materialize_preserved_steps,
-    mark_step_checkpoint_evidence,
-    preserved_outputs_for_dependencies,
-    record_dependency_inputs_for_step,
-    refresh_ready_steps,
-    upsert_step_check,
-    update_step_row,
-    validate_preserved_dependency_outputs,
+from moonmind.workflows.skills.tool_registry import (
+    ToolRegistrySnapshot,
+    parse_tool_registry,
 )
+from moonmind.workflows.temporal.activity_catalog import (
+    INTEGRATIONS_TASK_QUEUE,
+    WORKFLOW_TASK_QUEUE,
+    TemporalActivityRoute,
+    build_default_activity_catalog,
+)
+from moonmind.workflows.temporal.bounded_story_loop import (
+    BoundedStoryLoopInput,
+    LoopAttempt,
+    LoopBudget,
+    LoopStopState,
+    PublicationAction,
+    PublicationFeasibility,
+    RemainingWorkArtifact,
+)
+from moonmind.workflows.temporal.bounded_story_loop import (
+    RemediationLoopState as BoundedRemediationLoopState,
+)
+from moonmind.workflows.temporal.bounded_story_loop import (
+    RemediationProgressVector,
+    TypedGateResult,
+    advance_remediation_loop_state,
+    build_remediation_progress_vector,
+    compile_bounded_story_loop,
+    evaluate_attempt_continuation,
+    evaluate_publication_decision,
+)
+from moonmind.workflows.temporal.completion_summary import is_generic_completion_summary
+from moonmind.workflows.temporal.incident_reconstruction import (
+    build_incident_reconstruction_manifest,
+    build_incident_trace_ref,
+)
+from moonmind.workflows.temporal.publish_auto_evidence import (
+    AutoPublishEvidenceError,
+    parse_auto_publish_evidence,
+)
+from moonmind.workflows.temporal.recovery_decision import validate_recovery_contract
+from moonmind.workflows.temporal.recovery_manifest import (
+    build_failed_run_recovery_manifest,
+    resolve_resume_checkpoint_step_id,
+)
+from moonmind.workflows.temporal.recovery_state import (
+    CheckpointRecoveryContract,
+    deterministic_recovery_identity,
+    validate_restore_result,
+)
+from moonmind.workflows.temporal.scheduled_start import temporal_scheduled_start_time
 from moonmind.workflows.temporal.step_executions import (
     external_handoff_gate_decision,
     git_effect_metadata,
@@ -142,38 +244,25 @@ from moonmind.workflows.temporal.step_executions import (
     step_execution_operation_idempotency_key,
     workspace_policy_metadata,
 )
-from moonmind.workflows.temporal.recovery_manifest import (
-    build_failed_run_recovery_manifest,
-)
-from moonmind.workflows.temporal.incident_reconstruction import (
-    build_incident_reconstruction_manifest,
-    build_incident_trace_ref,
-)
-from moonmind.workflows.temporal.bounded_story_loop import (
-    BoundedStoryLoopInput,
-    LoopAttempt,
-    LoopBudget,
-    PublicationAction,
-    TypedGateResult,
-    compile_bounded_story_loop,
-    evaluate_attempt_continuation,
-    evaluate_publication_decision,
-)
-from moonmind.workflows.temporal.completion_summary import (
-    is_generic_completion_summary,
-)
-from moonmind.workflows.temporal.publish_auto_evidence import (
-    AutoPublishEvidenceError,
-    parse_auto_publish_evidence,
+from moonmind.workflows.temporal.step_ledger import (
+    TERMINAL_STEP_STATUSES,
+    build_initial_step_rows,
+    build_progress_summary,
+    build_step_ledger_snapshot,
+    clear_step_checkpoint_evidence,
+    invalidate_downstream_steps_for_changed_output,
+    mark_step_checkpoint_evidence,
+    mark_step_execution_manifest_evidence,
+    materialize_preserved_steps,
+    preserved_outputs_for_dependencies,
+    record_dependency_inputs_for_step,
+    refresh_ready_steps,
+    update_step_row,
+    upsert_step_check,
+    validate_preserved_dependency_outputs,
 )
 from moonmind.workflows.temporal.title_search import tokenize_title
-from moonmind.workflows.temporal.scheduled_start import temporal_scheduled_start_time
-from moonmind.workflows.temporal.activity_catalog import (
-    INTEGRATIONS_TASK_QUEUE,
-    WORKFLOW_TASK_QUEUE,
-    TemporalActivityRoute,
-    build_default_activity_catalog,
-)
+
 
 class DependencyFailureError(ValueError):
     """Structured dependency gate failure."""
@@ -181,6 +270,7 @@ class DependencyFailureError(ValueError):
     def __init__(self, message: str, *, detail: dict[str, Any]) -> None:
         super().__init__(message)
         self.detail = detail
+
 
 DEFAULT_ACTIVITY_RETRY_POLICY = RetryPolicy(
     initial_interval=timedelta(seconds=5),
@@ -193,6 +283,8 @@ _TERMINAL_LAST_ERROR_UNSET = object()
 JIRA_BLOCKER_RECHECK_MIN_ACTIVITY_ATTEMPTS = 3
 
 DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
+RUN_EXPLICIT_RECOVERY_CONTRACT_PATCH = "run-explicit-recovery-contract-v1"
+RUN_TYPED_RECOVERY_TARGET_ENTRY_PATCH = "run-typed-recovery-target-entry-v1"
 
 
 def bounded_story_loop_step_effects(
@@ -272,10 +364,11 @@ def bounded_story_loop_scope_guard(
             "reason": "unrelated_work_selection_rejected",
         }
     return {"allowed": True, "reason": "selected_item_only"}
+
+
 _PR_OPTIONAL_AGENT_SKILLS = JIRA_AGENT_SKILLS
-_PR_OPTIONAL_TASK_SKILLS = frozenset(
-    {"jira-implement", *_PR_OPTIONAL_AGENT_SKILLS}
-)
+_PR_OPTIONAL_TASK_SKILLS = frozenset({"jira-implement", *_PR_OPTIONAL_AGENT_SKILLS})
+_CANONICAL_NO_COMMIT_TASK_PRESETS = frozenset({"github-issue-implement"})
 _EXTERNAL_INTEGRATION_MONITOR_IDS = frozenset({"codex_cloud", "jules"})
 _PUBLISH_NOT_REQUIRED_STATUSES = frozenset(
     {
@@ -317,11 +410,11 @@ _DIRECT_EXECUTABLE_OUTPUT_KEYS = frozenset(
     }
 )
 RUN_AUTO_PUBLISH_METADATA_EVIDENCE_PATCH = "run-auto-publish-metadata-evidence-v1"
-_REPORT_ONLY_PUBLISH_TYPES = frozenset({"security_pentest_report"})
+RUN_CHECKPOINT_RECOVERY_STATE_MACHINE_PATCH = "run-checkpoint-recovery-state-machine-v1"
+RUN_PR_RESOLVER_OWNED_CONTINUATION_PATCH = "run-pr-resolver-owned-continuation-v1"
+RUN_PR_RESOLVER_CONTINUATION_IDENTITY_PATCH = "run-pr-resolver-continuation-identity-v1"
 _JIRA_ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
-_JIRA_BACKED_AGENT_SKILLS = frozenset(
-    {"jira-implement", *JIRA_BACKED_AGENT_SKILLS}
-)
+_JIRA_BACKED_AGENT_SKILLS = frozenset({"jira-implement", *JIRA_BACKED_AGENT_SKILLS})
 _PLAIN_TEXT_BLOCKED_OUTCOME_PATTERN = re.compile(
     r"(?im)^\s*(?:#{1,6}\s*)?(?:result|verdict|outcome)\s*:\s*blocked\b[^\n]*"
 )
@@ -366,6 +459,8 @@ _MOONSPEC_REMEDIATION_TITLE_ATTEMPT_PATTERN = re.compile(
     r"\b(?P<attempt>\d+)\s+of\s+(?P<max_attempts>\d+)\b",
     re.IGNORECASE,
 )
+
+
 class RunWorkflowInput(TypedDict, total=False):
     """Input payload for the MoonMind.UserWorkflow workflow."""
 
@@ -375,16 +470,22 @@ class RunWorkflowInput(TypedDict, total=False):
     input_artifact_ref: Optional[str]
     plan_artifact_ref: Optional[str]
     scheduled_for: Optional[str]
+    remediation_loop_continuation: dict[str, Any]
+
 
 class _RunWorkflowOutputBase(TypedDict):
     status: str
     message: Optional[str]
+
 
 class RunWorkflowOutput(_RunWorkflowOutputBase, total=False):
     proposals_generated: int
     proposals_submitted: int
     mergeAutomationDisposition: str
     headSha: str
+    executionOutcome: dict[str, Any]
+    finalizationOutcome: dict[str, Any]
+
 
 USER_WORKFLOW_NAME = "MoonMind.UserWorkflow"
 WORKFLOW_NAME = USER_WORKFLOW_NAME
@@ -411,8 +512,26 @@ DEPENDENCY_RESOLUTION_FAILED = "dependency_failed"
 DEPENDENCY_RESOLUTION_BYPASSED = "bypassed"
 DEPENDENCY_RESOLUTION_MANUAL_OVERRIDE = "manual_override"
 DEPENDENCY_RESOLUTION_WAITING_FOR_RERUN = "waiting_for_successful_rerun"
-MERGE_AUTOMATION_SUCCESS_STATUSES = frozenset({"merged", "already_merged"})
+MERGE_AUTOMATION_MERGED_STATUSES = frozenset({"merged", "already_merged"})
+# fix_only finish mode: merge automation completed its review/fix loop with
+# nothing left to address and no merge authority. Successful, but not a merge.
+MERGE_AUTOMATION_REVIEW_CLEAN_STATUS = "review_clean"
+MERGE_AUTOMATION_SUCCESS_STATUSES = MERGE_AUTOMATION_MERGED_STATUSES | frozenset(
+    {MERGE_AUTOMATION_REVIEW_CLEAN_STATUS}
+)
 MERGE_AUTOMATION_FAILURE_STATUSES = frozenset({"blocked", "failed", "expired"})
+# Terminal pr-resolver dispositions that mean the resolver child finished its
+# job. "review_clean" is the fix_only terminal: complete, but not a merge.
+MERGE_AUTOMATION_RESOLVER_SUCCESS_DISPOSITIONS = frozenset(
+    {"merged", "already_merged", MERGE_AUTOMATION_REVIEW_CLEAN_STATUS}
+)
+MERGE_AUTOMATION_DEFAULT_FINISH_MODE = "merge"
+# Supported finish modes, mirroring `MergeAutomationFinishMode`. Only an omitted
+# value takes the default; every other unsupported value fails validation
+# instead of silently inheriting merge authority.
+MERGE_AUTOMATION_FINISH_MODES = frozenset(
+    {MERGE_AUTOMATION_DEFAULT_FINISH_MODE, "fix_only"}
+)
 MERGE_AUTOMATION_CANCELED_STATUS = "canceled"
 MERGE_AUTOMATION_TERMINAL_STATUSES = (
     MERGE_AUTOMATION_SUCCESS_STATUSES
@@ -439,9 +558,7 @@ RUN_BLOCKED_OUTCOME_SHORT_CIRCUIT_PATCH = "run-blocked-outcome-short-circuit-v1"
 RUN_JIRA_BLOCKER_RECHECK_PATCH = "run-jira-blocker-recheck-v1"
 RUN_FAILED_RESULT_BLOCKER_PATCH = "run-failed-result-blocker-v1"
 RUN_JIRA_BLOCKER_WAIT_COALESCING_PATCH = "run-jira-blocker-wait-coalescing-v1"
-RUN_JIRA_BLOCKER_RECHECK_RETRY_FLOOR_PATCH = (
-    "run-jira-blocker-recheck-retry-floor-v1"
-)
+RUN_JIRA_BLOCKER_RECHECK_RETRY_FLOOR_PATCH = "run-jira-blocker-recheck-retry-floor-v1"
 RUN_JIRA_BLOCKER_RECHECK_ASSESSMENT_CONTEXT_PATCH = (
     "run-jira-blocker-recheck-assessment-context-v1"
 )
@@ -451,7 +568,9 @@ RUN_JIRA_BLOCKER_RECHECK_ASSESSMENT_CONTEXT_ALIAS_PATCH = (
 # Replay-stable patch id for the v2 workflow-scoped Codex termination path. The
 # identifier says "update" for in-flight history continuity, but current
 # Temporal external workflow handles expose the session control surface by signal.
-RUN_WORKFLOW_SCOPED_SESSION_TERMINATION_UPDATE_PATCH = "run-task-scoped-session-termination-v2"
+RUN_WORKFLOW_SCOPED_SESSION_TERMINATION_UPDATE_PATCH = (
+    "run-task-scoped-session-termination-v2"
+)
 # Replay-stable patch id for workflow-scoped Codex termination through the
 # AgentSession update handler. This path executes the remote terminate activity.
 RUN_WORKFLOW_SCOPED_SESSION_TERMINATION_UPDATE_EXECUTE_PATCH = (
@@ -462,10 +581,12 @@ RUN_CONDITIONAL_REGISTRY_READ_PATCH = "run-conditional-registry-read-v1"
 RUN_PROVIDER_PROFILE_MANAGER_ID_PATCH = "provider-profile-manager-id-v1"
 RUN_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH = "run-workflow-child-task-queue-v2"
 RUN_RUNTIME_PROFILE_CLEAR_FORWARDING_PATCH = "run-runtime-profile-clear-forwarding-v1"
-RUN_UPDATE_INPUTS_VISIBILITY_REFRESH_PATCH = (
-    "run-update-inputs-visibility-refresh-v1"
-)
+RUN_UPDATE_INPUTS_VISIBILITY_REFRESH_PATCH = "run-update-inputs-visibility-refresh-v1"
 RUN_RECURRING_SCHEDULED_START_PATCH = "run-recurring-scheduled-start-v1"
+RUN_CANONICAL_GIT_REPOSITORY_PROJECTION_PATCH = (
+    "run-canonical-git-repository-projection-v1"
+)
+RUN_MEMO_RUNTIME_INHERITANCE_PATCH = "run-memo-runtime-inheritance-v1"
 DEPENDENCY_GATE_PATCH = "dependency-gate-v1"
 # Replay-stable patch id for unified wait-through-rerun dependency behavior.
 # Under this patch, a non-success prerequisite terminal outcome (failed,
@@ -477,34 +598,80 @@ NATIVE_PR_CREATE_PAYLOAD_PATCH = "native-pr-create-payload-v1"
 NATIVE_PR_BRANCH_DEFAULTS_PATCH = "native-pr-branch-defaults-v1"
 NATIVE_PR_PUSH_STATUS_GATE_PATCH = "native-pr-push-status-gate-v1"
 NATIVE_PR_LEASE_CONFLICT_GATE_PATCH = "native-pr-lease-conflict-gate-v1"
-RUN_STOP_ON_PUBLISH_HANDOFF_FAILURE_PATCH = (
-    "run-stop-on-publish-handoff-failure-v1"
+RUN_STOP_ON_PUBLISH_HANDOFF_FAILURE_PATCH = "run-stop-on-publish-handoff-failure-v1"
+# Replay-stable patch for recovering the confirmed PR URL from durable publish
+# context before starting merge automation. Older histories retain their local
+# variable-only handoff; new histories can no longer lose a PR observed by a
+# prior step when a later plan step carries no publication output.
+RUN_DURABLE_PUBLISH_CONTEXT_MERGE_HANDOFF_PATCH = (
+    "run-durable-publish-context-merge-handoff-v1"
 )
 RUN_DIRECT_TOOL_REPORT_OUTPUTS_PATCH = "run-direct-tool-report-outputs-v1"
-RUN_ASSESSMENT_PARAMETER_INJECTION_PATCH = (
-    "run-assessment-parameter-injection-v1"
+RUN_ASSESSMENT_PARAMETER_INJECTION_PATCH = "run-assessment-parameter-injection-v1"
+RUN_ASSESSMENT_ATTACHMENT_HANDOFF_PATCH = "run-assessment-attachment-handoff-v1"
+RUN_ISSUE_BRIEF_ATTACHMENT_HANDOFF_PATCH = "run-issue-brief-attachment-handoff-v1"
+RUN_MOONSPEC_VERIFY_ATTACHMENT_HANDOFF_PATCH = (
+    "run-moonspec-verify-attachment-handoff-v1"
 )
+RUN_TRUSTED_NO_COMMIT_REPOSITORY_OUTCOME_PATCH = (
+    "run-trusted-no-commit-repository-outcome-v1"
+)
+RUN_REPOSITORY_BOUND_NO_COMMIT_OUTCOME_PATCH = (
+    "run-repository-bound-no-commit-outcome-v1"
+)
+RUN_PUBLISHED_BRANCH_HANDOFF_PATCH = "run-published-branch-handoff-v1"
+# Preserve the authored PR/branch base when a downstream publishing step omits
+# repositoryOperation. Publishing itself is mutation authority, so current
+# executions compile that omission to ``write`` while older histories replay
+# their recorded candidate-as-base behavior.
+RUN_PUBLISH_MODE_REPOSITORY_OPERATION_PATCH = "run-publish-mode-repository-operation-v1"
 # Assert the producing Step Execution reached the `accepted` terminal
 # disposition before an external handoff runs, in addition to the existing
 # MoonSpec gate verdict block. Guarded for replay safety so in-flight runs keep
 # their original verdict-only decisions.
-RUN_HANDOFF_ACCEPTED_DISPOSITION_GATE_PATCH = (
-    "run-handoff-accepted-disposition-gate-v1"
-)
+RUN_HANDOFF_ACCEPTED_DISPOSITION_GATE_PATCH = "run-handoff-accepted-disposition-gate-v1"
 RUN_WORKFLOW_PUBLISH_OUTCOME_PATCH = "run-workflow-publish-outcome-v1"
-RUN_UNGATED_CONTINUATION_DISPOSITION_PATCH = (
-    "run-ungated-continuation-disposition-v1"
-)
+RUN_CANONICAL_NO_COMMIT_OUTCOME_PATCH = "run-canonical-no-commit-outcome-v1"
+RUN_UNGATED_CONTINUATION_DISPOSITION_PATCH = "run-ungated-continuation-disposition-v1"
 RUN_GATED_STEP_CONTINUATION_PATCH = "run-gated-step-continuation-v1"
+# Expose the workflow-owned continuation capability to the portable Skill at
+# launch.  The absence of an authority is meaningful: a one-shot runtime must
+# keep supported waits in the foreground because no later workflow owns them.
+RUN_TERMINAL_CONTINUATION_AUTHORITY_INSTRUCTIONS_PATCH = (
+    "run-terminal-continuation-authority-instructions-v1"
+)
+# Keep retry classification replay-stable for histories that already recorded
+# the prior provider-only decision. New executions use validated terminal
+# contract provenance to avoid repeating completed resolver mutations.
+RUN_TERMINAL_CONTRACT_RETRY_DECISION_PATCH = "run-terminal-contract-retry-decision-v1"
 # Merge-automation dispositions that are *continuations*: they only have meaning
 # when a MoonMind.MergeAutomation gate re-enters and finalizes the merge. A
 # standalone (ungated) resolver run that ends in one of these states has not
 # resolved the PR and must not be reported as a success.
-MERGE_AUTOMATION_CONTINUATION_DISPOSITIONS = frozenset({"reenter_gate"})
+MERGE_AUTOMATION_CONTINUATION_DISPOSITIONS = frozenset(
+    {"reenter_gate", "request_review"}
+)
+# Gated-continuation contract versions MoonMind can validate. Anything else is
+# normalized to v1 so replayed histories keep their recorded shape.
+SUPPORTED_GATED_CONTINUATION_SCHEMA_VERSIONS = frozenset(
+    {"gated-continuation/v1", "gated-continuation/v2"}
+)
 GATED_CONTINUATION_GATE_REGISTRY: Mapping[str, frozenset[str]] = {
     "merge_automation": MERGE_AUTOMATION_CONTINUATION_DISPOSITIONS,
 }
+# Advertise the automated-review request action to gated pr-resolver children.
+# Histories recorded before the review loop keep their original single-action
+# authority payload.
+RUN_PR_RESOLVER_REVIEW_REQUEST_AUTHORITY_PATCH = (
+    "run-pr-resolver-review-request-authority-v1"
+)
 RUN_PUBLISH_REPAIR_FEEDBACK_PATCH = "run-publish-repair-feedback-v1"
+RUN_PREPUBLICATION_FAILURE_BLOCKS_REPAIR_PATCH = (
+    "run-prepublication-failure-blocks-repair-v1"
+)
+RUN_PREPUBLICATION_FAILURE_BLOCKS_PUBLISH_PATCH = (
+    "run-prepublication-failure-blocks-publish-v1"
+)
 RUN_FETCH_PROFILE_SNAPSHOTS_PATCH = "fetch-profile-snapshots-v1"
 RUN_SLOT_CONTINUITY_PATCH = "run-slot-continuity-v1"
 RUN_DEFER_WORKFLOW_SCOPED_SESSION_UNTIL_SLOT_PATCH = (
@@ -525,6 +692,13 @@ RUN_WORKFLOW_SCOPED_SESSION_CLEAR_UPDATE_AUTHORITATIVE_PATCH = (
 RUN_WORKFLOW_SCOPED_SESSION_TERMINATION_ACTIVITY_SIGNAL_PATCH = (
     "run-task-scoped-session-termination-v4"
 )
+# Keep the managed-session child alive after its parent closes so API-owned
+# cancellation cleanup can still invoke its idempotent termination update.
+# The patch preserves replay compatibility for histories that recorded the
+# prior default parent-close policy.
+RUN_WORKFLOW_SCOPED_SESSION_ABANDON_ON_PARENT_CLOSE_PATCH = (
+    "run-task-scoped-session-abandon-on-parent-close-v1"
+)
 RUN_TERMINAL_STATE_ACTIVITY_PATCH = "run-terminal-state-activity-v1"
 # Replay-stable patch id for emitting a failed-run recovery manifest before
 # terminal failure is reported (MM-881). Gated so in-flight histories that
@@ -536,35 +710,96 @@ RUN_REAL_STARTED_AT_PATCH = "run-real-started-at-v1"
 RUN_STEP_EXECUTION_MANIFEST_PATCH = "run-step-" + "attempt-manifest-v1"
 RUN_CANONICAL_STEP_STATUS_VOCAB_PATCH = "run-canonical-step-status-vocabulary-v1"
 RUN_CANONICAL_STEP_CHECKPOINTS_PATCH = "run-canonical-step-checkpoints-v1"
-RUN_EMIT_EPHEMERAL_STEP_CHECKPOINTS_PATCH = (
-    "run-emit-ephemeral-step-checkpoints-v1"
+RUN_MANAGED_CHECKPOINT_AUTHORITY_PATCH = "run-managed-checkpoint-authority-v1"
+RUN_MANAGED_CHECKPOINT_CAPTURE_PATCH = "run-managed-checkpoint-capture-v1"
+RUN_UNCHANGED_CHECKPOINT_REUSE_PATCH = "run-unchanged-checkpoint-reuse-v1"
+RUN_MANAGED_CHECKPOINT_LOCATOR_GUARD_PATCH = "run-managed-checkpoint-locator-guard-v1"
+RUN_OMNIGENT_PREMATERIALIZATION_CHECKPOINT_GUARD_PATCH = (
+    "run-omnigent-prematerialization-checkpoint-guard-v1"
 )
+RUN_OMNIGENT_SPLIT_SESSION_WORKSPACE_CHECKPOINT_PATCH = (
+    "run-omnigent-split-session-workspace-checkpoint-v1"
+)
+RUN_RUNTIME_EXECUTION_CAPABILITIES_PATCH = "run-runtime-execution-capabilities-v1"
+RUN_DURABLE_FINALIZATION_OUTCOME_PATCH = "run-durable-finalization-outcome-v1"
+RUN_SKIP_NO_PUBLISH_PREPUBLICATION_CHECKPOINT_PATCH = (
+    "run-skip-no-publish-prepublication-checkpoint-v1"
+)
+FINALIZATION_CHECKPOINT_FAILED = "FINALIZATION_CHECKPOINT_FAILED"
+FINALIZATION_PUBLICATION_FAILED = "FINALIZATION_PUBLICATION_FAILED"
+FINALIZATION_RETRY_EXHAUSTED = "FINALIZATION_RETRY_EXHAUSTED"
+RUN_EMIT_EPHEMERAL_STEP_CHECKPOINTS_PATCH = "run-emit-ephemeral-step-checkpoints-v1"
 RUN_STEP_EXECUTION_NAMING_PATCH = "run-step-execution-naming-v1"
 RUN_CHECKPOINT_BRANCH_TURN_CONTEXT_PATCH = "run-checkpoint-branch-turn-context-v1"
 RUN_OMNIGENT_CHECKPOINT_BRANCH_TURN_REQUEST_PATCH = (
     "run-omnigent-checkpoint-branch-turn-request-v1"
 )
+RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH = (
+    "run-omnigent-authored-selection-compiler-v1"
+)
+RUN_OMNIGENT_AGENT_PROFILE_SNAPSHOT_COMPILER_PATCH = (
+    "run-omnigent-agent-profile-snapshot-compiler-v1"
+)
+RUN_OMNIGENT_GENERIC_AGENT_PROFILE_V2_PATCH = "run-omnigent-generic-agent-profile-v2"
+RUN_OMNIGENT_STOCK_AGENT_IDENTITY_PATCH = "run-omnigent-stock-agent-identity-v1"
+RUN_OMNIGENT_EXECUTION_PLAN_REF_PATCH = (
+    "run-omnigent-execution-plan-ref-v1"
+)
+RUN_AGENT_REQUIRED_CAPABILITIES_PROPAGATION_PATCH = (
+    "run-agent-required-capabilities-propagation-v1"
+)
+RUN_EXECUTION_FANOUT_AUTHORIZATION_PATCH = "run-execution-fanout-authorization-v1"
+# Resolved Skill metadata is the launch-time capability authority.  Plans may
+# have been compiled from an older registry projection, so merge the immutable
+# resolved snapshot's requirements into the AgentRun request before dispatch.
+# The Activity payload changes and therefore requires a replay gate.
+RUN_RESOLVED_SKILL_REQUIRED_CAPABILITIES_PATCH = (
+    "run-resolved-skill-required-capabilities-v1"
+)
+RUN_PROFILE_SNAPSHOT_RUNTIME_AUTHORITY_PATCH = (
+    "run-profile-snapshot-runtime-authority-v1"
+)
 RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH = (
     "run-already-implemented-jira-completion-v1"
 )
-RUN_MOONSPEC_VERIFY_PUBLICATION_GATE_PATCH = (
-    "run-moonspec-verify-publication-gate-v1"
+RUN_MOONSPEC_VERIFY_PUBLICATION_GATE_PATCH = "run-moonspec-verify-publication-gate-v1"
+RUN_MOONSPEC_GATE_PREVIOUS_OUTPUTS_HANDOFF_PATCH = (
+    "run-moonspec-gate-previous-outputs-handoff-v1"
 )
-RUN_MOONSPEC_VERIFY_REMEDIATION_INDEX_PATCH = (
-    "run-moonspec-verify-remediation-index-v1"
-)
+RUN_MOONSPEC_VERIFY_REMEDIATION_INDEX_PATCH = "run-moonspec-verify-remediation-index-v1"
 RUN_MOONSPEC_REMEDIATION_STEP_SKIP_PATCH = "run-moonspec-remediation-step-skip-v1"
 RUN_MOONSPEC_TITLE_REMEDIATION_DETECTION_PATCH = (
     "run-moonspec-title-remediation-detection-v1"
 )
 RUN_MOONSPEC_GATE_CONTRACT_REPAIR_PATCH = "run-moonspec-gate-contract-repair-v1"
+RUN_BOUNDED_STORY_LOOP_PROGRESS_BUDGET_PATCH = (
+    "run-bounded-story-loop-progress-budget-v1"
+)
+RUN_BOUNDED_STORY_LOOP_FEEDBACK_PROGRESS_PATCH = (
+    "run-bounded-story-loop-feedback-progress-v1"
+)
+RUN_BOUNDED_STORY_LOOP_REMEDIATION_BUDGET_PATCH = (
+    "run-bounded-story-loop-remediation-budget-v1"
+)
 RUN_MOONSPEC_GATE_CONTRACT_REPAIR_FRESH_SOURCE_PATCH = (
     "run-moonspec-gate-contract-repair-fresh-source-v1"
 )
 RUN_MOONSPEC_GATE_ENVIRONMENT_DRAFT_PUBLISH_PATCH = (
     "run-moonspec-gate-environment-draft-publish-v1"
 )
+RUN_MOONSPEC_ADDITIONAL_WORK_DRAFT_PUBLISH_PATCH = (
+    "run-moonspec-additional-work-draft-publish-v1"
+)
+RUN_WORKFLOW_GATE_TERMINAL_HANDOFF_PATCH = "run-workflow-gate-terminal-handoff-v1"
+RUN_MOONSPEC_DRAFT_PUBLISH_RECOVERY_HANDOFF_PATCH = (
+    "run-moonspec-draft-publish-recovery-handoff-v1"
+)
+RUN_AUTHORITATIVE_PUBLISH_OUTCOME_PATCH = "run-authoritative-publish-outcome-v1"
+RUN_AUTHORITATIVE_PR_REQUIREMENT_PATCH = "run-authoritative-pr-requirement-v1"
 RUN_STEP_RETRY_OVERRIDES_PATCH = "run-step-retry-overrides-v1"
+RUN_PROPAGATE_AGENT_CHILD_CANCELLATION_PATCH = (
+    "run-propagate-agent-child-cancellation-v1"
+)
 # MM-880: compile + persist a versioned ResiliencePolicy envelope before step
 # execution begins so every step execution can be traced to the policy values
 # that governed it.
@@ -585,14 +820,171 @@ RUN_FAIL_FAST_STEP_FAILURE_SUMMARY_PATCH = "run-fail-fast-step-failure-summary-v
 # correlated under one trace id. Gated so in-flight histories that predate the
 # trace-ref stamp / incident-manifest writes keep replaying deterministically.
 RUN_INCIDENT_RECONSTRUCTION_PATCH = "run-incident-reconstruction-v1"
+RUN_PLAN_ROUTED_MOONSPEC_REMEDIATION_PATCH = "run-plan-routed-moonspec-remediation-v1"
+RUN_DYNAMIC_REMEDIATION_LOOP_CONTROLLER_PATCH = (
+    "run-dynamic-remediation-loop-controller-v1"
+)
+# The dynamic controller replaces its durable decision while processing the
+# current verifier result. Re-read the blocking projection after that update so
+# a passing verdict cannot inherit the prior attempt's blocking reason. Keep
+# the ordering change replay-gated for histories that already evaluated a gate.
+RUN_REFRESH_MOONSPEC_BLOCK_AFTER_REMEDIATION_DECISION_PATCH = (
+    "run-refresh-moonspec-block-after-remediation-decision-v1"
+)
+# New controller admissions require executable instructions on both agent steps.
+# Gate the workflow-side validation so histories admitted before this invariant
+# keep replaying their recorded command sequence.
+RUN_REMEDIATION_LOOP_AGENT_INSTRUCTIONS_PATCH = (
+    "run-remediation-loop-agent-instructions-v1"
+)
+# Pass the exact verifier evidence that admitted an attempt directly to its
+# remediator. Older histories retain the previous nested previousOutputs-only
+# handoff so their materialized plan-node payloads replay unchanged.
+RUN_REMEDIATION_EXPLICIT_EVIDENCE_INPUTS_PATCH = (
+    "run-remediation-explicit-evidence-inputs-v1"
+)
+# Explicit cutover from the legacy, statically expanded remediation history to
+# the compact controller-owned continuation schema.  Keep this separate from
+# the controller patch so histories that never authored a loop never record the
+# new branch.
+RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH = "run-remediation-loop-continue-as-new-v1"
+# Agent/runtime artifact activities return opaque ``art_`` IDs, while the
+# deterministic remediation state stores canonical ``artifact://`` refs.
+# Version the boundary normalization so histories that already evaluated a gate
+# retain their original command sequence during replay.
+RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH = (
+    "run-remediation-loop-artifact-ref-normalization-v1"
+)
+# Verifier bundles author the structured remaining-work semantics, while the
+# runtime publishes their JSON as durable evidence. Preserve that artifact as
+# remainingWorkRef when an older verifier payload omits a separate ref, and do
+# not replace it with an empty terminal handoff. Replay-gate the workflow-side
+# fallback because it changes remediation inputs and terminal side effects.
+RUN_MOONSPEC_VERIFY_REMAINING_WORK_EVIDENCE_PATCH = (
+    "run-moonspec-verify-remaining-work-evidence-v1"
+)
+# A verifier artifact receives a new opaque ref on every publication, even
+# when its structured remaining-work payload is unchanged. Compare the stable
+# content digest while retaining the artifact ref as durable handoff evidence.
+# Gate the state and Continue-As-New payload change for replay safety.
+RUN_REMEDIATION_STABLE_PROGRESS_IDENTITY_PATCH = (
+    "run-remediation-stable-progress-identity-v1"
+)
+# Promote canonical checkpoint Activity evidence into cumulative remediation
+# authority and carry that compact head through Continue-As-New. Histories that
+# already admitted remediation without this evidence retain their prior command
+# payloads during replay.
+RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH = "run-workflow-owned-remediation-head-v1"
+# Cumulative checkpoint tracking is optional. Admit a headless remediation pair
+# against the live cumulative workspace when capture produced no canonical head.
+# Histories that already evaluated the old mandatory-head guard retain the prior
+# failure branch during replay.
+RUN_WORKFLOW_HEADLESS_REMEDIATION_PATCH = "run-workflow-headless-remediation-v1"
+# A checkpointless remediation may continue only from the repository branch
+# that the admitting verifier proved was published remotely. Carry that source
+# into both dynamic AgentRun requests so a managed runtime cannot discover an
+# unrelated checkout when no canonical workspace checkpoint exists. The
+# materialized child inputs change, so older histories retain their commands.
+RUN_HEADLESS_REMEDIATION_VERIFIED_WORKSPACE_PATCH = (
+    "run-headless-remediation-verified-workspace-v1"
+)
+# Complete the headless-remediation cutover at the execution boundary. The
+# admission patch above allows a remediation attempt without a canonical
+# checkpoint; older histories that already failed the later materialization
+# guard must retain that failure when replayed.
+RUN_HEADLESS_REMEDIATION_EXECUTION_PATCH = "run-headless-remediation-execution-v1"
+# External runtimes create a fresh sandbox only after their AgentRun starts, so
+# they cannot satisfy a pre-execution archive checkpoint. Continue from the
+# workflow-owned, remote-verified published branch instead. This changes both
+# remediation admission and child workspace inputs and is therefore replay
+# gated.
+RUN_EXTERNAL_PUBLISHED_BRANCH_REMEDIATION_PATCH = (
+    "run-external-published-branch-remediation-v1"
+)
+RUN_MANAGED_SESSION_CHECKPOINT_LOCATOR_PATCH = (
+    "run-managed-session-checkpoint-locator-v1"
+)
+# Bind a managed remediation checkpoint to the terminal verifier Step Execution
+# that last owned the shared session record. Older histories omitted this
+# source identity and must retain their original Activity payloads during replay.
+RUN_REMEDIATION_MANAGED_SESSION_SOURCE_IDENTITY_PATCH = (
+    "run-remediation-managed-session-source-identity-v1"
+)
+RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH = (
+    "run-remediation-continue-managed-session-v1"
+)
+
+
+def _normalize_git_branch_ref(value: Any) -> str:
+    """Return the short branch identity used by managed Git boundaries."""
+
+    normalized = str(value or "").strip()
+    while True:
+        prior = normalized
+        for prefix in ("refs/remotes/origin/", "refs/heads/", "origin/"):
+            if normalized.startswith(prefix):
+                normalized = normalized.removeprefix(prefix)
+        if normalized == prior:
+            return normalized
+
+
+@dataclasses.dataclass(frozen=True)
+class MoonSpecRemediationSuccessor:
+    """One exact, plan-authored remediation destination."""
+
+    logical_step_id: str
+    attempt: int
+    max_attempts: int
+    node_index: int
+
+
+@dataclasses.dataclass(frozen=True)
+class GateTransitionDecision:
+    """Workflow-owned routing for a valid verifier semantic result."""
+
+    disposition: str
+    routing_disposition: str
+    reason_code: str
+    successor: MoonSpecRemediationSuccessor | None = None
+
+
 # Replay-stable patch id for the status-only memo update emitted from
 # _update_search_attributes. Histories that already recorded the prior ungated
 # memo command require a reset/versioning cutover; see
 # docs/tmp/RunStatusMemoUpsertCutover.md.
 RUN_STATUS_MEMO_UPSERT_PATCH = "run-status-memo-upsert-v1"
 RUN_JSON_ARTIFACT_WRITE_COMPLETE_PATCH = "run-json-artifact-write-complete-v1"
+RUN_TEMPORAL_PR_RESOLVER_OWNERSHIP_PATCH = "run-temporal-pr-resolver-ownership-v1"
+RUN_PR_RESOLVER_CAPABILITY_PREFLIGHT_PATCH = "run-pr-resolver-capability-preflight-v1"
+RUN_PR_RESOLVER_PUBLISH_EVIDENCE_REF_PATCH = "run-pr-resolver-publish-evidence-ref-v1"
+RUN_TRUSTED_PR_RESOLVER_NATIVE_BINDING_PATCH = (
+    "run-trusted-pr-resolver-native-binding-v1"
+)
+RUN_PR_RESOLVER_SKILL_OWNED_EXECUTION_PATCH = "run-pr-resolver-skill-owned-execution-v1"
+RUN_RESOLVED_SKILL_TERMINAL_CONTRACT_PATCH = "run-resolved-skill-terminal-contract-v1"
+RUN_AUTO_PUBLISH_TERMINAL_CONTRACT_PATCH = "run-auto-publish-terminal-contract-v1"
+RUN_EXISTING_SKILLSET_TERMINAL_CONTRACT_PATCH = (
+    "run-existing-skillset-terminal-contract-v1"
+)
+RUN_EMPTY_AGENT_SKILLSET_SNAPSHOT_PATCH = "run-empty-agent-skillset-snapshot-v1"
+RUN_PR_RESOLVER_SELECTOR_RESOLUTION_PATCH = "run-pr-resolver-selector-resolution-v1"
+
+
+def _worker_capability_unavailable_error(
+    worker_capability: Mapping[str, Any],
+) -> exceptions.ApplicationError:
+    return exceptions.ApplicationError(
+        "MoonMind.PRResolver worker capability is unavailable; "
+        "no resolver or remediation agent was launched.",
+        dict(worker_capability),
+        type="WORKER_CAPABILITY_UNAVAILABLE",
+        non_retryable=True,
+    )
+
+
 MM_STARTED_AT_SEARCH_ATTRIBUTE = "mm_started_at"
-_PROFILE_SYNC_RUNTIME_IDS = ("codex_cli", "claude_code")
+_OMNIGENT_PROVIDER_RUNTIME_IDS = frozenset({"codex_cli", "opencode"})
+_PROFILE_SYNC_RUNTIME_IDS = ("codex_cli", "claude_code", "opencode")
 _MANAGED_AGENT_IDS = frozenset(
     {
         "claude",
@@ -604,15 +996,18 @@ _MANAGED_AGENT_IDS = frozenset(
     }
 )
 
+
 def _normalize_agent_runtime_id(agent_id: str) -> str:
     """Normalize runtime identifiers for managed/external dispatch decisions."""
 
     return str(agent_id).strip().lower().replace("-", "_")
 
+
 def _legacy_manager_workflow_id(runtime_id: str) -> str:
     # Preserve legacy workflow IDs for in-flight histories. New executions use
     # provider-profile-manager IDs once the replay patch is active.
     return f"auth-profile-manager:{runtime_id}"
+
 
 class MoonMindRunWorkflow:
     def _expected_workflow_name(self) -> str:
@@ -655,13 +1050,14 @@ class MoonMindRunWorkflow:
             logger_to_use = logging.getLogger(__name__)
 
         try:
-            logger_to_use.isEnabledFor(logging.INFO)
-            return logging.LoggerAdapter(logger_to_use, extra=extra)
+            if not isinstance(logger_to_use.isEnabledFor(logging.INFO), bool):
+                logger_to_use = logging.getLogger(__name__)
         except Exception:
             logging.getLogger(__name__).exception(
                 "Error checking logger capabilities in _get_logger"
             )
-            return logging.LoggerAdapter(logging.getLogger(__name__), extra=extra)
+            logger_to_use = logging.getLogger(__name__)
+        return logging.LoggerAdapter(logger_to_use, extra=extra)
 
     @staticmethod
     def _operator_failure_summary(exc: BaseException) -> str:
@@ -693,11 +1089,24 @@ class MoonMindRunWorkflow:
             current = next_exc
 
         for exc_obj, message in reversed(chain):
-            if message not in generic_messages and not isinstance(exc_obj, generic_types):
+            if message not in generic_messages and not isinstance(
+                exc_obj, generic_types
+            ):
                 return message[:1000]
         if chain:
             return chain[-1][1][:1000]
         return exc.__class__.__name__
+
+    def _bounded_operator_failure(
+        self, exc: BaseException, *, max_chars: int = 500
+    ) -> str:
+        """Return redacted nested failure evidence suitable for durable summaries."""
+
+        raw_message = self._operator_failure_summary(exc)
+        sanitized = self._sanitize_operator_summary(redact_sensitive_text(raw_message))
+        return self._coerce_text(sanitized, max_chars=max_chars) or (
+            exc.__class__.__name__
+        )
 
     @staticmethod
     def _failure_root_cause(exc: BaseException) -> BaseException:
@@ -760,11 +1169,14 @@ class MoonMindRunWorkflow:
             "SlotAcquisitionTimeout",
             "RATE_LIMITED",
         }
+        system_error_types = {"WORKER_CAPABILITY_UNAVAILABLE"}
         for app_type in reversed(application_types):
             if app_type in user_error_types:
                 return "user_error"
             if app_type in integration_error_types:
                 return "integration_error"
+            if app_type in system_error_types:
+                return "system_error"
 
         # Heuristic fallback based on the deepest root-cause type.
         root_type_name = root.__class__.__name__
@@ -774,6 +1186,13 @@ class MoonMindRunWorkflow:
         if "Timeout" in root_type_name or "Connection" in root_type_name:
             return "integration_error"
         return "execution_error"
+
+    @staticmethod
+    def _should_propagate_agent_child_cancellation(exc: BaseException) -> bool:
+        return isinstance(
+            exc,
+            (CancelledError, asyncio.CancelledError),
+        ) and workflow.patched(RUN_PROPAGATE_AGENT_CHILD_CANCELLATION_PATCH)
 
     # Canonical errorCategory tokens. These are machine classifications, not
     # operator-readable messages, so they must never be surfaced verbatim as a
@@ -838,9 +1257,7 @@ class MoonMindRunWorkflow:
         )
         details: list[str] = []
         raw_last_error = self._coerce_text(failure_message, max_chars=240)
-        last_error = (
-            self._sanitize_operator_summary(raw_last_error) or raw_last_error
-        )
+        last_error = self._sanitize_operator_summary(raw_last_error) or raw_last_error
         if last_error and last_error not in bounded_summary:
             details.append(f"lastError={last_error}")
         child_id = self._coerce_text(child_workflow_id, max_chars=400)
@@ -887,11 +1304,40 @@ class MoonMindRunWorkflow:
             "stepTitle": self._coerce_text(step_title, max_chars=200),
             "childWorkflowId": self._coerce_text(child_workflow_id, max_chars=400),
             "message": bounded_message,
-            "rootCauseType": self._coerce_text(
-                root.__class__.__name__, max_chars=80
-            ),
+            "rootCauseType": self._coerce_text(root.__class__.__name__, max_chars=80),
             "diagnosticsRef": self._coerce_text(diagnostics_ref, max_chars=400),
         }
+        current: BaseException | None = exc
+        for _ in range(20):
+            if current is None:
+                break
+            if (
+                isinstance(current, exceptions.ApplicationError)
+                and getattr(current, "type", None) == "WORKER_CAPABILITY_UNAVAILABLE"
+            ):
+                diagnostic.update(
+                    {
+                        "reasonCode": "worker_capability_unavailable",
+                        "agentExecutionLaunched": False,
+                    }
+                )
+                details = getattr(current, "details", ()) or ()
+                detail = (
+                    details[0] if details and isinstance(details[0], Mapping) else {}
+                )
+                for source_key, target_key in (
+                    ("workflowType", "workflowType"),
+                    ("taskQueue", "taskQueue"),
+                    ("registryFingerprint", "registryFingerprint"),
+                    ("observedWorkerBuilds", "observedWorkerBuilds"),
+                ):
+                    if detail.get(source_key) is not None:
+                        diagnostic[target_key] = detail[source_key]
+                break
+            next_exc = getattr(current, "cause", None)
+            if not isinstance(next_exc, BaseException):
+                next_exc = current.__cause__
+            current = next_exc
         # Drop empty optional keys to keep the structure compact.
         return {key: value for key, value in diagnostic.items() if value is not None}
 
@@ -965,6 +1411,7 @@ class MoonMindRunWorkflow:
         message: str,
         child_workflow_id: str | None = None,
         diagnostics_ref: str | None = None,
+        terminal_evidence: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Capture a failure diagnostic from a completed-but-failed step result."""
 
@@ -986,12 +1433,23 @@ class MoonMindRunWorkflow:
             "childWorkflowId": self._coerce_text(child_workflow_id, max_chars=400),
             "message": self._coerce_text(sanitized, max_chars=1000)
             or "plan step failed",
-            "rootCauseType": "AgentRunResult"
-            if source == "child_workflow"
-            else "ActivityResult",
+            "rootCauseType": (
+                "AgentRunResult" if source == "child_workflow" else "ActivityResult"
+            ),
             "diagnosticsRef": self._coerce_text(diagnostics_ref, max_chars=400),
         }
         compact = {key: value for key, value in diagnostic.items() if value is not None}
+        if isinstance(terminal_evidence, Mapping):
+            for key in (
+                "failureCode",
+                "terminalContractId",
+                "terminalContractMissingEvidence",
+                "queuedChildCount",
+                "queuedChildren",
+            ):
+                value = terminal_evidence.get(key)
+                if value is not None:
+                    compact[key] = value
         if self._failure_diagnostic is None:
             self._failure_diagnostic = compact
         return compact
@@ -1007,6 +1465,7 @@ class MoonMindRunWorkflow:
         self._integration: Optional[str] = None
         self._target_runtime: Optional[str] = None
         self._target_skill: Optional[str] = None
+        self._runtime_inheritance_parameters: dict[str, Any] = {}
         self._close_status: Optional[str] = None
         self._title: Optional[str] = None
         self._summary: str = "Execution initialized."
@@ -1015,6 +1474,9 @@ class MoonMindRunWorkflow:
         self._publish_status: Optional[str] = None
         self._publish_reason: Optional[str] = None
         self._publish_context: dict[str, Any] = {}
+        self._canonical_git_repository_projection_enabled: bool = False
+        self._canonical_no_commit_outcome_enabled: bool = False
+        self._authoritative_publish_outcome_enabled: bool = False
         self._publish_repair_attempts: int = 0
         self._operator_summary: Optional[str] = None
         self._last_step_id: Optional[str] = None
@@ -1022,8 +1484,22 @@ class MoonMindRunWorkflow:
         self._plan_blocked_message: Optional[str] = None
         self._moonspec_gate_verdict: Optional[str] = None
         self._moonspec_gate_reason: Optional[str] = None
+        # Compact/ref-only candidate authority. Temporal owns this value for the
+        # lifetime of the workflow and replays it deterministically; filesystem
+        # paths and checkpoint bodies never enter workflow state.
+        self._remediation_workspace_head: RemediationWorkspaceHead | None = None
+        self._remediation_loop_spec: RemediationLoopSpec | None = None
+        self._remediation_loop_state: RemediationLoopState | None = None
+        # Resolved runtime the authored loop controller runs on. Materialized
+        # attempts inherit it so ``auto`` loop tools never reach adapter routing.
+        self._remediation_loop_runtime: dict[str, Any] | None = None
+        self._remediation_loop_continuation: dict[str, Any] | None = None
+        self._original_input_payload: dict[str, Any] = {}
         self._moonspec_environment_blocked_publish_action_snapshot: str = "fail"
         self._moonspec_draft_publication_reason: Optional[str] = None
+        # A valid verifier can stop workflow routing without fabricating a
+        # failed execution.  This compact evidence is added to incident output.
+        self._workflow_control_stop: dict[str, Any] | None = None
         self._last_diagnostics_ref: Optional[str] = None
         # Bounded, redacted structured failure diagnostic captured at the
         # failure boundary. Surfaced in reports/run_summary.json and reused by
@@ -1033,6 +1509,7 @@ class MoonMindRunWorkflow:
         self._merge_automation_disposition: Optional[str] = None
         self._merge_automation_head_sha: Optional[str] = None
         self._gated_continuation_request: Optional[dict[str, Any]] = None
+        self._gated_continuation_execution_ref: Optional[str] = None
         self._report_created: bool = False
         self._report_ref: Optional[str] = None
         # MM-880: compact reference to the versioned ResiliencePolicy envelope
@@ -1070,6 +1547,12 @@ class MoonMindRunWorkflow:
         self._dependency_last_failed_at: dict[str, str] = {}
         self._remediation_context: dict[str, Any] = {}
         self._remediation_policy: dict[str, Any] = {}
+        self._native_skill_binding_by_step: dict[str, dict[str, Any]] = {}
+        self._execution_fanout_authorization_by_step: dict[str, dict[str, Any]] = {}
+        self._resolved_skill_required_capabilities_by_step: dict[
+            str, tuple[str, ...]
+        ] = {}
+        self._resolved_skill_terminal_contract_by_step: dict[str, dict[str, Any]] = {}
 
         # Artifact refs
         self._input_ref: Optional[str] = None
@@ -1081,6 +1564,8 @@ class MoonMindRunWorkflow:
         self._recovery_failed_step_id: str | None = None
         self._recovery_workspace: dict[str, Any] = {}
         self._recovery_workspace_restored_ref: str | None = None
+        self._checkpoint_recovery_contract: CheckpointRecoveryContract | None = None
+        self._checkpoint_recovery_state: dict[str, Any] | None = None
         # Compact record of a resume-path checkpoint validation/restoration
         # failure (failureCode + checkpointRef), captured before the failure is
         # raised so the failed-run recovery manifest reports the real degraded
@@ -1109,7 +1594,19 @@ class MoonMindRunWorkflow:
         self._step_checkpoint_refs: dict[str, str] = {}
         self._previous_step_checkpoint_refs: dict[str, str] = {}
         self._step_checkpoint_refs_by_boundary: dict[str, dict[str, str]] = {}
+        self._step_checkpoint_workspace_evidence_by_boundary: dict[
+            str, dict[str, dict[str, str]]
+        ] = {}
+        # Compact workspace artifact evidence is reusable until the workflow
+        # crosses a boundary that can mutate that workspace. This prevents
+        # adjacent checkpoint boundaries from recapturing identical bytes while
+        # retaining one logical Step Execution checkpoint per boundary.
+        self._step_workspace_mutation_generations: dict[str, int] = {}
+        self._step_checkpoint_workspace_evidence_by_generation: dict[
+            str, dict[int, dict[str, Any]]
+        ] = {}
         self._step_workspace_capture_inputs: dict[str, dict[str, Any]] = {}
+        self._step_checkpoint_capture_outcomes: dict[str, dict[str, Any]] = {}
         self._step_external_agent_ids: dict[str, str] = {}
         self._step_execution_launch_blocks: set[str] = set()
         self._fresh_source_step_execution_attempts: set[str] = set()
@@ -1196,9 +1693,9 @@ class MoonMindRunWorkflow:
         self._last_publish_repair_node_id: str | None = None
         self._codex_session_handle: Any | None = None
         self._codex_session_binding: CodexManagedSessionBinding | None = None
-        self._codex_session_cleared_before_step_attempts: set[
-            str | tuple[str, int]
-        ] = set()
+        self._codex_session_cleared_before_step_attempts: set[str | tuple[str, int]] = (
+            set()
+        )
         self._trusted_issue_context: dict[str, Any] | None = None
         self._assessment_context: dict[str, Any] = {}
         self._step_ledger_rows: list[dict[str, Any]] = []
@@ -1394,6 +1891,78 @@ class MoonMindRunWorkflow:
         )
         return str(artifact_id)
 
+    async def _materialize_remaining_work_artifact(
+        self,
+        *,
+        gate: StepGateResult,
+        gate_result_ref: str,
+        workspace_head_ref: str | None,
+    ) -> str:
+        """Persist the canonical terminal-incomplete handoff.
+
+        This deliberately fails closed: a terminal ADDITIONAL_WORK_NEEDED
+        outcome is invalid without both a preserved candidate head and a
+        separately addressable remaining-work artifact.
+        """
+
+        gate_ref = self._bounded_story_loop_artifact_ref(gate_result_ref)
+        head_ref = self._bounded_story_loop_artifact_ref(workspace_head_ref)
+        if not gate_ref or not head_ref:
+            raise ValueError(
+                "terminal incomplete finalization requires gate and workspace head refs"
+            )
+        issues = [dict(issue) for issue in gate.issues]
+        if not issues and self._patched_or_false_outside_workflow(
+            RUN_MOONSPEC_VERIFY_REMAINING_WORK_EVIDENCE_PATCH
+        ):
+            # Compact workflow history intentionally omits the verifier's
+            # structured remainingWork array. Reuse its authoritative artifact
+            # instead of publishing an apparently valid but empty handoff.
+            return (
+                self._bounded_story_loop_artifact_ref(gate.remaining_work_ref)
+                or gate_ref
+            )
+
+        def items(key: str) -> tuple[str, ...]:
+            return tuple(
+                str(issue.get(key) or "").strip()
+                for issue in issues
+                if str(issue.get(key) or "").strip()
+            )
+
+        artifact = RemainingWorkArtifact.model_validate(
+            {
+                "sourceGateResultRef": gate_ref,
+                "sourceVerificationRef": self._bounded_story_loop_artifact_ref(
+                    next(iter(gate.blocking_evidence_refs), None)
+                ),
+                "workspaceHeadRef": head_ref,
+                "gaps": items("remainingWork")
+                or items("summary")
+                or items("requirement"),
+                "requiredChecks": items("requiredCheck") or items("suggestedCommand"),
+                "blockedItems": items("blockedItem"),
+                "recommendedStartingFiles": items("suggestedFile"),
+                "recommendedCommands": items("suggestedCommand"),
+                "scopeLimitations": (),
+                "generatedAt": workflow.now().isoformat(),
+            }
+        )
+        artifact_id = await self._write_json_artifact(
+            name="reports/remaining_work_final.json",
+            payload=artifact.model_dump(by_alias=True, mode="json"),
+            metadata_json={
+                "artifact_kind": "remaining_work",
+                "schemaVersion": "remaining-work/v1",
+            },
+        )
+        artifact_ref = self._bounded_story_loop_artifact_ref(artifact_id)
+        if not artifact_ref:
+            raise ValueError(
+                "remaining-work artifact persistence returned no artifact ref"
+            )
+        return artifact_ref
+
     async def _record_step_execution_manifest(
         self,
         logical_step_id: str,
@@ -1505,9 +2074,7 @@ class MoonMindRunWorkflow:
             resolved_status = (
                 "blocked"
                 if launch_blocked
-                else "executing"
-                if canonical_step_status_vocab
-                else "running"
+                else "executing" if canonical_step_status_vocab else "running"
             )
             if launch_blocked:
                 resolved_terminal_disposition = "blocked"
@@ -1524,8 +2091,7 @@ class MoonMindRunWorkflow:
             )
             outputs = self._step_execution_compact_output_refs(logical_step_id)
             checks = list(
-                (self._step_ledger_row_for(logical_step_id) or {}).get("checks")
-                or []
+                (self._step_ledger_row_for(logical_step_id) or {}).get("checks") or []
             )
             side_effects_payload = self._step_execution_side_effects(
                 logical_step_id,
@@ -1540,6 +2106,16 @@ class MoonMindRunWorkflow:
         if resolved_summary is not None:
             bounded_outputs.setdefault("summary", resolved_summary[:500])
         prepared_input_refs = self._combined_step_execution_input_refs(input_refs)
+        cached_context = self._step_execution_context_projections.get(
+            (logical_step_id, attempt)
+        )
+        initial_context_ref = (
+            str(cached_context.get("initialContextPackRef") or "").strip()
+            if isinstance(cached_context, Mapping)
+            else ""
+        )
+        if initial_context_ref and initial_context_ref not in prepared_input_refs:
+            prepared_input_refs.append(initial_context_ref)
         input_payload: dict[str, Any] = {}
         if prepared_input_refs:
             input_payload["preparedInputRefs"] = prepared_input_refs
@@ -1763,9 +2339,8 @@ class MoonMindRunWorkflow:
         except Exception as exc:
             if exc.__class__.__name__ == "_NotInWorkflowEventLoopError":
                 return None
-            if (
-                isinstance(exc, ValueError)
-                and str(exc).startswith("artifact.create returned no artifact_id")
+            if isinstance(exc, ValueError) and str(exc).startswith(
+                "artifact.create returned no artifact_id"
             ):
                 self._get_logger().warning(
                     "Skipping step-execution manifest without artifact id.",
@@ -2074,7 +2649,10 @@ class MoonMindRunWorkflow:
         reason: str,
         source_execution_ordinal: Mapping[str, Any] | None,
     ) -> dict[str, Any] | None:
-        if not source_execution_ordinal or logical_step_id != self._recovery_failed_step_id:
+        if (
+            not source_execution_ordinal
+            or logical_step_id != self._recovery_failed_step_id
+        ):
             return None
         return {
             "sourceWorkflowId": source_execution_ordinal["workflowId"],
@@ -2168,12 +2746,17 @@ class MoonMindRunWorkflow:
         attempt: int,
         source_execution_ordinal: Mapping[str, Any] | None,
     ) -> dict[str, Any]:
-        if source_execution_ordinal and logical_step_id == self._recovery_failed_step_id:
+        if (
+            source_execution_ordinal
+            and logical_step_id == self._recovery_failed_step_id
+        ):
             resolved_policy = resolve_checkpoint_policy(
                 boundary="before_recovery_restoration",
-                recovery_source=self._recovery_source
-                if isinstance(self._recovery_source, Mapping)
-                else None,
+                recovery_source=(
+                    self._recovery_source
+                    if isinstance(self._recovery_source, Mapping)
+                    else None
+                ),
                 runtime_kind=self._target_runtime,
             )
             workspace = workspace_policy_metadata(
@@ -2204,7 +2787,9 @@ class MoonMindRunWorkflow:
                 checkpoint_ref=checkpoint_ref,
                 checkpoint_valid=bool(checkpoint_ref) if checkpoint_ref else None,
             )
-            workspace["sourceExecutionOrdinal"] = dict(source_execution_ordinal) if source_execution_ordinal else None
+            workspace["sourceExecutionOrdinal"] = (
+                dict(source_execution_ordinal) if source_execution_ordinal else None
+            )
             self._apply_step_checkpoint_manifest_refs(workspace, boundary_refs)
             return workspace
         workspace = workspace_policy_metadata(
@@ -2214,9 +2799,7 @@ class MoonMindRunWorkflow:
         )
         if attempt > 1:
             workspace["sourceExecutionOrdinal"] = (
-                dict(source_execution_ordinal)
-                if source_execution_ordinal
-                else None
+                dict(source_execution_ordinal) if source_execution_ordinal else None
             )
         self._apply_step_checkpoint_manifest_refs(workspace, boundary_refs)
         return workspace
@@ -2399,10 +2982,10 @@ class MoonMindRunWorkflow:
             if isinstance(row, Mapping)
             else ""
         )
-        checkpoint_ref = self._step_checkpoint_refs.get(
-            logical_step_id
-        ) or row_state_checkpoint_ref or self._previous_step_checkpoint_refs.get(
-            logical_step_id
+        checkpoint_ref = (
+            self._step_checkpoint_refs.get(logical_step_id)
+            or row_state_checkpoint_ref
+            or self._previous_step_checkpoint_refs.get(logical_step_id)
         )
         checkpoint_evidence: dict[str, Any] = {}
         if checkpoint_ref:
@@ -2820,8 +3403,7 @@ class MoonMindRunWorkflow:
         workspace: Mapping[str, Any],
     ) -> bool:
         return any(
-            isinstance(value, str) and value.strip()
-            for value in workspace.values()
+            isinstance(value, str) and value.strip() for value in workspace.values()
         )
 
     def _rebuild_step_ledger_index(self) -> None:
@@ -2833,15 +3415,23 @@ class MoonMindRunWorkflow:
 
     def _validate_recovery_source_for_execution(self) -> dict[str, Any] | None:
         recovery_source = self._recovery_source
+        if self._recovery_failed_step_id is not None:
+            return dict(recovery_source) if recovery_source is not None else None
         self._recovery_failed_step_id = None
         self._recovery_workspace = {}
         self._recovery_workspace_restored_ref = None
+        self._checkpoint_recovery_contract = None
+        self._checkpoint_recovery_state = None
         if recovery_source is None:
             return None
         if not isinstance(recovery_source, Mapping):
             raise ValueError("Recovery source must be a compact mapping.")
         if not recovery_source:
             return None
+        # Patch-gated so histories started before the explicit contract retain
+        # their recorded validation path during replay.
+        if self._workflow_patch_enabled(RUN_EXPLICIT_RECOVERY_CONTRACT_PATCH):
+            validate_recovery_contract(recovery_source)
 
         source_workflow_id = self._recovery_source_text(
             recovery_source,
@@ -2888,7 +3478,9 @@ class MoonMindRunWorkflow:
             "failed_run_recovery_manifest_ref",
         )
         if not manifest_ref:
-            raise ValueError("Recovery source requires failed-run recovery manifest ref.")
+            raise ValueError(
+                "Recovery source requires failed-run recovery manifest ref."
+            )
 
         plan_identity = self._recovery_source_text(
             recovery_source,
@@ -2962,6 +3554,33 @@ class MoonMindRunWorkflow:
                     f"preserved step {logical_step_id} requires a state checkpoint ref"
                 )
 
+        explicit_contract = recovery_source.get("checkpointRecovery")
+        if explicit_contract is None:
+            explicit_contract = recovery_source.get("checkpoint_recovery")
+        if explicit_contract is not None:
+            contract = CheckpointRecoveryContract.model_validate(explicit_contract)
+            restore_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                contract.restore_activity
+            )
+            if restore_route.fleet != "agent_runtime":
+                raise ValueError(
+                    "CHECKPOINT_CAPABILITY_INVALID: restore activity must run on "
+                    "the agent_runtime fleet"
+                )
+            self._checkpoint_recovery_contract = contract
+            self._checkpoint_recovery_state = {
+                "status": "recovery_preflight_validated",
+                "recoveryAction": contract.recovery_action,
+                "resumePhase": contract.resume_phase,
+                "sourceCheckpointRef": contract.source_checkpoint_ref,
+                "sourceCheckpointBoundary": contract.source_checkpoint_boundary,
+                "sourceCheckpointKind": contract.source_checkpoint_kind,
+                "targetRuntimeId": contract.capabilities.runtime_id,
+                "capabilitySetVersion": contract.capabilities.capability_set_version,
+                "capabilityDigest": contract.capabilities.capability_digest,
+                "restoreActivity": contract.restore_activity,
+            }
+
         self._recovery_failed_step_id = failed_step_id
         self._recovery_workspace = dict(workspace)
         return dict(recovery_source)
@@ -2977,7 +3596,9 @@ class MoonMindRunWorkflow:
             return None
         if self._recovery_workspace_restored_ref:
             return self._recovery_workspace_restored_ref
-        checkpoint_ref = self._recovery_workspace_checkpoint_ref(self._recovery_workspace)
+        checkpoint_ref = self._recovery_workspace_checkpoint_ref(
+            self._recovery_workspace
+        )
         if not checkpoint_ref:
             return None
         self._recovery_workspace_restored_ref = checkpoint_ref
@@ -2997,7 +3618,14 @@ class MoonMindRunWorkflow:
         if not isinstance(self._recovery_source, Mapping):
             return None
 
-        checkpoint_ref = self._recovery_workspace_checkpoint_ref(self._recovery_workspace)
+        if self._checkpoint_recovery_contract is not None and workflow.patched(
+            RUN_CHECKPOINT_RECOVERY_STATE_MACHINE_PATCH
+        ):
+            return await self._restore_checkpoint_recovery_workspace(logical_step_id)
+
+        checkpoint_ref = self._recovery_workspace_checkpoint_ref(
+            self._recovery_workspace
+        )
         if not checkpoint_ref:
             return None
 
@@ -3021,13 +3649,16 @@ class MoonMindRunWorkflow:
             "sourceRunId",
             "source_run_id",
         )
-        execution_ordinal = self._recovery_source_int(
-            self._recovery_source,
-            "failedStepExecution",
-            "failed_step_execution",
-            "sourceExecutionOrdinal",
-            "source_execution_ordinal",
-        ) or 1
+        execution_ordinal = (
+            self._recovery_source_int(
+                self._recovery_source,
+                "failedStepExecution",
+                "failed_step_execution",
+                "sourceExecutionOrdinal",
+                "source_execution_ordinal",
+            )
+            or 1
+        )
         task_input_snapshot_ref = self._recovery_source_text(
             self._recovery_source,
             "sourceTaskInputSnapshotRef",
@@ -3048,11 +3679,14 @@ class MoonMindRunWorkflow:
             recovery_source=self._recovery_source,
             runtime_kind=self._target_runtime,
         )
-        workspace_policy = self._recovery_source_text(
-            self._recovery_workspace,
-            "workspacePolicy",
-            "workspace_policy",
-        ) or resolved_policy.workspace_policy
+        workspace_policy = (
+            self._recovery_source_text(
+                self._recovery_workspace,
+                "workspacePolicy",
+                "workspace_policy",
+            )
+            or resolved_policy.workspace_policy
+        )
 
         validate_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
             "step_checkpoint.validate"
@@ -3084,18 +3718,29 @@ class MoonMindRunWorkflow:
                 "failureCode": failure_code,
                 "checkpointRef": checkpoint_ref,
             }
-            raise ValueError(
-                f"recovery checkpoint validation failed: {failure_code}"
-            )
+            raise ValueError(f"recovery checkpoint validation failed: {failure_code}")
 
+        target_workspace_locator = self._recovery_workspace.get(
+            "targetWorkspaceLocator"
+        )
+        if not isinstance(target_workspace_locator, Mapping):
+            target_workspace_locator = self._recovery_workspace.get(
+                "target_workspace_locator"
+            )
+        if not isinstance(target_workspace_locator, Mapping):
+            target_workspace_locator = None
         target_workspace_ref = self._recovery_source_text(
             self._recovery_workspace,
             "targetWorkspaceRef",
             "target_workspace_ref",
             "workspaceRef",
             "workspace_ref",
-        ) or checkpoint_ref
-        apply_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("workspace.apply_policy")
+        )
+        if target_workspace_locator is None:
+            target_workspace_ref = target_workspace_ref or checkpoint_ref
+        apply_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+            "workspace.apply_policy"
+        )
         apply_payload = {
             "identity": {
                 "workflowId": source_workflow_id,
@@ -3106,11 +3751,14 @@ class MoonMindRunWorkflow:
             "workspacePolicy": workspace_policy,
             "checkpointRef": checkpoint_ref,
             "checkpoint": dict(checkpoint_payload),
-            "targetWorkspaceRef": target_workspace_ref,
             "expectedPlanRef": source_plan_ref or None,
             "expectedPlanDigest": source_plan_digest or None,
             "idempotencyKey": f"{checkpoint_ref}:workspace_policy:{workspace_policy}",
         }
+        if target_workspace_locator is not None:
+            apply_payload["targetWorkspaceLocator"] = dict(target_workspace_locator)
+        if target_workspace_ref:
+            apply_payload["targetWorkspaceRef"] = target_workspace_ref
         policy = await workflow.execute_activity(
             apply_route.activity_type,
             apply_payload,
@@ -3131,6 +3779,116 @@ class MoonMindRunWorkflow:
         workspace_ref = str(policy.get("workspaceRef") or target_workspace_ref).strip()
         self._recovery_workspace_restored_ref = workspace_ref or checkpoint_ref
         return self._recovery_workspace_restored_ref
+
+    async def _restore_checkpoint_recovery_workspace(self, logical_step_id: str) -> str:
+        """Invoke the frozen runtime-owned restore route exactly once per history."""
+        contract = self._checkpoint_recovery_contract
+        state = self._checkpoint_recovery_state
+        if contract is None or state is None:
+            raise ValueError(
+                "CHECKPOINT_RESTORATION_NOT_READY: recovery preflight missing"
+            )
+        if state.get("status") == "recovery_workspace_restored":
+            return str(state["restorationEvidenceRef"])
+
+        source_ordinal = (
+            self._recovery_source_int(
+                self._recovery_source or {},
+                "failedStepExecution",
+                "failed_step_execution",
+            )
+            or 1
+        )
+        destination_id, idempotency_key = deterministic_recovery_identity(
+            workflow_id=workflow.info().workflow_id,
+            run_id=workflow.info().run_id,
+            logical_step_id=logical_step_id,
+            execution_ordinal=source_ordinal,
+            checkpoint_ref=contract.source_checkpoint_ref,
+        )
+        state.update(
+            {
+                "status": "recovery_restoring_workspace",
+                "destinationAgentRunId": destination_id,
+                "restoreIdempotencyKey": idempotency_key,
+            }
+        )
+        route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(contract.restore_activity)
+        workspace = dict(self._recovery_workspace)
+        source_locator = workspace.get("sourceWorkspaceLocator") or workspace.get(
+            "workspaceLocator"
+        )
+        checkpoint = (
+            workspace.get("workspace") or workspace.get("checkpoint") or workspace
+        )
+        result = await workflow.execute_activity(
+            route.activity_type,
+            {
+                "schemaVersion": "v1",
+                "recoveryIdentity": {
+                    "workflowId": workflow.info().workflow_id,
+                    "runId": workflow.info().run_id,
+                    "logicalStepId": logical_step_id,
+                    "executionOrdinal": source_ordinal + 1,
+                },
+                "source": {
+                    "workflowId": self._recovery_source_text(
+                        self._recovery_source or {},
+                        "sourceWorkflowId",
+                        "source_workflow_id",
+                    ),
+                    "runId": self._recovery_source_text(
+                        self._recovery_source or {}, "sourceRunId", "source_run_id"
+                    ),
+                    "logicalStepId": logical_step_id,
+                    "executionOrdinal": source_ordinal,
+                    "checkpointRef": contract.source_checkpoint_ref,
+                    "checkpointBoundary": contract.source_checkpoint_boundary,
+                    **(
+                        {"sourceWorkspaceLocator": dict(source_locator)}
+                        if isinstance(source_locator, Mapping)
+                        else {}
+                    ),
+                },
+                "checkpoint": {
+                    "kind": contract.source_checkpoint_kind,
+                    "baseCommit": checkpoint.get("baseCommit"),
+                    "archiveRef": checkpoint.get("archiveRef"),
+                    "archiveDigest": checkpoint.get("archiveDigest"),
+                    "manifestRef": checkpoint.get("manifestRef"),
+                    "manifestDigest": checkpoint.get("manifestDigest"),
+                },
+                "destination": {
+                    "runtimeId": contract.capabilities.runtime_id,
+                    "agentRunId": destination_id,
+                    "repository": self._repo,
+                    "relativePath": "repo",
+                },
+                "workspacePolicy": contract.workspace_policy,
+                "resumePhase": contract.resume_phase,
+                "capabilitySetVersion": contract.capabilities.capability_set_version,
+                "capabilityDigest": contract.capabilities.capability_digest,
+                "idempotencyKey": idempotency_key,
+            },
+            **self._execute_kwargs_for_route(route),
+        )
+        if not isinstance(result, Mapping):
+            raise ValueError("CHECKPOINT_RESTORATION_NOT_READY: invalid restore result")
+        locator, evidence_ref, evidence_digest = validate_restore_result(
+            result,
+            runtime_id=contract.capabilities.runtime_id,
+            destination_agent_run_id=destination_id,
+        )
+        state.update(
+            {
+                "status": "recovery_workspace_restored",
+                "destinationWorkspaceLocator": locator,
+                "restorationEvidenceRef": evidence_ref,
+                "restorationEvidenceDigest": evidence_digest,
+            }
+        )
+        self._recovery_workspace_restored_ref = evidence_ref
+        return evidence_ref
 
     def _preserved_outputs_for_step(
         self,
@@ -3291,6 +4049,661 @@ class MoonMindRunWorkflow:
                 refresh_ready_steps(self._step_ledger_rows, updated_at=updated_at)
         self._sync_progress_snapshot(updated_at=updated_at)
 
+    def _initialize_remediation_loop_controller(
+        self,
+        *,
+        ordered_nodes: Sequence[Mapping[str, Any]],
+        require_agent_instructions: bool = True,
+    ) -> None:
+        """Freeze the one authored loop contract into compact workflow state."""
+
+        controllers: list[Mapping[str, Any]] = []
+        controller_nodes: list[Mapping[str, Any]] = []
+        for node in ordered_nodes:
+            annotations = self._node_annotations_mapping(node)
+            raw_loop = annotations.get("remediationLoop")
+            if isinstance(raw_loop, Mapping):
+                controllers.append(raw_loop)
+                controller_nodes.append(node)
+        if not controllers:
+            return
+        if len(controllers) != 1:
+            raise ValueError("a plan must contain at most one remediation loop")
+        spec = RemediationLoopSpec.model_validate(dict(controllers[0]))
+        if require_agent_instructions:
+            validate_remediation_loop_agent_instructions(spec)
+        # Loop tools are authored as ``auto``: they inherit the run's resolved
+        # runtime from the controller plan node so every materialized attempt
+        # routes exactly like the authored steps of the same run. An unresolvable
+        # runtime is reported when an attempt is admitted, so a loop that never
+        # needs remediation still makes safe progress.
+        self._remediation_loop_runtime = self._plan_node_runtime_block(
+            controller_nodes[0]
+        )
+        info = workflow.info()
+        self._remediation_loop_spec = spec
+        self._remediation_loop_state = RemediationLoopState(
+            loopId=spec.loop_id,
+            phase=RemediationLoopPhase.INITIAL_VERIFICATION_PENDING,
+            consumedBudgets=ConsumedRemediationBudgets(),
+            sourceRunId=info.run_id,
+        )
+        self._sync_remediation_loop_projection()
+
+    def _restore_remediation_loop_continuation(
+        self,
+        *,
+        ordered_nodes: list[dict[str, Any]],
+    ) -> None:
+        """Restore only compact deterministic loop state after Continue-As-New."""
+
+        continuation = self._remediation_loop_continuation
+        spec = self._remediation_loop_spec
+        if continuation is None or spec is None:
+            return
+        if int(continuation.get("schemaVersion") or 0) != 1:
+            raise ValueError("unsupported remediation loop continuation schema")
+        state = RemediationLoopState.model_validate(continuation.get("state"))
+        if state.loop_id != spec.loop_id:
+            raise ValueError("remediation loop continuation belongs to another loop")
+        carried_nodes = continuation.get("orderedNodes")
+        carried_rows = continuation.get("stepLedgerRows")
+        if not isinstance(carried_nodes, list) or not isinstance(carried_rows, list):
+            raise ValueError("remediation loop continuation is missing ledger state")
+        ordered_nodes[:] = [
+            dict(node) for node in carried_nodes if isinstance(node, Mapping)
+        ]
+        self._step_ledger_rows = [
+            dict(row) for row in carried_rows if isinstance(row, Mapping)
+        ]
+        self._rebuild_step_ledger_index()
+        carried_head = continuation.get("workspaceHead")
+        if isinstance(carried_head, Mapping):
+            self._remediation_workspace_head = RemediationWorkspaceHead.model_validate(
+                carried_head
+            )
+        carried_session = continuation.get("managedSessionBinding")
+        if isinstance(carried_session, Mapping) and workflow.patched(
+            RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH
+        ):
+            binding = CodexManagedSessionBinding.model_validate(carried_session)
+            expected_agent_run_id = workflow.info().workflow_id
+            expected_session_workflow_id = self._workflow_scoped_session_workflow_id(
+                binding.runtime_id
+            )
+            if (
+                binding.agent_run_id != expected_agent_run_id
+                or binding.workflow_id != expected_session_workflow_id
+            ):
+                raise ValueError(
+                    "remediation loop continuation managed session belongs to "
+                    "another workflow"
+                )
+            self._codex_session_binding = binding
+        self._remediation_loop_state = state.model_copy(
+            update={
+                "source_run_id": workflow.info().run_id,
+                "continue_as_new_count": state.continue_as_new_count + 1,
+            }
+        )
+        self._sync_remediation_loop_projection()
+        self._sync_progress_snapshot(updated_at=workflow.now())
+
+    def _build_remediation_loop_continue_as_new_input(
+        self,
+        *,
+        ordered_nodes: Sequence[Mapping[str, Any]],
+    ) -> RunWorkflowInput:
+        state = self._remediation_loop_state
+        if state is None:
+            raise ValueError("remediation loop is not initialized")
+        payload = dict(self._original_input_payload)
+        state_payload = state.model_dump(by_alias=True, mode="json")
+        if not workflow.patched(RUN_REMEDIATION_STABLE_PROGRESS_IDENTITY_PATCH):
+            state_payload.pop("latestProgressSignature", None)
+        continuation: dict[str, Any] = {
+            "schemaVersion": 1,
+            "state": state_payload,
+            "orderedNodes": [dict(node) for node in ordered_nodes],
+            "stepLedgerRows": [dict(row) for row in self._step_ledger_rows],
+        }
+        head = self._remediation_workspace_head
+        if head is not None:
+            # The head contract is compact and ref-only precisely so it can cross
+            # Continue-As-New. Dropping it would make the next run misread an
+            # opted-in loop as headless and skip the head authority checks. The
+            # key is additive, so histories written without it still restore.
+            continuation["workspaceHead"] = head.model_dump(by_alias=True, mode="json")
+        binding = self._codex_session_binding
+        if binding is not None and workflow.patched(
+            RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH
+        ):
+            continuation["managedSessionBinding"] = binding.model_dump(
+                by_alias=True,
+                mode="json",
+                exclude_none=True,
+            )
+        payload["remediation_loop_continuation"] = continuation
+        return cast(RunWorkflowInput, payload)
+
+    def _sync_remediation_loop_projection(self) -> None:
+        spec = self._remediation_loop_spec
+        state = self._remediation_loop_state
+        if spec is None or state is None:
+            return
+        projection = project_remediation_loop(
+            spec=spec,
+            state=state,
+        )
+        pairs: dict[int, dict[str, object]] = {}
+        for row in self._step_ledger_rows:
+            annotations = row.get("annotations")
+            if not isinstance(annotations, Mapping):
+                continue
+            if annotations.get("remediationLoopId") != spec.loop_id:
+                continue
+            raw_attempt = annotations.get("moonSpecRemediationAttempt")
+            if not isinstance(raw_attempt, int) or raw_attempt < 1:
+                continue
+            pair = pairs.setdefault(raw_attempt, {"attempt": raw_attempt})
+            role = str(annotations.get("issueImplementRole") or "")
+            if role == "moonspec-remediation":
+                pair["remediationStepExecutionId"] = row.get("logicalStepId")
+                pair["remediationStatus"] = row.get("status")
+            elif role == "moonspec-verification-gate":
+                pair["verificationStepExecutionId"] = row.get("logicalStepId")
+                pair["verificationStatus"] = row.get("status")
+        projection["materializedAttempts"] = [
+            pairs[attempt] for attempt in sorted(pairs)
+        ]
+        self._publish_context["remediationLoop"] = projection
+
+    def _materialize_remediation_attempt(
+        self,
+        *,
+        ordinal: int,
+        verification_inputs: Mapping[str, object] | None = None,
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        """Create the admitted pair only; callers append it to the live ledger."""
+
+        spec = self._remediation_loop_spec
+        state = self._remediation_loop_state
+        if spec is None or state is None:
+            raise ValueError("remediation loop is not initialized")
+        info = workflow.info()
+        return materialize_attempt_nodes(
+            spec=spec,
+            workflow_id=info.workflow_id,
+            run_id=info.run_id,
+            ordinal=ordinal,
+            workspace_head_ref=state.workspace_head_ref,
+            runtime=self._remediation_loop_runtime_block(),
+            verification_inputs=verification_inputs,
+        )
+
+    @staticmethod
+    def _verified_headless_remediation_workspace_spec(
+        *,
+        node_inputs: Mapping[str, Any],
+        outputs: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        """Resolve the verifier-proven remote branch for headless remediation."""
+
+        evidence = outputs.get("acceptedRepositoryEvidence")
+        if not isinstance(evidence, Mapping):
+            evidence = outputs.get("accepted_repository_evidence")
+        if not isinstance(evidence, Mapping):
+            return None
+        push_status = str(evidence.get("pushStatus") or "").strip().lower()
+        branch = _normalize_git_branch_ref(evidence.get("branch"))
+        base_branch = _normalize_git_branch_ref(
+            evidence.get("baseBranch") or evidence.get("base_branch")
+        )
+        head_sha = str(
+            evidence.get("headSha") or evidence.get("head_sha") or ""
+        ).strip()
+        if (
+            evidence.get("publicationAuthorized") is not True
+            or evidence.get("candidateContaminated") is True
+            or evidence.get("remoteVerified") is not True
+            or push_status not in {"pushed", "published", "no_commits"}
+            or not branch
+            or not base_branch
+            or not head_sha
+        ):
+            return None
+
+        runtime = node_inputs.get("runtime")
+        runtime_inputs = runtime if isinstance(runtime, Mapping) else {}
+        workspace_spec: dict[str, Any] = {}
+        for raw in (
+            runtime_inputs.get("workspaceSpec"),
+            runtime_inputs.get("workspace_spec"),
+            node_inputs.get("workspaceSpec"),
+            node_inputs.get("workspace_spec"),
+        ):
+            if isinstance(raw, Mapping):
+                workspace_spec.update(dict(raw))
+        for key in (
+            "repository",
+            "repo",
+            "repositoryTarget",
+            "provider",
+            "connectionRef",
+            "startingBranch",
+            "targetBranch",
+            "branch",
+        ):
+            if node_inputs.get(key) is not None:
+                workspace_spec[key] = node_inputs[key]
+
+        repository = workspace_spec.get("repository") or workspace_spec.get("repo")
+        if not isinstance(repository, str) or not repository.strip():
+            return None
+        declared_target_branch = _normalize_git_branch_ref(
+            workspace_spec.get("targetBranch")
+        )
+        if declared_target_branch and declared_target_branch != branch:
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_MISMATCH,
+                "verified remediation branch does not match the verifier workspace",
+            )
+        declared_base_branch = _normalize_git_branch_ref(
+            workspace_spec.get("startingBranch") or workspace_spec.get("branch")
+        )
+        if declared_base_branch and declared_base_branch != base_branch:
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_MISMATCH,
+                "verified remediation base does not match the verifier workspace",
+            )
+
+        existing_repository_target = workspace_spec.get("repositoryTarget")
+        existing_repository_target_mapping = (
+            existing_repository_target
+            if isinstance(existing_repository_target, Mapping)
+            else {}
+        )
+        connection_ref = str(
+            workspace_spec.get("connectionRef")
+            or existing_repository_target_mapping.get("connectionRef")
+            or ""
+        ).strip()
+        workspace_spec["repository"] = repository.strip()
+        workspace_spec["repositoryTarget"] = {
+            "provider": "git",
+            "repository": {"name": repository.strip()},
+            "branch": {"name": branch},
+            "revision": {
+                "kind": "git_commit",
+                "commitSha": head_sha,
+            },
+        }
+        if connection_ref:
+            workspace_spec["repositoryTarget"]["connectionRef"] = connection_ref
+        workspace_spec["startingBranch"] = base_branch
+        workspace_spec["targetBranch"] = branch
+        workspace_spec.pop("repo", None)
+        workspace_spec.pop("branch", None)
+        return workspace_spec
+
+    def _published_branch_remediation_workspace_spec(
+        self,
+        *,
+        node_inputs: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        """Return the workflow-verified published head for external remediation."""
+
+        if (
+            str(self._publish_context.get("pushStatus") or "").strip().lower()
+            != "pushed"
+        ):
+            return None
+        branch = _normalize_git_branch_ref(self._publish_context.get("branch"))
+        head_sha = self._coerce_text(
+            self._publish_context.get("headSha"),
+            max_chars=80,
+        )
+        if not branch or not head_sha:
+            return None
+
+        runtime = node_inputs.get("runtime")
+        runtime_inputs = runtime if isinstance(runtime, Mapping) else {}
+        workspace_spec: dict[str, Any] = {}
+        for raw in (
+            runtime_inputs.get("workspaceSpec"),
+            runtime_inputs.get("workspace_spec"),
+            node_inputs.get("workspaceSpec"),
+            node_inputs.get("workspace_spec"),
+        ):
+            if isinstance(raw, Mapping):
+                workspace_spec.update(dict(raw))
+        for key in (
+            "repository",
+            "repo",
+            "repositoryTarget",
+            "connectionRef",
+            "startingBranch",
+            "baseBranch",
+            "publishBaseBranch",
+        ):
+            if node_inputs.get(key) is not None:
+                workspace_spec[key] = node_inputs[key]
+
+        repository_target_raw = workspace_spec.get("repositoryTarget")
+        repository_target = (
+            dict(repository_target_raw)
+            if isinstance(repository_target_raw, Mapping)
+            else {}
+        )
+        repository = workspace_spec.get("repository") or workspace_spec.get("repo")
+        existing_repository = repository_target.get("repository")
+        if not repository and isinstance(existing_repository, Mapping):
+            repository = existing_repository.get("name")
+        if not isinstance(repository, str) or not repository.strip():
+            return None
+        base_branch = _normalize_git_branch_ref(
+            self._publish_context.get("baseRef")
+            or workspace_spec.get("startingBranch")
+            or workspace_spec.get("baseBranch")
+            or workspace_spec.get("publishBaseBranch")
+        )
+        if not base_branch:
+            declared_branch = repository_target.get("branch")
+            if isinstance(declared_branch, Mapping):
+                declared_branch = declared_branch.get("name")
+            normalized_declared_branch = _normalize_git_branch_ref(declared_branch)
+            if normalized_declared_branch != branch:
+                base_branch = normalized_declared_branch
+        if not base_branch:
+            return None
+        connection_ref = self._coerce_text(
+            workspace_spec.get("connectionRef")
+            or repository_target.get("connectionRef"),
+            max_chars=200,
+        )
+        repository_target = {
+            "provider": "git",
+            "repository": {"name": repository.strip()},
+            "branch": {"name": branch},
+            "revision": {"kind": "git_commit", "commitSha": head_sha},
+        }
+        if connection_ref:
+            repository_target["connectionRef"] = connection_ref
+        return {
+            "repository": repository.strip(),
+            "repositoryTarget": repository_target,
+            "startingBranch": base_branch,
+            "targetBranch": branch,
+        }
+
+    def _remediation_loop_runtime_block(self) -> dict[str, Any]:
+        """Return the loop's resolved runtime block for attempt materialization."""
+
+        _, runtime_block = resolve_loop_runtime(self._remediation_loop_runtime)
+        return runtime_block
+
+    async def _evaluate_dynamic_remediation_verification(
+        self,
+        *,
+        ordered_nodes: list[dict[str, Any]],
+        verdict: str,
+        gate_result_ref: str | None,
+        remaining_work_ref: str | None,
+        progress_signature: str | None = None,
+        current_index: int | None = None,
+        logical_step_id: str | None = None,
+        recoverable_evidence: bool = False,
+        workspace_head: Mapping[str, Any] | None = None,
+        headless_workspace_spec: Mapping[str, Any] | None = None,
+    ) -> bool:
+        """Apply verifier evidence and append exactly one admitted pair.
+
+        Returns whether a new semantic remediation attempt was admitted.  The
+        persisted decision is the sole routing authority; agent advisory text
+        is deliberately not accepted by this boundary.
+        """
+
+        spec = self._remediation_loop_spec
+        state = self._remediation_loop_state
+        if spec is None or state is None:
+            return False
+        verifier_evidence_fallback = workflow.patched(
+            RUN_MOONSPEC_VERIFY_REMAINING_WORK_EVIDENCE_PATCH
+        )
+        normalize_artifact_refs = (
+            workflow.patched(RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH)
+            or verifier_evidence_fallback
+        )
+        if normalize_artifact_refs:
+            normalized_gate_result_ref = self._bounded_story_loop_artifact_ref(
+                gate_result_ref
+            )
+            if normalized_gate_result_ref is None:
+                raise ValueError(
+                    "dynamic remediation verification requires an artifact gate result"
+                )
+            gate_result_ref = normalized_gate_result_ref
+            if remaining_work_ref:
+                normalized_remaining_work_ref = self._bounded_story_loop_artifact_ref(
+                    remaining_work_ref
+                )
+                if normalized_remaining_work_ref is None:
+                    raise ValueError(
+                        "dynamic remediation verification requires an artifact "
+                        "remaining-work result"
+                    )
+                remaining_work_ref = normalized_remaining_work_ref
+        if (
+            verifier_evidence_fallback
+            and verdict.strip().upper() == "ADDITIONAL_WORK_NEEDED"
+            and not remaining_work_ref
+        ):
+            # Compatibility path for compact verifier payloads produced before
+            # the publication activity stamped remainingWorkRef. The gate
+            # artifact itself contains the resolved Skill's structured gaps.
+            remaining_work_ref = gate_result_ref
+        workflow_owned_head_enabled = workflow.patched(
+            RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH
+        )
+        published_branch_headless = workflow.patched(
+            RUN_EXTERNAL_PUBLISHED_BRANCH_REMEDIATION_PATCH
+        ) and isinstance(headless_workspace_spec, Mapping)
+        if (
+            workflow_owned_head_enabled
+            and self._remediation_workspace_head is None
+            and logical_step_id
+            and gate_result_ref
+            and not published_branch_headless
+        ):
+            self._initialize_remediation_head_from_canonical_checkpoint(
+                logical_step_id=logical_step_id,
+                gate_result_ref=gate_result_ref,
+                verdict=verdict,
+            )
+        if (
+            not workflow_owned_head_enabled
+            and self._remediation_workspace_head is None
+            and workspace_head is not None
+        ):
+            self._remediation_workspace_head = RemediationWorkspaceHead.model_validate(
+                workspace_head
+            )
+        if self._remediation_workspace_head is not None:
+            state = state.model_copy(
+                update={
+                    "workspace_head_ref": (
+                        self._remediation_workspace_head.head_checkpoint_ref
+                    )
+                }
+            )
+        if not gate_result_ref or not gate_result_ref.startswith("artifact://"):
+            raise ValueError(
+                "dynamic remediation verification requires an artifact gate result"
+            )
+        if state.phase in {
+            RemediationLoopPhase.INITIAL_VERIFICATION_PENDING,
+            RemediationLoopPhase.VERIFICATION_PENDING,
+        }:
+            state = start_verification(state)
+        state = record_verification_evidence(
+            state,
+            verification_ref=gate_result_ref,
+        )
+        state = record_semantic_progress(
+            state,
+            progress_ref=remaining_work_ref,
+            progress_signature=(
+                progress_signature
+                if workflow.patched(RUN_REMEDIATION_STABLE_PROGRESS_IDENTITY_PATCH)
+                else None
+            ),
+        )
+        decision = decide_remediation_continuation(
+            spec=spec,
+            state=state,
+            verdict=verdict,
+            gate_result_ref=gate_result_ref,
+            remaining_work_ref=remaining_work_ref,
+            progress_ref=remaining_work_ref,
+            recoverable_evidence=recoverable_evidence,
+        )
+        decision_ref = await self._write_json_artifact(
+            name=(
+                "reports/remediation_decision_"
+                f"{spec.loop_id}_attempt_{state.attempt_ordinal}.json"
+            ),
+            payload=decision.model_dump(by_alias=True, mode="json"),
+        )
+        if normalize_artifact_refs:
+            normalized_decision_ref = self._bounded_story_loop_artifact_ref(
+                decision_ref
+            )
+            if normalized_decision_ref is None:
+                raise ValueError(
+                    "dynamic remediation verification requires an artifact "
+                    "continuation decision"
+                )
+            decision_ref = normalized_decision_ref
+        state = apply_continuation_decision(
+            state,
+            decision=decision,
+            decision_ref=decision_ref,
+        )
+        if (
+            workflow_owned_head_enabled
+            and state.phase == RemediationLoopPhase.REMEDIATION_PENDING
+            and self._remediation_workspace_head is None
+            and not workflow.patched(RUN_WORKFLOW_HEADLESS_REMEDIATION_PATCH)
+        ):
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_MISMATCH,
+                "dynamic remediation admission has no canonical workspace checkpoint",
+            )
+        verified_headless_workspace: dict[str, Any] | None = None
+        if (
+            workflow.patched(RUN_HEADLESS_REMEDIATION_VERIFIED_WORKSPACE_PATCH)
+            and state.phase == RemediationLoopPhase.REMEDIATION_PENDING
+            and self._remediation_workspace_head is None
+        ):
+            if not isinstance(headless_workspace_spec, Mapping):
+                raise RemediationHeadError(
+                    REMEDIATION_HEAD_MISMATCH,
+                    "checkpointless remediation has no remote-verified workspace source",
+                )
+            verified_headless_workspace = dict(headless_workspace_spec)
+        continue_after_admission = workflow.patched(
+            RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH
+        ) and should_continue_as_new(spec=spec, state=state)
+        admitted = False
+        if state.phase == RemediationLoopPhase.REMEDIATION_PENDING:
+            state = start_remediation_attempt(state)
+            remediation, verification = materialize_attempt_nodes(
+                spec=spec,
+                workflow_id=workflow.info().workflow_id,
+                run_id=workflow.info().run_id,
+                ordinal=state.attempt_ordinal,
+                workspace_head_ref=state.workspace_head_ref,
+                runtime=self._remediation_loop_runtime_block(),
+                remediation_inputs=(
+                    {
+                        "gateResultRef": gate_result_ref,
+                        "remainingWorkRef": remaining_work_ref,
+                    }
+                    if workflow.patched(RUN_REMEDIATION_EXPLICIT_EVIDENCE_INPUTS_PATCH)
+                    else None
+                ),
+            )
+            if verified_headless_workspace is not None:
+                verification_workspace = dict(verified_headless_workspace)
+                raw_repository_target = verification_workspace.get("repositoryTarget")
+                if isinstance(raw_repository_target, Mapping):
+                    repository_target = dict(raw_repository_target)
+                    repository_target.pop("revision", None)
+                    verification_workspace["repositoryTarget"] = repository_target
+                for attempt_node, workspace_spec in (
+                    (remediation, verified_headless_workspace),
+                    (verification, verification_workspace),
+                ):
+                    attempt_inputs = dict(attempt_node.get("inputs") or {})
+                    attempt_inputs["workspaceSpec"] = dict(workspace_spec)
+                    if workflow.patched(
+                        RUN_EXTERNAL_PUBLISHED_BRANCH_REMEDIATION_PATCH
+                    ):
+                        attempt_inputs["remediationWorkspaceMode"] = (
+                            "remote_published_branch"
+                        )
+                    attempt_node["inputs"] = attempt_inputs
+            if (
+                workflow.patched(RUN_REMEDIATION_MANAGED_SESSION_SOURCE_IDENTITY_PATCH)
+                and logical_step_id
+            ):
+                source_identity = self._canonical_step_checkpoint_identity(
+                    logical_step_id
+                )
+                if source_identity is not None:
+                    remediation_annotations = dict(remediation.get("annotations") or {})
+                    remediation_annotations["workspaceCaptureSourceIdentity"] = (
+                        source_identity.model_dump(by_alias=True, mode="json")
+                    )
+                    remediation["annotations"] = remediation_annotations
+            pair = [remediation, verification]
+            insertion_index = (
+                len(ordered_nodes)
+                if current_index is None
+                else max(0, min(current_index, len(ordered_nodes)))
+            )
+            ordered_nodes[insertion_index:insertion_index] = pair
+            pair_dependencies = {
+                str(node["id"]): [
+                    str(dependency) for dependency in node.get("dependsOn", [])
+                ]
+                for node in pair
+            }
+            pair_rows = build_initial_step_rows(
+                ordered_nodes=pair,
+                dependency_map=pair_dependencies,
+                updated_at=workflow.now(),
+            )
+            for row, node in zip(pair_rows, pair, strict=True):
+                row["annotations"] = dict(node.get("annotations") or {})
+            self._step_ledger_rows.extend(pair_rows)
+            for order, row in enumerate(self._step_ledger_rows, start=1):
+                row["order"] = order
+            self._rebuild_step_ledger_index()
+            refresh_ready_steps(self._step_ledger_rows, updated_at=workflow.now())
+            admitted = True
+        self._remediation_loop_state = state
+        self._sync_remediation_loop_projection()
+        self._sync_progress_snapshot(updated_at=workflow.now())
+        if continue_after_admission:
+            await workflow.wait_condition(workflow.all_handlers_finished)
+            workflow.continue_as_new(
+                self._build_remediation_loop_continue_as_new_input(
+                    ordered_nodes=ordered_nodes,
+                )
+            )
+        return admitted
+
     def _capture_prepared_input_refs(self, parameters: Mapping[str, Any]) -> list[str]:
         task_payload = parameters.get("task")
         if not isinstance(task_payload, Mapping):
@@ -3333,6 +4746,15 @@ class MoonMindRunWorkflow:
             )
         self._step_checkpoint_refs.pop(logical_step_id, None)
         self._step_checkpoint_refs_by_boundary.pop(logical_step_id, None)
+        self._step_checkpoint_workspace_evidence_by_boundary.pop(
+            logical_step_id,
+            None,
+        )
+        self._step_workspace_mutation_generations.pop(logical_step_id, None)
+        self._step_checkpoint_workspace_evidence_by_generation.pop(
+            logical_step_id,
+            None,
+        )
         try:
             clear_step_checkpoint_evidence(
                 self._step_ledger_rows,
@@ -3398,20 +4820,79 @@ class MoonMindRunWorkflow:
                 disposition = self._coerce_text(record.get("disposition"), max_chars=40)
                 if not operation and not disposition:
                     continue
+                provider_kind = self._coerce_text(
+                    record.get("providerKind"),
+                    max_chars=80,
+                )
+                summary = self._coerce_text(record.get("summary"), max_chars=300)
                 side_effects.append(
                     {
-                        "kind": self._coerce_text(
-                            record.get("class") or record.get("kind"),
-                            max_chars=80,
+                        "kind": provider_kind
+                        or self._coerce_text(
+                            record.get("class") or record.get("kind"), max_chars=80
                         )
                         or "external",
-                        "status": "completed"
-                        if disposition == "accepted"
-                        else (disposition or "recorded"),
-                        "summary": operation or "Side effect recorded.",
+                        "status": (
+                            "completed"
+                            if disposition == "accepted"
+                            else (disposition or "recorded")
+                        ),
+                        "summary": summary or operation or "Side effect recorded.",
                     }
                 )
         return side_effects[:20]
+
+    def _record_declared_side_effect(
+        self,
+        *,
+        logical_step_id: str,
+        outputs: Mapping[str, Any],
+    ) -> None:
+        if not self._canonical_no_commit_outcome_enabled:
+            return
+        declaration = outputs.get("sideEffect") or outputs.get("side_effect")
+        if not isinstance(declaration, Mapping):
+            return
+        effect_class = self._coerce_text(
+            declaration.get("effectClass") or declaration.get("effect_class"),
+            max_chars=80,
+        )
+        if effect_class not in {
+            "external_idempotent",
+            "external_non_idempotent",
+            "publication",
+            "provider_account",
+        }:
+            return
+        operation = self._coerce_text(declaration.get("operation"), max_chars=120)
+        if not operation:
+            return
+        idempotency_key = self._coerce_text(
+            declaration.get("idempotencyKey") or declaration.get("idempotency_key"),
+            max_chars=200,
+        )
+        if effect_class == "external_idempotent" and not idempotency_key:
+            return
+        record = self._record_step_side_effect(
+            logical_step_id,
+            effect_class=effect_class,
+            operation=operation,
+            target=self._coerce_text(declaration.get("target"), max_chars=500),
+            idempotency_key=idempotency_key,
+            workflow_state_accepted=True,
+            reason=self._coerce_text(declaration.get("summary"), max_chars=300),
+        )
+        if record is None:
+            return
+        provider_kind = self._coerce_text(
+            declaration.get("kind") or declaration.get("provider"),
+            max_chars=80,
+        )
+        summary = self._coerce_text(declaration.get("summary"), max_chars=300)
+        if provider_kind:
+            record["providerKind"] = provider_kind
+        if summary:
+            record["summary"] = summary
 
     def _is_jira_orchestrate_external_handoff_node(
         self,
@@ -3517,7 +4998,9 @@ class MoonMindRunWorkflow:
             "verification Step Execution to reach an accepted terminal "
             f"disposition; {decision.get('reason')}."
         )
-        node_id = str(node.get("id") or "external-handoff").strip() or "external-handoff"
+        node_id = (
+            str(node.get("id") or "external-handoff").strip() or "external-handoff"
+        )
         # Record the denied non-idempotent external action as a blocked side
         # effect at the actual handoff boundary (Section 11 rule 2). Repeated
         # gate evaluations for the same node must not duplicate the record.
@@ -3850,9 +5333,7 @@ class MoonMindRunWorkflow:
         wf_info: Any,
         context_workspace: Mapping[str, Any],
     ) -> dict[str, Any]:
-        raw_source = payload.get("sourceCheckpoint") or payload.get(
-            "source_checkpoint"
-        )
+        raw_source = payload.get("sourceCheckpoint") or payload.get("source_checkpoint")
         if raw_source is None:
             source: dict[str, Any] = {}
         elif isinstance(raw_source, Mapping):
@@ -4056,6 +5537,29 @@ class MoonMindRunWorkflow:
         if isinstance(context, Mapping):
             return dict(context)
         return {}
+
+    def _record_omnigent_initial_context_ref(
+        self,
+        logical_step_id: str,
+        *,
+        attempt: int,
+        execution_result: Any,
+    ) -> None:
+        metadata = self._get_from_result(execution_result, "metadata")
+        if not isinstance(metadata, Mapping):
+            return
+        if str(metadata.get("providerName") or "").strip() != "omnigent":
+            return
+        context_pack_ref = str(metadata.get("initialContextPackRef") or "").strip()
+        if not context_pack_ref:
+            return
+        cache_key = (logical_step_id, attempt)
+        cached_context = self._step_execution_context_projections.get(cache_key)
+        if not isinstance(cached_context, Mapping):
+            return
+        updated_context = dict(cached_context)
+        updated_context["initialContextPackRef"] = context_pack_ref
+        self._step_execution_context_projections[cache_key] = updated_context
 
     def _mark_step_waiting(
         self,
@@ -4408,6 +5912,8 @@ class MoonMindRunWorkflow:
         prepared_input_refs: Sequence[str] = (),
         step_outputs: Mapping[str, Any] | None = None,
         diagnostic_refs: Sequence[str] = (),
+        omnigent_checkpoint: Mapping[str, Any] | None = None,
+        omnigent_checkpoint_capture: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Write checkpoint evidence through the artifact activity boundary.
 
@@ -4415,7 +5921,12 @@ class MoonMindRunWorkflow:
         inspection must happen before this call in sandbox/service activities.
         """
 
-        route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("step_checkpoint.create")
+        activity_type = (
+            "step_checkpoint.create_v2"
+            if omnigent_checkpoint_capture is not None
+            else "step_checkpoint.create"
+        )
+        route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(activity_type)
         checkpoint_id = build_step_checkpoint_id(identity, boundary)
         payload = {
             "identity": identity.model_dump(by_alias=True, mode="json"),
@@ -4428,8 +5939,13 @@ class MoonMindRunWorkflow:
             "preparedInputRefs": list(prepared_input_refs),
             "stepOutputs": dict(step_outputs or {}),
             "diagnosticRefs": list(diagnostic_refs),
+            "omnigentCheckpoint": (
+                dict(omnigent_checkpoint) if omnigent_checkpoint is not None else None
+            ),
             "idempotencyKey": checkpoint_id,
         }
+        if omnigent_checkpoint_capture is not None:
+            payload["omnigentCheckpointCapture"] = dict(omnigent_checkpoint_capture)
         result = await workflow.execute_activity(
             route.activity_type,
             payload,
@@ -4450,9 +5966,11 @@ class MoonMindRunWorkflow:
                 except KeyError:
                     pass
                 else:
-                    refs_by_boundary = self._step_checkpoint_refs_by_boundary.setdefault(
-                        identity.logical_step_id,
-                        {},
+                    refs_by_boundary = (
+                        self._step_checkpoint_refs_by_boundary.setdefault(
+                            identity.logical_step_id,
+                            {},
+                        )
                     )
                     refs_by_boundary[boundary_key] = checkpoint_ref
                     self._sync_progress_snapshot(updated_at=created_at)
@@ -4488,6 +6006,8 @@ class MoonMindRunWorkflow:
         self,
         logical_step_id: str,
         outputs: Mapping[str, Any],
+        *,
+        initialize_omnigent_capture: bool = False,
     ) -> None:
         raw_agent_kind = outputs.get("agentKind") or outputs.get("agent_kind")
         raw_agent_id = outputs.get("agentId") or outputs.get("agent_id")
@@ -4500,6 +6020,8 @@ class MoonMindRunWorkflow:
             )
             if agent_id:
                 agent_kind = self._agent_kind_for_id(agent_id)
+        elif not agent_kind:
+            agent_kind = self._agent_kind_for_id(agent_id)
         if agent_kind == "external" and agent_id:
             self._step_external_agent_ids[logical_step_id] = agent_id.lower()
 
@@ -4524,7 +6046,125 @@ class MoonMindRunWorkflow:
                     candidates.append(nested_workload)
 
         capture_input: dict[str, Any] = {}
+        source_identity = outputs.get("sourceIdentity") or outputs.get(
+            "source_identity"
+        )
+        if isinstance(source_identity, Mapping):
+            capture_input["sourceIdentity"] = dict(source_identity)
+        previous_capture = self._step_workspace_capture_inputs.get(logical_step_id, {})
+        capabilities: RuntimeExecutionCapabilities | None = None
+        capability_snapshot = outputs.get("runtimeCapabilities") or outputs.get(
+            "runtime_capabilities"
+        )
+        if not isinstance(capability_snapshot, Mapping):
+            # Provider result projections intentionally omit routing inputs such
+            # as agentId. Preserve the workflow-owned capability decision made
+            # before launch so a session checkpoint kind cannot be mistaken for
+            # the independently materialized workspace checkpoint kind.
+            previous_capability_snapshot = previous_capture.get(
+                "runtimeCapabilities"
+            ) or previous_capture.get("runtime_capabilities")
+            if isinstance(previous_capability_snapshot, Mapping):
+                capability_snapshot = previous_capability_snapshot
+        try:
+            capability_policy_enabled = workflow.patched(
+                RUN_RUNTIME_EXECUTION_CAPABILITIES_PATCH
+            )
+        except workflow._NotInWorkflowEventLoopError:
+            # Pure unit callers model newly started histories.
+            capability_policy_enabled = True
+        if capability_policy_enabled:
+            if isinstance(capability_snapshot, Mapping):
+                capabilities = RuntimeExecutionCapabilities.model_validate(
+                    capability_snapshot
+                )
+            elif agent_id:
+                capabilities = resolve_runtime_execution_capabilities(agent_id)
+            if capabilities is not None:
+                capture_input["runtimeCapabilities"] = capabilities.model_dump(
+                    by_alias=True, mode="json"
+                )
+                capture_input["captureAuthority"] = capabilities.workspace_authority
+                capture_input["criticality"] = (
+                    capabilities.post_execution_checkpoint_criticality
+                )
+                binding = self._codex_session_binding
+                if (
+                    capabilities.workspace_authority == "managed_runtime"
+                    and binding is not None
+                    and binding.runtime_id == capabilities.runtime_id
+                    and workflow.patched(RUN_MANAGED_SESSION_CHECKPOINT_LOCATOR_PATCH)
+                ):
+                    # A workflow-scoped managed session keeps one stable
+                    # workspace across plan steps. Reuse its typed identity so
+                    # a dynamic remediation step can capture and validate the
+                    # current loop head before launching its next AgentRun.
+                    capture_input["workspaceLocator"] = {
+                        "kind": "managed_runtime",
+                        "runtimeId": binding.runtime_id,
+                        "agentRunId": binding.agent_run_id,
+                        "relativePath": ".",
+                    }
+                elif capabilities.runtime_id == "omnigent":
+                    if initialize_omnigent_capture:
+                        # This marker and its authority bit are authored only by
+                        # the workflow call site that resolved the effective
+                        # agent runtime. Candidate plan/result mappings cannot
+                        # opt another sandbox step out of checkpoint capture.
+                        capture_input["omnigentCheckpointCapture"] = {
+                            "captureBoundaryState": "session_not_started"
+                        }
+                        capture_input["omnigentPrematerializationOwned"] = True
+                    try:
+                        wf_info = workflow.info()
+                        identity = StepExecutionIdentityModel(
+                            workflowId=wf_info.workflow_id,
+                            runId=wf_info.run_id,
+                            logicalStepId=logical_step_id,
+                            executionOrdinal=(
+                                self._step_execution_for(logical_step_id) or 1
+                            ),
+                        )
+                        locator_identity = (
+                            f"{wf_info.workflow_id}:{build_step_execution_id(identity)}"
+                        )
+                        capture_input["workspaceLocator"] = {
+                            "kind": "sandbox",
+                            "workspaceId": hashlib.sha256(
+                                locator_identity.encode("utf-8")
+                            ).hexdigest()[:24],
+                            "relativePath": "repo",
+                        }
+                    except workflow._NotInWorkflowEventLoopError:
+                        # Pure unit callers cannot derive a durable workflow identity;
+                        # the real workflow path always records this locator.
+                        pass
+        elif (
+            agent_kind == "managed"
+            or previous_capture.get("captureAuthority") == "managed_runtime"
+        ):
+            capture_input["captureAuthority"] = "managed_runtime"
         for candidate in candidates:
+            omnigent_capture = candidate.get(
+                "omnigentCheckpointCapture"
+            ) or candidate.get("omnigent_checkpoint_capture")
+            if isinstance(omnigent_capture, Mapping):
+                candidate_capture = dict(omnigent_capture)
+                if (
+                    candidate_capture.get("captureBoundaryState")
+                    == "session_not_started"
+                ):
+                    candidate_capture.pop("captureBoundaryState")
+                if candidate_capture:
+                    capture_input["omnigentCheckpointCapture"] = candidate_capture
+            omnigent_checkpoint = candidate.get("omnigentCheckpoint") or candidate.get(
+                "omnigent_checkpoint"
+            )
+            if isinstance(omnigent_checkpoint, Mapping):
+                capture_input["omnigentCheckpoint"] = dict(omnigent_checkpoint)
+            workspace_locator = candidate.get("workspaceLocator") or candidate.get(
+                "workspace_locator"
+            )
             workspace_path = self._checkpoint_capture_text(
                 candidate,
                 "workspacePath",
@@ -4542,13 +6182,18 @@ class MoonMindRunWorkflow:
                 "externalStateRef",
                 "external_state_ref",
             )
-            if workspace_path:
+            if external_state_ref:
+                # Omnigent's external-state artifact belongs to the session
+                # plane. Keep it alongside the sandbox locator so the v2
+                # checkpoint can attest both independent authorities.
+                capture_input["externalStateRef"] = external_state_ref
+            if isinstance(workspace_locator, Mapping):
+                capture_input["workspaceLocator"] = dict(workspace_locator)
+            elif workspace_path:
                 capture_input["workspacePath"] = workspace_path
             elif workspace_root_ref:
                 capture_input["workspaceRootRef"] = workspace_root_ref
-            elif external_state_ref:
-                capture_input["externalStateRef"] = external_state_ref
-            else:
+            elif not external_state_ref:
                 continue
 
             base_commit = self._checkpoint_capture_text(
@@ -4559,24 +6204,80 @@ class MoonMindRunWorkflow:
             if base_commit:
                 capture_input["baseCommit"] = base_commit
 
-            checkpoint_kind = self._checkpoint_capture_text(
+            workspace_checkpoint_kind = self._checkpoint_capture_text(
                 candidate,
-                "checkpointKind",
-                "checkpoint_kind",
                 "workspaceCheckpointKind",
                 "workspace_checkpoint_kind",
             )
+            checkpoint_kind = (
+                workspace_checkpoint_kind
+                or self._checkpoint_capture_text(
+                    candidate,
+                    "checkpointKind",
+                    "checkpoint_kind",
+                )
+            )
             if checkpoint_kind:
-                capture_input["kind"] = checkpoint_kind
-            elif self._step_external_agent_ids.get(logical_step_id) != "omnigent":
+                session_kinds = (
+                    set(capabilities.session_state.checkpoint_kinds)
+                    if capabilities is not None
+                    and capabilities.session_state is not None
+                    else set()
+                )
+                is_omnigent_session_kind = (
+                    capabilities is not None
+                    and capabilities.runtime_id == "omnigent"
+                    and workspace_checkpoint_kind is None
+                    and checkpoint_kind in session_kinds
+                    and checkpoint_kind not in capabilities.checkpoint_capture_kinds
+                )
+                if not (
+                    is_omnigent_session_kind
+                    and workflow.patched(
+                        RUN_OMNIGENT_SPLIT_SESSION_WORKSPACE_CHECKPOINT_PATCH
+                    )
+                ):
+                    capture_input["kind"] = checkpoint_kind
+            elif capabilities is None and (
+                capability_policy_enabled
+                or self._step_external_agent_ids.get(logical_step_id) != "omnigent"
+            ):
                 if base_commit:
                     capture_input["kind"] = "git_patch"
                 else:
                     capture_input["kind"] = "worktree_archive"
+
+            criticality = self._checkpoint_capture_text(
+                candidate,
+                "checkpointCriticality",
+                "checkpoint_criticality",
+            )
+            if capabilities is None and criticality in {
+                "required",
+                "recoverability_only",
+                "unsupported",
+            }:
+                capture_input["criticality"] = criticality
             break
 
         if capture_input:
             self._step_workspace_capture_inputs[logical_step_id] = capture_input
+
+    def _inject_remediation_managed_session_checkpoint_source_identity(
+        self,
+        *,
+        node: Mapping[str, Any],
+        capture_input_source: dict[str, Any],
+    ) -> None:
+        """Bind pre-launch capture to the verifier that admitted remediation."""
+
+        if not self._is_moonspec_remediation_step(node):
+            return
+        source_identity = self._node_annotations_mapping(node).get(
+            "workspaceCaptureSourceIdentity"
+        )
+        if isinstance(source_identity, Mapping):
+            capture_input_source["sourceIdentity"] = dict(source_identity)
 
     async def _capture_canonical_step_checkpoint_workspace(
         self,
@@ -4591,25 +6292,184 @@ class MoonMindRunWorkflow:
         if not capture_input:
             return None
 
-        route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
-            "workspace.capture_checkpoint"
-        )
         checkpoint_id = build_step_checkpoint_id(identity, boundary)
+        managed_checkpoint_authority_enabled = workflow.patched(
+            RUN_MANAGED_CHECKPOINT_AUTHORITY_PATCH
+        )
+        declared_authority = (
+            capture_input.get("captureAuthority")
+            if managed_checkpoint_authority_enabled
+            and capture_input.get("captureAuthority")
+            in {
+                "moonmind_sandbox",
+                "managed_runtime",
+                "external_provider",
+                "none",
+            }
+            else None
+        )
         resolved_policy = resolve_checkpoint_policy(
             boundary=str(boundary),
-            recovery_source=self._recovery_source
-            if isinstance(self._recovery_source, Mapping)
-            else None,
-            runtime_kind=self._target_runtime,
+            capabilities=(
+                RuntimeExecutionCapabilities.model_validate(
+                    capture_input["runtimeCapabilities"]
+                )
+                if isinstance(capture_input.get("runtimeCapabilities"), Mapping)
+                else None
+            ),
+            workspace_locator=(
+                capture_input.get("workspaceLocator")
+                if isinstance(capture_input.get("workspaceLocator"), Mapping)
+                else None
+            ),
+            recovery_source=(
+                self._recovery_source
+                if isinstance(self._recovery_source, Mapping)
+                else None
+            ),
+            runtime_kind=(
+                self._target_runtime
+                if declared_authority in {"managed_runtime", "external_provider"}
+                else None
+            ),
             external_agent_id=self._step_external_agent_ids.get(logical_step_id),
+            workspace_authority=declared_authority,
+            agent_kind=(
+                "managed"
+                if managed_checkpoint_authority_enabled
+                and capture_input.get("captureAuthority") == "managed_runtime"
+                else None
+            ),
+        )
+        managed_capture_enabled = workflow.patched(RUN_MANAGED_CHECKPOINT_CAPTURE_PATCH)
+        supported_capture_activities = {"workspace.capture_checkpoint"}
+        if managed_capture_enabled:
+            supported_capture_activities.add(
+                "agent_runtime.capture_workspace_checkpoint"
+            )
+        if resolved_policy.capture_activity not in supported_capture_activities:
+            self._step_checkpoint_capture_outcomes[logical_step_id] = {
+                "status": "unsupported",
+                "failureCode": "CHECKPOINT_CAPABILITY_UNSUPPORTED",
+                "boundary": str(boundary),
+                "captureAuthority": resolved_policy.capture_authority,
+                "captureActivity": (
+                    None
+                    if resolved_policy.capture_activity
+                    == "agent_runtime.capture_workspace_checkpoint"
+                    and not managed_capture_enabled
+                    else resolved_policy.capture_activity
+                ),
+                "capabilityCriticality": resolved_policy.criticality,
+            }
+            return None
+
+        if (
+            resolved_policy.capture_activity
+            == "agent_runtime.capture_workspace_checkpoint"
+            and workflow.patched(RUN_MANAGED_CHECKPOINT_LOCATOR_GUARD_PATCH)
+            and not isinstance(capture_input.get("workspaceLocator"), Mapping)
+        ):
+            # The parent cannot address a managed workspace until AgentRun returns
+            # the runtime-owned locator. In particular, after_prepare and
+            # before_execution run before the child exists. Defer capture instead
+            # of sending a payload the strict activity contract must reject.
+            self._step_checkpoint_capture_outcomes[logical_step_id] = {
+                "status": "deferred",
+                "failureCode": "CHECKPOINT_WORKSPACE_LOCATOR_UNAVAILABLE",
+                "boundary": str(boundary),
+                "captureAuthority": resolved_policy.capture_authority,
+                "captureActivity": resolved_policy.capture_activity,
+                "capabilityCriticality": resolved_policy.criticality,
+            }
+            return None
+
+        omnigent_checkpoint_capture = capture_input.get("omnigentCheckpointCapture")
+        omnigent_capture_boundary_state = (
+            str(omnigent_checkpoint_capture.get("captureBoundaryState") or "").strip()
+            if isinstance(omnigent_checkpoint_capture, Mapping)
+            else ""
+        )
+        if (
+            resolved_policy.capture_activity == "workspace.capture_checkpoint"
+            and workflow.patched(RUN_OMNIGENT_PREMATERIALIZATION_CHECKPOINT_GUARD_PATCH)
+            and boundary in {"after_prepare", "before_execution"}
+            and capture_input.get("omnigentPrematerializationOwned") is True
+            and omnigent_capture_boundary_state == "session_not_started"
+        ):
+            # The deterministic sandbox locator is known before AgentRun starts,
+            # but profile-bound Omnigent owns repository materialization inside
+            # its coordinator activity.  Defer the initial after-prepare and
+            # before-execution captures instead of asking the sandbox worker to
+            # archive a workspace that cannot exist yet.
+            self._step_checkpoint_capture_outcomes[logical_step_id] = {
+                "status": "deferred",
+                "failureCode": "CHECKPOINT_WORKSPACE_MATERIALIZATION_PENDING",
+                "boundary": str(boundary),
+                "captureAuthority": resolved_policy.capture_authority,
+                "captureActivity": resolved_policy.capture_activity,
+                "capabilityCriticality": resolved_policy.criticality,
+            }
+            return None
+
+        claimed_kind = str(capture_input.get("kind") or "").strip() or None
+        if (
+            claimed_kind
+            and claimed_kind not in resolved_policy.supported_checkpoint_kinds
+        ):
+            self._step_checkpoint_capture_outcomes[logical_step_id] = {
+                "status": "failed",
+                "failureCode": "CHECKPOINT_CAPABILITY_MISMATCH",
+                "boundary": str(boundary),
+                "claimedCheckpointKind": claimed_kind,
+                "supportedCheckpointKind": resolved_policy.checkpoint_kind,
+                "captureAuthority": resolved_policy.capture_authority,
+            }
+            raise RuntimeCapabilityError(
+                f"checkpoint kind '{claimed_kind}' is incompatible with "
+                f"{resolved_policy.capture_authority} capture; supported kinds: "
+                f"{', '.join(resolved_policy.supported_checkpoint_kinds) or '(none)'}"
+            )
+
+        route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+            resolved_policy.capture_activity
         )
         payload = {
             "identity": identity.model_dump(by_alias=True, mode="json"),
             "boundary": boundary,
-            "kind": capture_input.get("kind") or resolved_policy.checkpoint_kind,
             "artifactNamespace": f"step-checkpoints/{identity.logical_step_id}",
             "idempotencyKey": f"{checkpoint_id}:capture",
         }
+        if (
+            resolved_policy.capture_activity
+            == "agent_runtime.capture_workspace_checkpoint"
+        ):
+            capabilities = RuntimeExecutionCapabilities.model_validate(
+                capture_input["runtimeCapabilities"]
+            )
+            if boundary == "before_execution" and isinstance(
+                capture_input.get("sourceIdentity"), Mapping
+            ):
+                payload["sourceIdentity"] = dict(capture_input["sourceIdentity"])
+            payload.update(
+                {
+                    "schemaVersion": "v1",
+                    "checkpointKind": claimed_kind or resolved_policy.checkpoint_kind,
+                    "expectedRuntimeId": capabilities.runtime_id,
+                    "capabilitySetVersion": capabilities.capability_set_version,
+                    "capabilityDigest": capabilities.capability_digest,
+                    "capturePolicy": {
+                        "includeTracked": True,
+                        "includeUntracked": True,
+                        "includeIgnored": False,
+                        "redactionProfile": "managed-code-workspace-v1",
+                    },
+                }
+            )
+        else:
+            payload["kind"] = claimed_kind or resolved_policy.checkpoint_kind
+        if isinstance(capture_input.get("workspaceLocator"), Mapping):
+            payload["workspaceLocator"] = dict(capture_input["workspaceLocator"])
         if capture_input.get("workspacePath"):
             payload["workspacePath"] = capture_input["workspacePath"]
         if capture_input.get("workspaceRootRef"):
@@ -4625,11 +6485,39 @@ class MoonMindRunWorkflow:
             **self._execute_kwargs_for_route(route),
         )
         if not isinstance(result, Mapping):
+            self._step_checkpoint_capture_outcomes[logical_step_id] = {
+                "status": "failed",
+                "failureCode": "CHECKPOINT_RESULT_INVALID",
+                "boundary": str(boundary),
+                "captureAuthority": resolved_policy.capture_authority,
+                "captureActivity": resolved_policy.capture_activity,
+                "capabilityCriticality": resolved_policy.criticality,
+            }
             return None
         if result.get("status") != "captured":
+            self._step_checkpoint_capture_outcomes[logical_step_id] = {
+                "status": str(result.get("status") or "failed"),
+                "failureCode": self._coerce_text(
+                    result.get("failureCode"), max_chars=100
+                )
+                or "CHECKPOINT_CAPTURE_FAILED",
+                "boundary": str(boundary),
+                "captureAuthority": resolved_policy.capture_authority,
+                "captureActivity": resolved_policy.capture_activity,
+                "capabilityCriticality": resolved_policy.criticality,
+                "summary": self._coerce_text(result.get("summary"), max_chars=500),
+            }
             return None
         workspace_evidence = result.get("workspace")
         if not isinstance(workspace_evidence, Mapping):
+            self._step_checkpoint_capture_outcomes[logical_step_id] = {
+                "status": "failed",
+                "failureCode": "CHECKPOINT_WORKSPACE_EVIDENCE_MISSING",
+                "boundary": str(boundary),
+                "captureAuthority": resolved_policy.capture_authority,
+                "captureActivity": resolved_policy.capture_activity,
+                "capabilityCriticality": resolved_policy.criticality,
+            }
             return None
         if workspace_evidence.get("kind") == "ephemeral_workspace_ref":
             return None
@@ -4641,6 +6529,62 @@ class MoonMindRunWorkflow:
                 if str(ref).strip()
             ],
         }
+
+    @staticmethod
+    def _unchanged_checkpoint_reuse_enabled() -> bool:
+        try:
+            return workflow.patched(RUN_UNCHANGED_CHECKPOINT_REUSE_PATCH)
+        except workflow._NotInWorkflowEventLoopError:
+            return True
+
+    def _reusable_step_checkpoint_workspace(
+        self,
+        logical_step_id: str,
+    ) -> dict[str, Any] | None:
+        generation = self._step_workspace_mutation_generations.get(
+            logical_step_id,
+            0,
+        )
+        cached = self._step_checkpoint_workspace_evidence_by_generation.get(
+            logical_step_id,
+            {},
+        ).get(generation)
+        if not isinstance(cached, Mapping):
+            return None
+        workspace_evidence = cached.get("workspace")
+        if not isinstance(workspace_evidence, Mapping):
+            return None
+        return {
+            "workspace": dict(workspace_evidence),
+            "diagnosticRefs": list(cached.get("diagnosticRefs") or []),
+        }
+
+    def _cache_step_checkpoint_workspace(
+        self,
+        logical_step_id: str,
+        capture: Mapping[str, Any],
+    ) -> None:
+        workspace_evidence = capture.get("workspace")
+        if not isinstance(workspace_evidence, Mapping):
+            return
+        generation = self._step_workspace_mutation_generations.get(
+            logical_step_id,
+            0,
+        )
+        self._step_checkpoint_workspace_evidence_by_generation.setdefault(
+            logical_step_id,
+            {},
+        )[generation] = {
+            "workspace": dict(workspace_evidence),
+            "diagnosticRefs": list(capture.get("diagnosticRefs") or []),
+        }
+
+    def _mark_step_workspace_mutation_started(self, logical_step_id: str) -> None:
+        if not self._unchanged_checkpoint_reuse_enabled():
+            return
+        self._step_workspace_mutation_generations[logical_step_id] = (
+            self._step_workspace_mutation_generations.get(logical_step_id, 0) + 1
+        )
 
     async def _record_canonical_step_checkpoint(
         self,
@@ -4660,14 +6604,39 @@ class MoonMindRunWorkflow:
             self._input_ref
             or f"temporal://{identity.workflow_id}/{identity.run_id}/task-input"
         )
-        capture = await self._capture_canonical_step_checkpoint_workspace(
-            logical_step_id,
-            identity=identity,
-            boundary=boundary,
+        reuse_enabled = self._unchanged_checkpoint_reuse_enabled()
+        capture = (
+            self._reusable_step_checkpoint_workspace(logical_step_id)
+            if reuse_enabled
+            else None
         )
         if capture is None:
+            capture = await self._capture_canonical_step_checkpoint_workspace(
+                logical_step_id,
+                identity=identity,
+                boundary=boundary,
+            )
+        if capture is None:
             return None
+        if reuse_enabled:
+            self._cache_step_checkpoint_workspace(logical_step_id, capture)
         capture_diagnostics = list(capture.get("diagnosticRefs") or [])
+        step_capture_input = self._step_workspace_capture_inputs.get(
+            logical_step_id, {}
+        )
+        raw_omnigent_capture = step_capture_input.get("omnigentCheckpointCapture")
+        omnigent_capture_input: dict[str, Any] | None = None
+        if isinstance(raw_omnigent_capture, Mapping):
+            omnigent_capture_input = dict(raw_omnigent_capture)
+            if isinstance(step_capture_input.get("workspaceLocator"), Mapping):
+                omnigent_capture_input["workspaceLocator"] = dict(
+                    step_capture_input["workspaceLocator"]
+                )
+            omnigent_capture_input["instructionRefs"] = [
+                ref
+                for ref in self._prepared_artifact_refs
+                if str(ref).startswith("artifact://")
+            ]
         result = await self._create_step_checkpoint_via_activity(
             identity=identity,
             boundary=boundary,
@@ -4677,15 +6646,341 @@ class MoonMindRunWorkflow:
             plan_ref=self._plan_ref
             or f"temporal://{identity.workflow_id}/{identity.run_id}/plan",
             prepared_input_refs=self._prepared_artifact_refs,
-            step_outputs=step_outputs or self._step_execution_compact_output_refs(
-                logical_step_id
-            ),
+            step_outputs=step_outputs
+            or self._step_execution_compact_output_refs(logical_step_id),
             diagnostic_refs=[*capture_diagnostics, *diagnostic_refs],
+            omnigent_checkpoint=(
+                self._step_workspace_capture_inputs.get(logical_step_id, {}).get(
+                    "omnigentCheckpoint"
+                )
+                if isinstance(
+                    self._step_workspace_capture_inputs.get(logical_step_id, {}).get(
+                        "omnigentCheckpoint"
+                    ),
+                    Mapping,
+                )
+                else None
+            ),
+            omnigent_checkpoint_capture=omnigent_capture_input,
         )
         checkpoint_ref = str(result.get("checkpointRef") or "").strip()
         if checkpoint_ref:
             self._step_checkpoint_refs[logical_step_id] = checkpoint_ref
+            workspace = capture["workspace"]
+            workspace_kind = str(workspace.get("kind") or "").strip()
+            workspace_digest = str(
+                workspace.get("workspaceDigest") or workspace.get("archiveDigest") or ""
+            ).strip()
+            workspace_identity_digest = str(
+                workspace.get("workspaceIdentityDigest") or ""
+            ).strip()
+            checkpoint_manifest_ref = str(workspace.get("manifestRef") or "").strip()
+            evidence_by_boundary = (
+                self._step_checkpoint_workspace_evidence_by_boundary.setdefault(
+                    logical_step_id,
+                    {},
+                )
+            )
+            evidence_by_boundary[str(boundary)] = {
+                "checkpointRef": checkpoint_ref,
+                "workspaceKind": workspace_kind,
+                "workspaceDigest": workspace_digest,
+                "workspaceIdentityDigest": workspace_identity_digest,
+                "checkpointManifestRef": checkpoint_manifest_ref,
+            }
         return checkpoint_ref or None
+
+    def _record_primary_execution_outcome(
+        self,
+        logical_step_id: str,
+        *,
+        execution_result: Any,
+        result_status: str,
+        recorded_at: datetime,
+    ) -> None:
+        """Record canonical result refs before any auxiliary finalization starts."""
+
+        row = self._step_ledger_row_for(logical_step_id)
+        if not isinstance(row, dict):
+            return
+        compact_refs = self._proposal_step_output_refs(logical_step_id)
+        output_refs = list(
+            dict.fromkeys(
+                str(value).strip()
+                for key, value in compact_refs.items()
+                if key.endswith("Ref") and isinstance(value, str) and value.strip()
+            )
+        )
+        outputs = self._get_from_result(execution_result, "outputs")
+        if not isinstance(outputs, Mapping):
+            outputs = {}
+        diagnostics_ref = self._coerce_text(
+            compact_refs.get("diagnosticsRef")
+            or outputs.get("diagnosticsRef")
+            or outputs.get("diagnostics_ref"),
+            max_chars=400,
+        )
+        capture_input = self._step_workspace_capture_inputs.get(logical_step_id, {})
+        raw_workspace_locator = capture_input.get("workspaceLocator")
+        if isinstance(raw_workspace_locator, Mapping):
+            # Preserve ownership/authority. Never collapse a new typed locator
+            # to a path-like legacy projection.
+            workspace_locator: dict[str, Any] | str | None = dict(raw_workspace_locator)
+        else:
+            # Read/write fallback retained only for histories whose capture
+            # input predates typed locators.
+            workspace_locator = self._coerce_text(
+                capture_input.get("workspaceRootRef")
+                or capture_input.get("workspacePath")
+                or capture_input.get("externalStateRef"),
+                max_chars=500,
+            )
+        result_ref = next(
+            (
+                compact_refs[key]
+                for key in ("primaryRef", "summaryRef", "logsRef", "diagnosticsRef")
+                if isinstance(compact_refs.get(key), str)
+            ),
+            None,
+        )
+        row["executionOutcome"] = {
+            "status": "succeeded" if result_status == "COMPLETED" else "failed",
+            "resultRef": result_ref,
+            "outputRefs": output_refs,
+            "diagnosticsRef": diagnostics_ref,
+            "workspaceLocator": workspace_locator,
+            "recordedAt": recorded_at.isoformat(),
+        }
+        row["finalizationOutcome"] = {
+            "status": "not_started",
+            "phase": "after_execution_checkpoint",
+            "criticality": self._checkpoint_criticality(logical_step_id),
+            "retryCount": 0,
+            "updatedAt": recorded_at.isoformat(),
+        }
+        self._sync_progress_snapshot(updated_at=recorded_at)
+
+    def _checkpoint_criticality(self, logical_step_id: str) -> str:
+        capture_input = self._step_workspace_capture_inputs.get(logical_step_id, {})
+        criticality = str(capture_input.get("criticality") or "required").strip()
+        if criticality in {"required", "recoverability_only", "unsupported"}:
+            return criticality
+        return "required"
+
+    async def _finalize_after_execution_checkpoint(
+        self,
+        logical_step_id: str,
+        *,
+        updated_at: datetime,
+    ) -> None:
+        """Isolate idempotent checkpoint finalization from the primary result."""
+
+        row = self._step_ledger_row_for(logical_step_id)
+        if not isinstance(row, dict):
+            return
+        previous_outcome = row.get("finalizationOutcome")
+        if (
+            isinstance(previous_outcome, Mapping)
+            and previous_outcome.get("status") == "succeeded"
+            and self._coerce_text(previous_outcome.get("checkpointRef"), max_chars=500)
+        ):
+            return
+        retry_count = (
+            int(previous_outcome.get("retryCount") or 0)
+            if isinstance(previous_outcome, Mapping)
+            else 0
+        )
+        criticality = self._checkpoint_criticality(logical_step_id)
+        if criticality == "unsupported":
+            row["finalizationOutcome"] = {
+                "status": "unsupported",
+                "phase": "after_execution_checkpoint",
+                "criticality": criticality,
+                "failureCode": None,
+                "retryCount": 0,
+                "message": "Checkpoint capture is unsupported by this workspace.",
+                "updatedAt": updated_at.isoformat(),
+            }
+            return
+        try:
+            checkpoint_ref = await self._record_canonical_step_checkpoint(
+                logical_step_id,
+                boundary="after_execution",
+                updated_at=updated_at,
+            )
+        except Exception as exc:
+            status = "degraded" if criticality == "recoverability_only" else "failed"
+            row["finalizationOutcome"] = {
+                "status": status,
+                "phase": "after_execution_checkpoint",
+                "criticality": criticality,
+                "failureCode": FINALIZATION_CHECKPOINT_FAILED,
+                "terminalFailureCode": FINALIZATION_RETRY_EXHAUSTED,
+                "retryCount": retry_count + 1,
+                "message": self._bounded_operator_failure(exc),
+                "updatedAt": workflow.now().isoformat(),
+            }
+            self._summary = (
+                "Execution succeeded; finalization failed during the "
+                "after-execution checkpoint."
+            )
+            self._attention_required = criticality == "required"
+            if criticality == "required":
+                self._publish_status = "failed"
+                self._publish_reason = self._summary
+            self._update_memo()
+            return
+        capture_outcome = self._step_checkpoint_capture_outcomes.get(logical_step_id)
+        if not checkpoint_ref and isinstance(capture_outcome, Mapping):
+            capability_criticality = str(
+                capture_outcome.get("capabilityCriticality") or criticality
+            ).strip()
+            if capability_criticality in {
+                "required",
+                "recoverability_only",
+                "unsupported",
+            }:
+                criticality = capability_criticality
+            failure_code = self._coerce_text(
+                capture_outcome.get("failureCode"), max_chars=100
+            )
+            capture_status = str(capture_outcome.get("status") or "").strip()
+            finalization_status = "unsupported"
+            if capture_status not in {"unsupported", "deferred"}:
+                finalization_status = (
+                    "degraded" if criticality == "recoverability_only" else "failed"
+                )
+            row["finalizationOutcome"] = {
+                "status": finalization_status,
+                "phase": "after_execution_checkpoint",
+                "criticality": criticality,
+                "failureCode": failure_code,
+                "terminalFailureCode": (
+                    FINALIZATION_RETRY_EXHAUSTED
+                    if finalization_status == "failed"
+                    else None
+                ),
+                "retryCount": 0,
+                "checkpointRef": None,
+                "message": (
+                    self._coerce_text(capture_outcome.get("summary"), max_chars=500)
+                    or (
+                        "Required checkpoint capture failed."
+                        if finalization_status == "failed"
+                        else "Checkpoint capture is unsupported by this runtime."
+                    )
+                ),
+                "updatedAt": updated_at.isoformat(),
+            }
+            if finalization_status == "failed":
+                self._publish_status = "failed"
+                self._publish_reason = (
+                    "Execution succeeded, but its required after-execution "
+                    "workspace checkpoint failed."
+                )
+                self._summary = self._publish_reason
+                self._attention_required = True
+                self._update_memo()
+            return
+        row["finalizationOutcome"] = {
+            "status": "succeeded" if checkpoint_ref else "unsupported",
+            "phase": "after_execution_checkpoint",
+            "criticality": criticality,
+            "failureCode": None,
+            "retryCount": retry_count,
+            "checkpointRef": checkpoint_ref,
+            "message": (
+                None
+                if checkpoint_ref
+                else "No checkpoint-capable workspace was available."
+            ),
+            "updatedAt": workflow.now().isoformat(),
+        }
+        if checkpoint_ref and retry_count:
+            self._summary = "Execution succeeded; finalization retry completed."
+            self._attention_required = False
+            self._update_memo()
+
+    def _record_publication_finalization_failure(
+        self,
+        logical_step_id: str,
+        *,
+        exc: Exception,
+        updated_at: datetime,
+    ) -> None:
+        row = self._step_ledger_row_for(logical_step_id)
+        if not isinstance(row, dict):
+            return
+        previous = row.get("finalizationOutcome")
+        retry_count = 1
+        if isinstance(previous, Mapping):
+            retry_count = int(previous.get("retryCount") or 0) + 1
+        row["finalizationOutcome"] = {
+            "status": "failed",
+            "phase": "publication",
+            "criticality": "required",
+            "failureCode": FINALIZATION_PUBLICATION_FAILED,
+            "terminalFailureCode": FINALIZATION_RETRY_EXHAUSTED,
+            "retryCount": retry_count,
+            "message": self._bounded_operator_failure(exc),
+            "updatedAt": updated_at.isoformat(),
+        }
+        previous_publish_reason = self._publish_reason
+        self._publish_status = "failed"
+        self._publish_reason = previous_publish_reason or (
+            "Execution succeeded; finalization failed during publication."
+        )
+        self._summary = "Execution succeeded; finalization failed during publication."
+        self._attention_required = True
+        self._update_memo()
+
+    async def _record_prepublication_checkpoint(
+        self,
+        logical_step_id: str,
+        *,
+        publish_mode: str,
+        updated_at: datetime,
+        required_for_remediation: bool = False,
+    ) -> bool:
+        """Return whether a required pre-publication checkpoint failed."""
+
+        if (
+            workflow.patched(RUN_SKIP_NO_PUBLISH_PREPUBLICATION_CHECKPOINT_PATCH)
+            and publish_mode == "none"
+            and not required_for_remediation
+        ):
+            return False
+        try:
+            await self._record_canonical_step_checkpoint(
+                logical_step_id,
+                boundary="before_publication",
+                updated_at=updated_at,
+            )
+        except Exception as exc:
+            if not workflow.patched(RUN_DURABLE_FINALIZATION_OUTCOME_PATCH):
+                raise
+            row = self._step_ledger_row_for(logical_step_id)
+            if isinstance(row, dict):
+                row["finalizationOutcome"] = {
+                    "status": "failed",
+                    "phase": "before_publication_checkpoint",
+                    "criticality": "required",
+                    "failureCode": FINALIZATION_CHECKPOINT_FAILED,
+                    "terminalFailureCode": FINALIZATION_RETRY_EXHAUSTED,
+                    "retryCount": 1,
+                    "message": self._bounded_operator_failure(exc),
+                    "updatedAt": workflow.now().isoformat(),
+                }
+            self._summary = (
+                "Execution succeeded; finalization failed during the "
+                "pre-publication checkpoint."
+            )
+            self._publish_status = "failed"
+            self._publish_reason = self._summary
+            self._attention_required = True
+            self._update_memo()
+            return True
+        return False
 
     def _refresh_step_readiness(self, *, updated_at: datetime) -> None:
         refresh_ready_steps(self._step_ledger_rows, updated_at=updated_at)
@@ -4769,11 +7064,7 @@ class MoonMindRunWorkflow:
         if not self._moonspec_title_remediation_detection_enabled():
             return ""
         node_inputs = self._node_inputs_mapping(node)
-        title = (
-            str(node_inputs.get("title") or node.get("title") or "")
-            .strip()
-            .lower()
-        )
+        title = str(node_inputs.get("title") or node.get("title") or "").strip().lower()
         if title.startswith("remediate verification gaps") or title.startswith(
             "remediate remaining gaps"
         ):
@@ -4817,9 +7108,7 @@ class MoonMindRunWorkflow:
             if self._moonspec_remediation_title_role(node):
                 match = _MOONSPEC_REMEDIATION_TITLE_ATTEMPT_PATTERN.search(title)
                 if match:
-                    title_attempt = self._coerce_positive_int(
-                        match.group("attempt")
-                    )
+                    title_attempt = self._coerce_positive_int(match.group("attempt"))
                     title_max_attempts = self._coerce_positive_int(
                         match.group("max_attempts")
                     )
@@ -4838,6 +7127,52 @@ class MoonMindRunWorkflow:
             return True
         return attempt <= max_attempts
 
+    def _moonspec_remediation_budget_metadata(
+        self,
+        *,
+        ordered_nodes: Sequence[Mapping[str, Any]],
+        current_attempt: int | None,
+        max_attempts: int | None,
+    ) -> dict[str, Any]:
+        """Project remediation consumption from actual active step-ledger rows."""
+        remediation_ids = [
+            str(candidate.get("id") or "")
+            for candidate in ordered_nodes
+            if self._is_moonspec_remediation_step(candidate)
+            and self._moonspec_remediation_attempt_within_budget(candidate)
+        ]
+        attempts_started = sum(
+            1
+            for step_id in remediation_ids
+            if step_id and (self._step_execution_for(step_id) or 0) > 0
+        )
+        attempts_completed = sum(
+            1
+            for step_id in remediation_ids
+            if step_id
+            and str((self._step_ledger_row_for(step_id) or {}).get("status") or "")
+            == "completed"
+        )
+        return {
+            "maxAttempts": max_attempts,
+            "currentAttempt": current_attempt,
+            "attemptsStarted": attempts_started,
+            "attemptsCompleted": attempts_completed,
+            "remainingAttempts": (
+                max(0, max_attempts - attempts_started)
+                if max_attempts is not None
+                else None
+            ),
+            "exhausted": bool(
+                max_attempts is not None and attempts_started >= max_attempts
+            ),
+        }
+
+    @staticmethod
+    def _accepted_verifier_semantic_verdict(verdict: str) -> str:
+        """Preserve the verifier-owned semantic result in control evidence."""
+        return verdict
+
     def _is_moonspec_remediation_step(self, node: Mapping[str, Any]) -> bool:
         node_inputs = self._node_inputs_mapping(node)
         if self._moonspec_step_role(node) == "moonspec-remediation":
@@ -4848,23 +7183,398 @@ class MoonMindRunWorkflow:
             if isinstance(skill_node, Mapping)
             else skill_node
         )
-        selected_skill = str(
-            node_inputs.get("selectedSkill")
-            or node_inputs.get("skillId")
-            or node_inputs.get("targetSkill")
-            or skill_id_from_node
-            or ""
-        ).strip().lower()
-        if selected_skill != "moonspec-implement":
-            return False
-        title = (
-            str(node_inputs.get("title") or node.get("title") or "")
+        selected_skill = (
+            str(
+                node_inputs.get("selectedSkill")
+                or node_inputs.get("skillId")
+                or node_inputs.get("targetSkill")
+                or skill_id_from_node
+                or ""
+            )
             .strip()
             .lower()
         )
+        if selected_skill != "moonspec-implement":
+            return False
+        title = str(node_inputs.get("title") or node.get("title") or "").strip().lower()
         return title.startswith("remediate verification gaps") or title.startswith(
             "remediate remaining gaps"
         )
+
+    def _canonical_remediation_checkpoint_evidence(
+        self,
+        logical_step_id: str,
+    ) -> dict[str, str] | None:
+        """Return the latest workflow-owned workspace checkpoint for a Step."""
+
+        evidence_by_boundary = (
+            self._step_checkpoint_workspace_evidence_by_boundary.get(logical_step_id)
+            or {}
+        )
+        for boundary in ("before_publication", "after_execution"):
+            evidence = evidence_by_boundary.get(boundary)
+            if not isinstance(evidence, Mapping):
+                continue
+            checkpoint_ref = self._bounded_story_loop_artifact_ref(
+                evidence.get("checkpointRef")
+            )
+            workspace_kind = str(evidence.get("workspaceKind") or "").strip()
+            workspace_digest = str(evidence.get("workspaceDigest") or "").strip()
+            workspace_identity_digest = str(
+                evidence.get("workspaceIdentityDigest") or ""
+            ).strip()
+            checkpoint_manifest_ref = self._bounded_story_loop_artifact_ref(
+                evidence.get("checkpointManifestRef")
+            )
+            if (
+                workspace_kind == "worktree_archive"
+                and checkpoint_ref
+                and workspace_digest.startswith("sha256:")
+                and workspace_identity_digest.startswith("sha256:")
+                and checkpoint_manifest_ref
+            ):
+                return {
+                    "checkpointRef": checkpoint_ref,
+                    "workspaceDigest": workspace_digest,
+                    "workspaceIdentityDigest": workspace_identity_digest,
+                    "checkpointManifestRef": checkpoint_manifest_ref,
+                }
+        return None
+
+    def _initialize_remediation_head_from_canonical_checkpoint(
+        self,
+        *,
+        logical_step_id: str,
+        gate_result_ref: str,
+        verdict: str,
+    ) -> RemediationWorkspaceHead | None:
+        """Promote captured substrate evidence into the workflow-owned loop head."""
+
+        spec = self._remediation_loop_spec
+        if spec is None:
+            return None
+        evidence = self._canonical_remediation_checkpoint_evidence(logical_step_id)
+        if evidence is None:
+            return None
+        identity = self._canonical_step_checkpoint_identity(logical_step_id)
+        normalized_verdict = str(verdict or "").strip().upper()
+        head = RemediationWorkspaceHead(
+            loopId=spec.loop_id,
+            branchRef=f"checkpoint-branch:{spec.loop_id}",
+            rootCheckpointRef=evidence["checkpointRef"],
+            rootWorkspaceDigest=evidence["workspaceDigest"],
+            rootWorkspaceIdentityDigest=evidence["workspaceIdentityDigest"],
+            headCheckpointRef=evidence["checkpointRef"],
+            headWorkspaceDigest=evidence["workspaceDigest"],
+            headWorkspaceIdentityDigest=evidence["workspaceIdentityDigest"],
+            headStepExecutionId=(
+                build_step_execution_id(identity) if identity is not None else None
+            ),
+            latestVerificationRef=gate_result_ref,
+            latestVerificationVerdict=normalized_verdict,
+            status=(
+                "accepted"
+                if normalized_verdict == "FULLY_IMPLEMENTED"
+                else "verified_incomplete"
+            ),
+        )
+        self._remediation_workspace_head = head
+        return head
+
+    def _validate_remediation_workspace_materialization(
+        self,
+        logical_step_id: str,
+    ) -> dict[str, str]:
+        """Require Activity-owned proof that a remediation reads the loop head."""
+
+        head = self._remediation_workspace_head
+        evidence_by_boundary = (
+            self._step_checkpoint_workspace_evidence_by_boundary.get(logical_step_id)
+            or {}
+        )
+        evidence = evidence_by_boundary.get("before_execution")
+        if head is None or not isinstance(evidence, Mapping):
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_RESTORE_INVALID,
+                "remediation workspace was not checkpointed before execution",
+            )
+        workspace_kind = str(evidence.get("workspaceKind") or "").strip()
+        workspace_digest = str(evidence.get("workspaceDigest") or "").strip()
+        workspace_identity_digest = str(
+            evidence.get("workspaceIdentityDigest") or ""
+        ).strip()
+        if (
+            workspace_kind != "worktree_archive"
+            or not workspace_digest.startswith("sha256:")
+            or not workspace_identity_digest.startswith("sha256:")
+        ):
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_RESTORE_INVALID,
+                "remediation runtime cannot prove a restorable workspace before execution",
+            )
+        if (
+            workspace_digest != head.head_workspace_digest
+            or workspace_identity_digest != head.head_workspace_identity_digest
+        ):
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_MISMATCH,
+                "materialized remediation workspace does not match the current head",
+            )
+        return {
+            "checkpointRef": head.head_checkpoint_ref,
+            "workspaceDigest": workspace_digest,
+            "workspaceIdentityDigest": workspace_identity_digest,
+        }
+
+    def _remediation_workspace_materialization_required(
+        self,
+        node: Mapping[str, Any],
+    ) -> bool:
+        """Return whether this execution must prove a restored checkpoint head."""
+
+        if not workflow.patched(RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH):
+            return False
+        if not self._is_moonspec_remediation_step(node):
+            return False
+        raw_inputs = node.get("inputs")
+        node_inputs = raw_inputs if isinstance(raw_inputs, Mapping) else {}
+        if (
+            workflow.patched(RUN_EXTERNAL_PUBLISHED_BRANCH_REMEDIATION_PATCH)
+            and node_inputs.get("remediationWorkspaceMode") == "remote_published_branch"
+        ):
+            return False
+        return not (
+            workflow.patched(RUN_HEADLESS_REMEDIATION_EXECUTION_PATCH)
+            and self._remediation_workspace_head is None
+        )
+
+    def _inject_remediation_workspace_baseline(
+        self,
+        *,
+        node: Mapping[str, Any],
+        node_inputs: dict[str, Any],
+    ) -> None:
+        """Freeze the authoritative candidate baseline for one remediation step.
+
+        The first remediation node must supply the workflow-owned head. Later
+        nodes may repeat the identical value for replay-safe plan portability,
+        but may not replace it. Head advancement remains capture/persistence
+        activity-owned and is intentionally not inferred from agent prose.
+        """
+        if not self._is_moonspec_remediation_step(node):
+            return
+        supplied = node_inputs.get("remediationWorkspaceHead")
+        if supplied is not None:
+            candidate = RemediationWorkspaceHead.model_validate(supplied)
+            if (
+                self._remediation_workspace_head is not None
+                and candidate != self._remediation_workspace_head
+            ):
+                raise RemediationHeadError(
+                    REMEDIATION_HEAD_MISMATCH,
+                    "plan input cannot replace the workflow-owned remediation head",
+                )
+            self._remediation_workspace_head = candidate
+        if self._remediation_workspace_head is None:
+            # Legacy compiled plans do not yet carry a root checkpoint. Do not
+            # manufacture one from the live path; the compiler/persistence
+            # boundary must opt in by supplying authoritative checkpoint data.
+            return
+        attempt, _ = self._moonspec_remediation_attempt_metadata(node)
+        if attempt is None:
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_MISMATCH,
+                "remediation attempt ordinal is required",
+            )
+        frozen = freeze_attempt_input(self._remediation_workspace_head, attempt)
+        node_inputs["remediationAttemptInput"] = frozen.model_dump(
+            by_alias=True, mode="json"
+        )
+        # This projection is safe for agent/UI metadata and makes the exact next
+        # baseline observable without leaking an authorized workspace path.
+        node_inputs["remediationWorkspaceHead"] = project_head(
+            self._remediation_workspace_head
+        )
+
+    def _inject_remediation_verification_baseline(
+        self,
+        *,
+        node: Mapping[str, Any],
+        node_inputs: dict[str, Any],
+    ) -> None:
+        """Bind an admitted verifier to the candidate captured by its attempt."""
+
+        if self._moonspec_step_role(node) != "moonspec-verification-gate":
+            return
+        annotations = self._node_annotations_mapping(node)
+        if not annotations.get("remediationLoopId"):
+            return
+        state = self._remediation_loop_state
+        if state is None:
+            # A materialized attempt can only exist while the loop owns state, so
+            # a missing state is a real authority break rather than a missing
+            # opt-in.
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_MISMATCH,
+                "dynamic remediation verification has no admitted loop state",
+            )
+        attempt, _ = self._moonspec_remediation_attempt_metadata(node)
+        if attempt != state.attempt_ordinal:
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_MISMATCH,
+                "dynamic verifier attempt does not match the admitted loop attempt",
+            )
+        head = self._remediation_workspace_head
+        if head is None:
+            # Cumulative checkpoint tracking is opt-in and is owned by the
+            # capture/persistence boundary, exactly as
+            # ``_inject_remediation_workspace_baseline`` treats it for the
+            # remediation half of the same attempt. Without that authoritative
+            # head the verifier reads the loop's own recorded head ref and the
+            # live workspace the admitted attempt just ran in, like the authored
+            # verification step does, so its absence must not fail the run.
+            node_inputs["remediationWorkspaceHeadRef"] = state.workspace_head_ref
+            node_inputs["readOnlyWorkspaceHead"] = True
+            return
+        if attempt != head.head_attempt_ordinal:
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_MISMATCH,
+                "dynamic verifier attempt does not match the workflow-owned head",
+            )
+        node_inputs["remediationWorkspaceHeadRef"] = head.head_checkpoint_ref
+        node_inputs["remediationWorkspaceHead"] = project_head(head)
+        node_inputs["readOnlyWorkspaceHead"] = True
+
+    def _advance_headless_remediation_attempt(
+        self,
+        *,
+        node: Mapping[str, Any],
+    ) -> None:
+        """Move a completed headless attempt from remediation to verification.
+
+        Only the loop's own admitted attempt advances the phase. An authored
+        remediation step that is not the active dynamic attempt leaves the loop
+        untouched; attempt identity stays enforced at the verification gate.
+        """
+
+        state = self._remediation_loop_state
+        if state is None:
+            return
+        if state.phase != RemediationLoopPhase.REMEDIATION_RUNNING:
+            return
+        attempt, _ = self._moonspec_remediation_attempt_metadata(node)
+        if attempt != state.attempt_ordinal:
+            return
+        self._remediation_loop_state = capture_remediation_candidate(state)
+        self._sync_remediation_loop_projection()
+
+    def _advance_remediation_workspace_head(
+        self,
+        *,
+        node: Mapping[str, Any],
+        node_inputs: Mapping[str, Any],
+        execution_result: Any,
+        step_execution_id: str,
+    ) -> None:
+        """Consume captured attempt evidence before the next attempt is frozen."""
+        if not self._is_moonspec_remediation_step(node):
+            return
+        if self._remediation_workspace_head is None:
+            # A headless attempt has no cumulative candidate to advance, but the
+            # loop must still leave remediation. Otherwise the phase stays
+            # REMEDIATION_RUNNING, the verifier runs anyway, and
+            # record_verification_evidence rejects the evidence it produced.
+            self._advance_headless_remediation_attempt(node=node)
+            return
+        attempt_payload = node_inputs.get("remediationAttemptInput")
+        if not isinstance(attempt_payload, Mapping):
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_MISMATCH,
+                "completed remediation step has no frozen attempt input",
+            )
+        outputs = self._effective_result_outputs(execution_result)
+        output_payload = (
+            outputs.get("remediationAttemptOutput")
+            if isinstance(outputs, Mapping)
+            else None
+        )
+        workflow_owned_head_enabled = workflow.patched(
+            RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH
+        )
+        captured = (
+            self._canonical_remediation_checkpoint_evidence(str(node.get("id") or ""))
+            if workflow_owned_head_enabled
+            else None
+        )
+        if workflow_owned_head_enabled:
+            output_payload = None
+            materialized = self._validate_remediation_workspace_materialization(
+                str(node.get("id") or "")
+            )
+        else:
+            materialized = None
+        if captured is not None:
+            captured_workspace_identity_digest = captured.get("workspaceIdentityDigest")
+            if (
+                not captured_workspace_identity_digest
+                or captured_workspace_identity_digest
+                != self._remediation_workspace_head.head_workspace_identity_digest
+            ):
+                raise RemediationHeadError(
+                    REMEDIATION_HEAD_MISMATCH,
+                    "captured candidate workspace identity does not match the current head",
+                )
+            checkpoint_manifest_ref = captured.get("checkpointManifestRef")
+            if captured["workspaceDigest"] == attempt_payload.get("expectedBaseDigest"):
+                output_payload = {
+                    "attemptEvidenceRef": captured["checkpointRef"],
+                    "parentCheckpointRef": materialized["checkpointRef"],
+                    "parentWorkspaceDigest": materialized["workspaceDigest"],
+                    "outcome": "no_candidate_change",
+                }
+            elif checkpoint_manifest_ref:
+                output_payload = {
+                    "attemptEvidenceRef": captured["checkpointRef"],
+                    "parentCheckpointRef": materialized["checkpointRef"],
+                    "parentWorkspaceDigest": materialized["workspaceDigest"],
+                    "outputCheckpointRef": captured["checkpointRef"],
+                    "outputWorkspaceDigest": captured["workspaceDigest"],
+                    "checkpointManifestRef": checkpoint_manifest_ref,
+                    "outcome": "candidate_captured",
+                }
+        if not isinstance(output_payload, Mapping):
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_MISMATCH,
+                (
+                    "completed remediation step has no authoritative checkpoint output"
+                    if workflow_owned_head_enabled
+                    else "completed remediation step has no captured attempt output"
+                ),
+            )
+        attempt = RemediationAttemptInput.model_validate(attempt_payload)
+        output = RemediationAttemptOutput.model_validate(output_payload)
+        updated, _ = advance_head(
+            self._remediation_workspace_head,
+            attempt,
+            output,
+            step_execution_id=step_execution_id,
+            transition_id=f"{self._remediation_workspace_head.loop_id}:{attempt.attempt_ordinal}",
+        )
+        self._remediation_workspace_head = updated
+        state = self._remediation_loop_state
+        if state is not None:
+            if state.attempt_ordinal != attempt.attempt_ordinal:
+                raise RemediationHeadError(
+                    REMEDIATION_HEAD_MISMATCH,
+                    "captured candidate does not match the active loop attempt",
+                )
+            self._remediation_loop_state = capture_remediation_candidate(
+                state.model_copy(
+                    update={"phase": RemediationLoopPhase.CANDIDATE_CAPTURING}
+                ),
+                workspace_head_ref=updated.head_checkpoint_ref,
+            )
+            self._sync_remediation_loop_projection()
 
     def _has_remaining_moonspec_remediation_step(
         self,
@@ -4872,12 +7582,222 @@ class MoonMindRunWorkflow:
         ordered_nodes: Sequence[Mapping[str, Any]],
         current_index: int,
     ) -> bool:
-        for node in ordered_nodes[current_index + 1:]:
+        for node in ordered_nodes[current_index + 1 :]:
             if self._is_moonspec_remediation_step(
                 node
             ) and self._moonspec_remediation_attempt_within_budget(node):
                 return True
         return False
+
+    def _resolve_next_moonspec_remediation_step(
+        self,
+        *,
+        ordered_nodes: Sequence[Mapping[str, Any]],
+        current_index: int,
+    ) -> tuple[MoonSpecRemediationSuccessor | None, str]:
+        """Resolve one exact successor after validating the annotated topology."""
+        if current_index < 0 or current_index >= len(ordered_nodes):
+            return None, "no_remediation_successor"
+        current = ordered_nodes[current_index]
+        current_role = self._moonspec_step_role(current)
+        current_inputs = self._node_inputs_mapping(current)
+        current_tool = self._plan_node_tool_mapping(current) or {}
+        current_tool_name = str(
+            current_tool.get("name") or current_tool.get("id") or ""
+        )
+        if current_role != "moonspec-verification-gate" and not (
+            not current_role
+            and self._is_moonspec_verify_step(
+                tool_name=current_tool_name,
+                node_inputs=current_inputs,
+            )
+        ):
+            return None, "not_explicit_remediation_chain"
+        current_attempt, current_max = self._moonspec_remediation_attempt_metadata(
+            current
+        )
+        if current_attempt is None and current_role != "moonspec-verification-gate":
+            current_attempt = 0
+        if current_max is None and current_attempt == 0:
+            declared_maxima = {
+                maximum
+                for candidate in ordered_nodes[current_index + 1 :]
+                if self._moonspec_step_role(candidate)
+                in {"moonspec-remediation", "moonspec-verification-gate"}
+                for _, maximum in [
+                    self._moonspec_remediation_attempt_metadata(candidate)
+                ]
+                if maximum is not None
+            }
+            if len(declared_maxima) == 1:
+                current_max = next(iter(declared_maxima))
+        if current_attempt is None or current_max is None:
+            return None, "no_remediation_successor"
+        if current_attempt >= current_max:
+            return None, "remediation_budget_exhausted"
+
+        expected_attempt = current_attempt + 1
+        candidates: list[MoonSpecRemediationSuccessor] = []
+        seen_attempts: set[int] = set()
+        attempts_by_role: dict[str, set[int]] = {
+            "moonspec-remediation": set(),
+            "moonspec-verification-gate": set(),
+        }
+        final_gate_attempts: set[int] = set()
+        malformed = False
+        for node_index, candidate in enumerate(ordered_nodes):
+            role = self._moonspec_step_role(candidate)
+            if role not in {"moonspec-remediation", "moonspec-verification-gate"}:
+                continue
+            attempt, max_attempts = self._moonspec_remediation_attempt_metadata(
+                candidate
+            )
+            if attempt is None or max_attempts != current_max:
+                malformed = True
+                continue
+            if attempt > current_max:
+                continue
+            identity = (0 if role == "moonspec-remediation" else current_max) + attempt
+            if identity in seen_attempts:
+                malformed = True
+            seen_attempts.add(identity)
+            attempts_by_role[role].add(attempt)
+            if (
+                role == "moonspec-verification-gate"
+                and self._node_annotations_mapping(candidate).get(
+                    "moonSpecFinalRemediationGate"
+                )
+                is True
+            ):
+                final_gate_attempts.add(attempt)
+            if role == "moonspec-remediation" and attempt == expected_attempt:
+                candidates.append(
+                    MoonSpecRemediationSuccessor(
+                        logical_step_id=str(candidate.get("id") or ""),
+                        attempt=attempt,
+                        max_attempts=max_attempts,
+                        node_index=node_index,
+                    )
+                )
+        expected_attempts = set(range(1, current_max + 1))
+        if (
+            malformed
+            or len(candidates) != 1
+            or attempts_by_role["moonspec-remediation"] != expected_attempts
+            or attempts_by_role["moonspec-verification-gate"] != expected_attempts
+            or final_gate_attempts != {current_max}
+        ):
+            return None, "no_remediation_successor"
+        successor = candidates[0]
+        if successor.node_index != current_index + 1 or not successor.logical_step_id:
+            return None, "no_remediation_successor"
+        return successor, "verification_requested_remediation"
+
+    def _resolve_gate_transition(
+        self,
+        *,
+        verdict: Any,
+        ordered_nodes: Sequence[Mapping[str, Any]],
+        current_index: int,
+    ) -> GateTransitionDecision:
+        """Keep verifier semantics advisory and make plan routing authoritative."""
+        normalized = str(getattr(verdict, "verdict", "") or "").strip().upper()
+        explicit_chain = False
+        if 0 <= current_index < len(ordered_nodes):
+            current = ordered_nodes[current_index]
+            current_role = self._moonspec_step_role(current)
+            current_tool = self._plan_node_tool_mapping(current) or {}
+            explicit_chain = current_role == "moonspec-verification-gate" or (
+                not current_role
+                and self._is_moonspec_verify_step(
+                    tool_name=str(
+                        current_tool.get("name") or current_tool.get("id") or ""
+                    ),
+                    node_inputs=self._node_inputs_mapping(current),
+                )
+                and any(
+                    self._moonspec_step_role(candidate) == "moonspec-remediation"
+                    for candidate in ordered_nodes[current_index + 1 :]
+                )
+            )
+        if not explicit_chain:
+            return GateTransitionDecision(
+                "generic", "existing_gate_policy", "not_explicit_remediation_chain"
+            )
+        if bool(getattr(verdict, "invalid", False)) or bool(
+            getattr(verdict, "degraded", False)
+        ):
+            return GateTransitionDecision(
+                "invalid", "fail_invalid_result", "invalid_gate_result"
+            )
+        if normalized == "FULLY_IMPLEMENTED":
+            return GateTransitionDecision(
+                "accept", "exit_remediation_loop", "verification_passed"
+            )
+        if normalized == "ADDITIONAL_WORK_NEEDED":
+            successor, reason = self._resolve_next_moonspec_remediation_step(
+                ordered_nodes=ordered_nodes,
+                current_index=current_index,
+            )
+            if successor is not None:
+                return GateTransitionDecision(
+                    "accept", "advance_to_next_remediation", reason, successor
+                )
+            return GateTransitionDecision("accept", "stop_at_control_gate", reason)
+        if normalized == "NO_DETERMINATION":
+            if bool(getattr(verdict, "recoverable_in_current_runtime", False)):
+                return GateTransitionDecision(
+                    "retry", "retry_current_verifier", "recoverable_no_determination"
+                )
+            return GateTransitionDecision(
+                "accept", "stop_at_control_gate", "unrecoverable_no_determination"
+            )
+        if normalized in {
+            "BLOCKED",
+            "FAILED_UNRECOVERABLE",
+            "ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION",
+        }:
+            return GateTransitionDecision(
+                "accept", "stop_at_control_gate", "terminal_gate_verdict"
+            )
+        return GateTransitionDecision(
+            "invalid", "fail_invalid_result", "invalid_gate_result"
+        )
+
+    def _record_moonspec_gate_transition_event(
+        self,
+        *,
+        logical_step_id: str,
+        node: Mapping[str, Any],
+        verdict: str,
+        transition: GateTransitionDecision,
+        review_retries_consumed: int,
+    ) -> None:
+        """Emit one compact structured event for each plan-routed verifier result."""
+        remediation_attempt, remediation_max = (
+            self._moonspec_remediation_attempt_metadata(node)
+        )
+        self._get_logger().info(
+            "moonspec_gate_transition %s",
+            json.dumps(
+                {
+                    "event": "moonspec_gate_transition",
+                    "logicalStepId": logical_step_id,
+                    "verdict": verdict,
+                    "disposition": transition.routing_disposition,
+                    "reasonCode": transition.reason_code,
+                    "nextLogicalStepId": (
+                        transition.successor.logical_step_id
+                        if transition.successor is not None
+                        else None
+                    ),
+                    "reviewRetriesConsumed": review_retries_consumed,
+                    "remediationAttempt": remediation_attempt,
+                    "remediationMaxAttempts": remediation_max,
+                },
+                sort_keys=True,
+            ),
+        )
 
     def _moonspec_remediation_loop_skip_reason(
         self,
@@ -4895,15 +7815,16 @@ class MoonMindRunWorkflow:
                 node_inputs=node_inputs,
             )
         )
+        if role == "moonspec-remediation-loop":
+            return (
+                "Skipped workflow-owned MoonSpec remediation loop controller "
+                "metadata step."
+            )
         if not (is_remediation or is_verification_gate):
             return None
 
         attempt, max_attempts = self._moonspec_remediation_attempt_metadata(node)
-        if (
-            attempt is not None
-            and max_attempts is not None
-            and attempt > max_attempts
-        ):
+        if attempt is not None and max_attempts is not None and attempt > max_attempts:
             return (
                 "Skipped MoonSpec remediation loop step "
                 f"{attempt}; configured maximum is {max_attempts}."
@@ -5002,10 +7923,7 @@ class MoonMindRunWorkflow:
                 if not isinstance(value, str):
                     continue
                 text = value.strip()
-                if (
-                    "# MoonSpec Verification Report" in text
-                    and "**Verdict**" in text
-                ):
+                if "# MoonSpec Verification Report" in text and "**Verdict**" in text:
                     return text
             turn_metadata = source.get("turnMetadata")
             if isinstance(turn_metadata, Mapping):
@@ -5055,6 +7973,8 @@ class MoonMindRunWorkflow:
                 "step_gate_result_ref",
                 "artifactRef",
                 "artifact_ref",
+                "diagnosticsRef",
+                "diagnostics_ref",
             ):
                 gate_result_ref = self._coerce_text(source.get(key), max_chars=400)
                 if gate_result_ref:
@@ -5087,8 +8007,7 @@ class MoonMindRunWorkflow:
         if not (gate_result.invalid or gate_result.degraded):
             return None
         detail = gate_result.downgrade_reason or (
-            "the structured verifier JSON was missing or failed contract "
-            "validation"
+            "the structured verifier JSON was missing or failed contract " "validation"
         )
         verdicts = ", ".join(sorted(REVIEW_VERDICTS))
         next_actions = ", ".join(recommended_next_actions())
@@ -5150,6 +8069,18 @@ class MoonMindRunWorkflow:
             )
             if declared_verdict:
                 break
+        gate_result_ref = self._moonspec_verify_gate_result_ref(outputs)
+        remaining_work_ref = gate_result.remaining_work_ref
+        if self._patched_or_false_outside_workflow(
+            RUN_MOONSPEC_VERIFY_REMAINING_WORK_EVIDENCE_PATCH
+        ):
+            remaining_work_ref = self._bounded_story_loop_artifact_ref(
+                remaining_work_ref
+            ) or (
+                self._bounded_story_loop_artifact_ref(gate_result_ref)
+                if verdict == "ADDITIONAL_WORK_NEEDED"
+                else None
+            )
         gate_context: dict[str, Any] = {
             "logicalStepId": node_id,
             "verdict": verdict,
@@ -5157,21 +8088,18 @@ class MoonMindRunWorkflow:
             "confidence": gate_result.confidence,
             "validatedRefs": dict(gate_result.validated_refs or {}),
             "invalidatedRefs": list(gate_result.invalidated_refs),
-            "remainingWorkRef": gate_result.remaining_work_ref,
+            "remainingWorkRef": remaining_work_ref,
             "recommendedNextAction": gate_result.recommended_next_action,
             "targetLogicalStepId": gate_result.target_logical_step_id,
             "workspacePolicyRecommendation": (
                 gate_result.workspace_policy_recommendation
             ),
-            "recoverableInCurrentRuntime": (
-                gate_result.recoverable_in_current_runtime
-            ),
+            "recoverableInCurrentRuntime": (gate_result.recoverable_in_current_runtime),
             "invalid": gate_result.invalid,
             "degraded": gate_result.degraded,
         }
         if gate_result.downgrade_reason:
             gate_context["downgradeReason"] = gate_result.downgrade_reason
-        gate_result_ref = self._moonspec_verify_gate_result_ref(outputs)
         if gate_result_ref:
             gate_context["gateResultRef"] = gate_result_ref
         if reason:
@@ -5185,6 +8113,8 @@ class MoonMindRunWorkflow:
         ref = str(value or "").strip()
         if ref.startswith("artifact://"):
             return ref
+        if ref.startswith("art_"):
+            return f"artifact://{ref}"
         return None
 
     def _bounded_story_loop_gate_from_step_gate(
@@ -5193,24 +8123,32 @@ class MoonMindRunWorkflow:
         gate_result: StepGateResult,
         gate_result_ref: str | None,
         logical_step_id: str,
+        progress_budget_enabled: bool,
     ) -> TypedGateResult:
         terminal = self._step_terminal_dispositions.get(logical_step_id)
         terminal_disposition = (
             "accepted" if terminal == "accepted" else "failed_with_remaining_work"
         )
-        return TypedGateResult.model_validate(
+        return TypedGateResult.from_boundary_payload(
             {
                 "verdict": gate_result.verdict,
                 "terminalDisposition": terminal_disposition,
-                "gateResultRef": self._bounded_story_loop_artifact_ref(
-                    gate_result_ref
-                ),
+                "gateResultRef": self._bounded_story_loop_artifact_ref(gate_result_ref),
+                # The verifier report is itself the authoritative remaining-work
+                # evidence when it does not publish a separate extracted artifact.
+                # Never admit ADDITIONAL_WORK_NEEDED without a durable reference.
                 "remainingWorkRef": self._bounded_story_loop_artifact_ref(
                     gate_result.remaining_work_ref
+                )
+                or (
+                    self._bounded_story_loop_artifact_ref(gate_result_ref)
+                    if gate_result.verdict == "ADDITIONAL_WORK_NEEDED"
+                    else None
                 ),
                 "diagnosticsRef": self._bounded_story_loop_artifact_ref(
                     next(iter(gate_result.blocking_evidence_refs), None)
                 ),
+                "progressSignature": (None),
                 "degraded": gate_result.degraded,
             }
         )
@@ -5268,37 +8206,364 @@ class MoonMindRunWorkflow:
         gate_result_ref: str | None,
         ordered_nodes: Sequence[Mapping[str, Any]],
         current_index: int,
+        plan_routed_moonspec_remediation_enabled: bool = True,
     ) -> dict[str, Any]:
         remediation_gate = current_index > 1 and self._is_moonspec_remediation_step(
             ordered_nodes[current_index - 2]
         )
-        has_remaining_remediation_step = self._has_remaining_moonspec_remediation_step(
-            ordered_nodes=ordered_nodes,
-            current_index=current_index,
+        successor: MoonSpecRemediationSuccessor | None = None
+        successor_reason = "legacy_remaining_remediation_scan"
+        if not plan_routed_moonspec_remediation_enabled:
+            has_remaining_remediation_step = (
+                self._has_remaining_moonspec_remediation_step(
+                    ordered_nodes=ordered_nodes,
+                    current_index=current_index,
+                )
+            )
+        else:
+            successor, successor_reason = self._resolve_next_moonspec_remediation_step(
+                ordered_nodes=ordered_nodes,
+                current_index=current_index,
+            )
+            annotated_topology_declared = any(
+                self._coerce_positive_int(
+                    self._node_annotations_mapping(candidate).get(
+                        "moonSpecRemediationAttempt"
+                    )
+                )
+                is not None
+                and self._coerce_positive_int(
+                    self._node_annotations_mapping(candidate).get(
+                        "moonSpecRemediationMaxAttempts"
+                    )
+                )
+                is not None
+                for candidate in ordered_nodes
+                if self._moonspec_step_role(candidate)
+                in {"moonspec-remediation", "moonspec-verification-gate"}
+            )
+            if successor_reason == "not_explicit_remediation_chain" or (
+                successor_reason == "no_remediation_successor"
+                and not annotated_topology_declared
+            ):
+                has_remaining_remediation_step = (
+                    self._has_remaining_moonspec_remediation_step(
+                        ordered_nodes=ordered_nodes,
+                        current_index=current_index,
+                    )
+                )
+            else:
+                has_remaining_remediation_step = successor is not None
+        progress_budget_enabled = self._patched_or_false_outside_workflow(
+            RUN_BOUNDED_STORY_LOOP_PROGRESS_BUDGET_PATCH
         )
         gate = self._bounded_story_loop_gate_from_step_gate(
             gate_result=gate_result,
             gate_result_ref=gate_result_ref,
             logical_step_id=logical_step_id,
+            progress_budget_enabled=progress_budget_enabled,
         )
         attempt = self._bounded_story_loop_attempt_for_gate(
             logical_step_id=logical_step_id,
             remediation_gate=remediation_gate,
         )
-        budget = LoopBudget.model_validate(
-            {
-                "maxAttempts": 1,
-                "maxConsecutiveNoProgressAttempts": 1,
-                "maxRepeatedFailedCommands": 1,
-                "maxUnsafeOrPolicyDeniedAttempts": 1,
-                "consumed": {
-                    "attempts": 0 if has_remaining_remediation_step else 1,
-                    "consecutive_no_progress_attempts": 0,
-                    "repeated_failed_commands": 0,
-                    "unsafe_or_policy_denied_attempts": 0,
-                },
+        loop_context = self._publish_context.get("boundedStoryLoop")
+        prior_progress_signature = None
+        prior_no_progress_attempts = 0
+        prior_progress_vector: RemediationProgressVector | None = None
+        prior_loop_state: BoundedRemediationLoopState | None = None
+        prior_consumed_counters: dict[str, int] = {}
+        if isinstance(loop_context, Mapping):
+            durable_state_payload = loop_context.get("durableLoopState")
+            if isinstance(durable_state_payload, Mapping):
+                try:
+                    prior_loop_state = BoundedRemediationLoopState.model_validate(
+                        durable_state_payload
+                    )
+                except ValidationError:
+                    prior_loop_state = None
+                if prior_loop_state is not None:
+                    prior_progress_vector = prior_loop_state.progress_vector
+                    prior_consumed_counters = dict(prior_loop_state.consumed)
+                    prior_no_progress_attempts = prior_loop_state.consumed.get(
+                        "consecutiveNoProgressAttempts", 0
+                    )
+            prior_decision = loop_context.get("continuationDecision")
+            if isinstance(prior_decision, Mapping):
+                prior_gate = prior_decision.get("gate")
+                if isinstance(prior_gate, Mapping):
+                    prior_progress_signature = (
+                        str(prior_gate.get("progressSignature") or "").strip() or None
+                    )
+                    prior_vector_payload = prior_gate.get("progressVector")
+                    if isinstance(prior_vector_payload, Mapping):
+                        try:
+                            prior_progress_vector = (
+                                RemediationProgressVector.model_validate(
+                                    prior_vector_payload
+                                )
+                            )
+                        except ValidationError:
+                            prior_progress_vector = None
+                prior_budget = prior_decision.get("budget")
+                if isinstance(prior_budget, Mapping):
+                    prior_consumed = prior_budget.get("consumed")
+                    if isinstance(prior_consumed, Mapping):
+                        prior_consumed_counters = {
+                            str(key): max(0, int(value or 0))
+                            for key, value in prior_consumed.items()
+                            if isinstance(value, (int, float))
+                            and not isinstance(value, bool)
+                        }
+                        prior_no_progress_attempts = int(
+                            prior_consumed.get("consecutiveNoProgressAttempts", 0) or 0
+                        )
+            if prior_loop_state is not None:
+                for key, value in prior_loop_state.consumed.items():
+                    prior_consumed_counters[key] = max(
+                        prior_consumed_counters.get(key, 0), value
+                    )
+        workflow_id, _ = self._bounded_story_loop_workflow_identity()
+        progress_node = (
+            ordered_nodes[current_index]
+            if 0 <= current_index < len(ordered_nodes)
+            else {}
+        )
+        remediation_attempt, remediation_max = (
+            self._moonspec_remediation_attempt_metadata(progress_node)
+        )
+        structured_evidence = (
+            gate_result.validated_refs
+            if isinstance(gate_result.validated_refs, Mapping)
+            else {}
+        )
+        evidence_schema_version = structured_evidence.get(
+            "progressEvidenceSchemaVersion"
+        )
+        progress_evidence_invalid = evidence_schema_version not in {
+            None,
+            "remediation-progress-evidence/v1",
+        } or (
+            isinstance(loop_context, Mapping)
+            and isinstance(loop_context.get("continuationDecision"), Mapping)
+            and isinstance(loop_context["continuationDecision"].get("gate"), Mapping)
+            and loop_context["continuationDecision"]["gate"].get("progressVector")
+            is not None
+            and prior_progress_vector is None
+        )
+        structured_checks: list[Mapping[str, Any]] = []
+        raw_checks = structured_evidence.get("requiredChecks")
+        if isinstance(raw_checks, Sequence) and not isinstance(
+            raw_checks, (str, bytes)
+        ):
+            structured_checks = [
+                check for check in raw_checks if isinstance(check, Mapping)
+            ]
+        progress_issues: Sequence[Mapping[str, Any]] = gate_result.issues
+        if (
+            self._patched_or_false_outside_workflow(
+                RUN_BOUNDED_STORY_LOOP_FEEDBACK_PROGRESS_PATCH
+            )
+            and not progress_issues
+            and gate_result.feedback
+        ):
+            progress_issues = ({"feedback": gate_result.feedback},)
+        progress_vector = build_remediation_progress_vector(
+            loop_id=workflow_id,
+            attempt_ordinal=remediation_attempt or attempt.attempt_ordinal,
+            issues=progress_issues,
+            checks=structured_checks,
+            prior=prior_progress_vector,
+            base_workspace_digest=self._coerce_text(
+                structured_evidence.get("baseWorkspaceDigest"), max_chars=200
+            ),
+            candidate_workspace_digest=self._coerce_text(
+                structured_evidence.get("candidateWorkspaceDigest"), max_chars=200
+            ),
+            relevant_diff_digest=self._coerce_text(
+                structured_evidence.get("relevantDiffDigest"), max_chars=200
+            ),
+            addressed_gap_ids=(
+                structured_evidence.get("addressedGapIds")
+                if isinstance(structured_evidence.get("addressedGapIds"), Sequence)
+                and not isinstance(
+                    structured_evidence.get("addressedGapIds"), (str, bytes)
+                )
+                else ()
+            ),
+            blocker_code=(
+                "verification_blocked" if gate_result.verdict == "BLOCKED" else None
+            ),
+            authoritative_evidence_digest=(
+                self._coerce_text(
+                    (gate_result.validated_refs or {}).get(
+                        "authoritativeEvidenceDigest"
+                    ),
+                    max_chars=200,
+                )
+                if structured_evidence
+                else None
+            ),
+            candidate_disposition=(
+                self._coerce_text(
+                    (gate_result.validated_refs or {}).get("candidateDisposition"),
+                    max_chars=100,
+                )
+                if structured_evidence
+                else None
+            ),
+        )
+        gate = gate.model_copy(
+            update={
+                "progress_vector": progress_vector,
+                "progress_signature": progress_vector.digest,
             }
         )
+        repeated_progress = bool(
+            progress_budget_enabled
+            and progress_vector.classification in {"no_progress", "regression"}
+        )
+        consecutive_no_progress_attempts = (
+            prior_no_progress_attempts + 1 if repeated_progress else 0
+        )
+        max_no_progress_attempts = 2
+        explicit_no_progress_budget = False
+        if progress_budget_enabled and isinstance(loop_context, Mapping):
+            loop_budgets = loop_context.get("budgets")
+            if isinstance(loop_budgets, Mapping):
+                configured_no_progress_attempts = self._coerce_positive_int(
+                    loop_budgets.get("maxConsecutiveNoProgressAttempts")
+                )
+                if configured_no_progress_attempts is not None:
+                    max_no_progress_attempts = configured_no_progress_attempts
+                    explicit_no_progress_budget = True
+        hard_max_attempts = remediation_max or 6
+        consumed = dict(prior_consumed_counters)
+        prior_failures = (
+            set(prior_progress_vector.repeated_failure_signatures)
+            if prior_progress_vector is not None
+            else set()
+        )
+        current_failures = set(progress_vector.repeated_failure_signatures)
+        repeated_failure_count = (
+            consumed.get("repeatedFailedCommands", 0) + 1
+            if current_failures and current_failures & prior_failures
+            else (1 if current_failures else 0)
+        )
+        consumed.update(
+            {
+                "attempts": max(
+                    consumed.get("attempts", 0),
+                    remediation_attempt or (1 if remediation_gate else 0),
+                ),
+                "consecutiveNoProgressAttempts": max(
+                    0, consecutive_no_progress_attempts
+                ),
+                "repeatedFailedCommands": repeated_failure_count,
+                "unsafeOrPolicyDeniedAttempts": max(
+                    consumed.get("unsafeOrPolicyDeniedAttempts", 0),
+                    (
+                        1
+                        if progress_vector.candidate_disposition
+                        in {"unsafe_side_effect", "policy_denied"}
+                        else 0
+                    ),
+                ),
+            }
+        )
+        evidence_retries = max(0, (self._step_execution_for(logical_step_id) or 1) - 1)
+        raw_infrastructure_retries = (
+            (gate_result.validated_refs or {}).get("infrastructureRetries", 0)
+            if isinstance(gate_result.validated_refs, Mapping)
+            else 0
+        )
+        infrastructure_retries = (
+            max(0, int(raw_infrastructure_retries))
+            if isinstance(raw_infrastructure_retries, (int, float))
+            and not isinstance(raw_infrastructure_retries, bool)
+            else 0
+        )
+        consumed["evidenceRetries"] = max(
+            consumed.get("evidenceRetries", 0), evidence_retries
+        )
+        consumed["infrastructureRetries"] = max(
+            consumed.get("infrastructureRetries", 0), infrastructure_retries
+        )
+        retry_accounting = (
+            loop_context.get("retryAccounting")
+            if isinstance(loop_context, Mapping)
+            else None
+        )
+        if isinstance(retry_accounting, Mapping):
+            for key in (
+                "evidenceRetries",
+                "infrastructureRetries",
+                "contractRepairAttempts",
+            ):
+                amount = retry_accounting.get(key)
+                if isinstance(amount, int) and not isinstance(amount, bool):
+                    consumed[key] = max(consumed.get(key, 0), amount)
+        resource_usage = (
+            gate_result.validated_refs.get("resourceUsage")
+            if isinstance(gate_result.validated_refs, Mapping)
+            else None
+        )
+        if isinstance(resource_usage, Mapping):
+            for source_key, counter_key in (
+                ("elapsedSeconds", "elapsedSeconds"),
+                ("provider", "provider"),
+                ("tokens", "tokens"),
+                ("cost", "cost"),
+            ):
+                amount = resource_usage.get(source_key)
+                if isinstance(amount, (int, float)) and not isinstance(amount, bool):
+                    consumed[counter_key] = max(
+                        consumed.get(counter_key, 0), max(0, int(amount))
+                    )
+        configured_budgets = (
+            loop_context.get("budgets") if isinstance(loop_context, Mapping) else None
+        )
+        configured_budgets = (
+            configured_budgets if isinstance(configured_budgets, Mapping) else {}
+        )
+        budget = LoopBudget.model_validate(
+            {
+                "maxAttempts": hard_max_attempts,
+                "maxConsecutiveNoProgressAttempts": max_no_progress_attempts,
+                "maxRepeatedFailedCommands": configured_budgets.get(
+                    "maxRepeatedFailedCommands", 2
+                ),
+                "maxUnsafeOrPolicyDeniedAttempts": configured_budgets.get(
+                    "maxUnsafeOrPolicyDeniedAttempts", 0
+                ),
+                "maxEvidenceRetries": configured_budgets.get("maxEvidenceRetries", 2),
+                "maxInfrastructureRetries": configured_budgets.get(
+                    "maxInfrastructureRetries", 2
+                ),
+                "maxContractRepairAttempts": configured_budgets.get(
+                    "maxContractRepairAttempts", 1
+                ),
+                "maxElapsedSeconds": configured_budgets.get("maxElapsedSeconds"),
+                "providerBudget": configured_budgets.get("providerBudget"),
+                "tokenBudget": configured_budgets.get("tokenBudget"),
+                "costBudget": configured_budgets.get("costBudget"),
+                "consumed": consumed,
+            }
+        )
+        grant = (
+            loop_context.get("budgetGrant")
+            if isinstance(loop_context, Mapping)
+            and isinstance(loop_context.get("budgetGrant"), Mapping)
+            else None
+        )
+        provisional_state = advance_remediation_loop_state(
+            prior=prior_loop_state,
+            policy=budget,
+            progress_vector=progress_vector,
+            consumed=consumed,
+            grant=grant,
+        )
+        budget = provisional_state.policy
         decision = evaluate_attempt_continuation(
             attempt=attempt,
             gate=gate,
@@ -5306,21 +8571,127 @@ class MoonMindRunWorkflow:
             checkpoint_available=True,
             policy_allowed=True,
         )
+        if (
+            gate.verdict == "ADDITIONAL_WORK_NEEDED"
+            and not has_remaining_remediation_step
+            and decision.continue_loop
+        ):
+            decision = decision.model_copy(
+                update={
+                    "continue_loop": False,
+                    "reason": "no_remediation_successor",
+                    "state": LoopStopState.FAILED_WITH_REMAINING_WORK,
+                    "next_attempt_kind": None,
+                }
+            )
+        if progress_evidence_invalid:
+            decision = decision.model_copy(
+                update={
+                    "continue_loop": False,
+                    "reason": "progress_evidence_invalid",
+                    "state": LoopStopState.FAILED_WITH_REMAINING_WORK,
+                    "next_attempt_kind": None,
+                }
+            )
         payload = decision.model_dump(by_alias=True, mode="json")
         payload["hasRemainingRemediationStep"] = has_remaining_remediation_step
+        payload["remediationRoutingReason"] = successor_reason
+        payload["nextLogicalStepId"] = (
+            successor.logical_step_id if successor is not None else None
+        )
         payload["gate"] = {
             "verdict": gate.verdict,
             "gateResultRef": gate.gate_result_ref,
             "remainingWorkRef": gate.remaining_work_ref,
             "diagnosticsRef": gate.diagnostics_ref,
+            "progressSignature": gate.progress_signature,
+            "progressVector": progress_vector.model_dump(by_alias=True, mode="json"),
+            "progressVectorDigest": progress_vector.digest,
         }
+        payload["attempt"] = attempt.model_dump(by_alias=True, mode="json")
+        payload["budget"] = budget.model_dump(by_alias=True, mode="json")
+        durable_state = provisional_state.model_copy(
+            update={
+                "prior_exhaustion_reason": (
+                    provisional_state.prior_exhaustion_reason
+                    if decision.continue_loop
+                    else decision.reason
+                )
+            }
+        )
+        payload["durableLoopState"] = durable_state.model_dump(
+            by_alias=True, mode="json"
+        )
+        payload["currentLogicalStepId"] = logical_step_id
+        current_node = next(
+            (
+                candidate
+                for candidate in ordered_nodes
+                if str(candidate.get("id") or "") == logical_step_id
+            ),
+            (
+                ordered_nodes[current_index]
+                if 0 <= current_index < len(ordered_nodes)
+                else {}
+            ),
+        )
+        remediation_attempt, remediation_max = (
+            self._moonspec_remediation_attempt_metadata(current_node)
+        )
+        review_retries = evidence_retries
+        persisted_review_budget: Mapping[str, Any] | None = None
+        current_row = self._step_ledger_row_for(logical_step_id) or {}
+        checks = current_row.get("checks")
+        if isinstance(checks, Sequence):
+            for check in reversed(checks):
+                if not isinstance(check, Mapping):
+                    continue
+                candidate_budget = check.get("reviewGateBudget")
+                if isinstance(candidate_budget, Mapping):
+                    persisted_review_budget = candidate_budget
+                    break
+        payload["reviewGateBudget"] = (
+            dict(persisted_review_budget)
+            if persisted_review_budget is not None
+            else {
+                "maxExecutions": review_retries + 1,
+                "executionsConsumed": review_retries + 1,
+                "retriesConsumed": review_retries,
+                "remainingExecutions": 0,
+            }
+        )
+        payload["nonSemanticRetryBudgets"] = {
+            "reviewEvidenceRetries": review_retries,
+            "infrastructureRetries": max(0, infrastructure_retries),
+            "consumesSemanticAttempt": False,
+        }
+        payload["remediationBudget"] = self._moonspec_remediation_budget_metadata(
+            ordered_nodes=ordered_nodes,
+            current_attempt=remediation_attempt,
+            max_attempts=remediation_max,
+        )
         self._publish_context.setdefault("boundedStoryLoop", {})[
             "continuationDecision"
         ] = payload
+        self._publish_context["boundedStoryLoop"]["durableLoopState"] = payload[
+            "durableLoopState"
+        ]
+        self._publish_context["boundedStoryLoop"].pop("budgetGrant", None)
         return payload
 
     def _blocking_moonspec_gate_reason(self) -> str | None:
-        verdict = self._normalize_moonspec_verify_verdict(self._moonspec_gate_verdict)
+        loop_state = self._remediation_loop_state
+        # Once the controller has persisted a decision, every terminal consumer
+        # uses that decision projection instead of independently reinterpreting
+        # verifier output.
+        decision_verdict = (
+            loop_state.latest_verdict
+            if loop_state is not None and loop_state.continuation_decision_ref
+            else None
+        )
+        verdict = self._normalize_moonspec_verify_verdict(
+            decision_verdict or self._moonspec_gate_verdict
+        )
         if verdict is None:
             return None
         if verdict in _MOONSPEC_GATE_PASSING_VERDICTS:
@@ -5401,7 +8772,29 @@ class MoonMindRunWorkflow:
             return False
         return bool(gate_context.get("degraded") or gate_context.get("invalid"))
 
-    def _activate_moonspec_draft_publication(self, gate_reason: str) -> str:
+    def _moonspec_draft_publication_policy(
+        self,
+        *,
+        environment_blocked_enabled: bool,
+        additional_work_enabled: bool,
+    ) -> str | None:
+        verdict = self._normalize_moonspec_verify_verdict(self._moonspec_gate_verdict)
+        if additional_work_enabled and verdict == "ADDITIONAL_WORK_NEEDED":
+            return "draft_pr_on_additional_work_needed"
+        if (
+            environment_blocked_enabled
+            and self._moonspec_environment_blocked_publish_action() == "draft_pr"
+            and self._moonspec_gate_qualifies_for_draft_publish()
+        ):
+            return "draft_pr_on_environment_blocked"
+        return None
+
+    def _activate_moonspec_draft_publication(
+        self,
+        gate_reason: str,
+        *,
+        policy: str = "draft_pr_on_environment_blocked",
+    ) -> str:
         summary = (
             "MoonSpec verification incomplete; publishing draft pull request "
             f"for operator review. {gate_reason}"
@@ -5410,11 +8803,9 @@ class MoonMindRunWorkflow:
         self._attention_required = True
         gate_context = self._publish_context.get("moonSpecGate")
         if isinstance(gate_context, dict):
-            gate_context["publicationPolicy"] = (
-                "draft_pr_on_environment_blocked"
-            )
+            gate_context["publicationPolicy"] = policy
         self._publish_context["moonSpecDraftPublication"] = {
-            "policy": "draft_pr_on_environment_blocked",
+            "policy": policy,
             "reason": gate_reason,
         }
         return summary
@@ -5423,10 +8814,33 @@ class MoonMindRunWorkflow:
         gate_context = self._publish_context.get("moonSpecGate")
         verdict = None
         diagnostics_ref = None
+        gate_result_ref = None
+        remaining_work_ref = None
         if isinstance(gate_context, Mapping):
             verdict = self._coerce_text(gate_context.get("verdict"), max_chars=80)
             diagnostics_ref = self._coerce_text(
                 gate_context.get("diagnosticsRef"), max_chars=400
+            )
+            gate_result_ref = self._coerce_text(
+                gate_context.get("gateResultRef"), max_chars=400
+            )
+            remaining_work_ref = self._coerce_text(
+                gate_context.get("remainingWorkRef"), max_chars=400
+            )
+        draft_context = self._publish_context.get("moonSpecDraftPublication")
+        policy = (
+            draft_context.get("policy") if isinstance(draft_context, Mapping) else None
+        )
+        if policy == "draft_pr_on_additional_work_needed":
+            explanation = (
+                "the bounded remediation budget was exhausted with remaining "
+                "implementation work"
+            )
+        else:
+            explanation = (
+                "the operator policy "
+                "`workflow.moonspec_environment_blocked_publish_action` is "
+                "`draft_pr`"
             )
         lines = [
             "## MoonSpec verification incomplete",
@@ -5434,9 +8848,7 @@ class MoonMindRunWorkflow:
             (
                 "This pull request was opened as a **draft** because MoonSpec "
                 f"verification did not approve publication (verdict "
-                f"{verdict or 'unknown'}) and the operator policy "
-                "`workflow.moonspec_environment_blocked_publish_action` is "
-                "`draft_pr`."
+                f"{verdict or 'unknown'}) and {explanation}."
             ),
             "",
         ]
@@ -5445,6 +8857,10 @@ class MoonMindRunWorkflow:
             lines.append(f"- Gate outcome: {reason}")
         if diagnostics_ref:
             lines.append(f"- Verification report: {diagnostics_ref}")
+        if remaining_work_ref:
+            lines.append(f"- Remaining work: {remaining_work_ref}")
+        if gate_result_ref and gate_result_ref != diagnostics_ref:
+            lines.append(f"- Verification gate result: {gate_result_ref}")
         lines.append("")
         lines.append(
             "Review the verification evidence before marking this pull "
@@ -5466,13 +8882,15 @@ class MoonMindRunWorkflow:
         attempts_consumed = review_retry_count + 1
         remaining_executions = max(0, attempts_allowed - attempts_consumed)
         no_progress_exhausted = (
-            consecutive_no_progress_attempts
-            >= max_consecutive_no_progress_attempts
+            consecutive_no_progress_attempts >= max_consecutive_no_progress_attempts
         )
         metadata: dict[str, Any] = {
             "gate": "approval_policy",
             "maxAttempts": attempts_allowed,
             "attemptsConsumed": attempts_consumed,
+            "maxExecutions": attempts_allowed,
+            "executionsConsumed": attempts_consumed,
+            "retriesConsumed": review_retry_count,
             "remainingExecutions": remaining_executions,
             "additionalStopDimension": {
                 "type": "consecutive_no_progress_attempts",
@@ -5511,15 +8929,10 @@ class MoonMindRunWorkflow:
         normalized = str(getattr(verdict, "verdict", "") or "").strip().upper()
         if review_retry_count >= max_review_attempts:
             return False
-        if (
-            consecutive_no_progress_attempts
-            >= max_consecutive_no_progress_attempts
-        ):
+        if consecutive_no_progress_attempts >= max_consecutive_no_progress_attempts:
             return False
         recommended_next_action = (
-            str(getattr(verdict, "recommended_next_action", "") or "")
-            .strip()
-            .lower()
+            str(getattr(verdict, "recommended_next_action", "") or "").strip().lower()
         )
         if normalized == "ADDITIONAL_WORK_NEEDED":
             return recommended_next_action == "reattempt_current_step"
@@ -5528,12 +8941,22 @@ class MoonMindRunWorkflow:
         )
 
     @staticmethod
+    def _gate_transition_allows_review_retry(
+        *,
+        plan_routed_moonspec_remediation_enabled: bool,
+        transition: GateTransitionDecision,
+    ) -> bool:
+        """Keep pre-cutover review retries independent of new plan routing."""
+        return (
+            not plan_routed_moonspec_remediation_enabled
+            or transition.disposition in {"generic", "retry"}
+        )
+
+    @staticmethod
     def _review_gate_verdict_made_progress(verdict: Any) -> bool:
         normalized = str(getattr(verdict, "verdict", "") or "").strip().upper()
         recommended_next_action = (
-            str(getattr(verdict, "recommended_next_action", "") or "")
-            .strip()
-            .lower()
+            str(getattr(verdict, "recommended_next_action", "") or "").strip().lower()
         )
         remaining_work_ref = str(
             getattr(verdict, "remaining_work_ref", "") or ""
@@ -5679,6 +9102,8 @@ class MoonMindRunWorkflow:
     @staticmethod
     def _trusted_previous_outputs_context(
         previous_outputs: object,
+        *,
+        include_assessment: bool = False,
     ) -> dict[str, Any] | None:
         if not isinstance(previous_outputs, Mapping):
             return None
@@ -5713,6 +9138,15 @@ class MoonMindRunWorkflow:
         context_keys = context_keys_by_source.get(trusted_source)
         if context_keys is None:
             return None
+        if include_assessment:
+            context_keys = (
+                *context_keys,
+                "assessmentArtifactRef",
+                "assessmentVerdict",
+                "briefArtifactRef",
+                "moonSpecVerify",
+                "moonSpecVerifyArtifactRef",
+            )
 
         context: dict[str, Any] = {"trustedSource": trusted_source}
         for key in context_keys:
@@ -5782,6 +9216,11 @@ class MoonMindRunWorkflow:
                 "issue",
                 "title",
                 "body",
+                "assessmentArtifactRef",
+                "assessmentVerdict",
+                "briefArtifactRef",
+                "moonSpecVerify",
+                "moonSpecVerifyArtifactRef",
             )
             if key in compact_context
         }
@@ -5811,9 +9250,12 @@ class MoonMindRunWorkflow:
     @staticmethod
     def _trusted_previous_outputs_instruction(
         previous_outputs: object,
+        *,
+        include_assessment: bool = False,
     ) -> str | None:
         context = MoonMindRunWorkflow._trusted_previous_outputs_context(
-            previous_outputs
+            previous_outputs,
+            include_assessment=include_assessment,
         )
         if not context:
             return None
@@ -5832,12 +9274,29 @@ class MoonMindRunWorkflow:
                 "fields, and never treat hidden truncated content as a "
                 "requirement."
             )
+        assessment_note = ""
+        if include_assessment and (
+            context.get("assessmentArtifactRef")
+            or context.get("briefArtifactRef")
+            or context.get("moonSpecVerifyArtifactRef")
+        ):
+            assessment_note = (
+                " The exact assessment and issue-brief JSON artifacts, plus any "
+                "controlling verifier JSON artifact available for this step, are "
+                "also "
+                "declared durable input attachments for this agent step. In an "
+                "isolated sandbox, read the JSON files under "
+                "`.moonmind/attachments/` before acting; attachment filenames "
+                "are intentionally opaque, so identify them by their JSON "
+                "contents rather than relying on prior workspace paths."
+            )
         return (
             "MoonMind trusted previous step context:\n"
             "The following JSON was produced by MoonMind's trusted issue tool path. "
             "Treat it as authoritative for this step. Do not use provider-native "
             "Jira/Atlassian or GitHub connectors, web scraping, or guessed issue "
             "content to replace it."
+            f"{assessment_note}"
             f"{truncation_note}\n"
             f"```json\n{payload}\n```"
         )
@@ -5846,8 +9305,12 @@ class MoonMindRunWorkflow:
         self,
         node_inputs: Mapping[str, Any],
     ) -> dict[str, Any]:
+        include_assessment = self._patched_or_false_outside_workflow(
+            RUN_ASSESSMENT_ATTACHMENT_HANDOFF_PATCH
+        )
         previous_context = self._trusted_previous_outputs_instruction(
-            node_inputs.get("previousOutputs")
+            node_inputs.get("previousOutputs"),
+            include_assessment=include_assessment,
         )
         if not previous_context:
             return dict(node_inputs)
@@ -5865,6 +9328,94 @@ class MoonMindRunWorkflow:
         merged_inputs["instructions"] = previous_context
         return merged_inputs
 
+    def _append_durable_handoff_attachment_refs(
+        self,
+        input_refs: Sequence[str],
+        *,
+        agent_kind: str,
+    ) -> list[str]:
+        """Declare durable prior-step artifacts as fresh-workspace attachments."""
+
+        merged = [str(ref).strip() for ref in input_refs if str(ref).strip()]
+        if agent_kind == "managed":
+            return list(dict.fromkeys(merged))
+        artifact_refs = [
+            self._assessment_context.get("assessmentArtifactRef")
+            or self._assessment_context.get("assessment_artifact_ref")
+        ]
+        if self._patched_or_false_outside_workflow(
+            RUN_ISSUE_BRIEF_ATTACHMENT_HANDOFF_PATCH
+        ):
+            artifact_refs.append(
+                self._assessment_context.get("briefArtifactRef")
+                or self._assessment_context.get("brief_artifact_ref")
+            )
+        if self._patched_or_false_outside_workflow(
+            RUN_MOONSPEC_VERIFY_ATTACHMENT_HANDOFF_PATCH
+        ):
+            gate_context = self._publish_context.get("moonSpecGate")
+            if isinstance(gate_context, Mapping):
+                artifact_refs.append(
+                    gate_context.get("gateResultRef")
+                    or gate_context.get("moonSpecVerifyArtifactRef")
+                )
+        for raw_ref in artifact_refs:
+            artifact_ref = self._coerce_text(raw_ref, max_chars=400)
+            if not artifact_ref:
+                continue
+            if artifact_ref.startswith("artifact://"):
+                merged.append(artifact_ref)
+            elif artifact_ref.startswith("art_"):
+                merged.append(f"artifact://{artifact_ref}")
+        return list(dict.fromkeys(merged))
+
+    def _apply_published_branch_handoff(
+        self,
+        workspace_spec: dict[str, Any],
+        *,
+        repository_operation: str | None = None,
+    ) -> None:
+        """Pin a downstream fresh workspace to the verified published head."""
+
+        if self._publish_context.get("pushStatus") != "pushed":
+            return
+        branch = _normalize_git_branch_ref(self._publish_context.get("branch"))
+        head_sha = self._coerce_text(
+            self._publish_context.get("headSha"),
+            max_chars=80,
+        )
+        if not branch or not head_sha:
+            return
+
+        repository_target_raw = workspace_spec.get("repositoryTarget")
+        repository_target = (
+            dict(repository_target_raw)
+            if isinstance(repository_target_raw, Mapping)
+            else {}
+        )
+        repository = workspace_spec.get("repository") or workspace_spec.get("repo")
+        existing_repository = repository_target.get("repository")
+        if not repository and isinstance(existing_repository, Mapping):
+            repository = existing_repository.get("name")
+        if not isinstance(repository, str) or not repository.strip():
+            return
+
+        repository_target["provider"] = "git"
+        repository_target["repository"] = {"name": repository.strip()}
+        repository_target["branch"] = {"name": branch}
+        repository_target["revision"] = {
+            "kind": "git_commit",
+            "commitSha": head_sha,
+        }
+        workspace_spec["repository"] = repository.strip()
+        workspace_spec["repositoryTarget"] = repository_target
+        base_branch = _normalize_git_branch_ref(self._publish_context.get("baseRef"))
+        workspace_spec["startingBranch"] = (
+            base_branch if repository_operation == "write" and base_branch else branch
+        )
+        workspace_spec["targetBranch"] = branch
+        workspace_spec["branch"] = branch
+
     def _record_trusted_issue_context(self, outputs: Mapping[str, Any]) -> None:
         context = self._trusted_previous_outputs_context(outputs)
         if context:
@@ -5879,13 +9430,19 @@ class MoonMindRunWorkflow:
                 return False
             raise
 
-    def _record_assessment_context(self, outputs: Mapping[str, Any]) -> None:
+    def _record_assessment_context(
+        self,
+        outputs: Mapping[str, Any],
+        *,
+        request: AgentExecutionRequest | None = None,
+    ) -> None:
         record_aliases = self._patched_or_false_outside_workflow(
             RUN_JIRA_BLOCKER_RECHECK_ASSESSMENT_CONTEXT_ALIAS_PATCH
         )
         for aliases in (
             ("assessmentArtifactRef", "assessment_artifact_ref"),
             ("assessmentVerdict", "assessment_verdict"),
+            ("briefArtifactRef", "brief_artifact_ref"),
         ):
             for key in aliases:
                 value = outputs.get(key)
@@ -5897,6 +9454,24 @@ class MoonMindRunWorkflow:
                 else:
                     self._assessment_context[key] = value
                 break
+        assessment_present = any(
+            outputs.get(key) not in (None, "", {}, [])
+            for key in (
+                "assessmentArtifactRef",
+                "assessment_artifact_ref",
+                "assessmentVerdict",
+                "assessment_verdict",
+            )
+        )
+        if assessment_present and request is not None:
+            repository = authored_repository_source(request)
+            branch = authored_starting_branch(request)
+            if repository and branch:
+                self._assessment_context["assessedRepository"] = repository
+                self._assessment_context["assessedBranch"] = branch
+            else:
+                self._assessment_context.pop("assessedRepository", None)
+                self._assessment_context.pop("assessedBranch", None)
 
     def _merge_assessment_context_into_result(self, execution_result: Any) -> Any:
         if not self._assessment_context:
@@ -5910,10 +9485,10 @@ class MoonMindRunWorkflow:
         for aliases in (
             ("assessmentArtifactRef", "assessment_artifact_ref"),
             ("assessmentVerdict", "assessment_verdict"),
+            ("briefArtifactRef", "brief_artifact_ref"),
         ):
             if any(
-                merged_outputs.get(alias) not in (None, "", {}, [])
-                for alias in aliases
+                merged_outputs.get(alias) not in (None, "", {}, []) for alias in aliases
             ):
                 continue
             for alias in aliases:
@@ -5949,10 +9524,28 @@ class MoonMindRunWorkflow:
             "assessment_artifact_ref",
             "assessmentVerdict",
             "assessment_verdict",
+            "briefArtifactRef",
+            "brief_artifact_ref",
         ):
             value = self._assessment_context.get(key)
             if value not in (None, "", {}, []):
                 merged.setdefault(key, value)
+        if self._patched_or_false_outside_workflow(
+            RUN_MOONSPEC_GATE_PREVIOUS_OUTPUTS_HANDOFF_PATCH
+        ):
+            gate_context = self._publish_context.get("moonSpecGate")
+            if isinstance(gate_context, Mapping) and gate_context:
+                # The workflow-owned gate is the latest controlling verifier
+                # result. Carry it across intervening agent steps so trusted
+                # finalizers do not depend on another workspace's relative path
+                # or on unstructured agent prose.
+                merged["moonSpecVerify"] = dict(gate_context)
+                gate_result_ref = self._coerce_text(
+                    gate_context.get("gateResultRef"),
+                    max_chars=400,
+                )
+                if gate_result_ref:
+                    merged["moonSpecVerifyArtifactRef"] = gate_result_ref
         if not self._trusted_issue_context:
             return merged if merged != previous_outputs else previous_outputs
         if self._trusted_previous_outputs_context(previous_outputs):
@@ -6014,6 +9607,11 @@ class MoonMindRunWorkflow:
         return "\n".join(lines)
 
     def _publish_repair_is_available(self, *, parameters: Mapping[str, Any]) -> bool:
+        if (
+            workflow.patched(RUN_PREPUBLICATION_FAILURE_BLOCKS_REPAIR_PATCH)
+            and self._publish_status == "failed"
+        ):
+            return False
         if self._publish_repair_attempts >= 1:
             return False
         if self._publish_mode(parameters) != "pr":
@@ -6102,7 +9700,9 @@ class MoonMindRunWorkflow:
             return None
         return execution_result
 
-    def _dependency_ids_from_parameters(self, parameters: Mapping[str, Any]) -> list[str]:
+    def _dependency_ids_from_parameters(
+        self, parameters: Mapping[str, Any]
+    ) -> list[str]:
         task_payload = parameters.get("task")
         if task_payload is None:
             return []
@@ -6156,9 +9756,7 @@ class MoonMindRunWorkflow:
         if self._dependency_wait_started_at is None:
             return
         elapsed = workflow.now() - self._dependency_wait_started_at
-        self._dependency_wait_duration_ms = max(
-            0, int(elapsed.total_seconds() * 1000)
-        )
+        self._dependency_wait_duration_ms = max(0, int(elapsed.total_seconds() * 1000))
 
     def _dependency_outcomes(self) -> list[dict[str, Any]]:
         return [
@@ -6206,7 +9804,7 @@ class MoonMindRunWorkflow:
         }
         self._dependency_outcomes_by_id[prerequisite_workflow_id] = outcome
 
-        if terminal_state == STATE_COMPLETED:
+        if terminal_state in {STATE_COMPLETED, STATE_NO_COMMIT}:
             self._unresolved_dependency_ids.discard(prerequisite_workflow_id)
             if not self._unresolved_dependency_ids and self._dependency_failure is None:
                 self._dependency_resolution = DEPENDENCY_RESOLUTION_SATISFIED
@@ -6234,9 +9832,7 @@ class MoonMindRunWorkflow:
         message: str | None,
     ) -> None:
         existing = self._dependency_outcomes_by_id.get(prerequisite_workflow_id)
-        existing_resolution = (
-            str(existing.get("resolution") or "") if existing else ""
-        )
+        existing_resolution = str(existing.get("resolution") or "") if existing else ""
 
         if self._dependency_resolution in (
             DEPENDENCY_RESOLUTION_BYPASSED,
@@ -6244,7 +9840,7 @@ class MoonMindRunWorkflow:
         ):
             return
 
-        if terminal_state == STATE_COMPLETED:
+        if terminal_state in {STATE_COMPLETED, STATE_NO_COMMIT}:
             # Idempotency: stale completed signals after already satisfied are no-ops.
             if existing_resolution in (
                 DEPENDENCY_RESOLUTION_SATISFIED,
@@ -6309,34 +9905,26 @@ class MoonMindRunWorkflow:
         ):
             return
 
-        last_failed_at = self._dependency_last_failed_at.get(
-            prerequisite_workflow_id
-        )
+        last_failed_at = self._dependency_last_failed_at.get(prerequisite_workflow_id)
         existing_waiting = (
             existing_resolution == DEPENDENCY_RESOLUTION_WAITING_FOR_RERUN
         )
         existing_message = str(existing.get("message") or "") if existing else ""
         incoming_message = str(message or "")
-        is_duplicate_observation = (
-            last_failed_at == resolved_at
-            or (
-                existing_waiting
-                and existing.get("terminalState") == terminal_state
-                and existing.get("closeStatus") == close_status
-                and existing.get("failureCategory") == failure_category
-                and existing_message == incoming_message
-            )
+        is_duplicate_observation = last_failed_at == resolved_at or (
+            existing_waiting
+            and existing.get("terminalState") == terminal_state
+            and existing.get("closeStatus") == close_status
+            and existing.get("failureCategory") == failure_category
+            and existing_message == incoming_message
         )
         if not is_duplicate_observation:
             self._dependency_failure_counts[prerequisite_workflow_id] = (
-                self._dependency_failure_counts.get(prerequisite_workflow_id, 0)
-                + 1
+                self._dependency_failure_counts.get(prerequisite_workflow_id, 0) + 1
             )
             self._dependency_last_failed_at[prerequisite_workflow_id] = resolved_at
 
-        failure_count = self._dependency_failure_counts.get(
-            prerequisite_workflow_id, 0
-        )
+        failure_count = self._dependency_failure_counts.get(prerequisite_workflow_id, 0)
         last_failed = self._dependency_last_failed_at.get(prerequisite_workflow_id)
 
         diagnostic_message = message or (
@@ -6430,13 +10018,13 @@ class MoonMindRunWorkflow:
             )
             return
 
-        # Normalize "succeeded" to "completed" so the outcome recorder
-        # (which only treats "completed" as success) can satisfy the gate.
+        # Normalize "succeeded" to "completed" so the outcome recorder can
+        # satisfy the gate with either canonical successful terminal state.
         terminal_state = signal.terminal_state
         if terminal_state == "succeeded":
             terminal_state = "completed"
 
-        is_terminal_failure = terminal_state != "completed"
+        is_terminal_failure = terminal_state not in {STATE_COMPLETED, STATE_NO_COMMIT}
         if is_terminal_failure:
             self._get_logger().warning(
                 "DependencyResolved signal indicates non-success terminal state %s for %s",
@@ -6583,7 +10171,7 @@ class MoonMindRunWorkflow:
                 )
                 continue
 
-            if state == STATE_COMPLETED:
+            if state in {STATE_COMPLETED, STATE_NO_COMMIT}:
                 self._record_dependency_outcome(
                     prerequisite_workflow_id=dependency_id,
                     terminal_state=state,
@@ -6667,10 +10255,7 @@ class MoonMindRunWorkflow:
                     await workflow.wait_condition(
                         lambda: self._cancel_requested
                         or (self._dependency_failure is not None and not self._paused)
-                        or (
-                            not self._paused
-                            and not self._unresolved_dependency_ids
-                        ),
+                        or (not self._paused and not self._unresolved_dependency_ids),
                         timeout=DEPENDENCY_RECONCILE_INTERVAL,
                     )
                 except asyncio.TimeoutError:
@@ -6686,13 +10271,16 @@ class MoonMindRunWorkflow:
             ):
                 event = (
                     "dependency_gate_manual_override"
-                    if self._dependency_resolution == DEPENDENCY_RESOLUTION_MANUAL_OVERRIDE
+                    if self._dependency_resolution
+                    == DEPENDENCY_RESOLUTION_MANUAL_OVERRIDE
                     else "dependency_gate_satisfied"
                 )
                 self._get_logger().info(
-                    "Dependency gate manually overridden"
-                    if event == "dependency_gate_manual_override"
-                    else "Dependency gate satisfied",
+                    (
+                        "Dependency gate manually overridden"
+                        if event == "dependency_gate_manual_override"
+                        else "Dependency gate satisfied"
+                    ),
                     extra={
                         "event": event,
                         "dependency_count": len(dependency_ids),
@@ -6735,15 +10323,42 @@ class MoonMindRunWorkflow:
 
     @workflow.run
     async def run(self, input_payload: RunWorkflowInput) -> RunWorkflowOutput:
+        self._canonical_git_repository_projection_enabled = workflow.patched(
+            RUN_CANONICAL_GIT_REPOSITORY_PROJECTION_PATCH
+        )
         try:
             workflow_type, parameters, input_ref, plan_ref, scheduled_for = (
                 self._initialize_from_payload(input_payload)
             )
+            recovery_target = parameters.get("recoveryTarget")
+            if recovery_target is not None and workflow.patched(
+                RUN_TYPED_RECOVERY_TARGET_ENTRY_PATCH
+            ):
+                if not isinstance(recovery_target, Mapping):
+                    raise ValueError("RECOVERY_TARGET_MISSING")
+                recovery_policy = compile_recovery_entry_policy(
+                    recovery_target,
+                    destination_workflow_id=workflow.info().workflow_id,
+                )
+                parameters["recoveryExecutionPolicy"] = dataclasses.asdict(
+                    recovery_policy
+                )
+                # Publication and restoration targets must never fall through
+                # to the ordinary semantic-work path. Their dedicated activity
+                # routes are promoted separately after replay evidence exists.
+                if recovery_policy.publication_only or recovery_policy.restoration_only:
+                    raise ValueError("RECOVERY_PHASE_UNSUPPORTED")
         except ValueError as exc:
             raise exceptions.ApplicationError(
                 str(exc),
                 non_retryable=True,
             ) from exc
+        self._canonical_no_commit_outcome_enabled = workflow.patched(
+            RUN_CANONICAL_NO_COMMIT_OUTCOME_PATCH
+        )
+        self._authoritative_publish_outcome_enabled = workflow.patched(
+            RUN_AUTHORITATIVE_PUBLISH_OUTCOME_PATCH
+        )
         self._get_logger().info(
             "Starting MoonMind.UserWorkflow workflow",
             extra={"workflow_type": workflow_type},
@@ -6963,6 +10578,27 @@ class MoonMindRunWorkflow:
             output_status, output_message, publish_failure = (
                 self._determine_publish_completion(parameters=parameters)
             )
+            if (
+                publish_failure
+                and workflow.patched(RUN_PR_RESOLVER_CONTINUATION_IDENTITY_PATCH)
+                and self._is_merge_automation_gated(parameters)
+                and (
+                    (
+                        self._gated_continuation_request
+                        and self._gated_continuation_failure_message(parameters) is None
+                    )
+                    or self._merge_automation_disposition
+                    in MERGE_AUTOMATION_RESOLVER_SUCCESS_DISPOSITIONS
+                )
+            ):
+                output_status = "success"
+                output_message = (
+                    "Workflow completed an authoritative durable continuation "
+                    "handoff to merge automation."
+                    if self._gated_continuation_request
+                    else "Workflow completed authoritative PR resolver terminal evidence."
+                )
+                publish_failure = False
             if publish_failure:
                 finalizing_status = "failed"
                 finalizing_error = output_message
@@ -7036,13 +10672,43 @@ class MoonMindRunWorkflow:
             "status": output_status,
             "message": output_message,
         }
+        if workflow.patched(RUN_DURABLE_FINALIZATION_OUTCOME_PATCH):
+            for row in reversed(self._step_ledger_rows):
+                execution_outcome = row.get("executionOutcome")
+                finalization_outcome = row.get("finalizationOutcome")
+                if isinstance(execution_outcome, Mapping):
+                    output["executionOutcome"] = dict(execution_outcome)
+                if isinstance(finalization_outcome, Mapping):
+                    output["finalizationOutcome"] = dict(finalization_outcome)
+                if execution_outcome or finalization_outcome:
+                    break
         if self._proposals_generated > 0 or self._proposals_submitted > 0:
             output["proposals_generated"] = self._proposals_generated
             output["proposals_submitted"] = self._proposals_submitted
         if self._merge_automation_disposition:
             output["mergeAutomationDisposition"] = self._merge_automation_disposition
         if self._gated_continuation_request:
-            output["gatedContinuation"] = dict(self._gated_continuation_request)
+            gated_continuation = dict(self._gated_continuation_request)
+            if workflow.patched(RUN_PR_RESOLVER_OWNED_CONTINUATION_PATCH):
+                parent_info = workflow.info().parent
+                if parent_info is not None and self._is_merge_automation_gated(
+                    parameters
+                ):
+                    gated_continuation.update(
+                        {
+                            "ownerWorkflowId": parent_info.workflow_id,
+                            "ownerRunId": parent_info.run_id,
+                            "ownerWorkflowType": "MoonMind.MergeAutomation",
+                            "childWorkflowId": workflow.info().workflow_id,
+                            "childRunId": workflow.info().run_id,
+                        }
+                    )
+                output["completionDisposition"] = "gated_continuation"
+            output["gatedContinuation"] = gated_continuation
+            if workflow.patched(RUN_PR_RESOLVER_CONTINUATION_IDENTITY_PATCH):
+                output["executionRef"] = self._gated_continuation_execution_ref
+                output["childRunId"] = gated_continuation.get("childRunId")
+                output["headSha"] = gated_continuation.get("headSha")
         if self._merge_automation_head_sha:
             output["headSha"] = self._merge_automation_head_sha
         return output
@@ -7052,6 +10718,11 @@ class MoonMindRunWorkflow:
     ) -> tuple[str, dict[str, Any], Optional[str], Optional[str], Optional[str]]:
         if not isinstance(input_payload, dict):
             raise ValueError("input_payload must be a dictionary")
+        self._original_input_payload = dict(input_payload)
+        continuation = input_payload.get("remediation_loop_continuation")
+        self._remediation_loop_continuation = (
+            dict(continuation) if isinstance(continuation, Mapping) else None
+        )
 
         workflow_type = self._required_string(
             input_payload,
@@ -7083,12 +10754,17 @@ class MoonMindRunWorkflow:
                 or parameters.get("moonspec_environment_blocked_publish_action")
             )
         )
-        recovery_source = self._mapping_value(parameters, "recoverySource", "recovery_source")
+        recovery_source = self._mapping_value(
+            parameters, "recoverySource", "recovery_source"
+        )
         self._recovery_source = (
             dict(recovery_source) if isinstance(recovery_source, Mapping) else None
         )
         self._target_runtime = self._runtime_visibility_from_parameters(parameters)
         self._target_skill = self._skill_visibility_from_parameters(parameters)
+        self._runtime_inheritance_parameters = (
+            self._runtime_inheritance_parameters_from_parameters(parameters)
+        )
         task_parameters = self._mapping_value(parameters, "workflow")
         if not task_parameters:
             task_parameters = self._mapping_value(parameters, "task")
@@ -7098,12 +10774,35 @@ class MoonMindRunWorkflow:
             task_parameters.get("dependsOn")
         )
         ws = self._mapping_value(parameters, "workspaceSpec", "workspace_spec") or {}
-        self._repo = (
-            self._string_from_mapping(parameters, "repo")
-            or self._string_from_mapping(parameters, "repository")
-            or self._string_from_mapping(ws, "repo")
-            or self._string_from_mapping(ws, "repository")
+        repository_values = (
+            parameters.get("repository"),
+            ws.get("repository"),
         )
+        lore_target_selected = any(
+            isinstance(value, Mapping) and value.get("provider") == "lore"
+            for value in repository_values
+        )
+        if (
+            self._canonical_git_repository_projection_enabled
+            and not lore_target_selected
+        ):
+            self._repo = (
+                self._string_from_mapping(parameters, "repo")
+                or repository_name_from_value(
+                    parameters.get("repository"), provider="git"
+                )
+                or self._string_from_mapping(ws, "repo")
+                or repository_name_from_value(ws.get("repository"), provider="git")
+            )
+        elif self._canonical_git_repository_projection_enabled:
+            self._repo = None
+        else:
+            self._repo = (
+                self._string_from_mapping(parameters, "repo")
+                or self._string_from_mapping(parameters, "repository")
+                or self._string_from_mapping(ws, "repo")
+                or self._string_from_mapping(ws, "repository")
+            )
         self._record_integration_from_parameters(parameters)
 
         input_ref = self._optional_string(
@@ -7148,9 +10847,7 @@ class MoonMindRunWorkflow:
             integration = integration.strip().lower()
         self._integration_label = integration
         self._integration = (
-            integration
-            if integration in _EXTERNAL_INTEGRATION_MONITOR_IDS
-            else None
+            integration if integration in _EXTERNAL_INTEGRATION_MONITOR_IDS else None
         )
 
     def _record_remediation_context(
@@ -7219,14 +10916,26 @@ class MoonMindRunWorkflow:
         if not scope.get("allowed"):
             raise ValueError(str(scope.get("reason") or "bounded story loop rejected"))
 
+        serialized_budgets = loop_input.budgets.model_dump(by_alias=True, mode="json")
+        if serialized_budgets.get("maxElapsedSeconds") is None:
+            serialized_budgets.pop("maxElapsedSeconds")
         self._publish_context["boundedStoryLoop"] = {
             "selectedItemRef": compiled.selected_item_ref,
             "selectedItemDigest": compiled.selected_item_digest,
             "nodeKinds": [node.kind for node in compiled.nodes],
             "publishMode": loop_input.publish_mode,
             "mergeAutomationEnabled": loop_input.merge_automation_enabled,
+            "budgets": serialized_budgets,
             "scopeGuard": scope,
         }
+        if loop_input.prior_loop_state is not None:
+            self._publish_context["boundedStoryLoop"]["durableLoopState"] = (
+                loop_input.prior_loop_state.model_dump(by_alias=True, mode="json")
+            )
+        if loop_input.budget_grant:
+            self._publish_context["boundedStoryLoop"]["budgetGrant"] = dict(
+                loop_input.budget_grant
+            )
 
     def _runtime_visibility_from_parameters(
         self,
@@ -7254,7 +10963,9 @@ class MoonMindRunWorkflow:
             or self._coerce_text(parameters.get("target_runtime"), max_chars=80)
             or self._coerce_text(parameters.get("mode"), max_chars=80)
             or self._coerce_text(task_runtime_payload.get("mode"), max_chars=80)
-            or self._coerce_text(task_runtime_payload.get("targetRuntime"), max_chars=80)
+            or self._coerce_text(
+                task_runtime_payload.get("targetRuntime"), max_chars=80
+            )
             or self._coerce_text(
                 task_runtime_payload.get("target_runtime"), max_chars=80
             )
@@ -7269,6 +10980,50 @@ class MoonMindRunWorkflow:
                 authored_runtime_payload.get("target_runtime"), max_chars=80
             )
         )
+
+    def _runtime_inheritance_parameters_from_parameters(
+        self,
+        parameters: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        task_payload = (
+            self._mapping_value(parameters, "workflow")
+            or self._mapping_value(parameters, "task")
+            or {}
+        )
+        task_runtime = self._mapping_value(task_payload, "runtime") or {}
+        runtime_payload = self._mapping_value(parameters, "runtime") or {}
+        authored_payload = self._mapping_value(parameters, "authoredTaskInput") or {}
+        authored_runtime = self._mapping_value(authored_payload, "runtime") or {}
+
+        selection: dict[str, Any] = {}
+        for source in (
+            parameters,
+            task_payload,
+            task_runtime,
+            runtime_payload,
+            authored_runtime,
+        ):
+            for key, value in self._runtime_selection_from_source(source).items():
+                selection.setdefault(key, value)
+        if self._target_runtime:
+            selection.setdefault("targetRuntime", self._target_runtime)
+
+        compact: dict[str, Any] = {}
+        runtime: dict[str, Any] = {}
+        for selection_key, parameter_key, runtime_key in (
+            ("targetRuntime", "targetRuntime", "mode"),
+            ("model", "model", "model"),
+            ("effort", "effort", "effort"),
+            ("executionProfileRef", "profileId", "executionProfileRef"),
+        ):
+            value = selection.get(selection_key)
+            if value is None:
+                continue
+            compact[parameter_key] = value
+            runtime[runtime_key] = value
+        if runtime:
+            compact["workflow"] = {"runtime": runtime}
+        return compact
 
     def _skill_visibility_from_parameters(
         self,
@@ -7291,20 +11046,20 @@ class MoonMindRunWorkflow:
             return None
         tool_payload = self._mapping_value(task_payload, "tool") or {}
         skill_payload = self._mapping_value(task_payload, "skill") or {}
-        tool_type = str(
-            tool_payload.get("type") or tool_payload.get("kind") or ""
-        ).strip().lower()
+        tool_type = (
+            str(tool_payload.get("type") or tool_payload.get("kind") or "")
+            .strip()
+            .lower()
+        )
         if tool_type in {"", "skill"}:
-            tool_name = (
-                self._coerce_text(tool_payload.get("name"), max_chars=160)
-                or self._coerce_text(tool_payload.get("id"), max_chars=160)
-            )
+            tool_name = self._coerce_text(
+                tool_payload.get("name"), max_chars=160
+            ) or self._coerce_text(tool_payload.get("id"), max_chars=160)
             if tool_name:
                 return tool_name
-        return (
-            self._coerce_text(skill_payload.get("id"), max_chars=160)
-            or self._coerce_text(skill_payload.get("name"), max_chars=160)
-        )
+        return self._coerce_text(
+            skill_payload.get("id"), max_chars=160
+        ) or self._coerce_text(skill_payload.get("name"), max_chars=160)
 
     async def _run_planning_stage(
         self,
@@ -7359,7 +11114,13 @@ class MoonMindRunWorkflow:
         """
         snapshots: dict[str, dict[str, Any]] = {}
         has_data = False
-        profile_list_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("provider_profile.list")
+        successful_runtime_ids: set[str] = set()
+        runtime_scoped_authority = self._workflow_patch_enabled(
+            RUN_PROFILE_SNAPSHOT_RUNTIME_AUTHORITY_PATCH
+        )
+        profile_list_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+            "provider_profile.list"
+        )
         for runtime_id in _PROFILE_SYNC_RUNTIME_IDS:
             try:
                 kwargs = self._execute_kwargs_for_route(profile_list_route)
@@ -7376,7 +11137,16 @@ class MoonMindRunWorkflow:
                     **kwargs,
                 )
                 if isinstance(result, dict):
-                    for profile in result.get("profiles", []):
+                    successful_runtime_ids.add(runtime_id)
+                    # ``profiles`` remains the manager's launch-ready routing
+                    # set.  ``profile_statuses`` retains compact identity and
+                    # readiness evidence for explicitly selected profiles, so
+                    # a disabled profile is reported as not launch-ready rather
+                    # than incorrectly reported as unknown.
+                    for profile in (
+                        *result.get("profile_statuses", []),
+                        *result.get("profiles", []),
+                    ):
                         if isinstance(profile, dict):
                             pid = str(profile.get("profile_id", "")).strip()
                             if pid:
@@ -7391,6 +11161,8 @@ class MoonMindRunWorkflow:
                 )
         if has_data:
             self._profile_snapshots = snapshots
+            if runtime_scoped_authority:
+                self._profile_snapshot_runtime_ids = successful_runtime_ids
 
     async def _compile_and_record_resilience_policy(
         self, *, parameters: Mapping[str, Any]
@@ -7568,8 +11340,7 @@ class MoonMindRunWorkflow:
         """Return a filesystem-safe slug for embedding in an artifact name."""
 
         slug = "".join(
-            char if char.isalnum() or char in {"-", "_"} else "-"
-            for char in str(value)
+            char if char.isalnum() or char in {"-", "_"} else "-" for char in str(value)
         ).strip("-")
         return slug or "profile"
 
@@ -7652,6 +11423,16 @@ class MoonMindRunWorkflow:
             dependency_map=dependency_map,
             updated_at=workflow.now(),
         )
+        if workflow.patched(RUN_DYNAMIC_REMEDIATION_LOOP_CONTROLLER_PATCH):
+            self._initialize_remediation_loop_controller(
+                ordered_nodes=ordered_nodes,
+                require_agent_instructions=workflow.patched(
+                    RUN_REMEDIATION_LOOP_AGENT_INSTRUCTIONS_PATCH
+                ),
+            )
+            self._restore_remediation_loop_continuation(
+                ordered_nodes=ordered_nodes,
+            )
         self._capture_prepared_input_refs(parameters)
 
         task_payload = parameters.get("task")
@@ -7680,6 +11461,9 @@ class MoonMindRunWorkflow:
         # cancellation/failure handling.
         workflow.patched(RUN_CONDITIONAL_REGISTRY_READ_PATCH)
         step_retry_overrides_enabled = workflow.patched(RUN_STEP_RETRY_OVERRIDES_PATCH)
+        plan_routed_moonspec_remediation_enabled = workflow.patched(
+            RUN_PLAN_ROUTED_MOONSPEC_REMEDIATION_PATCH
+        )
         previous_step_outputs: Mapping[str, Any] = {}
         execution_result: Any = None
         for index, node in enumerate(ordered_nodes, start=1):
@@ -7691,14 +11475,8 @@ class MoonMindRunWorkflow:
             if not isinstance(tool, Mapping):
                 raise ValueError("plan node tool definition is required")
 
-            tool_type = (
-                str(tool.get("type") or tool.get("kind") or "")
-                .strip()
-                .lower()
-            )
-            tool_name = str(
-                tool.get("name") or tool.get("id") or ""
-            ).strip()
+            tool_type = str(tool.get("type") or tool.get("kind") or "").strip().lower()
+            tool_name = str(tool.get("name") or tool.get("id") or "").strip()
             node_id = str(node.get("id") or "unknown")
             raw_node_inputs = node.get("inputs")
             original_node_inputs = (
@@ -7711,6 +11489,12 @@ class MoonMindRunWorkflow:
                     previous_step_outputs = preserved_outputs
                 continue
             current_step_row = self._step_ledger_row_for(node_id)
+            if (
+                self._remediation_loop_continuation is not None
+                and isinstance(current_step_row, Mapping)
+                and current_step_row.get("status") in TERMINAL_STEP_STATUSES
+            ):
+                continue
             if (
                 isinstance(current_step_row, Mapping)
                 and current_step_row.get("status") == "pending"
@@ -7734,8 +11518,8 @@ class MoonMindRunWorkflow:
                     self._refresh_step_readiness(updated_at=workflow.now())
                     self._update_memo()
                     continue
-            handoff_block_reason = (
-                self._jira_orchestrate_external_handoff_block_reason(node)
+            handoff_block_reason = self._jira_orchestrate_external_handoff_block_reason(
+                node
             )
             if handoff_block_reason:
                 self._plan_blocked_message = handoff_block_reason
@@ -7772,9 +11556,7 @@ class MoonMindRunWorkflow:
                     None,
                 )
                 if raw_no_progress_attempts is not None:
-                    max_consecutive_no_progress_attempts = int(
-                        raw_no_progress_attempts
-                    )
+                    max_consecutive_no_progress_attempts = int(raw_no_progress_attempts)
             review_retry_count = 0
             consecutive_no_progress_attempts = 0
             moonspec_contract_repair_attempts = 0
@@ -7783,10 +11565,15 @@ class MoonMindRunWorkflow:
             result_status: str | None = None
             execution_result = None
             accepted_execution = False
+            accepted_gate_verdict = "FULLY_IMPLEMENTED"
+            accepted_gate_action = "advance"
+            accepted_gate_disposition = "accepted"
+            accepted_gate_budget: dict[str, Any] | None = None
             gate_stop_requested = False
             step_failure_summary: str | None = None
             blocked_outcome_wait_skipped = False
             current_review_attempt = 1
+            agent_request_for_context: AgentExecutionRequest | None = None
 
             while current_review_attempt <= (max_review_attempts + 1):
                 await self._wait_if_paused_at_safe_boundary()
@@ -7794,6 +11581,45 @@ class MoonMindRunWorkflow:
                     return
 
                 node_inputs = dict(original_node_inputs)
+                try:
+                    self._inject_remediation_workspace_baseline(
+                        node=node,
+                        node_inputs=node_inputs,
+                    )
+                    self._inject_remediation_verification_baseline(
+                        node=node,
+                        node_inputs=node_inputs,
+                    )
+                except (RemediationHeadError, ValidationError) as exc:
+                    # These authority and contract checks run before the Step
+                    # Execution is launched, so nothing else would attribute the
+                    # failure to a step. Without a failed Step Execution the
+                    # recovery manifest reports
+                    # ``no_failed_step_execution_to_resume`` and the run loses
+                    # checkpoint-based recovery even though the prior accepted
+                    # attempt captured valid checkpoints. A malformed head
+                    # mapping raises ValidationError rather than
+                    # RemediationHeadError and must be attributed the same way.
+                    #
+                    # The rejection is a real Step Execution, so allocate its
+                    # execution identity here; _mark_step_running never runs for
+                    # a step rejected before launch, and a failed row left at
+                    # ordinal 0 projects as a failed step with zero executions.
+                    self._try_update_step_row(
+                        node_id,
+                        updated_at=workflow.now(),
+                        increment_attempt=True,
+                    )
+                    self._record_step_execution_exception(
+                        exc,
+                        logical_step_id=node_id,
+                        tool_name=tool_name,
+                        source="workflow",
+                        updated_at=workflow.now(),
+                    )
+                    self._refresh_step_readiness(updated_at=workflow.now())
+                    self._update_memo()
+                    raise
                 if previous_review_feedback:
                     node_inputs = self._inject_review_feedback_into_inputs(
                         tool_type=tool_type,
@@ -7845,9 +11671,26 @@ class MoonMindRunWorkflow:
                     capture_input_source["workspaceSpec"] = dict(
                         workflow_workspace_spec
                     )
+                if workflow.patched(
+                    RUN_REMEDIATION_MANAGED_SESSION_SOURCE_IDENTITY_PATCH
+                ):
+                    self._inject_remediation_managed_session_checkpoint_source_identity(
+                        node=node,
+                        capture_input_source=capture_input_source,
+                    )
                 self._record_step_workspace_capture_input(
                     node_id,
                     capture_input_source,
+                    initialize_omnigent_capture=(
+                        tool_type == "agent_runtime"
+                        and _normalize_agent_runtime_id(
+                            self._agent_id_from_runtime_inputs(
+                                node_inputs=node_inputs,
+                                fallback_name=tool_name,
+                            )
+                        )
+                        == "omnigent"
+                    ),
                 )
                 current_step_execution = self._step_execution_for(node_id) or 1
                 attempt_reason = (
@@ -7881,6 +11724,13 @@ class MoonMindRunWorkflow:
                         boundary="before_execution",
                         updated_at=workflow.now(),
                     )
+                    # From this point onward, preflight, runtime, or tool
+                    # execution may mutate the authoritative workspace. A later
+                    # checkpoint must capture the next generation rather than
+                    # reusing the pre-execution artifact evidence.
+                    self._mark_step_workspace_mutation_started(node_id)
+                    if self._remediation_workspace_materialization_required(node):
+                        self._validate_remediation_workspace_materialization(node_id)
                     step_execution_naming_enabled = workflow.patched(
                         RUN_STEP_EXECUTION_NAMING_PATCH
                     )
@@ -7888,10 +11738,7 @@ class MoonMindRunWorkflow:
                         RUN_STEP_EXECUTION_MANIFEST_PATCH
                     )
 
-                    if (
-                        tool_type != "agent_runtime"
-                        and step_execution_manifest_enabled
-                    ):
+                    if tool_type != "agent_runtime" and step_execution_manifest_enabled:
                         await self._record_step_execution_manifest(
                             node_id,
                             phase="start",
@@ -7914,18 +11761,20 @@ class MoonMindRunWorkflow:
                                     operation="execute",
                                 ),
                             },
-                            budget=self._review_gate_budget_metadata(
-                                max_review_attempts=max_review_attempts,
-                                review_retry_count=review_retry_count,
-                                max_consecutive_no_progress_attempts=(
-                                    max_consecutive_no_progress_attempts
-                                ),
-                                consecutive_no_progress_attempts=(
-                                    consecutive_no_progress_attempts
-                                ),
-                            )
-                            if review_gate_active
-                            else None,
+                            budget=(
+                                self._review_gate_budget_metadata(
+                                    max_review_attempts=max_review_attempts,
+                                    review_retry_count=review_retry_count,
+                                    max_consecutive_no_progress_attempts=(
+                                        max_consecutive_no_progress_attempts
+                                    ),
+                                    consecutive_no_progress_attempts=(
+                                        consecutive_no_progress_attempts
+                                    ),
+                                )
+                                if review_gate_active
+                                else None
+                            ),
                         )
                     if (
                         tool_type != "agent_runtime"
@@ -7975,6 +11824,38 @@ class MoonMindRunWorkflow:
                                 queue_order=index,
                                 attempt_reason=attempt_reason,
                             )
+                            agent_request_for_context = request
+                            if (
+                                node_id == self._recovery_failed_step_id
+                                and self._checkpoint_recovery_state is not None
+                            ):
+                                locator = self._checkpoint_recovery_state.get(
+                                    "destinationWorkspaceLocator"
+                                )
+                                evidence_ref = self._checkpoint_recovery_state.get(
+                                    "restorationEvidenceRef"
+                                )
+                                if not isinstance(locator, Mapping) or not evidence_ref:
+                                    raise ValueError(
+                                        "CHECKPOINT_RESTORATION_NOT_READY: recovered "
+                                        "AgentRun requires destination locator and evidence"
+                                    )
+                                recovered_workspace = dict(request.workspace_spec)
+                                recovered_workspace["workspaceLocator"] = dict(locator)
+                                recovered_workspace["restorationEvidenceRef"] = (
+                                    evidence_ref
+                                )
+                                recovered_workspace["sourceCheckpointRef"] = (
+                                    self._checkpoint_recovery_state[
+                                        "sourceCheckpointRef"
+                                    ]
+                                )
+                                recovered_workspace["capabilityDigest"] = (
+                                    self._checkpoint_recovery_state["capabilityDigest"]
+                                )
+                                request = request.model_copy(
+                                    update={"workspace_spec": recovered_workspace}
+                                )
                             await self._resolve_step_resilience_policy_ref(
                                 node_id=node_id,
                                 execution_profile_ref=request.execution_profile_ref,
@@ -7989,7 +11870,9 @@ class MoonMindRunWorkflow:
                                     reason=attempt_reason,
                                     input_refs=(
                                         node_inputs.get("inputRefs")
-                                        if isinstance(node_inputs.get("inputRefs"), list)
+                                        if isinstance(
+                                            node_inputs.get("inputRefs"), list
+                                        )
                                         else []
                                     ),
                                     execution={
@@ -8003,18 +11886,20 @@ class MoonMindRunWorkflow:
                                             operation="execute",
                                         ),
                                     },
-                                    budget=self._review_gate_budget_metadata(
-                                        max_review_attempts=max_review_attempts,
-                                        review_retry_count=review_retry_count,
-                                        max_consecutive_no_progress_attempts=(
-                                            max_consecutive_no_progress_attempts
-                                        ),
-                                        consecutive_no_progress_attempts=(
-                                            consecutive_no_progress_attempts
-                                        ),
-                                    )
-                                    if review_gate_active
-                                    else None,
+                                    budget=(
+                                        self._review_gate_budget_metadata(
+                                            max_review_attempts=max_review_attempts,
+                                            review_retry_count=review_retry_count,
+                                            max_consecutive_no_progress_attempts=(
+                                                max_consecutive_no_progress_attempts
+                                            ),
+                                            consecutive_no_progress_attempts=(
+                                                consecutive_no_progress_attempts
+                                            ),
+                                        )
+                                        if review_gate_active
+                                        else None
+                                    ),
                                 )
                                 request = (
                                     await self._request_with_persisted_retrieval_ref(
@@ -8051,10 +11936,10 @@ class MoonMindRunWorkflow:
                                 request=request,
                                 logical_step_id=node_id,
                             )
-                            request = await self._maybe_bind_workflow_scoped_session(request)
-                            selected_skill_for_repair = node_inputs.get(
-                                "selectedSkill"
+                            request = await self._maybe_bind_workflow_scoped_session(
+                                request
                             )
+                            selected_skill_for_repair = node_inputs.get("selectedSkill")
                             if (
                                 request.agent_kind == "managed"
                                 and not self._is_jira_agent_skill_name(
@@ -8070,13 +11955,72 @@ class MoonMindRunWorkflow:
                                 step_execution_label = "attempt"
                                 if step_execution_naming_enabled:
                                     step_execution_label = "execution"
-                                child_workflow_id = (
-                                    f"{child_workflow_id}:{step_execution_label}{current_step_execution}"
-                                )
+                                child_workflow_id = f"{child_workflow_id}:{step_execution_label}{current_step_execution}"
                             if system_retries > 0:
                                 child_workflow_id = (
                                     f"{child_workflow_id}:retry{system_retries}"
                                 )
+                            temporal_pr_resolver = bool(
+                                self._native_skill_binding_by_step.get(node_id, {}).get(
+                                    "eligible"
+                                )
+                            ) and workflow.patched(
+                                RUN_TEMPORAL_PR_RESOLVER_OWNERSHIP_PATCH
+                            )
+                            if (
+                                str(selected_skill_for_repair or "").strip().lower()
+                                == "pr-resolver"
+                            ):
+                                binding = self._native_skill_binding_by_step.get(
+                                    node_id,
+                                    {
+                                        "eligible": False,
+                                        "host": "cli",
+                                        "reasonCode": "resolved_skill_evidence_unavailable",
+                                        "identity": {},
+                                    },
+                                )
+                                self._publish_context["prResolverNativeBinding"] = dict(
+                                    binding
+                                )
+                                if not temporal_pr_resolver:
+                                    portable_note = (
+                                        "\n\nHost decision: execute the resolved pr-resolver "
+                                        "Skill directly because "
+                                        f"{binding.get('reasonCode')}. Follow its SKILL.md "
+                                        "workflow and packaged helpers, and publish its "
+                                        "terminal evidence. MoonMind must not substitute "
+                                        "native PR snapshot, comment, gate, or merge logic."
+                                    )
+                                    if workflow.patched(
+                                        RUN_TERMINAL_CONTINUATION_AUTHORITY_INSTRUCTIONS_PATCH
+                                    ):
+                                        authority_instruction = self._terminal_continuation_authority_instruction(
+                                            request
+                                        )
+                                        portable_note = (
+                                            f"{portable_note}\n\n"
+                                            + authority_instruction
+                                        )
+                                        request_parameters = self._parameters_with_terminal_continuation_authority_instruction(
+                                            request,
+                                            authority_instruction=(
+                                                authority_instruction
+                                            ),
+                                        )
+                                    else:
+                                        request_parameters = request.parameters
+                                    request = request.model_copy(
+                                        update={
+                                            "instruction_ref": (
+                                                str(request.instruction_ref or "")
+                                                + portable_note
+                                            ),
+                                            "parameters": request_parameters,
+                                        }
+                                    )
+                            if temporal_pr_resolver:
+                                child_workflow_id = f"{child_workflow_id}:pr-resolver"
                             self._active_agent_child_workflow_id = child_workflow_id
                             self._active_agent_id = request.agent_id
                             self._mark_step_waiting(
@@ -8091,17 +12035,131 @@ class MoonMindRunWorkflow:
                                 ),
                             )
                             try:
-                                child_result = await workflow.execute_child_workflow(
-                                    "MoonMind.AgentRun",
-                                    request,
-                                    id=child_workflow_id,
-                                    task_queue=self._workflow_child_task_queue(),
-                                )
+                                if temporal_pr_resolver:
+                                    worker_capability: dict[str, Any] = {}
+                                    if workflow.patched(
+                                        RUN_PR_RESOLVER_CAPABILITY_PREFLIGHT_PATCH
+                                    ):
+                                        capability_result = await workflow.execute_activity(
+                                            "worker.verify_workflow_capability",
+                                            {
+                                                "workflowType": "MoonMind.PRResolver",
+                                                "taskQueue": self._workflow_child_task_queue(),
+                                            },
+                                            task_queue=INTEGRATIONS_TASK_QUEUE,
+                                            start_to_close_timeout=timedelta(
+                                                seconds=15
+                                            ),
+                                            retry_policy=RetryPolicy(
+                                                maximum_attempts=1
+                                            ),
+                                        )
+                                        worker_capability = (
+                                            dict(capability_result)
+                                            if isinstance(capability_result, Mapping)
+                                            else {}
+                                        )
+                                        if not worker_capability.get("available"):
+                                            raise _worker_capability_unavailable_error(
+                                                worker_capability
+                                            )
+                                    resolved_pull_request = None
+                                    merge_gate = parameters.get("mergeGate")
+                                    merge_gate = (
+                                        merge_gate
+                                        if isinstance(merge_gate, Mapping)
+                                        else {}
+                                    )
+                                    repository, selector = (
+                                        pr_resolver_identity_selector(
+                                            request=request,
+                                            node_inputs=node_inputs,
+                                            workflow_parameters=parameters,
+                                        )
+                                    )
+                                    try:
+                                        numeric_selector = int(selector)
+                                    except (TypeError, ValueError):
+                                        numeric_selector = 0
+                                    if (
+                                        workflow.patched(
+                                            RUN_PR_RESOLVER_SELECTOR_RESOLUTION_PATCH
+                                        )
+                                        and numeric_selector <= 0
+                                        and not str(
+                                            merge_gate.get("pullRequestUrl") or ""
+                                        ).strip()
+                                    ):
+                                        selector_result = (
+                                            await workflow.execute_activity(
+                                                "pr_resolver.resolve_selector",
+                                                {
+                                                    "repository": repository,
+                                                    "selector": selector,
+                                                },
+                                                task_queue=INTEGRATIONS_TASK_QUEUE,
+                                                start_to_close_timeout=timedelta(
+                                                    minutes=2
+                                                ),
+                                                retry_policy=RetryPolicy(
+                                                    maximum_attempts=3
+                                                ),
+                                            )
+                                        )
+                                        resolved_pull_request = (
+                                            dict(selector_result)
+                                            if isinstance(selector_result, Mapping)
+                                            else {}
+                                        )
+                                        if not resolved_pull_request.get("resolved"):
+                                            raise ValueError(
+                                                str(
+                                                    resolved_pull_request.get("summary")
+                                                    or "PR selector could not be resolved."
+                                                )
+                                            )
+                                    resolver_input = build_pr_resolver_start_input(
+                                        request=request,
+                                        node_inputs=node_inputs,
+                                        workflow_parameters=parameters,
+                                        parent_workflow_id=workflow.info().workflow_id,
+                                        parent_run_id=workflow.info().run_id,
+                                        principal=self._principal(),
+                                        step_id=node_id,
+                                        resolved_pull_request=resolved_pull_request,
+                                        implementation_identity=(
+                                            self._native_skill_binding_by_step.get(
+                                                node_id, {}
+                                            ).get("identity")
+                                            or {}
+                                        ),
+                                        worker_capability=worker_capability,
+                                    )
+                                    child_result = await workflow.execute_child_workflow(
+                                        "MoonMind.PRResolver",
+                                        resolver_input.model_dump(
+                                            by_alias=True, mode="json"
+                                        ),
+                                        id=child_workflow_id,
+                                        task_queue=self._workflow_child_task_queue(),
+                                        cancellation_type=(
+                                            ChildWorkflowCancellationType.TRY_CANCEL
+                                        ),
+                                    )
+                                else:
+                                    child_result = await workflow.execute_child_workflow(
+                                        "MoonMind.AgentRun",
+                                        request,
+                                        id=child_workflow_id,
+                                        task_queue=self._workflow_child_task_queue(),
+                                    )
                             finally:
                                 self._active_agent_child_workflow_id = None
                                 self._active_agent_id = None
                             execution_result = self._map_agent_run_result(child_result)
                         except Exception as exc:
+                            if self._should_propagate_agent_child_cancellation(exc):
+                                raise
                             diagnostic = self._record_failure_diagnostic(
                                 exc,
                                 stage=self._state,
@@ -8135,6 +12193,31 @@ class MoonMindRunWorkflow:
                         }
                         result_status = "FAILED"
                         break
+
+                    elif tool_type == "skill" and tool_name == CONTAINER_RUN_JOB_TOOL:
+                        try:
+                            execution_result = await self._execute_container_job_tool(
+                                node_inputs=node_inputs,
+                                node_id=node_id,
+                                execution_ordinal=current_step_execution,
+                            )
+                        except Exception as exc:
+                            diagnostic = self._record_step_execution_exception(
+                                exc,
+                                logical_step_id=node_id,
+                                tool_name=tool_name,
+                                source="container_job",
+                                updated_at=workflow.now(),
+                            )
+                            if failure_mode == "FAIL_FAST":
+                                raise
+                            execution_result = {
+                                "status": "FAILED",
+                                "outputs": {
+                                    "error": diagnostic.get("category"),
+                                    "summary": diagnostic.get("message"),
+                                },
+                            }
 
                     elif tool_type == "skill":
                         snapshot = await load_registry_snapshot()
@@ -8239,11 +12322,30 @@ class MoonMindRunWorkflow:
                         execution_result=execution_result,
                         updated_at=workflow.now(),
                     )
-                    await self._record_canonical_step_checkpoint(
+                    self._record_omnigent_initial_context_ref(
                         node_id,
-                        boundary="after_execution",
-                        updated_at=workflow.now(),
+                        attempt=self._step_execution_for(node_id) or 1,
+                        execution_result=execution_result,
                     )
+                    if workflow.patched(RUN_DURABLE_FINALIZATION_OUTCOME_PATCH):
+                        outcome_recorded_at = workflow.now()
+                        self._record_primary_execution_outcome(
+                            node_id,
+                            execution_result=execution_result,
+                            result_status=result_status,
+                            recorded_at=outcome_recorded_at,
+                        )
+                        self._update_memo()
+                        await self._finalize_after_execution_checkpoint(
+                            node_id,
+                            updated_at=outcome_recorded_at,
+                        )
+                    else:
+                        await self._record_canonical_step_checkpoint(
+                            node_id,
+                            boundary="after_execution",
+                            updated_at=workflow.now(),
+                        )
                     if (
                         result_status == "COMPLETED"
                         and workflow.patched(RUN_JIRA_BLOCKER_RECHECK_PATCH)
@@ -8281,6 +12383,19 @@ class MoonMindRunWorkflow:
                                     "status field"
                                 )
                             break
+                        self._record_step_result_evidence(
+                            node_id,
+                            execution_result=execution_result,
+                            updated_at=workflow.now(),
+                        )
+                        if workflow.patched(RUN_DURABLE_FINALIZATION_OUTCOME_PATCH):
+                            self._record_primary_execution_outcome(
+                                node_id,
+                                execution_result=execution_result,
+                                result_status=result_status,
+                                recorded_at=workflow.now(),
+                            )
+                            self._update_memo()
                     if result_status != "COMPLETED":
                         failure_message = self._activity_result_failure_message(
                             execution_result
@@ -8301,7 +12416,9 @@ class MoonMindRunWorkflow:
                             failure_message=failure_message,
                         )
 
-                        if workflow.patched(RUN_AGENT_RUNTIME_RETRY_CLASSIFICATION_PATCH):
+                        if workflow.patched(
+                            RUN_AGENT_RUNTIME_RETRY_CLASSIFICATION_PATCH
+                        ):
                             retryable = self._activity_result_retryable(
                                 execution_result,
                                 failure_message=failure_message,
@@ -8341,17 +12458,16 @@ class MoonMindRunWorkflow:
                                 updated_at=workflow.now(),
                                 summary=self._summary,
                             )
-                            current_step_execution = self._step_execution_for(node_id) or (
-                                current_step_execution + 1
-                            )
+                            current_step_execution = self._step_execution_for(
+                                node_id
+                            ) or (current_step_execution + 1)
                             attempt_reason = "runtime_recovered"
                             continue
 
                         diagnostics_ref = None
                         outputs = self._get_from_result(execution_result, "outputs")
-                        if (
-                            isinstance(outputs, Mapping)
-                            and workflow.patched(RUN_FAILED_RESULT_BLOCKER_PATCH)
+                        if isinstance(outputs, Mapping) and workflow.patched(
+                            RUN_FAILED_RESULT_BLOCKER_PATCH
                         ):
                             diagnostics_ref = self._coerce_text(
                                 outputs.get("diagnosticsRef")
@@ -8371,6 +12487,7 @@ class MoonMindRunWorkflow:
                                 message=step_failure_summary,
                                 child_workflow_id=child_workflow_id,
                                 diagnostics_ref=diagnostics_ref,
+                                terminal_evidence=outputs,
                             )
                             # MM-884: capture the sanitized provider failure
                             # envelope and observed cost (first failure wins) so
@@ -8442,6 +12559,15 @@ class MoonMindRunWorkflow:
                         < _MOONSPEC_GATE_CONTRACT_REPAIR_MAX_ATTEMPTS
                     ):
                         moonspec_contract_repair_attempts += 1
+                        loop_context = self._publish_context.setdefault(
+                            "boundedStoryLoop", {}
+                        )
+                        retry_accounting = loop_context.setdefault(
+                            "retryAccounting", {}
+                        )
+                        retry_accounting["contractRepairAttempts"] = (
+                            moonspec_contract_repair_attempts
+                        )
                         if workflow.patched(
                             RUN_MOONSPEC_GATE_CONTRACT_REPAIR_FRESH_SOURCE_PATCH
                         ):
@@ -8541,10 +12667,6 @@ class MoonMindRunWorkflow:
                 )
 
                 if review_verdict.verdict != "FULLY_IMPLEMENTED":
-                    if self._review_gate_verdict_made_progress(review_verdict):
-                        consecutive_no_progress_attempts = 0
-                    else:
-                        consecutive_no_progress_attempts += 1
                     failed_review_summary = self._bounded_review_summary(
                         review_verdict.feedback,
                         fallback="Structured gate did not approve advancement",
@@ -8558,7 +12680,113 @@ class MoonMindRunWorkflow:
                         artifact_ref=gate_result_ref,
                         metadata=gate_check_metadata,
                     )
-                    if self._review_gate_retry_allowed(
+                    transition = self._resolve_gate_transition(
+                        verdict=review_verdict,
+                        ordered_nodes=ordered_nodes,
+                        current_index=index - 1,
+                    )
+                    if (
+                        plan_routed_moonspec_remediation_enabled
+                        and transition.disposition != "generic"
+                    ):
+                        self._record_moonspec_gate_transition_event(
+                            logical_step_id=node_id,
+                            node=node,
+                            verdict=review_verdict.verdict,
+                            transition=transition,
+                            review_retries_consumed=review_retry_count,
+                        )
+                    plan_routed_verifier = (
+                        plan_routed_moonspec_remediation_enabled
+                        and transition.disposition == "accept"
+                    )
+                    if (
+                        plan_routed_verifier
+                        and self._step_has_accepted_output_evidence(
+                            node_id, execution_result
+                        )
+                    ):
+                        current_attempt, current_max = (
+                            self._moonspec_remediation_attempt_metadata(node)
+                        )
+                        # The verifier owns the semantic verdict.  Accepting its
+                        # evidence as a completed control operation must not
+                        # rewrite terminal outcomes as remediation work.
+                        accepted_gate_verdict = (
+                            self._accepted_verifier_semantic_verdict(
+                                review_verdict.verdict
+                            )
+                        )
+                        accepted_gate_action = transition.routing_disposition
+                        accepted_gate_disposition = "accepted"
+                        next_logical_step_id = (
+                            transition.successor.logical_step_id
+                            if transition.successor is not None
+                            else None
+                        )
+                        review_budget = self._review_gate_budget_metadata(
+                            max_review_attempts=max_review_attempts,
+                            review_retry_count=review_retry_count,
+                            max_consecutive_no_progress_attempts=(
+                                max_consecutive_no_progress_attempts
+                            ),
+                            consecutive_no_progress_attempts=(
+                                consecutive_no_progress_attempts
+                            ),
+                            verdict=review_verdict.verdict,
+                            recommended_next_action=(
+                                review_verdict.recommended_next_action
+                            ),
+                        )
+                        remediation_budget = self._moonspec_remediation_budget_metadata(
+                            ordered_nodes=ordered_nodes,
+                            current_attempt=current_attempt,
+                            max_attempts=current_max,
+                        )
+                        accepted_gate_budget = {
+                            "reviewGateBudget": review_budget,
+                            "remediationBudget": remediation_budget,
+                        }
+                        self._upsert_step_check(
+                            node_id,
+                            kind="approval_policy",
+                            status="passed",
+                            summary=(
+                                "Valid verifier result accepted; routing to "
+                                + (
+                                    f"remediation attempt {transition.successor.attempt}."
+                                    if transition.successor is not None
+                                    else "the workflow control gate."
+                                )
+                            ),
+                            retry_count=review_retry_count,
+                            artifact_ref=gate_result_ref,
+                            metadata={
+                                **gate_check_metadata,
+                                "workflowTransition": accepted_gate_action,
+                                "transitionReasonCode": transition.reason_code,
+                                "targetLogicalStepId": next_logical_step_id,
+                                "reviewEvidenceRetriesConsumed": review_retry_count,
+                                "remediationAttemptsConsumed": remediation_budget[
+                                    "attemptsStarted"
+                                ],
+                                "remediationAttemptsMaximum": current_max,
+                                "reviewGateBudget": review_budget,
+                                "remediationBudget": remediation_budget,
+                            },
+                        )
+                        accepted_execution = True
+                        break
+                    if self._review_gate_verdict_made_progress(review_verdict):
+                        consecutive_no_progress_attempts = 0
+                    else:
+                        consecutive_no_progress_attempts += 1
+                    if self._gate_transition_allows_review_retry(
+                        plan_routed_moonspec_remediation_enabled=(
+                            plan_routed_moonspec_remediation_enabled
+                        ),
+                        transition=transition,
+                    ) and self._review_gate_retry_allowed(
                         verdict=review_verdict,
                         review_retry_count=review_retry_count,
                         max_review_attempts=max_review_attempts,
@@ -8594,9 +12822,11 @@ class MoonMindRunWorkflow:
                         phase="terminal",
                         updated_at=workflow.now(),
                         reason=attempt_reason,
-                        status="blocked"
-                        if review_verdict.verdict == "BLOCKED"
-                        else "failed",
+                        status=(
+                            "blocked"
+                            if review_verdict.verdict == "BLOCKED"
+                            else "failed"
+                        ),
                         terminal_disposition=self._terminal_disposition_for_gate_stop(
                             review_verdict
                         ),
@@ -8679,6 +12909,26 @@ class MoonMindRunWorkflow:
                         raise ValueError(missing_evidence_summary)
                     break
 
+                passing_transition = self._resolve_gate_transition(
+                    verdict=review_verdict,
+                    ordered_nodes=ordered_nodes,
+                    current_index=index - 1,
+                )
+                if (
+                    plan_routed_moonspec_remediation_enabled
+                    and passing_transition.disposition == "accept"
+                    and passing_transition.routing_disposition
+                    == "exit_remediation_loop"
+                ):
+                    accepted_gate_verdict = review_verdict.verdict
+                    accepted_gate_action = passing_transition.routing_disposition
+                    self._record_moonspec_gate_transition_event(
+                        logical_step_id=node_id,
+                        node=node,
+                        verdict=review_verdict.verdict,
+                        transition=passing_transition,
+                        review_retries_consumed=review_retry_count,
+                    )
                 self._upsert_step_check(
                     node_id,
                     kind="approval_policy",
@@ -8714,13 +12964,17 @@ class MoonMindRunWorkflow:
                     self._publish_reason = self._plan_blocked_message
                     self._refresh_step_readiness(updated_at=workflow.now())
                     continue
-                if (
-                    result_status != "COMPLETED"
-                    and (
-                        publish_mode in {"pr", "branch"}
-                        or workflow.patched(RUN_FAILED_RESULT_BLOCKER_PATCH)
-                    )
+                if result_status != "COMPLETED" and (
+                    publish_mode in {"pr", "branch"}
+                    or workflow.patched(RUN_FAILED_RESULT_BLOCKER_PATCH)
                 ):
+                    # Failed managed runs may still carry independently verified
+                    # terminal-checkpoint publication evidence. Project it before
+                    # the failure short-circuit so operators can recover the work.
+                    self._record_publish_result(
+                        parameters=parameters,
+                        execution_result=execution_result,
+                    )
                     self._plan_blocked_message = (
                         step_failure_summary
                         or self._activity_result_provider_failure_summary(
@@ -8739,6 +12993,19 @@ class MoonMindRunWorkflow:
                     continue
                 continue
 
+            workflow_owned_remediation_head = self._is_moonspec_remediation_step(
+                node
+            ) and workflow.patched(RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH)
+            if not workflow_owned_remediation_head:
+                self._advance_remediation_workspace_head(
+                    node=node,
+                    node_inputs=node_inputs,
+                    execution_result=execution_result,
+                    step_execution_id=(
+                        f"{workflow.info().workflow_id}:{workflow.info().run_id}:"
+                        f"{node_id}:execution:{self._step_execution_for(node_id) or 1}"
+                    ),
+                )
             self._mark_step_terminal(
                 node_id,
                 status="completed",
@@ -8747,9 +13014,20 @@ class MoonMindRunWorkflow:
                 or self._summary,
                 last_error=None,
             )
+            outputs = self._effective_result_outputs(execution_result)
+            if isinstance(outputs, Mapping):
+                self._record_declared_side_effect(
+                    logical_step_id=node_id,
+                    outputs=outputs,
+                )
             self._record_downstream_dependency_effects(
                 node_id,
                 updated_at=workflow.now(),
+            )
+            self._record_omnigent_initial_context_ref(
+                node_id,
+                attempt=self._step_execution_for(node_id) or 1,
+                execution_result=execution_result,
             )
             await self._record_step_execution_manifest(
                 node_id,
@@ -8757,21 +13035,24 @@ class MoonMindRunWorkflow:
                 updated_at=workflow.now(),
                 reason=attempt_reason,
                 status="completed",
-                terminal_disposition="accepted",
-                budget=self._review_gate_budget_metadata(
-                    max_review_attempts=max_review_attempts,
-                    review_retry_count=review_retry_count,
-                    max_consecutive_no_progress_attempts=(
-                        max_consecutive_no_progress_attempts
-                    ),
-                    consecutive_no_progress_attempts=(
-                        consecutive_no_progress_attempts
-                    ),
-                    verdict="FULLY_IMPLEMENTED",
-                    recommended_next_action="advance",
-                )
-                if review_gate_active
-                else None,
+                terminal_disposition=accepted_gate_disposition,
+                budget=(
+                    accepted_gate_budget
+                    or self._review_gate_budget_metadata(
+                        max_review_attempts=max_review_attempts,
+                        review_retry_count=review_retry_count,
+                        max_consecutive_no_progress_attempts=(
+                            max_consecutive_no_progress_attempts
+                        ),
+                        consecutive_no_progress_attempts=(
+                            consecutive_no_progress_attempts
+                        ),
+                        verdict=accepted_gate_verdict,
+                        recommended_next_action=accepted_gate_action,
+                    )
+                    if review_gate_active
+                    else None
+                ),
             )
             self._record_step_checkpoint_evidence(
                 node_id,
@@ -8783,12 +13064,11 @@ class MoonMindRunWorkflow:
                 node_id=node_id,
                 execution_result=execution_result,
             )
-            if (
-                self._gated_continuation_request
-                and workflow.patched(RUN_GATED_STEP_CONTINUATION_PATCH)
+            if self._gated_continuation_request and workflow.patched(
+                RUN_GATED_STEP_CONTINUATION_PATCH
             ):
-                continuation_blocked_message = (
-                    self._gated_continuation_failure_message(parameters)
+                continuation_blocked_message = self._gated_continuation_failure_message(
+                    parameters
                 )
                 if continuation_blocked_message:
                     self._plan_blocked_message = continuation_blocked_message
@@ -8810,9 +13090,8 @@ class MoonMindRunWorkflow:
                 if blocked_outcome_wait_skipped
                 else self._blocked_outcome_message(execution_result)
             )
-            if (
-                blocked_message
-                and workflow.patched(RUN_BLOCKED_OUTCOME_SHORT_CIRCUIT_PATCH)
+            if blocked_message and workflow.patched(
+                RUN_BLOCKED_OUTCOME_SHORT_CIRCUIT_PATCH
             ):
                 self._plan_blocked_message = blocked_message
                 self._publish_status = "not_required"
@@ -8829,23 +13108,79 @@ class MoonMindRunWorkflow:
                 self._update_memo()
                 break
             publish_status_before = self._publish_status
-            await self._record_canonical_step_checkpoint(
-                node_id,
-                boundary="before_publication",
-                updated_at=workflow.now(),
+            remediation_checkpoint_required = (
+                workflow.patched(RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH)
+                and self._remediation_loop_spec is not None
+                and (
+                    workflow_owned_remediation_head
+                    or self._moonspec_step_role(node) == "moonspec-verification-gate"
+                )
             )
-            await self._record_publish_result_from_execution(
-                parameters=parameters,
-                execution_result=execution_result,
-            )
+            if remediation_checkpoint_required:
+                prepublication_checkpoint_failed = (
+                    await self._record_prepublication_checkpoint(
+                        node_id,
+                        publish_mode=publish_mode,
+                        updated_at=workflow.now(),
+                        required_for_remediation=True,
+                    )
+                )
+            else:
+                # Preserve the historical internal invocation shape for replayed
+                # paths and test/runtime adapters that predate remediation-owned
+                # checkpoint admission.
+                prepublication_checkpoint_failed = (
+                    await self._record_prepublication_checkpoint(
+                        node_id,
+                        publish_mode=publish_mode,
+                        updated_at=workflow.now(),
+                    )
+                )
+            if prepublication_checkpoint_failed:
+                break
+            if workflow_owned_remediation_head:
+                self._advance_remediation_workspace_head(
+                    node=node,
+                    node_inputs=node_inputs,
+                    execution_result=execution_result,
+                    step_execution_id=(
+                        f"{workflow.info().workflow_id}:{workflow.info().run_id}:"
+                        f"{node_id}:execution:{self._step_execution_for(node_id) or 1}"
+                    ),
+                )
+            publication_raised = False
+            try:
+                await self._record_publish_result_from_execution(
+                    parameters=parameters,
+                    execution_result=execution_result,
+                )
+            except Exception as exc:
+                if not workflow.patched(RUN_DURABLE_FINALIZATION_OUTCOME_PATCH):
+                    raise
+                self._record_publication_finalization_failure(
+                    node_id,
+                    exc=exc,
+                    updated_at=workflow.now(),
+                )
+                publication_raised = True
+            if (
+                not publication_raised
+                and self._publish_status == "failed"
+                and publish_status_before != "failed"
+                and workflow.patched(RUN_DURABLE_FINALIZATION_OUTCOME_PATCH)
+            ):
+                self._record_publication_finalization_failure(
+                    node_id,
+                    exc=RuntimeError(self._publish_reason or "Publish failed"),
+                    updated_at=workflow.now(),
+                )
             if workflow.patched(RUN_MOONSPEC_VERIFY_PUBLICATION_GATE_PATCH):
                 outputs_for_gate = self._get_from_result(execution_result, "outputs")
-                if (
-                    isinstance(outputs_for_gate, Mapping)
-                    and self._is_moonspec_verify_step(
-                        tool_name=tool_name,
-                        node_inputs=node_inputs,
-                    )
+                if isinstance(
+                    outputs_for_gate, Mapping
+                ) and self._is_moonspec_verify_step(
+                    tool_name=tool_name,
+                    node_inputs=node_inputs,
                 ):
                     step_gate_result = self._moonspec_verify_gate_result(
                         outputs_for_gate
@@ -8861,11 +13196,65 @@ class MoonMindRunWorkflow:
                         self._moonspec_gate_verdict
                     )
                     blocking_gate_reason = self._blocking_moonspec_gate_reason()
+                    dynamic_attempt_admitted = False
+                    if (
+                        workflow.patched(RUN_DYNAMIC_REMEDIATION_LOOP_CONTROLLER_PATCH)
+                        and self._remediation_loop_spec is not None
+                        and gate_verdict is not None
+                    ):
+                        dynamic_attempt_admitted = await self._evaluate_dynamic_remediation_verification(
+                            ordered_nodes=ordered_nodes,
+                            verdict=gate_verdict,
+                            gate_result_ref=step_gate_result_ref,
+                            remaining_work_ref=(step_gate_result.remaining_work_ref),
+                            progress_signature=self._coerce_text(
+                                (step_gate_result.validated_refs or {}).get(
+                                    "authoritativeEvidenceDigest"
+                                ),
+                                max_chars=200,
+                            ),
+                            current_index=index,
+                            logical_step_id=node_id,
+                            recoverable_evidence=(
+                                step_gate_result.recoverable_in_current_runtime
+                            ),
+                            workspace_head=(
+                                outputs_for_gate.get("remediationWorkspaceHead")
+                                if isinstance(
+                                    outputs_for_gate.get("remediationWorkspaceHead"),
+                                    Mapping,
+                                )
+                                else None
+                            ),
+                            headless_workspace_spec=(
+                                self._verified_headless_remediation_workspace_spec(
+                                    node_inputs=node_inputs,
+                                    outputs=outputs_for_gate,
+                                )
+                                or (
+                                    self._published_branch_remediation_workspace_spec(
+                                        node_inputs=node_inputs,
+                                    )
+                                    if workflow.patched(
+                                        RUN_EXTERNAL_PUBLISHED_BRANCH_REMEDIATION_PATCH
+                                    )
+                                    else None
+                                )
+                                if workflow.patched(
+                                    RUN_HEADLESS_REMEDIATION_VERIFIED_WORKSPACE_PATCH
+                                )
+                                else None
+                            ),
+                        )
+                        if workflow.patched(
+                            RUN_REFRESH_MOONSPEC_BLOCK_AFTER_REMEDIATION_DECISION_PATCH
+                        ):
+                            blocking_gate_reason = self._blocking_moonspec_gate_reason()
+                        if dynamic_attempt_admitted:
+                            blocking_gate_reason = None
                     remaining_remediation_index = (
                         index - 1
-                        if workflow.patched(
-                            RUN_MOONSPEC_VERIFY_REMEDIATION_INDEX_PATCH
-                        )
+                        if workflow.patched(RUN_MOONSPEC_VERIFY_REMEDIATION_INDEX_PATCH)
                         else index
                     )
                     continuation_decision = (
@@ -8875,47 +13264,276 @@ class MoonMindRunWorkflow:
                             gate_result_ref=step_gate_result_ref,
                             ordered_nodes=ordered_nodes,
                             current_index=remaining_remediation_index,
+                            plan_routed_moonspec_remediation_enabled=(
+                                plan_routed_moonspec_remediation_enabled
+                            ),
                         )
                     )
                     if blocking_gate_reason and not bool(
                         continuation_decision.get("continueLoop")
                     ):
-                        if (
-                            workflow.patched(
-                                RUN_MOONSPEC_GATE_ENVIRONMENT_DRAFT_PUBLISH_PATCH
+                        transition_reason = "terminal_gate_verdict"
+                        loop_state = self._remediation_loop_state
+                        normalized_gate = str(
+                            (
+                                loop_state.latest_verdict
+                                if loop_state is not None
+                                and loop_state.continuation_decision_ref
+                                else gate_verdict
                             )
-                            and self._moonspec_environment_blocked_publish_action()
-                            == "draft_pr"
-                            and publish_mode == "pr"
-                            and self._moonspec_gate_qualifies_for_draft_publish()
+                            or ""
+                        ).upper()
+                        budget_payload = continuation_decision.get("budget")
+                        consumed_payload = (
+                            budget_payload.get("consumed")
+                            if isinstance(budget_payload, Mapping)
+                            else None
+                        )
+                        if isinstance(consumed_payload, Mapping) and int(
+                            consumed_payload.get("consecutiveNoProgressAttempts", 0)
+                            or 0
+                        ) >= int(
+                            budget_payload.get("maxConsecutiveNoProgressAttempts", 1)
+                            or 1
                         ):
-                            draft_summary = (
-                                self._activate_moonspec_draft_publication(
-                                    blocking_gate_reason
+                            transition_reason = "semantic_no_progress_exhausted"
+                        elif (
+                            normalized_gate == "ADDITIONAL_WORK_NEEDED"
+                            and plan_routed_moonspec_remediation_enabled
+                        ):
+                            _, transition_reason = (
+                                self._resolve_next_moonspec_remediation_step(
+                                    ordered_nodes=ordered_nodes,
+                                    current_index=index - 1,
                                 )
                             )
+                        elif normalized_gate == "NO_DETERMINATION":
+                            transition_reason = "unrecoverable_no_determination"
+                        remediation_budget = continuation_decision.get(
+                            "remediationBudget"
+                        )
+                        review_budget = continuation_decision.get("reviewGateBudget")
+                        gate_payload = continuation_decision.get("gate")
+                        gate_payload = (
+                            gate_payload if isinstance(gate_payload, Mapping) else {}
+                        )
+                        remaining_work_ref = (
+                            gate_payload.get("remainingWorkRef")
+                            or step_gate_result.remaining_work_ref
+                        )
+                        attempt_payload = continuation_decision.get("attempt")
+                        attempt_payload = (
+                            attempt_payload
+                            if isinstance(attempt_payload, Mapping)
+                            else {}
+                        )
+                        workspace_head_ref = attempt_payload.get(
+                            "checkpointAfterRef"
+                        ) or attempt_payload.get("checkpointBeforeRef")
+                        terminal_handoff_enabled = workflow.patched(
+                            RUN_WORKFLOW_GATE_TERMINAL_HANDOFF_PATCH
+                        )
+                        if (
+                            normalized_gate == "ADDITIONAL_WORK_NEEDED"
+                            and terminal_handoff_enabled
+                        ):
+                            remaining_work_ref = (
+                                await self._materialize_remaining_work_artifact(
+                                    gate=step_gate_result,
+                                    gate_result_ref=step_gate_result_ref,
+                                    workspace_head_ref=workspace_head_ref,
+                                )
+                            )
+                            gate_payload = dict(gate_payload)
+                            gate_payload["remainingWorkRef"] = remaining_work_ref
+                            continuation_decision["gate"] = gate_payload
+                            continuation_decision["remainingWorkRef"] = (
+                                remaining_work_ref
+                            )
+                        feasibility = self._publication_feasibility(execution_result)
+                        exhausted_budget_dimension = (
+                            "consecutive_no_progress_attempts"
+                            if transition_reason == "no_progress_attempts_exhausted"
+                            else (
+                                "remediation_attempts"
+                                if transition_reason == "remediation_budget_exhausted"
+                                else None
+                            )
+                        )
+                        self._workflow_control_stop = {
+                            "kind": "workflow_gate",
+                            "reasonCode": transition_reason,
+                            "logicalStepId": node_id,
+                            "verdict": normalized_gate,
+                            "terminalDisposition": "failed_with_remaining_work",
+                            "gateResultRef": step_gate_result_ref,
+                            "continuationDecisionRef": (
+                                loop_state.continuation_decision_ref
+                                if loop_state is not None
+                                else None
+                            ),
+                            "verificationRef": gate_payload.get("diagnosticsRef"),
+                            "remainingWorkRef": remaining_work_ref,
+                            "workspaceHeadRef": workspace_head_ref,
+                            "exhaustedBudgetDimension": exhausted_budget_dimension,
+                            "lastAcceptedStepExecutionId": attempt_payload.get(
+                                "stepExecutionId"
+                            ),
+                            "publicationFeasible": feasibility["feasible"],
+                            "publicationFeasibilityReason": feasibility["reason"],
+                            "publicationAttempted": False,
+                            "metrics": {
+                                "failureKind": "workflow_gate",
+                                "gateVerdict": normalized_gate,
+                                "gateReason": transition_reason,
+                                "publicationFeasibility": feasibility["reason"],
+                                "publicationRequested": publish_mode != "none",
+                                "publicationCompleted": False,
+                                "noChangeHandoff": not feasibility["feasible"],
+                                "candidatePreserved": bool(workspace_head_ref),
+                                "recoveryTargetAvailable": False,
+                                "remediationAdmitted": False,
+                            },
+                            "auxiliaryOutcomes": {
+                                "evidencePublication": {"status": "preserved"},
+                                "gitPublication": {"status": "not_attempted"},
+                                "workspacePreservation": {
+                                    "status": (
+                                        "preserved"
+                                        if workspace_head_ref
+                                        else "unavailable"
+                                    )
+                                },
+                                "hostCleanup": {"status": "pending"},
+                                "providerProfileRelease": {"status": "pending"},
+                                "janitorRequired": False,
+                            },
+                            "reviewGateBudget": (
+                                dict(review_budget)
+                                if isinstance(review_budget, Mapping)
+                                else None
+                            ),
+                            "remediationBudget": (
+                                dict(remediation_budget)
+                                if isinstance(remediation_budget, Mapping)
+                                else None
+                            ),
+                        }
+                        control_stop_summary = {
+                            "remediation_budget_exhausted": (
+                                "Skipped because remediation budget was exhausted "
+                                "after verification attempt "
+                                f"{(self._workflow_control_stop.get('remediationBudget') or {}).get('currentAttempt')}."
+                            ),
+                            "no_remediation_successor": (
+                                "Skipped because no explicit remediation successor exists."
+                            ),
+                            "semantic_no_progress_exhausted": (
+                                "Skipped because consecutive remediation cycles "
+                                "produced no new progress."
+                            ),
+                            "terminal_gate_verdict": (
+                                "Skipped because verification returned "
+                                f"{normalized_gate}."
+                            ),
+                            "unrecoverable_no_determination": (
+                                "Skipped because verification could not obtain "
+                                "recoverable evidence."
+                            ),
+                        }.get(transition_reason, blocking_gate_reason)
+                        environment_draft_publish_enabled = workflow.patched(
+                            RUN_MOONSPEC_GATE_ENVIRONMENT_DRAFT_PUBLISH_PATCH
+                        )
+                        additional_work_draft_publish_enabled = workflow.patched(
+                            RUN_MOONSPEC_ADDITIONAL_WORK_DRAFT_PUBLISH_PATCH
+                        )
+                        draft_publication_policy = (
+                            self._moonspec_draft_publication_policy(
+                                environment_blocked_enabled=(
+                                    environment_draft_publish_enabled
+                                ),
+                                additional_work_enabled=(
+                                    additional_work_draft_publish_enabled
+                                ),
+                            )
+                        )
+                        terminal_handoff_kind = self._terminal_gate_handoff_kind(
+                            publish_mode=publish_mode,
+                            draft_publication_policy=draft_publication_policy,
+                            publication_feasible=bool(feasibility["feasible"]),
+                        )
+                        if terminal_handoff_kind == "draft_publication":
+                            self._workflow_control_stop["publicationAttempted"] = True
+                            self._workflow_control_stop["auxiliaryOutcomes"][
+                                "gitPublication"
+                            ] = {"status": "attempted"}
+                            draft_summary = self._activate_moonspec_draft_publication(
+                                blocking_gate_reason,
+                                policy=draft_publication_policy,
+                            )
                             self._summary = draft_summary
+                            self._workflow_control_stop["metrics"][
+                                "publicationRequested"
+                            ] = True
+                            # Draft publication is an explicit recovery handoff.
+                            # The remaining plan is skipped below, so preserve
+                            # already-pushed changes for the post-loop native PR
+                            # boundary even when an earlier auxiliary tool result
+                            # left a stale not_required/no-commit projection.
+                            if workflow.patched(
+                                RUN_MOONSPEC_DRAFT_PUBLISH_RECOVERY_HANDOFF_PATCH
+                            ) and self._execution_result_has_publishable_changes(
+                                execution_result
+                            ):
+                                require_pull_request_url = True
+                                if self._publish_status in {
+                                    "not_required",
+                                    "skipped",
+                                }:
+                                    self._publish_status = None
+                                    self._publish_reason = None
+                                    self._publish_context.pop("noCommitPublish", None)
+                                    self._publish_context.pop("noChangePublish", None)
                             self._mark_remaining_plan_steps_skipped(
                                 ordered_nodes=ordered_nodes,
                                 completed_index=index - 1,
                                 summary=draft_summary,
                             )
-                            self._refresh_step_readiness(
-                                updated_at=workflow.now()
-                            )
+                            self._refresh_step_readiness(updated_at=workflow.now())
                             self._update_memo()
                             break
-                        self._plan_blocked_message = blocking_gate_reason
+                        if (
+                            terminal_handoff_kind == "artifact_backed"
+                            and terminal_handoff_enabled
+                        ):
+                            handoff_ref = await self._persist_terminal_gate_handoff(
+                                feasibility=feasibility,
+                                publish_mode=publish_mode,
+                                remaining_work_ref=remaining_work_ref,
+                                workspace_head_ref=workspace_head_ref,
+                            )
+                            self._workflow_control_stop["terminalHandoffRef"] = (
+                                handoff_ref
+                            )
+                            if feasibility["reason"] == "no_candidate_change":
+                                control_stop_summary = (
+                                    "Verification completed as an operation but the quality "
+                                    f"gate returned {normalized_gate}. No pull request was "
+                                    "attempted because no publishable candidate change existed; "
+                                    "the remaining-work evidence is preserved for Edit for rerun "
+                                    "or Full retry."
+                                )
+                        self._plan_blocked_message = control_stop_summary
                         self._publish_status = "not_required"
-                        self._publish_reason = blocking_gate_reason
+                        self._publish_reason = control_stop_summary
                         self._publish_context["publicationBlockedBy"] = (
                             "moonspec_verify"
                         )
-                        self._summary = blocking_gate_reason
+                        self._summary = control_stop_summary
                         self._mark_remaining_plan_steps_skipped(
                             ordered_nodes=ordered_nodes,
                             completed_index=index - 1,
-                            summary=blocking_gate_reason,
+                            summary=control_stop_summary,
                         )
                         self._refresh_step_readiness(updated_at=workflow.now())
                         self._update_memo()
@@ -8955,7 +13573,10 @@ class MoonMindRunWorkflow:
                 execution_result, "outputs"
             )
             if isinstance(outputs_for_story_output, Mapping):
-                self._record_assessment_context(outputs_for_story_output)
+                self._record_assessment_context(
+                    outputs_for_story_output,
+                    request=agent_request_for_context,
+                )
                 self._record_trusted_issue_context(outputs_for_story_output)
                 previous_step_outputs = outputs_for_story_output
                 story_output_result = outputs_for_story_output.get("storyOutput")
@@ -9017,6 +13638,23 @@ class MoonMindRunWorkflow:
         if self._cancel_requested:
             return
 
+        if workflow.patched(RUN_AUTHORITATIVE_PR_REQUIREMENT_PATCH):
+            require_pull_request_url = self._authoritative_pr_requirement(
+                publish_mode=publish_mode,
+                pr_publish_optional=pr_publish_optional,
+            )
+            pull_request_url = pull_request_url or self._coerce_text(
+                self._publish_context.get("pullRequestUrl"),
+                max_chars=500,
+            )
+
+        if (
+            workflow.patched(RUN_PREPUBLICATION_FAILURE_BLOCKS_PUBLISH_PATCH)
+            and self._publish_status == "failed"
+        ):
+            require_pull_request_url = False
+            pull_request_url = None
+
         if (
             workflow.patched(RUN_MOONSPEC_VERIFY_PUBLICATION_GATE_PATCH)
             and self._apply_blocking_moonspec_gate_to_publish()
@@ -9051,9 +13689,7 @@ class MoonMindRunWorkflow:
                         parameters=parameters,
                         execution_result=execution_result,
                     )
-                    pull_request_url = self._extract_pull_request_url(
-                        execution_result
-                    )
+                    pull_request_url = self._extract_pull_request_url(execution_result)
 
         if require_pull_request_url and pull_request_url is None:
             last_tool = (
@@ -9141,7 +13777,10 @@ class MoonMindRunWorkflow:
                     self._get_logger().info(
                         "Skipping native PR creation: publish output not required."
                     )
-                elif push_status == "no_commits":
+                elif (
+                    push_status == "no_commits"
+                    and self._moonspec_draft_publication_reason is None
+                ):
                     self._get_logger().info(
                         "Skipping native PR creation: agent made no commits "
                         "on branch '%s'.",
@@ -9193,6 +13832,7 @@ class MoonMindRunWorkflow:
                         )
                         pr_url = self._get_from_result(create_result, "url")
                         created = self._get_from_result(create_result, "created")
+                        adopted = self._get_from_result(create_result, "adopted")
                         summary = self._get_from_result(create_result, "summary") or ""
                         created_head_sha = self._coerce_text(
                             self._get_from_result(create_result, "headSha"),
@@ -9200,6 +13840,15 @@ class MoonMindRunWorkflow:
                         )
                         if created_head_sha:
                             self._publish_context["headSha"] = created_head_sha
+                        if (
+                            self._moonspec_draft_publication_reason is not None
+                            and not created
+                            and not adopted
+                        ):
+                            raise ValueError(
+                                "draft PR publication was rejected: "
+                                f"{summary or 'existing pull request is not a draft'}"
+                            )
                         if pr_url:
                             pull_request_url = pr_url
                             self._get_logger().info(
@@ -9219,6 +13868,13 @@ class MoonMindRunWorkflow:
                         raise ValueError(
                             f"publishMode 'pr' requested; native PR creation failed: {e}"
                         ) from e
+        if workflow.patched(
+            RUN_DURABLE_PUBLISH_CONTEXT_MERGE_HANDOFF_PATCH
+        ) and not self._publish_context.get("publicationBlockedBy"):
+            pull_request_url = pull_request_url or self._coerce_text(
+                self._publish_context.get("pullRequestUrl"),
+                max_chars=500,
+            )
         if (
             pr_publish_optional
             and publish_mode == "pr"
@@ -9226,9 +13882,7 @@ class MoonMindRunWorkflow:
             and pull_request_url is None
         ):
             self._publish_status = "not_required"
-            self._publish_reason = (
-                "Jira issue agent completed; no PR output required"
-            )
+            self._publish_reason = "Jira issue agent completed; no PR output required"
             if self._merge_automation_requested(parameters):
                 self._publish_context["mergeAutomationStatus"] = "not_applicable"
         # Persist the PR URL so the workflow output can determine if a PR was created.
@@ -9269,9 +13923,9 @@ class MoonMindRunWorkflow:
             return outputs
         if not workflow.patched(RUN_DIRECT_TOOL_REPORT_OUTPUTS_PATCH):
             return None
-        if isinstance(result, Mapping) and not _DIRECT_EXECUTABLE_OUTPUT_KEYS.isdisjoint(
-            result
-        ):
+        if isinstance(
+            result, Mapping
+        ) and not _DIRECT_EXECUTABLE_OUTPUT_KEYS.isdisjoint(result):
             return result
         return None
 
@@ -9281,6 +13935,10 @@ class MoonMindRunWorkflow:
 
     def _auto_publish_evidence_sources(self, result: Any) -> list[Mapping[str, Any]]:
         sources: list[Mapping[str, Any]] = []
+        if isinstance(result, Mapping) and workflow.patched(
+            RUN_PR_RESOLVER_PUBLISH_EVIDENCE_REF_PATCH
+        ):
+            sources.append(result)
         outputs = self._effective_result_outputs(result)
         metadata = (
             self._effective_result_metadata(result)
@@ -9288,9 +13946,26 @@ class MoonMindRunWorkflow:
             else None
         )
         for source in (outputs, metadata):
-            if isinstance(source, Mapping):
+            if isinstance(source, Mapping) and source not in sources:
                 sources.append(source)
         return sources
+
+    @staticmethod
+    def _inline_auto_publish_evidence(value: Any) -> Any:
+        if isinstance(value, Mapping) or isinstance(value, bytes):
+            return value
+        if isinstance(value, str) and value.lstrip().startswith("{"):
+            return value
+        return None
+
+    @staticmethod
+    def _auto_publish_artifact_ref(value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        candidate = value.strip()
+        if candidate.startswith("art_") or candidate.startswith("artifact:"):
+            return candidate
+        return None
 
     def _activity_result_status(self, result: Any) -> str | None:
         raw_status = self._get_from_result(result, "status")
@@ -9384,6 +14059,35 @@ class MoonMindRunWorkflow:
             turn_metadata.get("failureClass"),
             turn_metadata.get("failure_class"),
         )
+
+        metadata = outputs.get("metadata")
+        if not isinstance(metadata, Mapping):
+            metadata = {}
+
+        # A validated resolver terminal disposition belongs to the selected
+        # Skill, not generic provider recovery. Retrying manual-review or failed
+        # terminal evidence can repeat mutations. A rejected typed continuation
+        # is non-retryable only when the synthetic resolver continuation error is
+        # the authoritative failure; real provider failures keep their existing
+        # bounded retry classification. Missing or malformed terminal evidence
+        # also stays retryable so the repair path can recover it.
+        if self._workflow_patch_enabled(RUN_TERMINAL_CONTRACT_RETRY_DECISION_PATCH):
+            terminal_contract_outcome = (
+                str(metadata.get("terminalContractOutcome") or "").strip().lower()
+            )
+            merge_automation_disposition = (
+                str(metadata.get("mergeAutomationDisposition") or "").strip().lower()
+            )
+            if (
+                terminal_contract_outcome == "terminal_failure"
+                and merge_automation_disposition in {"manual_review", "failed"}
+            ):
+                return False
+            if (
+                terminal_contract_outcome == "continuation_requested"
+                and provider_error_code == "pr_resolver_reenter_gate"
+            ):
+                return False
 
         if provider_error_code in {"401", "403"}:
             return False
@@ -9715,7 +14419,7 @@ class MoonMindRunWorkflow:
                     return message
             match = _PLAIN_TEXT_BLOCKED_OUTCOME_PATTERN.search(value)
             if match:
-                summary = self._coerce_text(value[match.start():], max_chars=700)
+                summary = self._coerce_text(value[match.start() :], max_chars=700)
                 if summary:
                     return f"Workflow blocked by plan step: {summary}"
 
@@ -10049,7 +14753,7 @@ class MoonMindRunWorkflow:
         if preserve_assessment_context:
             outputs = self._get_from_result(current_result, "outputs")
             if isinstance(outputs, Mapping):
-                self._record_assessment_context(outputs)
+                self._record_assessment_context(outputs, request=agent_request)
         while self._jira_blocker_waitable_result(
             current_result,
             tool_type=tool_type,
@@ -10108,9 +14812,7 @@ class MoonMindRunWorkflow:
                     "status": "FAILED",
                     "outputs": {
                         "error": "missing_required_checkpoint_evidence",
-                        "summary": (
-                            "Workspace policy rejected before launch."
-                        ),
+                        "summary": ("Workspace policy rejected before launch."),
                     },
                 }
                 break
@@ -10224,7 +14926,7 @@ class MoonMindRunWorkflow:
                 )
                 outputs = self._get_from_result(current_result, "outputs")
                 if isinstance(outputs, Mapping):
-                    self._record_assessment_context(outputs)
+                    self._record_assessment_context(outputs, request=agent_request)
             self._record_step_result_evidence(
                 node_id,
                 execution_result=current_result,
@@ -10250,7 +14952,7 @@ class MoonMindRunWorkflow:
         completed_index: int,
         summary: str,
     ) -> None:
-        for node in ordered_nodes[completed_index + 1:]:
+        for node in ordered_nodes[completed_index + 1 :]:
             node_id = str(node.get("id") or "").strip()
             if not node_id:
                 continue
@@ -10282,9 +14984,7 @@ class MoonMindRunWorkflow:
         normalized = value.strip().lower()
         return normalized if normalized in {"auto", "none", "branch", "pr"} else ""
 
-    def _managed_session_runtime_id(
-        self, request: AgentExecutionRequest
-    ) -> str | None:
+    def _managed_session_runtime_id(self, request: AgentExecutionRequest) -> str | None:
         if request.agent_kind != "managed":
             return None
         return canonical_managed_session_runtime_id(request.agent_id)
@@ -10341,28 +15041,43 @@ class MoonMindRunWorkflow:
         if self._codex_session_binding is not None:
             return self._codex_session_binding
 
+        recovery_agent_run_id = ""
+        if self._checkpoint_recovery_state is not None:
+            recovery_agent_run_id = str(
+                self._checkpoint_recovery_state.get("destinationAgentRunId") or ""
+            ).strip()
+        agent_run_id = recovery_agent_run_id or workflow.info().workflow_id
         session_input = CodexManagedSessionWorkflowInput(
-            agentRunId=workflow.info().workflow_id,
+            agentRunId=agent_run_id,
             runtimeId=runtime_id,
             executionProfileRef=request.execution_profile_ref,
         )
         session_workflow_id = self._workflow_scoped_session_workflow_id(runtime_id)
+        if recovery_agent_run_id:
+            session_workflow_id = f"{session_workflow_id}:recovery"
         initial_binding = CodexManagedSessionBinding.from_input(
             workflow_id=session_workflow_id,
             session_input=session_input,
         )
+        session_child_options: dict[str, Any] = {
+            "id": session_workflow_id,
+            "task_queue": self._workflow_child_task_queue(),
+            "search_attributes": self._workflow_scoped_session_visibility(
+                binding=initial_binding
+            ),
+            "static_summary": "Workflow-scoped managed runtime session",
+            "static_details": self._workflow_scoped_session_static_details(
+                binding=initial_binding
+            ),
+        }
+        if workflow.patched(RUN_WORKFLOW_SCOPED_SESSION_ABANDON_ON_PARENT_CLOSE_PATCH):
+            session_child_options["parent_close_policy"] = (
+                workflow.ParentClosePolicy.ABANDON
+            )
         self._codex_session_handle = await workflow.start_child_workflow(
             "MoonMind.AgentSession",
             session_input,
-            id=session_workflow_id,
-            task_queue=self._workflow_child_task_queue(),
-            search_attributes=self._workflow_scoped_session_visibility(
-                binding=initial_binding
-            ),
-            static_summary="Workflow-scoped managed runtime session",
-            static_details=self._workflow_scoped_session_static_details(
-                binding=initial_binding
-            ),
+            **session_child_options,
         )
         self._codex_session_binding = initial_binding
         return self._codex_session_binding
@@ -10491,9 +15206,7 @@ class MoonMindRunWorkflow:
                     result, "sessionState"
                 ) or self._get_from_result(result, "session_state")
                 if isinstance(session_state, Mapping):
-                    session_epoch = self._get_from_result(
-                        session_state, "sessionEpoch"
-                    )
+                    session_epoch = self._get_from_result(session_state, "sessionEpoch")
                     if isinstance(session_epoch, int) and session_epoch >= 1:
                         self._codex_session_binding = binding.model_copy(
                             update={"session_epoch": session_epoch}
@@ -10580,7 +15293,9 @@ class MoonMindRunWorkflow:
                             binding=binding,
                             reason=reason,
                         )
-                elif workflow.patched(RUN_WORKFLOW_SCOPED_SESSION_TERMINATION_UPDATE_PATCH):
+                elif workflow.patched(
+                    RUN_WORKFLOW_SCOPED_SESSION_TERMINATION_UPDATE_PATCH
+                ):
                     await session_handle.signal(
                         "control_action",
                         {
@@ -10663,7 +15378,9 @@ class MoonMindRunWorkflow:
             snapshot_route=snapshot_route,
         )
         if not snapshot.container_id or not snapshot.thread_id:
-            raise ValueError("Workflow-scoped managed session cannot be cleared before launch")
+            raise ValueError(
+                "Workflow-scoped managed session cannot be cleared before launch"
+            )
         clear_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
             "agent_runtime.clear_session"
         )
@@ -10839,9 +15556,13 @@ class MoonMindRunWorkflow:
         publish_payload = self._mapping_value(parameters, "publish")
         if publish_payload:
             return publish_payload
-        nested_publish = task_payload.get("publish") if isinstance(task_payload, dict) else None
+        nested_publish = (
+            task_payload.get("publish") if isinstance(task_payload, dict) else None
+        )
         if isinstance(nested_publish, Mapping):
-            return self._json_mapping(nested_publish, path="parameters.workflow.publish")
+            return self._json_mapping(
+                nested_publish, path="parameters.workflow.publish"
+            )
         return {}
 
     def _proposal_telemetry_signals(self) -> list[dict[str, Any]]:
@@ -10947,8 +15668,12 @@ class MoonMindRunWorkflow:
             return []
         return [dict(item) for item in raw if isinstance(item, dict)]
 
-    def _resolve_task_body_instructions(self, task_payload: Mapping[str, Any]) -> str | None:
-        instructions = self._coerce_text(task_payload.get("instructions"), flatten=False)
+    def _resolve_task_body_instructions(
+        self, task_payload: Mapping[str, Any]
+    ) -> str | None:
+        instructions = self._coerce_text(
+            task_payload.get("instructions"), flatten=False
+        )
         if instructions:
             return instructions
         steps = task_payload.get("steps")
@@ -10956,7 +15681,9 @@ class MoonMindRunWorkflow:
             for step in steps:
                 if not isinstance(step, Mapping):
                     continue
-                step_instructions = self._coerce_text(step.get("instructions"), flatten=False)
+                step_instructions = self._coerce_text(
+                    step.get("instructions"), flatten=False
+                )
                 if step_instructions:
                     return step_instructions
         return None
@@ -10967,9 +15694,7 @@ class MoonMindRunWorkflow:
         publish_payload: Mapping[str, Any],
         task_payload: Mapping[str, Any],
     ) -> str:
-        publish_title = self._coerce_text(
-            publish_payload.get("prTitle"), max_chars=150
-        )
+        publish_title = self._coerce_text(publish_payload.get("prTitle"), max_chars=150)
         if publish_title:
             return publish_title
         explicit_title = self._coerce_text(task_payload.get("title"), max_chars=150)
@@ -10998,9 +15723,7 @@ class MoonMindRunWorkflow:
         publish_payload: Mapping[str, Any],
         task_payload: Mapping[str, Any],
     ) -> str:
-        publish_body = self._coerce_text(
-            publish_payload.get("prBody"), flatten=False
-        )
+        publish_body = self._coerce_text(publish_payload.get("prBody"), flatten=False)
         if publish_body:
             return publish_body
         default_summary = self._resolve_task_body_instructions(task_payload)
@@ -11010,23 +15733,17 @@ class MoonMindRunWorkflow:
             return self._summary
         return "Automated changes by MoonMind."
 
-    def _resolve_publish_base_branch(self, publish_payload: Mapping[str, Any]) -> str | None:
+    def _resolve_publish_base_branch(
+        self, publish_payload: Mapping[str, Any]
+    ) -> str | None:
         raw_base = publish_payload.get("prBaseBranch")
         if raw_base is None:
             raw_base = publish_payload.get("baseBranch")
         return self._coerce_text(raw_base)
 
     def _normalize_native_pr_base_branch(self, value: Any) -> str | None:
-        branch = self._coerce_text(value)
-        if not branch:
-            return None
-        if branch.startswith("refs/remotes/origin/"):
-            branch = branch.removeprefix("refs/remotes/origin/")
-        elif branch.startswith("refs/heads/"):
-            branch = branch.removeprefix("refs/heads/")
-        if branch.startswith("origin/"):
-            branch = branch.removeprefix("origin/")
-        return branch
+        branch = _normalize_git_branch_ref(value)
+        return branch or None
 
     def _resolve_native_pr_branches(
         self,
@@ -11081,9 +15798,7 @@ class MoonMindRunWorkflow:
         head_branch = next(
             (
                 candidate
-                for candidate in (
-                    self._coerce_text(value) for value in head_candidates
-                )
+                for candidate in (self._coerce_text(value) for value in head_candidates)
                 if candidate
             ),
             "",
@@ -11159,9 +15874,8 @@ class MoonMindRunWorkflow:
         parameters: Mapping[str, Any],
         execution_result: Any,
     ) -> None:
-        if (
-            self._publish_status == "failed"
-            and workflow.patched(RUN_STOP_ON_PUBLISH_HANDOFF_FAILURE_PATCH)
+        if self._publish_status == "failed" and workflow.patched(
+            RUN_STOP_ON_PUBLISH_HANDOFF_FAILURE_PATCH
         ):
             return
 
@@ -11175,6 +15889,33 @@ class MoonMindRunWorkflow:
         outputs = self._effective_result_outputs(execution_result)
         if not isinstance(outputs, Mapping):
             return
+        terminal_publication = outputs.get("terminalPublication")
+        if isinstance(terminal_publication, Mapping):
+            compact_terminal = {
+                key: terminal_publication.get(key)
+                for key in (
+                    "intent",
+                    "status",
+                    "reasonCode",
+                    "source",
+                    "attempted",
+                    "commitCreated",
+                    "branchPushed",
+                    "branchName",
+                    "branchUrl",
+                    "headSha",
+                    "baseBranch",
+                    "remoteVerified",
+                    "evidenceRef",
+                    "idempotencyKey",
+                )
+                if terminal_publication.get(key) is not None
+            }
+            self._publish_context["terminalPublication"] = compact_terminal
+            if compact_terminal.get("remoteVerified") is True:
+                self._publish_context["branch"] = compact_terminal.get("branchName")
+                self._publish_context["headSha"] = compact_terminal.get("headSha")
+                self._publish_context["baseRef"] = compact_terminal.get("baseBranch")
         self._record_no_commit_publish_evidence(outputs)
 
         not_required_reason = self._publish_not_required_reason(outputs)
@@ -11185,24 +15926,17 @@ class MoonMindRunWorkflow:
                 self._publish_context["mergeAutomationStatus"] = "not_applicable"
             return
 
-        report_not_required_reason = self._report_only_publish_not_required_reason(
-            outputs
-        )
-        if report_not_required_reason is not None:
-            self._publish_status = "not_required"
-            self._publish_reason = report_not_required_reason
-            if self._merge_automation_requested(parameters):
-                self._publish_context["mergeAutomationStatus"] = "not_applicable"
-            return
-
         push_status = self._coerce_text(outputs.get("push_status"))
         if push_status is None:
             return
         self._record_publish_metadata_context(outputs)
 
         if push_status == "no_commits":
-            if publish_mode == "pr" and self._pr_publish_optional_for_task(
-                parameters, include_applied_templates=True
+            if publish_mode == "pr" and (
+                self._pr_publish_optional_for_task(
+                    parameters, include_applied_templates=True
+                )
+                or self._is_canonical_no_commit_task(parameters)
             ):
                 self._publish_status = "not_required"
                 self._publish_reason = self._compose_no_commit_publish_reason(
@@ -11277,12 +16011,9 @@ class MoonMindRunWorkflow:
     ) -> None:
         if self._publish_mode(parameters) == "auto":
             await self._resolve_auto_publish_evidence_ref(execution_result)
-            if (
-                self._publish_status == "failed"
-                and str(self._publish_reason or "").startswith(
-                    "auto_publish_evidence_read_failed:"
-                )
-            ):
+            if self._publish_status == "failed" and str(
+                self._publish_reason or ""
+            ).startswith("auto_publish_evidence_read_failed:"):
                 return
         self._record_publish_result(
             parameters=parameters,
@@ -11290,9 +16021,13 @@ class MoonMindRunWorkflow:
         )
 
     async def _resolve_auto_publish_evidence_ref(self, execution_result: Any) -> None:
+        resolver_ref_contract = workflow.patched(
+            RUN_PR_RESOLVER_PUBLISH_EVIDENCE_REF_PATCH
+        )
         sources = self._auto_publish_evidence_sources(execution_result)
         if not sources:
             return
+        ref: Any = None
         for source in sources:
             for key in (
                 "publishResult",
@@ -11303,9 +16038,12 @@ class MoonMindRunWorkflow:
                 "auto_publish_evidence",
             ):
                 if key in source:
-                    return
-
-        ref: Any = None
+                    if not resolver_ref_contract:
+                        return
+                    value = source.get(key)
+                    if self._inline_auto_publish_evidence(value) is not None:
+                        return
+                    ref = self._auto_publish_artifact_ref(value) or ref
         for source in sources:
             output_refs = source.get("outputRefs") or source.get("output_refs")
             if not isinstance(output_refs, Mapping):
@@ -11315,6 +16053,10 @@ class MoonMindRunWorkflow:
                 or output_refs.get("publishResult")
                 or output_refs.get("publish_result")
             )
+            if resolver_ref_contract and not ref:
+                ref = output_refs.get("publishEvidence") or output_refs.get(
+                    "publish_evidence"
+                )
             if isinstance(ref, str) and ref.strip():
                 break
         if not isinstance(ref, str) or not ref.strip():
@@ -11339,6 +16081,9 @@ class MoonMindRunWorkflow:
         self._publish_context["autoPublishEvidence"] = evidence_payload
 
     def _record_auto_publish_result(self, execution_result: Any) -> None:
+        resolver_ref_contract = workflow.patched(
+            RUN_PR_RESOLVER_PUBLISH_EVIDENCE_REF_PATCH
+        )
         evidence_payload: Any = None
         for source in self._auto_publish_evidence_sources(execution_result):
             for key in (
@@ -11350,8 +16095,17 @@ class MoonMindRunWorkflow:
                 "auto_publish_evidence",
             ):
                 if key in source:
-                    evidence_payload = source.get(key)
-                    break
+                    value = source.get(key)
+                    if not resolver_ref_contract:
+                        evidence_payload = value
+                        break
+                    inline = self._inline_auto_publish_evidence(value)
+                    if inline is not None:
+                        evidence_payload = inline
+                        break
+                    ref = self._auto_publish_artifact_ref(value)
+                    if ref:
+                        self._publish_context["evidenceRef"] = ref
             if evidence_payload is None:
                 output_refs = source.get("outputRefs") or source.get("output_refs")
                 if isinstance(output_refs, Mapping):
@@ -11360,6 +16114,10 @@ class MoonMindRunWorkflow:
                         or output_refs.get("publishResult")
                         or output_refs.get("publish_result")
                     )
+                    if resolver_ref_contract and not ref:
+                        ref = output_refs.get("publishEvidence") or output_refs.get(
+                            "publish_evidence"
+                        )
                     if isinstance(ref, str) and ref.strip():
                         self._publish_context["evidenceRef"] = ref.strip()
                         break
@@ -11417,46 +16175,6 @@ class MoonMindRunWorkflow:
             )
             if evidence.pr_url:
                 self._pull_request_url = evidence.pr_url
-
-    def _report_only_publish_not_required_reason(
-        self,
-        outputs: Mapping[str, Any],
-    ) -> str | None:
-        report_type = self._coerce_text(
-            outputs.get("report_type") or outputs.get("reportType"),
-            max_chars=120,
-        )
-        report_bundle = outputs.get("report_bundle") or outputs.get("reportBundle")
-        if not report_type and isinstance(report_bundle, Mapping):
-            report_type = self._coerce_text(
-                report_bundle.get("report_type") or report_bundle.get("reportType"),
-                max_chars=120,
-            )
-        if report_type not in _REPORT_ONLY_PUBLISH_TYPES:
-            return None
-
-        primary_ref = self._coerce_text(
-            outputs.get("primary_report_ref") or outputs.get("primaryReportRef"),
-            max_chars=200,
-        )
-        if not primary_ref and isinstance(report_bundle, Mapping):
-            primary_bundle_ref = report_bundle.get(
-                "primary_report_ref"
-            ) or report_bundle.get("primaryReportRef")
-            if isinstance(primary_bundle_ref, Mapping):
-                primary_ref = self._coerce_text(
-                    primary_bundle_ref.get("artifact_id")
-                    or primary_bundle_ref.get("artifactId"),
-                    max_chars=200,
-                )
-            else:
-                primary_ref = self._coerce_text(primary_bundle_ref, max_chars=200)
-        if not primary_ref:
-            return None
-        return (
-            "security.pentest.run produced a final report artifact; "
-            "PR/branch publication is not applicable"
-        )
 
     def _publish_not_required_reason(self, outputs: Mapping[str, Any]) -> str | None:
         for source in self._publish_outcome_sources(outputs):
@@ -11576,9 +16294,7 @@ class MoonMindRunWorkflow:
         )
         if isinstance(orchestration, Mapping):
             status = str(
-                orchestration.get("workflowStatus")
-                or orchestration.get("status")
-                or ""
+                orchestration.get("workflowStatus") or orchestration.get("status") or ""
             ).strip()
             created_count = orchestration.get(
                 "createdWorkflowCount", orchestration.get("createdTaskCount")
@@ -11607,9 +16323,9 @@ class MoonMindRunWorkflow:
                 suffix = f" ({'; '.join(parts)})" if parts else ""
                 return f"Jira downstream workflow creation {status}{suffix}."
 
-        github_orchestration = outputs.get("githubWorkflowOrchestration") or outputs.get(
-            "github_workflow_orchestration"
-        )
+        github_orchestration = outputs.get(
+            "githubWorkflowOrchestration"
+        ) or outputs.get("github_workflow_orchestration")
         if isinstance(github_orchestration, Mapping):
             status = str(github_orchestration.get("status") or "").strip()
             created_count = github_orchestration.get("createdWorkflowCount")
@@ -11671,9 +16387,7 @@ class MoonMindRunWorkflow:
                 max_chars=1600,
             )
         )
-        self._last_step_summary = self._sanitize_operator_summary(
-            step_summary
-        )
+        self._last_step_summary = self._sanitize_operator_summary(step_summary)
 
         self._last_diagnostics_ref = self._coerce_text(
             outputs.get("diagnostics_ref") or outputs.get("diagnosticsRef"),
@@ -11684,6 +16398,10 @@ class MoonMindRunWorkflow:
             node_id=node_id,
         )
         self._gated_continuation_request = gated_continuation
+        self._gated_continuation_execution_ref = self._coerce_text(
+            outputs.get("terminalContractExecutionRef"),
+            max_chars=240,
+        )
         if gated_continuation:
             self._publish_context["gatedContinuation"] = gated_continuation
         else:
@@ -11727,9 +16445,26 @@ class MoonMindRunWorkflow:
         )
         if publish_branch:
             self._publish_context["branch"] = publish_branch
+        if self._patched_or_false_outside_workflow(RUN_PUBLISHED_BRANCH_HANDOFF_PATCH):
+            push_status = self._coerce_text(
+                outputs.get("push_status") or outputs.get("pushStatus"),
+                max_chars=80,
+            )
+            if push_status == "pushed":
+                self._publish_context["pushStatus"] = push_status
+            elif push_status:
+                self._publish_context.pop("pushStatus", None)
 
         publish_base_ref = self._coerce_text(
-            outputs.get("push_base_ref") or outputs.get("pushBaseRef"),
+            outputs.get("push_base_ref")
+            or outputs.get("pushBaseRef")
+            or (
+                outputs.get("base_branch") or outputs.get("baseBranch")
+                if self._patched_or_false_outside_workflow(
+                    RUN_EXTERNAL_PUBLISHED_BRANCH_REMEDIATION_PATCH
+                )
+                else None
+            ),
             max_chars=120,
         )
         if publish_base_ref:
@@ -11860,9 +16595,7 @@ class MoonMindRunWorkflow:
         metadata = self._get_from_result(execution_result, "metadata")
         outputs = self._effective_result_outputs(execution_result)
         report_sources = [
-            source
-            for source in (metadata, outputs)
-            if isinstance(source, Mapping)
+            source for source in (metadata, outputs) if isinstance(source, Mapping)
         ]
         if not report_sources:
             return
@@ -11871,22 +16604,19 @@ class MoonMindRunWorkflow:
         report_bundle: Any = None
         for source in report_sources:
             report_ref = self._coerce_text(
-                source.get("primaryReportRef")
-                or source.get("primary_report_ref"),
+                source.get("primaryReportRef") or source.get("primary_report_ref"),
                 max_chars=200,
             )
             report_bundle = source.get("reportBundle") or source.get("report_bundle")
             if report_ref or isinstance(report_bundle, Mapping):
                 break
         if not report_ref and isinstance(report_bundle, Mapping):
-            primary_ref = (
-                report_bundle.get("primary_report_ref")
-                or report_bundle.get("primaryReportRef")
+            primary_ref = report_bundle.get("primary_report_ref") or report_bundle.get(
+                "primaryReportRef"
             )
             if isinstance(primary_ref, Mapping):
                 report_ref = self._coerce_text(
-                    primary_ref.get("artifact_id")
-                    or primary_ref.get("artifactId"),
+                    primary_ref.get("artifact_id") or primary_ref.get("artifactId"),
                     max_chars=200,
                 )
             else:
@@ -11898,6 +16628,18 @@ class MoonMindRunWorkflow:
 
     def _record_no_commit_publish_evidence(self, outputs: Mapping[str, Any]) -> None:
         push_status = self._coerce_text(outputs.get("push_status"), max_chars=80)
+        if self._authoritative_publish_outcome_enabled and push_status == "pushed":
+            stale_no_commit = self._publish_context.pop("noCommitPublish", None)
+            stale_no_change = self._publish_context.pop("noChangePublish", None)
+            if (
+                stale_no_commit is not None or stale_no_change is not None
+            ) and self._publish_status in {
+                "not_required",
+                "skipped",
+            }:
+                self._publish_status = None
+                self._publish_reason = None
+            return
         if push_status == "no_commits":
             self._publish_context["noCommitPublish"] = {"status": "no_commits"}
             return
@@ -11915,6 +16657,42 @@ class MoonMindRunWorkflow:
                 if publish_outcome.get(key) is True:
                     self._publish_context["noCommitPublish"] = {"status": key}
                     return
+
+    def _authoritative_pr_requirement(
+        self,
+        *,
+        publish_mode: str,
+        pr_publish_optional: bool,
+    ) -> bool:
+        """Derive the PR gate from durable publication evidence after all steps."""
+
+        if publish_mode != "pr" or self._integration is not None:
+            return False
+        if self._publish_status == "failed" or self._publish_context.get(
+            "publicationBlockedBy"
+        ):
+            return False
+        commit_count = self._publish_context.get("commitCount")
+        has_commits = (
+            not isinstance(commit_count, bool)
+            and isinstance(commit_count, (int, float))
+            and int(commit_count) > 0
+        ) or (
+            isinstance(commit_count, str)
+            and commit_count.strip().isdigit()
+            and int(commit_count.strip()) > 0
+        )
+        if has_commits or self._coerce_text(
+            self._publish_context.get("pullRequestUrl"), max_chars=500
+        ):
+            return True
+        if self._publish_status == "published" and self._publish_context.get(
+            "storyOutputMode"
+        ) in {"jira", "github"}:
+            return False
+        if self._publish_status in {"not_required", "skipped"}:
+            return False
+        return not pr_publish_optional
 
     @staticmethod
     def _node_selected_skill(node: Mapping[str, Any]) -> str:
@@ -11980,6 +16758,20 @@ class MoonMindRunWorkflow:
         if not skill_names:
             return False
         return skill_names.issubset(_PR_OPTIONAL_TASK_SKILLS)
+
+    def _is_canonical_no_commit_task(
+        self,
+        parameters: Mapping[str, Any],
+    ) -> bool:
+        if not self._canonical_no_commit_outcome_enabled:
+            return False
+        task_payload = self._mapping_value(parameters, "workflow")
+        if not task_payload:
+            task_payload = self._mapping_value(parameters, "task")
+        return bool(
+            self._task_applied_template_slugs(parameters, task_payload)
+            & _CANONICAL_NO_COMMIT_TASK_PRESETS
+        )
 
     def _task_skill_names(
         self,
@@ -12123,24 +16915,142 @@ class MoonMindRunWorkflow:
         return slugs
 
     def _execution_result_has_publishable_changes(self, execution_result: Any) -> bool:
+        return self._publication_feasibility(execution_result)["feasible"]
+
+    def _publication_feasibility(self, execution_result: Any) -> dict[str, Any]:
+        """Classify accepted repository evidence before selecting a handoff."""
+
         if self._extract_pull_request_url(execution_result):
-            return True
+            return PublicationFeasibility(
+                feasible=True, reason="verified_remote_head"
+            ).model_dump(by_alias=True)
         outputs = self._get_from_result(execution_result, "outputs")
         if not isinstance(outputs, Mapping):
-            return False
-        push_status = str(outputs.get("push_status") or "").strip().lower()
+            return PublicationFeasibility(
+                feasible=False, reason="publication_state_ambiguous"
+            ).model_dump(by_alias=True)
+        evidence = outputs.get("acceptedRepositoryEvidence")
+        if not isinstance(evidence, Mapping):
+            evidence = outputs.get("accepted_repository_evidence")
+        if not isinstance(evidence, Mapping):
+            return PublicationFeasibility(
+                feasible=False, reason="publication_state_ambiguous"
+            ).model_dump(by_alias=True)
+        candidate_diff_ref = self._bounded_story_loop_artifact_ref(
+            evidence.get("candidateDiffRef")
+        )
+        evidence_refs = tuple(
+            ref
+            for ref in (
+                self._bounded_story_loop_artifact_ref(evidence.get("evidenceRef")),
+                candidate_diff_ref,
+            )
+            if ref
+        )
+        if evidence.get("publicationAuthorized") is False:
+            return PublicationFeasibility(
+                feasible=False,
+                reason="publication_unauthorized",
+                evidenceRefs=evidence_refs,
+            ).model_dump(by_alias=True)
+        if evidence.get("candidateContaminated") is True:
+            return PublicationFeasibility(
+                feasible=False,
+                reason="candidate_contaminated",
+                evidenceRefs=evidence_refs,
+            ).model_dump(by_alias=True)
+        push_status = str(evidence.get("pushStatus") or "").strip().lower()
         if push_status in {"pushed", "published"}:
-            return True
-        commit_count = outputs.get("push_commit_count")
-        if commit_count is None:
-            commit_count = outputs.get("pushCommitCount")
+            return PublicationFeasibility(
+                feasible=True,
+                reason="verified_remote_head",
+                evidenceRefs=evidence_refs,
+            ).model_dump(by_alias=True)
+        commit_count = evidence.get("commitsAheadOfBase")
         if isinstance(commit_count, bool):
-            return False
+            commit_count = None
         if isinstance(commit_count, (int, float)):
-            return int(commit_count) > 0
-        if isinstance(commit_count, str) and commit_count.strip().isdigit():
-            return int(commit_count.strip()) > 0
-        return False
+            return PublicationFeasibility(
+                feasible=int(commit_count) > 0,
+                reason=(
+                    "commits_ahead_of_base"
+                    if int(commit_count) > 0
+                    else "no_candidate_change"
+                ),
+                evidenceRefs=evidence_refs,
+            ).model_dump(by_alias=True)
+        if candidate_diff_ref:
+            return PublicationFeasibility(
+                feasible=True,
+                reason="safe_candidate_diff",
+                evidenceRefs=evidence_refs,
+            ).model_dump(by_alias=True)
+        if evidence.get("repositoryChanged") is False:
+            return PublicationFeasibility(
+                feasible=False,
+                reason="no_candidate_change",
+                evidenceRefs=evidence_refs,
+            ).model_dump(by_alias=True)
+        return PublicationFeasibility(
+            feasible=False,
+            reason="publication_state_ambiguous",
+            evidenceRefs=evidence_refs,
+        ).model_dump(by_alias=True)
+
+    @staticmethod
+    def _terminal_gate_handoff_kind(
+        *,
+        publish_mode: str,
+        draft_publication_policy: str | None,
+        publication_feasible: bool,
+    ) -> str:
+        """Select the recovery handoff before attempting publication."""
+
+        if (
+            publish_mode == "pr"
+            and draft_publication_policy is not None
+            and publication_feasible
+        ):
+            return "draft_publication"
+        return "artifact_backed"
+
+    async def _persist_terminal_gate_handoff(
+        self,
+        *,
+        feasibility: Mapping[str, Any],
+        publish_mode: str,
+        remaining_work_ref: str | None,
+        workspace_head_ref: str | None,
+    ) -> str:
+        """Persist the explicit fallback handoff selected by the terminal gate."""
+
+        publication_feasible = bool(feasibility.get("feasible"))
+        handoff = {
+            "schemaVersion": "terminal-gate-handoff/v1",
+            "status": "artifact_backed",
+            "publicationFeasible": publication_feasible,
+            "publicationAttempted": False,
+            "publicationMode": publish_mode,
+            "reason": feasibility.get("reason") or "publication_state_ambiguous",
+            "remainingWorkRef": remaining_work_ref,
+            "workspaceHeadRef": workspace_head_ref,
+            "actions": [
+                "edit_for_rerun",
+                "full_retry",
+                "continue_remediation_not_yet_admitted",
+            ],
+        }
+        artifact_id = await self._write_json_artifact(
+            name="reports/terminal_gate_handoff.json",
+            payload=handoff,
+            metadata_json={"artifact_kind": "terminal_gate_handoff"},
+        )
+        artifact_ref = self._bounded_story_loop_artifact_ref(artifact_id)
+        handoff["artifactRef"] = artifact_ref
+        self._publish_context["terminalGateHandoff"] = handoff
+        if not publication_feasible:
+            self._publish_context["noChangeHandoff"] = handoff
+        return artifact_ref
 
     @staticmethod
     def _sanitize_operator_summary(summary: str | None) -> str | None:
@@ -12156,7 +17066,9 @@ class MoonMindRunWorkflow:
         pr_publish_optional: bool = False,
     ) -> str:
         branch = self._coerce_text(self._publish_context.get("branch"), max_chars=120)
-        base_ref = self._coerce_text(self._publish_context.get("baseRef"), max_chars=120)
+        base_ref = self._coerce_text(
+            self._publish_context.get("baseRef"), max_chars=120
+        )
         operator_summary = self._coerce_text(
             self._operator_summary,
             max_chars=700,
@@ -12165,15 +17077,21 @@ class MoonMindRunWorkflow:
         commit_count_value = self._publish_context.get("commitCount")
         if isinstance(commit_count_value, bool):
             commit_count_value = None
-        if isinstance(commit_count_value, (int, float)) and int(commit_count_value) >= 0:
+        if (
+            isinstance(commit_count_value, (int, float))
+            and int(commit_count_value) >= 0
+        ):
             commit_count = int(commit_count_value)
-        elif isinstance(commit_count_value, str) and commit_count_value.strip().isdigit():
+        elif (
+            isinstance(commit_count_value, str) and commit_count_value.strip().isdigit()
+        ):
             commit_count = int(commit_count_value.strip())
 
         parts: list[str] = []
         if publish_mode == "pr" and pr_publish_optional:
             parts.append(
-                "No pull request was required because this Jira-oriented workflow "
+                "No pull request was required because this issue implementation "
+                "workflow "
                 "completed without repository changes"
             )
         elif publish_mode == "pr":
@@ -12196,7 +17114,7 @@ class MoonMindRunWorkflow:
             parts.append(f"final agent report: {operator_summary}")
         elif publish_mode == "pr" and pr_publish_optional:
             parts.append(
-                "no structured agent report confirmed whether the Jira issue was "
+                "no structured agent report confirmed whether the issue was "
                 "already implemented"
             )
 
@@ -12267,13 +17185,55 @@ class MoonMindRunWorkflow:
         if not merge_gate:
             return False
         parent = self._coerce_text(
-            merge_gate.get("parentWorkflowId")
-            or merge_gate.get("parent_workflow_id"),
+            merge_gate.get("parentWorkflowId") or merge_gate.get("parent_workflow_id"),
             max_chars=200,
         )
         if not parent:
             return False
         return parent == self._actual_parent_workflow_id()
+
+    @staticmethod
+    def _terminal_continuation_authority_instruction(
+        request: AgentExecutionRequest,
+    ) -> str:
+        """Describe continuation ownership without duplicating Skill semantics."""
+
+        authority = request.terminal_continuation_authority
+        if authority is None:
+            return (
+                "Execution continuation authority: none. No durable parent "
+                "workflow owns a later gate cycle after this agent process "
+                "exits. Treat this execution as standalone: if the resolved "
+                "Skill describes a parent-owned typed continuation, do not emit "
+                "it; keep supported bounded waits in the foreground and follow "
+                "the Skill to a terminal outcome."
+            )
+        allowed_actions = ", ".join(authority.allowed_actions)
+        return (
+            "Execution continuation authority: validated. Durable parent "
+            f"{authority.owner_workflow_type} owns gate "
+            f"'{authority.gate_type}' and permits only these typed actions: "
+            f"{allowed_actions}. Return a continuation only when the resolved "
+            "Skill authorizes that exact action."
+        )
+
+    @staticmethod
+    def _parameters_with_terminal_continuation_authority_instruction(
+        request: AgentExecutionRequest,
+        *,
+        authority_instruction: str,
+    ) -> dict[str, Any]:
+        """Expose continuation authority at the Omnigent adapter boundary."""
+
+        parameters = dict(request.parameters or {})
+        raw_metadata = parameters.get("metadata")
+        metadata = dict(raw_metadata) if isinstance(raw_metadata, Mapping) else {}
+        raw_moonmind = metadata.get("moonmind")
+        moonmind = dict(raw_moonmind) if isinstance(raw_moonmind, Mapping) else {}
+        moonmind["terminalContinuationAuthorityInstruction"] = authority_instruction
+        metadata["moonmind"] = moonmind
+        parameters["metadata"] = metadata
+        return parameters
 
     @staticmethod
     def _normalize_gate_type(value: str | None) -> str:
@@ -12349,6 +17309,31 @@ class MoonMindRunWorkflow:
                 raw_request.get("budget"),
                 max_value_chars=120,
             )
+            not_before = self._coerce_text(
+                raw_request.get("notBefore") or raw_request.get("not_before"),
+                max_chars=80,
+            )
+            retry_after_seconds = raw_request.get("retryAfterSeconds")
+            if retry_after_seconds is None:
+                retry_after_seconds = raw_request.get("retry_after_seconds")
+            execution_ref = self._coerce_text(
+                raw_request.get("executionRef") or raw_request.get("execution_ref"),
+                max_chars=240,
+            )
+            head_sha = self._coerce_text(
+                raw_request.get("headSha") or raw_request.get("head_sha"),
+                max_chars=64,
+            )
+            schema_version = self._coerce_text(
+                raw_request.get("schemaVersion") or raw_request.get("schema_version"),
+                max_chars=64,
+            )
+            provider = self._coerce_text(raw_request.get("provider"), max_chars=64)
+            progress_signature = self._coerce_text(
+                raw_request.get("progressSignature")
+                or raw_request.get("progress_signature"),
+                max_chars=400,
+            )
         else:
             legacy_disposition = self._coerce_text(
                 outputs.get("mergeAutomationDisposition")
@@ -12370,11 +17355,20 @@ class MoonMindRunWorkflow:
             evidence_refs = {}
             side_effects = {"externalPullRequest": True}
             budget = {}
+            not_before = None
+            retry_after_seconds = None
+            execution_ref = None
+            head_sha = self._coerce_text(outputs.get("headSha"), max_chars=64)
+            schema_version = None
+            provider = None
+            progress_signature = None
 
         gate_type = self._normalize_gate_type(raw_gate_type)
         action = self._normalize_gate_type(raw_action)
+        if schema_version not in SUPPORTED_GATED_CONTINUATION_SCHEMA_VERSIONS:
+            schema_version = "gated-continuation/v1"
         continuation: dict[str, Any] = {
-            "schemaVersion": "gated-continuation/v1",
+            "schemaVersion": schema_version,
             "source": request_source,
             "logicalStepId": node_id,
             "gateType": gate_type,
@@ -12390,6 +17384,18 @@ class MoonMindRunWorkflow:
             continuation["sideEffects"] = side_effects
         if budget:
             continuation["budget"] = budget
+        if not_before:
+            continuation["notBefore"] = not_before
+        if retry_after_seconds is not None:
+            continuation["retryAfterSeconds"] = retry_after_seconds
+        if execution_ref:
+            continuation["executionRef"] = execution_ref
+        if head_sha:
+            continuation["headSha"] = head_sha
+        if provider:
+            continuation["provider"] = provider
+        if progress_signature:
+            continuation["progressSignature"] = progress_signature
 
         allowed_actions = GATED_CONTINUATION_GATE_REGISTRY.get(gate_type)
         if allowed_actions is None:
@@ -12430,11 +17436,7 @@ class MoonMindRunWorkflow:
             return None
 
         reason = self._coerce_text(request.get("reason"), max_chars=700)
-        detail = (
-            f" Reason: {reason.rstrip('.')}. "
-            if reason
-            else " "
-        )
+        detail = f" Reason: {reason.rstrip('.')}. " if reason else " "
         return (
             "Step requested gated continuation "
             f"gateType='{gate_type or 'unknown'}' action='{action or 'unknown'}'."
@@ -12486,7 +17488,61 @@ class MoonMindRunWorkflow:
         if self._plan_blocked_message:
             return ("failed", self._plan_blocked_message, True)
 
+        for row in self._step_ledger_rows:
+            finalization_outcome = row.get("finalizationOutcome")
+            if not isinstance(finalization_outcome, Mapping):
+                continue
+            if (
+                finalization_outcome.get("status") == "failed"
+                and finalization_outcome.get("criticality") == "required"
+            ):
+                failure_message = self._coerce_text(
+                    finalization_outcome.get("message"), max_chars=500
+                )
+                if not failure_message and self._publish_status == "failed":
+                    failure_message = self._coerce_text(
+                        self._publish_reason, max_chars=500
+                    )
+                if not failure_message:
+                    phase = self._coerce_text(
+                        finalization_outcome.get("phase"), max_chars=100
+                    )
+                    failure_message = (
+                        "Required step finalization failed during "
+                        f"{phase.replace('_', ' ')}."
+                        if phase
+                        else "Required step finalization failed."
+                    )
+                return (
+                    "failed",
+                    failure_message,
+                    True,
+                )
+
         publish_mode = self._publish_mode(parameters)
+        if (
+            self._authoritative_publish_outcome_enabled
+            and self._moonspec_draft_publication_reason is not None
+        ):
+            pull_request_url = self._coerce_text(
+                self._pull_request_url or self._publish_context.get("pullRequestUrl"),
+                max_chars=500,
+            )
+            if pull_request_url:
+                return (
+                    "failed",
+                    "Workflow failed MoonSpec verification; incomplete work was "
+                    f"preserved in draft pull request {pull_request_url}. "
+                    f"{self._moonspec_draft_publication_reason}",
+                    True,
+                )
+            return (
+                "failed",
+                "Workflow failed MoonSpec verification and draft pull request "
+                "publication did not complete. "
+                f"{self._moonspec_draft_publication_reason}",
+                True,
+            )
         if self._publish_status == "skipped":
             if publish_mode == "pr":
                 self._publish_status = "failed"
@@ -12511,6 +17567,15 @@ class MoonMindRunWorkflow:
                     "failed",
                     "reportOutput requested but no final report was created",
                     True,
+                )
+            if self._is_canonical_no_commit_outcome(parameters):
+                return (
+                    "no_commit",
+                    self._compose_success_completion_message(
+                        publish_detail=self._publish_reason,
+                        publish_mode=publish_mode,
+                    ),
+                    False,
                 )
             return (
                 "success",
@@ -12587,6 +17652,20 @@ class MoonMindRunWorkflow:
             False,
         )
 
+    def _is_canonical_no_commit_outcome(
+        self,
+        parameters: Mapping[str, Any],
+    ) -> bool:
+        if not self._canonical_no_commit_outcome_enabled:
+            return False
+        if self._publish_mode(parameters) not in {"pr", "branch"}:
+            return False
+        if self._report_requested(parameters):
+            return False
+        if not self._has_no_commit_publish_evidence():
+            return False
+        return not self._pull_request_created() and not self._branch_published()
+
     def _missing_required_outcome_reason(
         self,
         *,
@@ -12599,7 +17678,7 @@ class MoonMindRunWorkflow:
             return "publishMode 'pr' requested but no PR was created"
         if publish_mode == "branch" and self._publish_status is None:
             return "branch publish outcome unknown"
-        if self._merge_automation_requested(parameters) and not self._merge_happened():
+        if self._merge_required(parameters) and not self._merge_happened():
             return "merge automation requested but PR was not merged"
         if self._report_requested(parameters) and not self._report_created:
             return "reportOutput requested but no final report was created"
@@ -12625,16 +17704,26 @@ class MoonMindRunWorkflow:
             self._publish_context.get("mergeAutomationStatus"),
             max_chars=40,
         )
-        if status in MERGE_AUTOMATION_SUCCESS_STATUSES:
+        if status in MERGE_AUTOMATION_MERGED_STATUSES:
             return True
         result = self._publish_context.get("mergeAutomationResult")
         if isinstance(result, Mapping):
             result_status = self._coerce_text(result.get("status"), max_chars=40)
-            return result_status in MERGE_AUTOMATION_SUCCESS_STATUSES
+            return result_status in MERGE_AUTOMATION_MERGED_STATUSES
         return False
 
     def _merge_automation_requested(self, parameters: Mapping[str, Any]) -> bool:
         return self._merge_automation_request(parameters) is not None
+
+    def _merge_required(self, parameters: Mapping[str, Any]) -> bool:
+        """True when merge automation was asked to finish by merging the PR."""
+
+        request = self._merge_automation_request(parameters)
+        if request is None:
+            return False
+        return (
+            self._coerce_text(request.get("finishMode"), max_chars=20) or "merge"
+        ) == "merge"
 
     def _report_requested(self, parameters: Mapping[str, Any]) -> bool:
         candidates = []
@@ -12659,6 +17748,27 @@ class MoonMindRunWorkflow:
             if enabled and required:
                 return True
         return False
+
+    def _normalize_finish_mode(self, value: Any) -> str:
+        """Return a supported finish mode or fail validation.
+
+        Only an omitted (or blank) value inherits the ``merge`` default. A typo
+        such as ``fix-only``, or a malformed non-string, must never be silently
+        widened into merge authority for an irreversible side effect.
+        """
+
+        candidate = self._coerce_text(value, max_chars=20)
+        if candidate is None and (value is None or isinstance(value, str)):
+            return MERGE_AUTOMATION_DEFAULT_FINISH_MODE
+        if candidate in MERGE_AUTOMATION_FINISH_MODES:
+            return candidate
+        raise exceptions.ApplicationError(
+            "Unsupported merge automation finishMode "
+            f"{candidate if candidate is not None else type(value).__name__!r}; "
+            f"expected one of {sorted(MERGE_AUTOMATION_FINISH_MODES)}.",
+            type="UNSUPPORTED_MERGE_AUTOMATION_FINISH_MODE",
+            non_retryable=True,
+        )
 
     def _merge_automation_request(
         self,
@@ -12722,6 +17832,26 @@ class MoonMindRunWorkflow:
             if effective_jira_issue_key and "required" not in post_merge_jira:
                 post_merge_jira["required"] = True
             post_merge_jira.setdefault("strategy", "done_category")
+            raw_review_loop = candidate.get("reviewLoop") or candidate.get(
+                "review_loop"
+            )
+            review_loop = (
+                dict(raw_review_loop) if isinstance(raw_review_loop, Mapping) else {}
+            )
+            raw_post_merge_github = candidate.get("postMergeGithub") or candidate.get(
+                "post_merge_github"
+            )
+            post_merge_github = (
+                dict(raw_post_merge_github)
+                if isinstance(raw_post_merge_github, Mapping)
+                else {}
+            )
+            github_issue = self._canonical_github_issue_from_parameters(parameters)
+            if github_issue:
+                post_merge_github.setdefault("enabled", True)
+                post_merge_github.setdefault("required", True)
+                post_merge_github.setdefault("repository", github_issue["repository"])
+                post_merge_github.setdefault("issueNumber", github_issue["issueNumber"])
             return {
                 "enabled": True,
                 "checks": self._coerce_text(candidate.get("checks"), max_chars=20)
@@ -12742,8 +17872,13 @@ class MoonMindRunWorkflow:
                     max_chars=20,
                 )
                 or "squash",
+                "finishMode": self._normalize_finish_mode(
+                    candidate.get("finishMode") or candidate.get("finish_mode")
+                ),
                 "jiraIssueKey": effective_jira_issue_key,
                 "postMergeJira": post_merge_jira,
+                "postMergeGithub": post_merge_github,
+                "reviewLoop": review_loop,
                 "fallbackPollSeconds": (
                     candidate.get("fallbackPollSeconds")
                     or candidate.get("fallback_poll_seconds")
@@ -12758,6 +17893,46 @@ class MoonMindRunWorkflow:
                     or timeout_config.get("expire_after_seconds")
                 ),
             }
+        return None
+
+    def _canonical_github_issue_from_parameters(
+        self,
+        parameters: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        task_payload = self._mapping_value(parameters, "workflow")
+        if not task_payload:
+            task_payload = self._mapping_value(parameters, "task")
+        mappings: list[Mapping[str, Any]] = [parameters, task_payload]
+        for source in (parameters, task_payload):
+            for key in ("inputs", "input"):
+                nested = source.get(key)
+                if isinstance(nested, Mapping):
+                    mappings.append(nested)
+        templates = task_payload.get("appliedStepTemplates")
+        if isinstance(templates, Sequence) and not isinstance(templates, (str, bytes)):
+            for template in templates:
+                if not isinstance(template, Mapping):
+                    continue
+                mappings.append(template)
+                nested = template.get("inputs")
+                if isinstance(nested, Mapping):
+                    mappings.append(nested)
+        for mapping in mappings:
+            issue = mapping.get("github_issue") or mapping.get("githubIssue")
+            if not isinstance(issue, Mapping):
+                continue
+            repository = self._coerce_text(
+                issue.get("repository") or issue.get("repo"), max_chars=240
+            )
+            try:
+                issue_number = int(issue.get("number") or issue.get("issueNumber"))
+            except (TypeError, ValueError):
+                issue_number = 0
+            if repository and issue_number > 0:
+                return {
+                    "repository": repository,
+                    "issueNumber": issue_number,
+                }
         return None
 
     def _canonical_jira_issue_key_from_parameters(
@@ -12839,9 +18014,7 @@ class MoonMindRunWorkflow:
             if not isinstance(nested, Mapping):
                 continue
             nested_candidate = self._coerce_text(
-                nested.get("key")
-                or nested.get("issueKey")
-                or nested.get("issue_key"),
+                nested.get("key") or nested.get("issueKey") or nested.get("issue_key"),
                 max_chars=40,
             )
             normalized_nested = str(nested_candidate or "").strip().upper()
@@ -12926,10 +18099,9 @@ class MoonMindRunWorkflow:
         if parsed is None:
             return None
         repo = self._repo or parsed["repo"]
-        normalized_head_sha = (
-            self._coerce_text(head_sha, max_chars=80)
-            or self._coerce_text(self._publish_context.get("headSha"), max_chars=80)
-        )
+        normalized_head_sha = self._coerce_text(
+            head_sha, max_chars=80
+        ) or self._coerce_text(self._publish_context.get("headSha"), max_chars=80)
         if not normalized_head_sha:
             return None
         pr_number = int(parsed["number"])
@@ -13023,8 +18195,11 @@ class MoonMindRunWorkflow:
                     "skill": "pr-resolver",
                     "mergeMethod": request.get("mergeMethod") or "squash",
                 },
+                "finishMode": request.get("finishMode") or "merge",
                 "timeouts": timeouts,
                 "postMergeJira": request.get("postMergeJira") or {},
+                "postMergeGithub": request.get("postMergeGithub") or {},
+                "reviewLoop": request.get("reviewLoop") or {},
             },
             "resolverTemplate": resolver_template,
             "idempotencyKey": (
@@ -13101,6 +18276,12 @@ class MoonMindRunWorkflow:
         post_merge_jira = result_map.get("postMergeJira")
         if isinstance(post_merge_jira, Mapping):
             summary["postMergeJira"] = dict(post_merge_jira)
+        post_merge_github = result_map.get("postMergeGithub")
+        if isinstance(post_merge_github, Mapping):
+            summary["postMergeGithub"] = dict(post_merge_github)
+        review_loop = result_map.get("reviewLoop")
+        if isinstance(review_loop, Mapping):
+            summary["reviewLoop"] = dict(review_loop)
         return summary
 
     async def _complete_already_implemented_jira_if_needed(
@@ -13254,19 +18435,27 @@ class MoonMindRunWorkflow:
         return ""
 
     def _merge_automation_child_succeeded(self, result: Any) -> bool:
-        status = self._coerce_text(self._get_from_result(result, "status"), max_chars=40)
+        status = self._coerce_text(
+            self._get_from_result(result, "status"), max_chars=40
+        )
         return status in MERGE_AUTOMATION_SUCCESS_STATUSES
 
     def _merge_automation_child_canceled(self, result: Any) -> bool:
-        status = self._coerce_text(self._get_from_result(result, "status"), max_chars=40)
+        status = self._coerce_text(
+            self._get_from_result(result, "status"), max_chars=40
+        )
         return status == MERGE_AUTOMATION_CANCELED_STATUS
 
     def _merge_automation_child_status_valid(self, result: Any) -> bool:
-        status = self._coerce_text(self._get_from_result(result, "status"), max_chars=40)
+        status = self._coerce_text(
+            self._get_from_result(result, "status"), max_chars=40
+        )
         return bool(status) and status in MERGE_AUTOMATION_TERMINAL_STATUSES
 
     def _merge_automation_failure_reason(self, result: Any) -> str:
-        status = self._coerce_text(self._get_from_result(result, "status"), max_chars=40)
+        status = self._coerce_text(
+            self._get_from_result(result, "status"), max_chars=40
+        )
         if not status:
             return "merge automation failed: missing terminal status"
         if status not in MERGE_AUTOMATION_TERMINAL_STATUSES:
@@ -13283,7 +18472,9 @@ class MoonMindRunWorkflow:
                     break
         if blocker_summary:
             return f"merge automation {status or 'failed'}: {blocker_summary}"
-        summary = self._coerce_text(self._get_from_result(result, "summary"), max_chars=500)
+        summary = self._coerce_text(
+            self._get_from_result(result, "summary"), max_chars=500
+        )
         if summary:
             return f"merge automation {status or 'failed'}: {summary}"
         return f"merge automation {status or 'failed'}"
@@ -13296,11 +18487,20 @@ class MoonMindRunWorkflow:
     ) -> None:
         if not pull_request_url:
             return
+        if self._moonspec_draft_publication_reason is not None:
+            self._publish_context["mergeAutomationStatus"] = "not_applicable"
+            self._publish_context["mergeAutomationSummary"] = (
+                "Merge automation is disabled for an attention-required "
+                "MoonSpec draft pull request."
+            )
+            return
         info = workflow.info()
         payload = self._build_merge_gate_start_payload(
             parameters=parameters,
             pull_request_url=pull_request_url,
-            head_sha=self._coerce_text(self._publish_context.get("headSha"), max_chars=80),
+            head_sha=self._coerce_text(
+                self._publish_context.get("headSha"), max_chars=80
+            ),
             parent_workflow_id=info.workflow_id,
             parent_run_id=info.run_id,
         )
@@ -13334,7 +18534,9 @@ class MoonMindRunWorkflow:
         except CancelledError:
             self._awaiting_external = False
             self._waiting_reason = None
-            self._publish_context["mergeAutomationStatus"] = MERGE_AUTOMATION_CANCELED_STATUS
+            self._publish_context["mergeAutomationStatus"] = (
+                MERGE_AUTOMATION_CANCELED_STATUS
+            )
             self._publish_context["mergeAutomationSummary"] = (
                 "Merge automation canceled while parent was awaiting child workflow."
             )
@@ -13360,10 +18562,13 @@ class MoonMindRunWorkflow:
         self._publish_context["mergeAutomationResult"] = (
             dict(child_result) if isinstance(child_result, Mapping) else child_result
         )
-        child_status = self._coerce_text(
-            self._get_from_result(child_result, "status"),
-            max_chars=40,
-        ) or "unknown"
+        child_status = (
+            self._coerce_text(
+                self._get_from_result(child_result, "status"),
+                max_chars=40,
+            )
+            or "unknown"
+        )
         child_status_valid = self._merge_automation_child_status_valid(child_result)
         reason = (
             self._merge_automation_failure_reason(child_result)
@@ -13400,19 +18605,44 @@ class MoonMindRunWorkflow:
     ) -> str | None:
         """Resolve effective workflow/step skill intent before AgentRun launch."""
 
+        selected_skill = selected_agent_skill(node_inputs)
+        if selected_skill == "auto":
+            selected_skill = ""
         if existing_skillset_ref:
+            if selected_skill and self._workflow_patch_enabled(
+                RUN_EXISTING_SKILLSET_TERMINAL_CONTRACT_PATCH
+            ):
+                artifact_read_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                    "artifact.read"
+                )
+                resolved_payload = await execute_typed_activity(
+                    "artifact.read",
+                    ArtifactReadInput(
+                        principal=self._principal(),
+                        artifact_ref=existing_skillset_ref,
+                    ),
+                    **self._execute_kwargs_for_route(artifact_read_route),
+                )
+                resolved = ResolvedSkillSet.model_validate(
+                    self._decode_json_payload(
+                        resolved_payload,
+                        error_message=(
+                            "resolvedSkillsetRef must resolve to a JSON object"
+                        ),
+                    )
+                )
+                self._record_resolved_selected_skill(
+                    resolved=resolved,
+                    selected_skill=selected_skill,
+                    node_id=node_id,
+                    terminal_contract_enabled=True,
+                )
             return existing_skillset_ref
 
         effective = build_effective_workflow_skill_selectors(
             task_skills,
             node_skills if node_skills is not None else node_inputs.get("skills"),
         )
-        selected_skill = selected_agent_skill(node_inputs)
-        if selected_skill == "auto":
-            selected_skill = ""
-        if effective is None and not selected_skill:
-            return None
-
         effective_payload = (
             effective.model_dump(mode="json", exclude_none=True)
             if effective is not None
@@ -13420,9 +18650,11 @@ class MoonMindRunWorkflow:
         )
         if selected_skill:
             excluded_names = {
-                str(item.get("name") or "").strip().lower()
-                if isinstance(item, WorkflowMapping)
-                else str(item or "").strip().lower()
+                (
+                    str(item.get("name") or "").strip().lower()
+                    if isinstance(item, WorkflowMapping)
+                    else str(item or "").strip().lower()
+                )
                 for item in (effective_payload.get("exclude") or [])
             }
             excluded_names.discard("")
@@ -13441,7 +18673,14 @@ class MoonMindRunWorkflow:
                 effective_payload["include"] = include
 
         selector = SkillSelector.model_validate(effective_payload)
-        if not selector.sets and not selector.include and not selector.exclude:
+        if (
+            not selector.sets
+            and not selector.include
+            and not selector.exclude
+            and not self._workflow_patch_enabled(
+                RUN_EMPTY_AGENT_SKILLSET_SNAPSHOT_PATCH
+            )
+        ):
             return None
 
         route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("agent_skill.resolve")
@@ -13457,13 +18696,14 @@ class MoonMindRunWorkflow:
             **self._execute_kwargs_for_route(route),
         )
         if selected_skill:
-            normalized_skill = str(selected_skill).strip().lower()
-            resolved_skill_names = self._resolved_skillset_skill_names(resolved)
-            if normalized_skill not in resolved_skill_names:
-                raise ValueError(
-                    f"selected skill '{selected_skill}' was not resolved into the "
-                    "agent skill snapshot"
-                )
+            self._record_resolved_selected_skill(
+                resolved=resolved,
+                selected_skill=selected_skill,
+                node_id=node_id,
+                terminal_contract_enabled=self._workflow_patch_enabled(
+                    RUN_RESOLVED_SKILL_TERMINAL_CONTRACT_PATCH
+                ),
+            )
         manifest_ref = self._resolved_skillset_field(
             resolved,
             "manifest_ref",
@@ -13477,6 +18717,72 @@ class MoonMindRunWorkflow:
             "snapshotId",
         )
         return str(snapshot_id) if snapshot_id else None
+
+    def _record_resolved_selected_skill(
+        self,
+        *,
+        resolved: Any,
+        selected_skill: str,
+        node_id: str,
+        terminal_contract_enabled: bool,
+    ) -> None:
+        """Record trusted selected-Skill launch metadata from its snapshot."""
+
+        normalized_skill = str(selected_skill).strip().lower()
+        resolved_skill_names = self._resolved_skillset_skill_names(resolved)
+        if normalized_skill not in resolved_skill_names:
+            raise ValueError(
+                f"selected skill '{selected_skill}' was not resolved into the "
+                "agent skill snapshot"
+            )
+        selected_entry = self._resolved_skillset_entry(
+            resolved,
+            normalized_skill,
+        )
+        self._resolved_skill_required_capabilities_by_step[node_id] = (
+            self._resolved_skill_required_capabilities(selected_entry)
+        )
+        self._execution_fanout_authorization_by_step[node_id] = (
+            self._resolved_skill_execution_fanout_authorization(
+                selected_entry,
+                selected_skill=normalized_skill,
+            )
+        )
+        if terminal_contract_enabled:
+            terminal_contract = self._resolved_skill_terminal_contract(selected_entry)
+            if terminal_contract is not None:
+                self._resolved_skill_terminal_contract_by_step[node_id] = (
+                    terminal_contract
+                )
+        if normalized_skill != "pr-resolver":
+            return
+        if workflow.patched(RUN_PR_RESOLVER_SKILL_OWNED_EXECUTION_PATCH):
+            decision = require_skill_owned_pr_resolver_execution(selected_entry)
+            self._native_skill_binding_by_step[node_id] = {
+                "eligible": decision.eligible,
+                "host": decision.host,
+                "reasonCode": decision.reason_code,
+                "identity": dict(decision.identity),
+            }
+        elif workflow.patched(RUN_TRUSTED_PR_RESOLVER_NATIVE_BINDING_PATCH):
+            decision = evaluate_pr_resolver_native_binding(selected_entry)
+            self._native_skill_binding_by_step[node_id] = {
+                "eligible": decision.eligible,
+                "host": decision.host,
+                "reasonCode": decision.reason_code,
+                "identity": dict(decision.identity),
+            }
+        else:
+            # Replay path for histories created before native routing was bound
+            # to immutable resolved-skill evidence. Those histories selected the
+            # native host by canonical name, so preserve that child-workflow
+            # command only for their replay.
+            self._native_skill_binding_by_step[node_id] = {
+                "eligible": True,
+                "host": "temporal",
+                "reasonCode": "legacy_name_binding_replay",
+                "identity": {},
+            }
 
     @staticmethod
     def _resolved_skillset_skill_names(resolved: Any) -> set[str]:
@@ -13507,6 +18813,156 @@ class MoonMindRunWorkflow:
             if name:
                 names.add(name)
         return names
+
+    @staticmethod
+    def _resolved_skillset_entry(resolved: Any, skill_name: str) -> Any:
+        skills = (
+            resolved.get("skills")
+            if isinstance(resolved, WorkflowMapping)
+            else getattr(resolved, "skills", None)
+        )
+        if not isinstance(skills, Iterable) or isinstance(skills, (str, bytes)):
+            return None
+        normalized = str(skill_name or "").strip().lower()
+        for entry in skills:
+            raw_name = (
+                entry.get("skill_name") or entry.get("skillName") or entry.get("name")
+                if isinstance(entry, WorkflowMapping)
+                else getattr(entry, "skill_name", None)
+                or getattr(entry, "skillName", None)
+                or getattr(entry, "name", None)
+            )
+            if str(raw_name or "").strip().lower() == normalized:
+                return entry
+        return None
+
+    @staticmethod
+    def _resolved_skill_execution_fanout_authorization(
+        resolved_entry: Any,
+        *,
+        selected_skill: str,
+    ) -> dict[str, Any]:
+        if isinstance(resolved_entry, WorkflowMapping):
+            provenance = resolved_entry.get("provenance")
+            required = resolved_entry.get(
+                "required_capabilities",
+                resolved_entry.get("requiredCapabilities", ()),
+            )
+        else:
+            provenance = getattr(resolved_entry, "provenance", None)
+            required = getattr(resolved_entry, "required_capabilities", ())
+        if isinstance(provenance, WorkflowMapping):
+            raw_source_kind = provenance.get(
+                "source_kind", provenance.get("sourceKind")
+            )
+        else:
+            raw_source_kind = getattr(provenance, "source_kind", None)
+        source_kind = (
+            str(getattr(raw_source_kind, "value", raw_source_kind) or "")
+            .strip()
+            .lower()
+        )
+        capabilities = {
+            str(value or "").strip().lower()
+            for value in (
+                required
+                if isinstance(required, Iterable)
+                and not isinstance(required, (str, bytes))
+                else ()
+            )
+        }
+        authorized = bool(
+            source_kind in {"built_in", "deployment"}
+            and "execution.fanout" in capabilities
+        )
+        return {
+            "authorized": authorized,
+            "selectedSkill": str(selected_skill or "").strip().lower(),
+            "sourceKind": source_kind or "unresolved",
+            "reasonCode": (
+                "trusted_resolved_skill_requirement"
+                if authorized
+                else "resolved_skill_policy_denied"
+            ),
+        }
+
+    @staticmethod
+    def _resolved_skill_required_capabilities(
+        resolved_entry: Any,
+    ) -> tuple[str, ...]:
+        if isinstance(resolved_entry, WorkflowMapping):
+            required = resolved_entry.get(
+                "required_capabilities",
+                resolved_entry.get("requiredCapabilities", ()),
+            )
+        else:
+            required = getattr(resolved_entry, "required_capabilities", ())
+        if not isinstance(required, Iterable) or isinstance(required, (str, bytes)):
+            return ()
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for value in required:
+            capability = str(value or "").strip().lower()
+            if not capability or capability in seen:
+                continue
+            seen.add(capability)
+            normalized.append(capability)
+        return tuple(normalized)
+
+    @staticmethod
+    def _resolved_skill_terminal_contract(
+        resolved_entry: Any,
+    ) -> dict[str, Any] | None:
+        """Return the compact terminal contract selected with the Skill."""
+
+        if resolved_entry is None:
+            return None
+        if isinstance(resolved_entry, WorkflowMapping):
+            raw_contract = resolved_entry.get(
+                "terminal_contract",
+                resolved_entry.get("terminalContract"),
+            )
+        else:
+            raw_contract = getattr(resolved_entry, "terminal_contract", None)
+            if raw_contract is None:
+                raw_contract = getattr(resolved_entry, "terminalContract", None)
+        if hasattr(raw_contract, "model_dump"):
+            raw_contract = raw_contract.model_dump(mode="json")
+        if not isinstance(raw_contract, WorkflowMapping):
+            return None
+
+        def _contract_text(*keys: str) -> str:
+            for key in keys:
+                value = raw_contract.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+            return ""
+
+        contract_id = _contract_text("contract_id", "contractId")
+        owner = _contract_text("owner")
+        evidence_kind = _contract_text("evidence_kind", "evidenceKind")
+        relative_path = _contract_text("relative_path", "relativePath")
+        expected_schema_version = _contract_text(
+            "expected_schema_version",
+            "expectedSchemaVersion",
+        )
+        if not all(
+            (
+                contract_id,
+                owner,
+                evidence_kind,
+                relative_path,
+                expected_schema_version,
+            )
+        ):
+            return None
+        return {
+            "contractId": contract_id,
+            "owner": owner,
+            "evidenceKind": evidence_kind,
+            "relativePath": relative_path,
+            "expectedSchemaVersion": expected_schema_version,
+        }
 
     @staticmethod
     def _resolved_skillset_field(resolved: Any, *keys: str) -> Any:
@@ -13584,8 +19040,7 @@ class MoonMindRunWorkflow:
             if verify_artifact_path:
                 break
         parameters["verify_artifact_path"] = (
-            verify_artifact_path
-            or self._default_moonspec_verify_artifact_path(node_id)
+            verify_artifact_path or self._default_moonspec_verify_artifact_path(node_id)
         )
 
     def _ensure_assessment_parameters(
@@ -13608,16 +19063,30 @@ class MoonMindRunWorkflow:
         step runs as ``auto``); callers gate it away from moonspec-verify steps,
         which merely READ the assessment path, so only the writer publishes.
         """
-        if parameters.get("assessment_artifact_path"):
-            return
         nested_inputs = node_inputs.get("inputs")
         skill_inputs = nested_inputs if isinstance(nested_inputs, Mapping) else {}
-        for source in (node_inputs, skill_inputs):
-            for key in ("assessment_artifact_path", "assessmentArtifactPath"):
-                value = source.get(key)
-                if isinstance(value, str) and value.strip():
-                    parameters["assessment_artifact_path"] = value.strip()
-                    return
+        if not parameters.get("assessment_artifact_path"):
+            for source in (node_inputs, skill_inputs):
+                for key in ("assessment_artifact_path", "assessmentArtifactPath"):
+                    value = source.get(key)
+                    if isinstance(value, str) and value.strip():
+                        parameters["assessment_artifact_path"] = value.strip()
+                        break
+                if parameters.get("assessment_artifact_path"):
+                    break
+        if not parameters.get(
+            "brief_artifact_path"
+        ) and self._patched_or_false_outside_workflow(
+            RUN_ISSUE_BRIEF_ATTACHMENT_HANDOFF_PATCH
+        ):
+            for source in (node_inputs, skill_inputs):
+                for key in ("brief_artifact_path", "briefArtifactPath"):
+                    value = source.get(key)
+                    if isinstance(value, str) and value.strip():
+                        parameters["brief_artifact_path"] = value.strip()
+                        break
+                if parameters.get("brief_artifact_path"):
+                    break
 
     def _build_agent_execution_request(
         self,
@@ -13630,6 +19099,7 @@ class MoonMindRunWorkflow:
         step_execution: int | None = None,
         queue_order: int | None = None,
         attempt_reason: str = "initial_execution",
+        trusted_remediation_authority: Mapping[str, Any] | None = None,
     ) -> "AgentExecutionRequest":
         """Build an ``AgentExecutionRequest`` from plan-node inputs and workflow context."""
         node_inputs = self._append_trusted_previous_outputs_to_agent_inputs(node_inputs)
@@ -13643,8 +19113,9 @@ class MoonMindRunWorkflow:
         )
         if not agent_id:
             raise ValueError(
-                "agent_runtime plan node must specify an agent_id "
-                "(via inputs.runtime.mode, inputs.targetRuntime, or tool.name)"
+                "agent_runtime plan node must specify a resolved agent_id "
+                "(via inputs.runtime.mode, inputs.targetRuntime, or tool.name); "
+                f"{AUTO_RUNTIME_SENTINEL!r} is a planning-time selection sentinel"
             )
 
         agent_kind = self._agent_kind_for_id(agent_id)
@@ -13688,16 +19159,22 @@ class MoonMindRunWorkflow:
 
         workspace_spec: dict[str, Any] = {}
         for source_label, raw_workspace_spec in (
-            ("workflow.workspaceSpec", (
-                workflow_parameters.get("workspaceSpec")
-                if isinstance(workflow_parameters, Mapping)
-                else None
-            )),
-            ("workflow.workspace_spec", (
-                workflow_parameters.get("workspace_spec")
-                if isinstance(workflow_parameters, Mapping)
-                else None
-            )),
+            (
+                "workflow.workspaceSpec",
+                (
+                    workflow_parameters.get("workspaceSpec")
+                    if isinstance(workflow_parameters, Mapping)
+                    else None
+                ),
+            ),
+            (
+                "workflow.workspace_spec",
+                (
+                    workflow_parameters.get("workspace_spec")
+                    if isinstance(workflow_parameters, Mapping)
+                    else None
+                ),
+            ),
             ("node.runtime.workspaceSpec", runtime_block.get("workspaceSpec")),
             ("node.runtime.workspace_spec", runtime_block.get("workspace_spec")),
             ("node.workspaceSpec", node_inputs.get("workspaceSpec")),
@@ -13712,6 +19189,7 @@ class MoonMindRunWorkflow:
                 )
         for ws_key in (
             "repository",
+            "repositoryTarget",
             "repo",
             "startingBranch",
             "targetBranch",
@@ -13723,8 +19201,32 @@ class MoonMindRunWorkflow:
             if ws_val is not None:
                 workspace_spec[ws_key] = ws_val
 
+        repository_operation = (
+            str(node_inputs.get("repositoryOperation") or "").strip().lower()
+        )
+        if not repository_operation and self._patched_or_false_outside_workflow(
+            RUN_PUBLISH_MODE_REPOSITORY_OPERATION_PATCH
+        ):
+            effective_publish_mode = runtime_block.get("publishMode")
+            if effective_publish_mode is None:
+                effective_publish_mode = node_inputs.get("publishMode")
+            if effective_publish_mode is None and isinstance(
+                workflow_parameters, Mapping
+            ):
+                effective_publish_mode = workflow_parameters.get("publishMode")
+            if str(effective_publish_mode or "").strip().lower() in {
+                "branch",
+                "pr",
+            }:
+                repository_operation = "write"
+        if self._patched_or_false_outside_workflow(RUN_PUBLISHED_BRANCH_HANDOFF_PATCH):
+            self._apply_published_branch_handoff(
+                workspace_spec,
+                repository_operation=repository_operation or None,
+            )
+
         parameters: dict[str, Any] = {}
-        for param_key in (
+        parameter_keys = (
             "model",
             "requestedModel",
             "modelTier",
@@ -13745,7 +19247,31 @@ class MoonMindRunWorkflow:
             "story_breakdown_path",
             "storyBreakdownMarkdownPath",
             "story_breakdown_markdown_path",
+            # Context retrieval (RAG) authoring surfaces (#3514): initial
+            # ContextPack overrides and in-session follow-up retrieval policy,
+            # plus the repository/tenant scope the retrieval budget binds to.
+            "rag",
+            "followUpRetrieval",
+            "repository",
+            "tenant",
+            "tenantId",
+            "omnigentExecutionPlan",
+        )
+        if self._workflow_patch_enabled(
+            RUN_AGENT_REQUIRED_CAPABILITIES_PROPAGATION_PATCH
         ):
+            # Capability requirements are authored workflow/step authority. They
+            # must reach the runtime request so mounted-tool preflight and the
+            # provider adapter enforce the same contract that admission accepted.
+            # Gate the new Activity payload field for replaying histories.
+            parameter_keys = (*parameter_keys, "requiredCapabilities")
+        if self._workflow_patch_enabled(RUN_REMEDIATION_EXPLICIT_EVIDENCE_INPUTS_PATCH):
+            parameter_keys = (
+                *parameter_keys,
+                "gateResultRef",
+                "remainingWorkRef",
+            )
+        for param_key in parameter_keys:
             param_val = runtime_block.get(param_key)
             if param_val is None:
                 param_val = node_inputs.get(param_key)
@@ -13753,6 +19279,177 @@ class MoonMindRunWorkflow:
                 param_val = workflow_parameters.get(param_key)
             if param_val is not None:
                 parameters[param_key] = param_val
+        if (
+            agent_id == "omnigent"
+            and self._workflow_patch_enabled(
+                RUN_OMNIGENT_EXECUTION_PLAN_REF_PATCH
+            )
+            and isinstance(workflow_parameters, Mapping)
+        ):
+            admitted_plan_ref = str(
+                workflow_parameters.get("executionPlanRef") or ""
+            ).strip()
+            if admitted_plan_ref:
+                if not admitted_plan_ref.startswith(
+                    "omnigent-execution-plan:sha256:"
+                ):
+                    raise ValueError("workflow.executionPlanRef is invalid")
+                for source_name, source in (
+                    ("node.runtime", runtime_block),
+                    ("node", node_inputs),
+                ):
+                    supplied = str(source.get("executionPlanRef") or "").strip()
+                    if supplied and supplied != admitted_plan_ref:
+                        raise ValueError(
+                            f"{source_name}.executionPlanRef conflicts with "
+                            "the admitted workflow executionPlanRef"
+                        )
+                parameters["executionPlanRef"] = admitted_plan_ref
+        if repository_operation:
+            if repository_operation not in {"read", "write"}:
+                raise ValueError(
+                    f"node[{node_id}].repositoryOperation must be one of: read, write"
+                )
+            parameters["repositoryOperation"] = repository_operation
+            if repository_operation == "read":
+                # Defense in depth for plans produced before the planner began
+                # projecting the read-only operation into publishMode. Omnigent
+                # derives repository/GitHub mutation authority from this value.
+                parameters["publishMode"] = "none"
+            else:
+                parameters["repositoryMutationRequired"] = True
+        publish_mode = str(parameters.get("publishMode") or "").strip().lower()
+        assessment_verdict = (
+            str(
+                self._assessment_context.get("assessmentVerdict")
+                or self._assessment_context.get("assessment_verdict")
+                or ""
+            )
+            .strip()
+            .upper()
+        )
+        assessment_artifact_ref = str(
+            self._assessment_context.get("assessmentArtifactRef")
+            or self._assessment_context.get("assessment_artifact_ref")
+            or ""
+        ).strip()
+        assessed_repository = str(
+            self._assessment_context.get("assessedRepository") or ""
+        ).strip()
+        assessed_branch = str(
+            self._assessment_context.get("assessedBranch") or ""
+        ).strip()
+        identity_request = AgentExecutionRequest(
+            agentKind=agent_kind,
+            agentId=agent_id,
+            correlationId=correlation_id,
+            idempotencyKey=idempotency_key,
+            workspaceSpec=workspace_spec,
+            parameters=parameters,
+        )
+        current_repository = authored_repository_source(identity_request)
+        current_branch = authored_starting_branch(identity_request)
+        repository_bound_policy = self._workflow_patch_enabled(
+            RUN_REPOSITORY_BOUND_NO_COMMIT_OUTCOME_PATCH
+        )
+        trusted_no_commit_candidate = (
+            agent_kind == "external"
+            and agent_id == "omnigent"
+            and publish_mode in {"branch", "pr"}
+            and repository_operation != "read"
+            and assessment_verdict == "FULLY_IMPLEMENTED"
+            and assessment_artifact_ref
+            and self._workflow_patch_enabled(
+                RUN_TRUSTED_NO_COMMIT_REPOSITORY_OUTCOME_PATCH
+            )
+        )
+        if trusted_no_commit_candidate and (
+            not repository_bound_policy
+            or (
+                assessed_repository == current_repository
+                and assessed_branch == current_branch
+            )
+        ):
+            # This reserved parameter is derived exclusively from durable
+            # workflow state. It is deliberately absent from ``parameter_keys``
+            # so authored node/workflow inputs cannot grant no-commit authority.
+            if repository_bound_policy:
+                parameters["repositoryOutcomePolicy"] = RepositoryOutcomePolicy(
+                    allowNoCommit=True,
+                    authority="trusted_assessment",
+                    assessmentVerdict="FULLY_IMPLEMENTED",
+                    assessmentArtifactRef=assessment_artifact_ref,
+                    assessedRepository=assessed_repository,
+                    assessedBranch=assessed_branch,
+                ).model_dump(mode="json", by_alias=True)
+            else:
+                # Replay-only shape for histories that recorded the original
+                # policy before repository identity became mandatory. Current
+                # workers reject it at execution rather than granting unbound
+                # no-commit authority.
+                parameters["repositoryOutcomePolicy"] = {
+                    "schemaVersion": "repository-outcome-policy/v1",
+                    "allowNoCommit": True,
+                    "authority": "trusted_assessment",
+                    "assessmentVerdict": "FULLY_IMPLEMENTED",
+                    "assessmentArtifactRef": assessment_artifact_ref,
+                }
+        if self._workflow_patch_enabled(RUN_RESOLVED_SKILL_REQUIRED_CAPABILITIES_PATCH):
+            resolved_capabilities = (
+                self._resolved_skill_required_capabilities_by_step.get(node_id, ())
+            )
+            if resolved_capabilities:
+                authored_capabilities = parameters.get("requiredCapabilities", [])
+                if not isinstance(authored_capabilities, list):
+                    raise ValueError("requiredCapabilities must be a list")
+                merged_capabilities: list[str] = []
+                seen_capabilities: set[str] = set()
+                for value in (*authored_capabilities, *resolved_capabilities):
+                    capability = str(value or "").strip().lower()
+                    if not capability or capability in seen_capabilities:
+                        continue
+                    seen_capabilities.add(capability)
+                    merged_capabilities.append(capability)
+                parameters["requiredCapabilities"] = merged_capabilities
+        if self._workflow_patch_enabled(
+            RUN_AGENT_REQUIRED_CAPABILITIES_PROPAGATION_PATCH
+        ):
+            required_capabilities = parameters.get("requiredCapabilities")
+            nested_repository = workspace_spec.get("repository")
+            if (
+                isinstance(required_capabilities, list)
+                and any(
+                    str(capability).strip() == "gh"
+                    for capability in required_capabilities
+                )
+                and "repository" not in parameters
+                and nested_repository is not None
+            ):
+                # Mounted-tool authorization and workspace materialization must
+                # consume the same compiled repository identity. The Omnigent
+                # coordinator's gh preflight reads the compact parameters plane,
+                # while cloning remains owned by the workspace specification.
+                parameters["repository"] = nested_repository
+        checkpoint_recovery = None
+        if (
+            self._recovery_failed_step_id == node_id
+            and isinstance(self._recovery_source, Mapping)
+            and self._workflow_patch_enabled(
+                RUN_CHECKPOINT_RECOVERY_STATE_MACHINE_PATCH
+            )
+        ):
+            # This is trusted workflow-owned recovery state created by the API
+            # after artifact validation. Keep it out of ordinary plan inputs.
+            checkpoint_recovery = dict(self._recovery_source)
+        if self._workflow_patch_enabled(
+            RUN_PR_RESOLVER_CONTINUATION_IDENTITY_PATCH
+        ) and isinstance(workflow_parameters, Mapping):
+            merge_gate = workflow_parameters.get("mergeGate")
+            if isinstance(merge_gate, Mapping):
+                parameters["mergeGate"] = self._json_mapping(
+                    merge_gate,
+                    path="workflow.mergeGate",
+                )
         raw_omnigent_parameters = runtime_block.get("omnigent")
         if raw_omnigent_parameters is None:
             raw_omnigent_parameters = node_inputs.get("omnigent")
@@ -13761,10 +19458,84 @@ class MoonMindRunWorkflow:
         if raw_omnigent_parameters is not None:
             if not isinstance(raw_omnigent_parameters, Mapping):
                 raise ValueError(f"node[{node_id}].omnigent must be an object")
-            parameters["omnigent"] = self._json_mapping(
-                raw_omnigent_parameters,
-                path=f"node[{node_id}].omnigent",
+            if self._workflow_patch_enabled(
+                RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH
+            ):
+                agent_profile_snapshot = (
+                    workflow_parameters.get("agentProfileSnapshot")
+                    if isinstance(workflow_parameters, Mapping)
+                    else None
+                )
+                if (
+                    agent_id == "omnigent"
+                    and isinstance(agent_profile_snapshot, Mapping)
+                    and self._workflow_patch_enabled(
+                        RUN_OMNIGENT_AGENT_PROFILE_SNAPSHOT_COMPILER_PATCH
+                    )
+                ):
+                    parameters["omnigent"] = (
+                        self._compile_agent_profile_snapshot_omnigent_selection(
+                            raw_omnigent_parameters,
+                            snapshot=agent_profile_snapshot,
+                            execution_profile_ref=execution_profile_ref,
+                            path=f"node[{node_id}].omnigent",
+                        )
+                    )
+                else:
+                    parameters["omnigent"] = self._compile_authored_omnigent_selection(
+                        raw_omnigent_parameters,
+                        path=f"node[{node_id}].omnigent",
+                    )
+            else:
+                # Preserve the exact historical activity input for workflows whose
+                # histories predate the product compiler boundary.
+                parameters["omnigent"] = self._json_mapping(
+                    raw_omnigent_parameters,
+                    path=f"node[{node_id}].omnigent",
+                )
+        if agent_id == "omnigent" and execution_profile_ref:
+            profile_snapshots = getattr(self, "_profile_snapshots", None)
+            snapshot = (
+                profile_snapshots.get(execution_profile_ref)
+                if isinstance(profile_snapshots, Mapping)
+                else None
             )
+            if isinstance(snapshot, Mapping):
+                profile_agent_name = self._coerce_text(
+                    snapshot.get("agentName") or snapshot.get("agent_name"),
+                    max_chars=255,
+                )
+                runtime_id = snapshot.get("runtime_id")
+                if not profile_agent_name and runtime_id == "codex_cli":
+                    profile_agent_name = (
+                        CODEX_STOCK_AGENT_NAME
+                        if self._workflow_patch_enabled(
+                            RUN_OMNIGENT_STOCK_AGENT_IDENTITY_PATCH
+                        )
+                        else "codex"
+                    )
+                elif (
+                    not profile_agent_name
+                    and runtime_id == "claude_code"
+                    and self._workflow_patch_enabled(
+                        RUN_OMNIGENT_STOCK_AGENT_IDENTITY_PATCH
+                    )
+                ):
+                    profile_agent_name = CLAUDE_STOCK_AGENT_NAME
+                if profile_agent_name:
+                    omnigent_parameters = (
+                        dict(parameters.get("omnigent"))
+                        if isinstance(parameters.get("omnigent"), Mapping)
+                        else {}
+                    )
+                    agent_parameters = (
+                        dict(omnigent_parameters.get("agent"))
+                        if isinstance(omnigent_parameters.get("agent"), Mapping)
+                        else {}
+                    )
+                    agent_parameters.setdefault("agentName", profile_agent_name)
+                    omnigent_parameters["agent"] = agent_parameters
+                    parameters["omnigent"] = omnigent_parameters
         profile_selector = self._build_profile_selector(
             agent_id=agent_id,
             runtime_block=runtime_block,
@@ -13838,7 +19609,9 @@ class MoonMindRunWorkflow:
                     "contentRef",
                     "contentDigest",
                     "inputContractDigest",
+                    "requiredCapabilities",
                     "inputs",
+                    "sideEffect",
                 ):
                     if key in raw_skill_payload:
                         compact_skill_payload[key] = self._json_value(
@@ -13970,9 +19743,7 @@ class MoonMindRunWorkflow:
                 or node_inputs.get("verifyArtifactPath")
             )
             if isinstance(verify_artifact_path, str) and verify_artifact_path.strip():
-                cadence_payload["latestVerificationPath"] = (
-                    verify_artifact_path.strip()
-                )
+                cadence_payload["latestVerificationPath"] = verify_artifact_path.strip()
             moonmind_payload["remediationCadence"] = cadence_payload
             metadata_payload["moonmind"] = moonmind_payload
             parameters["metadata"] = metadata_payload
@@ -14012,6 +19783,14 @@ class MoonMindRunWorkflow:
                         metadata_payload["moonmind"] = moonmind_payload
                         parameters["metadata"] = metadata_payload
 
+        if self._patched_or_false_outside_workflow(
+            RUN_ASSESSMENT_ATTACHMENT_HANDOFF_PATCH
+        ):
+            input_refs = self._append_durable_handoff_attachment_refs(
+                input_refs,
+                agent_kind=agent_kind,
+            )
+
         runtime_selection = {
             "runtimeId": agent_id,
             "agentKind": agent_kind,
@@ -14033,6 +19812,21 @@ class MoonMindRunWorkflow:
             skill_source_policy["resolvedSkillsetRef"] = resolved_skillset_ref
         if selected_skill:
             skill_source_policy["selectedSkill"] = selected_skill
+        if self._workflow_patch_enabled(RUN_EXECUTION_FANOUT_AUTHORIZATION_PATCH):
+            fanout_authorization = dict(
+                self._execution_fanout_authorization_by_step.get(
+                    node_id,
+                    {
+                        "authorized": False,
+                        "selectedSkill": selected_skill,
+                        "sourceKind": "unresolved",
+                        "reasonCode": "resolved_skill_evidence_unavailable",
+                    },
+                )
+            )
+            if resolved_skillset_ref:
+                fanout_authorization["resolvedSkillsetRef"] = resolved_skillset_ref
+            skill_source_policy["executionFanout"] = fanout_authorization
         execution_ordinal = step_execution or 1
         context_workspace = self._step_execution_workspace(
             node_id,
@@ -14082,16 +19876,14 @@ class MoonMindRunWorkflow:
                     for proposal in raw_memory_proposals
                     if isinstance(proposal, Mapping)
                 ]
-            raw_memory_context = (
-                task_payload_for_context.get("memoryContext")
-                or task_payload_for_context.get("memory_context")
-            )
+            raw_memory_context = task_payload_for_context.get(
+                "memoryContext"
+            ) or task_payload_for_context.get("memory_context")
             if isinstance(raw_memory_context, Mapping):
                 memory_context = raw_memory_context
-            raw_fix_patterns = (
-                task_payload_for_context.get("matchedFixPatterns")
-                or task_payload_for_context.get("fixPatterns")
-            )
+            raw_fix_patterns = task_payload_for_context.get(
+                "matchedFixPatterns"
+            ) or task_payload_for_context.get("fixPatterns")
             if isinstance(raw_fix_patterns, Sequence) and not isinstance(
                 raw_fix_patterns,
                 (str, bytes, bytearray),
@@ -14302,9 +20094,7 @@ class MoonMindRunWorkflow:
                 "branchId": branch_context.get("branchId"),
                 "branchTurnId": branch_context.get("branchTurnId"),
                 "sourceCheckpointRef": branch_context.get("sourceCheckpointRef"),
-                "sourceCheckpointDigest": branch_context.get(
-                    "sourceCheckpointDigest"
-                ),
+                "sourceCheckpointDigest": branch_context.get("sourceCheckpointDigest"),
                 "rootCheckpointRef": branch_context.get("rootCheckpointRef"),
                 "contextBundleRef": attempt_context.context_bundle_ref,
                 "contextBundleDigest": attempt_context.context_bundle_digest,
@@ -14335,9 +20125,9 @@ class MoonMindRunWorkflow:
         parameters["metadata"] = metadata_payload
         projection_context = attempt_context.to_manifest_projection().get("context")
         if isinstance(projection_context, Mapping):
-            self._step_execution_context_projections[
-                (node_id, execution_ordinal)
-            ] = dict(projection_context)
+            self._step_execution_context_projections[(node_id, execution_ordinal)] = (
+                dict(projection_context)
+            )
         step_execution_identity = StepExecutionIdentityModel(
             workflowId=wf_info.workflow_id,
             runId=wf_info.run_id,
@@ -14362,6 +20152,15 @@ class MoonMindRunWorkflow:
             "runtimeSelection": dict(runtime_selection),
             "skillSourcePolicy": skill_source_policy,
         }
+        omnigent_execution_plan = parameters.get("omnigentExecutionPlan")
+        if (
+            agent_kind == "external"
+            and _normalize_agent_runtime_id(agent_id) == "omnigent"
+            and isinstance(omnigent_execution_plan, Mapping)
+        ):
+            step_execution_payload["omnigentExecutionPlan"] = dict(
+                omnigent_execution_plan
+            )
         if attempt_context.retrieval_manifest_ref:
             step_execution_payload["retrievalManifestRef"] = (
                 attempt_context.retrieval_manifest_ref
@@ -14433,16 +20232,207 @@ class MoonMindRunWorkflow:
                 f"{wf_info.workflow_id}:{branch_id}:{branch_turn_id}:omnigent"
             )
 
+        # Repository work delegated through Omnigent carries durable ownership,
+        # never a worker or daemon filesystem path. The activity resolves this
+        # identity after validating the current workflow and step execution.
+        if (
+            agent_kind == "external"
+            and _normalize_agent_runtime_id(agent_id) == "omnigent"
+        ):
+            locator_identity = (
+                f"{wf_info.workflow_id}:{step_execution_payload['stepExecutionId']}"
+            )
+            workspace_spec["workspaceLocator"] = {
+                "kind": "sandbox",
+                "workspaceId": hashlib.sha256(
+                    locator_identity.encode("utf-8")
+                ).hexdigest()[:24],
+                "relativePath": "repo",
+            }
+
+        # Remediation workspace authority is controller-produced runtime metadata.
+        # Never copy a plan/browser-authored top-level block into the canonical
+        # request: doing so would let one request attest its own loop head.
+        runtime_metadata = runtime_block.get("metadata")
+        moonmind_metadata = (
+            runtime_metadata.get("moonmind")
+            if isinstance(runtime_metadata, Mapping)
+            else None
+        )
+        remediation_workspace = (
+            moonmind_metadata.get("remediationWorkspaceAuthority")
+            if isinstance(moonmind_metadata, Mapping)
+            else None
+        )
+        if remediation_workspace is not None:
+            raise ValueError(
+                "remediationWorkspaceAuthority must come from workflow-owned controller state"
+            )
+        remediation_workspace = trusted_remediation_authority
+        if node_inputs.get("remediationWorkspace") is not None:
+            raise ValueError(
+                "remediationWorkspace must come from trusted runtime controller metadata"
+            )
+        if remediation_workspace is not None and not isinstance(
+            remediation_workspace, Mapping
+        ):
+            raise ValueError("remediation workspace authority is malformed")
+        if isinstance(remediation_workspace, Mapping):
+            if not (
+                agent_kind == "external"
+                and _normalize_agent_runtime_id(agent_id) == "omnigent"
+            ):
+                raise ValueError(
+                    "remediationWorkspace is only supported by external/omnigent"
+                )
+            required_authority = {
+                "loopId",
+                "branchRef",
+                "attemptOrdinal",
+                "baseCheckpointRef",
+                "baseWorkspaceDigest",
+                "expectedHeadVersion",
+                "headAuthorityRef",
+                "executionProfileRef",
+                "hostProfileRef",
+                "launchPolicyRef",
+                "workspaceCapabilitySnapshot",
+            }
+            missing = sorted(required_authority - set(remediation_workspace))
+            if missing:
+                raise ValueError(
+                    "remediation workspace authority is incomplete: "
+                    + ", ".join(missing)
+                )
+            if (
+                remediation_workspace.get("executionProfileRef")
+                != execution_profile_ref
+            ):
+                raise ValueError(
+                    "remediation workspace profile does not match selected Provider Profile"
+                )
+            remediation_workspace = {
+                **{key: remediation_workspace[key] for key in required_authority},
+                "workflowId": wf_info.workflow_id,
+                "runId": wf_info.run_id,
+                "logicalStepId": node_id,
+                "stepExecutionId": step_execution_payload["stepExecutionId"],
+                "workspacePolicy": "continue_from_loop_head",
+            }
+            destination = {
+                "kind": "sandbox",
+                "workspaceId": hashlib.sha256(
+                    f"{wf_info.workflow_id}:{step_execution_payload['stepExecutionId']}".encode()
+                ).hexdigest()[:24],
+                "relativePath": "repo",
+            }
+            remediation_workspace["destinationWorkspaceLocator"] = destination
+            workspace_spec["workspaceLocator"] = dict(destination)
+
+        terminal_contract_payload: dict[str, Any] | None = None
+        resolved_terminal_contract = self._resolved_skill_terminal_contract_by_step.get(
+            node_id
+        )
+        if isinstance(resolved_terminal_contract, Mapping):
+            terminal_contract_payload = {
+                **dict(resolved_terminal_contract),
+                "executionRef": step_execution_payload["stepExecutionId"],
+            }
+        else:
+            side_effect = compact_skill_payload.get("sideEffect")
+            if isinstance(side_effect, Mapping):
+                contract_id = str(side_effect.get("terminalContractId") or "").strip()
+                outcome_artifact = str(side_effect.get("outcomeArtifact") or "").strip()
+                expected_schema_version = str(
+                    side_effect.get("terminalSchemaVersion") or ""
+                ).strip()
+                if contract_id and outcome_artifact and expected_schema_version:
+                    terminal_contract_payload = {
+                        "contractId": contract_id,
+                        "owner": "agent",
+                        "evidenceKind": "workspace_json",
+                        "relativePath": outcome_artifact,
+                        "expectedSchemaVersion": expected_schema_version,
+                        "executionRef": step_execution_payload["stepExecutionId"],
+                    }
+
+        # ``auto`` means that the selected portable Skill owns repository
+        # publication.  Compile that ownership into the same execution-bound
+        # terminal contract used by other agent side effects so a clean CLI
+        # exit cannot bypass the evidence handoff.  This is derived from the
+        # resolved publish mode and runtime workspace authority, not from a
+        # per-skill or per-runtime allowlist. External-provider workspaces need
+        # a provider-owned evidence handoff and must not receive workspace_json.
+        auto_publish_workspace_contract = False
+        if (
+            terminal_contract_payload is None
+            and str(parameters.get("publishMode") or "").strip().lower() == "auto"
+            and workflow.patched(RUN_AUTO_PUBLISH_TERMINAL_CONTRACT_PATCH)
+        ):
+            auto_publish_workspace_authority = resolve_runtime_execution_capabilities(
+                _normalize_agent_runtime_id(agent_id)
+            ).workspace_authority
+            auto_publish_workspace_contract = auto_publish_workspace_authority in {
+                "managed_runtime",
+                "moonmind_sandbox",
+            }
+        if auto_publish_workspace_contract:
+            terminal_contract_payload = {
+                "contractId": "auto_publish_terminal.v1",
+                "owner": "agent",
+                "evidenceKind": "workspace_json",
+                "relativePath": "artifacts/publish_result.json",
+                "expectedSchemaVersion": "moonmind.publish.auto.v1",
+                "executionRef": step_execution_payload["stepExecutionId"],
+            }
+
+        terminal_continuation_authority = None
+        if (
+            selected_skill == "pr-resolver"
+            and terminal_contract_payload is not None
+            and terminal_contract_payload.get("contractId") == "pr_resolver_terminal.v1"
+            and self._is_merge_automation_gated(parameters)
+            and workflow.patched(RUN_PR_RESOLVER_OWNED_CONTINUATION_PATCH)
+        ):
+            parent_info = workflow.info().parent
+            allowed_continuation_actions = ["reenter_gate"]
+            if workflow.patched(RUN_PR_RESOLVER_REVIEW_REQUEST_AUTHORITY_PATCH):
+                allowed_continuation_actions.append("request_review")
+            terminal_continuation_authority = {
+                "schemaVersion": "terminal-continuation-authority/v1",
+                "gateType": "merge_automation",
+                "ownerWorkflowId": parent_info.workflow_id,
+                "ownerRunId": parent_info.run_id,
+                "ownerWorkflowType": "MoonMind.MergeAutomation",
+                "allowedActions": allowed_continuation_actions,
+                "source": "validated_temporal_parent",
+            }
+
         return AgentExecutionRequest(
             agent_kind=agent_kind,
             agent_id=agent_id,
             execution_profile_ref=execution_profile_ref,
+            omnigent_execution_plan=(
+                dict(omnigent_execution_plan)
+                if agent_kind == "external"
+                and _normalize_agent_runtime_id(agent_id) == "omnigent"
+                and isinstance(omnigent_execution_plan, Mapping)
+                else None
+            ),
             correlation_id=correlation_id,
             idempotency_key=idempotency_key,
             instruction_ref=request_instruction_ref,
             runtime_command=runtime_command_payload,
             step_execution=step_execution_payload,
             resolved_skillset_ref=resolved_skillset_ref,
+            remediation_workspace=(
+                dict(remediation_workspace)
+                if isinstance(remediation_workspace, Mapping)
+                else None
+            ),
+            checkpoint_recovery=checkpoint_recovery,
+            terminal_contract=terminal_contract_payload,
+            terminal_continuation_authority=terminal_continuation_authority,
             input_refs=input_refs,
             workspace_spec=workspace_spec,
             skill=compact_skill_payload,
@@ -14677,6 +20667,18 @@ class MoonMindRunWorkflow:
         if profile_snapshots is None:
             return profile_id
         if profile_id not in profile_snapshots:
+            authoritative_runtime_ids = getattr(
+                self, "_profile_snapshot_runtime_ids", None
+            )
+            if isinstance(authoritative_runtime_ids, (set, frozenset, list, tuple)):
+                child_runtime_id = self._managed_runtime_id(agent_id or "")
+                compatible_runtime_ids = {child_runtime_id}
+                if child_runtime_id == "omnigent":
+                    compatible_runtime_ids.update(_OMNIGENT_PROVIDER_RUNTIME_IDS)
+                if compatible_runtime_ids.isdisjoint(
+                    str(item).strip() for item in authoritative_runtime_ids
+                ):
+                    return profile_id
             raise ValueError(
                 "%s execution_profile_ref '%s' is not a known profile for this "
                 "runtime." % (source_label, profile_id)
@@ -14695,7 +20697,10 @@ class MoonMindRunWorkflow:
         if not runtime_id or not agent_id:
             return profile_id
         child_runtime_id = self._managed_runtime_id(agent_id)
-        if runtime_id != child_runtime_id:
+        compatible_runtime_ids = {child_runtime_id}
+        if child_runtime_id == "omnigent":
+            compatible_runtime_ids.update(_OMNIGENT_PROVIDER_RUNTIME_IDS)
+        if runtime_id not in compatible_runtime_ids:
             if self._workflow_is_replaying():
                 return profile_id
             raise ValueError(
@@ -14754,15 +20759,23 @@ class MoonMindRunWorkflow:
         runtime_block = (
             runtime_block_raw if isinstance(runtime_block_raw, Mapping) else {}
         )
-        return str(
-            runtime_block.get("mode")
-            or runtime_block.get("agentId")
-            or runtime_block.get("agent_id")
-            or node_inputs.get("targetRuntime")
-            or node_inputs.get("agentId")
-            or fallback_name
-            or ""
-        ).strip()
+        for candidate in (
+            runtime_block.get("mode"),
+            runtime_block.get("agentId"),
+            runtime_block.get("agent_id"),
+            node_inputs.get("targetRuntime"),
+            node_inputs.get("agentId"),
+            fallback_name,
+        ):
+            value = str(candidate or "").strip()
+            if not value:
+                continue
+            # ``auto`` selects the run's runtime at planning time; it is never a
+            # runtime identity and must never route to adapter dispatch.
+            if _normalize_agent_runtime_id(value) == AUTO_RUNTIME_SENTINEL:
+                continue
+            return value
+        return ""
 
     def _agent_runtime_id_for_plan_node(
         self,
@@ -14785,6 +20798,20 @@ class MoonMindRunWorkflow:
             fallback_name=selected_node.get("name") or selected_node.get("id"),
         )
         return agent_id or None
+
+    def _plan_node_runtime_block(
+        self,
+        node: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Return an authored node's compact runtime block with a resolved mode."""
+
+        node_inputs = self._node_inputs_mapping(node)
+        raw_runtime = node_inputs.get("runtime")
+        runtime_block = dict(raw_runtime) if isinstance(raw_runtime, Mapping) else {}
+        agent_id = self._agent_runtime_id_for_plan_node(node)
+        if agent_id:
+            runtime_block["mode"] = agent_id
+        return runtime_block
 
     def _mark_slot_continuity_for_next_step(
         self,
@@ -14850,6 +20877,135 @@ class MoonMindRunWorkflow:
             selector["providerId"] = "minimax"
 
         return selector
+
+    async def _execute_container_job_tool(
+        self,
+        *,
+        node_inputs: Mapping[str, Any],
+        node_id: str,
+        execution_ordinal: int,
+    ) -> dict[str, Any]:
+        """Submit once, then durably poll the separately owned job record."""
+
+        info = workflow.info()
+        owner = OwnerIdentity(principalId=self._principal(), principalType="service")
+        spec = node_inputs.get("spec")
+        if not isinstance(spec, Mapping):
+            raise ValueError("container.run_job inputs.spec is required")
+        resolved_spec = dict(spec)
+        if "workspaceRef" not in resolved_spec:
+            runtime_id = self._managed_runtime_id(self._target_runtime or "")
+            if not runtime_id:
+                raise ValueError(
+                    "container.run_job requires workspaceRef when no managed runtime is selected"
+                )
+            resolved_spec["workspaceRef"] = {
+                "kind": "managed_runtime",
+                "runtimeId": runtime_id,
+                "agentRunId": info.workflow_id,
+                "relativePath": "repo",
+            }
+        request = ContainerJobSubmitRequest.model_validate(
+            {
+                "contractVersion": node_inputs.get("contractVersion", "v1"),
+                "idempotencyKey": node_inputs.get("idempotencyKey"),
+                "source": {
+                    "source": "workflow",
+                    "callerRequestId": node_inputs.get("callerRequestId"),
+                    "workflowId": info.workflow_id,
+                    "runId": info.run_id,
+                    "stepId": node_id,
+                },
+                "spec": resolved_spec,
+            }
+        )
+        owner_payload = owner.model_dump(mode="json", by_alias=True)
+        request_payload = request.model_dump(
+            mode="json", by_alias=True, exclude_none=True
+        )
+        submit_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("container_job.submit")
+        accepted = await workflow.execute_activity(
+            submit_route.activity_type,
+            {"owner": owner_payload, "request": request_payload},
+            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+            **self._execute_kwargs_for_route(submit_route),
+        )
+        job_id = str(self._get_from_result(accepted, "jobId") or "")
+        if not job_id:
+            raise ValueError("container-job submission returned no jobId")
+
+        status_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("container_job.status")
+        terminal_states = {
+            ContainerJobState.SUCCEEDED.value,
+            ContainerJobState.FAILED.value,
+            ContainerJobState.CANCELED.value,
+            ContainerJobState.TIMED_OUT.value,
+            ContainerJobState.REJECTED.value,
+        }
+        snapshot: Any = None
+        while True:
+            if self._cancel_requested:
+                cancel_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                    "container_job.cancel"
+                )
+                await workflow.execute_activity(
+                    cancel_route.activity_type,
+                    {
+                        "owner": owner_payload,
+                        "jobId": job_id,
+                        "request": {
+                            "idempotencyKey": (
+                                f"{info.workflow_id}:{node_id}:{execution_ordinal}:cancel"
+                            )
+                        },
+                    },
+                    cancellation_type=ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
+                    **self._execute_kwargs_for_route(cancel_route),
+                )
+                return {
+                    "status": "CANCELLED",
+                    "outputs": {"jobId": job_id, "state": "canceling"},
+                }
+            snapshot = await workflow.execute_activity(
+                status_route.activity_type,
+                {"owner": owner_payload, "jobId": job_id},
+                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                **self._execute_kwargs_for_route(status_route),
+            )
+            state = str(self._get_from_result(snapshot, "state") or "")
+            if state in terminal_states:
+                break
+            await workflow.sleep(timedelta(seconds=5))
+
+        terminal = self._get_from_result(snapshot, "terminal")
+        outputs = {
+            "jobId": job_id,
+            "state": str(self._get_from_result(snapshot, "state") or ""),
+            "logsRef": self._get_from_result(snapshot, "logsRef"),
+            "artifactsRef": self._get_from_result(snapshot, "artifactsRef"),
+        }
+        if isinstance(terminal, Mapping):
+            outputs.update(
+                {
+                    "exitCode": terminal.get("exitCode"),
+                    "failureClass": terminal.get("failureClass"),
+                    "summary": terminal.get("message"),
+                }
+            )
+        outputs = {key: value for key, value in outputs.items() if value is not None}
+        state = outputs["state"]
+        return {
+            "status": (
+                "COMPLETED"
+                if state == ContainerJobState.SUCCEEDED.value
+                else (
+                    "CANCELLED"
+                    if state == ContainerJobState.CANCELED.value
+                    else "FAILED"
+                )
+            ),
+            "outputs": outputs,
+        }
 
     def _map_agent_run_result(self, result: Any) -> dict[str, Any]:
         """Convert ``AgentRunResult`` to the dict format the execution loop expects."""
@@ -15262,7 +21418,9 @@ class MoonMindRunWorkflow:
 
         if workflow.patched("enable_task_proposals_gate"):
             if not settings.workflow.enable_proposals:
-                self._get_logger().info("Workflow proposal generation is globally disabled")
+                self._get_logger().info(
+                    "Workflow proposal generation is globally disabled"
+                )
                 return
 
         self._set_state(STATE_PROPOSALS, summary="Generating workflow proposals.")
@@ -15323,7 +21481,9 @@ class MoonMindRunWorkflow:
             policy = task.get("proposalPolicy")
             policy_payload: dict[str, Any] = {}
             if isinstance(policy, dict):
-                from moonmind.workflows.executions.execution_contract import WorkflowProposalPolicy
+                from moonmind.workflows.executions.execution_contract import (
+                    WorkflowProposalPolicy,
+                )
 
                 try:
                     parsed_policy = WorkflowProposalPolicy.model_validate(policy)
@@ -15480,27 +21640,17 @@ class MoonMindRunWorkflow:
         lowered = text.lower()
         blockers: list[str] = []
         if (
-            (
-                "native" in lowered
-                or "windows/wsl" in lowered
-                or "ue/toolchain" in lowered
-            )
-            and (
-                "missing" in lowered
-                or "unavailable" in lowered
-                or "not run" in lowered
-            )
+            "native" in lowered or "windows/wsl" in lowered or "ue/toolchain" in lowered
+        ) and (
+            "missing" in lowered or "unavailable" in lowered or "not run" in lowered
         ):
             blockers.append("native_unreal_toolchain_missing")
         if "unauthorized" in lowered and ("ghcr" in lowered or "docker" in lowered):
             blockers.append("docker_registry_unauthorized")
-        if (
-            "ci" in lowered
-            and (
-                "current-head" in lowered
-                or "pending" in lowered
-                or "no run evidence" in lowered
-            )
+        if "ci" in lowered and (
+            "current-head" in lowered
+            or "pending" in lowered
+            or "no run evidence" in lowered
         ):
             blockers.append("current_head_ci_evidence_missing")
         return blockers
@@ -15667,6 +21817,43 @@ class MoonMindRunWorkflow:
         if not workflow.patched(RUN_FAILED_RUN_RECOVERY_MANIFEST_PATCH):
             return None, None
         try:
+            failed_step_id = self._recovery_failed_step_id or self._coerce_text(
+                (self._failure_diagnostic or {}).get("stepId"), max_chars=200
+            )
+            # A step rejected before launch captured no workspace of its own, so
+            # its capability snapshot and checkpoint kind live on the accepted
+            # step whose checkpoint the manifest resumes from. Resolve that step
+            # with the manifest's own rule so both stay in agreement.
+            capture_step_id = (
+                resolve_resume_checkpoint_step_id(
+                    step_ledger_rows=self._step_ledger_rows,
+                    terminal_dispositions=self._step_terminal_dispositions,
+                    checkpoint_refs_by_boundary=(
+                        self._step_checkpoint_refs_by_boundary
+                    ),
+                    failure_diagnostic=self._failure_diagnostic,
+                    recovery_failed_step_id=self._recovery_failed_step_id,
+                )
+                or failed_step_id
+            )
+            capture_input = self._step_workspace_capture_inputs.get(
+                capture_step_id or "", {}
+            )
+            capability_payload = capture_input.get("runtimeCapabilities")
+            capabilities = (
+                RuntimeExecutionCapabilities.model_validate(capability_payload)
+                if isinstance(capability_payload, Mapping)
+                else None
+            )
+            restore_route_registered = False
+            if capabilities and capabilities.checkpoint_restore_activity:
+                try:
+                    DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                        capabilities.checkpoint_restore_activity
+                    )
+                    restore_route_registered = True
+                except Exception:
+                    restore_route_registered = False
             manifest = build_failed_run_recovery_manifest(
                 workflow_id=workflow.info().workflow_id,
                 run_id=workflow.info().run_id,
@@ -15680,6 +21867,12 @@ class MoonMindRunWorkflow:
                 checkpoint_validation_failure=(
                     self._recovery_checkpoint_validation_failure
                 ),
+                checkpoint_kind=self._coerce_text(
+                    capture_input.get("kind") or capture_input.get("checkpointKind"),
+                    max_chars=100,
+                ),
+                runtime_capabilities=capabilities,
+                restore_route_registered=restore_route_registered,
             )
         except Exception as exc:
             self._get_logger().warning(
@@ -15717,15 +21910,16 @@ class MoonMindRunWorkflow:
             "validationResult": manifest.validation.result,
         }
         if manifest.last_accepted_step is not None:
-            summary["lastAcceptedStepId"] = (
-                manifest.last_accepted_step.logical_step_id
-            )
+            summary["lastAcceptedStepId"] = manifest.last_accepted_step.logical_step_id
         if manifest.validation.checkpoint_ref:
             summary["checkpointRef"] = manifest.validation.checkpoint_ref
         if manifest.blocked_reason:
             summary["blockedReason"] = manifest.blocked_reason
         if manifest_ref:
             summary["manifestRef"] = manifest_ref
+        control_stop = self._sanitized_workflow_control_stop()
+        if control_stop:
+            summary["controlStop"] = control_stop
         self._recovery_manifest_ref = manifest_ref
         self._recovery_manifest_summary = summary
         return summary, manifest_ref
@@ -15771,7 +21965,9 @@ class MoonMindRunWorkflow:
             refs = row.get("refs")
             git_disposition: Any = None
             if isinstance(refs, Mapping):
-                git_disposition = refs.get("gitDisposition") or refs.get("git_disposition")
+                git_disposition = refs.get("gitDisposition") or refs.get(
+                    "git_disposition"
+                )
             if not disposition and not git_disposition:
                 continue
             entry: dict[str, Any] = {
@@ -15800,6 +21996,16 @@ class MoonMindRunWorkflow:
             refs["plan"] = self._plan_ref
         if self._input_ref:
             refs["taskInput"] = self._input_ref
+        if self._workflow_control_stop:
+            for key, ref_name in (
+                ("gateResultRef", "gateResult"),
+                ("verificationRef", "verification"),
+                ("remainingWorkRef", "remainingWork"),
+                ("workspaceHeadRef", "workspaceHead"),
+            ):
+                value = self._workflow_control_stop.get(key)
+                if isinstance(value, str) and value.strip():
+                    refs[ref_name] = value.strip()
         if isinstance(self._failure_diagnostic, Mapping):
             diagnostics_ref = self._failure_diagnostic.get("diagnosticsRef")
             if isinstance(diagnostics_ref, str) and diagnostics_ref.strip():
@@ -15807,6 +22013,14 @@ class MoonMindRunWorkflow:
         elif self._last_diagnostics_ref:
             refs["diagnostics"] = self._last_diagnostics_ref
         return refs
+
+    def _sanitized_workflow_control_stop(self) -> dict[str, Any] | None:
+        """Return the bounded terminal gate projection safe for durable surfaces."""
+
+        if not self._workflow_control_stop:
+            return None
+        sanitized = redact_sensitive_payload(self._workflow_control_stop)
+        return dict(sanitized) if isinstance(sanitized, Mapping) else None
 
     async def _emit_incident_reconstruction_manifest(
         self,
@@ -15843,6 +22057,7 @@ class MoonMindRunWorkflow:
                 workspace_changes=self._incident_workspace_changes(),
                 logs_ref=self._logs_ref,
                 artifact_refs=self._incident_artifact_refs(),
+                control_stop=self._sanitized_workflow_control_stop(),
             )
         except Exception as exc:
             self._get_logger().warning(
@@ -15880,6 +22095,10 @@ class MoonMindRunWorkflow:
             "evidencePresent": present_kinds,
             "traceBoundaries": [span.boundary for span in manifest.trace_spans],
         }
+        if manifest.control_stop is not None:
+            summary["controlStop"] = manifest.control_stop.model_dump(
+                by_alias=True, mode="json", exclude_none=True
+            )
         if manifest.cost is not None:
             summary["costObserved"] = manifest.cost.observed_available
         if manifest.provider is not None and manifest.provider.provider_error_class:
@@ -15896,6 +22115,15 @@ class MoonMindRunWorkflow:
         try:
             await self._terminate_workflow_scoped_sessions(reason=status)
         except Exception as exc:
+            if self._workflow_control_stop:
+                auxiliary = self._workflow_control_stop.get("auxiliaryOutcomes")
+                if isinstance(auxiliary, dict):
+                    auxiliary["hostCleanup"] = {
+                        "status": "failed",
+                        "reason": self._sanitize_operator_summary(str(exc))
+                        or "session_cleanup_failed",
+                    }
+                    auxiliary["janitorRequired"] = True
             self._get_logger().warning(
                 "Failed to terminate workflow-scoped agent sessions: %s", exc
             )
@@ -15907,12 +22135,14 @@ class MoonMindRunWorkflow:
             publish_reason = (
                 "run did not complete successfully"
                 if status in ("failed", "canceled")
-                else "No repository changes were available to commit or publish."
-                if status == "no_commit"
                 else (
-                    "publishing disabled"
-                    if publish_mode == "none"
-                    else "published successfully"
+                    "No repository changes were available to commit or publish."
+                    if status == "no_commit"
+                    else (
+                        "publishing disabled"
+                        if publish_mode == "none"
+                        else "published successfully"
+                    )
                 )
             )
 
@@ -15939,7 +22169,10 @@ class MoonMindRunWorkflow:
                                 self._publish_reason or "auto publish verified push"
                             )
                         publish_status = "published"
-                    elif publish_mode == "auto" and self._publish_status == "not_required":
+                    elif (
+                        publish_mode == "auto"
+                        and self._publish_status == "not_required"
+                    ):
                         code = "NO_COMMIT"
                         publish_status = "skipped"
                         publish_reason = (
@@ -15953,7 +22186,11 @@ class MoonMindRunWorkflow:
                             or "No repository changes were available to commit or publish."
                         )
                     elif self._publish_status == "not_required":
-                        code = "NO_COMMIT" if publish_mode == "auto" else "PUBLISH_DISABLED"
+                        code = (
+                            "NO_COMMIT"
+                            if self._is_canonical_no_commit_outcome(parameters)
+                            else "PUBLISH_DISABLED"
+                        )
                         publish_status = "skipped"
                         publish_reason = (
                             self._publish_reason or "publish output not required"
@@ -15961,7 +22198,9 @@ class MoonMindRunWorkflow:
                     elif publish_mode == "pr":
                         code = "PUBLISHED_PR"
                         publish_status = "published"
-                        publish_reason = self._publish_reason or "published pull request"
+                        publish_reason = (
+                            self._publish_reason or "published pull request"
+                        )
                     elif publish_mode == "branch":
                         code = "PUBLISHED_BRANCH"
                         publish_status = "published"
@@ -15972,9 +22211,7 @@ class MoonMindRunWorkflow:
                 elif status == "failed" and self._publish_status == "not_required":
                     publish_status = "skipped"
                     publish_reason = (
-                        self._publish_reason
-                        or error
-                        or "publish output not required"
+                        self._publish_reason or error or "publish output not required"
                     )
             else:
                 if status == "success":
@@ -16045,6 +22282,47 @@ class MoonMindRunWorkflow:
                     "outcomes": self._dependency_outcomes(),
                 },
             }
+            if self._workflow_control_stop:
+                auxiliary = self._workflow_control_stop.get("auxiliaryOutcomes")
+                if isinstance(auxiliary, dict):
+                    git_status = (
+                        "failed"
+                        if self._publish_status == "failed"
+                        else (
+                            "completed"
+                            if self._publish_status == "published"
+                            else "not_attempted"
+                        )
+                    )
+                    git_outcome = auxiliary.get("gitPublication")
+                    if not (
+                        isinstance(git_outcome, Mapping)
+                        and git_outcome.get("status") == "failed"
+                    ):
+                        auxiliary["gitPublication"] = {"status": git_status}
+                    for outcome_name in ("hostCleanup", "providerProfileRelease"):
+                        outcome = auxiliary.get(outcome_name)
+                        if not (
+                            isinstance(outcome, Mapping)
+                            and outcome.get("status") == "failed"
+                        ):
+                            auxiliary[outcome_name] = {"status": "completed"}
+                    auxiliary["janitorRequired"] = any(
+                        isinstance(auxiliary.get(outcome_name), Mapping)
+                        and auxiliary[outcome_name].get("status") == "failed"
+                        for outcome_name in ("hostCleanup", "providerProfileRelease")
+                    )
+                metrics = self._workflow_control_stop.get("metrics")
+                if isinstance(metrics, dict):
+                    metrics["publicationCompleted"] = (
+                        self._publish_status == "published"
+                    )
+                control_stop = self._sanitized_workflow_control_stop() or {}
+                finish_summary["primaryOutcome"] = control_stop
+                finish_summary["controlStop"] = control_stop
+                finish_summary["runMetrics"] = dict(
+                    self._workflow_control_stop.get("metrics") or {}
+                )
             if self._operator_summary:
                 finish_summary["operatorSummary"] = self._operator_summary
             side_effects = self._finish_summary_side_effects()
@@ -16063,6 +22341,33 @@ class MoonMindRunWorkflow:
                         self._publish_context.get("blockedReason")
                     )
             if self._publish_context:
+                terminal_publication = self._publish_context.get("terminalPublication")
+                if isinstance(terminal_publication, Mapping):
+                    # Keep preservation evidence on the canonical publish block
+                    # consumed by terminal-state persistence and execution detail.
+                    # The failed finish outcome above remains authoritative.
+                    finish_summary["publish"].update(
+                        {
+                            key: terminal_publication.get(key)
+                            for key in (
+                                "intent",
+                                "status",
+                                "reasonCode",
+                                "source",
+                                "attempted",
+                                "commitCreated",
+                                "branchPushed",
+                                "branchName",
+                                "branchUrl",
+                                "headSha",
+                                "baseBranch",
+                                "remoteVerified",
+                                "evidenceRef",
+                                "idempotencyKey",
+                            )
+                            if terminal_publication.get(key) is not None
+                        }
+                    )
                 finish_summary["publishContext"] = dict(self._publish_context)
                 merge_automation_summary = self._merge_automation_summary_from_context()
                 if merge_automation_summary:
@@ -16315,6 +22620,291 @@ class MoonMindRunWorkflow:
             normalized[key] = self._json_value(item, path=f"{path}.{key}")
         return normalized
 
+    def _compile_authored_omnigent_selection(
+        self, value: Mapping[str, Any], *, path: str
+    ) -> dict[str, Any]:
+        """Compile product-owned Omnigent intent without accepting authority."""
+
+        allowed_fields: dict[str, frozenset[str] | None] = {
+            "endpointRef": None,
+            "executionTargetRef": None,
+            "launchPolicyRef": None,
+            "agent": frozenset({"harnessOverride", "agentName"}),
+            "capture": frozenset(
+                {
+                    "required",
+                    "retentionDays",
+                    "changedFiles",
+                    "workspaceFiles",
+                    "sessionFiles",
+                    "deleteOmnigentSessionAfterHarvest",
+                }
+            ),
+            "session": frozenset({"title", "labels"}),
+            "prompt": frozenset({"text", "instructionRef"}),
+            "productIntent": None,
+            "contextRefs": None,
+            "workspaceContextRefs": None,
+            "repositoryContextRefs": None,
+        }
+        normalized = self._json_mapping(value, path=path)
+
+        forbidden_authority_keys = {
+            "hostid",
+            "dockervolume",
+            "volumename",
+            "credentialgeneration",
+            "leaseid",
+            "providerleaseid",
+            "hostleaseid",
+            "absolutebindsource",
+            "bindsource",
+            "registrationtoken",
+            "profileauthorization",
+            "moonmindprofileauthorization",
+        }
+
+        def reject_authority(item: Any, *, item_path: str) -> None:
+            if isinstance(item, Mapping):
+                for nested_key, nested_value in item.items():
+                    canonical_key = re.sub(r"[^a-z0-9]", "", nested_key.lower())
+                    if canonical_key in forbidden_authority_keys:
+                        raise ValueError(
+                            f"{item_path}.{nested_key} is trusted authority and "
+                            "cannot be authored"
+                        )
+                    reject_authority(
+                        nested_value,
+                        item_path=f"{item_path}.{nested_key}",
+                    )
+            elif isinstance(item, list):
+                for index, nested_value in enumerate(item):
+                    reject_authority(
+                        nested_value,
+                        item_path=f"{item_path}[{index}]",
+                    )
+
+        reject_authority(normalized, item_path=path)
+        unknown = sorted(set(normalized) - set(allowed_fields))
+        if unknown:
+            raise ValueError(
+                f"{path} contains unsupported authored fields: {', '.join(unknown)}"
+            )
+
+        for key, nested_allowlist in allowed_fields.items():
+            if key not in normalized or nested_allowlist is None:
+                continue
+            nested = normalized[key]
+            if not isinstance(nested, Mapping):
+                raise ValueError(f"{path}.{key} must be an object")
+            nested_unknown = sorted(set(nested) - set(nested_allowlist))
+            if nested_unknown:
+                raise ValueError(
+                    f"{path}.{key} contains unsupported authored fields: "
+                    + ", ".join(nested_unknown)
+                )
+
+        agent = normalized.get("agent")
+        if isinstance(agent, Mapping):
+            harness = agent.get("harnessOverride")
+            generic_v2 = self._workflow_patch_enabled(
+                RUN_OMNIGENT_GENERIC_AGENT_PROFILE_V2_PATCH
+            )
+            invalid = harness is not None and (
+                not isinstance(harness, str)
+                or not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", harness)
+            )
+            if invalid or (
+                not generic_v2
+                and harness not in {None, "codex-native", "claude-native"}
+            ):
+                raise ValueError(
+                    f"{path}.agent.harnessOverride must be a supported native harness"
+                )
+        return normalized
+
+    def _compile_agent_profile_snapshot_omnigent_selection(
+        self,
+        value: Mapping[str, Any],
+        *,
+        snapshot: Mapping[str, Any],
+        execution_profile_ref: str | None,
+        path: str,
+    ) -> dict[str, Any]:
+        """Merge trusted profile authority after validating authored intent.
+
+        Agent-profile snapshots produced by the API are immutable launch
+        authority.  Older persisted executions also copied some of that
+        authority into ``parameters.omnigent``.  Accept only exact copies of
+        those legacy fields, discard them from the authored surface, then merge
+        the snapshot through the canonical runtime names.
+        """
+
+        normalized_snapshot = self._json_mapping(
+            snapshot,
+            path="workflow.agentProfileSnapshot",
+        )
+        schema_version = self._required_string(
+            normalized_snapshot,
+            "schemaVersion",
+            error_message="agentProfileSnapshot.schemaVersion is required",
+        )
+        if schema_version != "moonmind.omnigent-agent-profile-snapshot.v1":
+            raise ValueError("agentProfileSnapshot.schemaVersion is unsupported")
+
+        profile_id = self._required_string(
+            normalized_snapshot,
+            "profileId",
+            error_message="agentProfileSnapshot.profileId is required",
+        )
+        profile_version = normalized_snapshot.get("version")
+        if (
+            isinstance(profile_version, bool)
+            or not isinstance(profile_version, int)
+            or profile_version < 1
+        ):
+            raise ValueError("agentProfileSnapshot.version must be a positive integer")
+        provider_profile_ref = self._required_string(
+            normalized_snapshot,
+            "providerProfileRef",
+            error_message="agentProfileSnapshot.providerProfileRef is required",
+        )
+        if execution_profile_ref != provider_profile_ref:
+            raise ValueError(
+                "agentProfileSnapshot.providerProfileRef conflicts with "
+                "the resolved execution profile"
+            )
+
+        target_ref = self._required_string(
+            normalized_snapshot,
+            "executionProfileRef",
+            error_message="agentProfileSnapshot.executionProfileRef is required",
+        )
+        launch_policy_ref = self._required_string(
+            normalized_snapshot,
+            "launchPolicyRef",
+            error_message="agentProfileSnapshot.launchPolicyRef is required",
+        )
+        agent_id = self._required_string(
+            normalized_snapshot,
+            "agentId",
+            error_message="agentProfileSnapshot.agentId is required",
+        )
+        document = self._mapping_value(normalized_snapshot, "document")
+        if not document:
+            raise ValueError("agentProfileSnapshot.document is required")
+        endpoint_ref = self._required_string(
+            document,
+            "endpointRef",
+            error_message="agentProfileSnapshot.document.endpointRef is required",
+        )
+        generic_v2 = self._workflow_patch_enabled(
+            RUN_OMNIGENT_GENERIC_AGENT_PROFILE_V2_PATCH
+        )
+        raw_harness = document.get("harness")
+        if generic_v2 and isinstance(raw_harness, Mapping):
+            harness = self._required_string(
+                raw_harness,
+                "id",
+                error_message="agentProfileSnapshot.document.harness.id is required",
+            )
+        else:
+            harness = self._required_string(
+                document,
+                "harness",
+                error_message="agentProfileSnapshot.document.harness is required",
+            )
+        if not generic_v2 and harness not in {
+            "codex-native",
+            "claude-native",
+            "opencode-native",
+        }:
+            raise ValueError("agentProfileSnapshot.document.harness is unsupported")
+
+        authored = self._json_mapping(value, path=path)
+
+        def discard_legacy_field(key: str, expected: str) -> None:
+            if key not in authored:
+                return
+            observed = authored.pop(key)
+            if not isinstance(observed, str) or observed.strip() != expected:
+                raise ValueError(f"{path}.{key} conflicts with agentProfileSnapshot")
+
+        expected_profile_ref: dict[str, Any] | None = None
+        if generic_v2:
+            authored_profile_ref = authored.pop("agentProfileRef", None)
+            expected_profile_ref = {
+                "profileId": profile_id,
+                "version": profile_version,
+                "digest": normalized_snapshot.get("digest"),
+            }
+            legacy_profile_ref_matches = (
+                isinstance(authored_profile_ref, str)
+                and authored_profile_ref == f"{profile_id}@{profile_version}"
+            )
+            if (
+                authored_profile_ref is not None
+                and not legacy_profile_ref_matches
+                and authored_profile_ref != expected_profile_ref
+            ):
+                raise ValueError(
+                    f"{path}.agentProfileRef conflicts with agentProfileSnapshot"
+                )
+        else:
+            discard_legacy_field("agentProfileRef", f"{profile_id}@{profile_version}")
+        discard_legacy_field("executionProfileRef", target_ref)
+
+        raw_agent = authored.get("agent")
+        if isinstance(raw_agent, Mapping):
+            authored_agent = dict(raw_agent)
+            if "agentId" in authored_agent:
+                observed_agent_id = authored_agent.pop("agentId")
+                if (
+                    not isinstance(observed_agent_id, str)
+                    or observed_agent_id.strip() != agent_id
+                ):
+                    raise ValueError(
+                        f"{path}.agent.agentId conflicts with agentProfileSnapshot"
+                    )
+            if authored_agent:
+                authored["agent"] = authored_agent
+            else:
+                authored.pop("agent", None)
+
+        compiled = self._compile_authored_omnigent_selection(
+            authored,
+            path=path,
+        )
+
+        for key, expected in (
+            ("endpointRef", endpoint_ref),
+            ("executionTargetRef", target_ref),
+            ("launchPolicyRef", launch_policy_ref),
+        ):
+            observed = compiled.get(key)
+            if observed is not None and (
+                not isinstance(observed, str) or observed.strip() != expected
+            ):
+                raise ValueError(f"{path}.{key} conflicts with agentProfileSnapshot")
+            compiled[key] = expected
+
+        compiled_agent = (
+            dict(compiled.get("agent"))
+            if isinstance(compiled.get("agent"), Mapping)
+            else {}
+        )
+        authored_harness = compiled_agent.get("harnessOverride")
+        if authored_harness is not None and authored_harness != harness:
+            raise ValueError(
+                f"{path}.agent.harnessOverride conflicts with agentProfileSnapshot"
+            )
+        compiled_agent["harnessOverride"] = harness
+        compiled_agent["agentId"] = agent_id
+        compiled["agent"] = compiled_agent
+        if expected_profile_ref is not None:
+            compiled["agentProfileRef"] = expected_profile_ref
+        return compiled
+
     def _json_value(self, value: Any, *, path: str) -> Any:
         if value is None or isinstance(value, (str, int, float, bool)):
             return value
@@ -16389,9 +22979,7 @@ class MoonMindRunWorkflow:
             workflow.upsert_search_attributes(
                 [
                     SearchAttributePair(
-                        SearchAttributeKey.for_datetime(
-                            MM_STARTED_AT_SEARCH_ATTRIBUTE
-                        ),
+                        SearchAttributeKey.for_datetime(MM_STARTED_AT_SEARCH_ATTRIBUTE),
                         started_at,
                     )
                 ]
@@ -16530,6 +23118,11 @@ class MoonMindRunWorkflow:
                 memo_dict["targetRuntime"] = self._target_runtime
             if self._target_skill:
                 memo_dict["targetSkill"] = self._target_skill
+        if (
+            workflow.patched(RUN_MEMO_RUNTIME_INHERITANCE_PATCH)
+            and self._runtime_inheritance_parameters
+        ):
+            memo_dict["parameters"] = dict(self._runtime_inheritance_parameters)
         if self._input_ref:
             memo_dict["input_artifact_ref"] = self._input_ref
         if self._plan_ref:
@@ -17050,9 +23643,8 @@ class MoonMindRunWorkflow:
 
         runtime_block = parameters_patch.get("runtime")
         if isinstance(runtime_block, Mapping):
-            if (
-                preserve_profile_clear
-                and self._source_requests_runtime_profile_clear(runtime_block)
+            if preserve_profile_clear and self._source_requests_runtime_profile_clear(
+                runtime_block
             ):
                 profile_clear_requested = True
             selection.update(self._runtime_selection_from_source(runtime_block))
@@ -17162,7 +23754,7 @@ class MoonMindRunWorkflow:
 
     @workflow.query
     def get_status(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "state": self._state,
             "paused": self._paused,
             "cancel_requested": self._cancel_requested,
@@ -17172,10 +23764,20 @@ class MoonMindRunWorkflow:
             "awaiting_external": self._awaiting_external,
             "waiting_reason": self._waiting_reason,
         }
+        for row in reversed(self._step_ledger_rows):
+            if isinstance(row.get("executionOutcome"), Mapping):
+                payload["executionOutcome"] = dict(row["executionOutcome"])
+            if isinstance(row.get("finalizationOutcome"), Mapping):
+                payload["finalizationOutcome"] = dict(row["finalizationOutcome"])
+            if "executionOutcome" in payload or "finalizationOutcome" in payload:
+                break
+        return payload
 
     @workflow.query
     def get_progress(self) -> dict[str, Any]:
-        payload = ExecutionProgressModel.model_validate(self._progress_snapshot).model_dump(
+        payload = ExecutionProgressModel.model_validate(
+            self._progress_snapshot
+        ).model_dump(
             by_alias=True,
             mode="json",
         )
@@ -17207,3 +23809,5 @@ class MoonMindUserWorkflow(MoonMindRunWorkflow):
     @workflow.run
     async def run(self, input_payload: RunWorkflowInput) -> RunWorkflowOutput:
         return await super().run(input_payload)
+
+    advance_remediation_loop_state,

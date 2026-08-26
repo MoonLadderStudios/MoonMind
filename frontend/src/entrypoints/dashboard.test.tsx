@@ -12,14 +12,18 @@ import postcss from 'postcss';
 import type { Root, Rule } from 'postcss';
 
 import type { BootPayload } from '../boot/parseBootPayload';
-import { act, fireEvent, renderWithClient, screen, waitFor } from '../utils/test-utils';
+import { DashboardSystemMenu } from '../components/DashboardSystemMenu';
+import { act, fireEvent, renderWithClient, screen, waitFor, within } from '../utils/test-utils';
 import { DashboardApp } from './dashboard-app';
 import { navigateTo } from '../lib/navigation';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import {
   readDashboardPreferences,
   resetDashboardPreferences,
   updateDashboardPreferences,
 } from '../utils/dashboardPreferences';
+import { DASHBOARD_DESTINATIONS } from '../lib/dashboardRoutes';
+import { SKILLS_CREATE_REQUEST_EVENT } from '../lib/skillsCreateRequest';
 
 const animatedNavIconMocks = vi.hoisted(() => ({
   moonStart: vi.fn(),
@@ -177,15 +181,33 @@ vi.mock('lucide-animated', async () => {
 // MM-960: simulate a transient dynamic-import (chunk-load) failure for one page
 // so we can assert the route boundary's Retry recreates the lazy import instead
 // of replaying React.lazy's cached rejection. The factory rejects the first time
-// it is evaluated and resolves to a real component afterward.
-const skillsImport = vi.hoisted(() => ({ attempts: 0 }));
-vi.mock('./skills', () => {
-  skillsImport.attempts += 1;
-  if (skillsImport.attempts === 1) {
-    throw new Error('Failed to fetch dynamically imported module: skills');
+// it is evaluated and resolves to a real component afterward. The index-health
+// page carries the failure because no other test imports it first.
+const indexHealthImport = vi.hoisted(() => ({ attempts: 0 }));
+vi.mock('./index-health', () => {
+  indexHealthImport.attempts += 1;
+  if (indexHealthImport.attempts === 1) {
+    throw new Error('Failed to fetch dynamically imported module: index-health');
   }
-  return { default: () => <div>Skills page recovered</div> };
+  return { default: () => <div>Index health page recovered</div> };
 });
+
+vi.mock('./skills', () => ({
+  default: ({ payload }: { payload: BootPayload }) => {
+    const initialData = payload.initialData as {
+      dashboardConfig?: { initialPath?: string };
+      skillsListDisplayMode?: unknown;
+      skillsListDisplayStatus?: unknown;
+    } | undefined;
+    return (
+      <div>
+        <div>Skills page loaded</div>
+        <div>Skills route path: {initialData?.dashboardConfig?.initialPath ?? 'unknown'}</div>
+        <div>Skills list display: {String(initialData?.skillsListDisplayMode ?? 'unset')}</div>
+      </div>
+    );
+  },
+}));
 
 vi.mock('./workflow-list', () => ({
   default: () => <div>Workflow list route loaded</div>,
@@ -379,23 +401,198 @@ describe('Dashboard shared entry', () => {
     fireEvent.mouseLeave(createLink);
     expect(animatedNavIconMocks.rocketStop).toHaveBeenCalledTimes(1);
 
-    const schedulesLink = screen.getByRole('link', { name: 'Recurring' });
-    fireEvent.mouseEnter(schedulesLink);
-    expect(animatedNavIconMocks.moonStart).toHaveBeenCalledTimes(1);
-    fireEvent.mouseLeave(schedulesLink);
-    expect(animatedNavIconMocks.moonStop).toHaveBeenCalledTimes(1);
+    // Recurring and Skills live in the System menu, not the permanent masthead.
+    expect(screen.queryByRole('link', { name: 'Recurring' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Skills' })).toBeNull();
+  });
 
-    const skillsLink = screen.getByRole('link', { name: 'Skills' });
-    fireEvent.mouseEnter(skillsLink);
-    expect(animatedNavIconMocks.sparklesStart).toHaveBeenCalledTimes(1);
-    fireEvent.mouseLeave(skillsLink);
-    expect(animatedNavIconMocks.sparklesStop).toHaveBeenCalledTimes(1);
+  it('MM-1200 groups enabled non-primary destinations under the System menu', async () => {
+    window.history.replaceState({}, '', '/workflows');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
-    const settingsLink = screen.getByRole('link', { name: 'Settings' });
-    fireEvent.mouseEnter(settingsLink);
-    expect(animatedNavIconMocks.settingsStart).toHaveBeenCalledTimes(1);
-    fireEvent.mouseLeave(settingsLink);
-    expect(animatedNavIconMocks.settingsStop).toHaveBeenCalledTimes(1);
+    await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
+    const navigation = screen.getByRole('navigation', { name: 'MoonMind navigation' });
+    expect(Array.from(navigation.querySelectorAll('.route-nav-primary > a')).map((link) => link.textContent?.trim())).toEqual([
+      'Workflows', 'Create',
+    ]);
+    expect(screen.queryByRole('link', { name: 'Recurring' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Skills' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Manifests' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Artifacts' })).toBeNull();
+
+    const trigger = screen.getByRole('button', { name: 'System' });
+    fireEvent.click(trigger);
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByRole('menuitem', { name: 'Recurring' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'Skills' })).toBeTruthy();
+    expect(screen.getByText('Workflow resources')).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'Manifests' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'Artifacts' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'Settings' })).toBeTruthy();
+    expect(screen.queryByRole('menuitem', { name: 'Remediation' })).toBeNull();
+
+    const first = screen.getByRole('menuitem', { name: 'Recurring' });
+    first.focus();
+    fireEvent.keyDown(first, { key: 'End' });
+    expect(document.activeElement).toBe(screen.getByRole('menuitem', { name: 'Settings' }));
+    fireEvent.keyDown(document.activeElement as Element, { key: 'Escape' });
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+    expect(document.activeElement).toBe(trigger);
+
+    // No skew alert when the server does not report a drifted registry.
+    expect(document.querySelector('[data-ui-version-skew]')).toBeNull();
+  });
+
+  it('keeps feature-gated navigation and raises a version-skew alert when the server destination registry drifts', async () => {
+    // Reproduces the deployed regression where a stale JS bundle met a newer
+    // API registry: the old behavior threw the whole uiInfo payload away, so
+    // the System menu (which has no null-uiInfo fallback) silently vanished
+    // while the primary links fell back to a stale layout. The skew must be
+    // loud, and capability-gated navigation must keep working.
+    const driftedDestinations = DASHBOARD_DESTINATIONS
+      .map(({ page: _page, dataWidePanel: _wide, ...item }) => ({ ...item }))
+      .map((item) => (item.key === 'recurring' ? { ...item, navigationGroup: 'primary' as const } : item));
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => uiInfo({ buildId: '20990101.1', destinations: driftedDestinations }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: false,
+        status: 404,
+        statusText: 'Not Found',
+        text: async () => 'Unhandled fetch',
+      } as Response);
+    });
+
+    window.history.replaceState({}, '', '/workflows');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+    await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
+
+    const banner = await screen.findByRole('alert');
+    expect(banner.textContent).toContain('Dashboard build mismatch');
+    expect(banner.textContent).toContain('20990101.1');
+
+    // uiInfo stays usable: the System menu and its feature-gated entries survive.
+    const trigger = screen.getByRole('button', { name: 'System' });
+    fireEvent.click(trigger);
+    expect(screen.getByRole('menuitem', { name: 'Skills' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'Settings' })).toBeTruthy();
+  });
+
+  it.each([
+    ['/manifests', 'Manifests'],
+    ['/artifacts/example', 'Artifacts'],
+    ['/observability/example', 'Artifacts'],
+    ['/remediations/example', 'Remediation'],
+    ['/settings/providers', 'Settings'],
+    ['/schedules', 'Recurring'],
+    ['/schedules/nightly-build', 'Recurring'],
+    ['/skills', 'Skills'],
+    ['/skills/speckit-orchestrate', 'Skills'],
+  ])('MM-1200 marks the System menu active and relabels it for the child route %s', (path, label) => {
+    renderWithClient(
+      <MemoryRouter initialEntries={[path]}>
+        <nav aria-label="Test navigation">
+          <a href="/workflows">Workflows</a>
+          <DashboardSystemMenu
+            uiInfo={uiInfo({ features: { ...uiInfo().features, remediationCollection: true } })}
+            mobileDrawerOpen={false}
+          />
+        </nav>
+      </MemoryRouter>,
+    );
+
+    // The trigger takes on the active selection's one-word label in place of
+    // "System" while carrying the active underline treatment.
+    const trigger = screen.getByRole('button', { name: label });
+    expect(trigger.classList.contains('active')).toBe(true);
+    expect(screen.queryByRole('button', { name: 'System' })).toBeNull();
+    expect(screen.getByRole('link', { name: 'Workflows' }).classList.contains('active')).toBe(false);
+  });
+
+  it.each([
+    ['Enter', 'Recurring'],
+    [' ', 'Recurring'],
+    ['ArrowDown', 'Recurring'],
+    ['ArrowUp', 'Settings'],
+  ])('MM-1200 opens System with %s and focuses %s', async (key, expectedItem) => {
+    renderWithClient(
+      <MemoryRouter initialEntries={['/workflows']}>
+        <DashboardSystemMenu uiInfo={uiInfo()} mobileDrawerOpen={false} />
+      </MemoryRouter>,
+    );
+    const trigger = screen.getByRole('button', { name: 'System' });
+    fireEvent.keyDown(trigger, { key });
+
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('menuitem', { name: expectedItem })));
+  });
+
+  it('MM-1200 supports complete menu focus movement and closes on focus departure', async () => {
+    renderWithClient(
+      <MemoryRouter initialEntries={['/workflows']}>
+        <DashboardSystemMenu uiInfo={uiInfo()} mobileDrawerOpen={false} />
+      </MemoryRouter>,
+    );
+    const trigger = screen.getByRole('button', { name: 'System' });
+    fireEvent.click(trigger);
+    const first = screen.getByRole('menuitem', { name: 'Recurring' });
+    const last = screen.getByRole('menuitem', { name: 'Settings' });
+    first.focus();
+    fireEvent.keyDown(first, { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(screen.getByRole('menuitem', { name: 'Skills' }));
+    fireEvent.keyDown(document.activeElement as Element, { key: 'ArrowUp' });
+    expect(document.activeElement).toBe(first);
+    fireEvent.keyDown(first, { key: 'End' });
+    expect(document.activeElement).toBe(last);
+    fireEvent.keyDown(last, { key: 'Home' });
+    expect(document.activeElement).toBe(first);
+    fireEvent.blur(first, { relatedTarget: document.body });
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('MM-1200 routes selections client-side and closes on selection or outside click', () => {
+    function LocationProbe() {
+      return <output aria-label="Current path">{useLocation().pathname}</output>;
+    }
+    renderWithClient(
+      <MemoryRouter initialEntries={['/workflows']}>
+        <DashboardSystemMenu uiInfo={uiInfo()} mobileDrawerOpen={false} />
+        <LocationProbe />
+      </MemoryRouter>,
+    );
+    const trigger = screen.getByRole('button', { name: 'System' });
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Settings' }));
+    expect(screen.getByRole('status', { name: 'Current path' }).textContent).toBe('/settings');
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+
+    fireEvent.click(trigger);
+    fireEvent.pointerDown(document.body);
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('MM-1200 renders enabled System children inline on mobile without a nested popover', () => {
+    renderWithClient(
+      <MemoryRouter initialEntries={['/workflows']}>
+        <DashboardSystemMenu
+          uiInfo={uiInfo({ features: { ...uiInfo().features, manifests: false, artifacts: false } })}
+          mobileDrawerOpen
+        />
+      </MemoryRouter>,
+    );
+    const inline = screen.getByLabelText('System destinations');
+    expect(inline.querySelector('[role="menu"]')).toBeNull();
+    expect(screen.getByRole('link', { name: 'Settings' })).toBeTruthy();
+    // Recurring and Skills render as normal inline links, not a nested popover.
+    expect(within(inline).getByRole('link', { name: 'Recurring' })).toBeTruthy();
+    expect(within(inline).getByRole('link', { name: 'Skills' })).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Manifests' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Artifacts' })).toBeNull();
   });
 
   it('MM-1192 traps mobile navigation focus, locks scrolling, and restores focus on Escape', async () => {
@@ -462,8 +659,10 @@ describe('Dashboard shared entry', () => {
 
     onChange?.({ matches: false } as MediaQueryListEvent);
 
-    await waitFor(() => expect(trigger.getAttribute('aria-expanded')).toBe('false'));
-    expect(document.body.style.overflow).toBe('');
+    await waitFor(() => {
+      expect(trigger.getAttribute('aria-expanded')).toBe('false');
+      expect(document.body.style.overflow).toBe('');
+    });
     expect(screen.queryByRole('button', { name: 'Close navigation menu' })).toBeNull();
   });
 
@@ -499,7 +698,7 @@ describe('Dashboard shared entry', () => {
 
     expect(await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Workflows' }).getAttribute('href')).toBe('/workflows');
-    expect(document.querySelectorAll('.route-nav-icon')).toHaveLength(7);
+    expect(document.querySelectorAll('.route-nav-icon')).toHaveLength(3);
     expect(screen.getByText('vtest-build')).toBeTruthy();
     expect(screen.queryByLabelText('Operational metrics')).toBeNull();
     expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions/metrics'))).toBe(false);
@@ -576,6 +775,7 @@ describe('Dashboard shared entry', () => {
           json: async () => ({
             items: [{
               id: 'schedule-one',
+              version: 1,
               name: 'Daily recurring scan',
               enabled: true,
               cron: '0 9 * * *',
@@ -593,6 +793,7 @@ describe('Dashboard shared entry', () => {
           ok: true,
           json: async () => ({
             id: 'schedule-one',
+            version: 1,
             name: 'Daily recurring scan',
             description: 'Runs every morning.',
             enabled: true,
@@ -656,6 +857,7 @@ describe('Dashboard shared entry', () => {
           json: async () => ({
             items: [{
               id: 'schedule-one',
+              version: 1,
               name: 'Daily recurring scan',
               enabled: true,
               cron: '0 9 * * *',
@@ -705,6 +907,7 @@ describe('Dashboard shared entry', () => {
           json: async () => ({
             items: [{
               id: 'schedule-one',
+              version: 1,
               name: 'Daily recurring scan',
               enabled: true,
               cron: '0 9 * * *',
@@ -722,6 +925,7 @@ describe('Dashboard shared entry', () => {
           ok: true,
           json: async () => ({
             id: 'schedule-one',
+            version: 1,
             name: 'Daily recurring scan',
             description: 'Runs every morning.',
             enabled: true,
@@ -758,6 +962,190 @@ describe('Dashboard shared entry', () => {
     expect(fetchSpy.mock.calls.some(([url]) => String(url) === '/api/recurring-workflows/stale-schedule')).toBe(true);
   });
 
+  function mockSkillsCatalogFetch(skillIds: string[], uiInfoOverrides: Record<string, unknown> = {}) {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo(uiInfoOverrides) } as Response);
+      }
+      if (url === '/api/workflows/skills') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: { worker: skillIds },
+            legacyItems: skillIds.map((id) => ({ id })),
+          }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+  }
+
+  function storedDashboardPreferences(): Record<string, unknown> {
+    const raw = window.localStorage.getItem('moonmind.dashboard.preferences');
+    const parsed = raw ? JSON.parse(raw) : {};
+    return (parsed.preferences ?? {}) as Record<string, unknown>;
+  }
+
+  it('renders one Skills list display radio group on skill routes and opens the first skill in sidebar mode', async () => {
+    mockSkillsCatalogFetch(['speckit-orchestrate', 'pr-resolver']);
+    
+    window.history.replaceState({}, '', '/skills');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Skills page loaded')).toBeTruthy();
+    const group = screen.getByRole('radiogroup', { name: 'Skills list display' });
+    expect(screen.getAllByRole('radiogroup')).toHaveLength(1);
+    expect(screen.queryByRole('radiogroup', { name: 'Workflow list display' })).toBeNull();
+    expect(screen.queryByRole('radiogroup', { name: 'Recurring list display' })).toBeNull();
+    expect(within(group).getByRole('radio', { name: 'Full table' }).getAttribute('aria-checked')).toBe('true');
+
+    fireEvent.click(within(group).getByRole('radio', { name: 'Sidebar list' }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/skills/speckit-orchestrate');
+    });
+    expect(await screen.findByText('Skills list display: sidebar')).toBeTruthy();
+
+    const prefs = storedDashboardPreferences();
+    expect(prefs.skillsListDisplayMode).toBe('sidebar');
+    expect(prefs.lastSelectedSkillId).toBe('speckit-orchestrate');
+    // Skills mode changes never touch the Workflow or Recurring preferences.
+    expect(prefs.workflowListDisplayMode).toBe('sidebar');
+    expect(prefs.recurringListDisplayMode).toBe('table');
+  });
+
+  it('mounts the green Create New Skill button in the masthead to the right of System on skill routes', async () => {
+    mockSkillsCatalogFetch(['speckit-orchestrate', 'pr-resolver']);
+
+    window.history.replaceState({}, '', '/skills');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Skills page loaded')).toBeTruthy();
+
+    const createButton = screen.getByRole('button', { name: 'Create New Skill' });
+    expect(createButton.classList.contains('skills-create-nav-button')).toBe(true);
+
+    // It lives in the masthead route-nav, immediately after the System dropdown.
+    const systemMenu = document.querySelector<HTMLElement>('.dashboard-system-menu')!;
+    expect(systemMenu).toBeTruthy();
+    expect(createButton.closest('.route-nav')).toBe(systemMenu.closest('.route-nav'));
+    expect(
+      systemMenu.compareDocumentPosition(createButton) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    // Clicking it asks the Skills page to open its create drawer via the window
+    // event (the drawer is owned by the Skills page, not the masthead).
+    const handler = vi.fn();
+    window.addEventListener(SKILLS_CREATE_REQUEST_EVENT, handler);
+    fireEvent.click(createButton);
+    window.removeEventListener(SKILLS_CREATE_REQUEST_EVENT, handler);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not mount the Create New Skill button off skill routes', async () => {
+    window.history.replaceState({}, '', '/workflows');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
+    expect(screen.queryByRole('button', { name: 'Create New Skill' })).toBeNull();
+  });
+
+  it('does not mount the Create New Skill button when the skills feature is disabled', async () => {
+    mockSkillsCatalogFetch(['speckit-orchestrate', 'pr-resolver'], {
+      features: { ...uiInfo().features, skills: false },
+    });
+
+    window.history.replaceState({}, '', '/skills');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    // The skills page still renders for the route, but the masthead create
+    // affordance must stay hidden while the skills feature flag is off.
+    expect(await screen.findByText('Skills page loaded')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Create New Skill' })).toBeNull();
+  });
+
+  it('opens a remembered skill from /skills and clears a stale remembered skill before fallback', async () => {
+    window.localStorage.setItem('moonmind.dashboard.preferences', JSON.stringify({
+      version: 3,
+      preferences: { skillsListDisplayMode: 'table', lastSelectedSkillId: 'ghost-skill' },
+    }));
+    mockSkillsCatalogFetch(['speckit-orchestrate', 'pr-resolver']);
+    
+    window.history.replaceState({}, '', '/skills');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Skills page loaded')).toBeTruthy();
+    fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/skills/speckit-orchestrate');
+    });
+    expect(await screen.findByText('Skills list display: hidden')).toBeTruthy();
+    const prefs = storedDashboardPreferences();
+    expect(prefs.lastSelectedSkillId).toBe('speckit-orchestrate');
+    expect(prefs.skillsListDisplayMode).toBe('hidden');
+  });
+
+  it('opens a still-valid remembered skill instead of the first visible row', async () => {
+    window.localStorage.setItem('moonmind.dashboard.preferences', JSON.stringify({
+      version: 3,
+      preferences: { skillsListDisplayMode: 'table', lastSelectedSkillId: 'pr-resolver' },
+    }));
+    mockSkillsCatalogFetch(['speckit-orchestrate', 'pr-resolver']);
+    
+    window.history.replaceState({}, '', '/skills');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Skills page loaded')).toBeTruthy();
+    fireEvent.click(screen.getByRole('radio', { name: 'Sidebar list' }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/skills/pr-resolver');
+    });
+  });
+
+  it('keeps an empty skills catalog on the table with an accessible status message', async () => {
+    mockSkillsCatalogFetch([]);
+    
+    window.history.replaceState({}, '', '/skills');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Skills page loaded')).toBeTruthy();
+    const group = screen.getByRole('radiogroup', { name: 'Skills list display' });
+    fireEvent.click(within(group).getByRole('radio', { name: 'Sidebar list' }));
+
+    await waitFor(() => {
+      expect(within(group).getByRole('status').textContent).toBe('No skill to open.');
+    });
+    expect(window.location.pathname).toBe('/skills');
+    expect(within(group).getByRole('radio', { name: 'Full table' }).getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('switches Skills detail between hidden and full-table modes without guessing routes', async () => {
+    mockSkillsCatalogFetch(['speckit-orchestrate', 'pr-resolver']);
+    
+    window.history.replaceState({}, '', '/skills/pr-resolver');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    // A direct detail visit coerces the persisted table default to sidebar
+    // instead of redirecting away from the requested skill.
+    expect(await screen.findByText('Skills list display: sidebar')).toBeTruthy();
+    expect(window.location.pathname).toBe('/skills/pr-resolver');
+
+    fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
+    expect(await screen.findByText('Skills list display: hidden')).toBeTruthy();
+    expect(window.location.pathname).toBe('/skills/pr-resolver');
+    expect(storedDashboardPreferences().skillsListDisplayMode).toBe('hidden');
+    expect(storedDashboardPreferences().lastSelectedSkillId).toBe('pr-resolver');
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Full table' }));
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/skills');
+    });
+    expect(await screen.findByText('Skills list display: table')).toBeTruthy();
+  });
+
   it('switches Recurring detail between full table and hidden-list modes', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
@@ -770,6 +1158,7 @@ describe('Dashboard shared entry', () => {
           json: async () => ({
             items: [{
               id: 'schedule-one',
+              version: 1,
               name: 'Daily recurring scan',
               enabled: true,
               cron: '0 9 * * *',
@@ -787,6 +1176,7 @@ describe('Dashboard shared entry', () => {
           ok: true,
           json: async () => ({
             id: 'schedule-one',
+            version: 1,
             name: 'Daily recurring scan',
             description: 'Runs every morning.',
             enabled: true,
@@ -839,6 +1229,7 @@ describe('Dashboard shared entry', () => {
           json: async () => ({
             items: [{
               id: 'schedule-one',
+              version: 1,
               name: 'Daily recurring scan',
               enabled: true,
               cron: '0 9 * * *',
@@ -856,6 +1247,7 @@ describe('Dashboard shared entry', () => {
           ok: true,
           json: async () => ({
             id: 'schedule-one',
+            version: 1,
             name: 'Daily recurring scan',
             description: 'Runs every morning.',
             enabled: true,
@@ -933,6 +1325,7 @@ describe('Dashboard shared entry', () => {
   // `hidden` on a direct `/schedules/{definitionId}` visit.
   const recurringScheduleRow = (id: string, name: string) => ({
     id,
+    version: 1,
     name,
     enabled: true,
     cron: '0 9 * * *',
@@ -1217,19 +1610,19 @@ describe('Dashboard shared entry', () => {
   it('recovers from a failed lazy page import when the user retries (MM-960)', async () => {
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
-      window.history.replaceState({}, '', '/skills');
+      window.history.replaceState({}, '', '/index-health');
       renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
       // First dynamic import rejects -> styled route error with a Retry action.
       expect(await screen.findByText('This page failed to load')).toBeTruthy();
-      expect(screen.queryByText('Skills page recovered')).toBeNull();
+      expect(screen.queryByText('Index health page recovered')).toBeNull();
 
       // Retry must recreate the lazy import (a cached rejection would re-throw).
       fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
 
-      expect(await screen.findByText('Skills page recovered')).toBeTruthy();
+      expect(await screen.findByText('Index health page recovered')).toBeTruthy();
       expect(screen.queryByText('This page failed to load')).toBeNull();
-      expect(skillsImport.attempts).toBeGreaterThanOrEqual(2);
+      expect(indexHealthImport.attempts).toBeGreaterThanOrEqual(2);
     } finally {
       consoleErrorSpy.mockRestore();
     }
@@ -1395,7 +1788,8 @@ describe('Dashboard shared entry', () => {
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
     expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
-    fireEvent.click(screen.getByRole('link', { name: 'Settings' }));
+    fireEvent.click(screen.getByRole('button', { name: 'System' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Settings' }));
 
     expect(
       await screen.findByText('Settings permissions: provider_profiles.write,settings.effective.read'),
@@ -1728,7 +2122,8 @@ describe('Dashboard shared entry', () => {
     expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
     fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
     expect((await screen.findByRole('status')).textContent).toContain('Opening first workflow...');
-    fireEvent.click(screen.getByRole('link', { name: 'Settings' }));
+    fireEvent.click(screen.getByRole('button', { name: 'System' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Settings' }));
     expect(await screen.findByText('Settings permissions:')).toBeTruthy();
 
     const completeList = resolveList;
@@ -1758,13 +2153,13 @@ describe('Dashboard shared entry', () => {
     expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions/metrics'))).toBe(false);
   });
 
-  it('uses the constrained shell by default for non-table pages', async () => {
+  it('uses the fluid data-wide shell for the skills workspace', async () => {
     window.history.replaceState({}, '', '/skills');
-    skillsImport.attempts = 1;
+    
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
-    expect(await screen.findByText('Skills page recovered')).toBeTruthy();
-    expect(document.querySelector('.panel--data-wide')).toBeNull();
+    expect(await screen.findByText('Skills page loaded')).toBeTruthy();
+    expect(document.querySelector('.panel--data-wide')).toBeTruthy();
     expect(document.querySelector('.dashboard-alerts-region')).toBeTruthy();
   });
 
@@ -1785,6 +2180,29 @@ describe('Dashboard shared entry', () => {
     expect(cssRuleBlock(dashboardCss, '.panel.panel--data-wide')).toContain('max-width: none;');
     expect(cssRuleBlock(dashboardCss, '.dashboard-root')).toContain('overflow-x: clip;');
     expect(dashboardCss).not.toContain('dashboard-shell-constrained');
+  });
+
+  it('restores horizontal scrolling for the skills catalog table on narrow viewports', async () => {
+    // The skills catalog is a non-responsive DataTable (fixed 20rem skill column
+    // plus four more columns). Wide screens intentionally bleed it edge-to-edge
+    // with `overflow: visible` so the sticky header sticks to the page while the
+    // catalog scrolls; that desktop behavior must be preserved.
+    const desktopSlabBlock = cssRuleBlock(dashboardCss, '.skills-catalog-page .data-table-slab');
+    expect(desktopSlabBlock).toContain('overflow: visible;');
+
+    // But `.dashboard-root` clips horizontal overflow, so on a phone or narrow
+    // desktop that edge-to-edge table would lose its only scroll container and
+    // clip the right-side columns with no way to reach them. A small-breakpoint
+    // override must restore a horizontal scroll container.
+    expect(cssRuleBlock(dashboardCss, '.dashboard-root')).toContain('overflow-x: clip;');
+
+    const narrowSlabBlock = cssRuleBlockMatching(dashboardCss, (rule) => (
+      normalizeCssSelector(rule.selector) === '.skills-catalog-page .data-table-slab' &&
+      rule.parent?.type === 'atrule' &&
+      rule.parent.name === 'media' &&
+      rule.parent.params.includes('max-width: 900px')
+    ));
+    expect(narrowSlabBlock).toContain('overflow-x: auto;');
   });
 
   it('keeps workflow collection workspaces fluid', async () => {
@@ -1823,9 +2241,12 @@ describe('Dashboard shared entry', () => {
     expect(shellBlock).toContain('--mm-rail-width: var(--workflow-list-column-workflow-width)');
     expect(shellBlock).toContain('[content-start] min(var(--mm-content-max), calc(100% - 2rem))');
 
-    const skillsWorkspaceBlock = cssRuleBlock(dashboardCss, '.skills-page.collection-workspace');
-    expect(skillsWorkspaceBlock).toContain('--mm-rail-width: var(--workflow-list-column-workflow-width)');
-    expect(skillsWorkspaceBlock).toContain('--mm-rail-bleed: 1rem');
+    // Skills opts into the same edge-rail geometry through the neutral
+    // collection-workspace modifier rather than a forked page-specific grid.
+    const edgeRailBlock = cssRuleBlock(dashboardCss, '.collection-workspace--edge-rail');
+    expect(edgeRailBlock).toContain('--mm-rail-width: var(--workflow-list-column-workflow-width)');
+    expect(edgeRailBlock).toContain('--mm-rail-bleed: var(--workflow-list-slab-bleed-inline)');
+    expect(cssRuleBlocks(dashboardCss, '.skills-page.collection-workspace')).toEqual([]);
 
     // The rail stays fixed to the shared workflow-column width and bleeds left
     // by the same amount as the data slab, so its painted edge reaches x:0.
@@ -1883,7 +2304,7 @@ describe('Dashboard shared entry', () => {
     // in-flow behavior: collapsed create content spans the single available
     // column and the floating bar resets to the viewport-centered offset.
     const midShellBlock = cssRuleBlockMatching(dashboardCss, (rule) => (
-      normalizeCssSelector(rule.selector) === '.workflow-workspace-shell' &&
+      rule.selector.split(',').map(normalizeCssSelector).includes('.workflow-workspace-shell') &&
       rule.parent?.type === 'atrule' &&
       rule.parent.name === 'media' &&
       rule.parent.params.includes('max-width: 114rem') &&
@@ -2043,29 +2464,58 @@ describe('Dashboard shared entry', () => {
     expect(reducedMotionBlock).toContain('transform: none !important');
   });
 
-  it('draws a thin divider directly to the left of the workflow sidebar scrollbar', async () => {
+  it('separates the collection rail with its own right border, not a scrollbar-offset divider', async () => {
     const sidebarBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar');
     expect(sidebarBlock).toContain('padding: 0');
-    // The scrollbar width is a shared token so the divider offset tracks it.
-    expect(sidebarBlock).toContain('--workflow-list-sidebar-scrollbar-width: 6px');
+    // The rail no longer hard-codes a scrollbar width, and no longer clamps to a
+    // content/viewport height that shrinks the divider with the row count.
+    expect(sidebarBlock).not.toContain('--workflow-list-sidebar-scrollbar-width');
+    expect(sidebarBlock).not.toContain('max-height');
 
+    // The separator is the shared collection rail's own inline-end border, one
+    // divider-width wide, applied through the neutral `.collection-sidebar`
+    // primitive so Workflows, Recurring, and Skills stay consistent.
+    const railBorderBlock = cssRuleBlock(
+      dashboardCss,
+      '.workflow-workspace-shell > .collection-sidebar,\n.collection-workspace--edge-rail > .collection-sidebar',
+    );
+    const normalizedRailBorder = railBorderBlock.replace(/\s+/g, ' ');
+    expect(normalizedRailBorder).toContain(
+      'border-inline-end: var(--workflow-list-divider-width) solid var(--workflow-list-divider-color)',
+    );
+    // Height is owned by the workspace block-size token, not by the rows.
+    expect(railBorderBlock).toContain('block-size: var(--mm-collection-workspace-block-size)');
+    expect(railBorderBlock).toContain('max-block-size: var(--mm-collection-workspace-block-size)');
+    expect(railBorderBlock).toContain('align-self: stretch');
+
+    // The old pseudo-element divider no longer draws anything.
+    const dividerBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar::after');
+    expect(dividerBlock).toContain('content: none');
+    expect(dividerBlock).not.toContain('right:');
+    expect(dividerBlock).not.toContain('background:');
+
+    // The list stays the scroll container; its scrollbar styling is cosmetic and
+    // no separator geometry references a scrollbar-width token anywhere.
     const sidebarTableBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-table');
+    expect(sidebarTableBlock).toContain('overflow-y: auto');
     expect(sidebarTableBlock).toContain('scrollbar-width: thin');
+    expect(sidebarTableBlock).toContain('scrollbar-gutter: stable');
 
     const scrollbarBlock = cssRuleBlock(
       dashboardCss,
       '.workflow-workspace-sidebar-table::-webkit-scrollbar',
     );
-    expect(scrollbarBlock).toContain('width: var(--workflow-list-sidebar-scrollbar-width)');
+    expect(scrollbarBlock).toContain('width: 6px');
 
-    // The divider sits directly to the left of the scrollbar (offset by its
-    // width) and reuses the shared list divider token for color/thickness.
-    const dividerBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar::after');
-    expect(dividerBlock).toContain('right: var(--workflow-list-sidebar-scrollbar-width)');
-    expect(dividerBlock).toContain('width: var(--workflow-list-divider-width)');
-    expect(dividerBlock).toContain('background: var(--workflow-list-divider-color)');
-    expect(dividerBlock).toContain('top: 0');
-    expect(dividerBlock).toContain('bottom: 0');
+    // The workspace shell provides the block-size floor so zero, three, or
+    // thirty rows all produce the same rail height.
+    const shellBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-shell');
+    expect(shellBlock).toContain('min-block-size: var(--mm-collection-workspace-block-size)');
+    const rootBlock = cssRuleBlock(dashboardCss, ':root');
+    expect(rootBlock).toContain('--mm-collection-workspace-block-size:');
+
+    // No rule anywhere positions a divider using a scrollbar-width token.
+    expect(dashboardCss).not.toContain('--workflow-list-sidebar-scrollbar-width');
 
     // The full-screen workflow table has no inner scrollbar and never draws the
     // sidebar divider.
@@ -2096,16 +2546,20 @@ describe('Dashboard shared entry', () => {
     expect(svgBlock).toContain('height: 0.8125rem');
   });
 
-  it('keeps workflow detail step timeline icons large inside their status circles', async () => {
+  it('MM-1132 makes workflow detail step timeline icons mostly fill their status circles', async () => {
     const iconBlock = cssRuleBlock(dashboardCss, '.step-tl-icon');
     expect(iconBlock).toContain('width: 1.35rem');
     expect(iconBlock).toContain('height: 1.35rem');
     expect(iconBlock).toContain('border-radius: 50%');
+    // The .status pill padding must be reset here: with border-box sizing it
+    // starves the circle's content box and the svg flex-shrinks to ~4px.
+    expect(iconBlock).toContain('padding: 0');
 
     const svgBlock = cssRuleBlock(dashboardCss, '.step-tl-icon svg');
     expect(svgBlock).toContain('width: 1.05rem');
     expect(svgBlock).toContain('height: 1.05rem');
-    expect(svgBlock).toContain('stroke-width: 2.4');
+    expect(svgBlock).toContain('flex: none');
+    expect(svgBlock).toContain('stroke-width: 2');
   });
 
   it('keeps checkbox label hit areas bounded to visible control text', async () => {
@@ -2686,21 +3140,22 @@ describe('Dashboard shared entry', () => {
 
   it('defines the shared MM-488 executing shimmer modifier contract', async () => {
     expect(dashboardCss).toMatch(/--mm-executing-sweep-cycle-duration:\s*2600ms/);
-    // MM-1048: angle and vertical travel are slightly more horizontal than the
-    // previous -24deg / +/-128% treatment.
-    expect(dashboardCss).toMatch(/--mm-executing-sweep-angle:\s*-20deg/);
+    // Approved shimmer geometry (MM-1036 as shipped and operator-reviewed).
+    // The sweep angle was steepened from -18deg to -28deg per operator review
+    // so the shimmer line sits ~10deg further from horizontal (closer to
+    // vertical). MM-1048's -20deg / +/-120% re-angle never rendered (its own
+    // commit broke gradient resolution), so it is not the approved look.
+    expect(dashboardCss).toMatch(/--mm-executing-sweep-angle:\s*-28deg/);
     expect(dashboardCss).toMatch(/--mm-executing-sweep-band-width:\s*24%/);
     expect(dashboardCss).toMatch(/--mm-executing-sweep-band-height:\s*180%/);
     expect(dashboardCss).toMatch(/--mm-executing-sweep-halo-width-multiplier:\s*10/);
     expect(dashboardCss).toMatch(/--mm-executing-sweep-core-width-multiplier:\s*9\.1667/);
     expect(dashboardCss).not.toContain('--mm-executing-sweep-halo-peak-width-multiplier');
     expect(dashboardCss).not.toContain('--mm-executing-sweep-core-peak-width-multiplier');
-    // MM-1048: vertical travel is reduced to +/-120% so the horizontal delta
-    // exceeds the vertical delta and the sweep travels more horizontally.
     expect(dashboardCss).toMatch(/--mm-executing-sweep-start-x:\s*135%/);
-    expect(dashboardCss).toMatch(/--mm-executing-sweep-start-y:\s*120%/);
+    expect(dashboardCss).toMatch(/--mm-executing-sweep-start-y:\s*160%/);
     expect(dashboardCss).toMatch(/--mm-executing-sweep-end-x:\s*-135%/);
-    expect(dashboardCss).toMatch(/--mm-executing-sweep-end-y:\s*-120%/);
+    expect(dashboardCss).toMatch(/--mm-executing-sweep-end-y:\s*-160%/);
     expect(dashboardCss).toMatch(/--mm-executing-sweep-layer-offset-x:\s*-12%/);
     expect(dashboardCss).toMatch(/--mm-executing-sweep-layer-offset-y:\s*-10%/);
     expect(dashboardCss).toContain('--mm-executing-letter-cycle-duration: var(--mm-executing-sweep-cycle-duration)');
@@ -2712,15 +3167,23 @@ describe('Dashboard shared entry', () => {
     expect(dashboardCss).toContain('--mm-executing-border-glint-outset: 1px');
     expect(dashboardCss).toContain('--mm-executing-border-glint-width: 3px');
     expect(dashboardCss).toContain('--mm-executing-border-glint-opacity: 0.95');
-    expect(dashboardCss).toContain('--mm-executing-moving-light-gradient:');
-    expect(dashboardCss).toContain('--mm-status-shimmer-halo: color-mix(in srgb, currentColor 30%, transparent)');
-    expect(dashboardCss).toContain('--mm-status-shimmer-core: color-mix(in srgb, currentColor 70%, white 30%)');
+    // Approved shimmer palette (MM-1036 as shipped): translucent accent halo
+    // under a translucent accent-2 core. MM-1048's brighter currentColor mixes
+    // (30% halo, opaque whitened core) never rendered on screen and are
+    // explicitly rejected below so a "restore the shimmer" fix cannot silently
+    // reintroduce them.
+    expect(dashboardCss).toContain(
+      '--mm-status-shimmer-halo: rgb(var(--mm-accent) / var(--mm-executing-sweep-halo-opacity))',
+    );
+    expect(dashboardCss).toContain(
+      '--mm-status-shimmer-core: rgb(var(--mm-accent-2) / var(--mm-executing-sweep-core-opacity))',
+    );
+    expect(dashboardCss).not.toContain('--mm-status-shimmer-halo: color-mix');
+    expect(dashboardCss).not.toContain('--mm-status-shimmer-core: color-mix');
     expect(dashboardCss).toContain('--mm-status-shimmer-letter-halo: color-mix(in srgb, currentColor 32%, transparent)');
     expect(dashboardCss).toContain('--mm-status-shimmer-letter-bright: color-mix(in srgb, currentColor 68%, white 32%)');
     expect(dashboardCss).toContain('var(--mm-status-shimmer-halo) 50%');
     expect(dashboardCss).toContain('var(--mm-status-shimmer-core) 50%');
-    expect(dashboardCss).not.toContain('rgb(var(--mm-accent) / var(--mm-executing-sweep-halo-opacity)) 50%');
-    expect(dashboardCss).not.toContain('rgb(var(--mm-accent-2) / var(--mm-executing-sweep-core-opacity)) 50%');
 
     const shimmerBlock = cssRuleBlocks(
       dashboardCss,
@@ -2729,6 +3192,18 @@ describe('Dashboard shared entry', () => {
     expect(shimmerBlock).toContain('overflow: hidden');
     expect(shimmerBlock).toContain('isolation: isolate');
     expect(shimmerBlock).not.toContain('animation-delay:');
+    // The moving-light gradient must be declared where its shimmer color
+    // inputs exist (the shimmer host), never on :root. A root declaration
+    // references pill-local custom properties that are undefined at :root,
+    // computes to the guaranteed-invalid value, and every consuming layer
+    // renders background-image: none while the animation keeps running.
+    expect(shimmerBlock).toContain('--mm-status-moving-light-gradient:');
+    expect(shimmerBlock).toContain('var(--mm-status-shimmer-halo) 50%');
+    expect(shimmerBlock).toContain('var(--mm-status-shimmer-core) 50%');
+    const rootBlock = cssRuleBlocks(dashboardCss, ':root').join('\n');
+    expect(rootBlock).not.toContain('moving-light-gradient');
+    expect(rootBlock).not.toContain('--mm-status-shimmer');
+    expect(dashboardCss).not.toContain('--mm-executing-moving-light-gradient');
     const runningBackgroundBlock = cssRuleBlocks(
       dashboardCss,
       '.status-running[data-effect="shimmer-sweep"], .status-running.is-executing',
@@ -2743,7 +3218,7 @@ describe('Dashboard shared entry', () => {
         rule.selector.includes('::before') &&
         rule.selector.includes('::after'),
     );
-    expect(sharedLightMaskBlock).toContain('background-image: var(--mm-executing-moving-light-gradient)');
+    expect(sharedLightMaskBlock).toContain('background-image: var(--mm-status-moving-light-gradient)');
     expect(sharedLightMaskBlock).toContain('animation: mm-status-pill-shimmer var(--mm-executing-sweep-cycle-duration) linear infinite');
     expect(sharedLightMaskBlock).toContain('mix-blend-mode: plus-lighter');
     expect(sharedLightMaskBlock).toMatch(
@@ -2803,7 +3278,7 @@ describe('Dashboard shared entry', () => {
         rule.selector.includes('.status-letter-wave::after'),
     );
     expect(textMaskBlock).toContain('content: attr(data-label)');
-    expect(textMaskBlock).toContain('background-image: var(--mm-executing-moving-light-gradient)');
+    expect(textMaskBlock).toContain('background-image: var(--mm-status-moving-light-gradient)');
     expect(textMaskBlock).toContain('animation: mm-status-pill-shimmer var(--mm-executing-sweep-cycle-duration) linear infinite');
     expect(textMaskBlock).toContain('background-clip: text');
     expect(textMaskBlock).toContain('-webkit-background-clip: text');
@@ -3055,18 +3530,24 @@ describe('Dashboard shared entry', () => {
     );
   });
 
-  it('keeps collection controls outside the masthead and constrains desktop navigation', async () => {
+  it('keeps collection controls beside the brand in the masthead and constrains desktop navigation', async () => {
     const { readFileSync } = await import('node:fs');
     const dashboardCss = readFileSync(
       `${process.cwd()}/frontend/src/styles/dashboard.css`,
       'utf8',
     );
 
+    // Equal-weight side columns keep the middle nav column centered on the
+    // masthead so Workflows / Create / System never shift when the list display
+    // radio buttons appear or disappear in the brand group.
     expect(dashboardCss).toMatch(
-      /\.masthead\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*auto\s+minmax\(0,\s*1fr\)\s+auto;/s,
+      /\.masthead\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto\s+minmax\(0,\s*1fr\);/s,
     );
     expect(dashboardCss).toMatch(
       /\.masthead-brand\s*\{[^}]*justify-self:\s*start;/s,
+    );
+    expect(dashboardCss).toMatch(
+      /\.masthead-brand-group\s*\{[^}]*display:\s*inline-flex;[^}]*align-items:\s*center;[^}]*justify-self:\s*start;/s,
     );
     expect(dashboardCss).toMatch(
       /\.workflow-list-display-control\s*\{[^}]*justify-self:\s*start;/s,
@@ -3086,10 +3567,11 @@ describe('Dashboard shared entry', () => {
           rule.parent.name === 'media' &&
           rule.parent.params.includes('min-width: 1181px'),
       );
-    expect(desktopMastheadRule('.masthead-brand')).toContain('grid-column: 1;');
+    expect(desktopMastheadRule('.masthead-brand-group')).toContain('grid-column: 1;');
     expect(desktopMastheadRule('.workflow-list-display-control')).toBe('');
     expect(desktopMastheadRule('.masthead-nav')).toContain('grid-column: 2;');
-    expect(desktopMastheadRule('.masthead-nav')).toContain('overflow-x: auto;');
+    expect(desktopMastheadRule('.masthead-nav')).not.toContain('overflow');
+    expect(desktopMastheadRule('.route-nav-primary')).not.toContain('overflow');
     expect(desktopMastheadRule('.masthead-title-meta')).toContain('grid-column: 3;');
     expect(cssRuleBlock(dashboardCss, '.masthead-title-meta .version-badge')).toContain('white-space: nowrap;');
   });

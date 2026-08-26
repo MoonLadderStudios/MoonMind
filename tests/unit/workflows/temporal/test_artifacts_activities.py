@@ -189,6 +189,62 @@ async def test_execution_record_terminal_state_indexes_run_digest_best_effort(
 
 
 @pytest.mark.asyncio
+async def test_execution_terminal_projection_lag_does_not_overwrite_success(
+    activities,
+    monkeypatch,
+):
+    """Internally-started children may close before their projection row exists."""
+
+    import api_service.db.base as db_base
+    import moonmind.workflows.temporal.service as temporal_service
+
+    class _SessionContext:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class _TemporalExecutionService:
+        def __init__(self, session):
+            self.session = session
+
+        async def record_terminal_state(self, **_kwargs):
+            raise temporal_service.TemporalExecutionNotFoundError("projection pending")
+
+    digest_write = AsyncMock()
+    monkeypatch.setattr(db_base, "get_async_session_context", lambda: _SessionContext())
+    monkeypatch.setattr(
+        temporal_service,
+        "TemporalExecutionService",
+        _TemporalExecutionService,
+    )
+    monkeypatch.setattr(
+        activities,
+        "_write_run_digest_best_effort",
+        digest_write,
+    )
+
+    result = await activities.execution_record_terminal_state(
+        {
+            "workflowId": "resolver:child:3199",
+            "state": "completed",
+            "closeStatus": "completed",
+            "summary": "PR merged and remotely verified",
+        }
+    )
+
+    assert result == {
+        "workflowId": "resolver:child:3199",
+        "state": "completed",
+        "closeStatus": "completed",
+        "projectionDeferred": True,
+        "reasonCode": "temporal_projection_pending",
+    }
+    digest_write.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_write_run_digest_best_effort_runs_sync_indexing_in_executor(
     activities,
     monkeypatch,

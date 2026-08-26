@@ -19,8 +19,16 @@ from urllib.parse import urlparse
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
+for _package_root in (SCRIPT_DIR.parent / "lib", *SCRIPT_DIR.parents):
+    if (_package_root / "pr_resolver_core").is_dir():
+        sys.path.insert(0, str(_package_root))
+        break
 
-from pr_resolve_contract import EXIT_CODE_FAILED
+from pr_resolver_core.review_providers import (  # noqa: E402
+    resolve_automated_review_provider,
+)
+
+from pr_resolve_contract import EXIT_CODE_FAILED  # noqa: E402
 
 _RUNNING_CHECK_STATES = {"IN_PROGRESS", "QUEUED", "PENDING", "WAITING", "REQUESTED"}
 _FAILURE_CHECK_STATES = {
@@ -56,14 +64,23 @@ _KNOWN_AUTOMATION_USERS = {
     "github-actions",
 }
 _UTC = timezone.utc
+_EPOCH_UTC = datetime(1970, 1, 1, tzinfo=timezone.utc)
 _NON_VISIBLE_COMMENT_REASONS = {
     "addressed_in_ledger",
     "command_comment",
     "empty_body",
-    "stale_bot_comment",
     "thread_outdated",
     "thread_resolved",
 }
+
+def _env_flag(name: str) -> bool:
+    return str(os.environ.get(name, "")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
 
 def _build_subprocess_env() -> dict[str, str]:
     env = os.environ.copy()
@@ -373,8 +390,6 @@ def _classify_comment_actionability(
     Actionability rules are intentionally simple and deterministic:
     - Ignore comments with empty bodies.
     - Ignore review comments only when explicitly marked resolved/outdated.
-    - Treat bot review comments on a *previous* commit as stale when the HEAD
-      commit differs (the fix was already pushed).
     - Treat issue comments and review bodies as actionable.
     - Treat review comments as actionable except resolved/outdated threads and
       bot-authored comments (unless explicitly enabled).
@@ -392,15 +407,6 @@ def _classify_comment_actionability(
             return False, "thread_resolved"
         if comment.get("thread_outdated", False):
             return False, "thread_outdated"
-        # Bot review comments left on a previous commit are stale — the agent
-        # already pushed a fix and the bot cannot re-evaluate its own feedback.
-        if (
-            head_commit_sha
-            and is_bot_user(comment.get("user") or "")
-            and comment.get("commit_id")
-            and str(comment["commit_id"]).strip() != head_commit_sha
-        ):
-            return False, "stale_bot_comment"
         if not include_bot_review_comments and is_bot_user(comment.get("user") or ""):
             return False, "bot_review_comment_excluded"
         return True, "actionable"
@@ -450,13 +456,20 @@ _LEDGER_CANDIDATE_PATHS = [
     Path("var/pr_comments/comment-resolution-ledger.json"),
 ]
 _ACCEPTED_DISPOSITIONS = {"addressed", "not-applicable"}
+_DEFERRED_DISPOSITIONS = {"deferred", "deferred-with-reason", "unfixable"}
 
-def _extract_ids_from_entries(entries: list, *, id_keys: tuple[str, ...] = ("id", "comment_id")) -> set[int]:
+def _extract_ids_from_entries(
+    entries: list,
+    *,
+    id_keys: tuple[str, ...] = ("id", "comment_id"),
+    dispositions: set[str] | None = None,
+) -> set[int]:
     """Extract comment IDs from a list of ledger entry dicts.
 
     Accepts both ``disposition`` and ``status`` field names, and both
     ``id`` and ``comment_id`` key names to maximise compatibility.
     """
+    accepted = dispositions if dispositions is not None else _ACCEPTED_DISPOSITIONS
     ids: set[int] = set()
     for entry in entries:
         if not isinstance(entry, dict):
@@ -466,7 +479,7 @@ def _extract_ids_from_entries(entries: list, *, id_keys: tuple[str, ...] = ("id"
             .strip()
             .lower()
         )
-        if disposition not in _ACCEPTED_DISPOSITIONS:
+        if disposition not in accepted:
             continue
         for key in id_keys:
             cid = entry.get(key)
@@ -475,8 +488,12 @@ def _extract_ids_from_entries(entries: list, *, id_keys: tuple[str, ...] = ("id"
                 break
     return ids
 
-def _load_addressed_comment_ids(ledger_path: Path | None = None) -> set[int]:
-    """Load comment IDs that have been locally marked as addressed or not-applicable.
+def _load_ledger_comment_ids(
+    ledger_path: Path | None = None,
+    *,
+    dispositions: set[str] | None = None,
+) -> set[int]:
+    """Load comment IDs recorded with one of *dispositions* in a local ledger.
 
     Searches multiple candidate paths and accepts both array and object-wrapped
     ledger formats so that different agent skill outputs are all recognised.
@@ -503,20 +520,43 @@ def _load_addressed_comment_ids(ledger_path: Path | None = None) -> set[int]:
             continue
         # Array format: [{"id": ..., "disposition": ...}, ...]
         if isinstance(payload, list):
-            ids.update(_extract_ids_from_entries(payload))
+            ids.update(
+                _extract_ids_from_entries(payload, dispositions=dispositions)
+            )
         # Object format: {"resolutions": [...]} or {"comments": [...]}
         elif isinstance(payload, dict):
             for key in ("resolutions", "comments"):
                 nested = payload.get(key)
                 if isinstance(nested, list):
-                    ids.update(_extract_ids_from_entries(nested))
+                    ids.update(
+                        _extract_ids_from_entries(nested, dispositions=dispositions)
+                    )
     return ids
+
+
+def _load_addressed_comment_ids(ledger_path: Path | None = None) -> set[int]:
+    """Comment IDs the ledger marks as addressed or not-applicable."""
+
+    return _load_ledger_comment_ids(
+        ledger_path,
+        dispositions=_ACCEPTED_DISPOSITIONS,
+    )
+
+
+def _load_deferred_comment_ids(ledger_path: Path | None = None) -> set[int]:
+    """Comment IDs the ledger explicitly deferred or reported as unfixable."""
+
+    return _load_ledger_comment_ids(
+        ledger_path,
+        dispositions=_DEFERRED_DISPOSITIONS,
+    )
 
 def summarize_comments(
     comments: list[dict],
     *,
     include_bot_review_comments: bool = True,
     addressed_comment_ids: set[int] | None = None,
+    deferred_comment_ids: set[int] | None = None,
     head_commit_sha: str | None = None,
 ) -> dict:
     review_comments = [c for c in comments if c.get("type") == "review_comment"]
@@ -534,7 +574,11 @@ def summarize_comments(
 
     for comment in comments:
         cid = comment.get("id")
-        if isinstance(cid, int) and cid in resolved_ids:
+        if (
+            isinstance(cid, int)
+            and cid in resolved_ids
+            and comment.get("type") != "review_comment"
+        ):
             actionable = False
             reason = "addressed_in_ledger"
         else:
@@ -563,6 +607,15 @@ def summarize_comments(
             }
         )
 
+    present_ids = {
+        comment.get("id")
+        for comment in comments
+        if isinstance(comment.get("id"), int)
+    }
+    deferred_present = sorted(
+        cid for cid in (deferred_comment_ids or set()) if cid in present_ids
+    )
+
     return {
         "classificationVersion": 2,
         "total": len(comments),
@@ -575,6 +628,8 @@ def summarize_comments(
         "botCommentCount": len(bot_comments),
         "hasActionableComments": len(actionable_comments) > 0,
         "actionableCommentIds": [c.get("id") for c in actionable_comments],
+        "deferredCommentIds": deferred_present,
+        "hasDeferredComments": bool(deferred_present),
         "nonActionableReasonCounts": non_actionable_reason_counts,
         "classifiedComments": classified_comments,
     }
@@ -651,6 +706,229 @@ def apply_codex_review_grace(
     }
     return comments_summary
 
+def _normalized_comment_body(comment: dict) -> str:
+    return " ".join(str(comment.get("body") or "").strip().split())
+
+
+def _is_review_request_comment(comment: dict, *, command: str) -> bool:
+    if comment.get("type") != "issue_comment":
+        return False
+    body = _normalized_comment_body(comment).rstrip(".").strip().lower()
+    return body == command.strip().lower()
+
+
+def _fetch_head_commit_timestamp(*, pr_repo: str | None, head_sha: str) -> datetime | None:
+    repo = str(pr_repo or "").strip()
+    sha = str(head_sha or "").strip()
+    if not repo or not sha:
+        return None
+    payload = run_command_optional(["gh", "api", f"repos/{repo}/commits/{sha}"])
+    if not isinstance(payload, dict):
+        return None
+    commit = payload.get("commit")
+    if not isinstance(commit, dict):
+        return None
+    for key in ("committer", "author"):
+        actor = commit.get(key)
+        if isinstance(actor, dict):
+            parsed = _parse_utc_timestamp(actor.get("date"))
+            if parsed is not None:
+                return parsed
+    return None
+
+
+def _fetch_pull_request_reviews(*, pr_repo: str | None, pr_number: object) -> list[dict]:
+    repo = str(pr_repo or "").strip()
+    number = str(pr_number or "").strip()
+    if not repo or not number:
+        return []
+    payload = run_command_optional(
+        ["gh", "api", f"repos/{repo}/pulls/{number}/reviews?per_page=100"]
+    )
+    if not isinstance(payload, list):
+        return []
+    return [item for item in payload if isinstance(item, dict)]
+
+
+def _fetch_comment_reactions(*, pr_repo: str | None, comment_id: object) -> list[dict]:
+    repo = str(pr_repo or "").strip()
+    identifier = str(comment_id or "").strip()
+    if not repo or not identifier:
+        return []
+    payload = run_command_optional(
+        [
+            "gh",
+            "api",
+            f"repos/{repo}/issues/comments/{identifier}/reactions?per_page=100",
+        ]
+    )
+    if not isinstance(payload, list):
+        return []
+    return [item for item in payload if isinstance(item, dict)]
+
+
+def build_automated_review_evidence(
+    *,
+    provider: object,
+    require_fresh_review: bool,
+    pr_repo: str | None,
+    pr_number: object,
+    head_sha: str,
+    comments: list[dict],
+    reviews: list[dict] | None = None,
+    head_committed_at: datetime | None = None,
+    reactions_for_request: list[dict] | None = None,
+) -> dict:
+    """Collect portable evidence about the configured automated reviewer.
+
+    The Skill owns this decision in every host: a review only counts for the
+    current head when the provider identity submitted it against that exact
+    commit, or reacted to the request comment that was posted for that head.
+    """
+
+    record = resolve_automated_review_provider(provider)
+    if record is None or not require_fresh_review:
+        return {
+            "enabled": False,
+            "provider": record.provider if record is not None else "",
+            "reason": "review_loop_disabled",
+        }
+
+    normalized_head = str(head_sha or "").strip()
+    if head_committed_at is None:
+        head_committed_at = _fetch_head_commit_timestamp(
+            pr_repo=pr_repo, head_sha=normalized_head
+        )
+
+    request_comment = None
+    request_at = None
+    for comment in comments:
+        if not isinstance(comment, dict):
+            continue
+        if not _is_review_request_comment(comment, command=record.command):
+            continue
+        created_at = _parse_utc_timestamp(comment.get("created_at"))
+        if created_at is None:
+            continue
+        if head_committed_at is not None and created_at < head_committed_at:
+            # A request that predates the current head cannot cover it.
+            continue
+        if request_at is None or created_at >= request_at:
+            request_comment = comment
+            request_at = created_at
+
+    if reviews is None:
+        reviews = _fetch_pull_request_reviews(pr_repo=pr_repo, pr_number=pr_number)
+
+    provider_logins = set(record.reviewer_logins)
+    provider_reviews: list[tuple[datetime | None, dict]] = []
+    for review in reviews:
+        user = review.get("user") if isinstance(review.get("user"), dict) else {}
+        if _strip_bot_suffix(user.get("login")) not in provider_logins:
+            continue
+        provider_reviews.append(
+            (_parse_utc_timestamp(review.get("submitted_at")), review)
+        )
+    provider_reviews.sort(key=lambda item: item[0] or _EPOCH_UTC)
+    latest_provider_review = provider_reviews[-1][1] if provider_reviews else None
+
+    fresh_review = None
+    for submitted_at, review in provider_reviews:
+        commit_id = str(review.get("commit_id") or "").strip()
+        if commit_id:
+            if normalized_head and commit_id == normalized_head:
+                fresh_review = review
+            continue
+        # GitHub omitted the reviewed commit: fall back to "submitted after the
+        # request that was made for this head".
+        if (
+            request_at is not None
+            and submitted_at is not None
+            and submitted_at > request_at
+        ):
+            fresh_review = review
+
+    completion_kind = ""
+    completion_id = None
+    completed_at = None
+    if fresh_review is not None:
+        completion_kind = "review"
+        completion_id = fresh_review.get("id")
+        completed_at = str(fresh_review.get("submitted_at") or "").strip() or None
+
+    if fresh_review is None and request_comment is not None:
+        if reactions_for_request is None:
+            reactions_for_request = _fetch_comment_reactions(
+                pr_repo=pr_repo, comment_id=request_comment.get("id")
+            )
+        for reaction in reactions_for_request:
+            user = reaction.get("user") if isinstance(reaction.get("user"), dict) else {}
+            if _strip_bot_suffix(user.get("login")) not in provider_logins:
+                continue
+            if str(reaction.get("content") or "") not in record.clean_review_reactions:
+                continue
+            completion_kind = "reaction"
+            completion_id = reaction.get("id")
+            completed_at = str(reaction.get("created_at") or "").strip() or None
+            break
+
+    fresh = bool(completion_kind)
+    evidence: dict = {
+        "enabled": True,
+        "provider": record.provider,
+        "command": record.command,
+        "reviewerLogins": sorted(provider_logins),
+        "headSha": normalized_head,
+        "freshReviewForHead": fresh,
+        "requestPending": (not fresh) and request_comment is not None,
+        "requestCommentId": request_comment.get("id") if request_comment else None,
+        "requestedAt": request_at.isoformat() if request_at is not None else None,
+        "headCommittedAt": (
+            head_committed_at.isoformat() if head_committed_at is not None else None
+        ),
+        "completionKind": completion_kind or None,
+        "completionId": completion_id,
+        "completedAt": completed_at,
+    }
+    if latest_provider_review is not None:
+        evidence["latestProviderReview"] = {
+            "id": latest_provider_review.get("id"),
+            "state": latest_provider_review.get("state"),
+            "commitId": latest_provider_review.get("commit_id"),
+            "submittedAt": latest_provider_review.get("submitted_at"),
+        }
+    return evidence
+
+
+def build_progress_signature(
+    *,
+    head_sha: str,
+    comments_summary: dict,
+) -> str:
+    """Stable signature of "what still needs work" for this head.
+
+    The owning workflow compares consecutive signatures to detect a remediation
+    loop that is not making progress.
+    """
+
+    actionable = sorted(
+        str(item)
+        for item in (comments_summary.get("actionableCommentIds") or [])
+        if item is not None
+    )
+    deferred = sorted(
+        str(item)
+        for item in (comments_summary.get("deferredCommentIds") or [])
+        if item is not None
+    )
+    parts = [
+        str(head_sha or "").strip(),
+        ",".join(actionable),
+        ",".join(deferred),
+    ]
+    return "|".join(parts)
+
+
 def _check_name(check: dict) -> str:
     return str(check.get("name") or check.get("context") or "Unknown Check").strip()
 
@@ -695,6 +973,7 @@ def _is_security_check(check: dict) -> bool:
 def summarize_ci_checks(checks: list[dict]) -> dict:
     is_running = False
     has_failures = False
+    has_authoritative_failures = False
     failed_checks: list[dict] = []
     degraded_reasons: list[str] = []
     security_check_count = 0
@@ -715,6 +994,7 @@ def summarize_ci_checks(checks: list[dict]) -> dict:
             is_running = True
         elif state in _FAILURE_CHECK_STATES:
             has_failures = True
+            has_authoritative_failures = True
             failed_checks.append(
                 {
                     "name": name,
@@ -733,6 +1013,7 @@ def summarize_ci_checks(checks: list[dict]) -> dict:
     return {
         "isRunning": is_running,
         "hasFailures": has_failures,
+        "hasAuthoritativeFailures": has_authoritative_failures,
         "failedChecks": failed_checks,
         "totalCheckCount": len(checks),
         "securityCheckCount": security_check_count,
@@ -836,6 +1117,27 @@ def main():
         default="var/pr_resolver/snapshot.json",
         help="Snapshot path to write",
     )
+    parser.add_argument(
+        "--review-provider",
+        default=os.environ.get("PR_RESOLVER_REVIEW_PROVIDER", ""),
+        help=(
+            "Automated review provider that must review every head SHA "
+            "(for example 'codex'). Empty or 'none' disables the review loop."
+        ),
+    )
+    parser.add_argument(
+        "--require-fresh-review",
+        dest="require_fresh_review",
+        action="store_true",
+        default=_env_flag("PR_RESOLVER_REQUIRE_FRESH_REVIEW"),
+        help="Require a fresh automated review for the current head SHA.",
+    )
+    parser.add_argument(
+        "--no-require-fresh-review",
+        dest="require_fresh_review",
+        action="store_false",
+        help="Do not require a fresh automated review for the current head SHA.",
+    )
     args = parser.parse_args()
     snapshot_path = Path(args.snapshot_path)
 
@@ -909,6 +1211,7 @@ def main():
             "nonSecurityCheckCount": 0,
             "isRunning": False,
             "hasFailures": False,
+            "hasAuthoritativeFailures": False,
         }
         head_non_sec = int(head_summary.get("nonSecurityCheckCount", 0))
         rollup_non_sec = int(ci_summary.get("nonSecurityCheckCount", 0))
@@ -919,6 +1222,7 @@ def main():
             # resolver waits instead of merging.
             ci_summary["isRunning"] = True
             ci_summary["signalQuality"] = "degraded"
+            ci_summary["hasAuthoritativeFailures"] = False
             degraded = list(ci_summary.get("degradedReasons") or [])
             degraded.append("rollup_stale_head_sha_has_no_non_security_checks")
             ci_summary["degradedReasons"] = sorted(dict.fromkeys(degraded))
@@ -927,6 +1231,9 @@ def main():
             # the authoritative source for running / failure state.
             ci_summary["isRunning"] = bool(head_summary.get("isRunning"))
             ci_summary["hasFailures"] = bool(head_summary.get("hasFailures"))
+            ci_summary["hasAuthoritativeFailures"] = bool(
+                head_summary.get("hasAuthoritativeFailures")
+            )
             head_failed = head_summary.get("failedChecks") or []
             if head_failed:
                 ci_summary["failedChecks"] = head_failed
@@ -994,10 +1301,12 @@ def main():
     if not isinstance(comments, list):
         comments = []
     addressed_ids = _load_addressed_comment_ids()
+    deferred_ids = _load_deferred_comment_ids()
     comments_summary = summarize_comments(
         comments,
         include_bot_review_comments=True,
         addressed_comment_ids=addressed_ids,
+        deferred_comment_ids=deferred_ids,
         head_commit_sha=head_sha,
     )
     comments_summary = apply_codex_review_grace(
@@ -1007,8 +1316,18 @@ def main():
         previous_grace=_load_previous_codex_review_grace(snapshot_path),
     )
 
+    automated_review = build_automated_review_evidence(
+        provider=args.review_provider,
+        require_fresh_review=bool(args.require_fresh_review),
+        pr_repo=pr_repo,
+        pr_number=pr_data.get("number"),
+        head_sha=head_sha,
+        comments=comments,
+    )
+
     # 4. Construct Snapshot
     snapshot = {
+        "repository": pr_repo or "",
         "pr": pr_data,
         "ci": ci_summary,
         "commentsFetch": {
@@ -1017,6 +1336,11 @@ def main():
         },
         "comments": comments,
         "commentsSummary": comments_summary,
+        "automatedReview": automated_review,
+        "progressSignature": build_progress_signature(
+            head_sha=head_sha,
+            comments_summary=comments_summary,
+        ),
     }
 
     snapshot_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1034,6 +1358,12 @@ def main():
         "ci": snapshot["ci"],
         "comment_count": len(snapshot["comments"]),
         "actionable_comment_count": comments_summary.get("actionableCommentCount", 0),
+        "automated_review": {
+            "enabled": automated_review.get("enabled"),
+            "provider": automated_review.get("provider"),
+            "freshReviewForHead": automated_review.get("freshReviewForHead"),
+            "requestPending": automated_review.get("requestPending"),
+        },
     }
     print(json.dumps(summary, indent=2))
 

@@ -135,19 +135,7 @@ fi
 if [[ "$uses_temporal_test_server" == "1" ]]; then
     temporal_test_tmpdir="${TMPDIR:-/tmp}"
     rm -f "$temporal_test_tmpdir"/temporal-test-server-sdk-python-*.downloading
-    "$PYTHON_BIN" - <<'PY'
-import asyncio
-
-from temporalio.testing import WorkflowEnvironment
-
-
-async def main() -> None:
-    env = await WorkflowEnvironment.start_time_skipping()
-    await env.shutdown()
-
-
-asyncio.run(main())
-PY
+    "$PYTHON_BIN" api_service/docker/cache_temporal_test_server.py
 fi
 
 if [[ "$RUN_PYTHON_TESTS" == "1" ]]; then

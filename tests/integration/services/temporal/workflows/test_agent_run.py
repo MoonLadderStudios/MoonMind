@@ -8,14 +8,23 @@ from typing import Any
 
 from temporalio import workflow
 from temporalio.testing import WorkflowEnvironment
-from temporalio.worker import Worker, UnsandboxedWorkflowRunner
+from temporalio.worker import Replayer, Worker, UnsandboxedWorkflowRunner
 from temporalio.client import WorkflowFailureError
 from temporalio.service import RPCError
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult, AgentRunStatus, ProfileSelector
+from moonmind.schemas.agent_runtime_models import (
+    MANAGED_PROCESS_LOST_DURING_RECONCILIATION,
+    AgentExecutionRequest,
+    AgentRunResult,
+    AgentRunStatus,
+    ProfileSelector,
+)
 from moonmind.schemas.workload_models import WorkloadRequest
 from moonmind.workloads.docker_launcher import DockerWorkloadLauncher
 from moonmind.workloads.registry import RunnerProfileRegistry
-from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
+from moonmind.workflows.temporal.workflows.agent_run import (
+    MoonMindAgentRun,
+    _SLOT_WAIT_TIMEOUT_SECONDS,
+)
 
 # NOTE: This test file is NOT marked integration_ci because the Temporal
 # time-skipping workflow tests consistently exceed CI timeout thresholds.
@@ -169,11 +178,41 @@ async def mock_provider_profile_list(request: dict) -> dict:
 
 @_activity.defn(name="provider_profile.ensure_manager")
 async def mock_provider_profile_ensure_manager(request: dict) -> dict:
+    global _provider_profile_ensure_manager_count
+    _provider_profile_ensure_manager_count += 1
     return {"started": True, "workflow_id": f"provider-profile-manager:{request.get('runtime_id', 'test')}"}
 
 @_activity.defn(name="provider_profile.reset_manager")
 async def mock_provider_profile_reset_manager(request: dict) -> dict:
     return {"reset": True, "workflow_id": f"provider-profile-manager:{request.get('runtime_id', 'test')}"}
+
+
+_provider_profile_ensure_manager_count = 0
+_provider_profile_manager_state_count = 0
+_provider_profile_manager_state_mode = "running"
+
+
+@_activity.defn(name="provider_profile.manager_state")
+async def mock_provider_profile_manager_state(request: dict) -> dict:
+    global _provider_profile_manager_state_count
+    _provider_profile_manager_state_count += 1
+    workflow_id = f"provider-profile-manager:{request.get('runtime_id', 'test')}"
+    if _provider_profile_manager_state_mode == "ambiguous":
+        return {
+            "running": True,
+            "workflow_id": workflow_id,
+            "status": "RUNNING",
+            "inspection_succeeded": False,
+            "inspection_status": "QUERY_TIMEOUT",
+        }
+    return {
+        "running": True,
+        "workflow_id": workflow_id,
+        "status": "RUNNING",
+        "inspection_succeeded": True,
+        "requester_pending": True,
+    }
+
 
 # Collect all activities that need to be registered on the main task queue.
 _COMMON_AGENT_RUN_ACTIVITIES = [
@@ -182,6 +221,7 @@ _COMMON_AGENT_RUN_ACTIVITIES = [
     mock_provider_profile_list,
     mock_provider_profile_ensure_manager,
     mock_provider_profile_reset_manager,
+    mock_provider_profile_manager_state,
 ]
 
 _managed_launch_requests: list[dict] = []
@@ -254,6 +294,23 @@ async def mock_agent_runtime_status(request: dict) -> dict:
             "status": status,
             "metadata": metadata,
         }
+    if _managed_status_mode == "process_lost_then_completed":
+        status = "failed" if len(_managed_launch_requests) == 1 else "completed"
+        return {
+            "runId": request.get("runId")
+            or request.get("run_id")
+            or "test-managed-run",
+            "agentKind": "managed",
+            "agentId": request.get("agentId")
+            or request.get("agent_id")
+            or "claude_code",
+            "status": status,
+            "metadata": {
+                "runtimeId": "claude_code",
+                "finishedAt": datetime.now(tz=UTC).isoformat(),
+                "exitCode": 0 if status == "completed" else None,
+            },
+        }
     return {
         "status": "running",
         "container_id": request.get("container_id", "test-container-001"),
@@ -299,6 +356,28 @@ async def mock_agent_runtime_fetch_result(request: dict) -> dict:
                         "after a profile cooldown."
                     ),
                 },
+            },
+        }
+    if _managed_status_mode == "process_lost_then_completed":
+        if _managed_fetch_result_count == 1:
+            return {
+                "summary": "Managed worker restarted while the process was running.",
+                "failureClass": "system_error",
+                "providerErrorCode": (
+                    MANAGED_PROCESS_LOST_DURING_RECONCILIATION
+                ),
+                "metadata": {
+                    "normalizedStatus": "failed",
+                    "fetchRunId": request.get("runId")
+                    or request.get("run_id"),
+                },
+            }
+        return {
+            "summary": "Replacement process recovered the durable workspace.",
+            "metadata": {
+                "normalizedStatus": "completed",
+                "fetchRunId": request.get("runId")
+                or request.get("run_id"),
             },
         }
     return {
@@ -589,9 +668,17 @@ class RuntimeUpdateProviderProfileManager:
             handle = workflow.get_external_workflow_handle(
                 req["requester_workflow_id"]
             )
+            assigned_profile_id = (
+                req.get("execution_profile_ref")
+                or (
+                    "default-managed"
+                    if self.assignable_profile_id == "*"
+                    else self.assignable_profile_id
+                )
+            )
             await handle.signal(
                 "slot_assigned",
-                {"profile_id": self.assignable_profile_id},
+                {"profile_id": assigned_profile_id},
             )
             await workflow.sleep(3600)
 
@@ -709,6 +796,106 @@ async def test_agent_run_workflow_cancellation():
                 assert "cancel" in exc_str or "cancel" in cause_str or isinstance(
                     exc_info.value.__cause__, asyncio.CancelledError
                 )
+
+
+async def test_slot_wait_preserves_durable_request_when_manager_inspection_is_ambiguous(
+):
+    """A busy manager query must not trigger ensure/re-request amplification."""
+    global _provider_profile_ensure_manager_count
+    global _provider_profile_manager_state_count
+    global _provider_profile_manager_state_mode
+
+    _provider_profile_ensure_manager_count = 0
+    _provider_profile_manager_state_count = 0
+    _provider_profile_manager_state_mode = "ambiguous"
+    history = None
+    try:
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with (
+                Worker(
+                    env.client,
+                    task_queue="agent-run-task-queue-ambiguous-manager",
+                    workflows=[
+                        MoonMindAgentRun,
+                        RuntimeUpdateProviderProfileManager,
+                    ],
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                ),
+                Worker(
+                    env.client,
+                    task_queue="mm.activity.artifacts",
+                    activities=[
+                        mock_provider_profile_list,
+                        mock_provider_profile_ensure_manager,
+                        mock_provider_profile_reset_manager,
+                        mock_provider_profile_manager_state,
+                    ],
+                ),
+            ):
+                manager_id = "provider-profile-manager:codex_cli"
+                await env.client.start_workflow(
+                    RuntimeUpdateProviderProfileManager.run,
+                    {
+                        "runtime_id": "codex_cli",
+                        "assignable_profile_id": "never-assign",
+                    },
+                    id=manager_id,
+                    task_queue="agent-run-task-queue-ambiguous-manager",
+                )
+                manager_handle = env.client.get_workflow_handle(manager_id)
+                child_handle = await env.client.start_workflow(
+                    MoonMindAgentRun.run,
+                    AgentExecutionRequest(
+                        agent_kind="managed",
+                        agent_id="codex_cli",
+                        execution_profile_ref="default-managed",
+                        correlation_id="ambiguous-manager:corr",
+                        idempotency_key="ambiguous-manager:idem",
+                    ),
+                    id="test-agent-run-ambiguous-manager",
+                    task_queue="agent-run-task-queue-ambiguous-manager",
+                )
+
+                manager_state = {}
+                for _ in range(40):
+                    manager_state = await manager_handle.query(
+                        RuntimeUpdateProviderProfileManager.get_state
+                    )
+                    if (
+                        manager_state.get("request_payloads")
+                        and _provider_profile_manager_state_count >= 1
+                    ):
+                        break
+                    await asyncio.sleep(0.05)
+
+                assert len(manager_state.get("request_payloads", [])) == 1
+                await env.sleep(_SLOT_WAIT_TIMEOUT_SECONDS + 5)
+
+                for _ in range(40):
+                    if _provider_profile_manager_state_count >= 2:
+                        break
+                    await asyncio.sleep(0.05)
+
+                manager_state = await manager_handle.query(
+                    RuntimeUpdateProviderProfileManager.get_state
+                )
+                assert _provider_profile_manager_state_count >= 2
+                assert _provider_profile_ensure_manager_count == 0
+                assert len(manager_state["request_payloads"]) == 1
+
+                await child_handle.cancel()
+                with pytest.raises(WorkflowFailureError):
+                    await child_handle.result()
+                history = await child_handle.fetch_history()
+
+        assert history is not None
+        await Replayer(
+            workflows=[MoonMindAgentRun],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ).replay_workflow(history)
+    finally:
+        _provider_profile_manager_state_mode = "running"
+
 
 @pytest.mark.asyncio
 async def test_agent_run_reports_managed_429_retry_summary_to_parent():
@@ -989,6 +1176,308 @@ async def test_managed_agent_runtime_selection_update_switches_runtime_manager()
             await child_handle.cancel()
             with pytest.raises(WorkflowFailureError):
                 await child_handle.result()
+
+
+@pytest.mark.asyncio
+async def test_managed_agent_runtime_switch_detaches_incompatible_session_before_launch():
+    """A queued Codex retry switched to Claude must not launch a mixed request."""
+    _managed_launch_requests.clear()
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with (
+            Worker(
+                env.client,
+                task_queue="agent-run-task-queue-session-runtime-switch",
+                workflows=[MoonMindAgentRun, RuntimeUpdateProviderProfileManager],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ),
+            Worker(
+                env.client,
+                task_queue="mm.activity.artifacts",
+                activities=_COMMON_AGENT_RUN_ACTIVITIES,
+            ),
+            Worker(
+                env.client,
+                task_queue="mm.activity.agent_runtime",
+                activities=_COMMON_AGENT_RUN_ACTIVITIES,
+            ),
+        ):
+            codex_manager_id = "provider-profile-manager:codex_cli"
+            claude_manager_id = "provider-profile-manager:claude_code"
+            await env.client.start_workflow(
+                RuntimeUpdateProviderProfileManager.run,
+                {
+                    "runtime_id": "codex_cli",
+                    "assignable_profile_id": "hold-codex-slot",
+                },
+                id=codex_manager_id,
+                task_queue="agent-run-task-queue-session-runtime-switch",
+            )
+            await env.client.start_workflow(
+                RuntimeUpdateProviderProfileManager.run,
+                {
+                    "runtime_id": "claude_code",
+                    "assignable_profile_id": "*",
+                },
+                id=claude_manager_id,
+                task_queue="agent-run-task-queue-session-runtime-switch",
+            )
+
+            child_id = "test-agent-session-runtime-switch"
+            child_handle = await env.client.start_workflow(
+                MoonMindAgentRun.run,
+                AgentExecutionRequest(
+                    agentKind="managed",
+                    agentId="codex_cli",
+                    executionProfileRef="default-managed",
+                    correlationId="corr-session-runtime-switch",
+                    idempotencyKey="idem-session-runtime-switch",
+                    managedSession={
+                        "workflowId": "task:session:codex_cli",
+                        "agentRunId": "task",
+                        "sessionId": "sess:task:codex_cli",
+                        "sessionEpoch": 2,
+                        "runtimeId": "codex_cli",
+                        "executionProfileRef": "default-managed",
+                    },
+                    stepExecution={
+                        "schemaVersion": "v1",
+                        "workflowId": "task",
+                        "runId": "run",
+                        "logicalStepId": "node-1",
+                        "executionOrdinal": 2,
+                        "stepExecutionId": "task:run:node-1:execution:2",
+                        "reason": "runtime_recovered",
+                        "runtimeContextPolicy": "fresh_agent_run",
+                        "runtimeSelection": {
+                            "runtimeId": "codex_cli",
+                            "agentKind": "managed",
+                            "model": "gpt-5.6-sol",
+                            "effort": "high",
+                            "executionProfileRef": "default-managed",
+                            "skillId": "pr-resolver",
+                        },
+                        "runtimeSessionReset": {
+                            "resolvedPolicy": "fresh_agent_run",
+                        },
+                    },
+                    parameters={
+                        "targetRuntime": "codex_cli",
+                        "model": "gpt-5.6-sol",
+                        "effort": "high",
+                        "profileId": "default-managed",
+                    },
+                ),
+                id=child_id,
+                task_queue="agent-run-task-queue-session-runtime-switch",
+            )
+
+            codex_manager_handle = env.client.get_workflow_handle(codex_manager_id)
+            for _ in range(80):
+                codex_state = await codex_manager_handle.query(
+                    RuntimeUpdateProviderProfileManager.get_state
+                )
+                if codex_state["pending_requests"]:
+                    break
+                await asyncio.sleep(0.1)
+
+            await child_handle.signal(
+                "update_runtime_selection",
+                {
+                    "targetRuntime": "claude_code",
+                    "model": "claude-opus-4-7",
+                    "effort": "high",
+                    "parametersPatch": {
+                        "targetRuntime": "claude_code",
+                        "model": "claude-opus-4-7",
+                        "workflow": {
+                            "runtime": {
+                                "mode": "claude_code",
+                            }
+                        },
+                    },
+                },
+            )
+
+            for _ in range(80):
+                if _managed_launch_requests:
+                    break
+                await asyncio.sleep(0.1)
+
+            claude_manager_handle = env.client.get_workflow_handle(
+                claude_manager_id
+            )
+            claude_state = await claude_manager_handle.query(
+                RuntimeUpdateProviderProfileManager.get_state
+            )
+            assert _managed_launch_requests, {
+                "child": str((await child_handle.describe()).status),
+                "codexManager": await codex_manager_handle.query(
+                    RuntimeUpdateProviderProfileManager.get_state
+                ),
+                "claudeManager": claude_state,
+            }
+            launched_request = _managed_launch_requests[-1]["request"]
+            assert launched_request["agentId"] == "claude_code"
+            assert launched_request.get("managedSession") is None
+            assert launched_request["stepExecution"]["runtimeSessionReset"] is None
+            assert launched_request["stepExecution"]["runtimeSelection"] == {
+                "runtimeId": "claude_code",
+                "agentKind": "managed",
+                "model": "claude-opus-4-7",
+                "effort": "high",
+                "executionProfileRef": "default-managed",
+                "skillId": "pr-resolver",
+            }
+
+            await child_handle.signal(
+                MoonMindAgentRun.completion_signal,
+                {"summary": "completed after safe runtime switch"},
+            )
+            result = await child_handle.result()
+            assert result.summary == "completed after safe runtime switch"
+
+
+@pytest.mark.asyncio
+async def test_managed_agent_profile_switch_detaches_existing_session_before_launch():
+    """A queued Codex retry must not reuse a session from the previous profile."""
+    _managed_launch_requests.clear()
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with (
+            Worker(
+                env.client,
+                task_queue="agent-run-task-queue-session-profile-switch",
+                workflows=[MoonMindAgentRun, RuntimeUpdateProviderProfileManager],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ),
+            Worker(
+                env.client,
+                task_queue="mm.activity.artifacts",
+                activities=_COMMON_AGENT_RUN_ACTIVITIES,
+            ),
+            Worker(
+                env.client,
+                task_queue="mm.activity.agent_runtime",
+                activities=_COMMON_AGENT_RUN_ACTIVITIES,
+            ),
+        ):
+            manager_id = "provider-profile-manager:codex_cli"
+            await env.client.start_workflow(
+                RuntimeUpdateProviderProfileManager.run,
+                {
+                    "runtime_id": "codex_cli",
+                    "assignable_profile_id": "alternate-managed",
+                },
+                id=manager_id,
+                task_queue="agent-run-task-queue-session-profile-switch",
+            )
+
+            child_id = "test-agent-session-profile-switch"
+            child_handle = await env.client.start_workflow(
+                MoonMindAgentRun.run,
+                AgentExecutionRequest(
+                    agentKind="managed",
+                    agentId="codex_cli",
+                    executionProfileRef="default-managed",
+                    correlationId="corr-session-profile-switch",
+                    idempotencyKey="idem-session-profile-switch",
+                    managedSession={
+                        "workflowId": "task:session:codex_cli",
+                        "agentRunId": "task",
+                        "sessionId": "sess:task:codex_cli",
+                        "sessionEpoch": 2,
+                        "runtimeId": "codex_cli",
+                        "executionProfileRef": "default-managed",
+                    },
+                    stepExecution={
+                        "schemaVersion": "v1",
+                        "workflowId": "task",
+                        "runId": "run",
+                        "logicalStepId": "node-1",
+                        "executionOrdinal": 2,
+                        "stepExecutionId": "task:run:node-1:execution:2",
+                        "reason": "runtime_recovered",
+                        "runtimeContextPolicy": "fresh_agent_run",
+                        "runtimeSelection": {
+                            "runtimeId": "codex_cli",
+                            "agentKind": "managed",
+                            "model": "gpt-5.6-sol",
+                            "effort": "high",
+                            "executionProfileRef": "default-managed",
+                            "skillId": "pr-resolver",
+                        },
+                        "runtimeSessionReset": {
+                            "resolvedPolicy": "fresh_agent_run",
+                        },
+                    },
+                    parameters={
+                        "targetRuntime": "codex_cli",
+                        "model": "gpt-5.6-sol",
+                        "effort": "high",
+                        "profileId": "default-managed",
+                        "metadata": {
+                            "moonmind": {
+                                "deferManagedSessionUntilSlot": {
+                                    "agentRunId": "task",
+                                }
+                            }
+                        },
+                    },
+                ),
+                id=child_id,
+                task_queue="agent-run-task-queue-session-profile-switch",
+            )
+
+            manager_handle = env.client.get_workflow_handle(manager_id)
+            for _ in range(80):
+                manager_state = await manager_handle.query(
+                    RuntimeUpdateProviderProfileManager.get_state
+                )
+                if manager_state["pending_requests"]:
+                    break
+                await asyncio.sleep(0.1)
+
+            await child_handle.signal(
+                "update_runtime_selection",
+                {
+                    "targetRuntime": "codex_cli",
+                    "executionProfileRef": "alternate-managed",
+                    "parametersPatch": {
+                        "profileId": "alternate-managed",
+                        "workflow": {
+                            "runtime": {
+                                "mode": "codex_cli",
+                                "profileId": "alternate-managed",
+                            }
+                        },
+                    },
+                },
+            )
+
+            for _ in range(80):
+                if _managed_launch_requests:
+                    break
+                await asyncio.sleep(0.1)
+
+            assert _managed_launch_requests, await manager_handle.query(
+                RuntimeUpdateProviderProfileManager.get_state
+            )
+            launched_request = _managed_launch_requests[-1]["request"]
+            assert launched_request["agentId"] == "codex_cli"
+            assert launched_request.get("managedSession") is None
+            assert launched_request["executionProfileRef"] == "alternate-managed"
+            assert launched_request["stepExecution"]["runtimeSessionReset"] is None
+            assert launched_request["stepExecution"]["runtimeSelection"][
+                "executionProfileRef"
+            ] == "alternate-managed"
+
+            await child_handle.signal(
+                MoonMindAgentRun.completion_signal,
+                {"summary": "completed after safe profile switch"},
+            )
+            result = await child_handle.result()
+            assert result.summary == "completed after safe profile switch"
 
 
 @pytest.mark.asyncio
@@ -1490,6 +1979,94 @@ async def test_agent_run_reconciles_managed_completion_during_no_progress_grace(
         )
     finally:
         _managed_status_mode = "default"
+
+
+@pytest.mark.asyncio
+async def test_agent_run_relaunches_lost_managed_process_in_same_workspace():
+    global _managed_status_mode, _managed_status_poll_count, _managed_fetch_result_count
+    _managed_launch_requests.clear()
+    _managed_status_mode = "process_lost_then_completed"
+    _managed_status_poll_count = 0
+    _managed_fetch_result_count = 0
+
+    try:
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with (
+                Worker(
+                    env.client,
+                    task_queue="agent-run-task-queue",
+                    workflows=[MoonMindAgentRun, MockProviderProfileManager],
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                ),
+                Worker(
+                    env.client,
+                    task_queue="mm.activity.artifacts",
+                    activities=[
+                        mock_provider_profile_list,
+                        mock_provider_profile_ensure_manager,
+                        mock_provider_profile_reset_manager,
+                        mock_provider_profile_manager_state,
+                    ],
+                ),
+                Worker(
+                    env.client,
+                    task_queue="mm.activity.agent_runtime",
+                    activities=[
+                        mock_agent_runtime_build_launch_context,
+                        mock_agent_runtime_launch,
+                        mock_agent_runtime_status,
+                        mock_agent_runtime_fetch_result,
+                        mock_publish_artifacts,
+                        mock_cancel,
+                    ],
+                ),
+            ):
+                manager_id = "provider-profile-manager:claude_code"
+                await env.client.start_workflow(
+                    MockProviderProfileManager.run,
+                    {"runtime_id": "claude_code"},
+                    id=manager_id,
+                    task_queue="agent-run-task-queue",
+                )
+
+                handle = await env.client.start_workflow(
+                    MoonMindAgentRun.run,
+                    AgentExecutionRequest(
+                        agent_kind="managed",
+                        agent_id="claude_code",
+                        execution_profile_ref="default-managed",
+                        instruction_ref="Implement the requested change.",
+                        correlation_id="managed-process-loss:corr",
+                        idempotency_key="managed-process-loss:idem",
+                        parameters={"model": "test-model"},
+                    ),
+                    id="test-agent-managed-process-loss-recovery",
+                    task_queue="agent-run-task-queue",
+                )
+                result = await asyncio.wait_for(handle.result(), timeout=15)
+
+        assert result.failure_class is None
+        assert result.summary == (
+            "Replacement process recovered the durable workspace."
+        )
+        assert result.metadata["managedProcessLossRecoveryOutcome"] == "recovered"
+        assert result.metadata["managedProcessLossRecoveryCount"] == 1
+        assert len(_managed_launch_requests) == 2
+        first_launch = _managed_launch_requests[0]
+        first = first_launch["request"]
+        replacement = _managed_launch_requests[1]["request"]
+        assert replacement["executionProfileRef"] == first["executionProfileRef"]
+        assert replacement["parameters"] == first["parameters"]
+        assert replacement["idempotencyKey"] == first["idempotencyKey"]
+        assert replacement["workspaceSpec"]["workspaceLocator"] == {
+            "kind": "managed_runtime",
+            "runtimeId": "claude_code",
+            "agentRunId": first_launch["run_id"],
+            "relativePath": "repo",
+        }
+    finally:
+        _managed_status_mode = "default"
+
 
 @pytest.mark.asyncio
 async def test_agent_run_reconciles_managed_quota_after_no_progress_cancel(

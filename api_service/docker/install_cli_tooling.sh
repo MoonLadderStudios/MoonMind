@@ -32,8 +32,9 @@ if [ "${INSTALL_CODEX_CLI}" != "true" ]; then
     echo "INSTALL_CODEX_CLI=${INSTALL_CODEX_CLI}; skipping Codex install and using stubs" >&2
     stub_codex
 else
-    if ! npm install -g @openai/codex@"${CODEX_CLI_VERSION}"; then
-        echo "Warning: Failed to install @openai/codex; installing stub" >&2
+    if ! npm install -g --include=optional @openai/codex@"${CODEX_CLI_VERSION}"; then
+        install_status=$?
+        echo "Warning: Failed to install @openai/codex (exit ${install_status}); installing stub" >&2
         stub_codex
     else
         CODEX_LINK_TARGET=$(readlink -f /usr/local/bin/codex)
@@ -49,7 +50,12 @@ fi
 if [ "${INSTALL_CLAUDE_CLI}" != "true" ]; then
     echo "INSTALL_CLAUDE_CLI=${INSTALL_CLAUDE_CLI}; skipping Claude CLI install and using stub" >&2
     stub_claude
-elif ! npm install -g @anthropic-ai/claude-code@"${CLAUDE_CLI_VERSION}"; then
+# Upstream ships the launcher as a wrapper plus a platform-native optional
+# dependency materialized by a postinstall step. ``--include=optional`` keeps
+# that dependency in scope regardless of any inherited npm configuration; the
+# build's ``claude --version`` gate then fails fast if the launcher is still
+# unusable rather than shipping a silently broken CLI.
+elif ! npm install -g --include=optional @anthropic-ai/claude-code@"${CLAUDE_CLI_VERSION}"; then
     install_status=$?
     echo "Warning: Failed to install Claude CLI (exit ${install_status}); installing stub binary" >&2
     stub_claude

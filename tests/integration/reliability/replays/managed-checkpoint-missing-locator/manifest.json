@@ -1,0 +1,15 @@
+{
+  "incidentWorkflowId": "mm:8a09888d-27cf-4d15-b351-70615ca21821",
+  "runId": "019f5f15-ea74-73d0-a9d0-255221701af3",
+  "failureShape": "managed checkpoint capture was scheduled before AgentRun returned workspaceLocator",
+  "boundary": "after_prepare",
+  "stepInputs": {
+    "agentKind": "managed",
+    "agentId": "codex_cli"
+  },
+  "escapedActivityPayload": {
+    "schemaVersion": "v1",
+    "checkpointKind": "worktree_archive",
+    "expectedRuntimeId": "codex_cli"
+  }
+}

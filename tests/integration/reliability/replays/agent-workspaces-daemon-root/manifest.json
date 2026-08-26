@@ -1,0 +1,8 @@
+{
+  "incidentWorkflowId": "mm:cdf36806-9cab-4a7c-8d86-de568fd02c07",
+  "incidentRunId": "019fd33f-6be5-77e0-9728-8ecfcb535c3c",
+  "failedChildWorkflowId": "mm:cdf36806-9cab-4a7c-8d86-de568fd02c07:agent:node-1",
+  "failedChildRunId": "019fd33f-90ac-7537-89f7-65a56f6504ce",
+  "failureShape": "the agent-runtime worker mapped bind paths through a Compose-generated volume name even though Compose creates the explicitly named agent_workspaces volume",
+  "boundary": "Compose named-volume identity to remote Docker daemon bind source"
+}

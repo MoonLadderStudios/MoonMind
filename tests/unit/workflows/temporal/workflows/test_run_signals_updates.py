@@ -9,6 +9,7 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker, UnsandboxedWorkflowRunner
 
 from temporalio import workflow
+from temporalio.client import WorkflowExecutionStatus, WorkflowFailureError
 from temporalio.exceptions import ActivityError
 from temporalio.workflow import ActivityCancellationType
 from moonmind.workflows.temporal.activity_catalog import ARTIFACTS_TASK_QUEUE
@@ -25,6 +26,13 @@ class _NestedFailure(Exception):
     def __init__(self, message: str, cause: BaseException | None = None) -> None:
         super().__init__(message)
         self.cause = cause
+
+
+@workflow.defn(name="CancellationBoundaryChild")
+class _CancellationBoundaryChild:
+    @workflow.run
+    async def run(self) -> None:
+        await workflow.wait_condition(lambda: False)
 
 
 async def fake_execute_activity(activity_name, *args, **kwargs):
@@ -339,6 +347,74 @@ async def test_run_workflow_cancel_signal(mock_run_environment):
             await handle.execute_update("Cancel")
             result = await handle.result()
             assert result["status"] == "canceled"
+
+
+@pytest.mark.asyncio
+async def test_temporal_cancel_propagates_to_active_agent_child(
+    mock_run_environment,
+    monkeypatch,
+):
+    task_queue = "test-task-queue-authoritative-cancel"
+    child_workflow_id = "test-wf-authoritative-cancel:agent:active-step"
+
+    async def execute_blocking_child(self, *args, **kwargs):
+        del args, kwargs
+        self._active_agent_child_workflow_id = child_workflow_id
+        try:
+            await workflow.execute_child_workflow(
+                _CancellationBoundaryChild.run,
+                id=child_workflow_id,
+                task_queue=task_queue,
+            )
+        finally:
+            self._active_agent_child_workflow_id = None
+
+    monkeypatch.setattr(
+        MoonMindUserWorkflow,
+        "_run_execution_stage",
+        execute_blocking_child,
+    )
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue=task_queue,
+            workflows=[MoonMindUserWorkflow, _CancellationBoundaryChild],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            parent_handle = await env.client.start_workflow(
+                MoonMindUserWorkflow.run,
+                {
+                    "workflow_type": "MoonMind.UserWorkflow",
+                    "initial_parameters": {},
+                    "plan_artifact_ref": "ref-123",
+                },
+                id="test-wf-authoritative-cancel",
+                task_queue=task_queue,
+            )
+            child_handle = env.client.get_workflow_handle(child_workflow_id)
+
+            for _ in range(50):
+                try:
+                    child_description = await child_handle.describe()
+                except Exception:
+                    await asyncio.sleep(0.02)
+                    continue
+                if child_description.status is WorkflowExecutionStatus.RUNNING:
+                    break
+                await asyncio.sleep(0.02)
+            else:
+                pytest.fail("active AgentRun child did not start")
+
+            await parent_handle.cancel()
+            with pytest.raises(WorkflowFailureError):
+                await parent_handle.result()
+
+            parent_description = await parent_handle.describe()
+            child_description = await child_handle.describe()
+            assert parent_description.status is WorkflowExecutionStatus.CANCELED
+            assert child_description.status is WorkflowExecutionStatus.CANCELED
+
 
 @pytest.mark.asyncio
 async def test_recovery_forwards_operator_message_to_active_jules_child(monkeypatch):

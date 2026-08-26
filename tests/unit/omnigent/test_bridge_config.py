@@ -59,8 +59,8 @@ hostConnection:
   embedded:
     bindAddress: 0.0.0.0
     port: 8000
-    authMode: header_or_token
-    protocolProfile: omnigent.host_runner.v1
+    authMode: upstream_runner_tunnel
+    protocolProfile: omnigent.runner_tunnel.983c93c6
 
 sessionDefaults:
   hostType: managed
@@ -228,6 +228,66 @@ def test_host_protocol_mode_accepts_embedded() -> None:
         config.host_connection.embedded.host_auth_conformance_evidence_ref
         == "artifact://omnigent/host-auth"
     )
+    assert config.readiness() == {
+        "enabled": True,
+        "selectedMode": HOST_PROTOCOL_MODE_EMBEDDED,
+        "protocolProfile": "omnigent.runner_tunnel.983c93c6",
+        "upstreamComponentVersion": "983c93c6",
+        "conformanceState": "gated",
+        "evidenceRefs": {
+            "proxyConformance": "artifact://omnigent/proxy-conformance",
+            "liveSmoke": "artifact://omnigent/live-smoke",
+            "hostAuthConformance": "artifact://omnigent/host-auth",
+        },
+        "evidenceValidation": {},
+        "gateReason": "validated_embedded_evidence_required",
+    }
+
+    validation = {
+        key: {
+            "status": "passed",
+            "supportedHostModes": ["static_compose", "on_demand_docker"],
+        }
+        for key in ("proxyConformance", "liveSmoke", "hostAuthConformance")
+    }
+    assert (
+        config.readiness(evidence_validation=validation)["conformanceState"] == "ready"
+    )
+    mode_validation = {
+        key: {"status": "passed", "supportedHostModes": ["static_compose"]}
+        for key in ("proxyConformance", "liveSmoke", "hostAuthConformance")
+    }
+    assert config.readiness(
+        evidence_validation=mode_validation, host_mode="static_compose"
+    )["conformanceState"] == "ready"
+    unsupported = config.readiness(
+        evidence_validation=mode_validation, host_mode="on_demand_docker"
+    )
+    assert unsupported["conformanceState"] == "gated"
+    assert unsupported["gateReason"] == "embedded_host_mode_evidence_required"
+    assert config.readiness(
+        evidence_validation=mode_validation
+    )["conformanceState"] == "gated"
+
+
+def test_proxy_readiness_exposes_supported_fallback_without_embedded_evidence(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.example.test")
+    readiness = parse_bridge_config({}).readiness()
+
+    assert readiness["selectedMode"] == HOST_PROTOCOL_MODE_PROXY
+    assert readiness["protocolProfile"] == "omnigent.server.v1"
+    assert readiness["conformanceState"] == "ready"
+    assert readiness["evidenceRefs"] == {}
+
+
+def test_proxy_readiness_is_gated_when_runtime_is_disabled(monkeypatch) -> None:
+    monkeypatch.delenv("OMNIGENT_ENABLED", raising=False)
+    monkeypatch.delenv("OMNIGENT_SERVER_URL", raising=False)
+
+    assert parse_bridge_config({}).readiness()["conformanceState"] == "gated"
 
 
 def test_embedded_mode_requires_conformance_and_smoke_evidence() -> None:
@@ -235,6 +295,20 @@ def test_embedded_mode_requires_conformance_and_smoke_evidence() -> None:
         parse_bridge_config(
             {"compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED}}
         )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "match"),
+    [
+        ("authMode", "header_or_token", "authMode"),
+        ("protocolProfile", "omnigent.host_runner.v1", "protocolProfile"),
+    ],
+)
+def test_embedded_auth_contract_rejects_unsupported_profiles(
+    field: str, value: str, match: str
+) -> None:
+    with pytest.raises(BridgeConfigError, match=match):
+        parse_bridge_config({"hostConnection": {"embedded": {field: value}}})
 
 
 def test_disabled_embedded_mode_can_be_declared_without_evidence() -> None:

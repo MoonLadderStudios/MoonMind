@@ -34,7 +34,6 @@ from moonmind.jules.runtime import (
 )
 from moonmind.rag.guardrails import GuardrailError, ensure_rag_ready
 from moonmind.rag.settings import RagRuntimeSettings
-from moonmind.workflows.automation.preflight import run_docker_sidecar_preflight_check
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +134,7 @@ def _effective_worker_capabilities(
     if configured:
         return configured
     if runtime == "universal":
-        capabilities = ["codex", "claude", "git", "gh"]
+        capabilities = ["codex", "claude", "git", "gh", "execution.fanout"]
         if _jules_runtime_gate_from_env(source).enabled:
             capabilities.insert(2, "jules")
         return tuple(capabilities)
@@ -143,7 +142,10 @@ def _effective_worker_capabilities(
         "codex_cli": "codex",
         "claude_code": "claude",
     }.get(runtime, runtime)
-    return (normalized_runtime, "git", "gh")
+    capabilities = (normalized_runtime, "git", "gh")
+    if normalized_runtime in {"codex", "claude"}:
+        return (*capabilities, "execution.fanout")
+    return capabilities
 
 def _jules_runtime_gate_from_env(source: Mapping[str, str]):
     """Return Jules runtime gate state derived from worker environment."""
@@ -335,13 +337,6 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
         ensure_rag_ready(RagRuntimeSettings.from_env(source))
     except GuardrailError as exc:
         raise RuntimeError(str(exc)) from exc
-    docker_sidecar_preflight = run_docker_sidecar_preflight_check(env=source)
-    if docker_sidecar_preflight.status.value == "failed":
-        message = docker_sidecar_preflight.message or "Docker sidecar preflight failed."
-        if docker_sidecar_preflight.diagnostics_ref:
-            message = f"{message} diagnosticsRef={docker_sidecar_preflight.diagnostics_ref}"
-        raise RuntimeError(message)
-
     github_token = str(source.get("GITHUB_TOKEN", "")).strip()
     redaction_values = (github_token,) if github_token else ()
 

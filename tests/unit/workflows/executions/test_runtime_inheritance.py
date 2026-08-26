@@ -109,6 +109,7 @@ def _parent_record(
     effort: str | None = "high",
     profile_id: str | None = "codex_default",
     execution_profile_ref: str | None = "codex_default",
+    omnigent: dict[str, Any] | None = None,
 ) -> SimpleNamespace:
     parameters: dict[str, Any] = {}
     if target_runtime is not None:
@@ -126,6 +127,8 @@ def _parent_record(
         workflow_runtime["executionProfileRef"] = execution_profile_ref
     if workflow_runtime:
         parameters["workflow"] = {"runtime": workflow_runtime}
+    if omnigent is not None:
+        parameters["omnigent"] = omnigent
     return SimpleNamespace(
         workflow_id=workflow_id,
         owner_id=owner_id,
@@ -408,6 +411,84 @@ def test_apply_inherited_runtime_writes_target_and_task_runtime_fields() -> None
     assert runtime["effort"] == "high"
     assert runtime["executionProfileRef"] == "codex_default"
     assert runtime["profileId"] == "codex_default"
+
+
+@pytest.mark.asyncio
+async def test_github_3453_child_inherits_complete_omnigent_selection() -> None:
+    selection = {
+        "executionTargetRef": "omnigent-codex@1",
+        "launchPolicyRef": "codex-on-demand@1",
+        "agent": {"harnessOverride": "codex-native"},
+    }
+    parent = _parent_record(
+        target_runtime="omnigent",
+        profile_id=None,
+        execution_profile_ref="codex-oauth-profile",
+        omnigent=selection,
+    )
+    service = _FakeService({"mm:parent": parent})
+    principal = ExecutionPrincipal(
+        user_id="user-1",
+        workflow_id="mm:parent",
+        scopes=frozenset({SCOPE_CREATE_CHILD, SCOPE_INHERIT_RUNTIME}),
+    )
+    payload: dict[str, Any] = {"runtimeInheritance": "caller", "task": {}}
+
+    inherited = await resolve_child_runtime_inheritance(
+        request_payload=payload,
+        task_payload=payload["task"],
+        principal=principal,
+        service=service,
+    )
+    assert inherited is not None
+    apply_inherited_runtime_to_payload(
+        payload=payload,
+        task_payload=payload["task"],
+        inherited=inherited,
+    )
+
+    assert payload["targetRuntime"] == "omnigent"
+    assert payload["task"]["runtime"] == {
+        "mode": "omnigent",
+        "model": "gpt-5.4",
+        "effort": "high",
+        "executionProfileRef": "codex-oauth-profile",
+        "omnigent": selection,
+    }
+
+
+def test_github_3453_explicit_child_omnigent_selection_wins_inheritance() -> None:
+    inherited = InheritedRuntime(
+        target_runtime="omnigent",
+        execution_profile_ref="parent-profile",
+        omnigent={
+            "executionTargetRef": "parent-target",
+            "launchPolicyRef": "parent-policy",
+        },
+    )
+    child_selection = {
+        "executionTargetRef": "child-target",
+        "launchPolicyRef": "child-policy",
+    }
+    payload: dict[str, Any] = {
+        "targetRuntime": "omnigent",
+        "task": {
+            "runtime": {
+                "mode": "omnigent",
+                "executionProfileRef": "child-profile",
+                "omnigent": child_selection,
+            }
+        },
+    }
+
+    apply_inherited_runtime_to_payload(
+        payload=payload,
+        task_payload=payload["task"],
+        inherited=inherited,
+    )
+
+    assert payload["task"]["runtime"]["executionProfileRef"] == "child-profile"
+    assert payload["task"]["runtime"]["omnigent"] == child_selection
 
 
 def test_apply_inherited_runtime_does_not_overwrite_existing_runtime_fields() -> None:

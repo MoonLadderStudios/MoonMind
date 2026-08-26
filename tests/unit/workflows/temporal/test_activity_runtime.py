@@ -21,13 +21,16 @@ from temporalio import activity as temporal_activity
 from temporalio import exceptions as temporal_exceptions
 
 from api_service.db.models import Base
-from moonmind.config.settings import PentestSettings, settings
-from moonmind.integrations.pentest.models import (
-    PENTEST_CLAUDE_OAUTH_PROFILE_ID,
-    PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
+from moonmind.config.settings import (
+    settings,
 )
 from moonmind.jules.runtime import JULES_RUNTIME_DISABLED_MESSAGE
-from moonmind.schemas.agent_runtime_models import AgentRunResult, ManagedRunRecord
+from moonmind.schemas.agent_runtime_models import (
+    AgentExecutionRequest,
+    AgentRunResult,
+    ManagedRunRecord,
+)
+from moonmind.schemas.managed_session_models import CodexManagedSessionLocator
 from moonmind.schemas.jules_models import JulesTaskResponse
 from moonmind.schemas.workload_models import (
     ValidatedWorkloadRequest,
@@ -72,7 +75,6 @@ from moonmind.workflows.temporal.activity_runtime import (
     TemporalProposalActivities,
     TemporalSandboxActivities,
     TemporalSkillActivities,
-    TemporalPentestProviderLeaseManager,
     _default_registry_skill_payload,
     _default_skill_registry_payload,
     build_activity_bindings,
@@ -80,8 +82,6 @@ from moonmind.workflows.temporal.activity_runtime import (
     build_activity_invocation_envelope,
     build_compact_activity_result,
     build_observability_summary,
-    cleanup_pentest_orphan_containers,
-    emit_pentest_activity_heartbeat,
 )
 from moonmind.workflows.agent_skills.agent_skills_activities import AgentSkillsActivities
 from moonmind.workflows.temporal.artifacts import (
@@ -94,11 +94,514 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactValidationError,
     build_artifact_ref,
 )
+from moonmind.workflows.temporal.runtime.workspace_locators import (
+    SandboxWorkspaceRecord,
+    SandboxWorkspaceRecordStore,
+)
+from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
+
+
+@pytest.mark.asyncio
+async def test_step_checkpoint_activity_constructs_complete_omnigent_identity() -> None:
+    store = InMemoryArtifactStore()
+    external = store.put_bytes(
+        json.dumps(
+            {
+                "omnigentSessionId": "session-1",
+                "firstMessage": {
+                    "digest": "sha256:" + "1" * 64,
+                    "responseIdentifiers": {"itemId": "message-1"},
+                },
+                "lastCommittedBridgeEventCursor": "event-9",
+            },
+            sort_keys=True,
+        ).encode(),
+        content_type="application/json",
+    )
+    external_ref = "artifact://omnigent-test/external-state"
+    store._data[external_ref] = store.get_bytes(external.artifact_ref)
+    manifest = store.put_bytes(b'{"capture":"complete"}', content_type="application/json")
+    manifest_ref = "artifact://omnigent-test/capture-manifest"
+    store._data[manifest_ref] = store.get_bytes(manifest.artifact_ref)
+    activities = TemporalCheckpointActivities(artifact_store=store)
+
+    result = await activities.step_checkpoint_create(
+        {
+            "identity": {
+                "workflowId": "wf-3509",
+                "runId": "run-3509",
+                "logicalStepId": "implement",
+                "executionOrdinal": 1,
+            },
+            "boundary": "after_execution",
+            "taskInputSnapshotRef": "artifact://task/input",
+            "planRef": "artifact://plan/current",
+            "workspace": {
+                "kind": "worktree_archive",
+                "baseCommit": "abc123",
+                "headCommit": "def456",
+                "archiveRef": "artifact://workspace/archive",
+                "manifestRef": "artifact://workspace/manifest",
+                "archiveDigest": "sha256:" + "2" * 64,
+                "archiveBytes": 10,
+                "createdAt": "2026-08-02T00:00:00Z",
+            },
+            "omnigentCheckpointCapture": {
+                "providerProfileId": "codex",
+                "credentialRef": "credential://provider-profile/codex/generation/3",
+                "credentialGeneration": 3,
+                "providerLeaseRef": "provider-lease-1",
+                "hostBindingRef": "binding-1",
+                "hostLeaseRef": "host-lease-1",
+                "endpointRef": "endpoint-1",
+                "omnigentHostId": "host-1",
+                "bridgeSessionId": "bridge-1",
+                "effectiveLaunchRef": "omnigent-launch:sha256:" + "3" * 64,
+                "executionProfileRef": "profile://codex",
+                "launchPolicyRef": "policy://default",
+                "policyId": "omnigent-codex",
+                "policyVersion": 1,
+                "policyRef": "omnigent-codex@1",
+                "policyDigest": "sha256:" + "4" * 64,
+                "policySnapshotRef": "omnigent-policy:sha256:" + "5" * 64,
+                "policyValidation": {"valid": True},
+                "externalStateRef": external_ref,
+                "captureManifestRef": manifest_ref,
+                "terminalRef": "artifact://terminal/result",
+                "diagnosticsRef": "artifact://diagnostics/result",
+                "idempotencyKey": "idem-3509",
+                "workspaceLocator": {
+                    "kind": "sandbox",
+                    "workspaceId": "clean-workspace",
+                    "relativePath": "repo",
+                },
+                "instructionRefs": ["artifact://instructions/current"],
+                "sourceBranch": "main",
+                "publicationState": "none",
+            },
+            "createdAt": "2026-08-02T00:00:00Z",
+            "idempotencyKey": "wf-3509:checkpoint:after_execution",
+        }
+    )
+
+    checkpoint = json.loads(store.get_bytes(result["checkpointRef"]))
+    identity = checkpoint["omnigentCheckpoint"]
+    assert identity["schemaVersion"] == "v2"
+    assert identity["externalStateRef"] == external_ref
+    assert identity["externalStateDigest"].startswith("sha256:")
+    assert identity["workspaceCheckpointRef"] == "artifact://workspace/archive"
+    # Immutable policy-authority evidence stamped from the trusted launch flows
+    # through to the persisted checkpoint so it stays cold-restore eligible.
+    assert identity["policyId"] == "omnigent-codex"
+    assert identity["policyVersion"] == 1
+    assert identity["policyRef"] == "omnigent-codex@1"
+    assert identity["policyDigest"] == "sha256:" + "4" * 64
+    assert identity["policySnapshotRef"] == "omnigent-policy:sha256:" + "5" * 64
+    assert identity["policyValidation"] == {"valid": True}
+    assert identity["validation"] == {
+        "valid": True,
+        "liveReattachAvailable": True,
+        "workspaceColdRestoreAvailable": True,
+        "branchCreationAvailable": True,
+        "reasons": [],
+        "capacityBlocked": False,
+        "readinessBlocked": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_direct_codex_bridge_append_is_idempotent_and_preserves_provenance() -> None:
+    appended: list[dict[str, Any]] = []
+
+    class FakeStore:
+        async def list_events(self, _bridge_session_id: str) -> list[Any]:
+            return [
+                SimpleNamespace(
+                    event_type="session.started",
+                    text_preview=None,
+                    artifact_ref=None,
+                    metadata_={
+                        "moonmind": {
+                            "directManagedSessionId": "direct-session-1",
+                            "sessionEpoch": 2,
+                            "turnId": None,
+                        }
+                    },
+                )
+            ]
+
+        async def append_events(
+            self, _bridge_session_id: str, events: list[dict[str, Any]]
+        ) -> None:
+            appended.extend(events)
+
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="codex",
+        correlationId="workflow-3367",
+        idempotencyKey="issue-3367-idempotency",
+        parameters={"instructions": "test"},
+    )
+    locator = CodexManagedSessionLocator(
+        sessionId="direct-session-1",
+        sessionEpoch=2,
+        containerId="container-1",
+        threadId="thread-2",
+    )
+    runtime = object.__new__(TemporalAgentRuntimeActivities)
+
+    result = await runtime._append_direct_codex_bridge_events(
+        store=FakeStore(),
+        row=SimpleNamespace(bridge_session_id="bridge-1"),
+        request=request,
+        locator=locator,
+        event_payloads=[
+            {"type": "session.started", "status": "running"},
+            {
+                "type": "session.item.resource_published",
+                "status": "running",
+                "artifactRef": "artifact:summary",
+            },
+        ],
+        compatibility_profile="moonmind.codex_direct_compat.v1",
+    )
+
+    assert result["eventCount"] == 1
+    assert [event["eventType"] for event in appended] == [
+        "session.item.resource_published"
+    ]
+    assert appended[0]["metadata"]["moonmind"] == {
+        "workflowChatVisible": True,
+        "source": "codex_direct_compat",
+        "compatibilityProfile": "moonmind.codex_direct_compat.v1",
+        "directManagedSessionId": "direct-session-1",
+        "sessionEpoch": 2,
+        "turnId": None,
+        "sourceEventId": None,
+        "sourceOutcome": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_direct_codex_bridge_dedup_keeps_same_text_in_distinct_turns() -> None:
+    appended: list[dict[str, Any]] = []
+
+    class FakeStore:
+        async def list_events(self, _bridge_session_id: str) -> list[Any]:
+            return [
+                SimpleNamespace(
+                    event_type="response.output",
+                    text_preview="same",
+                    artifact_ref=None,
+                    metadata_={"moonmind": {"directManagedSessionId": "session", "sessionEpoch": 1, "turnId": "turn-1"}},
+                )
+            ]
+
+        async def append_events(self, _bridge_session_id: str, events: list[dict[str, Any]]) -> None:
+            appended.extend(events)
+
+    request = AgentExecutionRequest(agentKind="managed", agentId="codex", correlationId="wf", idempotencyKey="idem")
+    locator = CodexManagedSessionLocator(sessionId="session", sessionEpoch=1, containerId="container", threadId="thread")
+    runtime = object.__new__(TemporalAgentRuntimeActivities)
+    result = await runtime._append_direct_codex_bridge_events(
+        store=FakeStore(), row=SimpleNamespace(bridge_session_id="bridge"), request=request,
+        locator=locator,
+        event_payloads=[{"type": "response.output", "status": "running", "text": "same", "data": {"turnId": "turn-2"}}],
+        compatibility_profile="moonmind.codex_direct_compat.v1",
+    )
+
+    assert result["eventCount"] == 1
+    assert appended[0]["metadata"]["moonmind"]["turnId"] == "turn-2"
+
+
+@pytest.mark.asyncio
+async def test_direct_codex_bridge_retry_after_partial_commit_appends_only_tail() -> None:
+    committed: list[Any] = []
+
+    class FakeStore:
+        async def list_events(self, _bridge_session_id: str) -> list[Any]:
+            return list(committed)
+
+        async def append_events(self, _bridge_session_id: str, events: list[dict[str, Any]]) -> None:
+            committed.extend(
+                SimpleNamespace(
+                    event_type=event["eventType"],
+                    text_preview=event.get("textPreview"),
+                    artifact_ref=event.get("artifactRef"),
+                    metadata_=event["metadata"],
+                )
+                for event in events
+            )
+
+    request = AgentExecutionRequest(agentKind="managed", agentId="codex", correlationId="wf", idempotencyKey="idem")
+    locator = CodexManagedSessionLocator(sessionId="session", sessionEpoch=4, containerId="container", threadId="thread")
+    runtime = object.__new__(TemporalAgentRuntimeActivities)
+    events = [
+        {"type": "response.output.delta", "status": "running", "text": "same", "data": {"turnId": "turn", "sourceEventId": "position-1"}},
+        {"type": "response.output.delta", "status": "running", "text": "same", "data": {"turnId": "turn", "sourceEventId": "position-2"}},
+        {"type": "response.completed", "status": "completed", "data": {"turnId": "turn", "sourceEventId": "terminal-1"}},
+    ]
+
+    first = await runtime._append_direct_codex_bridge_events(
+        store=FakeStore(), row=SimpleNamespace(bridge_session_id="bridge"), request=request,
+        locator=locator, event_payloads=events[:2], compatibility_profile="moonmind.codex_direct_compat.v1",
+    )
+    retry = await runtime._append_direct_codex_bridge_events(
+        store=FakeStore(), row=SimpleNamespace(bridge_session_id="bridge"), request=request,
+        locator=locator, event_payloads=events, compatibility_profile="moonmind.codex_direct_compat.v1",
+    )
+
+    assert first["eventCount"] == 2
+    assert retry["eventCount"] == 1
+    assert [event.metadata_["moonmind"]["sourceEventId"] for event in committed] == [
+        "position-1", "position-2", "terminal-1"
+    ]
+
+
+def test_direct_codex_active_observations_use_canonical_classes_and_source_ids() -> None:
+    locator = CodexManagedSessionLocator(
+        sessionId="direct-session-3418",
+        sessionEpoch=3,
+        containerId="container-1",
+        threadId="thread-3",
+    )
+
+    events = TemporalAgentRuntimeActivities._direct_codex_active_event_payloads(
+        observations=[
+            {
+                "kind": "assistant_message_delta",
+                "turnId": "turn-7",
+                "text": "bounded delta",
+                "metadata": {"sourceEventId": "codex-event-1"},
+            },
+            {
+                "kind": "tool_call_started",
+                "turnId": "turn-7",
+                "metadata": {
+                    "sourceEventId": "codex-event-2",
+                    "toolName": "shell",
+                },
+            },
+        ],
+        source_metadata={
+            "source": "codex_direct_compat",
+            "directManagedSessionId": "direct-session-3418",
+            "sessionEpoch": 3,
+        },
+        locator=locator,
+        turn_id="turn-7",
+    )
+
+    assert [event["type"] for event in events] == [
+        "response.output.delta",
+        "session.item.tool.started",
+    ]
+    assert [event["eventId"] for event in events] == [
+        "codex-event-1",
+        "codex-event-2",
+    ]
+    assert all(
+        event["data"]["directManagedSessionId"] == "direct-session-3418"
+        for event in events
+    )
+
+
+def test_direct_codex_active_intervention_requires_authoritative_evidence() -> None:
+    locator = CodexManagedSessionLocator(
+        sessionId="direct-session-3418",
+        sessionEpoch=3,
+        containerId="container-1",
+        threadId="thread-3",
+    )
+
+    with pytest.raises(
+        TemporalActivityRuntimeError,
+        match="requires authoritative intervention evidence",
+    ):
+        TemporalAgentRuntimeActivities._direct_codex_active_event_payloads(
+            observations=[{"kind": "approval_requested", "metadata": {}}],
+            source_metadata={"source": "codex_direct_compat"},
+            locator=locator,
+            turn_id="turn-7",
+        )
+
+
+def test_direct_codex_active_observations_cover_lifecycle_and_intervention_outcomes(
+) -> None:
+    locator = CodexManagedSessionLocator(
+        sessionId="direct-session-3418",
+        sessionEpoch=4,
+        containerId="container-1",
+        threadId="thread-4",
+    )
+    authority = {
+        "actorId": "operator-1",
+        "idempotencyKey": "control-1",
+        "expectedSessionId": locator.session_id,
+        "expectedSessionEpoch": locator.session_epoch,
+        "expectedTurnId": "turn-8",
+        "outcome": "delivery_unknown",
+        "auditRef": "artifact://audit/control-1",
+    }
+
+    events = TemporalAgentRuntimeActivities._direct_codex_active_event_payloads(
+        observations=[
+            {"kind": "turn_completed", "metadata": {"sourceEventId": "done-1"}},
+            {"kind": "intervention_delivery_unknown", "metadata": authority},
+            {"kind": "turn_canceled", "metadata": {"sourceEventId": "cancel-1"}},
+            {"kind": "turn_timed_out", "metadata": {"sourceEventId": "timeout-1"}},
+            {
+                "kind": "continuity_published",
+                "metadata": {"artifactRef": "artifact://continuity/1"},
+            },
+            {
+                "kind": "cleanup_failed",
+                "metadata": {
+                    "sourceEventId": "cleanup-1",
+                    "failureReason": "sidecar unavailable",
+                },
+            },
+        ],
+        source_metadata={"source": "codex_direct_compat"},
+        locator=locator,
+        turn_id="turn-8",
+    )
+
+    assert [event["type"] for event in events] == [
+        "session.item.turn.completed",
+        "session.item.control.delivery_unknown",
+        "session.item.terminal.canceled",
+        "session.item.terminal.timed_out",
+        "session.item.resource_published",
+        "session.item.cleanup.failed",
+    ]
+    assert events[1]["artifactRef"] == "artifact://audit/control-1"
+    assert events[4]["artifactRef"] == "artifact://continuity/1"
+    assert events[1]["metadata"]["actorId"] == "operator-1"
+
+
+def test_direct_codex_active_intervention_rejects_wrong_turn_authority() -> None:
+    locator = CodexManagedSessionLocator(
+        sessionId="direct-session-3418",
+        sessionEpoch=4,
+        containerId="container-1",
+        threadId="thread-4",
+    )
+
+    with pytest.raises(
+        TemporalActivityRuntimeError,
+        match="does not match the active turn",
+    ):
+        TemporalAgentRuntimeActivities._direct_codex_active_event_payloads(
+            observations=[
+                {
+                    "kind": "intervention_completed",
+                    "metadata": {
+                        "actorId": "operator-1",
+                        "idempotencyKey": "control-1",
+                        "expectedSessionId": locator.session_id,
+                        "expectedSessionEpoch": locator.session_epoch,
+                        "expectedTurnId": "stale-turn",
+                        "outcome": "completed",
+                        "auditRef": "artifact://audit/control-1",
+                    },
+                },
+            ],
+            source_metadata={"source": "codex_direct_compat"},
+            locator=locator,
+            turn_id="turn-8",
+        )
+
+
+def test_direct_codex_dual_write_compares_independently_persisted_streams() -> None:
+    def event(kind: str, *, status: str = "running", artifact: str | None = None, text: str | None = None) -> Any:
+        return SimpleNamespace(
+            event_type=kind,
+            normalized_status=status,
+            artifact_ref=artifact,
+            text_preview=text,
+        )
+
+    reference = [
+        event("response.output", text="answer"),
+        event("session.item.control.completed", artifact="artifact://control/1"),
+        event("session.item.resource_published", artifact="artifact://resource/1"),
+        event("response.completed", status="completed"),
+    ]
+    direct = [
+        event("session.item.control.completed", artifact="artifact://control/wrong"),
+        event("response.output", text="answer"),
+        event("response.output", text="answer"),
+        event("response.completed", status="failed"),
+    ]
+
+    comparison = TemporalAgentRuntimeActivities._compare_bridge_event_streams(
+        direct_events=direct,
+        comparison_events=reference,
+    )
+
+    assert comparison["comparisonAvailable"] is True
+    assert comparison["matched"] is False
+    assert comparison["missingEventClasses"] == ["session.item.resource_published"]
+    assert comparison["unexpectedEventClasses"] == []
+    assert comparison["droppedEventCount"] == 1
+    assert comparison["duplicateEventCount"] == 1
+    assert comparison["semanticMismatchCount"] >= 1
+    reordered = TemporalAgentRuntimeActivities._compare_bridge_event_streams(
+        direct_events=list(reversed(reference)),
+        comparison_events=reference,
+    )
+    assert reordered["reordered"] is True
+
+
+@pytest.mark.asyncio
+async def test_post_merge_github_completion_applies_done_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.workflows.temporal import story_output_tools
+
+    captured: dict[str, Any] = {}
+
+    async def fake_update_github_issue_status(inputs, _context=None):
+        captured.update(inputs)
+        return SimpleNamespace(
+            status="COMPLETED",
+            outputs={
+                "confirmedState": "closed",
+                "confirmedLabels": ["status: done"],
+                "appliedActions": ["patch_issue"],
+            },
+        )
+
+    monkeypatch.setattr(
+        story_output_tools,
+        "update_github_issue_status",
+        fake_update_github_issue_status,
+    )
+
+    result = await TemporalIntegrationActivities.merge_automation_complete_post_merge_github(
+        object(),
+        {
+            "postMergeGithub": {
+                "enabled": True,
+                "required": True,
+                "repository": "MoonLadderStudios/MoonMind",
+                "issueNumber": 3143,
+            }
+        },
+    )
+
+    assert captured == {
+        "repository": "MoonLadderStudios/MoonMind",
+        "issueNumber": 3143,
+        "mode": "done",
+    }
+    assert result["status"] == "succeeded"
+    assert result["confirmedLabels"] == ["status: done"]
 from moonmind.workflows.temporal.report_artifacts import validate_report_bundle_result
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workloads.registry import RunnerProfileRegistry
 
-PENTEST_RUNNER_IMAGE = "ghcr.io/moonladderstudios/moonmind-pentestgpt:1.0"
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -122,6 +625,9 @@ async def test_prepare_managed_codex_turn_adds_moonspec_verify_artifact_hint() -
     assert '"advance"' in prepared
     assert '"reattempt_current_step"' in prepared
     assert '`FULLY_IMPLEMENTED`, set `recommendedNextAction` to "advance"' in prepared
+    assert "workflow runtime owns routing" in prepared
+    assert "read-only verifier must not ask its own rerun" in prepared
+    assert 'Use "reattempt_current_step" only when rerunning this verifier' in prepared
     assert "raw diagnostic" in prepared
     assert "map-entry" in prepared
     assert "missing map assets" in prepared
@@ -780,7 +1286,7 @@ async def test_default_skill_registry_payload_excludes_agent_only_jira_skill(
     skills = payload.get("skills")
     assert skills == []
 
-async def test_default_skill_registry_payload_uses_dood_tool_definitions():
+async def test_default_skill_registry_payload_uses_generic_container_job_definition():
     payload = _default_skill_registry_payload(
         parameters={
             "workflow": {
@@ -788,13 +1294,7 @@ async def test_default_skill_registry_payload_uses_dood_tool_definitions():
                     {
                         "tool": {
                             "type": "skill",
-                            "name": "container.run_workload",
-                        }
-                    },
-                    {
-                        "tool": {
-                            "type": "skill",
-                            "name": "unreal.run_tests",
+                            "name": "container.run_job",
                         }
                     },
                 ]
@@ -805,14 +1305,12 @@ async def test_default_skill_registry_payload_uses_dood_tool_definitions():
     skills = payload.get("skills")
     assert isinstance(skills, list)
     tools = {item["name"]: item for item in skills}
-    assert tools["container.run_workload"]["requirements"]["capabilities"] == [
-        "docker_workload"
-    ]
-    assert tools["unreal.run_tests"]["requirements"]["capabilities"] == [
+    assert set(tools) == {"container.run_job"}
+    assert tools["container.run_job"]["requirements"]["capabilities"] == [
         "docker_workload"
     ]
     assert (
-        tools["container.run_workload"]["executor"]["activity_type"]
+        tools["container.run_job"]["executor"]["activity_type"]
         == "mm.tool.execute"
     )
 
@@ -839,140 +1337,6 @@ async def test_default_skill_registry_payload_includes_input_sourced_tool_steps(
     assert [item["name"] for item in skills] == ["jira.get_issue"]
     assert all("version" not in item for item in skills if isinstance(item, dict))
 
-async def test_default_skill_registry_payload_uses_curated_pentest_tool_definition():
-    payload = _default_skill_registry_payload(
-        parameters={
-            "workflow": {
-                "steps": [
-                    {
-                        "tool": {
-                            "type": "skill",
-                            "name": "security.pentest.run",
-                        }
-                    }
-                ]
-            }
-        }
-    )
-
-    skills = payload.get("skills")
-    assert isinstance(skills, list)
-    assert len(skills) == 1
-    definition = skills[0]
-
-    assert definition["name"] == "security.pentest.run"
-    assert "version" not in definition
-    assert definition["type"] == "skill"
-    assert definition["executor"] == {
-        "activity_type": "security.pentest.execute",
-        "selector": {"mode": "by_capability"},
-        "binding_reason": "stronger_isolation",
-    }
-    assert definition["requirements"]["capabilities"] == ["agent_runtime"]
-    assert definition["security"]["allowed_roles"] == [
-        "admin",
-        "security_operator",
-    ]
-
-    input_schema = definition["inputs"]["schema"]
-    assert input_schema["required"] == ["target"]
-    assert input_schema["properties"]["operation_mode"]["enum"] == [
-        "recon_only",
-        "validate_hypothesis",
-        "full_authorized",
-    ]
-    assert input_schema["properties"]["operation_mode"]["default"] == "recon_only"
-    assert (
-        input_schema["properties"]["runner_profile_id"]["default"]
-        == "pentestgpt-claude-oauth"
-    )
-    assert input_schema["properties"]["provider_selector"][
-        "additionalProperties"
-    ] is False
-    assert set(input_schema["properties"]["provider_selector"]["properties"]) == {
-        "provider_id",
-        "tags_any",
-        "tags_all",
-    }
-    assert (
-        input_schema["properties"]["provider_runtime_state"][
-            "additionalProperties"
-        ]["properties"]["available_slots"]["minimum"]
-        == 0
-    )
-    assert input_schema["properties"]["time_budget_minutes"] == {
-        "type": "integer",
-        "minimum": 1,
-        "maximum": 480,
-        "default": 60,
-    }
-    assert input_schema["properties"]["artifacts_dir"]["type"] == "string"
-    assert input_schema["properties"]["evidence_level"]["enum"] == [
-        "minimal",
-        "standard",
-        "full",
-    ]
-
-    output_schema = definition["outputs"]["schema"]
-    assert output_schema["required"] == [
-        "status",
-        "target",
-        "runner_profile_id",
-        "launch_plan",
-    ]
-    assert output_schema["properties"]["status"] == {
-        "type": "string",
-        "enum": ["launch_plan_ready", "provider_cooldown"],
-    }
-    assert "provider_profile" in output_schema["properties"]
-    assert "provider_lease" in output_schema["properties"]
-    assert output_schema["properties"]["provider_cooldown"]["properties"][
-        "cooldown_seconds"
-    ] == {"type": "integer", "minimum": 0}
-    launch_plan_schema = output_schema["properties"]["launch_plan"]
-    assert launch_plan_schema["required"] == [
-        "profile_id",
-        "container_name",
-        "image",
-        "entrypoint",
-        "workdir",
-        "network_policy",
-        "linux_capabilities",
-        "devices",
-        "labels",
-        "cleanup_selector",
-    ]
-    assert {
-        "mounts",
-        "env_keys",
-        "resources",
-        "timeout_seconds",
-        "cleanup",
-    }.issubset(launch_plan_schema["properties"])
-
-    assert definition["policies"] == {
-        "timeouts": {
-            "start_to_close_seconds": 28800,
-            "schedule_to_close_seconds": 32400,
-        },
-        "retries": {
-            "max_attempts": 1,
-            "backoff": "none",
-            "non_retryable_error_codes": [
-                "INVALID_SCOPE",
-                "PERMISSION_DENIED",
-                "UNAPPROVED_TARGET",
-                "UNSUPPORTED_PROFILE",
-                "NON_IDEMPOTENT_OPERATION",
-            ],
-        },
-    }
-
-    parsed = parse_skill_registry(payload)
-    assert [tool.name for tool in parsed] == [
-        "security.pentest.run"
-    ]
-    assert parsed[0].executor.activity_type == "security.pentest.execute"
 
 async def test_default_skill_registry_payload_uses_curated_deployment_tool_definition():
     payload = _default_skill_registry_payload(
@@ -1095,22 +1459,6 @@ async def test_default_skill_registry_payload_routes_jira_status_update_to_integ
     assert route.fleet == INTEGRATIONS_FLEET
     assert route.task_queue == "mm.activity.integrations"
 
-async def test_curated_pentest_activity_binding_is_registered_on_agent_runtime_fleet():
-    bindings = build_activity_bindings(
-        build_default_activity_catalog(),
-        agent_runtime_activities=TemporalAgentRuntimeActivities(),
-        agent_skills_activities=AgentSkillsActivities(),
-        fleets=[AGENT_RUNTIME_FLEET],
-    )
-
-    binding = next(
-        item for item in bindings if item.activity_type == "security.pentest.execute"
-    )
-    assert binding.fleet == AGENT_RUNTIME_FLEET
-    assert binding.task_queue == "mm.activity.agent_runtime"
-    assert binding.handler.__temporal_activity_definition.name == (
-        "security.pentest.execute"
-    )
 
 async def test_managed_runtime_cleanup_binding_is_registered_on_agent_runtime_fleet():
     bindings = build_activity_bindings(
@@ -1131,2478 +1479,96 @@ async def test_managed_runtime_cleanup_binding_is_registered_on_agent_runtime_fl
     assert binding.handler.__temporal_activity_definition.name == (
         "agent_runtime.cleanup_managed_runtime_files"
     )
-
-def _approved_pentest_scope() -> dict[str, object]:
-    now = datetime.now(timezone.utc)
-    return {
-        "scope_id": "scope-123",
-        "title": "Lab validation",
-        "owner_user_id": "user-security",
-        "created_at": (now - timedelta(hours=1)).isoformat().replace("+00:00", "Z"),
-        "expires_at": (now + timedelta(hours=1)).isoformat().replace("+00:00", "Z"),
-        "target_class": "lab",
-        "targets": [{"kind": "url", "value": "https://lab.example.test"}],
-        "allowed_actions": [
-            "auth_testing",
-            "vuln_validation",
-            "exploit_validation",
-        ],
-        "prohibited_actions": [],
-        "requires_manual_approval": False,
-        "approval_recorded": False,
-        "allowed_runner_profiles": [PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID],
-        "required_network_attachment_type": None,
-        "authorized_principals": ["user-security"],
-        "metadata": {"jira": "MM-470"},
-    }
-
-def _pentest_activity_payload(**overrides: object) -> dict[str, object]:
-    request: dict[str, object] = {
-        "pentest_enabled": True,
-        "agent_run_id": "run-123",
-        "step_id": "step-pentest",
-        "attempt": 1,
-        "target": "https://lab.example.test",
-        "operation_mode": "validate_hypothesis",
-        "objective": "Validate auth bypass hypothesis.",
-        "scope_artifact_ref": "art:sha256:scope",
-        "runner_profile_id": PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
-        "execution_profile_ref": PENTEST_CLAUDE_OAUTH_PROFILE_ID,
-        "time_budget_minutes": 60,
-        "evidence_level": "standard",
-        "artifacts_dir": "/tmp/artifacts",
-        "principal_id": "user-security",
-        "approved_scope": _approved_pentest_scope(),
-        "trusted_internal_execution": True,
-    }
-    request.update(overrides)
-    return {"request": request}
-
-def _pentest_artifact_activity_payload(**overrides: object) -> dict[str, object]:
-    request: dict[str, object] = {
-        "pentest_enabled": True,
-        "agent_run_id": "run-123",
-        "step_id": "step-pentest",
-        "attempt": 1,
-        "target": "https://lab.example.test",
-        "operation_mode": "validate_hypothesis",
-        "objective": "Validate auth bypass hypothesis.",
-        "scope_artifact_ref": "art_scope_valid",
-        "runner_profile_id": PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
-        "execution_profile_ref": PENTEST_CLAUDE_OAUTH_PROFILE_ID,
-        "time_budget_minutes": 60,
-        "evidence_level": "standard",
-        "artifacts_dir": "/tmp/artifacts",
-        "principal_id": "user-security",
-    }
-    request.update(overrides)
-    return {"request": request}
-
-class _FakePentestArtifactService:
-    def __init__(self, artifacts: dict[str, bytes]) -> None:
-        self.artifacts = artifacts
-        self.reads: list[tuple[str, str]] = []
-
-    async def read(
-        self,
-        *,
-        artifact_id: str,
-        principal: str,
-        allow_restricted_raw: bool = False,
-    ) -> tuple[object, bytes]:
-        self.reads.append((artifact_id, principal))
-        if artifact_id not in self.artifacts:
-            raise TemporalArtifactNotFoundError(artifact_id)
-        return SimpleNamespace(artifact_id=artifact_id), self.artifacts[artifact_id]
-
-def _scope_artifact_bytes(**overrides: object) -> bytes:
-    return json.dumps(_approved_pentest_scope() | overrides).encode("utf-8")
-
-class _FakePentestLauncher:
-    def __init__(
-        self,
-        *,
-        status: str = "succeeded",
-        findings_payload: dict[str, Any] | None = None,
-    ) -> None:
-        self.status = status
-        self.findings_payload = findings_payload
-        self.requests: list[object] = []
-
-    async def run(self, request: object) -> WorkloadResult:
-        self.requests.append(request)
-        workload_request = getattr(request, "request", request)
-        artifacts_dir = getattr(workload_request, "artifacts_dir", None)
-        if self.findings_payload is not None and artifacts_dir:
-            findings_path = (
-                Path(str(artifacts_dir))
-                / "pentest"
-                / "findings"
-                / "findings.normalizer-input.json"
-            )
-            findings_path.parent.mkdir(parents=True, exist_ok=True)
-            findings_path.write_text(
-                json.dumps(self.findings_payload, sort_keys=True, indent=2) + "\n",
-                encoding="utf-8",
-            )
-        return WorkloadResult.model_validate(
-            {
-                "requestId": "workload-run-123",
-                "profileId": PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
-                "status": self.status,
-                "exitCode": 0 if self.status == "succeeded" else 2,
-                "stdoutRef": "file:/tmp/artifacts/pentest/runtime/stdout.log",
-                "stderrRef": "file:/tmp/artifacts/pentest/runtime/stderr.log",
-                "diagnosticsRef": "file:/tmp/artifacts/pentest/runtime/diagnostics.json",
-                "outputRefs": {
-                    "report.primary": "file:/tmp/artifacts/pentest/findings/findings.report.md",
-                    "report.summary": "file:/tmp/artifacts/pentest/findings/findings.summary.md",
-                    "report.structured": "file:/tmp/artifacts/pentest/findings/findings.normalizer-input.json",
-                    "report.evidence": "file:/tmp/artifacts/pentest/evidence/bundle.tar.zst",
-                },
-                "metadata": {"fake": True},
-            }
-        )
-
-class _FileWritingPentestLauncher(_FakePentestLauncher):
-    async def run(self, request: object) -> WorkloadResult:
-        workload_request = getattr(request, "request", request)
-        artifacts_dir = Path(str(getattr(workload_request, "artifacts_dir")))
-        base = artifacts_dir / "pentest"
-        report_profile_fields = {
-            "runner_" + "profile" + "_id": "report-runner",
-            "execution_" + "profile" + "_ref": "report-execution",
-        }
-        files = {
-            "runtime/stdout.log": "stdout raw-output-marker-should-not-leak\n",
-            "runtime/stderr.log": "stderr raw-error-marker-should-not-leak\n",
-            "runtime/diagnostics.json": json.dumps(
-                {"status": "ok", "raw_log": "must stay in artifact body"}
-            ),
-            "findings/findings.summary.md": "Summary without secrets.\n",
-            "findings/findings.report.md": "# Pentest report\n\nPrimary report.\n",
-            "findings/findings.normalizer-input.json": json.dumps(
-                {
-                    "tool_name": "security.pentest.run",
-                    "target": "https://lab.example.test",
-                    "scope_artifact_ref": "art:sha256:scope",
-                    "operation_mode": "validate_hypothesis",
-                    **report_profile_fields,
-                    "produced_at": "2026-06-14T00:00:00Z",
-                    "findings": [
-                        {
-                            "finding_id": "finding-1",
-                            "title": "Supported issue",
-                            "severity": "high",
-                            "confidence": "confirmed",
-                            "target": "https://lab.example.test",
-                            "summary": "Evidence supports issue",
-                        }
-                    ],
-                    "summary": {
-                        "findings_count": 1,
-                        "confirmed_findings_count": 1,
-                        "high_or_critical_count": 1,
-                    },
-                }
-            ),
-            "evidence/bundle.tar.zst": (
-                "fake evidence body evidence-marker-should-not-leak\n"
-            ),
-        }
-        for relative, body in files.items():
-            path = base / relative
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(body, encoding="utf-8")
-        return await super().run(request)
-
-
-class _MalformedFindingsFileLauncher(_FileWritingPentestLauncher):
-    async def run(self, request: object) -> WorkloadResult:
-        result = await super().run(request)
-        workload_request = getattr(request, "request", request)
-        artifacts_dir = Path(str(getattr(workload_request, "artifacts_dir")))
-        (
-            artifacts_dir / "pentest" / "findings" / "findings.normalizer-input.json"
-        ).write_text("{malformed-json", encoding="utf-8")
-        return result
-
-
-class _BlockingPentestLauncher(_FakePentestLauncher):
-    def __init__(self, *, status: str = "succeeded") -> None:
-        super().__init__(
-            status=status,
-            findings_payload={
-                "tool_name": "security.pentest.run",
-                "target": "https://lab.example.test",
-                "scope_artifact_ref": "art:sha256:scope",
-                "operation_mode": "validate_hypothesis",
-                "runner_profile_id": PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
-                "execution_profile_ref": PENTEST_CLAUDE_OAUTH_PROFILE_ID,
-                "produced_at": "2026-06-14T00:00:00Z",
-                "findings": [
-                    {
-                        "finding_id": "blocking-finding",
-                        "title": "Blocking launcher finding",
-                        "severity": "low",
-                        "confidence": "supported",
-                        "target": "https://lab.example.test",
-                        "summary": "Valid structured finding for heartbeat test.",
-                    }
-                ],
-            },
-        )
-        self.started = asyncio.Event()
-        self.release = asyncio.Event()
-
-    async def run(self, request: object) -> WorkloadResult:
-        self.requests.append(request)
-        self.started.set()
-        await self.release.wait()
-        return await super().run(request)
-
-
-class _RecordingPentestRegistry:
-    """Registry stand-in that validates requests into the launcher contract.
-
-    The real ``DockerWorkloadLauncher`` dereferences ``request.profile`` and
-    ``request.request``, so the activity must hand the launcher a
-    ``ValidatedWorkloadRequest`` rather than the plain ``WorkloadRequest``
-    returned by ``parse_workload_request``. This records every validated
-    request so tests can assert the registry was consulted before launch.
-    """
-
-    def __init__(self) -> None:
-        self.requests: list[object] = []
-
-    def validate_request(self, request, *, workflow_docker_mode=None):
-        self.requests.append(request)
-        return ValidatedWorkloadRequest(
-            request=request,
-            profile=None,
-            ownership=request.ownership_metadata(
-                workflow_docker_mode=workflow_docker_mode or "profiles"
-            ),
-            containerName=request.container_name,
-        )
-
-class _FakePentestLeaseManager:
-    def __init__(self, client_adapter: object | None = None) -> None:
-        self.client_adapter = client_adapter
-        self.events: list[tuple[str, dict[str, Any]]] = []
-
-    async def acquire(
-        self,
-        *,
-        runtime_id: str,
-        profile_id: str,
-        owner: str,
-        metadata: dict[str, Any],
-    ) -> str:
-        self.events.append(
-            (
-                "acquire",
-                {
-                    "runtime_id": runtime_id,
-                    "profile_id": profile_id,
-                    "owner": owner,
-                    "metadata": dict(metadata),
-                },
-            )
-        )
-        return f"lease:{owner}"
-
-    async def release(
-        self,
-        *,
-        runtime_id: str,
-        profile_id: str,
-        owner: str,
-        lease_id: str,
-    ) -> None:
-        self.events.append(
-            (
-                "release",
-                {
-                    "runtime_id": runtime_id,
-                    "profile_id": profile_id,
-                    "owner": owner,
-                    "lease_id": lease_id,
-                },
-            )
-        )
-
-    async def record_cooldown(
-        self,
-        *,
-        runtime_id: str,
-        profile_id: str,
-        owner: str,
-        cooldown_seconds: int,
-        reason: str,
-    ) -> None:
-        self.events.append(
-            (
-                "cooldown",
-                {
-                    "runtime_id": runtime_id,
-                    "profile_id": profile_id,
-                    "owner": owner,
-                    "cooldown_seconds": cooldown_seconds,
-                    "reason": reason,
-                },
-            )
-        )
-
-
-class _SupervisedPentestHandle:
-    def __init__(
-        self,
-        *,
-        result_after_polls: int | None = 2,
-        result_status: str = "succeeded",
-        poll_error: Exception | None = None,
-    ) -> None:
-        self.result_after_polls = result_after_polls
-        self.result_status = result_status
-        self.poll_error = poll_error
-        self.polls = 0
-        self.stops: list[int] = []
-        self.removed = False
-
-    async def poll(self) -> WorkloadResult | None:
-        self.polls += 1
-        if self.poll_error is not None:
-            raise self.poll_error
-        if self.result_after_polls is None or self.polls < self.result_after_polls:
-            return None
-        return WorkloadResult.model_validate(
-            {
-                "requestId": "supervised-run-123",
-                "profileId": PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
-                "status": self.result_status,
-                "exitCode": 0 if self.result_status == "succeeded" else 2,
-                "stdoutRef": "file:/tmp/artifacts/pentest/runtime/stdout.log",
-                "stderrRef": "file:/tmp/artifacts/pentest/runtime/stderr.log",
-                "diagnosticsRef": "file:/tmp/artifacts/pentest/runtime/diagnostics.json",
-                "outputRefs": {
-                    "report.primary": "file:/tmp/artifacts/pentest/findings/findings.report.md",
-                    "report.summary": "file:/tmp/artifacts/pentest/findings/findings.summary.md",
-                    "report.structured": "file:/tmp/artifacts/pentest/findings/findings.normalizer-input.json",
-                    "report.evidence": "file:/tmp/artifacts/pentest/evidence/bundle.tar.zst",
-                },
-            }
-        )
-
-    async def stop(self, *, grace_seconds: int) -> dict[str, object]:
-        self.stops.append(grace_seconds)
-        return {
-            "gracefulTerminationAttempted": True,
-            "killEscalated": True,
-        }
-
-    async def remove(self) -> dict[str, object]:
-        self.removed = True
-        return {"containerRemoved": True}
-
-
-class _SupervisedPentestLauncher:
-    def __init__(self, handle: _SupervisedPentestHandle) -> None:
-        self.handle = handle
-        self.requests: list[object] = []
-
-    async def start(self, request: object) -> _SupervisedPentestHandle:
-        self.requests.append(request)
-        return self.handle
-
-
-@pytest.fixture(autouse=True)
-def _use_fake_pentest_lease_manager(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(
-        (
-            "moonmind.workflows.temporal.activity_runtime."
-            "TemporalPentestProviderLeaseManager"
-        ),
-        _FakePentestLeaseManager,
-    )
-
-async def test_temporal_pentest_provider_lease_manager_acquires_slot_with_update():
-    class _ClientAdapter:
-        def __init__(self) -> None:
-            self.updates: list[tuple[str, str, dict[str, object]]] = []
-            self.signals: list[tuple[str, str, dict[str, object]]] = []
-
-        async def update_workflow(
-            self, workflow_id: str, update_name: str, arg: dict[str, object]
-        ) -> dict[str, object]:
-            self.updates.append((workflow_id, update_name, arg))
-            return {
-                "profile_id": "claude_anthropic",
-                "lease_id": "owner-1",
-            }
-
-        async def signal_workflow(
-            self, workflow_id: str, signal_name: str, arg: dict[str, object]
-        ) -> None:
-            self.signals.append((workflow_id, signal_name, arg))
-
-    client = _ClientAdapter()
-    manager = TemporalPentestProviderLeaseManager(client)
-
-    lease_id = await manager.acquire(
-        runtime_id="claude_code",
-        profile_id="claude_anthropic",
-        owner="owner-1",
-        metadata={"target_hash": "hash-1"},
-    )
-
-    assert lease_id == "owner-1"
-    assert client.signals == []
-    assert client.updates == [
-        (
-            "provider-profile-manager:claude_code",
-            "AcquireSlot",
-            {
-                "requester_workflow_id": "owner-1",
-                "runtime_id": "claude_code",
-                "execution_profile_ref": "claude_anthropic",
-                "metadata": {"target_hash": "hash-1"},
-            },
-        )
-    ]
-
-async def test_temporal_pentest_provider_lease_manager_waits_for_profile_readiness(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    sleeps: list[float] = []
-
-    async def _sleep(seconds: float) -> None:
-        sleeps.append(seconds)
-
-    monkeypatch.setattr(activity_runtime_module.asyncio, "sleep", _sleep)
-
-    class _WorkflowHandle:
-        def __init__(self) -> None:
-            self.queries = 0
-
-        async def query(self, query_name: str) -> dict[str, object]:
-            assert query_name == "get_state"
-            self.queries += 1
-            if self.queries < 3:
-                return {"profiles": {}}
-            return {"profiles": {"claude_anthropic": {"enabled": True}}}
-
-    class _TemporalClient:
-        def __init__(self) -> None:
-            self.handle = _WorkflowHandle()
-            self.started: list[tuple[str, dict[str, object], str]] = []
-
-        async def start_workflow(
-            self,
-            workflow_name: str,
-            arg: dict[str, object],
-            *,
-            id: str,
-            task_queue: str,
-        ) -> None:
-            self.started.append((workflow_name, arg, id))
-
-        def get_workflow_handle(self, workflow_id: str) -> _WorkflowHandle:
-            assert workflow_id == "provider-profile-manager:claude_code"
-            return self.handle
-
-    class _ClientAdapter:
-        def __init__(self) -> None:
-            self.client = _TemporalClient()
-            self.updates: list[tuple[str, str, dict[str, object]]] = []
-
-        async def get_client(self) -> _TemporalClient:
-            return self.client
-
-        async def update_workflow(
-            self, workflow_id: str, update_name: str, arg: dict[str, object]
-        ) -> dict[str, object]:
-            self.updates.append((workflow_id, update_name, arg))
-            return {
-                "profile_id": "claude_anthropic",
-                "lease_id": "owner-1",
-            }
-
-    client = _ClientAdapter()
-    manager = TemporalPentestProviderLeaseManager(client)
-
-    lease_id = await manager.acquire(
-        runtime_id="claude_code",
-        profile_id="claude_anthropic",
-        owner="owner-1",
-        metadata={},
-    )
-
-    assert lease_id == "owner-1"
-    assert client.client.handle.queries == 3
-    assert sleeps == [1.0, 1.0]
-    assert client.client.started == [
-        (
-            "MoonMind.ProviderProfileManager",
-            {"runtime_id": "claude_code"},
-            "provider-profile-manager:claude_code",
-        )
-    ]
-    assert client.updates == [
-        (
-            "provider-profile-manager:claude_code",
-            "AcquireSlot",
-            {
-                "requester_workflow_id": "owner-1",
-                "runtime_id": "claude_code",
-                "execution_profile_ref": "claude_anthropic",
-                "metadata": {},
-            },
-        )
-    ]
-
-async def test_temporal_pentest_provider_lease_manager_fails_closed_without_updates():
-    class _ClientAdapter:
-        async def signal_workflow(
-            self, workflow_id: str, signal_name: str, arg: dict[str, object]
-        ) -> None:
-            raise AssertionError("acquire must not use asynchronous request_slot signals")
-
-    manager = TemporalPentestProviderLeaseManager(_ClientAdapter())
-
-    with pytest.raises(RuntimeError, match="workflow updates"):
-        await manager.acquire(
-            runtime_id="claude_code",
-            profile_id="claude_anthropic",
-            owner="owner-1",
-            metadata={},
-        )
-
-async def test_pentest_heartbeat_helper_emits_compact_redacted_payload(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    emitted: list[dict[str, object]] = []
-
-    monkeypatch.setattr(
-        activity_runtime_module.temporal_activity,
-        "heartbeat",
-        lambda payload: emitted.append(payload),
-    )
-
-    payload = activity_runtime_module.emit_pentest_activity_heartbeat(
-        phase="running",
-        agent_run_id="run-123",
-        step_id="step-pentest",
-        attempt=1,
-        message="running with token=secret-value",
-        metadata={
-            "stdout": "raw stdout body must be dropped",
-            "safe": "password=hunter2",
-        },
-    )
-
-    assert emitted == [payload]
-    assert payload["phase"] == "running"
-    assert payload["message"] == "running with token=[REDACTED]"
-    assert payload["metadata"] == {"safe": "password=[REDACTED]"}
-    assert "secret-value" not in str(payload)
-    assert "raw stdout body" not in str(payload)
-
-async def test_security_pentest_execute_fails_closed_before_runner_when_disabled_by_operator_override(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    # Discovery/execution defaults to enabled (MM-845); the operator disable
-    # override (MOONMIND_PENTEST_ENABLED=false) must still fail closed before
-    # the runner when the policy flag is omitted and falls back to settings.
-    monkeypatch.setattr(settings.pentest, "enabled", False)
-    launcher = _FakePentestLauncher()
-    activities = TemporalAgentRuntimeActivities(workload_launcher=launcher)
-
-    payload = _pentest_activity_payload()["request"]
-    payload.pop("pentest_enabled")
-
-    result = await activities.security_pentest_execute({"request": payload})
-
-    assert result["status"] == "policy_denied"
-    assert result["execution_policy"]["max_attempts"] == 1
-    assert result["failure_classification"]["failure_kind"] == "policy_denied"
-    assert result["failure_classification"]["interaction_state"] == "pre_interaction"
-    assert result["terminal_cleanup"]["terminal_reason"] == "failure"
-    assert launcher.requests == []
-
-
-async def test_security_pentest_execute_honors_explicit_disabled_payload_flag(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    # In-flight payloads that recorded an explicit pentest_enabled=False must
-    # keep failing closed even though discovery now defaults to enabled.
-    monkeypatch.setattr(settings.pentest, "enabled", True)
-    launcher = _FakePentestLauncher()
-    activities = TemporalAgentRuntimeActivities(workload_launcher=launcher)
-
-    payload = _pentest_activity_payload(pentest_enabled=False)["request"]
-
-    result = await activities.security_pentest_execute({"request": payload})
-
-    assert result["status"] == "policy_denied"
-    assert result["failure_classification"]["failure_kind"] == "policy_denied"
-    assert result["failure_classification"]["interaction_state"] == "pre_interaction"
-    assert launcher.requests == []
-
-async def test_security_pentest_execute_malformed_attempt_returns_validation_failure():
-    launcher = _FakePentestLauncher()
-    activities = TemporalAgentRuntimeActivities(workload_launcher=launcher)
-    payload = dict(_pentest_activity_payload()["request"])
-    payload["attempt"] = "not-an-int"
-
-    result = await activities._security_pentest_execute_trusted_internal(
-        {"request": payload}
-    )
-
-    assert result["status"] == "validation_failed"
-    assert result["failure_classification"]["failure_kind"] == "policy_denied"
-    assert result["failure_classification"]["interaction_state"] == "pre_interaction"
-    assert launcher.requests == []
-
-async def test_security_pentest_execute_emits_all_phase_heartbeats(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    emitted: list[dict[str, object]] = []
-    monkeypatch.setattr(
-        activity_runtime_module.temporal_activity,
-        "heartbeat",
-        lambda payload: emitted.append(payload),
-    )
-    monkeypatch.setattr(
-        activity_runtime_module,
-        "_PENTEST_RUNNING_HEARTBEAT_INTERVAL_SECONDS",
-        0.01,
-    )
-    activities = TemporalAgentRuntimeActivities(
-        workload_launcher=_FileWritingPentestLauncher(),
-        workload_registry=_RecordingPentestRegistry(),
-    )
-
-    result = await activities._security_pentest_execute_trusted_internal(
-        _pentest_activity_payload()
-    )
-
-    assert result["status"] == "completed"
-    phases = [str(item["phase"]) for item in emitted]
-    for phase in (
-        "validating_scope",
-        "waiting_for_profile_slot",
-        "materializing_inputs",
-        "launching_container",
-        "running",
-        "publishing_artifacts",
-        "normalizing_findings",
-        "cleanup",
-    ):
-        assert phase in phases
-
-async def test_security_pentest_execute_repeats_running_heartbeats(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    emitted: list[dict[str, object]] = []
-    monkeypatch.setattr(
-        activity_runtime_module.temporal_activity,
-        "heartbeat",
-        lambda payload: emitted.append(payload),
-    )
-    monkeypatch.setattr(
-        activity_runtime_module,
-        "_PENTEST_RUNNING_HEARTBEAT_INTERVAL_SECONDS",
-        0.01,
-    )
-    launcher = _BlockingPentestLauncher()
-    activities = TemporalAgentRuntimeActivities(
-        workload_launcher=launcher,
-        workload_registry=_RecordingPentestRegistry(),
-    )
-
-    task = asyncio.create_task(
-        activities._security_pentest_execute_trusted_internal(
-            _pentest_activity_payload()
-        )
-    )
-    await asyncio.wait_for(launcher.started.wait(), timeout=1)
-    await asyncio.sleep(0.035)
-    launcher.release.set()
-    result = await task
-
-    assert result["status"] == "completed"
-    running = [item for item in emitted if item["phase"] == "running"]
-    assert len(running) >= 2
-
-async def test_security_pentest_execute_fails_closed_before_runner_without_scope():
-    launcher = _FakePentestLauncher()
-    activities = TemporalAgentRuntimeActivities(workload_launcher=launcher)
-
-    result = await activities._security_pentest_execute_trusted_internal(
-        _pentest_activity_payload(approved_scope=None)
-    )
-
-    assert result["status"] == "validation_failed"
-    assert result["failure_classification"]["failure_kind"] == "policy_denied"
-    assert "missing_approved_scope" in str(result["diagnostics"])
-    assert launcher.requests == []
-
-async def test_security_pentest_execute_loads_scope_artifact_before_launch_plan():
-    artifact_service = _FakePentestArtifactService(
-        {"art_scope_valid": _scope_artifact_bytes()}
-    )
-    activities = TemporalAgentRuntimeActivities(
-        artifact_service=artifact_service,
-        workload_launcher=_FileWritingPentestLauncher(),
-        workload_registry=_RecordingPentestRegistry(),
-    )
-
-    result = await activities.security_pentest_execute(
-        _pentest_artifact_activity_payload()
-    )
-
-    assert artifact_service.reads == [("art_scope_valid", "user-security")]
-    assert result["status"] == "completed"
-    assert result["launch_plan"]["profile_id"] == PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID
-
-
-async def test_security_pentest_execute_applies_url_first_defaults_before_validation():
-    artifact_service = _FakePentestArtifactService(
-        {
-            "art_scope_valid": _scope_artifact_bytes(
-                allowed_actions=["recon", "scan", "content_discovery"],
-            )
-        }
-    )
-    registry = _RecordingPentestRegistry()
-    activities = TemporalAgentRuntimeActivities(
-        artifact_service=artifact_service,
-        workload_launcher=_FileWritingPentestLauncher(),
-        workload_registry=registry,
-    )
-    payload = _pentest_artifact_activity_payload()
-    request = payload["request"]
-    assert isinstance(request, dict)
-    for key in (
-        "operation_mode",
-        "runner_profile_id",
-        "execution_profile_ref",
-        "time_budget_minutes",
-        "evidence_level",
-    ):
-        request.pop(key)
-
-    result = await activities.security_pentest_execute(payload)
-
-    assert result["status"] == "completed"
-    assert registry.requests[0].env_overrides["MM_PENTEST_MODE"] == "recon_only"
-    assert registry.requests[0].profile_id == PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID
-    assert result["runner_profile_id"] == PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID
-    assert result["execution_profile_ref"] == PENTEST_CLAUDE_OAUTH_PROFILE_ID
-
-
-async def test_security_pentest_execute_accepts_workflow_invocation_envelope(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", "/custom/agent_jobs")
-    artifact_service = _FakePentestArtifactService(
-        {"art_scope_valid": _scope_artifact_bytes()}
-    )
-    launcher = _FakePentestLauncher()
-    materialized_requests: list[object] = []
-    activities = TemporalAgentRuntimeActivities(
-        artifact_service=artifact_service,
-        workload_launcher=launcher,
-        workload_registry=_RecordingPentestRegistry(),
-    )
-
-    def _record_materialization(**kwargs):
-        materialized_requests.append(kwargs["request"])
-        return {}
-
-    monkeypatch.setattr(
-        activities._pentest_activities,
-        "_materialize_pentest_input_files",
-        _record_materialization,
+    route = build_default_activity_catalog().resolve_activity(
+        "agent_runtime.cleanup_managed_runtime_files"
     )
+    assert route.timeouts.start_to_close_seconds == 1800
 
-    result = await activities.security_pentest_execute(
-        {
-            "registry_snapshot_ref": "art_registry",
-            "principal": "user-security",
-            "pentest_enabled": True,
-            "invocation_payload": {
-                "id": "step-pentest",
-                "tool": {
-                    "type": "skill",
-                    "name": "security.pentest.run",
-                },
-                "inputs": {
-                    "pentest_enabled": False,
-                    "target": "https://lab.example.test",
-                    "operation_mode": "validate_hypothesis",
-                    "scope_artifact_ref": "art_scope_valid",
-                    "runner_profile_id": PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
-                    "execution_profile_ref": PENTEST_CLAUDE_OAUTH_PROFILE_ID,
-                    "time_budget_minutes": 60,
-                    "evidence_level": "standard",
-                    "agent_run_id": "caller-supplied-run",
-                    "step_id": "caller-supplied-step",
-                    "attempt": 99,
-                    "principal_id": "caller-supplied-principal",
-                    "artifacts_dir": "/tmp/caller-supplied-artifacts",
-                },
-                "options": {},
-            },
-            "context": {
-                "namespace": "default",
-                "workflow_id": "mm:workflow-123",
-                "run_id": "run-123",
-                "node_id": "step-pentest",
-            },
-            "idempotency_key": (
-                "mm:workflow-123:run-123:step-pentest:execution:1:execute"
-            ),
-        }
-    )
-
-    assert artifact_service.reads == [("art_scope_valid", "user-security")]
-    assert result["status"] == "failed"
-    assert result["normalization_status"] == "normalizer_error"
-    assert result["launch_plan"]["profile_id"] == PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID
-    assert len(launcher.requests) == 1
-    assert len(materialized_requests) == 1
-    request = materialized_requests[0]
-    assert request.agent_run_id == "mm:workflow-123"
-    assert request.step_id == "step-pentest"
-    assert request.attempt == 1
-    assert request.principal_id == "user-security"
-    assert (
-        request.artifacts_dir
-        == "/custom/agent_jobs/mm:workflow-123/artifacts/step-pentest"
-    )
 
-@pytest.mark.parametrize(
-    ("artifact_id", "artifact_payload", "message"),
-    [
-        ("art_scope_missing", None, "scope_artifact_unreadable"),
-        ("art_scope_malformed", b"{not-json", "scope_artifact_malformed"),
-        (
-            "art_scope_structurally_invalid",
-            json.dumps({"scope_id": "scope-123"}).encode("utf-8"),
-            "scope_artifact_invalid",
-        ),
-    ],
-)
-async def test_security_pentest_execute_maps_unreadable_scope_artifacts(
-    artifact_id: str,
-    artifact_payload: bytes | None,
-    message: str,
-):
-    artifacts = {} if artifact_payload is None else {artifact_id: artifact_payload}
-    launcher = _FakePentestLauncher()
-    activities = TemporalAgentRuntimeActivities(
-        artifact_service=_FakePentestArtifactService(artifacts),
-        workload_launcher=launcher,
-        workload_registry=_RecordingPentestRegistry(),
-    )
 
-    result = await activities.security_pentest_execute(
-        _pentest_artifact_activity_payload(scope_artifact_ref=artifact_id)
-    )
 
-    assert result["status"] == "validation_failed"
-    assert "INVALID_SCOPE" in str(result["diagnostics"])
-    assert message in str(result["diagnostics"])
-    assert launcher.requests == []
-
-async def test_security_pentest_execute_rejects_ordinary_inline_scope_without_artifact():
-    launcher = _FakePentestLauncher()
-    activities = TemporalAgentRuntimeActivities(workload_launcher=launcher)
-
-    result = await activities.security_pentest_execute(
-        _pentest_activity_payload(
-            scope_artifact_ref="",
-            approved_scope=_approved_pentest_scope(),
-            trusted_internal_execution=False,
-        )
-    )
 
-    assert result["status"] == "validation_failed"
-    diagnostics = str(result["diagnostics"])
-    assert "INVALID_SCOPE" in diagnostics
-    assert (
-        "scope_artifact_ref" in diagnostics
-        or "inline_scope_requires_trusted_internal_execution" in diagnostics
-    )
-    assert launcher.requests == []
-
-async def test_security_pentest_execute_allows_trusted_internal_inline_scope():
-    activities = TemporalAgentRuntimeActivities(
-        workload_launcher=_FakePentestLauncher(),
-        workload_registry=_RecordingPentestRegistry(),
-    )
 
-    result = await activities._security_pentest_execute_trusted_internal(
-        _pentest_activity_payload(
-            scope_artifact_ref=None,
-            trusted_internal_execution=True,
-        )
-    )
 
-    assert result["status"] == "completed"
-    assert result["launch_plan"]["profile_id"] == PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID
 
 
-async def test_security_pentest_execute_ignores_caller_supplied_trust_flag():
-    """A registry-dispatched submission cannot self-authorize an inline scope."""
 
-    launcher = _FakePentestLauncher()
-    activities = TemporalAgentRuntimeActivities(workload_launcher=launcher)
 
-    result = await activities.security_pentest_execute(
-        _pentest_activity_payload(
-            scope_artifact_ref=None,
-            trusted_internal_execution=True,
-        )
-    )
 
-    assert result["status"] == "validation_failed"
-    diagnostics = str(result["diagnostics"])
-    assert "INVALID_SCOPE" in diagnostics
-    assert (
-        "inline_scope_requires_trusted_internal_execution" in diagnostics
-        or "scope_artifact_ref" in diagnostics
-    )
-    assert launcher.requests == []
-
-@pytest.mark.parametrize(
-    ("scope_overrides", "request_overrides", "error_code", "reason"),
-    [
-        ({"expires_at": "2020-01-01T00:00:00Z"}, {}, "INVALID_SCOPE", "scope_expired"),
-        ({}, {"principal_id": "user-other"}, "PERMISSION_DENIED", "principal_not_authorized"),
-        (
-            {"targets": [{"kind": "url", "value": "https://other.example.test"}]},
-            {},
-            "UNAPPROVED_TARGET",
-            "target_outside_scope",
-        ),
-        (
-            {"allowed_runner_profiles": ["missing-profile"]},
-            {},
-            "UNSUPPORTED_PROFILE",
-            "runner_profile_not_allowed",
-        ),
-        (
-            {"allowed_actions": ["auth_testing"]},
-            {},
-            "UNSUPPORTED_PROFILE",
-            "operation_mode_not_allowed",
-        ),
-        (
-            {"required_network_attachment_type": "vpn"},
-            {},
-            "UNSUPPORTED_PROFILE",
-            "network_attachment_required",
-        ),
-        (
-            {"metadata": {"idempotency_safety": "ambiguous"}},
-            {},
-            "NON_IDEMPOTENT_OPERATION",
-            "idempotency_safety_ambiguous",
-        ),
-    ],
-)
-async def test_security_pentest_execute_returns_validation_failure_before_side_effects(
-    scope_overrides: dict[str, object],
-    request_overrides: dict[str, object],
-    error_code: str,
-    reason: str,
-):
-    launcher = _FakePentestLauncher()
-    activities = TemporalAgentRuntimeActivities(
-        artifact_service=_FakePentestArtifactService(
-            {"art_scope_valid": _scope_artifact_bytes(**scope_overrides)}
-        ),
-        workload_launcher=launcher,
-        workload_registry=_RecordingPentestRegistry(),
-    )
 
-    result = await activities.security_pentest_execute(
-        _pentest_artifact_activity_payload(**request_overrides)
-    )
 
-    assert result["status"] == "validation_failed"
-    diagnostics = str(result["diagnostics"])
-    assert error_code in diagnostics
-    assert reason in diagnostics
-    assert launcher.requests == []
-
-async def test_security_pentest_execute_denies_without_retry_when_workflow_docker_disabled():
-    activities = TemporalAgentRuntimeActivities(workflow_docker_mode="disabled")
-
-    with pytest.raises(temporal_exceptions.ApplicationError) as exc_info:
-        await activities.security_pentest_execute(_pentest_activity_payload())
-
-    message = str(exc_info.value)
-    assert "docker_workflows_disabled" in message
-    assert "policy_denied" in message
-    assert exc_info.value.type == "docker_workflows_disabled"
-    assert exc_info.value.non_retryable is True
-
-async def test_security_pentest_execute_reaches_launch_plan_after_scope_validation():
-    launcher = _FakePentestLauncher()
-    registry = _RecordingPentestRegistry()
-    activities = TemporalAgentRuntimeActivities(
-        workload_launcher=launcher,
-        workload_registry=registry,
-    )
 
-    result = await activities._security_pentest_execute_trusted_internal(
-        _pentest_activity_payload()
-    )
 
-    assert result["status"] == "completed"
-    assert result["launch_plan"]["profile_id"] == PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID
-    assert len(launcher.requests) == 1
-    # The registry must validate the parsed request before the launcher runs it,
-    # and the launcher must receive the validated request (not the raw one).
-    assert len(registry.requests) == 1
-    assert isinstance(launcher.requests[0], ValidatedWorkloadRequest)
-
-async def test_security_pentest_execute_returns_safe_launch_plan_after_scope_validation():
-    launcher = _FakePentestLauncher()
-    activities = TemporalAgentRuntimeActivities(
-        workload_launcher=launcher,
-        workload_registry=_RecordingPentestRegistry(),
-    )
 
-    result = await activities._security_pentest_execute_trusted_internal(
-        _pentest_activity_payload()
-    )
 
-    assert result["status"] == "completed"
-    assert result["target"] == "https://lab.example.test"
-    assert result["runner_profile_id"] == PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID
-    launch_plan = result["launch_plan"]
-    assert launch_plan["profile_id"] == PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID
-    assert launch_plan["container_name"] == "mm-pentest-run-123-step-pentest-1"
-    assert launch_plan["network_policy"] == "bridge_approved_lab"
-    assert launch_plan["linux_capabilities"] == []
-    assert launch_plan["devices"] == []
-    assert launch_plan["labels"]["moonmind.tool_name"] == "security.pentest.run"
-    assert launch_plan["labels"]["moonmind.runtime_id"] == "pentestgpt"
-    assert launch_plan["labels"]["moonmind.operation_mode"] == "validate_hypothesis"
-    validated_request = launcher.requests[0]
-    assert validated_request.request.runtime_id == "pentestgpt"
-    assert validated_request.ownership.labels["moonmind.runtime_id"] == "pentestgpt"
-
-async def test_security_pentest_execute_includes_secret_safe_provider_preparation():
-    activities = TemporalAgentRuntimeActivities(
-        workload_launcher=_FakePentestLauncher(),
-        workload_registry=_RecordingPentestRegistry(),
-    )
 
-    result = await activities._security_pentest_execute_trusted_internal(
-        _pentest_activity_payload()
-    )
 
-    provider_profile = result["provider_profile"]
-    assert provider_profile["profile_id"] == PENTEST_CLAUDE_OAUTH_PROFILE_ID
-    assert provider_profile["runtime_id"] == "pentestgpt"
-    assert provider_profile["provider_id"] == "anthropic"
-    assert provider_profile["env"]["PENTESTGPT_AUTH_MODE"] == "manual"
-    assert provider_profile["env"]["LANGFUSE_ENABLED"] == "false"
-    assert provider_profile["env"]["CLAUDE_HOME"] == "/home/pentester/.claude"
-    assert provider_profile["secret_env"] == {}
-    assert provider_profile["secret_refs"] == {}
-    assert set(provider_profile["clear_env_keys"]) == {
-        "ANTHROPIC_API_KEY",
-        "ANTHROPIC_AUTH_TOKEN",
-        "CLAUDE_API_KEY",
-        "CLAUDE_CODE_OAUTH_TOKEN",
-        "OPENAI_API_KEY",
-    }
-    assert provider_profile["force_non_interactive"] is True
-    assert result["provider_lease"]["runtime_id"] == "claude_code"
-    assert result["provider_lease"]["profile_id"] == "claude_anthropic"
-    assert result["provider_lease"]["lease_required"] is True
-    assert "sk-" not in str(result)
-
-async def test_security_pentest_execute_does_not_resolve_secret_refs_for_oauth(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    resolved_refs: list[object] = []
-
-    async def _fake_resolver(ref: object, *, field_name: str) -> str:
-        resolved_refs.append(ref)
-        raise AssertionError("OAuth Pentest path must not resolve API key secrets")
-
-    monkeypatch.setattr(
-        "moonmind.workflows.temporal.activity_runtime.resolve_managed_api_key_reference",
-        _fake_resolver,
-    )
-    launcher = _FakePentestLauncher()
-    activities = TemporalAgentRuntimeActivities(
-        workload_launcher=launcher,
-        workload_registry=_RecordingPentestRegistry(),
-    )
 
-    result = await activities._security_pentest_execute_trusted_internal(
-        _pentest_activity_payload()
-    )
 
-    assert result["status"] == "completed"
-    assert resolved_refs == []
-    request = launcher.requests[0].request
-    assert "ANTHROPIC_API_KEY" not in request.env_overrides
-    assert request.env_overrides["PENTESTGPT_AUTH_MODE"] == "manual"
-
-async def test_security_pentest_execute_honors_oauth_provider_runtime_state():
-    activities = TemporalAgentRuntimeActivities(
-        workload_launcher=_FakePentestLauncher(),
-        workload_registry=_RecordingPentestRegistry(),
-    )
 
-    result = await activities._security_pentest_execute_trusted_internal(
-        _pentest_activity_payload(
-            execution_profile_ref=None,
-            provider_selector={"tags_all": ["oauth"]},
-            provider_runtime_state={
-                PENTEST_CLAUDE_OAUTH_PROFILE_ID: {
-                    "profile_id": PENTEST_CLAUDE_OAUTH_PROFILE_ID,
-                    "auth_state": "connected",
-                    "oauth_volume_present": True,
-                }
-            },
-        )
-    )
 
-    assert result["provider_profile"]["profile_id"] == PENTEST_CLAUDE_OAUTH_PROFILE_ID
-    assert result["provider_lease"]["profile_id"] == "claude_anthropic"
-
-async def test_security_pentest_execute_acquires_lease_after_scope_validation_without_secret_resolution(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    order: list[str] = []
-    lease_manager = _FakePentestLeaseManager()
-    artifact_service = _FakePentestArtifactService(
-        {"art_scope_valid": _scope_artifact_bytes()}
-    )
 
-    original_read = artifact_service.read
 
-    async def _recording_read(**kwargs):
-        order.append("scope_read")
-        return await original_read(**kwargs)
 
-    async def _fake_resolver(ref: object, *, field_name: str) -> str:
-        order.append("secret_resolve")
-        return "sk-resolved-provider-value"
 
-    async def _recording_acquire(**kwargs):
-        order.append("lease_acquire")
-        return await _FakePentestLeaseManager.acquire(lease_manager, **kwargs)
 
-    artifact_service.read = _recording_read  # type: ignore[method-assign]
-    lease_manager.acquire = _recording_acquire  # type: ignore[method-assign]
-    monkeypatch.setattr(
-        "moonmind.workflows.temporal.activity_runtime.resolve_managed_api_key_reference",
-        _fake_resolver,
-    )
-    activities = TemporalAgentRuntimeActivities(
-        artifact_service=artifact_service,
-        workload_launcher=_FakePentestLauncher(),
-        workload_registry=_RecordingPentestRegistry(),
-        pentest_provider_lease_manager=lease_manager,
-    )
 
-    result = await activities.security_pentest_execute(
-        _pentest_artifact_activity_payload()
-    )
 
-    assert result["status"] == "completed"
-    assert order == ["scope_read", "lease_acquire"]
-    acquire_event = lease_manager.events[0]
-    assert acquire_event[0] == "acquire"
-    payload = acquire_event[1]
-    assert payload["owner"] == "pentest:run-123:step-pentest:1"
-    assert payload["metadata"] == {
-        "tool": "security.pentest.run",
-        "runtime_id": "claude_code",
-        "profile_id": "claude_anthropic",
-        "agent_run_id": "run-123",
-        "step_id": "step-pentest",
-        "attempt": 1,
-        "target_hash": "af009b45becaa02be2c95bfdd8a055c52fc3c0ec440b24d73fb14783c9b7786e",
-        "mode": "validate_hypothesis",
-        "runner_profile": PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
-    }
-    assert "https://lab.example.test" not in str(payload["metadata"])
-    assert "sk-resolved-provider-value" not in str(result)
-
-async def test_security_pentest_execute_does_not_acquire_lease_for_invalid_scope():
-    lease_manager = _FakePentestLeaseManager()
-    launcher = _FakePentestLauncher()
-    activities = TemporalAgentRuntimeActivities(
-        artifact_service=_FakePentestArtifactService(
-            {"art_scope_valid": _scope_artifact_bytes(expires_at="2020-01-01T00:00:00Z")}
-        ),
-        workload_launcher=launcher,
-        workload_registry=_RecordingPentestRegistry(),
-        pentest_provider_lease_manager=lease_manager,
-    )
 
-    result = await activities.security_pentest_execute(
-        _pentest_artifact_activity_payload()
-    )
 
-    assert result["status"] == "validation_failed"
-    assert lease_manager.events == []
-    assert launcher.requests == []
-
-async def test_security_pentest_execute_releases_acquired_lease_on_success():
-    lease_manager = _FakePentestLeaseManager()
-    activities = TemporalAgentRuntimeActivities(
-        workload_launcher=_FakePentestLauncher(),
-        workload_registry=_RecordingPentestRegistry(),
-        pentest_provider_lease_manager=lease_manager,
-    )
 
-    result = await activities._security_pentest_execute_trusted_internal(
-        _pentest_activity_payload()
-    )
 
-    assert result["status"] == "completed"
-    assert [event[0] for event in lease_manager.events] == ["acquire", "release"]
-    assert result["terminal_cleanup"]["provider_lease_released"] is True
-    assert result["provider_lease"]["lease_id"] == "lease:pentest:run-123:step-pentest:1"
-
-async def test_security_pentest_execute_releases_acquired_lease_on_workload_failure():
-    lease_manager = _FakePentestLeaseManager()
-    activities = TemporalAgentRuntimeActivities(
-        workload_launcher=_FakePentestLauncher(status="failed"),
-        workload_registry=_RecordingPentestRegistry(),
-        pentest_provider_lease_manager=lease_manager,
-    )
 
-    result = await activities._security_pentest_execute_trusted_internal(
-        _pentest_activity_payload()
-    )
 
-    assert result["status"] == "failed"
-    assert [event[0] for event in lease_manager.events] == ["acquire", "release"]
-    assert result["terminal_cleanup"]["provider_lease_released"] is True
-
-async def test_security_pentest_execute_reports_secret_safe_provider_cooldown():
-    lease_manager = _FakePentestLeaseManager()
-    activities = TemporalAgentRuntimeActivities(
-        workload_launcher=_FakePentestLauncher(),
-        workload_registry=_RecordingPentestRegistry(),
-        pentest_provider_lease_manager=lease_manager,
-    )
 
-    result = await activities._security_pentest_execute_trusted_internal(
-        _pentest_activity_payload(
-            provider_failure={"category": "provider_429"},
-        )
-    )
 
-    assert result["status"] == "provider_cooldown"
-    assert result["provider_cooldown"] == {
-        "profile_id": "claude_anthropic",
-        "cooldown_seconds": 300,
-        "failure_category": "provider_429",
-        "retry_allowed": False,
-    }
-    assert result["provider_lease"]["release_required"] is True
-    assert [event[0] for event in lease_manager.events] == [
-        "acquire",
-        "cooldown",
-        "release",
-    ]
-    assert lease_manager.events[1][1]["reason"] == "provider_429"
-    assert result["terminal_cleanup"]["provider_lease_released"] is True
-    assert "OPENROUTER_API_KEY" not in str(result["provider_cooldown"])
-    assert "sk-" not in str(result)
-
-async def test_security_pentest_execute_classifies_lease_manager_failure_as_provider_capacity():
-    class _FailingLeaseManager(_FakePentestLeaseManager):
-        async def acquire(self, **kwargs) -> str:
-            self.events.append(("acquire", dict(kwargs)))
-            raise RuntimeError("slot service unavailable")
-
-    lease_manager = _FailingLeaseManager()
-    launcher = _FakePentestLauncher()
-    activities = TemporalAgentRuntimeActivities(
-        workload_launcher=launcher,
-        workload_registry=_RecordingPentestRegistry(),
-        pentest_provider_lease_manager=lease_manager,
-    )
 
-    result = await activities._security_pentest_execute_trusted_internal(
-        _pentest_activity_payload()
-    )
 
-    assert result["status"] == "provider_capacity_failed"
-    assert result["failure_classification"]["failure_kind"] == "provider_capacity"
-    assert result["failure_classification"]["interaction_state"] == "pre_interaction"
-    assert [event[0] for event in lease_manager.events] == ["acquire"]
-    assert launcher.requests == []
-
-async def test_security_pentest_execute_includes_instruction_materialization_metadata():
-    activities = TemporalAgentRuntimeActivities(
-        workload_launcher=_FakePentestLauncher(),
-        workload_registry=_RecordingPentestRegistry(),
-    )
 
-    result = await activities._security_pentest_execute_trusted_internal(
-        _pentest_activity_payload()
-    )
 
-    bundle = result["instruction_bundle"]
-    paths = result["runtime_paths"]
-    invocation = result["wrapper_invocation"]
-
-    assert bundle["target"] == "https://lab.example.test"
-    assert "objective" not in bundle
-    assert bundle["operation_mode"] == "validate_hypothesis"
-    assert "content" not in bundle
-    assert len(bundle["sha256"]) == 64
-    assert paths["instruction_file"] == "/tmp/artifacts/pentest/inputs/instruction.txt"
-    assert paths["input_manifest_file"] == "/tmp/artifacts/pentest/inputs/request.json"
-    assert paths["approved_scope_file"] == (
-        "/tmp/artifacts/pentest/inputs/approved-scope.json"
-    )
-    assert paths["provider_snapshot_file"] == (
-        "/tmp/artifacts/pentest/inputs/provider-snapshot.json"
-    )
-    assert paths["stdout_file"] == "/tmp/artifacts/pentest/runtime/stdout.log"
-    assert paths["stderr_file"] == "/tmp/artifacts/pentest/runtime/stderr.log"
-    assert paths["diagnostics_file"] == "/tmp/artifacts/pentest/runtime/diagnostics.json"
-    assert paths["raw_evidence_file"] == (
-        "/tmp/artifacts/pentest/evidence/pentestgpt-session-export.json"
-    )
-    assert paths["normalizer_input_file"] == (
-        "/tmp/artifacts/pentest/findings/findings.normalizer-input.json"
-    )
-    assert invocation["command"][0] == "--target"
-    assert "--non-interactive" in invocation["command"]
-    assert "--instruction-file" in invocation["command"]
-    assert invocation["env"] == {
-        "MM_PENTEST_TARGET": "https://lab.example.test",
-        "MM_PENTEST_MODE": "validate_hypothesis",
-        "MM_PENTEST_INSTRUCTION_FILE": paths["instruction_file"],
-        "LANGFUSE_ENABLED": "false",
-    }
-    assert "Validate auth bypass hypothesis" not in str(result)
-    assert "Objective:" not in str(invocation["command"])
-    assert "Objective:" not in str(invocation["env"])
-    assert "Objective:" not in str(result["launch_plan"]["labels"])
-    assert "make connect" not in str(result).lower()
-    assert "docker attach" not in str(result).lower()
-
-async def test_security_pentest_execute_includes_publication_metadata_without_session_artifacts(
-    tmp_path: Path,
-):
-    # The runner's structured findings file is authoritative for the published
-    # normalized findings, so the launcher writes it rather than relying on
-    # caller-supplied publication-time findings.
-    activities = TemporalAgentRuntimeActivities(
-        workload_launcher=_FakePentestLauncher(
-            findings_payload={
-                "target": "https://lab.example.test",
-                "operation_mode": "validate_hypothesis",
-                "runner_profile_id": PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
-                "findings": [
-                    {
-                        "finding_id": "finding-1",
-                        "title": "Supported issue",
-                        "severity": "high",
-                        "confidence": "supported",
-                        "target": "https://lab.example.test",
-                        "summary": "Evidence supports issue",
-                    }
-                ],
-                "summary": {
-                    "findings_count": 1,
-                    "confirmed_findings_count": 0,
-                    "high_or_critical_count": 1,
-                },
-            }
-        ),
-        workload_registry=_RecordingPentestRegistry(),
-    )
 
-    result = await activities._security_pentest_execute_trusted_internal(
-        _pentest_activity_payload(
-            artifacts_dir=str(tmp_path / "artifacts"),
-            summary_text="Pentest finished with password=hunter2",
-            findings=[],
-            provider_snapshot_available=True,
-            wrapper_log_available=True,
-        )
-    )
 
-    publication = result["artifact_publication"]
-    finding_set = result["normalized_findings"]
-    live_logs = result["live_log_events"]
-    artifact_names = {item["name"] for item in publication["artifacts"]}
-
-    assert publication["status"] == "complete"
-    assert {
-        "input.manifest",
-        "input.instructions",
-        "runtime.stdout",
-        "runtime.stderr",
-        "runtime.diagnostics",
-        "report.summary",
-        "report.primary",
-        "report.structured",
-        "output.provider_snapshot",
-        "output.logs",
-        "report.evidence",
-    }.issubset(artifact_names)
-    assert result["report_bundle_v"] == 1
-    assert result["primary_report_ref"]
-    assert result["summary_ref"]
-    assert result["structured_ref"]
-    assert result["evidence_refs"]
-    assert result["report_bundle"]["report_type"] == "security_pentest_report"
-    assert result["report_bundle"]["report_scope"] == "final"
-    assert result["report_bundle"]["sensitivity"] == "security_restricted"
-    assert result["report_bundle"]["counts"]["high_or_critical_count"] == 1
-    assert result["severity_counts"] == {"high": 1}
-    assert "session.summary" not in artifact_names
-    assert "session.step_checkpoint" not in artifact_names
-    assert "session.control_event" not in artifact_names
-    assert "session.reset_boundary" not in artifact_names
-    assert publication["restricted_evidence_refs"]
-    assert finding_set["summary"] == {
-        "findings_count": 1,
-        "confirmed_findings_count": 0,
-        "high_or_critical_count": 1,
-    }
-    assert finding_set["findings"][0]["confidence"] == "supported"
-    assert finding_set["normalization_status"] == "ok"
-    assert result["normalization_status"] == "ok"
-    assert result["quarantined_findings_count"] == 0
-    assert result["heartbeat_phases"] == [
-        "validating_scope",
-        "waiting_for_profile_slot",
-        "materializing_inputs",
-        "launching_container",
-        "running",
-        "publishing_artifacts",
-        "normalizing_findings",
-        "cleanup",
-    ]
-    assert any(event["event_type"] == "artifact" for event in live_logs)
-    assert any(event["event_type"] == "annotation" for event in live_logs)
-    assert "hunter2" not in str(result)
-    assert "terminal_control" not in str(live_logs)
-    assert "docker attach" not in str(result).lower()
-
-async def test_security_pentest_execute_publishes_runner_outputs_through_artifact_service(
-    tmp_path: Path,
-):
-    async with temporal_db(tmp_path) as session_maker:
-        async with session_maker() as session:
-            service = TemporalArtifactService(
-                TemporalArtifactRepository(session),
-                store=LocalTemporalArtifactStore(tmp_path / "artifact-store"),
-            )
-            activities = TemporalAgentRuntimeActivities(
-                artifact_service=service,
-                workload_launcher=_FileWritingPentestLauncher(),
-                workload_registry=_RecordingPentestRegistry(),
-            )
-
-            result = await activities._security_pentest_execute_trusted_internal(
-                _pentest_activity_payload(
-                    artifacts_dir=str(tmp_path / "runner-artifacts"),
-                    findings=[],
-                    provider_snapshot_available=True,
-                )
-            )
-
-            assert result["status"] == "completed"
-            artifact_ref_fields = {
-                "stdout_artifact_ref",
-                "stderr_artifact_ref",
-                "diagnostics_artifact_ref",
-                "provider_snapshot_artifact_ref",
-                "primary_report_ref",
-                "summary_ref",
-                "structured_ref",
-                "evidence_bundle_artifact_ref",
-            }
-            for field in artifact_ref_fields:
-                assert str(result[field]).startswith("art_"), field
-
-            validate_report_bundle_result(result["report_bundle"])
-            assert result["report_bundle"]["counts"] == {
-                "findings_count": 1,
-                "confirmed_findings_count": 1,
-                "high_or_critical_count": 1,
-                "severity_counts": {"high": 1},
-            }
-            assert "findings_count" not in result["report_bundle"]
-            assert "high_or_critical_count" not in result["report_bundle"]
-
-            expected_link_types = {
-                "runtime.stdout",
-                "runtime.stderr",
-                "runtime.diagnostics",
-                "output.provider_snapshot",
-                "report.primary",
-                "report.summary",
-                "report.structured",
-                "report.evidence",
-            }
-            by_link_type = {}
-            for link_type in expected_link_types:
-                artifacts = await service.list_for_execution(
-                    namespace="default",
-                    workflow_id="run-123",
-                    run_id="step-pentest-1",
-                    principal="user-security",
-                    link_type=link_type,
-                    latest_only=True,
-                )
-                assert artifacts, link_type
-                by_link_type[link_type] = artifacts[0]
-            assert by_link_type["report.primary"].metadata_json["is_final_report"] is True
-            assert (
-                by_link_type["report.primary"].metadata_json["sensitivity"]
-                == "security_restricted"
-            )
-            _structured_artifact, structured_payload = await service.read(
-                artifact_id=result["report_bundle"]["structured_ref"]["artifact_id"],
-                principal="user-security",
-                allow_restricted_raw=True,
-            )
-            assert isinstance(structured_payload, bytes)
-            assert json.loads(structured_payload.decode("utf-8")) == result[
-                "normalized_findings"
-            ]
-
-
-async def test_security_pentest_execute_preserves_report_refs_for_non_clean_runner_status(
-    tmp_path: Path,
-):
-    target_url = "https://lab.example.test/app"
-
-    async with temporal_db(tmp_path) as session_maker:
-        async with session_maker() as session:
-            service = TemporalArtifactService(
-                TemporalArtifactRepository(session),
-                store=LocalTemporalArtifactStore(tmp_path / "artifact-store"),
-            )
-            activities = TemporalAgentRuntimeActivities(
-                artifact_service=service,
-                workload_launcher=_FileWritingPentestLauncher(status="failed"),
-                workload_registry=_RecordingPentestRegistry(),
-            )
-
-            result = await activities._security_pentest_execute_trusted_internal(
-                _pentest_activity_payload(
-                    artifacts_dir=str(tmp_path / "runner-artifacts"),
-                    target=target_url,
-                    approved_scope={
-                        **_approved_pentest_scope(),
-                        "targets": [
-                            {
-                                "kind": "url",
-                                "value": target_url,
-                            }
-                        ],
-                    },
-                )
-            )
-
-            assert result["status"] == "failed"
-            assert result["normalization_status"] == "runner_failed"
-            assert result["primary_report_ref"].startswith("art_")
-            assert result["summary_ref"].startswith("art_")
-            assert result["structured_ref"].startswith("art_")
-            assert result["evidence_refs"]
-            assert result["report_bundle"]["counts"]["findings_count"] == 0
-            assert result["terminal_cleanup"]["terminal_reason"] == "failure"
-
-            artifacts = await service.list_for_execution(
-                namespace="default",
-                workflow_id="run-123",
-                run_id="step-pentest-1",
-                principal="user-security",
-                link_type="report.primary",
-                latest_only=True,
-            )
-            assert artifacts
-
-
-async def test_security_pentest_execute_publishes_parsed_structured_findings_when_file_is_malformed(
-    tmp_path: Path,
-):
-    async with temporal_db(tmp_path) as session_maker:
-        async with session_maker() as session:
-            service = TemporalArtifactService(
-                TemporalArtifactRepository(session),
-                store=LocalTemporalArtifactStore(tmp_path / "artifact-store"),
-            )
-            activities = TemporalAgentRuntimeActivities(
-                artifact_service=service,
-                workload_launcher=_MalformedFindingsFileLauncher(),
-                workload_registry=_RecordingPentestRegistry(),
-            )
-
-            result = await activities._security_pentest_execute_trusted_internal(
-                _pentest_activity_payload(
-                    artifacts_dir=str(tmp_path / "runner-artifacts"),
-                    findings=[],
-                    provider_snapshot_available=True,
-                )
-            )
-
-            assert result["status"] == "failed"
-            assert result["normalization_status"] == "normalizer_error"
-            _structured_artifact, structured_payload = await service.read(
-                artifact_id=result["report_bundle"]["structured_ref"]["artifact_id"],
-                principal="user-security",
-                allow_restricted_raw=True,
-            )
-            assert json.loads(structured_payload.decode("utf-8")) == result[
-                "normalized_findings"
-            ]
-            assert structured_payload != b"{malformed-json"
-
-
-async def test_security_pentest_execute_rejects_missing_report_bundle_files(
-    tmp_path: Path,
-):
-    class _MissingSummaryReportLauncher(_FileWritingPentestLauncher):
-        async def run(self, request: object) -> WorkloadResult:
-            result = await super().run(request)
-            workload_request = getattr(request, "request", request)
-            artifacts_dir = Path(str(getattr(workload_request, "artifacts_dir")))
-            (
-                artifacts_dir / "pentest" / "findings" / "findings.summary.md"
-            ).unlink()
-            return result
-
-    async with temporal_db(tmp_path) as session_maker:
-        async with session_maker() as session:
-            service = TemporalArtifactService(
-                TemporalArtifactRepository(session),
-                store=LocalTemporalArtifactStore(tmp_path / "artifact-store"),
-            )
-            activities = TemporalAgentRuntimeActivities(
-                artifact_service=service,
-                workload_launcher=_MissingSummaryReportLauncher(),
-                workload_registry=_RecordingPentestRegistry(),
-            )
-
-            with pytest.raises(
-                TemporalArtifactValidationError,
-                match="Pentest summary report file was not found",
-            ):
-                await activities._security_pentest_execute_trusted_internal(
-                    _pentest_activity_payload(
-                        artifacts_dir=str(tmp_path / "runner-artifacts"),
-                        findings=[],
-                        provider_snapshot_available=True,
-                    )
-                )
-
-
-async def test_security_pentest_report_bundle_rejects_unsafe_custom_keys():
-    unsafe_cases = (
-        {"raw_log": "inline log"},
-        {"finding_details": {"body": "raw finding"}},
-        {"presigned_url": "https://example.invalid/raw"},
-        {"evidence_body": "raw evidence"},
-    )
 
-    for unsafe in unsafe_cases:
-        bundle = {"report_bundle_v": 1, **unsafe}
-        with pytest.raises(TemporalArtifactValidationError, match="unsafe report bundle"):
-            validate_report_bundle_result(bundle)
-
-async def test_security_pentest_serialized_result_and_metadata_stay_compact_and_secret_safe(
-    tmp_path: Path,
-):
-    async with temporal_db(tmp_path) as session_maker:
-        async with session_maker() as session:
-            service = TemporalArtifactService(
-                TemporalArtifactRepository(session),
-                store=LocalTemporalArtifactStore(tmp_path / "artifact-store"),
-            )
-            activities = TemporalAgentRuntimeActivities(
-                artifact_service=service,
-                workload_launcher=_FileWritingPentestLauncher(),
-                workload_registry=_RecordingPentestRegistry(),
-            )
-
-            result = await activities._security_pentest_execute_trusted_internal(
-                _pentest_activity_payload(
-                    artifacts_dir=str(tmp_path / "runner-artifacts"),
-                    summary_text="Pentest finished with token=ghp_summaryshouldnotleak",
-                    provider_snapshot_available=True,
-                )
-            )
-
-            serialized = json.dumps(result, sort_keys=True)
-            assert len(serialized.encode("utf-8")) < 60000
-            blocked_patterns = (
-                "raw-output-marker-should-not-leak",
-                "raw-error-marker-should-not-leak",
-                "evidence-marker-should-not-leak",
-                "ghp_summaryshouldnotleak",
-                "presigned_url",
-                "finding_details",
-                "evidence_body",
-                "session.summary",
-                "session.step_checkpoint",
-                "session.control_event",
-                "session.reset_boundary",
-            )
-            for pattern in blocked_patterns:
-                assert pattern not in serialized
-
-            artifacts = await service.list_for_execution(
-                namespace="default",
-                workflow_id="run-123",
-                run_id="step-pentest-1",
-                principal="user-security",
-                latest_only=False,
-            )
-            metadata_payload = json.dumps(
-                [artifact.metadata_json for artifact in artifacts],
-                sort_keys=True,
-            )
-            for pattern in blocked_patterns:
-                assert pattern not in metadata_payload
-
-async def test_pentest_heartbeat_emitter_returns_redacted_compact_payload(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    heartbeats: list[dict[str, object]] = []
-    monkeypatch.setattr(
-        activity_runtime_module.temporal_activity,
-        "heartbeat",
-        lambda payload: heartbeats.append(payload),
-    )
 
-    payload = emit_pentest_activity_heartbeat(
-        phase="running",
-        agent_run_id="run-123",
-        step_id="step-pentest",
-        attempt=1,
-        message="Still running with token=hunter2",
-        metadata={
-            "container_name": "mm-pentest-run-123-step-pentest-1",
-            "env": {"ANTHROPIC_API_KEY": "secret"},
-            "stdout": "raw output",
-            "api_key": "hunter2",
-        },
-        elapsed_seconds=1.23456,
-    )
 
-    assert heartbeats == [payload]
-    assert payload["phase"] == "running"
-    assert payload["elapsed_seconds"] == 1.235
-    assert payload["metadata"]["container_name"] == "mm-pentest-run-123-step-pentest-1"
-    assert "env" not in payload.get("metadata", {})
-    assert "stdout" not in payload.get("metadata", {})
-    assert "hunter2" not in str(payload)
-
-async def test_security_pentest_execute_supervised_handle_emits_running_heartbeats(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    heartbeats: list[dict[str, object]] = []
-    monkeypatch.setattr(
-        activity_runtime_module,
-        "_PENTEST_RUNNING_HEARTBEAT_INTERVAL_SECONDS",
-        0.001,
-    )
-    monkeypatch.setattr(
-        activity_runtime_module.temporal_activity,
-        "heartbeat",
-        lambda payload: heartbeats.append(payload),
-    )
-    handle = _SupervisedPentestHandle(result_after_polls=2)
-    launcher = _SupervisedPentestLauncher(handle)
-    activities = TemporalAgentRuntimeActivities(
-        workload_launcher=launcher,
-        workload_registry=_RecordingPentestRegistry(),
-    )
 
-    result = await activities._security_pentest_execute_trusted_internal(
-        _pentest_activity_payload()
-    )
 
-    assert result["status"] == "completed"
-    phases = [heartbeat["phase"] for heartbeat in heartbeats]
-    assert phases == [
-        "validating_scope",
-        "waiting_for_profile_slot",
-        "materializing_inputs",
-        "launching_container",
-        "running",
-        "running",
-        "publishing_artifacts",
-        "normalizing_findings",
-        "cleanup",
-    ]
-    assert handle.polls >= 2
-    for heartbeat in heartbeats:
-        assert "ANTHROPIC_API_KEY" not in str(heartbeat)
-        assert "hunter2" not in str(heartbeat)
-
-async def test_security_pentest_execute_emits_publication_heartbeat_after_runtime(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    heartbeats: list[dict[str, object]] = []
-    monkeypatch.setattr(
-        activity_runtime_module,
-        "_PENTEST_RUNNING_HEARTBEAT_INTERVAL_SECONDS",
-        0.001,
-    )
-    monkeypatch.setattr(
-        activity_runtime_module.temporal_activity,
-        "heartbeat",
-        lambda payload: heartbeats.append(payload),
-    )
-    activities = TemporalAgentRuntimeActivities(
-        workload_launcher=_FakePentestLauncher(),
-        workload_registry=_RecordingPentestRegistry(),
-    )
 
-    result = await activities._security_pentest_execute_trusted_internal(
-        _pentest_activity_payload()
-    )
 
-    assert result["status"] == "completed"
-    phases = [heartbeat["phase"] for heartbeat in heartbeats]
-    assert phases == [
-        "validating_scope",
-        "waiting_for_profile_slot",
-        "materializing_inputs",
-        "launching_container",
-        "running",
-        "publishing_artifacts",
-        "normalizing_findings",
-        "cleanup",
-    ]
-    assert phases.index("publishing_artifacts") > phases.index("running")
-    assert phases.index("normalizing_findings") > phases.index(
-        "publishing_artifacts"
-    )
 
-async def test_supervised_pentest_workload_timeout_stops_removes_and_returns_cleanup():
-    handle = _SupervisedPentestHandle(result_after_polls=None)
-    launcher = _SupervisedPentestLauncher(handle)
-    request_payload = dict(_pentest_activity_payload()["request"])
-    request_payload.pop("pentest_enabled", None)
-    request = activity_runtime_module.PentestWorkloadRequest.model_validate(
-        request_payload
-    )
-    result = await activity_runtime_module._supervise_pentest_workload_with_activity_heartbeats(
-        launcher,
-        SimpleNamespace(
-            container_name="mm-pentest-run-123-step-pentest-1",
-            profile=SimpleNamespace(
-                cleanup=SimpleNamespace(kill_grace_seconds=7),
-            ),
-        ),
-        request=request,
-        timeout_seconds=0.001,
-        heartbeat_interval_seconds=0.001,
-    )
 
-    assert result.status == "timed_out"
-    assert result.timeout_reason == "workload exceeded timeoutSeconds"
-    assert handle.stops == [7]
-    assert handle.removed is True
-    assert result.metadata["cleanup"]["terminalReason"] == "timeout"
-    assert result.metadata["cleanup"]["gracefulTerminationAttempted"] is True
-    assert result.metadata["cleanup"]["killEscalated"] is True
-    assert result.metadata["cleanup"]["containerRemoved"] is True
-
-async def test_supervised_pentest_workload_cancellation_stops_and_removes():
-    handle = _SupervisedPentestHandle(result_after_polls=None)
-    launcher = _SupervisedPentestLauncher(handle)
-    request_payload = dict(_pentest_activity_payload()["request"])
-    request_payload.pop("pentest_enabled", None)
-    request = activity_runtime_module.PentestWorkloadRequest.model_validate(
-        request_payload
-    )
 
-    task = asyncio.create_task(
-        activity_runtime_module._supervise_pentest_workload_with_activity_heartbeats(
-            launcher,
-            SimpleNamespace(container_name="mm-pentest-run-123-step-pentest-1"),
-            request=request,
-            timeout_seconds=60,
-            heartbeat_interval_seconds=0.001,
-        )
-    )
-    await asyncio.sleep(0)
-    task.cancel()
-
-    cancellation_result = await asyncio.gather(task, return_exceptions=True)
-
-    assert handle.stops == [30]
-    assert handle.removed is True
-    assert isinstance(cancellation_result[0], asyncio.CancelledError)
-
-async def test_supervised_pentest_workload_poll_error_stops_and_removes():
-    handle = _SupervisedPentestHandle(
-        result_after_polls=None,
-        poll_error=RuntimeError("docker daemon unavailable"),
-    )
-    launcher = _SupervisedPentestLauncher(handle)
-    request_payload = dict(_pentest_activity_payload()["request"])
-    request_payload.pop("pentest_enabled", None)
-    request = activity_runtime_module.PentestWorkloadRequest.model_validate(
-        request_payload
-    )
 
-    with pytest.raises(RuntimeError, match="docker daemon unavailable"):
-        await activity_runtime_module._supervise_pentest_workload_with_activity_heartbeats(
-            launcher,
-            SimpleNamespace(container_name="mm-pentest-run-123-step-pentest-1"),
-            request=request,
-            timeout_seconds=60,
-            heartbeat_interval_seconds=0.001,
-        )
-
-    assert handle.stops == [30]
-    assert handle.removed is True
-
-async def test_pentest_orphan_cleanup_uses_deterministic_label_selector():
-    class _Janitor:
-        def __init__(self) -> None:
-            self.selector: dict[str, str] | None = None
-            self.removed: list[str] = []
-
-        async def find_by_labels(self, labels: dict[str, str]) -> tuple[str, ...]:
-            self.selector = dict(labels)
-            return ("container-1", "container-2")
-
-        async def remove(self, container_id: str) -> None:
-            self.removed.append(container_id)
-
-    janitor = _Janitor()
-
-    result = await cleanup_pentest_orphan_containers(
-        janitor,
-        agent_run_id="run-123",
-        step_id="step-pentest",
-        runner_profile_id=PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
-    )
 
-    assert janitor.selector == {
-        "moonmind.kind": "workload",
-        "moonmind.tool_name": "security.pentest.run",
-        "moonmind.runtime_id": "pentestgpt",
-        "moonmind.agent_run_id": "run-123",
-        "moonmind.step_id": "step-pentest",
-        "moonmind.workload_profile": PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
-    }
-    assert janitor.removed == ["container-1", "container-2"]
-    assert result["removed_count"] == 2
-
-async def test_security_pentest_execute_coerces_string_publication_flags():
-    activities = TemporalAgentRuntimeActivities(
-        workload_launcher=_FakePentestLauncher(),
-        workload_registry=_RecordingPentestRegistry(),
-    )
 
-    result = await activities._security_pentest_execute_trusted_internal(
-        _pentest_activity_payload(
-            provider_snapshot_available="false",
-            wrapper_log_available="0",
-        )
-    )
 
-    publication = result["artifact_publication"]
-    artifact_names = {item["name"] for item in publication["artifacts"]}
-    assert "output.provider_snapshot" in artifact_names
-    assert "output.logs" not in artifact_names
-    assert publication["omitted_optional_artifacts"] == ["output.logs"]
-
-async def test_pentest_settings_parse_safe_policy_csv_values():
-    parsed = PentestSettings(
-        MOONMIND_PENTEST_ENABLED="true",
-        MOONMIND_PENTEST_ALLOWED_RUNNER_PROFILES="pentestgpt-claude-oauth",
-        MOONMIND_PENTEST_ALLOWED_OPERATION_MODES="recon_only,validate_hypothesis",
-        MOONMIND_PENTEST_ALLOWED_EVIDENCE_LEVELS="minimal,standard",
-        MOONMIND_PENTEST_MAX_TIME_BUDGET_MINUTES="120",
-        MOONMIND_PENTEST_PROVIDER_LEASE_SECONDS="",
-    )
 
-    assert parsed.enabled is True
-    assert parsed.allowed_runner_profiles == (
-        PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
-    )
-    assert parsed.allowed_operation_modes == ("recon_only", "validate_hypothesis")
-    assert parsed.allowed_evidence_levels == ("minimal", "standard")
-    assert parsed.max_time_budget_minutes == 120
-    assert parsed.provider_lease_seconds is None
-    assert (
-        PentestSettings.model_fields["enabled"].json_schema_extra["moonmind"][
-            "expose"
-        ]
-        is True
-    )
 
-async def test_pentest_settings_rejects_defaults_outside_allowlists():
-    with pytest.raises(ValueError, match="default pentest operation mode"):
-        PentestSettings(
-            MOONMIND_PENTEST_DEFAULT_OPERATION_MODE="validate_hypothesis",
-            MOONMIND_PENTEST_ALLOWED_OPERATION_MODES="recon_only",
-        )
-    with pytest.raises(ValueError, match="default pentest evidence level"):
-        PentestSettings(
-            MOONMIND_PENTEST_DEFAULT_EVIDENCE_LEVEL="full",
-            MOONMIND_PENTEST_ALLOWED_EVIDENCE_LEVELS="minimal,standard",
-        )
-    with pytest.raises(ValueError, match="default pentest runner profile"):
-        PentestSettings(
-            MOONMIND_PENTEST_DEFAULT_RUNNER_PROFILE="missing-profile",
-            MOONMIND_PENTEST_ALLOWED_RUNNER_PROFILES="pentestgpt-claude-oauth",
-        )
-
-async def test_pentest_workload_profile_registry_includes_claude_oauth_runner():
-    registry = RunnerProfileRegistry.load_file(
-        Path("config/workloads/default-runner-profiles.yaml"),
-        workspace_root="/work/agent_jobs",
-    )
 
-    profile = registry.get(PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID)
-    assert profile is not None
-    assert profile.image == PENTEST_RUNNER_IMAGE
-    assert profile.network_policy == "bridge"
-    assert "ANTHROPIC_API_KEY" not in profile.env_allowlist
-    assert "CLAUDE_HOME" in profile.env_allowlist
-
-async def test_security_pentest_execute_rejects_configured_profiles_missing_from_registry(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    launcher = _FakePentestLauncher()
-    registry = RunnerProfileRegistry.load_file(
-        Path("config/workloads/default-runner-profiles.yaml"),
-        workspace_root="/work/agent_jobs",
-    )
-    activities = TemporalAgentRuntimeActivities(
-        workload_launcher=launcher,
-        workload_registry=registry,
-    )
-    monkeypatch.setattr(
-        settings.pentest,
-        "allowed_runner_profiles",
-        (PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID, "pentestgpt-missing"),
-    )
 
-    result = await activities._security_pentest_execute_trusted_internal(
-        _pentest_activity_payload()
-    )
 
-    assert result["status"] == "validation_failed"
-    assert "runner_profile_not_registered" in str(result["diagnostics"])
-    assert "pentestgpt-missing" in str(result["diagnostics"])
-    assert launcher.requests == []
-
-async def test_security_pentest_execute_rejects_registered_runner_image_drift(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    launcher = _FakePentestLauncher()
-    registry_path = tmp_path / "profiles.json"
-    registry_path.write_text(
-        json.dumps(
-            {
-                "profiles": [
-                    {
-                        "id": PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
-                        "kind": "one_shot",
-                        "image": "ghcr.io/moonladderstudios/moonmind-pentestgpt:1.0-drift",
-                        "workdirTemplate": "/work/agent_jobs/${agent_run_id}/repo",
-                        "requiredMounts": [
-                            {
-                                "type": "volume",
-                                "source": "agent_workspaces",
-                                "target": "/work/agent_jobs",
-                            }
-                        ],
-                        "envAllowlist": ["ANTHROPIC_API_KEY"],
-                        "networkPolicy": "bridge",
-                        "resources": {
-                            "cpu": "4",
-                            "memory": "8g",
-                            "shmSize": "1g",
-                            "maxCpu": "4",
-                            "maxMemory": "8g",
-                            "maxShmSize": "1g",
-                        },
-                        "timeoutSeconds": 28800,
-                        "maxTimeoutSeconds": 28800,
-                        "cleanup": {
-                            "removeContainerOnExit": True,
-                            "killGraceSeconds": 30,
-                        },
-                        "devicePolicy": {"mode": "none"},
-                    }
-                ]
-            }
-        ),
-        encoding="utf-8",
-    )
-    registry = RunnerProfileRegistry.load_file(
-        registry_path,
-        workspace_root="/work/agent_jobs",
-    )
-    activities = TemporalAgentRuntimeActivities(
-        workload_launcher=launcher,
-        workload_registry=registry,
-    )
-    monkeypatch.setattr(
-        settings.pentest,
-        "runner_image",
-        PENTEST_RUNNER_IMAGE,
-    )
-    monkeypatch.setattr(
-        settings.pentest,
-        "allowed_runner_profiles",
-        (PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,),
-    )
-    result = await activities._security_pentest_execute_trusted_internal(
-        _pentest_activity_payload()
-    )
 
-    assert result["status"] == "validation_failed"
-    assert "runner_profile_image_drift" in str(result["diagnostics"])
-    assert PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID in str(result["diagnostics"])
-    assert launcher.requests == []
-
-async def test_security_pentest_execute_validates_safe_profile_against_registry(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    launcher = _FileWritingPentestLauncher()
-    registry = RunnerProfileRegistry.load_file(
-        Path("config/workloads/default-runner-profiles.yaml"),
-        workspace_root=tmp_path,
-        profile_image_overrides={
-            PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID: PENTEST_RUNNER_IMAGE
-        },
-    )
-    activities = TemporalAgentRuntimeActivities(
-        workload_launcher=launcher,
-        workload_registry=registry,
-    )
-    monkeypatch.setattr(
-        settings.pentest,
-        "runner_image",
-        PENTEST_RUNNER_IMAGE,
-    )
-    monkeypatch.setattr(
-        settings.pentest,
-        "default_runner_profile",
-        PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
-    )
-    monkeypatch.setattr(
-        settings.pentest,
-        "allowed_runner_profiles",
-        (PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,),
-    )
-    payload = _pentest_activity_payload()
-    payload["request"]["repo_dir"] = str(tmp_path / "run-123" / "repo")
-    payload["request"]["artifacts_dir"] = str(
-        tmp_path / "run-123" / "artifacts" / "pentest"
-    )
 
-    result = await activities._security_pentest_execute_trusted_internal(payload)
-
-    assert result["status"] == "completed"
-    assert len(launcher.requests) == 1
-
-async def test_security_pentest_execute_materializes_input_files_without_secrets(
-    tmp_path: Path,
-):
-    artifacts_dir = tmp_path / "artifacts"
-    activities = TemporalAgentRuntimeActivities(
-        workload_launcher=_FakePentestLauncher(),
-        workload_registry=_RecordingPentestRegistry(),
-    )
 
-    result = await activities._security_pentest_execute_trusted_internal(
-        _pentest_activity_payload(
-            artifacts_dir=str(artifacts_dir),
-            summary_text="password=hunter2",
-        )
-    )
 
-    assert result["status"] == "failed"
-    assert result["normalization_status"] == "normalizer_error"
-    instruction_file = artifacts_dir / "pentest" / "inputs" / "instruction.txt"
-    manifest_file = artifacts_dir / "pentest" / "inputs" / "request.json"
-    scope_file = artifacts_dir / "pentest" / "inputs" / "approved-scope.json"
-    provider_file = artifacts_dir / "pentest" / "inputs" / "provider-snapshot.json"
-    assert instruction_file.read_text(encoding="utf-8").startswith("Objective:")
-    manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
-    provider_snapshot = json.loads(provider_file.read_text(encoding="utf-8"))
-    scope_snapshot = json.loads(scope_file.read_text(encoding="utf-8"))
-    assert manifest["provider_snapshot_ref"] == f"file:{provider_file}"
-    assert provider_snapshot["profile_id"] == PENTEST_CLAUDE_OAUTH_PROFILE_ID
-    assert "secret_env_keys" not in provider_snapshot
-    assert provider_snapshot["credential_env_key_count"] == 0
-    assert provider_snapshot["missing_credential_env_key_count"] == 0
-    assert scope_snapshot["scope_id"] == "scope-123"
-    assert "hunter2" not in provider_file.read_text(encoding="utf-8")
-    assert "hunter2" not in manifest_file.read_text(encoding="utf-8")
-
-async def test_security_pentest_execute_fails_before_launch_when_policy_disallows_mode():
-    launcher = _FakePentestLauncher()
-    activities = TemporalAgentRuntimeActivities(workload_launcher=launcher)
-
-    result = await activities._security_pentest_execute_trusted_internal(
-        _pentest_activity_payload(operation_mode="full_authorized")
-    )
 
-    assert result["status"] == "validation_failed"
-    assert "operation_mode_disabled" in str(result["diagnostics"])
-    assert launcher.requests == []
-
-async def test_security_pentest_execute_sources_publication_payload_from_nested_request():
-    activities = TemporalAgentRuntimeActivities(
-        workload_launcher=_FakePentestLauncher(),
-        workload_registry=_RecordingPentestRegistry(),
-    )
-    # Publication inputs (here ``summary_text``) must be sourced from the nested
-    # ``request`` envelope, not from the top-level payload. ``summary_text``
-    # flows into the publication diagnostics/preview, which survive the
-    # runner-file overwrite of ``normalized_findings``.
-    nested_request = _pentest_activity_payload(
-        summary_text="nested-source-marker",
-        provider_snapshot_available=False,
-    )["request"]
-    payload = {
-        "request": nested_request,
-        "summary_text": "top-source-marker",
-        "provider_snapshot_available": True,
-    }
-
-    result = await activities._security_pentest_execute_trusted_internal(payload)
-
-    publication = result["artifact_publication"]
-    artifact_names = {item["name"] for item in publication["artifacts"]}
-    assert "nested-source-marker" in result["diagnostics"]["summary"]
-    assert "top-source-marker" not in str(result)
-    assert "output.provider_snapshot" in artifact_names
-
-async def test_security_pentest_execute_uses_runner_normalized_findings_after_launch(
-    tmp_path: Path,
-):
-    launcher = _FakePentestLauncher(
-        findings_payload={
-            "tool_name": "security.pentest.run",
-            "tool_version": "1.0.0",
-            "target": "https://lab.example.test",
-            "scope_artifact_ref": "art:sha256:approved-scope",
-            "operation_mode": "validate_hypothesis",
-            "runner_profile_id": PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
-            "execution_profile_ref": PENTEST_CLAUDE_OAUTH_PROFILE_ID,
-            "produced_at": "2026-01-01T00:00:00Z",
-            "findings": [
-                {
-                    "finding_id": "runner-finding",
-                    "title": "Runner finding",
-                    "severity": "critical",
-                    "confidence": "confirmed",
-                    "summary": "Runner-produced evidence.",
-                },
-                "ignored-non-object",
-            ],
-            "summary": {
-                "findings_count": 1,
-                "confirmed_findings_count": 1,
-                "high_or_critical_count": 1,
-            },
-            "evidence_refs": ["file:/tmp/evidence.json"],
-        }
-    )
-    activities = TemporalAgentRuntimeActivities(
-        workload_launcher=launcher,
-        workload_registry=_RecordingPentestRegistry(),
-    )
 
-    result = await activities._security_pentest_execute_trusted_internal(
-        _pentest_activity_payload(artifacts_dir=str(tmp_path / "artifacts"))
-    )
 
-    assert result["status"] == "completed"
-    assert result["findings_count"] == 1
-    assert result["confirmed_findings_count"] == 1
-    assert result["report_bundle"]["counts"]["high_or_critical_count"] == 1
-    assert result["severity_counts"] == {"critical": 1}
-    assert [
-        item["finding_id"] for item in result["normalized_findings"]["findings"]
-    ] == ["runner-finding"]
-
-
-async def test_successful_workload_missing_structured_findings_is_not_clean(
-    tmp_path: Path,
-):
-    # The launcher writes no structured findings file. A succeeded workload with
-    # no machine-readable findings must NOT be reported as a clean run.
-    activities = TemporalAgentRuntimeActivities(
-        workload_launcher=_FakePentestLauncher(),
-        workload_registry=_RecordingPentestRegistry(),
-    )
 
-    result = await activities._security_pentest_execute_trusted_internal(
-        _pentest_activity_payload(artifacts_dir=str(tmp_path / "artifacts"))
-    )
 
-    assert result["status"] == "failed"
-    assert (
-        result["normalized_findings"]["normalization_status"] == "normalizer_error"
-    )
-    assert result["normalization_status"] == "normalizer_error"
-    assert not result["normalized_findings"].get("implies_no_vulnerabilities", False)
-    assert result["failure_classification"]["failure_kind"] == "runtime_action"
-    assert result["terminal_cleanup"]["terminal_reason"] == "failure"
-
-
-async def test_provider_cooldown_does_not_return_clean_findings():
-    activities = TemporalAgentRuntimeActivities(
-        workload_launcher=_FakePentestLauncher(),
-        workload_registry=_RecordingPentestRegistry(),
-        pentest_provider_lease_manager=_FakePentestLeaseManager(),
-    )
 
-    result = await activities._security_pentest_execute_trusted_internal(
-        _pentest_activity_payload(
-            provider_failure={"category": "provider_429"},
-        )
-    )
 
-    assert result["status"] == "provider_cooldown"
-    assert (
-        result["normalized_findings"]["normalization_status"] == "provider_failed"
-    )
-    assert not result["normalized_findings"].get("implies_no_vulnerabilities", False)
 
 
-async def test_workload_failure_does_not_return_clean_findings():
-    activities = TemporalAgentRuntimeActivities(
-        workload_launcher=_FakePentestLauncher(status="failed"),
-        workload_registry=_RecordingPentestRegistry(),
-    )
 
-    result = await activities._security_pentest_execute_trusted_internal(
-        _pentest_activity_payload()
-    )
 
-    assert result["status"] in {"failed", "timed-out", "canceled"}
-    assert result["normalized_findings"]["normalization_status"] == "runner_failed"
-    assert not result["normalized_findings"].get("implies_no_vulnerabilities", False)
-
-async def test_security_pentest_execute_fails_closed_before_unknown_runner_launch(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    launcher = _FakePentestLauncher()
-    activities = TemporalAgentRuntimeActivities(workload_launcher=launcher)
-    monkeypatch.setattr(
-        settings.pentest, "allowed_runner_profiles", ("missing-profile",)
-    )
 
-    result = await activities._security_pentest_execute_trusted_internal(
-        _pentest_activity_payload(
-            runner_profile_id="missing-profile",
-            approved_scope={
-                **_approved_pentest_scope(),
-                "allowed_runner_profiles": ["missing-profile"],
-            },
-        )
-    )
 
-    assert result["status"] == "validation_failed"
-    assert "unknown Pentest runner profile" in str(result["diagnostics"])
-    assert launcher.requests == []
-
-async def test_security_pentest_execute_returns_structured_runtime_failure_with_cleanup():
-    launcher = _FakePentestLauncher(status="failed")
-    activities = TemporalAgentRuntimeActivities(
-        workload_launcher=launcher,
-        workload_registry=_RecordingPentestRegistry(),
-    )
 
-    result = await activities._security_pentest_execute_trusted_internal(
-        _pentest_activity_payload()
-    )
 
-    assert result["status"] == "failed"
-    assert result["failure_classification"]["failure_kind"] == "runtime_action"
-    assert result["failure_classification"]["interaction_state"] == "post_interaction"
-    assert result["terminal_cleanup"]["terminal_reason"] == "failure"
-    assert result["terminal_cleanup"]["container_removed"] is True
-    assert result["execution_policy"]["automatic_retries_enabled"] is False
-
-async def test_security_pentest_execute_requires_registry_to_launch():
-    # A launcher is configured but no registry is wired. The real launcher needs
-    # a ValidatedWorkloadRequest, so the activity must fail closed rather than
-    # hand the raw request to the launcher.
-    launcher = _FakePentestLauncher()
-    activities = TemporalAgentRuntimeActivities(workload_launcher=launcher)
-
-    result = await activities._security_pentest_execute_trusted_internal(
-        _pentest_activity_payload()
-    )
 
-    assert result["status"] == "failed"
-    assert result["failure_classification"]["failure_kind"] == "runtime_action"
-    assert "workload registry is required" in str(result["diagnostics"])
-    assert launcher.requests == []
-
-class _NoOutputRefsPentestLauncher:
-    """Launcher returning a succeeded result with ``output_refs`` unset (None)."""
-
-    def __init__(self) -> None:
-        self.requests: list[object] = []
-
-    async def run(self, request: object) -> WorkloadResult:
-        self.requests.append(request)
-        return WorkloadResult.model_validate(
-            {
-                "requestId": "workload-run-123",
-                "profileId": PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
-                "status": "succeeded",
-                "exitCode": 0,
-            }
-        )
-
-async def test_security_pentest_execute_handles_missing_output_refs():
-    # When the workload result omits output_refs, the activity must fall back to
-    # published artifact refs instead of raising AttributeError on None.get().
-    launcher = _NoOutputRefsPentestLauncher()
-    activities = TemporalAgentRuntimeActivities(
-        workload_launcher=launcher,
-        workload_registry=_RecordingPentestRegistry(),
-    )
 
-    result = await activities._security_pentest_execute_trusted_internal(
-        _pentest_activity_payload()
-    )
 
-    assert result["status"] == "completed"
-    assert len(launcher.requests) == 1
-    # Report refs fall back to the published pentest artifact refs.
-    assert result["primary_report_ref"]
-    assert result["summary_ref"]
 
 async def test_plan_generate_accepts_auto_placeholder_without_registry_entries(
     tmp_path: Path,
@@ -3731,83 +1697,6 @@ async def test_plan_generate_fallback_registry_includes_input_artifact_tool_step
                 "jira.get_issue"
             ]
 
-async def test_plan_generate_direct_skill_step_uses_only_authored_tool_inputs(
-    tmp_path: Path,
-):
-    from moonmind.workflows.temporal.worker_runtime import _build_runtime_planner
-
-    async with temporal_db(tmp_path) as session_maker:
-        async with session_maker() as session:
-            service = TemporalArtifactService(
-                TemporalArtifactRepository(session),
-                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
-            )
-            planner = TemporalPlanActivities(
-                artifact_service=service,
-                planner=_build_runtime_planner(),
-            )
-
-            result = await planner.plan_generate(
-                principal="user-1",
-                parameters={
-                    "repository": "g3-qrtr/crash_server_main",
-                    "targetRuntime": "claude_code",
-                    "model": "claude-opus-4-8",
-                    "profileId": "claude_anthropic",
-                    "effort": "xhigh",
-                    "publishMode": "none",
-                    "maxAttempts": 3,
-                    "stepCount": 1,
-                    "workflow": {
-                        "tool": {"type": "skill", "name": "auto"},
-                        "runtime": {
-                            "mode": "claude_code",
-                            "model": "claude-opus-4-8",
-                            "profileId": "claude_anthropic",
-                            "effort": "xhigh",
-                        },
-                        "steps": [
-                            {
-                                "id": "step-1",
-                                "title": "Run approved PentestGPT assessment",
-                                "type": "tool",
-                                "instructions": "Run the curated PentestGPT tool.",
-                                "tool": {
-                                    "id": "security.pentest.run",
-                                    "inputs": {
-                                        "target": "https://lab.example.test",
-                                        "scope_artifact_ref": "art_scope_valid",
-                                        "operation_mode": "recon_only",
-                                        "runner_profile_id": PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
-                                        "time_budget_minutes": 60,
-                                        "evidence_level": "standard",
-                                    },
-                                },
-                            }
-                        ],
-                    },
-                },
-            )
-
-            _artifact, payload = await service.read(
-                artifact_id=result.plan_ref.artifact_id,
-                principal="user-1",
-            )
-            plan_payload = json.loads(payload.decode("utf-8"))
-            node = plan_payload["nodes"][0]
-
-            assert node["tool"] == {
-                "type": "skill",
-                "name": "security.pentest.run",
-            }
-            assert node["inputs"] == {
-                "target": "https://lab.example.test",
-                "scope_artifact_ref": "art_scope_valid",
-                "operation_mode": "recon_only",
-                "runner_profile_id": PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
-                "time_budget_minutes": 60,
-                "evidence_level": "standard",
-            }
 
 async def test_default_registry_payload_uses_extended_timeouts_for_pr_resolver():
     payload = _default_registry_skill_payload(name="pr-resolver")
@@ -3976,85 +1865,18 @@ async def test_sandbox_rejects_workspace_outside_sandbox_root(tmp_path: Path):
         )
 
 
-async def test_checkpoint_capture_accepts_managed_agent_workspace(
+async def test_checkpoint_capture_rejects_managed_workspace(
     tmp_path: Path,
 ) -> None:
     workspace_root = tmp_path / "workspaces"
     managed_workspace_root = tmp_path / "agent_jobs"
-    workspace = managed_workspace_root / "mm:workflow-1" / "repo"
-    workspace.mkdir(parents=True)
-    subprocess.run(
-        ["git", "init"],
-        cwd=workspace,
-        check=True,
-        stdout=subprocess.PIPE,
-    )
-    subprocess.run(
-        ["git", "config", "user.email", "test@example.com"],
-        cwd=workspace,
-        check=True,
-    )
-    subprocess.run(
-        ["git", "config", "user.name", "Test User"],
-        cwd=workspace,
-        check=True,
-    )
-    target = workspace / "README.md"
-    target.write_text("base\n", encoding="utf-8")
-    subprocess.run(["git", "add", "README.md"], cwd=workspace, check=True)
-    subprocess.run(
-        ["git", "commit", "-m", "base"],
-        cwd=workspace,
-        check=True,
-        stdout=subprocess.PIPE,
-    )
-    base_commit = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=workspace, text=True
-    ).strip()
-    target.write_text("base\nchanged\n", encoding="utf-8")
-
-    activities = TemporalSandboxActivities(
-        workspace_root=workspace_root,
-        managed_workspace_root=managed_workspace_root,
-    )
-
-    result = await activities.workspace_capture_checkpoint(
-        {
-            "identity": {
-                "workflowId": "workflow-1",
-                "runId": "run-1",
-                "logicalStepId": "implement",
-                "executionOrdinal": 1,
-            },
-            "boundary": "after_execution",
-            "kind": "git_patch",
-            "workspacePath": str(workspace),
-            "artifactNamespace": "checkpoint",
-            "idempotencyKey": "workflow-1:checkpoint:after_execution",
-            "baseCommit": base_commit,
-        }
-    )
-
-    assert result["status"] == "captured"
-    assert result["workspace"]["kind"] == "git_patch"
-    assert result["workspace"]["patchRef"]
-
-
-async def test_checkpoint_capture_rejects_workspace_outside_approved_roots(
-    tmp_path: Path,
-) -> None:
-    workspace_root = tmp_path / "workspaces"
-    managed_workspace_root = tmp_path / "agent_jobs"
-    outside_workspace = tmp_path / "outside" / "repo"
+    outside_workspace = managed_workspace_root / "managed-run-1" / "repo"
     outside_workspace.mkdir(parents=True)
-    activities = TemporalSandboxActivities(
-        workspace_root=workspace_root,
-        managed_workspace_root=managed_workspace_root,
-    )
+    activities = TemporalSandboxActivities(workspace_root=workspace_root)
 
     with pytest.raises(
         TemporalActivityRuntimeError,
-        match="escapes approved checkpoint roots",
+        match="escapes sandbox root",
     ):
         await activities.workspace_capture_checkpoint(
             {
@@ -4072,56 +1894,6 @@ async def test_checkpoint_capture_rejects_workspace_outside_approved_roots(
                 "baseCommit": "abc123",
             }
         )
-
-
-async def test_checkpoint_capture_rejects_shared_managed_workspace_levels(
-    tmp_path: Path,
-) -> None:
-    workspace_root = tmp_path / "workspaces"
-    managed_workspace_root = tmp_path / "agent_jobs"
-    managed_workspace_root.mkdir()
-    job_root = managed_workspace_root / "mm:workflow-1"
-    job_root.mkdir()
-    activities = TemporalSandboxActivities(
-        workspace_root=workspace_root,
-        managed_workspace_root=managed_workspace_root,
-    )
-
-    for unsafe_workspace in (managed_workspace_root, job_root):
-        with pytest.raises(
-            TemporalActivityRuntimeError,
-            match="escapes approved checkpoint roots",
-        ):
-            await activities.workspace_capture_checkpoint(
-                {
-                    "identity": {
-                        "workflowId": "workflow-1",
-                        "runId": "run-1",
-                        "logicalStepId": "implement",
-                        "executionOrdinal": 1,
-                    },
-                    "boundary": "after_execution",
-                    "kind": "worktree_archive",
-                    "workspacePath": str(unsafe_workspace),
-                    "artifactNamespace": "checkpoint",
-                    "idempotencyKey": (
-                        f"workflow-1:checkpoint:{unsafe_workspace.name}"
-                    ),
-                }
-            )
-
-
-async def test_managed_workspace_root_expands_user_directory(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path))
-    activities = TemporalSandboxActivities(
-        workspace_root=tmp_path / "workspaces",
-        managed_workspace_root="~/agent_jobs",
-    )
-
-    assert activities._managed_workspace_root == tmp_path / "agent_jobs"
 
 
 async def test_sandbox_checkout_rejects_local_path_outside_workspace_root(
@@ -4530,11 +2302,12 @@ async def test_build_activity_bindings_resolves_omnigent_execute_handler(
                 binding.activity_type: binding
                 for binding in build_activity_bindings(
                     catalog,
-                    integration_activities=TemporalIntegrationActivities(
+                    agent_runtime_activities=TemporalAgentRuntimeActivities(
                         artifact_service=service,
-                        client_factory=_FakeJulesClient,
+                        workspace_root=tmp_path / "agent-workspaces",
                     ),
-                    fleets=(INTEGRATIONS_FLEET,),
+                    agent_skills_activities=AgentSkillsActivities(),
+                    fleets=(AGENT_RUNTIME_FLEET,),
                 )
             }
 
@@ -5351,6 +3124,26 @@ async def test_agent_runtime_publish_artifacts_publishes_remediation_attempt_jso
             assert persisted_payload["nextVerificationRequired"] is True
 
 
+async def test_remaining_work_digest_is_independent_of_entry_order() -> None:
+    first = {
+        "requirement": "artifact linkage",
+        "gapType": "implementation",
+    }
+    second = {
+        "requirement": "workflow routing",
+        "gapType": "behavior",
+    }
+
+    assert activity_runtime_module._unordered_json_list_digest(
+        [first, second]
+    ) == activity_runtime_module._unordered_json_list_digest([second, first])
+    assert activity_runtime_module._unordered_json_list_digest(
+        [first, second]
+    ) != activity_runtime_module._unordered_json_list_digest(
+        [first, {**second, "gapType": "contract"}]
+    )
+
+
 async def test_agent_runtime_publish_artifacts_links_remediation_verification_attempt(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -5448,6 +3241,14 @@ async def test_agent_runtime_publish_artifacts_links_remediation_verification_at
             assert result.metadata["gateResultRef"] == verification_ref
             assert result.metadata["moonSpecVerifyArtifactRef"] == verification_ref
             assert result.metadata["sourceMoonSpecVerifyArtifactRef"] != verification_ref
+            assert result.metadata["moonSpecVerify"]["remainingWorkRef"] == (
+                result.metadata["sourceMoonSpecVerifyArtifactRef"]
+            )
+            evidence = result.metadata["moonSpecVerify"]["validatedRefs"]
+            assert evidence["progressEvidenceSchemaVersion"] == (
+                "remediation-progress-evidence/v1"
+            )
+            assert evidence["authoritativeEvidenceDigest"].startswith("sha256:")
             artifact, artifact_path = await service.read_path(
                 artifact_id=verification_ref,
                 principal="system:agent_runtime",
@@ -5466,6 +3267,9 @@ async def test_agent_runtime_publish_artifacts_links_remediation_verification_at
             ] == result.metadata["sourceMoonSpecVerifyArtifactRef"]
             assert persisted_payload["remainingGaps"][0]["requirement"] == (
                 "artifact linkage"
+            )
+            assert persisted_payload["moonSpecVerify"]["remainingWorkRef"] == (
+                result.metadata["sourceMoonSpecVerifyArtifactRef"]
             )
 
 
@@ -5721,6 +3525,18 @@ async def test_agent_runtime_publish_artifacts_publishes_assessment_verdict_json
                 ),
                 encoding="utf-8",
             )
+            brief_path = workspace / "artifacts/jira-implement-brief.json"
+            brief_path.write_text(
+                json.dumps(
+                    {
+                        "issue_provider": "jira",
+                        "issue_ref": "MM-1139",
+                        "requirements": ["Persist approval decisions."],
+                        "constraints": "",
+                    }
+                ),
+                encoding="utf-8",
+            )
             run_store = ManagedRunStore(tmp_path / "runs")
             run_store.save(
                 ManagedRunRecord(
@@ -5762,8 +3578,13 @@ async def test_agent_runtime_publish_artifacts_publishes_assessment_verdict_json
                     summary="Completed.",
                     metadata={
                         "agentRunId": "assess-run-1",
+                        "parentWorkflowId": "parent-wf",
+                        "parentRunId": "parent-run",
                         "assessment_artifact_path": (
                             "artifacts/jira-implement-assessment.json"
+                        ),
+                        "brief_artifact_path": (
+                            "artifacts/jira-implement-brief.json"
                         ),
                     },
                 )
@@ -5772,6 +3593,7 @@ async def test_agent_runtime_publish_artifacts_publishes_assessment_verdict_json
             assert isinstance(result, AgentRunResult)
             assert result.metadata["assessmentArtifactRef"].startswith("art_")
             assert result.metadata["assessmentVerdict"] == "NOT_IMPLEMENTED"
+            assert result.metadata["briefArtifactRef"].startswith("art_")
 
             # The published artifact carries the full structured verdict payload,
             # readable by ref (the bridge-compatible channel) without a shared FS.
@@ -5782,6 +3604,208 @@ async def test_agent_runtime_publish_artifacts_publishes_assessment_verdict_json
             persisted = json.loads(artifact_path.read_text(encoding="utf-8"))
             assert persisted["verdict"] == "NOT_IMPLEMENTED"
             assert persisted["issue_ref"] == "MM-1139"
+            _artifact, links, _pinned, _policy = await service.get_metadata(
+                artifact_id=result.metadata["assessmentArtifactRef"],
+                principal="system:agent_runtime",
+            )
+            assert any(
+                link.workflow_id == "parent-wf"
+                and link.run_id == "parent-run"
+                and link.link_type == "input.assessment_handoff"
+                for link in links
+            )
+            _artifact, brief_artifact_path = await service.read_path(
+                artifact_id=result.metadata["briefArtifactRef"],
+                principal="system:agent_runtime",
+            )
+            persisted_brief = json.loads(
+                brief_artifact_path.read_text(encoding="utf-8")
+            )
+            assert persisted_brief["issue_ref"] == "MM-1139"
+            _artifact, brief_links, _pinned, _policy = await service.get_metadata(
+                artifact_id=result.metadata["briefArtifactRef"],
+                principal="system:agent_runtime",
+            )
+            assert any(
+                link.workflow_id == "parent-wf"
+                and link.run_id == "parent-run"
+                and link.link_type == "input.issue_brief_handoff"
+                for link in brief_links
+            )
+
+            brief_path.write_text("not-json", encoding="utf-8")
+            with pytest.raises(
+                TemporalActivityRuntimeError,
+                match="issue brief artifact could not be read as JSON",
+            ):
+                await activities.agent_runtime_publish_artifacts(
+                    AgentRunResult(
+                        summary="Completed with malformed required brief.",
+                        metadata={
+                            "agentRunId": "assess-run-1",
+                            "brief_artifact_path": (
+                                "artifacts/jira-implement-brief.json"
+                            ),
+                        },
+                    )
+                )
+
+
+async def test_agent_runtime_publish_artifacts_resolves_omnigent_sandbox_workspace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Remote runtimes publish portable outputs through their sandbox locator."""
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            workspace_root = tmp_path / "agent_workspaces"
+            workspace_id = "sandbox-assess-1"
+            workflow_id = "parent-wf"
+            step_execution_id = "parent-wf:run-1:step-2:execution:1"
+            workspace = (
+                workspace_root / "temporal_sandbox" / workspace_id / "repo"
+            )
+            assessment_path = (
+                workspace / "artifacts/github-issue-implement-assessment.json"
+            )
+            assessment_path.parent.mkdir(parents=True)
+            assessment_path.write_text(
+                json.dumps(
+                    {
+                        "issue_provider": "github",
+                        "issue_ref": "MoonLadderStudios/MoonMind#3620",
+                        "verdict": "PARTIALLY_IMPLEMENTED",
+                        "mode": "main",
+                        "summary": "remaining approval lifecycle gaps",
+                        "requirements": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            SandboxWorkspaceRecordStore(workspace_root).ensure(
+                SandboxWorkspaceRecord(
+                    workspace_id=workspace_id,
+                    workflow_id=workflow_id,
+                    step_execution_id=step_execution_id,
+                    relative_path="repo",
+                )
+            )
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            activities = TemporalAgentRuntimeActivities(
+                artifact_service=service,
+                workspace_root=workspace_root,
+            )
+
+            async def _skip_notify(*_args: Any, **_kwargs: Any) -> dict[str, str]:
+                return {"status": "skipped"}
+
+            monkeypatch.setattr(
+                activities, "execution_notify_completion", _skip_notify
+            )
+            monkeypatch.setattr(
+                temporal_activity,
+                "info",
+                lambda: SimpleNamespace(
+                    namespace="default",
+                    workflow_id="parent-wf:agent:step-2",
+                    workflow_run_id="child-run-assess",
+                ),
+            )
+
+            result = await activities.agent_runtime_publish_artifacts(
+                AgentRunResult(
+                    summary="Omnigent session completed",
+                    metadata={
+                        "correlationId": workflow_id,
+                        "idempotencyKey": f"{step_execution_id}:agent_execute",
+                        "workspaceLocator": {
+                            "kind": "sandbox",
+                            "workspaceId": workspace_id,
+                            "relativePath": "repo",
+                        },
+                        "assessment_artifact_path": (
+                            "artifacts/github-issue-implement-assessment.json"
+                        ),
+                    },
+                )
+            )
+
+            assert isinstance(result, AgentRunResult)
+            assert result.metadata["assessmentArtifactRef"].startswith("art_")
+            assert result.metadata["assessmentVerdict"] == "PARTIALLY_IMPLEMENTED"
+            _artifact, artifact_path = await service.read_path(
+                artifact_id=result.metadata["assessmentArtifactRef"],
+                principal="system:agent_runtime",
+            )
+            persisted = json.loads(artifact_path.read_text(encoding="utf-8"))
+            assert persisted["issue_ref"] == "MoonLadderStudios/MoonMind#3620"
+
+
+async def test_agent_runtime_publish_artifacts_requires_declared_assessment_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A successful assessment cannot advance without its controlling verdict."""
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            workspace = tmp_path / "workspace"
+            workspace.mkdir()
+            run_store = ManagedRunStore(tmp_path / "runs")
+            run_store.save(
+                ManagedRunRecord(
+                    runId="assess-run-missing",
+                    agentId="codex_cli",
+                    runtimeId="codex_cli",
+                    status="completed",
+                    startedAt=datetime.now(timezone.utc),
+                    workspacePath=workspace.as_posix(),
+                )
+            )
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            activities = TemporalAgentRuntimeActivities(
+                artifact_service=service,
+                run_store=run_store,
+            )
+
+            async def _skip_notify(*_args: Any, **_kwargs: Any) -> dict[str, str]:
+                return {"status": "skipped"}
+
+            monkeypatch.setattr(
+                activities, "execution_notify_completion", _skip_notify
+            )
+            monkeypatch.setattr(
+                temporal_activity,
+                "info",
+                lambda: SimpleNamespace(
+                    namespace="default",
+                    workflow_id="parent-wf:agent:assess",
+                    workflow_run_id="child-run-assess-missing",
+                ),
+            )
+
+            with pytest.raises(
+                TemporalActivityRuntimeError,
+                match="Declared assessment verdict artifact was not produced",
+            ):
+                await activities.agent_runtime_publish_artifacts(
+                    AgentRunResult(
+                        summary="Completed.",
+                        metadata={
+                            "agentRunId": "assess-run-missing",
+                            "assessment_artifact_path": (
+                                "artifacts/github-issue-implement-assessment.json"
+                            ),
+                        },
+                    )
+                )
 
 
 async def test_agent_runtime_publish_artifacts_skips_assessment_without_path(

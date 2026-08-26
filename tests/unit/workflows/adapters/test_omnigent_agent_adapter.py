@@ -6,6 +6,7 @@ import pytest
 
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.adapters.omnigent_agent_adapter import (
+    OmnigentAgentSelection,
     OmnigentAdapterError,
     OmnigentExternalAdapter,
     OmnigentResolvedTarget,
@@ -130,6 +131,30 @@ def test_managed_repository_task_normalizes_repo_url_and_branch() -> None:
     )
 
 
+def test_managed_repository_task_normalizes_github_slug() -> None:
+    req = _request(
+        workspaceSpec={
+            "repository": "MoonLadderStudios/Tactics",
+            "workspaceLocator": {
+                "kind": "sandbox",
+                "workspaceId": "710b70b2b7957c3094f196ce",
+                "relativePath": "repo",
+            },
+        },
+        parameters={
+            "repository": "MoonLadderStudios/Tactics",
+            "omnigent": {"session": {"hostType": "managed"}},
+        },
+    )
+
+    selection = build_omnigent_selection(req)
+
+    assert (
+        selection.session.workspace
+        == "https://github.com/MoonLadderStudios/Tactics.git"
+    )
+
+
 def test_managed_repository_task_uses_starting_branch_not_target_branch() -> None:
     req = _request(
         workspaceSpec={
@@ -218,7 +243,7 @@ async def test_target_resolution_order() -> None:
         direct,
         list_agents=list_agents,
         upload_agent_bundle=upload,
-        default_agent_name=None,
+        default_agent=None,
     )).source == "agent_id"
     assert calls == []
 
@@ -236,7 +261,7 @@ async def test_target_resolution_order() -> None:
         named,
         list_agents=list_agents,
         upload_agent_bundle=upload,
-        default_agent_name=None,
+        default_agent=None,
     )).agent_id == "ag_named"
 
     bundle = build_omnigent_selection(
@@ -253,7 +278,7 @@ async def test_target_resolution_order() -> None:
         bundle,
         list_agents=list_agents,
         upload_agent_bundle=upload,
-        default_agent_name=None,
+        default_agent=None,
     )).source == "bundle_ref"
 
     default = build_omnigent_selection(_request())
@@ -261,15 +286,26 @@ async def test_target_resolution_order() -> None:
         default,
         list_agents=list_agents,
         upload_agent_bundle=upload,
-        default_agent_name="codex-native-ui",
+        default_agent=OmnigentAgentSelection(agent_name="codex-native-ui"),
     )).source == "default_agent_name"
+
+    calls.clear()
+    resolved_default_id = await resolve_omnigent_target(
+        default,
+        list_agents=list_agents,
+        upload_agent_bundle=upload,
+        default_agent=OmnigentAgentSelection(agent_id="ag_durable"),
+    )
+    assert resolved_default_id.agent_id == "ag_durable"
+    assert resolved_default_id.source == "default_agent_id"
+    assert calls == []
 
     with pytest.raises(OmnigentAdapterError) as exc:
         await resolve_omnigent_target(
             default,
             list_agents=list_agents,
             upload_agent_bundle=upload,
-            default_agent_name=None,
+            default_agent=None,
         )
     assert exc.value.failure_class == "integration_error"
 
@@ -310,6 +346,64 @@ def test_session_create_payload_host_id_rules() -> None:
         target=OmnigentResolvedTarget(agent_id="ag_1", source="agent_id"),
     )
     assert payload["host_id"] == "host_1"
+
+
+def test_codex_gh_session_keeps_authored_terminal_arguments() -> None:
+    req = _request(
+        parameters={
+            "requiredCapabilities": ["git", "gh"],
+            "omnigent": {
+                "agent": {"agentName": "codex-native-ui"},
+                "session": {
+                    "hostType": "external",
+                    "hostId": "host_1",
+                    "workspace": "/workspaces/run",
+                    "terminalLaunchArgs": ["--no-alt-screen"],
+                },
+            },
+        }
+    )
+    selection = build_omnigent_selection(req)
+
+    payload = build_omnigent_session_create_payload(
+        request=req,
+        selection=selection,
+        target=OmnigentResolvedTarget(
+            agent_id="ag_codex",
+            source="agent_id",
+        ),
+    )
+
+    assert payload["terminal_launch_args"] == ["--no-alt-screen"]
+
+
+def test_codex_session_without_gh_keeps_authored_shell_policy() -> None:
+    req = _request(
+        parameters={
+            "requiredCapabilities": ["git"],
+            "omnigent": {
+                "session": {
+                    "hostType": "external",
+                    "hostId": "host_1",
+                    "workspace": "/workspaces/run",
+                    "terminalLaunchArgs": ["--no-alt-screen"],
+                }
+            },
+        }
+    )
+    selection = build_omnigent_selection(req)
+
+    payload = build_omnigent_session_create_payload(
+        request=req,
+        selection=selection,
+        target=OmnigentResolvedTarget(
+            agent_id="ag_codex",
+            source="agent_name",
+            agent_name="codex-native-ui",
+        ),
+    )
+
+    assert payload["terminal_launch_args"] == ["--no-alt-screen"]
 
 
 def test_session_create_payload_keeps_id_only_labels() -> None:

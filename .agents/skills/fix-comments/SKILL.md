@@ -32,7 +32,7 @@ If no constraints are provided, default to addressing all applicable feedback.
 
 1. Resolve PR and collect all comments.
 - Resolve the comments helper before reading any existing comments artifact:
-  - Prefer `.agents/skills/fix-comments/tools/get_branch_pr_comments.py`.
+  - Prefer `${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/fix-comments/tools/get_branch_pr_comments.py`; its repository-default path is `.agents/skills/fix-comments/tools/get_branch_pr_comments.py`.
   - Fall back to `tools/get_branch_pr_comments.py` only for repositories that intentionally mirror skill helper tools into the repo root.
   - If neither helper exists, stop as blocked with reason `comments_helper_missing`; do not use a stale `var/pr_comments/current-branch-comments.json`.
 - Run the resolved helper with `python3 <helper> --output var/pr_comments/current-branch-comments.json`.
@@ -82,16 +82,32 @@ If no constraints are provided, default to addressing all applicable feedback.
 - If tracked or untracked code/documentation changes exist outside ignored artifacts, commit with a clear message (default: `Address PR feedback for #<number>`).
 - Push the current branch after committing.
 - If there was nothing to commit, still prove the current branch is published: verify the exact local `HEAD` SHA is visible on the remote PR branch using `gh pr view`, `git ls-remote`, or an equivalent GitHub connector path.
+- After the exact pushed/no-op head is verified, group review comments by
+  `thread_id`. Resolve a current GitHub review thread only when every
+  non-outdated comment in that thread has a ledger disposition of `addressed` or
+  `not-applicable`. If any comment in the thread is deferred, unclassified, or
+  still applicable, leave the entire thread unresolved. The refreshed comments
+  artifact exposes the GraphQL node as `thread_id`; resolve eligible threads with
+  GitHub's `resolveReviewThread` mutation. Never resolve an outdated thread. If a
+  fully handled current thread cannot be resolved, stop as blocked with reason
+  `publish_unavailable`; an unresolved current thread remains an authoritative
+  merge blocker.
+  ```bash
+  gh api graphql \
+    -f threadId="$THREAD_ID" \
+    -f query='mutation($threadId:ID!){resolveReviewThread(input:{threadId:$threadId}){thread{isResolved}}}'
+  ```
+- Refresh `var/pr_comments/current-branch-comments.json` after resolving threads. Do not report success while any handled, non-outdated review comment still has `thread_resolved=false`.
 - After any push or no-op verification, re-check that the remote PR branch head SHA equals local `HEAD` by writing canonical evidence through the shared helper:
   ```bash
-  python3 .agents/skills/_shared/publish_evidence.py write-pushed \
+  python3 "${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/_shared/publish_evidence.py" write-pushed \
     --skill-id fix-comments \
     --repo "$REPO" \
     --branch "$BRANCH"
   ```
   If there was no commit to push, use:
   ```bash
-  python3 .agents/skills/_shared/publish_evidence.py write-no-op \
+  python3 "${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/_shared/publish_evidence.py" write-no-op \
     --skill-id fix-comments \
     --repo "$REPO" \
     --branch "$BRANCH"
@@ -99,7 +115,7 @@ If no constraints are provided, default to addressing all applicable feedback.
   If push or remote verification is unavailable, write blocked evidence and
   stop as blocked with reason `publish_unavailable`:
   ```bash
-  python3 .agents/skills/_shared/publish_evidence.py write-blocked \
+  python3 "${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/_shared/publish_evidence.py" write-blocked \
     --skill-id fix-comments \
     --repo "$REPO" \
     --branch "$BRANCH" \
@@ -152,8 +168,22 @@ The format is a JSON array of objects:
     "id": 87654321,
     "disposition": "not-applicable",
     "rationale": "Informational summary from bot, no action needed."
+  },
+  {
+    "id": 24681357,
+    "disposition": "deferred",
+    "rationale": "Needs a product decision on the retry budget; out of scope here."
   }
 ]
 ```
 
-Accepted `disposition` values: `addressed`, `not-applicable`. The `id` field must match the comment's numeric `id` from the comments JSON. Alternatively, `comment_id` and `status` field names are also accepted for backwards compatibility.
+Accepted `disposition` values: `addressed`, `not-applicable`, `deferred`. The `id`
+field must match the comment's numeric `id` from the comments JSON. Alternatively,
+`comment_id` and `status` field names are also accepted for backwards compatibility.
+
+Record every comment you decided not to fix in this pass as `deferred`. A
+`deferred` comment is **not** treated as handled: `pr-resolver` reads the ledger,
+sees that the comment is still present, and stops the merge loop for manual
+review instead of repeating a remediation pass that cannot make progress. Never
+downgrade a still-applicable comment to `not-applicable` to keep the loop
+running.

@@ -1,0 +1,6 @@
+{
+  "invariant": "host discovery uses the confirmed stock endpoint and resolves the deterministic container hostname plus ready configured harness",
+  "path": "/v1/hosts",
+  "hostId": "host-stock-replay",
+  "harness": "codex-native"
+}

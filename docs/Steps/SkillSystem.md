@@ -1,8 +1,10 @@
 # Skill System
 
+**Document Class:** Canonical declarative
+**Viewpoint:** Module Architecture View
 Status: Desired State
 Owners: MoonMind Engineering
-Last Updated: 2026-04-29
+Last Updated: 2026-08-18
 Canonical for: agent skills, Skill steps, skill-set resolution, runtime skill materialization, `.agents/skills` path policy
 Related: `docs/Steps/StepTypes.md`, `docs/Workflows/SkillAndPlanContracts.md`, `docs/Workflows/WorkflowArchitecture.md`, `docs/Workflows/RequiredCapabilities.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/UI/WorkflowConsoleArchitecture.md`, `AGENTS.md`
 
@@ -68,6 +70,46 @@ The desired-state skill model is:
 8. Managed runtimes receive a compact activation summary inline and a full read-only active skill bundle at the materialized `visiblePath`; `.agents/skills` is used only as a safe compatibility alias.
 9. Runtime adapters consume the resolved snapshot; they must not rediscover, broaden, or re-resolve Skills during execution.
 10. `.agents/skills/local` remains a local-only overlay input convention, not the active runtime projection.
+11. A native host is selected from trusted resolved-skill evidence, never from
+    canonical skill name or publish mode alone, and is valid only when it
+    executes the exact portable semantic entrypoint from that resolved content.
+
+### Native implementation contracts
+
+Skills may declare a portable semantic implementation contract and supported
+hosts independently of their publish metadata. The resolved entry preserves the
+winning source, content ref, digest, contract, supported hosts, and native-host
+policy. A native binding may supply execution substrate, but the resolved Skill
+bundle remains the sole semantic authority. The binding must execute a portable
+entrypoint from that exact resolved content; it must not reproduce the Skill's
+data collection, classification, ordering, retry, remediation, or completion
+logic in MoonMind code.
+
+Allowed native responsibilities are limited to capabilities that cannot live in
+portable Skill content without violating platform boundaries: immutable
+resolution and materialization, credential delivery, workspace isolation,
+process supervision, durable scheduling, timeout and cancellation enforcement,
+approval enforcement, log and artifact transport, and validation or publication
+of the Skill's declared terminal evidence. Durability is not permission to move
+semantic decisions out of the Skill. A Temporal workflow may durably invoke the
+same portable entrypoint at Activity boundaries; it may not become a second
+implementation of that entrypoint.
+
+Later-precedence repo or local content with the same skill name remains different
+content and receives no built-in native privileges by name. When a compatible
+binding cannot execute the exact resolved implementation, the runtime records an
+explicit portable-host decision or rejects the step before launch with a policy
+diagnostic. It must not substitute other Skill content or a parallel built-in
+implementation.
+
+Native-binding review must answer both questions before implementation:
+
+1. Which irreducibly native capability is being supplied?
+2. Which portable semantic entrypoint from the resolved Skill is executed?
+
+If either answer is missing, the binding is invalid. Cross-host conformance tests
+may add defense in depth, but matching tests do not authorize duplicated semantic
+implementations.
 
 ---
 
@@ -1201,6 +1243,14 @@ Rules:
 4. A Tool invoked by an agent is still a Tool.
 5. Tool outputs remain Tool outputs and artifact refs.
 6. Agent decisions about which Tool to use belong to the Skill step/runtime policy, not to the Tool registry.
+
+Skill side-effect metadata may contribute a normalized Required Capability
+without becoming an authorization grant itself. Specifically,
+`sideEffect.kind: enqueue_children` derives `execution.fanout` during backend
+normalization. Policy must authorize and materialize the scoped runtime
+capability before launch; the Skill author and operator do not manage a separate
+permission checkbox. See
+[Required Capabilities](../Workflows/RequiredCapabilities.md#75-executionfanout).
 
 ---
 

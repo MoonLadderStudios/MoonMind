@@ -1,0 +1,14 @@
+{
+  "agentId": "claude_code",
+  "executionProfileRef": "claude_anthropic_oauth",
+  "managedSession": null,
+  "runtimeSessionReset": null,
+  "runtimeSelection": {
+    "runtimeId": "claude_code",
+    "agentKind": "managed",
+    "model": "claude-opus-4-7",
+    "effort": "high",
+    "executionProfileRef": "claude_anthropic_oauth",
+    "skillId": "pr-resolver"
+  }
+}

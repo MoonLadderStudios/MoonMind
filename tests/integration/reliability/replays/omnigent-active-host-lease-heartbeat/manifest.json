@@ -1,0 +1,9 @@
+{
+  "incidentWorkflowId": "mm:f2400165-4a1d-4277-a702-fe17d2045a4e",
+  "incidentRunId": "019fd3b6-67a9-7da3-b221-1bbca8e23948",
+  "failedChildWorkflowId": "mm:f2400165-4a1d-4277-a702-fe17d2045a4e:agent:node-1",
+  "failedChildRunId": "019fd3b6-827a-7da7-a40d-97016a06e0fd",
+  "hostLeaseRef": "ohl_7629c49b09bc2737dbf208a6c5a8a03b",
+  "failureShape": "a healthy long-running native Codex turn outlived the host lease's 90-second heartbeat window, so the scheduled janitor interrupted the session and removed its runner",
+  "boundary": "profile-bound provider execution to durable OAuth host lease janitor"
+}

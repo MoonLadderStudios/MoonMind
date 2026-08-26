@@ -1,6 +1,12 @@
 # Provider Profiles
 
-**Related design documents:** [SecretsSystem.md](./SecretsSystem.md), [OAuthTerminal.md](../ManagedAgents/OAuthTerminal.md), [ManagedAndExternalAgentExecutionModel.md](../Temporal/ManagedAndExternalAgentExecutionModel.md)
+Omnigent compatibility and capacity are governed by an
+[immutable policy version](../Omnigent/PolicyAuthority.md). The Codex product path
+this profile serves is the canonical external-agent identity `agentKind=external`,
+`agentId=omnigent`, nested harness `codex-native`, reconciled end-to-end by
+[NormalCodexProductPathReconciliation.md](../Omnigent/NormalCodexProductPathReconciliation.md).
+
+**Related design documents:** [SecretsSystem.md](./SecretsSystem.md), [OAuthTerminal.md](../ManagedAgents/OAuthTerminal.md), [ManagedAndExternalAgentExecutionModel.md](../Temporal/ManagedAndExternalAgentExecutionModel.md), [Codex via Omnigent Create-to-host contract](../Omnigent/CodexCreateToHostContract.md)
 
 Status: **Desired-State Design**
 Owners: MoonMind Engineering
@@ -54,6 +60,13 @@ The Settings experience has one additional product rule:
 > Claude and Codex provider profiles should be easy to find and configure in Settings. OAuth profiles must default to not launchable until the user successfully authenticates OAuth. API-key profiles seeded from configured environment secrets are connected and enabled by default.
 
 This means “disabled by default” is a safety state for unconfigured providers. It is not an extra manual step after setup succeeds.
+
+On a fresh installation with no provider credentials configured, the persisted
+profile set contains exactly `claude_anthropic_oauth` and
+`codex_openai_oauth`. Both profiles are disabled and not configured so Settings
+can offer OAuth or API-key setup without implying launch readiness. Credential-
+backed API and alternative-provider profiles are added and enabled only when
+their corresponding credentials are configured.
 
 ---
 

@@ -112,6 +112,8 @@ These commands cover:
 * `ui:lint` — ESLint
 * `ui:build:check` — clean rebuild plus manifest validation
 
+Run real-browser regressions locally with `npm run ui:test:browser`; it defaults to Chromium and Firefox. To reproduce one CI matrix leg, set `MOONMIND_BROWSER_ENGINES=chromium` or `MOONMIND_BROWSER_ENGINES=firefox`. CI supplies the matching browsers from its pinned Playwright container.
+
 ## Generated API types
 
 Refresh the generated frontend API types with:

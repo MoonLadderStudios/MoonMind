@@ -1,0 +1,12 @@
+{
+  "incidentWorkflowId": "mm:651a14f6-ff53-43e9-a91b-b37ad276f9ef",
+  "sourceWorkflowId": "mm:96eb128d-ff2e-4d22-9fe5-cde712d2c678",
+  "failureShape": "stock Codex reported a completed turn whose last durable item was function_call_output, after an assistant preamble but before a final assistant answer or repository change",
+  "sessionStatus": "completed",
+  "items": [
+    {"type": "message", "data": {"role": "user", "content": [{"type": "input_text", "text": "task"}]}},
+    {"type": "message", "data": {"role": "assistant", "content": [{"type": "output_text", "text": "I will inspect the repository."}]}},
+    {"type": "function_call", "data": {"name": "exec"}},
+    {"type": "function_call_output", "data": {"output": "bounded replay output"}}
+  ]
+}

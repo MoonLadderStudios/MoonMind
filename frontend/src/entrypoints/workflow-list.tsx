@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
 import { formatRuntimeLabel, formatStatusLabel } from '../utils/formatters';
 import { WorkflowLifecycleStatusPill } from '../components/ExecutionStatusPill';
+import { resolveWorkflowDisplayStatus } from '../status/workflowStatus';
 import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
 import { PageSizeSelector, parsePageSize } from '../components/PageSizeSelector';
 import {
@@ -2414,15 +2415,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
             <div className="notice error workflow-list-empty-message">{(error as Error).message}</div>
             {resultsFooter}
           </>
-        ) : sortedItems.length === 0 ? (
-          <>
-            {!hasPaginationContext ? (
-              <p className="small workflow-list-empty-message">No workflows found for the current filters.</p>
-            ) : (
-              <div className="card small workflow-list-empty-message">No workflows found for the current filters.</div>
-            )}
-            {resultsFooter}
-          </>
         ) : (
           <>
             <div className="queue-table-wrapper" data-layout="table" data-density={density}>
@@ -2581,7 +2573,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                           </td>
                           {isColumnVisible('status') ? (
                             <td className="queue-table-cell-status">
-                              <WorkflowLifecycleStatusPill status={row.rawState || row.state || row.status} />
+                              <WorkflowLifecycleStatusPill status={resolveWorkflowDisplayStatus(row.rawState, row.state, row.status)} />
                               {statusSupplements.map((item) => (
                                 <div key={item} className="workflow-list-status-supplement small">
                                   {item}
@@ -2641,7 +2633,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                         </a>
                       </div>
                       <div className="queue-card-status">
-                        <WorkflowLifecycleStatusPill status={row.rawState || row.state || row.status} />
+                        <WorkflowLifecycleStatusPill status={resolveWorkflowDisplayStatus(row.rawState, row.state, row.status)} />
                         {statusSupplements.map((item) => (
                           <div key={item} className="workflow-list-status-supplement small">
                             {item}
@@ -2691,6 +2683,19 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                       );
                     })}
               </ul>
+              {sortedItems.length === 0 ? (
+                !hasPaginationContext ? (
+                  <p className="small workflow-list-empty-message">
+                    No workflows found for the current filters.{' '}
+                    <a href="/workflows/new">Create a workflow</a>
+                  </p>
+                ) : (
+                  <div className="card small workflow-list-empty-message">
+                    No workflows found for the current filters.{' '}
+                    <a href="/workflows/new">Create a workflow</a>
+                  </div>
+                )
+              ) : null}
               {resultsFooter}
             </>
           )}

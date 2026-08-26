@@ -2,7 +2,7 @@
 
 Status: Active
 Owners: MoonMind Engineering
-Last Updated: 2026-04-04
+Last Updated: 2026-07-11
 
 ## 1. Purpose
 
@@ -10,10 +10,21 @@ The **PR Resolver** skill is invoked from the dashboard (via Temporal `AgentTask
 
 1. **Resolve target PR** (defaults to the PR associated with the current branch).
 2. **Fetch PR metadata + CI status + comments**.
-3. **Diagnose and Delegate**: Use the "Read-and-Execute" (Instruction Composition) pattern to dynamically load and execute specialized sub-skills (e.g., `fix-merge-conflicts`, `fix-ci`) based on the PR state.
+3. **Diagnose and Delegate**: classify the portable snapshot and follow the selected specialized Skill from the same resolved Skill set.
 4. **Merge the PR** if everything is already good **and** no CI is currently running.
 
-This skill acts as an **Umbrella Skill**. It relies on existing specialized skills to do the heavy lifting, ensuring robust, context-aware execution within a single Temporal Managed Agent execution run.
+MoonMind executes `pr-resolver` as an ordinary resolved Skill in
+`MoonMind.AgentRun`. The Skill markdown owns the loop and the packaged portable
+helpers own snapshot collection and merge gating. MoonMind supplies the managed
+runtime substrate and projects the Skill's terminal artifacts; it does not run a
+second resolver implementation.
+
+The checked-in skill is also a portable contract. Its provider-neutral models,
+normalization, classification, transition, and evidence rules live in
+`pr_resolver_core`, while provider data collection and command execution live in
+the Skill bundle. The same bundle is used in direct Codex and MoonMind-managed
+runs. The core performs no network, filesystem, process, credential, clock, or
+Temporal operations.
 
 ---
 
@@ -22,7 +33,11 @@ This skill acts as an **Umbrella Skill**. It relies on existing specialized skil
 * The `temporal-worker-sandbox` environment already supports run-scoped skills via `.agents/skills` symlinks to a single active set.
 * The worker environment has GitHub auth available for private repo operations and includes `gh` usage in existing workflows.
 * Specialized sub-skills (like `fix-merge-conflicts`) are available in the `.agents/skills/` directory.
-* Because the PR Resolver performs git/PR mutations itself (via sub-skills), Temporal Workflows using this skill must use `publish.mode=auto`. The selected skill owns repository publishing, must write `artifacts/publish_result.json` evidence, and avoids the MoonMind-managed branch/PR publish Activity.
+* Resolver workflows use `publish.mode=auto`. Specialized Skills may commit and
+  push when their instructions require it; the portable `pr-resolver` finalize
+  helper owns merge and terminal-evidence generation.
+* Publish authority and implementation hosting are independent decisions.
+  `publish.mode=auto` does not authorize native Temporal execution.
 
 ---
 
@@ -46,16 +61,32 @@ Shared repo skill mirror:
     pr_resolver_result.schema.json
 ```
 
-The **Read-and-Execute** pattern keeps orchestration in `SKILL.md`; `bin/pr_resolve_snapshot.py` produces the machine-readable snapshot, and sub-skills supply fix procedures.
+The Python scripts and this markdown form the portable implementation. MoonMind
+materializes and executes that same bundle through its ordinary agent runtime;
+there is no active native semantic host.
 
-### 3.2 Required Worker Capabilities
+### 3.2 Skill-owned host contract
 
-The Temporal Workflow Task Queue routing should derive/declare:
+The portable contract declares `implementation.contract =
+pr-resolver-core/v1`, supports the `cli` host, and is not native-host eligible.
+All resolved sources—built-in, deployment, repository, or local—execute their
+exact immutable Skill content through the ordinary agent runtime path. Built-in
+provenance does not authorize MoonMind to replace the bundle with
+`MoonMind.PRResolver` or GitHub-adapter readiness logic.
 
-* `git`
-* `gh`
+The former native resolver remains registered only for replay of Temporal
+histories that already recorded it. A new workflow records the
+`run-pr-resolver-skill-owned-execution-v1` cutover marker and cannot select that
+child type.
 
-This matches the standard `AgentTaskWorkflow` capability derivation pattern.
+### 3.3 Required Runtime Capabilities
+
+The selected managed runtime receives the resolved Skill set plus governed
+`git` and `gh` capabilities. MoonMind may materialize credentials, isolate the
+workspace, supervise the process, enforce cancellation and timeout policy, and
+persist artifacts. GitHub reads and merge attempts are initiated by the portable
+Skill helpers inside that boundary, not by an integrations activity that
+reimplements resolver behavior.
 
 ---
 
@@ -63,21 +94,33 @@ This matches the standard `AgentTaskWorkflow` capability derivation pattern.
 
 ### 4.1 Inputs (Skill Args)
 
+MoonMind workflow submissions require an explicit structured PR selector. The
+dashboard renders the Skill's **Pull request** and **Head branch** fields from
+the `SKILL.md` input schema and requires either a PR number/URL or a head branch.
+API callers may provide the selector through Skill/Tool `pr` or `branch` inputs,
+top-level task inputs, `git.startingBranch`, or a non-default `git.branch`.
+The repository's default checkout branch (for example, `main`) is not a PR
+selector. This boundary deliberately avoids inferring merge authority from
+free-form instructions.
+
 | Arg                   | Type        |  Default | Meaning                                                                                                              |
 | --------------------- | ----------- | -------: | -------------------------------------------------------------------------------------------------------------------- |
 | `repo`                | string|null |     null | `owner/repo`. If null, infer from git remote.                                                                        |
 | `pr`                  | string|null |     null | PR selector: number, URL, or branch (passed to `gh pr view`).                                                        |
 | `branch`              | string|null |     null | Explicit head branch to resolve; if set and `pr` unset, resolve associated PR.                                       |
 | `mergeMethod`         | enum        | `squash` | `merge`|`squash`|`rebase`                                                                                            |
+| `reviewProvider`      | string      |     `""` | Provider-neutral automated reviewer that must review every head SHA (for example `codex`). Empty or `none` disables the loop. |
+| `requireFreshReview`  | bool        |  `false` | Refuse to merge a head SHA that has no fresh review from `reviewProvider`.                                             |
+| `finishMode`          | enum        |  `merge` | `merge` merges once the gate opens; `fix_only` stops at the same open gate and reports `review_clean`. Only an omitted value takes the default; any other unsupported value fails validation instead of inheriting merge authority. |
 | `maxIterations`             | int         |        5 | Guardrail to avoid loops (re-evaluate after each fix).                                                                            |
 | `finalizeMaxRetries`        | int         |       60 | Total retries allowed for the orchestration process, including both finalize-only waits and full remediation cycles.              |
 | `finalizeBackoffSeconds`    | int         |       30 | Base sleep for finalize-only retries. The orchestrator uses exponential backoff and caps each sleep at `finalizeMaxSleepSeconds`. |
 | `finalizeMaxSleepSeconds`   | int         |      120 | Max sleep between finalize-only retries.                                                                                            |
 | `finalizeMaxElapsedSeconds` | int         |     7200 | Hard wall-clock cap for one orchestration run.                                                                                      |
 
-Retryable/no-progress blockers use at least five finalize attempts before
-returning `attempts_exhausted`, unless a hard timeout, hard failure, or
-non-retryable blocker is reached first.
+The Skill enforces these values in its own loop. MoonMind's runtime timeout and
+intervention policies remain an outer safety envelope and do not replace the
+Skill's retry semantics.
 
 ### 4.2 Outputs
 
@@ -86,48 +129,78 @@ Write a machine-readable result to the Workflow artifact directory:
 * `artifacts/pr_resolver_snapshot.json`
 * `artifacts/pr_resolver_result.json`
 
-The managed-agent adapter treats `var/pr_resolver/result.json` as the canonical
-terminal orchestration summary. `artifacts/pr_resolver_result.json` remains a
-supported terminal compatibility path for older resolver producers. Both paths
-must contain a valid terminal disposition and current-run evidence; files under
-`var/pr_resolver/attempts/` are diagnostic evidence only and never determine the
-parent workflow disposition.
+`var/pr_resolver/result.json` and `artifacts/publish_result.json` are the Skill's
+authoritative terminal evidence. MoonMind validates and projects those artifacts
+into workflow state; assistant prose or process exit alone is not completion
+evidence.
 
 Result should include:
 * Resolved PR identity
 * Decision summary (actions taken)
 * Merge outcome (merged / skipped / blocked + reason)
 * `mergeAutomationDisposition` for merge automation consumers:
-  `merged`, `already_merged`, `reenter_gate`, `manual_review`, or `failed`
+  `merged`, `already_merged`, `review_clean`, `reenter_gate`, `request_review`,
+  `manual_review`, or `failed`
 
-Continuation blockers use `reenter_gate`, not generic failure. This includes
-resolver-owned remediation steps (`run_fix_comments_skill`, `run_fix_ci_skill`,
-`run_fix_merge_conflicts_skill`) and transient finalize-only waits
-(`retry_finalize_after_backoff`, `wait_for_ci_and_retry_finalize`). Managed
-runtime adapters preserve that disposition only when the resolver run carries a
-`mergeGate` owner from `MoonMind.MergeAutomation`. In that gate-owned case, the
-adapter must not turn a non-zero resolver exit such as `attempts_exhausted` into
-an agent failure, because merge automation owns the next gate cycle.
+`reenter_gate` is terminal for the current resolver process but nonterminal for
+its enclosing merge automation. The Skill authors a `gated-continuation/v1`
+reason and retry deadline; the workflow transports and durably waits on that
+request without reimplementing review or CI semantics. Standalone and
+parent-mismatched handoffs fail closed, and detached polling after agent exit is
+unsupported.
 
-During long waits, especially `ci_running`, the resolver emits concise progress
-lines before sleeping. These lines are part of the operational contract: they keep
-managed-runtime observability fresh and avoid treating a healthy CI poll loop as
-a silent stuck agent.
+New handoffs bind the complete authority tuple: owner workflow ID, owner run ID,
+registered owner workflow type, resolver child workflow ID, resolver child run
+ID, step execution reference, and head SHA. The direct finalizer copies the
+existing Codex review-grace `expiresAt` into `notBefore`; it does not restart the
+grace period. Legacy untimed evidence is accepted only through the recorded
+fallback path and is reported as `legacy_continuation_fallback_used`.
 
-The orchestration command MUST run in the foreground for the lifetime of the
-managed run. It polls long-running states (notably `ci_running`) internally up to
-its elapsed budget and finalizes the merge when CI passes. The agent MUST NOT
-background the command or rely on notifications/scheduled wakeups to finish the
-merge after it exits — in a one-shot managed run there is no callback, so exiting
-while CI is still running abandons the merge and leaves the PR unresolved.
+`request_review` is the second continuation disposition. It means "this head SHA
+needs one fresh review from the configured provider before merge is allowed."
+The Skill authors a `gated-continuation/v2` payload that names only the provider,
+the exact head SHA, the step execution reference, and a progress signature. It
+never supplies request text and never posts the request itself: an agent process
+must not own a multi-hour external wait. The validated
+`MoonMind.MergeAutomation` parent translates the provider into its configured
+exact command, performs the request through one idempotent Activity, and owns
+the durable wait for the result.
 
-A standalone `pr-resolver` run (one not launched by `MoonMind.MergeAutomation`)
-that ends in the continuation state `reenter_gate` has no gate to re-enter, so it
-is not a successful PR resolution; the owning workflow fails such a run terminally
-rather than reporting success. Managed-runtime adapters suppress ungated
-continuation disposition metadata and surface the resolver's terminal blocker
-summary as a normal failed/blocked PR-resolution result. See
-`docs/Workflows/PrMergeAutomation.md` §13.4.
+`review_clean` is the terminal disposition for `finishMode = fix_only`. It means
+the merge gate is fully open and the Skill withheld the merge because this run
+was not granted merge authority. It narrows the side effect only: every gate,
+blocker, remediation, and evidence rule is unchanged, so an unresolved blocker
+still produces `manual_review`, `reenter_gate`, `request_review`, or `failed`. Its
+terminal evidence is the usual `artifacts/publish_result.json` with
+`merged = false` and the branch head verified on the remote, plus a live check
+that the pull request is still unmerged. Evidence that reports a merge — or that
+cannot verify the remote — is rejected as `UNAUTHORIZED_MERGE_EVIDENCE` or
+published as blocked instead of closing the run successfully. Being a terminal
+success, `review_clean` exits `0`; the result JSON carries the distinction.
+
+The canonical workflow terminal dispositions are `merged`, `already_merged`,
+`review_clean`, `manual_review`, and `failed`. Intermediate waits and remediation
+dispatches stay inside workflow state and are not terminal agent dispositions.
+
+### 4.3 Automated review evidence
+
+When `reviewProvider` is set and `requireFreshReview` is true, the snapshot adds
+an `automatedReview` block for the current head SHA. It is collected portably
+through `gh` and is the Skill's own authority — MoonMind does not classify review
+freshness on the Skill's behalf:
+
+* `freshReviewForHead` — a provider review whose `commit_id` is the current head,
+  a provider review submitted after a request that covers the current head, or a
+  clean-review reaction from the provider on that request comment.
+* `requestPending` — a request comment matching the provider command exists and
+  was created at or after the head commit, but no result has arrived.
+* `requestCommentId`, `requestedAt`, `completionKind`, `completionId`,
+  `completedAt` — the compact evidence trail.
+
+A review bound to an older commit is never fresh evidence for a newer head. The
+snapshot also emits `progressSignature` (head SHA plus the sorted outstanding
+actionable and deferred comment IDs) so the owning gate can detect a remediation
+loop that is not making progress.
 
 ---
 
@@ -139,7 +212,11 @@ summary as a normal failed/blocked PR-resolution result. See
 Use `gh pr view --json` (fields: `number,title,url,isDraft,state,headRefName,baseRefName,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup`).
 
 **B. Comments**
-Reuse existing scripts (`tools/get_branch_pr_comments.py` or `tools/get_pr_comments.py`) to yield a normalized list of comments.
+The Skill resolves `fix-comments/tools/get_branch_pr_comments.py` from the same
+immutable active Skill set. That helper retrieves issue comments, review bodies,
+inline review comments, and paginated review-thread resolution/outdated state.
+MoonMind workflows, Activities, and GitHub adapters do not retrieve or classify
+comments for `pr-resolver`.
 
 **C. CI / Checks / Running state**
 `bin/pr_resolve_snapshot.py` emits a unified snapshot, computing:
@@ -151,21 +228,25 @@ Reuse existing scripts (`tools/get_branch_pr_comments.py` or `tools/get_pr_comme
 
 ## 6. Decision Engine
 
-The resolver always re-evaluates from the top after each applied fix (bounded by `maxIterations`).
+The Skill always re-reads authoritative GitHub state after each applied fix.
 
 1. **Preflight stop conditions:** PR not found, PR is draft, or PR already merged/closed.
 2. **Merge conflicts:** If `mergeable` indicates conflict (`false`, `CONFLICTING`, or `DIRTY`) or `mergeStateStatus` is exactly `DIRTY` → Delegate to `fix-merge-conflicts` skill before any CI-fix or CI-wait decision.
 3. **CI failures:** If `ci.hasFailures == true` → Delegate to `fix-ci` skill (or fallback to manual diagnosis if skill missing).
 4. **Review comments:** If `reviewDecision` requests changes or comments are actionable → Delegate to `fix-comments` skill.
-5. **Merge:** If `mergeable` is clean, `mergeStateStatus` is `CLEAN`, no CI running, and reviews satisfied → Execute `gh pr merge`.
-6. **Finalize-only retry:** If CI is running without failures while `mergeable` is clean (not in conflict) and `mergeStateStatus` is `CLEAN` → stay in the finalize loop and retry after exponential backoff.
-7. **Blocked:** If the transient finalize-only retry budget is exhausted or a non-retryable blocker is detected → exit with the corresponding blocked or `attempts_exhausted` result.
+5. **Deferred comments:** If the `fix-comments` ledger deferred or could not fix a comment that is still present → stop as `manual_review`. Repeating the same remediation cannot clear a deferred disposition.
+6. **Fresh automated review:** If the review loop is enabled and no fresh provider review covers the current head → return `request_review` when no request covers this head, or `reenter_gate` while a request for this head is still outstanding.
+7. **Merge:** If gates pass, run the portable finalize helper with the selected merge method and independently verify the remote merge result through that helper.
+8. **Transient wait:** apply the Skill's bounded backoff, then read a new portable snapshot.
+9. **Blocked:** stop on budget exhaustion, non-retryable input, or an identical actionable blocker that repeats without a remote head change.
 
 ---
 
 ## 7. Fix Execution Strategies (Instruction Composition)
 
-Instead of hardcoding git commands or CI logic, the `pr-resolver` acts as an Umbrella Agent. It dynamically reads the instructions of specialized skills and executes them in the current Temporal Managed Agent session.
+The resolver starts one bounded `MoonMind.AgentRun` with the immutable resolved
+skill-set ref and exact blocker/head identity. It never embeds specialized repair
+logic in workflow code.
 
 ### 7.1 Fix Merge Conflicts
 **Action:** The agent reads `.agents/skills/fix-merge-conflicts/SKILL.md` (or equivalent location) into its context.
@@ -179,7 +260,8 @@ Instead of hardcoding git commands or CI logic, the `pr-resolver` acts as an Umb
 **Action:** The agent reads `.agents/skills/fix-comments/SKILL.md` into its context.
 **Execution:** It follows the instructions to categorize comments, apply code changes, and optionally reply to the PR.
 
-*Note: If a specific sub-skill does not exist yet (e.g., `fix-ci`), the `pr-resolver` can fallback to general best-effort problem solving based on the snapshot data.*
+If the required specialized skill is unavailable, resolution fails closed instead
+of substituting general best-effort behavior.
 
 ---
 
@@ -192,7 +274,9 @@ Merge only when:
 * **No CI currently running**
 * Review policy satisfied
 
-Execution: `gh pr merge <pr> --<mergeMethod>`
+Execution: `bin/pr_resolve_finalize.py` refreshes the portable snapshot, verifies
+the exact head and all gates, invokes `gh pr merge` with the selected method, and
+writes terminal evidence.
 
 ---
 
@@ -240,52 +324,21 @@ Include in result:
 
 ---
 
-## 12. Suggested `SKILL.md` Skeleton (Agent Skill)
+## 12. Canonical Skill Instructions
 
-This enforces the "Read-and-Execute" pattern for the LLM:
-
-```markdown
----
-name: pr-resolver
-description: Master orchestrator to resolve a PR by diagnosing state and delegating to specialized skills.
----
-
-# PR Resolver Skill
-
-## Purpose
-You are the Master orchestrator for finishing Pull Requests. You diagnose the PR state using a snapshot script and resolve issues by reading and executing the instructions of specialized sub-skills (`fix-merge-conflicts`, `fix-ci`, etc.).
-
-## Inputs (skill args)
-- inputs.repo (optional)
-- inputs.pr (optional)
-- inputs.branch (optional)
-- inputs.mergeMethod (merge|squash|rebase)
-- inputs.maxIterations (default 5)
-- inputs.finalizeMaxRetries (default 60)
-- inputs.finalizeBackoffSeconds (default 30)
-- inputs.finalizeMaxSleepSeconds (default 120)
-- inputs.finalizeMaxElapsedSeconds (default 7200)
-
-## Workflow
-1. Run `bin/pr_resolve_snapshot.py` to generate `artifacts/pr_resolver_snapshot.json`.
-2. Inspect the snapshot output.
-3. Apply fixes in this strict priority order:
-   - **Merge Conflicts:** If `mergeable` indicates conflict (`false`, `CONFLICTING`, or `DIRTY`) or `mergeStateStatus` is exactly `DIRTY`, you MUST read `.agents/skills/fix-merge-conflicts/SKILL.md`. Follow its procedure exactly to resolve the conflict before attempting CI fixes or waiting for CI.
-   - **CI Failures:** If `ci.hasFailures` is true, you MUST read `.agents/skills/fix-ci/SKILL.md` (or similar available skill) and follow its procedure to fix the tests/build.
-   - **Review Comments:** If `reviewDecision` indicates changes requested, read `.agents/skills/fix-comments/SKILL.md` and follow its procedure.
-   - **Merge:** If all green, `mergeable` is clean, `mergeStateStatus` is `CLEAN`, and NO CI is running, execute `gh pr merge --<mergeMethod>`.
-   - **Finalize-only retry:** If CI is running but no failures while `mergeable` is clean and `mergeStateStatus` is exactly `CLEAN`, retry finalize after bounded exponential backoff until the transient retry budget is exhausted.
-4. After applying ANY fix (conflict, CI, or review), you MUST loop back to Step 1 and re-run the snapshot. Stop after `maxIterations`, but do not report `attempts_exhausted` for retryable/no-progress blockers before five finalize attempts unless a hard timeout, hard failure, or non-retryable blocker is reached first.
-5. Write `artifacts/pr_resolver_result.json` summarizing the actions taken and the final merge outcome.
-
-## Constraints
-- Do NOT try to invent your own conflict resolution or CI fixing workflow. Always load and follow the specialized sub-skill instructions.
-- This skill is allowed to commit/push and merge only under `task.publish.mode = "auto"` and must write `artifacts/publish_result.json` evidence before reporting success.
-```
+`.agents/skills/pr-resolver/SKILL.md` is the canonical executable instruction
+contract. This document intentionally does not duplicate its step-by-step
+workflow. Changes to resolver behavior begin in that Skill bundle and are then
+reflected here as durable architecture; MoonMind-native code must not become a
+second source of behavior.
 
 ---
 
 ## 13. Verification
 
 - Skill assets live under `.agents/skills/pr-resolver/`; snapshot logic is exercised by `tests/unit/test_pr_resolver_tools.py` (loads `pr_resolve_snapshot.py` from the skill tree).
+- Skill resolution tests require `supportedHosts = ["cli"]` and
+  `nativeHostEligible = false`.
+- New `MoonMind.UserWorkflow` histories route `pr-resolver` through
+  `MoonMind.AgentRun`; the dedicated native workflow is replay-only.
 - The dashboard submit flows reference `pr-resolver` in the React workflow-start surface and its focused entrypoint tests.

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Queue one child MoonMind workflow per resolved issue target.
+"""Resolve issue targets and queue one child MoonMind workflow per target.
 
-The agent resolves Jira status or other issue targets into the canonical
-resolved-target shape (see SKILL.md) and writes them to a JSON file. This helper
-reads that file plus the selected child run capability / publish policy and
-submits one child execution per target through the internal Temporal execution
-API. Every child inherits the parent runtime via ``runtimeInheritance="caller"``
+The agent resolves Jira status targets into the canonical resolved-target shape
+(see SKILL.md) and writes them to a JSON file. GitHub issue-number ranges are
+resolved directly by this portable helper so a numeric range remains search
+criteria rather than being mistaken for a target list. The helper submits one
+child execution per resolved target through the internal Temporal execution API.
+Every child inherits the parent runtime via ``runtimeInheritance="caller"``
 (with a fallback copy of the effective runtime fields) and shares a single
 publish policy. A summary artifact links every queued child workflow.
 """
@@ -13,33 +14,57 @@ publish policy. A summary artifact links every queued child workflow.
 from __future__ import annotations
 
 import argparse
-import asyncio
 import hashlib
+import importlib.util
 import json
 import logging
 import os
 import re
+import subprocess
 import sys
 import traceback
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-REPO_ROOT = Path(__file__).resolve().parents[4]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
-import httpx
-from moonmind.workflows.executions.execution_contract import SUPPORTED_PUBLISH_MODES
-from moonmind.workflows.executions.runtime_defaults import normalize_runtime_id
+SHARED_ROOT = Path(__file__).resolve().parents[2] / "_shared"
+_CLIENT_PATH = SHARED_ROOT / "workflow_execution_client.py"
+_CLIENT_SPEC = importlib.util.spec_from_file_location(
+    "batch_workflows_execution_client", _CLIENT_PATH
+)
+if _CLIENT_SPEC is None or _CLIENT_SPEC.loader is None:
+    raise RuntimeError(f"resolved skill snapshot is missing portable client: {_CLIENT_PATH}")
+_CLIENT = importlib.util.module_from_spec(_CLIENT_SPEC)
+_CLIENT_SPEC.loader.exec_module(_CLIENT)
+child_idempotency_key = _CLIENT.child_idempotency_key
+normalize_publish_mode = _CLIENT.normalize_publish_mode
+normalize_runtime_id = _CLIENT.normalize_runtime_id
+validate_execution_envelope = _CLIENT.validate_execution_envelope
 
 logger = logging.getLogger(__name__)
 
 API_EXECUTIONS_ENDPOINT = "/api/executions"
-IDEMPOTENCY_KEY_MAX_LENGTH = 128
+IDEMPOTENCY_KEY_MAX_LENGTH = _CLIENT.IDEMPOTENCY_KEY_MAX_LENGTH
 PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE = "pr_with_merge_automation"
-BATCH_PUBLISH_MODES = SUPPORTED_PUBLISH_MODES | {PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE}
+SUPPORTED_RUN_REFS = frozenset(
+    {
+        ("jira", "skill", "jira-verify"),
+        ("jira", "preset", "jira-implement"),
+        ("jira", "preset", "jira-orchestrate"),
+        ("github", "preset", "github-issue-implement"),
+        ("github", "preset", "github-issue-orchestrate"),
+    }
+)
+_GITHUB_RANGE_PATTERN = re.compile(r"^(?P<start>\d+)-(?P<end>\d+)$")
+_GITHUB_GRAPHQL_CHUNK_SIZE = 50
+_GITHUB_MAX_SEARCH_WIDTH = 1000
+
+
+class BatchInputError(ValueError):
+    """Raised when provider-specific batch search input is invalid."""
 
 
 @dataclass
@@ -82,10 +107,7 @@ def _text(value: Any) -> str | None:
 
 
 def _normalize_publish_mode(value: str | None) -> str:
-    candidate = str(value or "").strip().lower()
-    if candidate not in BATCH_PUBLISH_MODES:
-        return "pr"
-    return candidate
+    return normalize_publish_mode(value)
 
 
 def _publish_payload_for_mode(publish_mode: str) -> dict[str, Any]:
@@ -104,6 +126,181 @@ def _normalize_repo(value: Any) -> str | None:
     if candidate.endswith(".git"):
         candidate = candidate[:-4]
     return candidate or None
+
+
+def parse_github_issue_range(value: str) -> tuple[int, int]:
+    """Parse an inclusive GitHub issue-number search range."""
+
+    candidate = str(value or "").strip()
+    match = _GITHUB_RANGE_PATTERN.fullmatch(candidate)
+    if match is None:
+        raise BatchInputError("GitHub issue range must use START-END")
+    start = int(match.group("start"))
+    end = int(match.group("end"))
+    if start <= 0 or end <= 0:
+        raise BatchInputError("GitHub issue range numbers must be positive integers")
+    if start > end:
+        raise BatchInputError(
+            "GitHub issue range START must be less than or equal to END"
+        )
+    return start, end
+
+
+def _github_repository_parts(repository: str) -> tuple[str, str]:
+    normalized = _normalize_repo(repository)
+    parts = normalized.split("/") if normalized else []
+    if len(parts) != 2 or not all(parts):
+        raise BatchInputError("GitHub repository must use owner/repository")
+    return parts[0], parts[1]
+
+
+def _github_issue_range_query(numbers: list[int]) -> str:
+    issue_fields = """
+      number
+      title
+      body
+      url
+      state
+      labels(first: 100) { nodes { name } }
+    """.strip()
+    selections = "\n".join(
+        f"issue{number}: issue(number: {number}) {{ {issue_fields} }}"
+        for number in numbers
+    )
+    return (
+        "query($owner: String!, $name: String!) {\n"
+        "  repository(owner: $owner, name: $name) {\n"
+        f"{selections}\n"
+        "  }\n"
+        "}"
+    )
+
+
+def resolve_github_issue_range(
+    repository: str,
+    issue_range: str,
+    *,
+    run_command: Any = subprocess.run,
+) -> list[dict[str, Any]]:
+    """Return only open GitHub Issues whose numbers fall in ``issue_range``.
+
+    GitHub's shared issue/PR numbering means numeric members of the range may be
+    pull requests or may not exist. Querying the GraphQL ``issue(number:)`` field
+    makes those entries resolve to null, so neither can become a workflow target.
+    Closed issues and responses without an explicit open state are also omitted.
+    """
+
+    owner, name = _github_repository_parts(repository)
+    normalized_repository = f"{owner}/{name}"
+    start, end = parse_github_issue_range(issue_range)
+    search_width = end - start + 1
+    if search_width > _GITHUB_MAX_SEARCH_WIDTH:
+        raise BatchInputError(
+            "GitHub issue range may span no more than "
+            f"{_GITHUB_MAX_SEARCH_WIDTH} numbers"
+        )
+    targets: list[dict[str, Any]] = []
+
+    for chunk_start in range(start, end + 1, _GITHUB_GRAPHQL_CHUNK_SIZE):
+        numbers = list(
+            range(chunk_start, min(end + 1, chunk_start + _GITHUB_GRAPHQL_CHUNK_SIZE))
+        )
+        query = _github_issue_range_query(numbers)
+        completed = run_command(
+            [
+                "gh",
+                "api",
+                "graphql",
+                "-f",
+                f"query={query}",
+                "-f",
+                f"owner={owner}",
+                "-f",
+                f"name={name}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        try:
+            response = json.loads(completed.stdout)
+        except json.JSONDecodeError as exc:
+            detail = _text(completed.stderr) or "invalid JSON"
+            raise RuntimeError(
+                f"GitHub issue discovery failed: {detail[:1024]}"
+            ) from exc
+        if not isinstance(response, dict):
+            raise RuntimeError("GitHub issue discovery returned an invalid response")
+        errors = (
+            response.get("errors")
+            if isinstance(response.get("errors"), list)
+            else []
+        )
+        expected_missing_aliases = {f"issue{number}" for number in numbers}
+        unexpected_errors = [
+            error
+            for error in errors
+            if not (
+                isinstance(error, dict)
+                and error.get("type") == "NOT_FOUND"
+                and isinstance(error.get("path"), list)
+                and len(error["path"]) == 2
+                and error["path"][0] == "repository"
+                and error["path"][1] in expected_missing_aliases
+                and str(error.get("message") or "").startswith(
+                    "Could not resolve to an Issue with the number of "
+                )
+            )
+        ]
+        if unexpected_errors:
+            raise RuntimeError(
+                f"GitHub issue discovery failed: {json.dumps(unexpected_errors)[:1024]}"
+            )
+        if completed.returncode != 0 and not errors:
+            detail = _text(completed.stderr) or "unknown error"
+            raise RuntimeError(f"GitHub issue discovery failed: {detail[:1024]}")
+        data = response.get("data") if isinstance(response.get("data"), dict) else {}
+        repository_data = data.get("repository")
+        if not isinstance(repository_data, dict):
+            raise RuntimeError(
+                f"GitHub repository was not found or is not readable: {normalized_repository}"
+            )
+
+        for number in numbers:
+            issue = repository_data.get(f"issue{number}")
+            if not isinstance(issue, dict):
+                continue
+            issue_state = (_text(issue.get("state")) or "").upper()
+            if issue_state != "OPEN":
+                continue
+            labels_node = (
+                issue.get("labels") if isinstance(issue.get("labels"), dict) else {}
+            )
+            labels = [
+                str(node.get("name"))
+                for node in labels_node.get("nodes", [])
+                if isinstance(node, dict) and _text(node.get("name"))
+            ]
+            resolved_number = int(issue.get("number"))
+            targets.append(
+                {
+                    "provider": "github",
+                    "ref": f"{normalized_repository}#{resolved_number}",
+                    "githubIssue": {
+                        "repository": normalized_repository,
+                        "number": resolved_number,
+                        "title": str(issue.get("title") or ""),
+                        "body": str(issue.get("body") or ""),
+                        "url": str(issue.get("url") or ""),
+                        "state": issue_state.lower(),
+                        "labels": labels,
+                    },
+                    "repository": normalized_repository,
+                }
+            )
+
+    return targets
 
 
 def parse_run_ref(value: str | None) -> tuple[str, str]:
@@ -160,7 +357,7 @@ def child_goal_for_target(
         return None
     if (
         target_kind == "preset"
-        and target_slug == "jira-implement"
+        and target_slug in {"jira-implement", "jira-orchestrate"}
         and provider == "jira"
     ):
         issue = (
@@ -168,7 +365,8 @@ def child_goal_for_target(
         )
         key = _text(issue.get("key")) or _text(target.get("ref"))
         if key:
-            return f"Implement Jira issue {key}."
+            action = "Orchestrate" if target_slug == "jira-orchestrate" else "Implement"
+            return f"{action} Jira issue {key}."
         return None
     if (
         target_kind == "preset"
@@ -246,7 +444,7 @@ def bind_child_inputs(
         return inputs
     if (
         target_kind == "preset"
-        and target_slug == "jira-implement"
+        and target_slug in {"jira-implement", "jira-orchestrate"}
         and provider == "jira"
     ):
         issue = (
@@ -305,22 +503,13 @@ def _child_idempotency_key(
     scope = _text(batch_scope)
     if not scope:
         return None
-    components = {
-        "scope": scope,
-        "provider": provider,
-        "ref": ref,
-        "targetKind": target_kind,
-        "targetSlug": target_slug,
-    }
-    canonical = json.dumps(components, sort_keys=True, separators=(",", ":"))
-    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-    safe_ref = re.sub(r"[^A-Za-z0-9_.#/-]+", "_", ref)[:32]
-    key = f"batch-workflows:{provider}:{safe_ref}:sha256:{digest}"
-    if len(key) > IDEMPOTENCY_KEY_MAX_LENGTH:
-        key = f"batch-workflows:sha256:{digest}"
-    if len(key) > IDEMPOTENCY_KEY_MAX_LENGTH:
-        raise RuntimeError("generated child idempotency key exceeds storage limit")
-    return key
+    return child_idempotency_key(
+        batch_scope=scope,
+        provider=provider,
+        ref=ref,
+        target_kind=target_kind,
+        target_slug=target_slug,
+    )
 
 
 def build_child_request(
@@ -427,12 +616,14 @@ def build_child_request(
     if idempotency_key:
         payload_dict["idempotencyKey"] = idempotency_key
 
-    return {
-        "type": "task",
-        "priority": 0,
-        "maxAttempts": 3,
-        "payload": payload_dict,
-    }
+    return validate_execution_envelope(
+        {
+            "type": "task",
+            "priority": 0,
+            "maxAttempts": 3,
+            "payload": payload_dict,
+        }
+    )
 
 
 def build_child_requests(
@@ -693,7 +884,11 @@ def _read_worker_token() -> str | None:
     return None
 
 
-async def _submit_jobs_via_http(
+def _read_execution_fanout_token() -> str | None:
+    return _text(os.getenv("MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN")) or None
+
+
+def _submit_jobs_via_http(
     submissions: list[ChildSubmission],
     *,
     moonmind_url: str,
@@ -702,6 +897,10 @@ async def _submit_jobs_via_http(
     created: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
     headers: dict[str, str] = {"Content-Type": "application/json"}
+    fanout_token = _read_execution_fanout_token()
+    if fanout_token:
+        headers["Authorization"] = f"Bearer {fanout_token}"
+        headers["X-MoonMind-Execution-Fanout"] = "v1"
     if worker_token:
         headers["X-MoonMind-Worker-Token"] = worker_token
     task_workflow_id = _task_workflow_id_from_env()
@@ -710,55 +909,71 @@ async def _submit_jobs_via_http(
     agent_run_id = _agent_run_id_from_env()
     if agent_run_id:
         headers["X-MoonMind-Agent-Run-Identifier"] = agent_run_id
-    base = moonmind_url.rstrip("/")
-    async with httpx.AsyncClient(
-        base_url=base, timeout=30.0, headers=headers
-    ) as client:
-        for submission in submissions:
-            request = submission.queue_request
-            body = {
-                "type": str(request["type"]),
-                "payload": request["payload"],
-                "priority": int(request.get("priority", 0)),
-                "maxAttempts": int(request.get("maxAttempts", 3)),
-            }
+    endpoint = moonmind_url.rstrip("/") + API_EXECUTIONS_ENDPOINT
+    for submission in submissions:
+        envelope = submission.queue_request
+        body = {
+            "type": str(envelope["type"]),
+            "payload": envelope["payload"],
+            "priority": int(envelope.get("priority", 0)),
+            "maxAttempts": int(envelope.get("maxAttempts", 3)),
+        }
+        try:
+            encoded = json.dumps(body, separators=(",", ":")).encode("utf-8")
+            http_request = urllib.request.Request(
+                endpoint, data=encoded, headers=headers, method="POST"
+            )
+            with urllib.request.urlopen(http_request, timeout=30.0) as response:
+                data = json.loads(response.read().decode("utf-8"))
+            if not isinstance(data, dict):
+                raise RuntimeError("execution API response must be a JSON object")
+            job_id = str(
+                data.get("workflowId") or data.get("taskId") or data.get("id") or ""
+            ).strip()
+            if not job_id:
+                raise RuntimeError("execution API response is missing workflowId")
+            created.append(
+                {
+                    "provider": submission.provider,
+                    "ref": submission.ref,
+                    "workflowId": job_id,
+                    "executionId": job_id,
+                    "targetRef": submission.ref,
+                    "idempotencyKey": str(
+                        envelope.get("payload", {}).get("idempotencyKey") or ""
+                    ),
+                }
+            )
+        except urllib.error.HTTPError as exc:
             try:
-                response = await client.post(API_EXECUTIONS_ENDPOINT, json=body)
-                response.raise_for_status()
-                data = response.json()
-                job_id = (
-                    str(
-                        data.get("workflowId")
-                        or data.get("taskId")
-                        or data.get("id")
-                        or ""
-                    )
-                    or "(unknown)"
-                )
-                created.append(
-                    {
-                        "provider": submission.provider,
-                        "ref": submission.ref,
-                        "workflowId": job_id,
-                    }
-                )
-            except Exception as exc:  # noqa: BLE001 - reported per target
-                errors.append(
-                    {
-                        "provider": submission.provider,
-                        "ref": submission.ref,
-                        "error": str(exc),
-                    }
-                )
+                detail = exc.read(65536).decode("utf-8", errors="replace")
+                error_message = f"{exc}: {detail}"
+            except Exception:
+                error_message = str(exc)
+            errors.append(
+                {
+                    "provider": submission.provider,
+                    "ref": submission.ref,
+                    "error": error_message,
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 - reported per target
+            errors.append(
+                {
+                    "provider": submission.provider,
+                    "ref": submission.ref,
+                    "error": str(exc),
+                }
+            )
     return created, errors
 
 
-async def _submit_jobs(
+def _submit_jobs(
     submissions: list[ChildSubmission],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     moonmind_url = _text(os.getenv("MOONMIND_URL"))
     if moonmind_url:
-        return await _submit_jobs_via_http(
+        return _submit_jobs_via_http(
             submissions,
             moonmind_url=moonmind_url,
             worker_token=_read_worker_token(),
@@ -775,15 +990,25 @@ async def _submit_jobs(
 
 def _write_artifacts(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2))
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    os.replace(temporary, path)
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Queue one child MoonMind workflow per resolved issue target."
+        description="Resolve issue targets and queue one child MoonMind workflow per target."
     )
     parser.add_argument(
-        "--targets", required=True, help="Path to resolved targets JSON."
+        "--targets", help="Path to resolved targets JSON."
+    )
+    parser.add_argument(
+        "--github-issue-range",
+        help="Inclusive GitHub issue-number search range in START-END form.",
+    )
+    parser.add_argument(
+        "--github-repository",
+        help="GitHub owner/repository; defaults to the parent task repository.",
     )
     parser.add_argument("--run-ref", required=True)
     parser.add_argument("--publish-mode", default="pr")
@@ -803,25 +1028,117 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="For skill:jira-verify children, update Jira status only on PASS.",
     )
     parser.add_argument("--max-workflows", type=int, default=25)
+    parser.add_argument(
+        "--preflight-error",
+        default=None,
+        help=(
+            "Record an input-validation failure without reading targets or "
+            "queueing child workflows."
+        ),
+    )
+    parser.add_argument(
+        "--requested-count",
+        type=int,
+        default=0,
+        help="Number of requested targets reported with --preflight-error.",
+    )
     parser.add_argument("--task-context-path", default=None)
     parser.add_argument("--artifacts-dir", default="artifacts")
     return parser.parse_args(argv)
 
 
-async def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
-    targets_path = Path(args.targets)
-    if not targets_path.exists():
-        raise RuntimeError(f"targets file not found: {targets_path}")
-    targets = _read_targets(targets_path)
-    constraints = _read_constraints(args)
-    runtime = _resolve_runtime_selection(args.task_context_path)
-    batch_repository = _load_parent_repository(args.task_context_path)
-    batch_scope = _parent_run_scope(args.task_context_path)
-    inherit_from_caller = _task_workflow_id_from_env() is not None
-    target_kind, target_slug = parse_run_ref(args.run_ref)
+    targets_path = Path(args.targets) if args.targets else None
+    artifacts_dir = _resolve_artifacts_dir(args.artifacts_dir)
+    result_path = artifacts_dir / "batch-workflows-result.json"
+    try:
+        result_path.unlink(missing_ok=True)
+    except OSError as exc:
+        raise RuntimeError(f"cannot remove stale result artifact: {exc}") from exc
+    execution_ref = _text(os.getenv("MOONMIND_STEP_EXECUTION_ID"))
+    targets_digest = (
+        hashlib.sha256(targets_path.read_bytes()).hexdigest()
+        if targets_path is not None and targets_path.exists() and targets_path.is_file()
+        else None
+    )
+    base_result: dict[str, Any] = {
+        "schemaVersion": "moonmind.batch-workflows-result.v1",
+        "contractId": "batch_workflows_fanout.v1",
+        "executionRef": execution_ref,
+        "targetsSha256": targets_digest,
+        "status": "running",
+        "runRef": args.run_ref,
+        "requested": 0,
+        "created": 0,
+        "queued": [],
+        "skipped": [],
+        "errors": [],
+        "failure": None,
+    }
+    _write_artifacts(result_path, base_result)
+    try:
+        if not execution_ref:
+            raise RuntimeError("MOONMIND_STEP_EXECUTION_ID is required")
+        preflight_error = _text(args.preflight_error)
+        if preflight_error:
+            if args.requested_count < 0:
+                preflight_error = "--requested-count must be zero or greater"
+            requested_count = max(0, args.requested_count)
+            failed = {
+                **base_result,
+                "timestamp": datetime.now(UTC).isoformat(),
+                "status": "failed",
+                "requested": requested_count,
+                "failure": {
+                    "code": "BATCH_FANOUT_INPUT_INVALID",
+                    "message": preflight_error[:1024],
+                },
+                "errors": [
+                    {
+                        "code": "BATCH_FANOUT_INPUT_INVALID",
+                        "error": preflight_error[:1024],
+                    }
+                ],
+            }
+            _write_artifacts(result_path, failed)
+            print(json.dumps(failed, indent=2))
+            return 2
+        if args.github_issue_range and targets_path is not None:
+            raise BatchInputError(
+                "use either --targets or --github-issue-range, not both"
+            )
+        batch_repository = _load_parent_repository(args.task_context_path)
+        if args.github_issue_range:
+            github_repository = (
+                _normalize_repo(args.github_repository) or batch_repository
+            )
+            if not github_repository:
+                raise BatchInputError(
+                    "--github-repository is required when parent repository context is unavailable"
+                )
+            targets = resolve_github_issue_range(
+                github_repository,
+                args.github_issue_range,
+            )
+            targets_path = artifacts_dir / "batch-workflows-targets.json"
+            _write_artifacts(targets_path, {"targets": targets})
+            base_result["targetsSha256"] = hashlib.sha256(
+                targets_path.read_bytes()
+            ).hexdigest()
+        else:
+            if targets_path is None:
+                raise BatchInputError("--targets or --github-issue-range is required")
+            if not targets_path.exists():
+                raise RuntimeError(f"targets file not found: {targets_path}")
+            targets = _read_targets(targets_path)
+        constraints = _read_constraints(args)
+        runtime = _resolve_runtime_selection(args.task_context_path)
+        batch_scope = _parent_run_scope(args.task_context_path) or execution_ref
+        inherit_from_caller = _task_workflow_id_from_env() is not None
+        target_kind, target_slug = parse_run_ref(args.run_ref)
 
-    config = TargetConfig(
+        config = TargetConfig(
         target_kind=target_kind,
         target_slug=target_slug,
         publish_mode=_normalize_publish_mode(args.publish_mode),
@@ -830,7 +1147,7 @@ async def main(argv: list[str] | None = None) -> int:
         update_status=bool(args.update_status),
     )
 
-    submissions, skipped = build_child_requests(
+        submissions, skipped = build_child_requests(
         targets,
         config=config,
         runtime=runtime,
@@ -839,9 +1156,25 @@ async def main(argv: list[str] | None = None) -> int:
         inherit_runtime_from_caller=inherit_from_caller,
         default_repository=batch_repository,
     )
-    created, errors = await _submit_jobs(submissions)
+        created, errors = _submit_jobs(submissions)
+    except Exception as exc:  # evidence must survive every reachable preflight failure
+        failure_code = (
+            "BATCH_FANOUT_INPUT_INVALID"
+            if isinstance(exc, BatchInputError)
+            else "BATCH_FANOUT_FAILED"
+        )
+        failed = {
+            **base_result,
+            "status": "failed",
+            "failure": {"code": failure_code, "message": str(exc)[:1024]},
+            "errors": [{"code": failure_code, "error": str(exc)[:1024]}],
+        }
+        _write_artifacts(result_path, failed)
+        print(json.dumps(failed, indent=2))
+        return 2 if isinstance(exc, BatchInputError) else 1
 
     payload = {
+        **base_result,
         "timestamp": datetime.now(UTC).isoformat(),
         "actor": os.getenv("GITHUB_ACTOR") or os.getenv("USER") or "unknown",
         "target": {
@@ -856,18 +1189,26 @@ async def main(argv: list[str] | None = None) -> int:
             "effort": runtime.effort,
             "executionProfileRef": runtime.provider_profile,
         },
+        "status": (
+            "no_op" if not targets else
+            "queued" if len(created) == len(targets) and not errors and not skipped else
+            "partial_failure" if created else "failed"
+        ),
         "requested": len(targets),
         "created": len(created),
         "queued": created,
         "skipped": [{"ref": item.ref, "reason": item.reason} for item in skipped],
         "errors": errors,
+        "failure": (
+            {"code": "BATCH_FANOUT_PARTIAL_FAILURE" if created else "BATCH_FANOUT_FAILED"}
+            if errors or skipped else None
+        ),
     }
     if payload["created"] == 0:
         payload["message"] = "No child workflows were queued."
 
-    artifacts_dir = _resolve_artifacts_dir(args.artifacts_dir)
-    _write_artifacts(artifacts_dir / "batch-workflows-result.json", payload)
-    if payload["created"] == 0 and not errors:
+    _write_artifacts(result_path, payload)
+    if payload["status"] == "no_op":
         _write_artifacts(
             artifacts_dir / "skill_outcome.json",
             {
@@ -886,12 +1227,12 @@ async def main(argv: list[str] | None = None) -> int:
         f"queued={payload['created']} skipped={len(skipped)} errors={len(errors)} "
         f"target={run_ref_for_config(config)}"
     )
-    return 1 if errors else 0
+    return 0 if payload["status"] in {"queued", "no_op"} else 1
 
 
 if __name__ == "__main__":
     try:
-        raise SystemExit(asyncio.run(main()))
+        raise SystemExit(main())
     except Exception as exc:  # noqa: BLE001 - surface root cause before exiting
         # Print the exception message and full traceback to stderr so runtime
         # failures (missing files, JSON decode errors, HTTP errors) are

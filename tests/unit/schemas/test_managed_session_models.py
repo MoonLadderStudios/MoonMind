@@ -188,6 +188,23 @@ def test_launch_codex_managed_session_request_freezes_remote_container_defaults(
     assert request.control_mode == "remote_container"
     assert request.protocol == "codex_app_server"
     assert request.session_epoch == 1
+    assert request.replace_existing is False
+
+
+def test_launch_codex_managed_session_request_serializes_explicit_replacement() -> None:
+    request = LaunchCodexManagedSessionRequest(
+        agentRunId="task-123",
+        sessionId="sess-123",
+        threadId="thread-1",
+        replaceExisting=True,
+        workspacePath="/work/task/repo",
+        sessionWorkspacePath="/work/task/session",
+        artifactSpoolPath="/work/task/artifacts",
+        codexHomePath="/work/task/codex-home",
+        imageRef="moonmind:latest",
+    )
+
+    assert request.model_dump(by_alias=True)["replaceExisting"] is True
 
 def test_launch_managed_session_request_rejects_claude_code_runtime_family() -> None:
     with pytest.raises(ValidationError, match="Input should be 'codex'"):
@@ -203,66 +220,19 @@ def test_launch_managed_session_request_rejects_claude_code_runtime_family() -> 
             imageRef="moonmind:latest",
         )
 
-def test_mm866_launch_request_serializes_lazy_docker_capability_contract() -> None:
-    request = LaunchCodexManagedSessionRequest(
-        agentRunId="task-123",
-        sessionId="sess-123",
-        threadId="thread-1",
-        workspacePath="/work/task/repo",
-        sessionWorkspacePath="/work/task/session",
-        artifactSpoolPath="/work/task/artifacts",
-        codexHomePath="/work/task/codex-home",
-        imageRef="moonmind:latest",
-        dockerCapability={
-            "allowed": True,
-            "mode": "sidecar-dind-rootless",
-            "activation": "on_demand",
-            "state": "not_started",
-            "dockerHost": "unix:///var/run/moonmind-docker/docker.sock",
-            "composeSupport": True,
-            "timeoutSeconds": 30,
-            "intervalSeconds": 1,
-        },
-    )
-
-    payload = request.model_dump(mode="json", by_alias=True)
-
-    assert payload["dockerCapability"] == {
-        "allowed": True,
-        "mode": "sidecar-dind-rootless",
-        "activation": "on_demand",
-        "state": "not_started",
-        "dockerHost": "unix:///var/run/moonmind-docker/docker.sock",
-        "composeSupport": True,
-        "manifestImageRef": None,
-        "timeoutSeconds": 30.0,
-        "intervalSeconds": 1.0,
-    }
-
-def test_mm866_launch_request_accepts_legacy_required_docker_capability_payload() -> None:
-    request = LaunchCodexManagedSessionRequest(
-        agentRunId="task-123",
-        sessionId="sess-123",
-        threadId="thread-1",
-        workspacePath="/work/task/repo",
-        sessionWorkspacePath="/work/task/session",
-        artifactSpoolPath="/work/task/artifacts",
-        codexHomePath="/work/task/codex-home",
-        imageRef="moonmind:latest",
-        dockerCapability={
-            "required": True,
-            "mode": "sidecar-dind",
-            "dockerHost": "unix:///var/run/moonmind-docker/docker.sock",
-            "composeSupport": True,
-        },
-    )
-
-    payload = request.model_dump(mode="json", by_alias=True)
-
-    assert payload["dockerCapability"]["allowed"] is True
-    assert payload["dockerCapability"]["activation"] == "on_launch"
-    assert payload["dockerCapability"]["state"] == "not_started"
-    assert "required" not in payload["dockerCapability"]
+def test_launch_request_rejects_removed_docker_capability_contract() -> None:
+    with pytest.raises(ValueError, match="dockerCapability"):
+        LaunchCodexManagedSessionRequest(
+            agentRunId="task-123",
+            sessionId="sess-123",
+            threadId="thread-1",
+            workspacePath="/work/task/repo",
+            sessionWorkspacePath="/work/task/session",
+            artifactSpoolPath="/work/task/artifacts",
+            codexHomePath="/work/task/codex-home",
+            imageRef="moonmind:latest",
+            dockerCapability={"allowed": True, "mode": "sidecar-dind"},
+        )
 
 def test_launch_codex_managed_session_request_rejects_local_control_mode() -> None:
     with pytest.raises(ValidationError, match="Input should be 'remote_container'"):
@@ -511,10 +481,66 @@ def test_send_codex_managed_session_turn_request_trims_instruction_and_reason() 
         threadId="thread-1",
         instructions="  Investigate the failing test  ",
         reason="  Operator follow-up  ",
+        model="  gpt-5.3-codex-spark  ",
+        effort="  xhigh  ",
     )
 
     assert request.instructions == "Investigate the failing test"
     assert request.reason == "Operator follow-up"
+    assert request.model == "  gpt-5.3-codex-spark  "
+    assert request.effort == "  xhigh  "
+
+    with pytest.raises(ValidationError, match="must not be blank"):
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-123",
+            sessionEpoch=1,
+            containerId="ctr-123",
+            threadId="thread-1",
+            instructions="Continue",
+            model="   ",
+        )
+
+def test_send_codex_managed_session_turn_request_defaults_environment_for_old_payloads() -> None:
+    request = SendCodexManagedSessionTurnRequest.model_validate(
+        {
+            "sessionId": "sess-123",
+            "sessionEpoch": 1,
+            "containerId": "ctr-123",
+            "threadId": "thread-1",
+            "instructions": "Continue the workflow",
+        }
+    )
+
+    assert request.environment == {}
+    assert request.model is None
+    assert request.effort is None
+
+def test_send_codex_managed_session_turn_request_limits_per_turn_environment() -> None:
+    request = SendCodexManagedSessionTurnRequest(
+        sessionId="sess-123",
+        sessionEpoch=1,
+        containerId="ctr-123",
+        threadId="thread-1",
+        instructions="Continue the workflow",
+        environment={
+            "MOONMIND_ACTIVE_SKILLS_DIR": "/work/runtime/skills_active/snapshot-2",
+            "MOONMIND_STEP_EXECUTION_ID": "workflow:step:execution:2",
+        },
+    )
+
+    assert request.environment == {
+        "MOONMIND_ACTIVE_SKILLS_DIR": "/work/runtime/skills_active/snapshot-2",
+        "MOONMIND_STEP_EXECUTION_ID": "workflow:step:execution:2",
+    }
+    with pytest.raises(ValidationError, match="environment key is not allowed"):
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-123",
+            sessionEpoch=1,
+            containerId="ctr-123",
+            threadId="thread-1",
+            instructions="Continue the workflow",
+            environment={"GITHUB_TOKEN": "not-allowed"},
+        )
 
 def test_attach_runtime_handles_signal_is_explicit_typed_contract() -> None:
     signal = CodexManagedSessionAttachRuntimeHandlesSignal.model_validate(

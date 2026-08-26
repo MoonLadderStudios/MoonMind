@@ -33,6 +33,17 @@ def test_validated_execution_profile_ref_rejects_runtime_mismatch() -> None:
         )
 
 
+def test_validated_execution_profile_ref_allows_codex_profile_for_omnigent() -> None:
+    workflow = MoonMindUserWorkflow()
+    workflow._profile_snapshots = {
+        "codex-ready": {"profile_id": "codex-ready", "runtime_id": "codex_cli"}
+    }
+
+    assert workflow._validated_execution_profile_ref(
+        "codex-ready", agent_id="omnigent", source_label="Task"
+    ) == "codex-ready"
+
+
 @pytest.mark.parametrize(
     "snapshot",
     [

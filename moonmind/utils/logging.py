@@ -66,7 +66,10 @@ _NON_SECRET_REF_KEYS = frozenset(
 )
 
 def _is_sensitive_key(key: str) -> bool:
-    return bool(_SENSITIVE_KEY_PATTERN.search(key))
+    return bool(
+        _SENSITIVE_KEY_PATTERN.search(key)
+        or re.search(r"(?:Token|Secret|Password|Credential|Auth)(?:$|[A-Z])", key)
+    )
 
 def _is_non_secret_sentinel(value: str) -> bool:
     return value.strip().casefold() in _NON_SECRET_SENTINEL_VALUES
@@ -154,7 +157,8 @@ def redact_sensitive_payload(payload: Any, *, key: str | None = None) -> Any:
     if payload is None:
         return None
     if isinstance(payload, str):
-        normalized_key = str(key or "").strip().lower()
+        raw_key = str(key or "").strip()
+        normalized_key = raw_key.lower()
         normalized_key_compact = normalized_key.replace("_", "")
         if (
             normalized_key in _NON_SECRET_REF_KEYS
@@ -163,7 +167,7 @@ def redact_sensitive_payload(payload: Any, *, key: str | None = None) -> Any:
             return payload
         if normalized_key.endswith("_ref") or normalized_key.endswith("ref"):
             return payload
-        if _is_sensitive_key(normalized_key):
+        if _is_sensitive_key(raw_key):
             if payload.startswith(("env://", "secret://", "vault://", "ref://")):
                 return payload
             return "[REDACTED]"

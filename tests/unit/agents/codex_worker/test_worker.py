@@ -1074,6 +1074,7 @@ async def test_run_once_passes_runtime_inheritance_args_to_batch_pr_resolver_ski
     processed = await worker.run_once()
 
     assert processed is True
+    assert queue.failed == []
     assert handler.calls == ["codex_skill:batch-pr-resolver:True"]
     payload = handler.skill_payloads[0]
     inputs = payload["inputs"]
@@ -7170,7 +7171,12 @@ async def test_config_from_env_uses_defaults(monkeypatch) -> None:
     assert config.legacy_job_types_enabled is True
     assert config.worker_runtime == "codex"
     assert config.allowed_types == ("task", "codex_exec", "codex_skill")
-    assert config.worker_capabilities == ("codex", "git", "gh")
+    assert config.worker_capabilities == (
+        "codex",
+        "git",
+        "gh",
+        "execution.fanout",
+    )
     assert config.docker_binary == "docker"
     assert config.container_workspace_volume is None
     assert config.container_default_timeout_seconds == 3600
@@ -7228,7 +7234,13 @@ async def test_config_from_env_runtime_mode_controls_default_capabilities(
     config = CodexWorkerConfig.from_env()
 
     assert config.worker_runtime == "universal"
-    assert config.worker_capabilities == ("codex", "claude", "git", "gh")
+    assert config.worker_capabilities == (
+        "codex",
+        "claude",
+        "git",
+        "gh",
+        "execution.fanout",
+    )
 
 async def test_config_from_env_rejects_jules_runtime_when_disabled(
     monkeypatch,
@@ -10556,6 +10568,30 @@ def test_runtime_can_execute_treats_aliases_as_equivalent(tmp_path: Path) -> Non
     assert claude_code_worker._runtime_can_execute("claude") is True
     assert claude_code_worker._runtime_can_execute("claude_code") is True
     assert claude_code_worker._runtime_can_execute("codex") is False
+
+
+def test_universal_worker_does_not_admit_external_omnigent_runtime(
+    tmp_path: Path,
+) -> None:
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:8000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+            worker_runtime="universal",
+        ),
+        queue_client=queue,
+        codex_exec_handler=handler,
+    )  # type: ignore[arg-type]
+
+    assert worker._runtime_can_execute("omnigent") is False
 
 
 async def test_resolve_task_auth_context_includes_git_identity_without_token(

@@ -38,7 +38,7 @@ export type DashboardUiInfo = {
 
 export type DashboardNavigationGroup = 'primary' | 'operations' | 'system';
 export type DashboardPageClassification = 'collection' | 'create' | 'workspace' | 'utility';
-export type DashboardDisplayMode = 'workflow-list' | 'recurring-list';
+export type DashboardDisplayMode = 'workflow-list' | 'recurring-list' | 'skills-list';
 export type DashboardIconKey =
   | 'archive' | 'bot' | 'manifest' | 'moon' | 'rocket' | 'scroll-text'
   | 'settings' | 'shield-check' | 'sparkles' | 'wrench';
@@ -64,13 +64,13 @@ export type DashboardDestination = DashboardDestinationInfo & {
 export const DASHBOARD_DESTINATIONS: readonly DashboardDestination[] = [
   { key: 'workflows', label: 'Workflows', iconKey: 'scroll-text', canonicalPath: '/workflows', pathPatterns: ['/workflows', '/workflows/:workflowId', '/workflows/:workflowId/:detailTab'], navigationGroup: 'primary', pageClassification: 'workspace', capabilityKey: 'workflowList', endpointKey: 'workflows', displayMode: 'workflow-list', page: 'workflows-workspace', dataWidePanel: true },
   { key: 'create', label: 'Create', iconKey: 'rocket', canonicalPath: '/workflows/new', pathPatterns: ['/workflows/new'], navigationGroup: 'primary', pageClassification: 'create', capabilityKey: 'workflowActions', page: 'workflows-workspace', dataWidePanel: true },
-  { key: 'recurring', label: 'Recurring', iconKey: 'moon', canonicalPath: '/schedules', pathPatterns: ['/schedules', '/schedules/:definitionId'], navigationGroup: 'primary', pageClassification: 'workspace', capabilityKey: 'schedules', endpointKey: 'schedules', displayMode: 'recurring-list', page: 'schedules', dataWidePanel: true },
-  { key: 'skills', label: 'Skills', iconKey: 'sparkles', canonicalPath: '/skills', pathPatterns: ['/skills/*'], navigationGroup: 'primary', pageClassification: 'workspace', capabilityKey: 'skills', endpointKey: 'skills', page: 'skills', dataWidePanel: false },
-  { key: 'manifests', label: 'RAG / Manifests', iconKey: 'manifest', canonicalPath: '/manifests', pathPatterns: ['/manifests', '/manifests/:manifestName'], navigationGroup: 'operations', pageClassification: 'collection', capabilityKey: 'manifests', endpointKey: 'manifests', page: 'manifests', dataWidePanel: true },
-  { key: 'omnigent-agents', label: 'Omnigent Agents', iconKey: 'bot', canonicalPath: '/omnigent/agents', pathPatterns: ['/omnigent/agents/*'], navigationGroup: 'operations', pageClassification: 'collection', capabilityKey: 'omnigentAgents', endpointKey: 'omnigentAgents', page: 'omnigent-inventory', dataWidePanel: true },
-  { key: 'omnigent-policies', label: 'Omnigent Policies', iconKey: 'shield-check', canonicalPath: '/omnigent/policies', pathPatterns: ['/omnigent/policies/*'], navigationGroup: 'operations', pageClassification: 'collection', capabilityKey: 'omnigentPolicies', endpointKey: 'omnigentPolicies', page: 'omnigent-inventory', dataWidePanel: true },
+  { key: 'recurring', label: 'Recurring', iconKey: 'moon', canonicalPath: '/schedules', pathPatterns: ['/schedules', '/schedules/:definitionId'], navigationGroup: 'system', pageClassification: 'workspace', capabilityKey: 'schedules', endpointKey: 'schedules', displayMode: 'recurring-list', page: 'schedules', dataWidePanel: true },
+  { key: 'skills', label: 'Skills', iconKey: 'sparkles', canonicalPath: '/skills', pathPatterns: ['/skills/*'], navigationGroup: 'system', pageClassification: 'workspace', capabilityKey: 'skills', endpointKey: 'skills', displayMode: 'skills-list', page: 'skills', dataWidePanel: true },
+  { key: 'manifests', label: 'Manifests', iconKey: 'manifest', canonicalPath: '/manifests', pathPatterns: ['/manifests', '/manifests/:manifestName'], navigationGroup: 'operations', pageClassification: 'collection', capabilityKey: 'manifests', endpointKey: 'manifests', page: 'manifests', dataWidePanel: true },
+  { key: 'omnigent-agents', label: 'Agents', iconKey: 'bot', canonicalPath: '/omnigent/agents', pathPatterns: ['/omnigent/agents/*'], navigationGroup: 'operations', pageClassification: 'collection', capabilityKey: 'omnigentAgents', endpointKey: 'omnigentAgents', page: 'omnigent-inventory', dataWidePanel: true },
+  { key: 'omnigent-policies', label: 'Policies', iconKey: 'shield-check', canonicalPath: '/omnigent/policies', pathPatterns: ['/omnigent/policies/*'], navigationGroup: 'operations', pageClassification: 'collection', capabilityKey: 'omnigentPolicies', endpointKey: 'omnigentPolicies', page: 'omnigent-inventory', dataWidePanel: true },
   { key: 'remediation', label: 'Remediation', iconKey: 'wrench', canonicalPath: '/remediations', pathPatterns: ['/remediations/*'], navigationGroup: 'operations', pageClassification: 'collection', capabilityKey: 'remediationCollection', endpointKey: 'remediations', page: 'remediations', dataWidePanel: true },
-  { key: 'artifacts', label: 'Artifacts / Observability', iconKey: 'archive', canonicalPath: '/artifacts', pathPatterns: ['/artifacts/*', '/observability/*'], navigationGroup: 'operations', pageClassification: 'collection', capabilityKey: 'artifacts', endpointKey: 'artifacts', page: 'artifacts', dataWidePanel: true },
+  { key: 'artifacts', label: 'Artifacts', iconKey: 'archive', canonicalPath: '/artifacts', pathPatterns: ['/artifacts/*', '/observability/*'], navigationGroup: 'operations', pageClassification: 'collection', capabilityKey: 'artifacts', endpointKey: 'artifacts', page: 'artifacts', dataWidePanel: true },
   { key: 'settings', label: 'Settings', iconKey: 'settings', canonicalPath: '/settings', pathPatterns: ['/settings/*'], navigationGroup: 'system', pageClassification: 'utility', capabilityKey: 'settings', endpointKey: 'settings', page: 'settings', dataWidePanel: true },
 ];
 
@@ -84,6 +84,27 @@ export function destinationState(
   if (value === true) return 'shown';
   if (value === false) return 'unavailable';
   return 'hidden';
+}
+
+export function visibleDashboardDestinations(
+  uiInfo: DashboardUiInfo | null | undefined,
+): DashboardDestination[] {
+  return DASHBOARD_DESTINATIONS.filter((destination) => destinationState(destination, uiInfo) === 'shown');
+}
+
+export function visiblePrimaryDestinations(
+  uiInfo: DashboardUiInfo | null | undefined,
+): DashboardDestination[] {
+  if (!uiInfo) {
+    return DASHBOARD_DESTINATIONS.filter(({ navigationGroup }) => navigationGroup === 'primary');
+  }
+  return visibleDashboardDestinations(uiInfo).filter(({ navigationGroup }) => navigationGroup === 'primary');
+}
+
+export function visibleSystemDestinations(
+  uiInfo: DashboardUiInfo | null | undefined,
+): DashboardDestination[] {
+  return visibleDashboardDestinations(uiInfo).filter(({ navigationGroup }) => navigationGroup !== 'primary');
 }
 
 export const DASHBOARD_REACT_ROUTE_PATHS = Array.from(
@@ -199,7 +220,7 @@ export function resolveDashboardRoute(pathname: string): DashboardRoute | null {
     return { page: 'settings', dataWidePanel: true, currentPath: path };
   }
   if (path === '/skills' || path.startsWith('/skills/')) {
-    return { page: 'skills', dataWidePanel: false, currentPath: path };
+    return { page: 'skills', dataWidePanel: true, currentPath: path };
   }
   if (path === '/schedules' || isDetailPath(path, 'schedules')) {
     return { page: 'schedules', dataWidePanel: true, currentPath: path };

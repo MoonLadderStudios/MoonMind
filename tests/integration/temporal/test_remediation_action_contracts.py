@@ -57,14 +57,15 @@ async def test_remediation_action_contract_publishes_request_result_and_verifica
             artifact_service=artifact_service,
         ).build_context(remediation_workflow_id=remediation.workflow_id)
 
-        action_kind = "workload.restart_helper_container"
+        action_kind = "execution.pause"
         action_id = "integration-action-contract"
+        action_parameters = {"reason": "pause execution"}
         authority = await RemediationActionAuthorityService(
             session=session
         ).evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
             action_kind=action_kind,
-            parameters={"reason": "restart helper"},
+            parameters=action_parameters,
             dry_run=False,
             idempotency_key=action_id,
             requesting_principal="workflow:remediator",
@@ -78,7 +79,7 @@ async def test_remediation_action_contract_publishes_request_result_and_verifica
             target_run_id=target.run_id,
             action_kind=action_kind,
             idempotency_key=action_id,
-            parameters={"reason": "restart helper"},
+            parameters=action_parameters,
             policy=RemediationMutationGuardPolicy(cooldown_seconds=0),
             now=datetime(2026, 4, 23, tzinfo=timezone.utc),
         )
@@ -216,14 +217,15 @@ async def test_remediation_lifecycle_repair_prevention_summary_artifacts(
             artifact_service=artifact_service,
         ).build_context(remediation_workflow_id=remediation.workflow_id)
 
-        action_kind = "workload.restart_helper_container"
+        action_kind = "execution.pause"
         action_id = "integration-lifecycle-repair"
+        action_parameters = {"reason": "pause execution"}
         authority = await RemediationActionAuthorityService(
             session=session
         ).evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
             action_kind=action_kind,
-            parameters={"reason": "restart helper"},
+            parameters=action_parameters,
             dry_run=False,
             idempotency_key=action_id,
             requesting_principal="workflow:remediator",
@@ -237,7 +239,7 @@ async def test_remediation_lifecycle_repair_prevention_summary_artifacts(
             target_run_id=target.run_id,
             action_kind=action_kind,
             idempotency_key=action_id,
-            parameters={"reason": "restart helper"},
+            parameters=action_parameters,
             policy=RemediationMutationGuardPolicy(cooldown_seconds=0),
             now=datetime(2026, 4, 23, tzinfo=timezone.utc),
         )
@@ -259,17 +261,18 @@ async def test_remediation_lifecycle_repair_prevention_summary_artifacts(
             pinned_run_id=target.run_id,
             current_run_id=target.run_id,
             candidate_action_kind=action_kind,
-            candidate_reason="helper_container_unhealthy",
+            candidate_reason="target_execution_requires_pause",
             decision="attempted",
             decision_reason="fresh_target_health_and_policy_allowed",
             repair_outcome="repaired",
+            verification_outcome="verified_resolved",
             action_request_ref=result["artifactRefs"]["actionRequest"],
             action_result_ref=result["artifactRefs"]["actionResult"],
             verification_ref=result["artifactRefs"]["verification"],
         )
         prevention = build_remediation_prevention_outcome(
             status="findings_reported",
-            root_cause_category="helper_container_health_gap",
+            root_cause_category="execution_control_gap",
             summary="Findings were recorded for follow-up prevention.",
             findings_ref=result["artifactRefs"]["verification"],
         )

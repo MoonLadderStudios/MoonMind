@@ -79,21 +79,21 @@ fi
 - If there was nothing to commit, still verify the current local `HEAD` exactly matches the remote branch head.
 - On successful push, write canonical evidence:
   ```bash
-  python3 .agents/skills/_shared/publish_evidence.py write-pushed \
+  python3 "${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/_shared/publish_evidence.py" write-pushed \
     --skill-id fix-merge-conflicts \
     --repo "$REPO" \
     --branch "$BRANCH"
   ```
 - On verified no-op, write canonical no-op evidence:
   ```bash
-  python3 .agents/skills/_shared/publish_evidence.py write-no-op \
+  python3 "${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/_shared/publish_evidence.py" write-no-op \
     --skill-id fix-merge-conflicts \
     --repo "$REPO" \
     --branch "$BRANCH"
   ```
 - If push or remote verification is unavailable, write blocked evidence, then stop as blocked with reason `publish_unavailable`:
   ```bash
-  python3 .agents/skills/_shared/publish_evidence.py write-blocked \
+  python3 "${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/_shared/publish_evidence.py" write-blocked \
     --skill-id fix-merge-conflicts \
     --repo "$REPO" \
     --branch "$BRANCH" \

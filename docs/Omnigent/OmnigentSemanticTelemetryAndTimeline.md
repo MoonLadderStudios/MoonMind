@@ -1,0 +1,199 @@
+# Omnigent Semantic Telemetry, Operator Session Timeline, and Stuck-State Reconciliation
+
+Status: Implemented
+Document Class: System / Feature Design View
+Owners: MoonMind Platform
+Last updated: 2026-08-19
+
+**Issue:** [MoonLadderStudios/MoonMind#3708](https://github.com/MoonLadderStudios/MoonMind/issues/3708) ([Omnigent control plane 7/11]).
+
+**Implementation tracking:** rollout notes and temporary handoffs belong under `docs/tmp/` or gitignored local-only artifacts, not in this canonical design document.
+
+## Related docs
+
+- [`docs/Omnigent/ControlPlaneAggregates.md`](./ControlPlaneAggregates.md) — the durable aggregates this telemetry and timeline project.
+- [`docs/Omnigent/ControlPlaneConcurrencyAndFencing.md`](./ControlPlaneConcurrencyAndFencing.md) — the revision/fencing authority the automated response is bound to.
+- [`docs/Omnigent/OmnigentLifecycleReconciler.md`](./OmnigentLifecycleReconciler.md) — the pure reducer whose decisions the timeline and stuck-state response derive from.
+
+## Why
+
+OpenTelemetry and Temporal Visibility remain the operational telemetry and
+durable orchestration planes. Temporal, canonical session state, decision
+journals, and artifacts remain the durable sources of lifecycle truth. This
+feature does not replace them: it makes Omnigent lifecycle behavior directly
+observable through a stable domain telemetry convention, one durable
+operator-facing session timeline, and a bounded stuck-state detector that
+requests a **fenced** reconciliation before a six-hour timeout or a user report.
+
+## Semantic trace convention
+
+Span names and bounded attributes are the closed vocabulary in
+`moonmind/omnigent/control_plane/spans.py`. Instrumentation wraps the
+infrastructure and activity boundaries **around** the domain decisions; the pure
+reducer never performs exporter I/O.
+
+Span names (closed set `OMNIGENT_SPANS`):
+
+```
+omnigent.intent.compile
+omnigent.session.reconcile
+omnigent.observation.load
+omnigent.provider.observe_snapshot
+omnigent.provider.read_event_batch
+omnigent.turn.submit
+omnigent.command.execute
+omnigent.profile_lease.ensure
+omnigent.host.ensure
+omnigent.session.ensure_provider_attachment
+omnigent.evidence.harvest
+omnigent.workspace.publish
+omnigent.cleanup.execute
+omnigent.compatibility.verify
+omnigent.stuck_state.inspect
+```
+
+Bounded span attributes (closed set `SAFE_SPAN_ATTRIBUTES`) carry only runtime,
+harness, host mode, command/decision class, desired/durable/observed/resulting
+state, reason code, expected/resulting revision, fencing generation class or
+ordinal, attempt ordinal, provider status vocabulary value, observation source
+and schema version, terminal evidence kind, compatibility/image-manifest
+digests, and retry/delivery-unknown/cleanup outcomes.
+
+`omnigent_span` fails safe: an unknown span name degrades to a no-op, unknown or
+oversized/secret-like attribute values are dropped, and a missing tracer or a
+failing exporter is swallowed. Prompts, transcripts, diffs, terminal input,
+credentials, presigned URLs, host paths, and unbounded provider payloads can
+never be emitted. **Exporter or backend failure cannot change execution
+correctness.**
+
+## Metric families
+
+Low-cardinality metric families live in
+`moonmind/omnigent/control_plane/metrics.py`; the concurrency *conflict* counters
+(revision/fencing conflicts, duplicate-command suppression, delivery-unknown
+created/reconciled, stale observation retained, cleanup-claim conflicts) remain
+in `telemetry.py` (#3704) and are not duplicated. The added families cover:
+
+- **Reconciliation:** decisions by decision/reason class, convergence latency,
+  repeated no-progress decisions, quarantined ambiguity, snapshot-recovered
+  terminal transitions.
+- **Provider and transport:** event-batch disconnects/reconnects, liveness-only
+  duration, snapshot latency/errors, provider-terminal-to-MoonMind-terminal
+  latency, unknown provider status/schema values, HTTP/SSE/WebSocket readiness
+  and failure classes.
+- **Resources and cleanup:** lease acquisition latency, lease renewal/fencing
+  conflicts, cleanup lag, orphaned lease count, janitor claim/success/conflict/
+  failure, evidence harvest/publication latency.
+- **Compatibility and verification:** deployed-build compatibility, runtime
+  capability readiness, exact-image conformance, protected-live evidence age,
+  provider verification runner health.
+
+Every label key is declared per-metric with a closed bounded value vocabulary,
+and `FORBIDDEN_LABEL_KEYS` rejects any Workflow, run, user, session, binding,
+provider-session, host, runner, profile, credential, repository, or workspace
+identity at registration and at record time. **Metric labels are low cardinality
+and never carry identity.**
+The same bounded recorder writes both the local diagnostic aggregate and real
+OpenTelemetry Counter/Histogram instruments. API and Temporal worker startup
+install the shared OTLP meter provider; instrument or exporter failure is
+contained after local evidence is recorded.
+
+## Durable operator session timeline
+
+`moonmind/omnigent/control_plane/timeline.py` projects one bounded, safe
+`SessionTimeline` for a single canonical session from its durable records. It is
+a projection, not a second lifecycle authority: it reads only durable records
+and performs no live-resource I/O, so it **survives provider/host/workspace
+cleanup**. The timeline surfaces the difference among desired, durable, observed,
+and reconciled state and explains why a session is launching, running,
+delivery-unknown, awaiting observation, retrying, terminal, cleanup-incomplete,
+or quarantined. Refs/digests pass through a secret-free guard and links are
+server-authored relative URLs built from opaque validated ids.
+Authorized trace and log links use
+`/api/omnigent/sessions/{session_id}/trace` and `/logs` redirects. The server
+resolves durable identifiers into validated telemetry templates only after the
+`operations.read` check; backend URLs and workflow/run identities are never
+embedded directly in the timeline document.
+
+The authorized machine-readable endpoint is
+`GET /api/omnigent/sessions/{session_id}/timeline` (operator permission
+`operations.read`). A Workflow Detail or operator UI projection may consume it
+without becoming a second lifecycle authority.
+
+## Stuck-state detector and automated response
+
+`moonmind/omnigent/control_plane/stuck_state.py` is a pure, bounded detector over
+durable records plus tri-state observation signals (`None` = not observed, so a
+missing observation is never treated as an observed negative). It detects at
+least: MoonMind active with no recent event/snapshot; provider-terminal vs
+MoonMind-nonterminal (and the reverse); active turn with only liveness
+observations; repeated no-progress reconciliation; orphaned host lease; profile
+lease without a consumer; cleanup incomplete past deadline; compatibility unknown
+after admission; command stuck claimed/delivery-unknown; stale live-conformance
+evidence.
+
+Automated response policy (`plan_response`):
+
+1. Record a stuck-state finding and stable reason code.
+2. The **first automated response is a fenced reconciliation** bound to the
+   durable session's current revision and fencing generation — never a blind
+   duplicate provider mutation and never a heuristic lease release. There is no
+   resubmit/release response action in the detector at all.
+3. Only decisions the pure reconciler authorizes under current fencing apply.
+4. Persistent ambiguity (beyond policy) escalates to **quarantine plus a
+   redacted diagnostics payload** rather than a fabricated success.
+5. Product reads and evidence stay available even when interactive mutation is
+   disabled.
+
+The existing durable `MoonMind.ManagedSessionReconcile` schedule is the single
+operational sweep owner. Its activity loads a bounded batch of canonical
+sessions, records each finding as an observation and reconciliation decision,
+journals one revision- and generation-fenced `request_reconcile` command, and
+executes the registered `ReconcileOmnigentSession` Update on the canonical
+`MoonMind.AgentSession` child workflow. The receiving workflow invokes the
+production reconciliation Activity, which reloads the canonical session and
+command journal, confirms that the session belongs to the parent Workflow
+scope, and validates the revision and fencing generation. An ambiguous Update delivery is
+parked as `delivery_unknown` and is never blindly resent. When the bounded
+persistent-ambiguity threshold is reached, the activity first publishes a
+restricted, redacted, long-retention diagnostic artifact and then quarantines
+the session with a fenced compare-and-swap. The read-only
+`GET /api/omnigent/sessions/{session_id}/stuck-state` endpoint projects the same
+pure inspection and response plan without becoming mutation authority.
+
+## New-admission readiness
+
+`moonmind/omnigent/control_plane/readiness.py` computes a bounded
+`AdmissionReadiness` over actual runtime capability and evidence freshness:
+reconciler/session-workflow generation, schema/repository compatibility, provider
+endpoint and snapshot capability, event transport, server/UI/host build
+manifests, WebSocket availability, worker/container backend, observation
+freshness, janitor health, and the last exact-image and protected-live evidence.
+Admission **fails closed**: a capability is ready only when explicitly observed
+ready; unknown or negative signals block new admission. Historical reads and
+cleanup for existing sessions stay available regardless. Workflow Create's
+`GET /api/omnigent/codex-catalog-readiness` projection carries this document as
+`admissionReadiness` and derives the loaded supervisor, reconcile Activity,
+janitor Activity, WebSocket route, persisted schema, typed provider snapshot and
+event observations, and the runtime owner's attested server/host image manifest
+from their production registries and durable evidence. A generic healthy
+endpoint, bridge conformance, or configured image ref is never promoted into
+snapshot, transport, or deployed-build evidence.
+
+An empty deployment has one bounded bootstrap path: the authenticated protected
+acceptance canary may attach a five-minute, closed-schema manifest of directly
+observed snapshot/transport support and immutable deployed server, bundled-UI,
+and host build identities to the normal catalog request. The repository-owned
+live controller accepts that manifest only from its live setup adapter and the
+catalog parses it only after constant-time canary-token authentication. Missing,
+stale, future-dated, malformed, mutable, or unauthenticated bootstrap evidence
+fails closed. Once runtime-owned observation and build rows exist, those durable
+records are authoritative; configured refs remain comparison targets only.
+
+## Non-goals
+
+- Replacing Temporal Visibility, Workflow Detail, or the artifact system with
+  OpenTelemetry.
+- Exporting raw provider transcripts or terminal input.
+- Automatically repairing arbitrary deployment configuration without reconciler
+  authority.

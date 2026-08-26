@@ -1,6 +1,13 @@
 # syntax=docker/dockerfile:1.4
 ARG CODEX_CLI_VERSION=latest
-ARG CLAUDE_CLI_VERSION=latest
+# Pin the Claude CLI instead of tracking the mutable ``latest`` tag. Upstream
+# publishes the launcher wrapper and its platform-native packages separately, so
+# ``latest`` can point at a wrapper whose matching native package is not
+# published yet (2.1.237 required @anthropic-ai/claude-code-linux-x64@2.1.237,
+# which does not exist). npm then omits the unresolvable optional dependency and
+# the launcher aborts with "claude native binary not installed", breaking every
+# image build until upstream catches up. Bump this deliberately.
+ARG CLAUDE_CLI_VERSION=2.1.236
 # Build the shared runtime image with Codex/Claude CLIs by default so the API
 # and Temporal workers can run from the same image tag. Disable selectively in
 # test-only or constrained builds.
@@ -103,7 +110,7 @@ RUN poetry export --only main --format requirements.txt --without-hashes --outpu
     && poetry export --only main --extras tests --format requirements.txt --without-hashes --output /deps/requirements-tests.txt
 
 # ---------------------------------------------------------------------------
-FROM python:3.12-slim-bookworm AS runtime-base
+FROM python:3.12-slim-bookworm AS runtime-dependencies
 
 ARG CODEX_CLI_VERSION
 # Use bash with pipefail and strict mode in the runtime image as well so
@@ -171,6 +178,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
       tee /etc/apt/sources.list.d/docker.list > /dev/null && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
+        docker-buildx-plugin \
         docker-ce-cli \
         docker-compose-plugin
 
@@ -192,7 +200,7 @@ RUN useradd --create-home --home-dir /home/app --shell /bin/bash app && \
 RUN runuser -u app -- env -u NODE_OPTIONS -u npm_config_node_options \
     HOME=/home/app \
     PATH="/usr/local/bin:/usr/local/sbin:/usr/bin:/bin" \
-    sh -c 'codex --version && claude --version && npm --version && rg --version'
+    sh -c 'codex --version && claude --version && npm --version && rg --version && docker buildx version && docker compose version'
 
 # Provide a managed Codex configuration template that enforces non-interactive
 # approvals and managed sandbox defaults. The template is merged into the
@@ -212,12 +220,41 @@ COPY README.md /app/README.md
 COPY LICENSE /app/LICENSE
 COPY NOTICE /app/NOTICE
 
+# Keep the test image buildable from the shallow, submodule-free checkout used
+# by required backend CI and managed workflow workspaces. Tests execute the
+# mounted checkout via PYTHONPATH, so this stage needs locked dependencies but
+# must not inherit production-only source COPY steps such as Omnigent.
+FROM runtime-dependencies AS test-runtime
+ARG INSTALL_TEST_DEPS=true
+COPY --from=python-requirements /deps/requirements-tests.txt /tmp/requirements-tests.txt
+COPY api_service/docker/cache_temporal_test_server.py /tmp/cache_temporal_test_server.py
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean && \
+    echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends postgresql
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --disable-pip-version-check readmeai~=0.6.3 --no-deps
+    if [ "${INSTALL_TEST_DEPS}" = "true" ]; then \
+        pip install --disable-pip-version-check -r /tmp/requirements-tests.txt; \
+        python /tmp/cache_temporal_test_server.py; \
+    fi && \
+    rm -f /tmp/requirements-tests.txt /tmp/cache_temporal_test_server.py
+ENV HOME=/home/app
+USER app
+
+FROM runtime-dependencies AS runtime-base
 
 # Copy source code AFTER installing locked dependencies so code changes only
 # invalidate the lightweight project install.
 COPY moonmind /app/moonmind/
+# The embedded host-auth adapter executes verifier sources from the exact
+# pinned submodule revision. Keep that immutable source available in every API
+# and worker runtime derived from this stage.
+COPY omnigent/omnigent /app/omnigent/omnigent/
+COPY pr_resolver_core /app/pr_resolver_core/
+COPY services/omnigent/tools/manifest.lock.json /app/services/omnigent/tools/manifest.lock.json
+COPY services/omnigent/profile/moonmind-tools.sh /app/services/omnigent/profile/moonmind-tools.sh
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --disable-pip-version-check --no-deps .
 COPY api_service /app/api_service/
@@ -231,15 +268,6 @@ COPY --from=frontend-builder /build/api_service/static/workflow_console/ /opt/mo
 
 RUN chmod +x /app/api_service/entrypoint.sh && \
     sed -i 's/\r$//' /app/api_service/entrypoint.sh
-
-FROM runtime-base AS test-runtime
-ARG INSTALL_TEST_DEPS=true
-COPY --from=python-requirements /deps/requirements-tests.txt /tmp/requirements-tests.txt
-RUN --mount=type=cache,target=/root/.cache/pip \
-    if [ "${INSTALL_TEST_DEPS}" = "true" ]; then \
-        pip install --disable-pip-version-check -r /tmp/requirements-tests.txt; \
-    fi && \
-    rm -f /tmp/requirements-tests.txt
 
 FROM runtime-base AS worker-runtime
 EXPOSE 8000

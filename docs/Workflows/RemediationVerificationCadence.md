@@ -3,7 +3,7 @@
 **Status:** Desired-state design refinement
 **Document Class:** System / Feature Design View
 **Owners:** MoonMind Platform + dashboard
-**Last Updated:** 2026-07-06
+**Last Updated:** 2026-08-09
 **Related:** `docs/Workflows/WorkflowRemediation.md`, `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Steps/StepExecutionsAndCheckpointing.md`, `docs/Artifacts/ArtifactPresentationContract.md`, `docs/UI/WorkflowDetailsPage.md`
 
 ---
@@ -79,6 +79,7 @@ The attempt number is the retry-cycle number, not the individual gap number. A s
 8. **Verification scope is the visible, trusted input.** The verifier's scope is the visible content of the trusted verification inputs (issue brief artifact, spec, assessment backlog). When a trusted input is marked truncated, the verifier or remediator first attempts one bounded recovery of the full content through the trusted MoonMind tool surface; residual truncation is a disclosed scope limitation in the report, not a `NO_DETERMINATION` trigger, unless the acceptance criteria themselves are truncated and unrecoverable. Hidden truncated content never becomes a requirement.
 9. **Non-repo-verifiable requirements are disclosed exclusions.** Requirements provable only by manual testing, external deployment, or provider tooling unavailable in the runtime are reported as scope exclusions with reasons. They do not block `FULLY_IMPLEMENTED` and do not force `NO_DETERMINATION` when every repo-verifiable in-scope requirement is verified.
 10. **Optional tooling never gates the verdict.** Unavailable or misconfigured optional enrichment tooling (for example MoonMind RAG retrieval failing with `embedding_provider_not_configured`) is recorded as a `NOT RUN` environment note. `NO_DETERMINATION` is reserved for verification targets that cannot be established at all: a missing or unreadable authoritative input, unrecoverably truncated acceptance criteria, or repository evidence for visible in-scope requirements that cannot be inspected.
+11. **Every attempt preserves one authoritative candidate source.** A remediation loop should carry a workflow-owned cumulative workspace head so each attempt continues from the prior candidate checkpoint. That head is supplied by the capture/persistence boundary and, when present, remains the single authority: an attempt or verifier bound to a different head version or attempt ordinal is rejected, and the head crosses Continue-As-New with the loop state. When a runtime cannot capture that checkpoint, MoonMind may admit a checkpointless attempt only from the same repository branch and exact head SHA that the admitting verifier proved was publication-authorized, uncontaminated, and remote-verified after either a push or a verified no-change result. The remediation request is pinned to that admitted SHA; its verifier follows the resulting head of the same candidate branch, and both preserve the verified base branch separately for publication. Missing, advanced, or mismatched checkpoint and remote-branch evidence stops the attempt before dispatch; a managed runtime must never select another run's checkout or an unverified branch tip as an implicit fallback. An admitted checkpointless attempt still advances the loop out of remediation so its verifier's evidence can be evaluated.
 
 ---
 
@@ -302,8 +303,10 @@ Verify remediation attempt N of M
 
 Each remediation step should explicitly instruct the worker to:
 
-- read the latest verifier artifact before changing anything;
+- run one named canonical remediation Skill rather than an `auto` Skill selection that can resolve to an empty bundle;
+- receive the exact latest `gateResultRef` and `remainingWorkRef` as direct compact inputs; before runtime launch, the trusted Activity boundary materializes their complete bytes outside workflow history and supplies readable `gateResultPath` and `remainingWorkPath` values to the remediator;
 - address all safe known gaps from that report in one bounded pass;
+- exercise the production workflow, Activity, adapter, persistence, or side-effect-owner boundary when the verifier names that evidence; test-only models, dictionaries, mocks, and hard-coded identities do not satisfy a production-boundary requirement;
 - defer or mark unsafe gaps with evidence instead of silently skipping them;
 - record targeted local checks inside the remediation attempt artifact;
 - avoid creating sibling full-verifier steps for local checks;
@@ -336,6 +339,19 @@ Keep support for immediate verification inside a remediation attempt, but model 
 - policy-required full completion verification.
 
 Examples include provider-profile slot changes, container/session/liveness operations, destructive actions, migrations, branch promotion, publish actions, and environmental repairs whose result determines the next safe remediation decision.
+
+For the cross-workflow administrative action path specifically, every
+side-effecting action enters a trusted post-action verification phase that
+re-reads fresh canonical evidence and classifies the repair outcome separately
+from the action delivery status. See
+`docs/Workflows/WorkflowRemediation.md` §11.6.1. The action verification artifact
+uses a normalized outcome vocabulary — `verified_resolved`, `verified_no_change`,
+`still_failed`, `regressed`, `evidence_unavailable`, `approval_required`,
+`verification_failed`, `canceled` — and records the target state before,
+immediately after, and after bounded stabilization. An action verification is a
+targeted action-verification artifact, not a full completion verifier pass, and
+an action that is only *delivered* (including a persisted Checkpoint Branch) is
+never reported as a repaired target.
 
 ---
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -22,17 +23,21 @@ from pr_resolve_contract import (  # noqa: E402
     EXIT_CODE_BLOCKED,
     EXIT_CODE_FAILED,
     EXIT_CODE_MERGED,
+    EXIT_CODE_REVIEW_CLEAN,
     FINALIZE_ONLY_RETRY_REASONS,
+    FINISH_MODES,
     FULL_REMEDIATION_REASONS,
     RESULT_SCHEMA_VERSION,
     classify_retry_action,
     compute_backoff_seconds,
+    current_execution_ref,
     merge_automation_disposition_for_result,
     normalize_text,
     now_utc_iso,
     parse_reason,
     remediation_next_step,
 )
+from pr_resolve_finalize import _env_flag  # noqa: E402
 
 DEFAULT_MIN_ATTEMPTS_BEFORE_EXHAUSTED = 5
 
@@ -52,7 +57,13 @@ def _read_json(path: Path) -> dict[str, Any] | None:
 
 def _normalize_status(payload: dict[str, Any]) -> str:
     status = normalize_text(payload.get("status")).lower()
-    if status in {"merged", "blocked", "failed", "attempts_exhausted"}:
+    if status in {
+        "merged",
+        "review_clean",
+        "blocked",
+        "failed",
+        "attempts_exhausted",
+    }:
         return status
     merge_outcome = normalize_text(payload.get("merge_outcome")).lower()
     if merge_outcome == "merged":
@@ -138,6 +149,19 @@ def _build_result(
             for entry in history
         ],
     }
+    if payload["mergeAutomationDisposition"] in {"reenter_gate", "request_review"}:
+        continuation = next(
+            (
+                item["gatedContinuation"]
+                for item in reversed(history)
+                if isinstance(item.get("gatedContinuation"), dict)
+            ),
+            None,
+        )
+        if continuation is not None:
+            payload["gatedContinuation"] = dict(continuation)
+        else:
+            payload["mergeAutomationDisposition"] = "failed"
     return payload
 
 def run_orchestration(
@@ -193,15 +217,17 @@ def run_orchestration(
         finalize_payload = finalize_runner(attempt)
         reason = parse_reason(finalize_payload)
         finalize_status = _normalize_status(finalize_payload)
-        history.append(
-            {
-                "attempt": attempt,
-                "stage": "finalize",
-                "status": finalize_status,
-                "reason": reason,
-                "timestamp": now_utc_iso(),
-            }
-        )
+        finalize_history = {
+            "attempt": attempt,
+            "stage": "finalize",
+            "status": finalize_status,
+            "reason": reason,
+            "timestamp": now_utc_iso(),
+        }
+        gated_continuation = finalize_payload.get("gatedContinuation")
+        if isinstance(gated_continuation, dict):
+            finalize_history["gatedContinuation"] = dict(gated_continuation)
+        history.append(finalize_history)
 
         if finalize_status == "merged":
             result = _build_result(
@@ -220,6 +246,26 @@ def run_orchestration(
                 finished_at=now_utc_iso(),
             )
             return result, EXIT_CODE_MERGED
+
+        if finalize_status == "review_clean":
+            # fix_only finish mode: the merge gate opened with nothing left to
+            # address, so the loop is complete without a merge side effect.
+            result = _build_result(
+                status="review_clean",
+                decision="review clean; merge gate passed without merging",
+                merge_outcome="skipped",
+                final_reason=reason or "finish_mode_fix_only",
+                next_step="done",
+                max_attempts=max_attempts,
+                finalize_max_retries=finalize_max_retries,
+                fix_max_iterations=fix_max_iterations,
+                min_attempts_before_exhausted=min_attempts_before_exhausted,
+                history=history,
+                escalations=escalations,
+                started_at=started_at,
+                finished_at=now_utc_iso(),
+            )
+            return result, EXIT_CODE_REVIEW_CLEAN
 
         if finalize_status == "failed":
             result = _build_result(
@@ -486,6 +532,7 @@ def _write_publish_evidence_fallback(reason: str) -> None:
         "mode": "auto",
         "owner": "agent",
         "skillId": "pr-resolver",
+        "executionRef": current_execution_ref() or "local:pr-resolver",
         "status": "blocked",
         "action": "none",
         "repository": "unknown/unknown",
@@ -629,6 +676,37 @@ def main() -> None:
         action="store_true",
         help="Do not execute merge in finalize stage.",
     )
+    parser.add_argument(
+        "--review-provider",
+        default=os.environ.get("PR_RESOLVER_REVIEW_PROVIDER", ""),
+        help=(
+            "Automated review provider that must review every head SHA "
+            "(for example 'codex'). Empty or 'none' disables the review loop."
+        ),
+    )
+    parser.add_argument(
+        "--require-fresh-review",
+        dest="require_fresh_review",
+        action="store_true",
+        default=_env_flag("PR_RESOLVER_REQUIRE_FRESH_REVIEW"),
+        help="Require a fresh automated review for the current head SHA.",
+    )
+    parser.add_argument(
+        "--no-require-fresh-review",
+        dest="require_fresh_review",
+        action="store_false",
+        help="Do not require a fresh automated review for the current head SHA.",
+    )
+    parser.add_argument(
+        "--finish-mode",
+        default=os.environ.get("PR_RESOLVER_FINISH_MODE", "") or "merge",
+        choices=list(FINISH_MODES),
+        help=(
+            "'merge' finishes by merging the PR once the gate passes. "
+            "'fix_only' stops at a passing gate and reports review_clean "
+            "without merging."
+        ),
+    )
     args = parser.parse_args()
 
     finalize_script = Path(__file__).with_name("pr_resolve_finalize.py")
@@ -649,12 +727,21 @@ def main() -> None:
             str(snapshot_path),
             "--result-path",
             str(finalize_result_path),
+            "--finish-mode",
+            args.finish_mode,
             "--strict-exit-codes",
         ]
         if args.pr:
             cmd.extend(["--pr", args.pr])
         if args.dry_run:
             cmd.append("--dry-run")
+        if args.review_provider:
+            cmd.extend(["--review-provider", args.review_provider])
+        cmd.append(
+            "--require-fresh-review"
+            if args.require_fresh_review
+            else "--no-require-fresh-review"
+        )
         return _run_command_and_read_result(cmd, result_path=finalize_result_path)
 
     def full_runner(attempt: int, escalation: int, reason: str) -> dict[str, Any]:

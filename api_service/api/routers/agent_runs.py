@@ -395,6 +395,8 @@ def _build_session_resource_list(
                 or None
             )
             resource_id = artifact.artifact_id
+            unavailable_reason = str(metadata.get("unavailableReason") or "").strip() or None
+            source_sequence = metadata.get("sourceEventSequence")
             resources.append(
                 SessionResourceModel(
                     resource_id=resource_id,
@@ -409,6 +411,24 @@ def _build_session_resource_list(
                     default_read_ref=artifact.default_read_ref,
                     preview_artifact_ref=artifact.preview_artifact_ref,
                     metadata=metadata,
+                    preview_available=bool(
+                        artifact.default_read_ref or artifact.preview_artifact_ref
+                    ),
+                    download_available=artifact.status == "complete",
+                    completeness_status=(
+                        "degraded" if unavailable_reason else "complete"
+                    ),
+                    unavailable_reason=unavailable_reason,
+                    source_event_sequence=(
+                        int(source_sequence)
+                        if isinstance(source_sequence, int)
+                        else None
+                    ),
+                    related_resource_ids=[
+                        str(value)
+                        for value in metadata.get("relatedResourceIds", [])
+                        if isinstance(value, str) and value.strip()
+                    ] if isinstance(metadata.get("relatedResourceIds"), list) else [],
                     content_url=_session_resource_url(
                         projection.session_id,
                         artifact.artifact_id,
@@ -596,7 +616,7 @@ def _require_session_control_capability(
     capabilities: dict[str, bool],
 ) -> None:
     capability_by_action = {
-        "send_follow_up": "sendFollowUp",
+        "continue_same_session": "sendFollowUp",
         "clear_session": "clearSession",
         "interrupt_turn": "interruptTurn",
         "cancel_session": "cancelSession",
@@ -1573,6 +1593,19 @@ async def control_agent_run_artifact_session(
         action=payload.action,
         capabilities=capabilities,
     )
+    if payload.expected_session_epoch != record.session_epoch:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "stale_session_state"},
+        )
+    if (
+        payload.expected_turn_id is not None
+        and payload.expected_turn_id != record.active_turn_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "active_turn_mismatch"},
+        )
     if record.status in _MANAGED_SESSION_TERMINAL_STATUSES:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -1584,12 +1617,13 @@ async def control_agent_run_artifact_session(
         agent_run_id=agent_run_id,
         runtime_id=record.runtime_id,
     )
-    if payload.action == "send_follow_up":
+    if payload.action == "continue_same_session":
         await client.update_workflow(
             workflow_id,
             "SendFollowUp",
             {
                 "message": payload.message,
+                "requestId": payload.control_request_id,
                 **({"reason": payload.reason} if payload.reason else {}),
             },
         )
@@ -1598,6 +1632,7 @@ async def control_agent_run_artifact_session(
             workflow_id,
             "ClearSession",
             {
+                "requestId": payload.control_request_id,
                 **({"reason": payload.reason} if payload.reason else {}),
             },
         )
@@ -1607,6 +1642,7 @@ async def control_agent_run_artifact_session(
             "InterruptTurn",
             {
                 "sessionEpoch": record.session_epoch,
+                "requestId": payload.control_request_id,
                 **({"reason": payload.reason} if payload.reason else {}),
             },
         )
@@ -1615,6 +1651,7 @@ async def control_agent_run_artifact_session(
             workflow_id,
             "CancelSession",
             {
+                "requestId": payload.control_request_id,
                 **({"reason": payload.reason} if payload.reason else {}),
             },
         )
@@ -1631,7 +1668,15 @@ async def control_agent_run_artifact_session(
     )
     if projection is None:
         _session_projection_not_found()
-    return ArtifactSessionControlResponse(action=payload.action, projection=projection)
+    return ArtifactSessionControlResponse(
+        action=payload.action,
+        controlRequestId=payload.control_request_id,
+        status="completed",
+        stableReasonCode=None,
+        controlEventRef=(record.latest_control_event_ref if record else None),
+        completedAt=datetime.now(UTC),
+        projection=projection,
+    )
 
 @router.get(
     "/{id}/observability/events",

@@ -281,6 +281,45 @@ async def test_create_pr_missing_token(monkeypatch):
     assert result.created is False
     assert "GitHub auth is not configured" in result.summary
 
+
+@pytest.mark.asyncio
+async def test_resolve_pull_request_selector_resolves_exact_open_branch(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    pull_request = {
+        "number": 3192,
+        "html_url": "https://github.com/o/r/pull/3192",
+        "head": {"ref": "feature/mm-1200", "repo": {"full_name": "o/r"}},
+    }
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=_mock_get_response(200, [pull_request]))
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().resolve_pull_request_selector(
+            repo="o/r",
+            selector="feature/mm-1200",
+        )
+
+    assert result.resolved is True
+    assert result.pr_number == 3192
+    assert result.pr_url == "https://github.com/o/r/pull/3192"
+    assert mock_client.get.await_args.kwargs["params"]["head"] == "o:feature/mm-1200"
+
+
+@pytest.mark.asyncio
+async def test_resolve_pull_request_selector_rejects_cross_repo_url() -> None:
+    result = await GitHubService().resolve_pull_request_selector(
+        repo="o/r",
+        selector="https://github.com/other/repo/pull/42",
+    )
+
+    assert result.resolved is False
+    assert result.reason_code == "repository_mismatch"
+
 @pytest.mark.asyncio
 async def test_create_pr_uses_secret_ref_when_env_missing(monkeypatch):
     """Secret-ref fallback should be used when raw env token is absent."""
@@ -565,11 +604,16 @@ async def test_merge_pr_success(monkeypatch):
         svc = GitHubService()
         result = await svc.merge_pull_request(
             pr_url="https://github.com/owner/repo/pull/99",
+            expected_head_sha="expected123",
         )
 
     assert isinstance(result, MergePRResult)
     assert result.merged is True
     assert result.merge_sha == "abc123"
+    assert mock_client.put.await_args.kwargs["json"] == {
+        "merge_method": "merge",
+        "sha": "expected123",
+    }
 
 @pytest.mark.asyncio
 async def test_merge_pr_invalid_url():
@@ -646,6 +690,50 @@ async def test_evaluate_pull_request_readiness_waits_for_running_checks(monkeypa
     assert result.ready is False
     assert result.checks_complete is False
     assert result.blockers[0]["kind"] == "checks_running"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_pull_request_readiness_preserves_failed_and_running_checks(
+    monkeypatch,
+):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(
+        side_effect=[
+            _mock_get_response(200, {"state": "open", "head": {"sha": "abc123"}}),
+            _mock_get_response(200, {"state": "pending"}),
+            _mock_get_response(
+                200,
+                {
+                    "check_runs": [
+                        {"status": "in_progress", "conclusion": None},
+                        {"status": "completed", "conclusion": "failure"},
+                    ]
+                },
+            ),
+        ]
+    )
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo="owner/repo",
+            pr_number=341,
+            head_sha="abc123",
+            policy={"checks": "required", "automatedReview": "disabled"},
+        )
+
+    assert result.checks_complete is False
+    assert result.checks_passing is False
+    assert [blocker["kind"] for blocker in result.blockers] == [
+        "checks_running",
+        "checks_failed",
+    ]
 
 @pytest.mark.asyncio
 async def test_evaluate_pull_request_readiness_reports_checks_permission_missing(monkeypatch):
@@ -873,10 +961,10 @@ async def test_evaluate_pull_request_readiness_respects_failed_combined_status_w
             policy={"checks": "required", "automatedReview": "disabled"},
         )
 
-    assert result.ready is True
+    assert result.ready is False
     assert result.checks_complete is True
     assert result.checks_passing is False
-    assert result.blockers == []
+    assert [blocker["kind"] for blocker in result.blockers] == ["checks_failed"]
 
 @pytest.mark.asyncio
 async def test_evaluate_pull_request_readiness_treats_commented_automated_review_as_complete(

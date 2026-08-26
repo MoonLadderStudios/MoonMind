@@ -1,0 +1,61 @@
+{
+  "schemaVersion": "moonmind.reliability-replay.v1",
+  "replayId": "omnigent-missed-terminal-edge-after-retry",
+  "incidentWorkflowId": "mm:54d3ef07-a077-4f09-9430-ec754360ecee",
+  "failedChildWorkflowId": "mm:54d3ef07-a077-4f09-9430-ec754360ecee:agent:node-1",
+  "activityType": "integration.omnigent.profile_bound_execute",
+  "omnigentSessionId": "b471f435b9ae427b8555607ea0d1f754",
+  "firstMessageMarker": "MoonMind-Omnigent-Run: mm:54d3ef07-a077-4f09-9430-ec754360ecee",
+  "preDispatchItemIds": [
+    "prior-item"
+  ],
+  "durableEventCount": 1393,
+  "reattachedSnapshot": {
+    "status": "idle",
+    "active_response_id": null,
+    "items": [
+      {
+        "id": "prior-item",
+        "type": "message",
+        "data": {
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "prior turn"
+            }
+          ]
+        }
+      },
+      {
+        "id": "npm-call",
+        "type": "function_call",
+        "data": {
+          "name": "shell",
+          "call_id": "npm-call"
+        }
+      },
+      {
+        "id": "final-assistant",
+        "type": "message",
+        "data": {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "output_text",
+              "text": "Committed and pushed 7e00981d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "late-npm-output",
+        "type": "function_call_output",
+        "data": {
+          "call_id": "npm-call",
+          "output": "npm error Exit handler never called"
+        }
+      }
+    ]
+  }
+}

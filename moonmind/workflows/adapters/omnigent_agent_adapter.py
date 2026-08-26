@@ -21,6 +21,10 @@ from moonmind.omnigent.failure_classification import (
     OmnigentFailureReason,
     classify_omnigent_failure,
 )
+from moonmind.omnigent.repository_sources import (
+    RepositorySourceError,
+    normalize_repository_source,
+)
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     AgentRunHandle,
@@ -68,7 +72,6 @@ _ROOT_SELECTION_KEYS = {
     "terminalLaunchArgs",
 }
 
-
 class OmnigentAdapterError(ValueError):
     """Adapter validation error carrying the canonical MoonMind failure class."""
 
@@ -111,7 +114,13 @@ class OmnigentExecutionSelection:
 @dataclass(frozen=True, slots=True)
 class OmnigentResolvedTarget:
     agent_id: str
-    source: Literal["agent_id", "agent_name", "bundle_ref", "default_agent_name"]
+    source: Literal[
+        "agent_id",
+        "agent_name",
+        "bundle_ref",
+        "default_agent_id",
+        "default_agent_name",
+    ]
     agent_name: str | None = None
 
 
@@ -181,7 +190,7 @@ async def resolve_omnigent_target(
     *,
     list_agents: Callable[[], Awaitable[list[Mapping[str, Any]]]],
     upload_agent_bundle: Callable[[str], Awaitable[Mapping[str, Any]]],
-    default_agent_name: str | None,
+    default_agent: OmnigentAgentSelection | None,
 ) -> OmnigentResolvedTarget:
     """Resolve target agent in the MM-990 canonical order."""
 
@@ -210,7 +219,13 @@ async def resolve_omnigent_target(
             failure_class="integration_error",
         )
 
-    default_name = _clean(default_agent_name)
+    if default_agent and default_agent.agent_id:
+        return OmnigentResolvedTarget(
+            agent_id=default_agent.agent_id,
+            source="default_agent_id",
+        )
+
+    default_name = _clean(default_agent.agent_name if default_agent else None)
     if default_name:
         resolved = await _resolve_agent_name(default_name, list_agents=list_agents)
         return OmnigentResolvedTarget(
@@ -234,6 +249,7 @@ def build_omnigent_session_create_payload(
     """Build the JSON session-create payload sent to Omnigent."""
 
     session = selection.session
+    terminal_launch_args = list(session.terminal_launch_args)
     title = (
         session.title
         or _clean((request.parameters or {}).get("title"))
@@ -255,7 +271,7 @@ def build_omnigent_session_create_payload(
         "workspace": session.workspace,
         "model_override": session.model_override,
         "reasoning_effort": session.reasoning_effort,
-        "terminal_launch_args": session.terminal_launch_args,
+        "terminal_launch_args": terminal_launch_args,
     }
     if session.host_type == "external":
         payload["host_id"] = session.host_id
@@ -444,8 +460,16 @@ def _find_repository_url(payload: Mapping[str, Any] | None) -> str | None:
         return None
     for key in ("repository", "repositoryUrl", "repoUrl", "gitUrl"):
         value = payload.get(key)
-        if isinstance(value, str) and _is_git_url_with_optional_branch(value):
-            return value
+        if isinstance(value, str):
+            if _is_git_url_with_optional_branch(value):
+                return value
+            try:
+                normalized, source_kind = normalize_repository_source(value)
+            except RepositorySourceError:
+                normalized = ""
+                source_kind = ""
+            if source_kind in {"github_https", "remote"} and normalized:
+                return normalized
         if isinstance(value, Mapping):
             nested = _find_repository_url(value)
             if nested:

@@ -1,1 +1,0 @@
-docker-compose -f docker-compose.downloader.yaml run --rm downloader

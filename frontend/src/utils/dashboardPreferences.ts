@@ -25,8 +25,10 @@ export const DASHBOARD_PREFERENCES_STORAGE_KEY = 'moonmind.dashboard.preferences
 export const DASHBOARD_PREFERENCES_CHANGED_EVENT = 'moonmind:dashboard-preferences-changed';
 
 // Version 2 replaces the workflow-only collapse boolean with the same typed
-// display-mode contract used by every collection. Version 1 is migrated below.
-export const DASHBOARD_PREFERENCES_VERSION = 2;
+// display-mode contract used by every collection. Version 3 adds the
+// independent Skills collection display preferences. Versions 1 and 2 are
+// migrated below without losing unrelated settings.
+export const DASHBOARD_PREFERENCES_VERSION = 3;
 
 export type WorkflowListDensity = 'comfortable' | 'compact';
 
@@ -84,6 +86,14 @@ export type DashboardPreferences = {
   recurringListDisplayMode: CollectionListDisplayMode;
   /** Last recurring schedule definition explicitly opened by the operator. */
   lastSelectedDefinitionId: string;
+  /**
+   * Persisted Skills list display mode. Reseeded on load so a direct visit to
+   * `/skills/{skillId}` can honor a persisted `hidden` or `sidebar`; `/skills`
+   * always resolves to `table` regardless of this value (route-owned).
+   */
+  skillsListDisplayMode: CollectionListDisplayMode;
+  /** Last skill explicitly opened by the operator. */
+  lastSelectedSkillId: string;
   /** Preferred default workflow detail tab. */
   preferredDetailTab: WorkflowDetailTab;
   /** Preferred runtime default for the create page, where safe. */
@@ -112,6 +122,8 @@ export const DEFAULT_DASHBOARD_PREFERENCES: DashboardPreferences = {
   lastSelectedWorkflowId: '',
   recurringListDisplayMode: 'table',
   lastSelectedDefinitionId: '',
+  skillsListDisplayMode: 'table',
+  lastSelectedSkillId: '',
   preferredDetailTab: 'overview',
   defaultRuntime: '',
   defaultProviderProfile: '',
@@ -175,16 +187,11 @@ function sanitizeString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function sanitizeRecurringListDisplayMode(value: unknown): CollectionListDisplayMode {
-  return typeof value === 'string' && isCollectionListDisplayMode(value)
-    ? value
-    : DEFAULT_DASHBOARD_PREFERENCES.recurringListDisplayMode;
-}
-
-function sanitizeWorkflowListDisplayMode(value: unknown): CollectionListDisplayMode {
-  return typeof value === 'string' && isCollectionListDisplayMode(value)
-    ? value
-    : DEFAULT_DASHBOARD_PREFERENCES.workflowListDisplayMode;
+function sanitizeListDisplayMode(
+  value: unknown,
+  fallback: CollectionListDisplayMode,
+): CollectionListDisplayMode {
+  return typeof value === 'string' && isCollectionListDisplayMode(value) ? value : fallback;
 }
 
 /**
@@ -213,10 +220,21 @@ export function sanitizeDashboardPreferences(value: unknown): DashboardPreferenc
       value.debugFieldsVisible,
       DEFAULT_DASHBOARD_PREFERENCES.debugFieldsVisible,
     ),
-    workflowListDisplayMode: sanitizeWorkflowListDisplayMode(value.workflowListDisplayMode),
+    workflowListDisplayMode: sanitizeListDisplayMode(
+      value.workflowListDisplayMode,
+      DEFAULT_DASHBOARD_PREFERENCES.workflowListDisplayMode,
+    ),
     lastSelectedWorkflowId: sanitizeString(value.lastSelectedWorkflowId),
-    recurringListDisplayMode: sanitizeRecurringListDisplayMode(value.recurringListDisplayMode),
+    recurringListDisplayMode: sanitizeListDisplayMode(
+      value.recurringListDisplayMode,
+      DEFAULT_DASHBOARD_PREFERENCES.recurringListDisplayMode,
+    ),
     lastSelectedDefinitionId: sanitizeString(value.lastSelectedDefinitionId),
+    skillsListDisplayMode: sanitizeListDisplayMode(
+      value.skillsListDisplayMode,
+      DEFAULT_DASHBOARD_PREFERENCES.skillsListDisplayMode,
+    ),
+    lastSelectedSkillId: sanitizeString(value.lastSelectedSkillId),
     preferredDetailTab: sanitizeDetailTab(value.preferredDetailTab),
     defaultRuntime: sanitizeString(value.defaultRuntime),
     defaultProviderProfile: sanitizeString(value.defaultProviderProfile),
@@ -231,6 +249,9 @@ type StoredEnvelope = {
 
 function migrateStoredPreferences(envelope: Partial<StoredEnvelope>): unknown {
   if (envelope.version === DASHBOARD_PREFERENCES_VERSION) return envelope.preferences;
+  // Version 2 blobs simply predate the Skills preferences; keep every stored
+  // field and let sanitization fill the new Skills defaults.
+  if (envelope.version === 2) return envelope.preferences;
   if (envelope.version !== 1 || !isPlainObject(envelope.preferences)) return null;
 
   const legacy = envelope.preferences as Record<string, unknown>;

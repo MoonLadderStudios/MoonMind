@@ -18,6 +18,8 @@ Read relevant documents in the following order before implementing tasks:
 - **Temporal owns durable orchestration.** Workflow code stays deterministic and side-effect-free; side effects run in Activities or external services, with compact non-sensitive payloads and replay/in-flight safety where histories or persisted payloads cross a change boundary.
 - **Artifacts are durable evidence.** Large prompts, logs, diagnostics, generated files, provider bundles, and session summaries live as artifacts or artifact refs; dashboards and summaries are projections, not second sources of truth.
 - **Local-first deployment remains simple.** The canonical operator path is Docker Compose with documented prerequisites, safe defaults, optional integrations, and actionable failures for missing requirements.
+- **Minimize the always-on container footprint.** Keep the default Docker Compose deployment's steady-state container count as small as practical. Add a permanently running container only when a documented requirement for an independent lifecycle, isolation, scaling, security, or failure boundary outweighs the operational cost; otherwise consolidate the responsibility into an existing service. Ephemeral, per-run, and on-demand containers are a separate category and are acceptable when they start only for bounded work, have explicit ownership and cleanup, and add no idle deployment footprint.
+- **The default experience is an executable contract.** Supported MoonMind systems and common user journeys must ship in an operational, self-maintaining state with opinionated defaults that complete the common path without hidden enablement, paused schedules, permanent dry-run behavior, or mandatory configuration. Omitted values and their documented `auto`/default equivalents must exercise the same production path and pass end-to-end tests; a default may not depend on a parameter whose purpose is to make that default work. Keep the primary UI visually streamlined through progressive disclosure: expose essential controls directly and place advanced customization behind checkboxes, dropdowns, expandable sections, or documented environment variables. Preserve explicit overrides for specialized deployments; reserve opt-in defaults for genuine authority, credential, billing, or irreversible safety boundaries, not routine correctness, maintenance, or availability.
 - **Avoid vendor lock-in.** Provider behavior belongs behind adapters, portable formats, and explicit vendor-specific decisions.
 - **Own context and data.** Ingested context and generated artifacts stay operator-controlled by default; inject only the context each step needs and clear or bound context between steps.
 - **Skills are first-class and low ceremony.** Skills are discoverable, composable, runtime-neutral at the workflow level, and identified by one canonical skill name.
@@ -25,8 +27,8 @@ Read relevant documents in the following order before implementing tasks:
 - **Scaffolding is disposable; evidence-based verification is permanent.** Build AI scaffolds to be deleted, swapped, or regenerated, while preserving stable contracts, tests, telemetry, and the Hypothesize → Execute → Verify → Publish → Learn loop.
 - **Runtime behavior is configurable.** Routine operator changes should use documented, namespaced, safe-by-default configuration with deterministic precedence and observable runtime mode switches.
 - **Architecture stays modular.** Add capabilities behind explicit module boundaries and stable contracts; justify cross-cutting changes and speculative abstractions before implementation.
-- **Resilience is evidence-backed.** Prefer retry, reroute, degraded mode, or explicit workaround when operator intent and safety boundaries are preserved; never silently substitute credentials, provider profiles, billing-relevant runtime values, source authority, or less-constrained execution paths.
-- **Reliability is proven at authority handoffs.** Before changing a workflow, adapter, runtime, skill, workspace, artifact, or finalization path, identify the authoritative terminal evidence, the owner of each side effect, and which auxiliary failures must not overwrite primary success. Never infer completion from assistant prose, wrapper completion, attempt artifacts, timestamps, or raw filesystem paths. Test the changed production journey across its real boundaries—not only nearby functions or mocks—and turn every escaped production regression into a minimized replay fixture that runs in required CI. For cross-runtime changes, explicitly cover every affected runtime × capability × boundary combination or reject unsupported combinations before execution.
+- **Resilience is failure containment, not fallback accumulation.** Prefer one capability-derived recovery policy over named-runtime, named-skill, or enumerated-edge-case branches. Every operation MoonMind exposes must be completable by the selected runtime or name a durable owner and resume mechanism before launch; one-shot runtimes must not receive tools that require a nonexistent continuation. On a recoverable contract failure, preserve the same authoritative workspace and immutable inputs, perform bounded continuation or retry, and publish a remotely verified recovery checkpoint before cleanup when retries exhaust. Never silently substitute credentials, provider profiles, billing-relevant runtime values, source authority, or less-constrained execution paths.
+- **Reliability is proven at authority handoffs.** Before changing a workflow, adapter, runtime, skill, workspace, artifact, or finalization path, identify the authoritative terminal evidence, the owner of each side effect, and which auxiliary failures must not overwrite primary success. Validate terminal evidence before releasing retry, credential, workspace, or cleanup authority; a process exit, wrapper completion, assistant prose, attempt artifact, timestamp, or raw filesystem path is not objective completion. Test the changed production journey across its real boundaries—not only nearby functions or mocks—and turn every escaped production regression into a minimized replay fixture that runs in required CI. For cross-runtime changes, explicitly cover every affected runtime × capability × boundary combination or reject unsupported combinations before execution.
 - **Gates steer before they stop.** Validation, approval, publish, and readiness gates should preserve safe progress by returning actionable adaptation paths before halting. Prefer bounded retry, reroute, degraded mode, draft publication, or additional verification/remediation steps when operator intent and safety boundaries are preserved. Reserve hard blockers for unsafe, ambiguous, authority-sensitive, credential-sensitive, billing-relevant, source-authority, or less-constrained execution paths.
 - **Continuous improvement is reviewable.** Runs end with structured outcomes and may produce improvement signals, but suggested changes are opt-in and reviewable.
 - **Canonical docs are durable and declarative.** Long-lived desired-state knowledge lives in `docs/` and this file. Migration narratives, rollout plans, implementation backlogs, status checklists, MoonSpec packets, and other run-local handoffs are temporary execution scaffolding under `docs/tmp/`, `artifacts/`, or local handoff paths; delete or archive them when complete.
@@ -41,10 +43,10 @@ Terminology:
 
 Runtime model:
 - MoonMind resolves and materializes one per-run active skill set and exposes it to agents through adapter boundaries.
-- `.agents/skills` is the canonical runtime-visible path. It contains the **resolved active snapshot** for the run, not a mutable source-of-truth folder.
+- `$MOONMIND_ACTIVE_SKILLS_DIR` is the canonical runtime-visible path to the **resolved active snapshot** for the run. `.agents/skills` is a convenience alias only when the repository does not already own that path; portable Skills must use the exported active path first and may use `.agents/skills` only as an outside-MoonMind fallback.
 - `.agents/skills/local` is a local-only input/overlay path, not the authoritative durable storage model for MoonMind-managed skills.
 - Do not mutate checked-in skill folders in place as part of runtime setup. Checked-in repo skills and local-only skills are inputs to resolution; generate the active skill set separately and expose it through the canonical active path.
-- Adapters map `.agents/skills -> ../skills_active` (or `.gemini/skills -> ../skills_active`) to link workflows to `skills_active` (or its equivalent run-scoped active directory), which holds the resolved immutable active skill set for the run.
+- Adapters may map `.agents/skills -> ../skills_active` (or `.gemini/skills -> ../skills_active`) when that alias is safe. They always export the actual immutable visible path through `MOONMIND_ACTIVE_SKILLS_DIR`; a checked-in repository path must never shadow the resolved run snapshot.
 - Point `WORKFLOW_SKILLS_WORKSPACE_ROOT` and `WORKFLOW_SKILLS_CACHE_ROOT` at writable paths intended specifically for resolved skill snapshots and runtime materialization artifacts, not at arbitrary mutable replacements for the canonical design.
 
 When writing code that interacts with skills:
@@ -52,6 +54,16 @@ When writing code that interacts with skills:
 - Keep large skill content out of workflow history (use refs).
 - Keep skills runnable outside MoonMind; isolate any MoonMind-specific services, paths, metadata, or runtime behavior behind an explicit adapter boundary.
 - Add workflow/activity or adapter-boundary tests.
+
+### Skill semantic authority
+
+- A resolved Skill bundle is the authoritative implementation of its behavior in every host. `SKILL.md` and the portable files shipped beside it must define the same decisions, data collection, ordering, and terminal evidence whether the Skill runs in Codex directly or through MoonMind.
+- Native integration may provide execution substrate only: resolution and immutable materialization, credentials, workspace isolation, process launch, durable scheduling, timeout/cancellation enforcement, logs, artifacts, approvals, and validation of declared terminal contracts.
+- Native workflows, Activities, adapters, and service clients must not reimplement Skill semantics such as provider data collection, comment or issue classification, blocker priority, retry decisions, remediation selection, or completion rules when the resolved Skill already performs that behavior.
+- A native host may execute the portable Skill implementation at a controlled Activity or runtime boundary. It may not replace that implementation with parallel logic merely for performance, durability, or convenience.
+- If required behavior cannot be executed from the resolved Skill bundle, select an explicit portable host or fail before mutation. Never substitute behavior based on Skill name, built-in provenance, publish mode, or a stale native binding.
+- Any proposed native binding must identify the irreducibly native capability it supplies and the exact portable semantic entrypoint it executes. If it cannot do both, do not add the binding.
+- Tests must prove that MoonMind executes the resolved Skill behavior, not merely that a separate native implementation produces similar classifications. Cross-host comparison tests are supplemental and never justify duplicate semantic implementations.
 
 ## Documentation: canonical vs feature artifacts
 
@@ -63,6 +75,7 @@ When writing code that interacts with skills:
 ## Simplicity Gate
 
 - Treat simplicity as a safety property. Prefer one explicit canonical path over parallel aliases, compatibility wrappers, layered fallbacks, or duplicated identity fields.
+- A resilience change must reduce or bound the reachable failure state space. Enforce the invariant at the earliest shared capability or authority boundary; do not add a list of skill names, runtime names, error strings, or incident-specific exceptions when one typed contract can express the rule.
 - Before adding a new abstraction, adapter, config key, workflow branch, or persisted field, identify the existing mechanism it replaces or extends. If the answer is unclear, stop and simplify the design before implementing.
 - When a design would shim or alias a superseded internal pattern, apply the **Compatibility Policy** below instead: remove the old pattern in the same change.
 - Keep implementation scope bounded to the current issue or task. Do not fold opportunistic cleanup, unrelated refactors, or speculative migration scaffolding into the change.
@@ -81,6 +94,15 @@ When writing code that interacts with skills:
 - Executable tools are identified by **tool-name**.
 - Do not introduce internal ID aliases, display-name matching, provider-specific synonyms, or compatibility translation tables for these identities. Rename by updating every caller, test, mock, seed, and doc reference in the same change.
 
+## UI and Visual Changes
+
+- All dashboard styling lives in one stylesheet: `frontend/src/styles/dashboard.css`. Shared design tokens (`--mm-*`) are defined at the top in `:root` (light theme) and `.dark` (dark theme); prefer tokens over hardcoded values.
+- Brand-critical rules are pinned by `frontend/src/styles/dashboardBrand.test.ts`; update its assertions in the same change as the style change.
+- Global element rules (for example the `button` rules) cascade into components, so a control's visible style may not be fully described by its own class rule. Check the full cascade, and remember `<a>`-based and `<button>`-based controls pick up different globals.
+- The masthead/nav renders its desktop layout at `min-width: 1181px`; below that it collapses to the mobile hamburger nav. Verify desktop visuals at a viewport at least that wide.
+- To verify a visual change without deploying, render a small harness page that links the real `dashboard.css` against production markup (correct wrapper classes, plus the `.dark` class for dark theme) and screenshot it with headless Chromium (for example the `mcr.microsoft.com/playwright` Docker image). The deployed UI is baked into the dashboard image — never hot-patch deployed static assets to preview changes; verify with `tools/verify_deployed_ui_assets.py` when the deployed bundle is in question.
+- For selection controls, reuse the canonical segmented-control system (`.segmented-control`, MM-1138) or its sliding-thumb pattern (an `--*-active-index` custom property driving `translateX` on an absolutely positioned `::before` thumb) rather than inventing a new selection affordance.
+
 ## Pull Request Preparation
 
 - Create non-draft pull requests by default. Use a draft PR only when the user or task explicitly requests a draft, or when the workflow publish policy explicitly allows draft publication for a readiness/publish gate that cannot complete validation in the current environment but can still publish a safe, reviewable handoff with clear missing evidence and next steps.
@@ -89,13 +111,14 @@ When writing code that interacts with skills:
 
 ### Test Taxonomy
 
-MoonMind uses a four-tier test model that separates hermetic CI from credentialed provider checks:
+MoonMind uses a five-tier test model that separates hermetic CI from credentialed provider checks and host-hardware qualification:
 
 | Tier | Marker(s) | Required on PR? | Runner |
 |------|-----------|-----------------|--------|
 | **Unit** | `asyncio` (as needed) | Targeted suite required when selected by impact | `./tools/test_unit.sh` |
 | **Hermetic Integration CI** | `integration` + `integration_ci` | Targeted suite required only when selected by impact | `./tools/test_integration.sh` |
 | **Provider Verification** | `provider_verification` + `jules` + `requires_credentials` | No (manual/nightly) | `./tools/test_jules_provider.sh` |
+| **GPU Qualification** | `integration` + `requires_gpu` | No (deployment-owned GPU host) | `./tools/test_gpu_qualification.sh` |
 | **Local-only Integration** | `integration` without `integration_ci` | No | local dev only |
 
 - **Hermetic Integration Tests** — compose-backed, local-dependencies-only, no external credentials required.
@@ -108,6 +131,10 @@ MoonMind uses a four-tier test model that separates hermetic CI from credentiale
   - **Compose foundation**: service topology, namespace bootstrapping, visibility schema rehearsal
   - **Startup seeding**: profiles, managed secrets, task templates
 
+- **GPU Qualification Tests** — the generic NVIDIA container qualification journey on a deployment-owned GPU host.
+  These are marked with `@pytest.mark.requires_gpu`, are excluded from required CI, and skip on CPU-only runners with an explicit environment reason.
+  The equivalent contract, dispatch, lifecycle, and negative-matrix coverage runs on ordinary CPU runners in the unit suite; see `docs/Workflows/GpuContainerContract.md`.
+
 - **Provider Verification Tests** — real third-party provider checks using real credentials.
   These are **not** required for merge and are excluded from the required CI pipeline.
   They are marked with `@pytest.mark.provider_verification` (and often `@pytest.mark.jules` / `@pytest.mark.requires_credentials`).
@@ -118,18 +145,20 @@ Note: Jules **unit** tests (`tests/unit/jules/`, `tests/unit/workflows/temporal/
 
 ### Running Tests
 
-- **Unit Tests**: For PR preparation, run the targeted unit command for the changed area, using `./tools/test_unit.sh` with Python path filters or `--ui-args` for frontend targets as appropriate. Run the full unit suite only when the impact selector, fail-open policy, broad/risky changes, or unclear coverage requires it. In MoonMind-managed agent containers, unit tests are expected to run locally inside the current container. Do not use `./tools/test_unit_docker.sh` or nested Docker for normal managed-agent verification.
-- **Managed-Agent Local Test Mode**: Managed-agent worker environments should run with `MOONMIND_FORCE_LOCAL_TESTS=1`. The WSL Docker fallback applies to human local WSL development only, not to containerized worker sessions.
+- **Unit Tests**: For PR preparation, run the targeted unit command for the changed area, using `./tools/test_unit.sh` with Python path filters or `--ui-args` for frontend targets as appropriate. Run the full unit suite only when the impact selector, fail-open policy, broad/risky changes, or unclear coverage requires it. In a MoonMind-managed workflow, run Python tests with `moonmind container python-tests <pytest paths or node ids>`. That command submits to MoonMind's API-owned Docker Backend, waits for the durable terminal result, and prints the logs and artifact references. Do not use `./tools/test_unit_docker.sh`, a Docker socket, or nested Docker from a managed agent.
+- **Managed-Agent Container Test Mode**: The test workload sets `MOONMIND_FORCE_LOCAL_TESTS=1` inside the dedicated Python test image so `./tools/test_unit.sh --python-only` cannot redirect into nested Docker. A missing `moonmind container` capability, disabled container-job backend, or missing configured test image is an environment blocker with explicit container-job evidence; it is not a test assertion failure.
 - **Frontend Test Prereqs**: Frontend unit tests require local Node/npm and repo JS dependencies from `package-lock.json`. `./tools/test_unit.sh` should prepare these automatically when dashboard tests are enabled. If `node_modules` is missing or stale relative to `package-lock.json`, the script runs `npm ci --no-fund --no-audit` before executing `npm run ui:test`.
 - **Targeted Test Runs**: Positional args to `./tools/test_unit.sh` filter Python tests only. They do not target a Vitest file. For focused frontend iteration, use `npm run ui:test -- <path>` after local JS deps are prepared, or use `./tools/test_unit.sh --ui-args <path>` to route Vitest targets through the test runner. Before preparing a PR, rerun the selector-equivalent targeted suite for the changed area; escalate to the full suite only for fail-open, broad, risky, or ambiguous changes.
-- **No Docker Assumption in Agent Jobs**: Do not assume the Docker socket is available inside MoonMind-managed agent workspaces when running unit tests.
+- **No Docker Assumption in Agent Jobs**: Do not assume the Docker socket is available inside MoonMind-managed agent workspaces. Containerized verification crosses the `container.*` service boundary; only the trusted worker talks to the system Docker endpoint.
 - **Hermetic Integration Tests**: Run the `integration_ci` suite only when the change affects an integration boundary listed in the taxonomy above or the selector/fail-open policy requires it. Use `./tools/test_integration.sh` (Bash) or `tools/test-integration.ps1` (PowerShell). Under the hood: `docker compose --project-name moonmind-test -f docker-compose.test.yaml run --rm pytest bash -lc "pytest tests/integration -m 'integration_ci' -q --tb=short"`.
 - **Compose Test Isolation**: Every Compose-backed test command must use an explicit test-only project name of `moonmind-test` or `moonmind-test-*`. Never run test setup or `down --remove-orphans` under the deployment project name (`moonmind`). Keep automatic test teardown enabled; isolate the project instead of skipping cleanup.
 - **Provider Verification**: Run live external-provider tests that require real credentials. Use `./tools/test_jules_provider.sh` (Bash) or `tools/test-provider.ps1`. These scripts fail fast if `JULES_API_KEY` is not set.
+- **GPU Qualification**: Run the real NVIDIA container journey on a deployment-owned GPU host with `./tools/test_gpu_qualification.sh`. It fails fast when `MOONMIND_GPU_QUALIFICATION_IMAGE` is unset, the Docker daemon exposes no NVIDIA runtime, or no immutable MoonMind revision is available, and it skips with an explicit reason when a bounded device probe finds no usable device. Records are published to a durable root outside the ephemeral run workspace (`MOONMIND_GPU_QUALIFICATION_RECORD_DIR`, default `var/gpu_qualification`). Never make the qualification image, command, or GPU count a MoonMind product setting.
 - **Workflow Boundary Coverage**: Any change to Temporal workflows, activity signatures, signal/update names, serialized payload shapes, status normalization, or adapter-to-workflow contracts MUST add or update tests at the workflow boundary, not just isolated unit tests. At minimum:
   - cover the real invocation shape used by the worker binding or Temporal activity wrapper,
   - cover one compatibility case for the previous payload/history shape when runs may already be in flight,
   - cover degraded provider input such as unknown, blank, or newly introduced status values.
+- **Default-Path Resilience Coverage**: Changes to selection, runtime launch, finalization, publishing, or recovery must exercise omitted/default input and its explicit equivalent through the production authority handoff. For one-shot runtimes, tests must prove that deferred-only capabilities are rejected before execution, missing terminal evidence receives bounded continuation while the workspace remains authoritative, and exhausted continuation preserves recoverable repository work before cleanup.
 - **Replay / In-Flight Safety**: If a change can affect already-running workflows or persisted payloads, add a compatibility or replay-style regression test, or document why in-flight compatibility is impossible and how the cutover is made safe.
 - **Agent Skill System Coverage**: Changes to agent-skill selection, snapshot resolution, runtime materialization, or adapter-visible skill paths must include tests covering the real workflow/activity or adapter boundary.
 - **Skill Architectural Boundaries**: Source loading, resolution, manifest generation, and materialization belong strictly at activity/service boundaries. Workflow code should carry immutable refs and compact metadata only. Large skill content must not be embedded in workflow payloads.

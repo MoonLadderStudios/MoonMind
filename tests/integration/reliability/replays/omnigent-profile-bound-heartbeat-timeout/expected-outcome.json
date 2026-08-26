@@ -1,0 +1,6 @@
+{
+  "periodicLifecycleHeartbeat": true,
+  "preservesStreamingHeartbeatState": true,
+  "cancelledAttemptCleanup": "retry_or_janitor_reconciliation",
+  "releaseProviderLeaseOnCancellation": false
+}

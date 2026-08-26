@@ -1,0 +1,10 @@
+{
+  "acceptStaleTerminal": false,
+  "acceptProgressedTerminal": false,
+  "acceptTerminalSnapshot": true,
+  "minimumBusySnapshotsObserved": 5,
+  "requiresStableQuietPeriod": true,
+  "assistantPreambleRequiresStableQuietPeriod": true,
+  "unfinishedToolCallBlocksCompletion": true,
+  "toolOnlyQuietPeriodSeconds": 300
+}

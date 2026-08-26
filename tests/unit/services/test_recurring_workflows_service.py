@@ -16,12 +16,17 @@ from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import (
     Base,
+    ManagedAgentProviderProfile,
+    OmnigentAgentProfile,
+    OmnigentAgentProfileVersion,
+    OmnigentOAuthHostBindingRecord,
     RecurringWorkflowDefinition,
     RecurringWorkflowRun,
     RecurringWorkflowRunOutcome,
 )
 from api_service.services.recurring_workflows_service import (
     RecurringScheduleRuntimeSummary,
+    RecurringWorkflowConflictError,
     RecurringWorkflowsService,
     RecurringWorkflowValidationError,
 )
@@ -121,6 +126,124 @@ async def test_create_definition_creates_temporal_schedule(
                 "mm_owner_type": "user",
                 "mm_owner_id": str(definition.owner_user_id),
             }
+
+
+async def test_create_definition_compiles_agent_profile_snapshot_separately(
+    tmp_path: Path,
+    mock_temporal_adapter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = {
+        "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
+        "profileId": "omnigent-bootstrap-default",
+        "version": 1,
+        "digest": "sha256:" + "a" * 64,
+        "providerProfileRef": "codex-openai-oauth",
+        "executionProfileRef": "omnigent-codex@1",
+        "launchPolicyRef": "codex-on-demand@1",
+        "agentId": "upstream-codex-agent",
+        "document": {
+            "model": {"settings": {}},
+            "rag": {},
+            "capture": {"stream": True},
+            "workspace": {"mutation": "allowed"},
+        },
+    }
+    resolver = AsyncMock(return_value=snapshot)
+    monkeypatch.setattr(
+        "api_service.services.recurring_workflows_service.resolve_agent_profile_snapshot",
+        resolver,
+    )
+    plan_binding = {
+        "planRef": "omnigent-execution-plan:sha256:" + "b" * 64,
+        "planDigest": "sha256:" + "b" * 64,
+        "planArtifactRef": "art_plan",
+        "taskInputSnapshotRef": "art_task",
+        "taskInputSnapshotDigest": "sha256:" + "c" * 64,
+    }
+    compile_plan = AsyncMock(
+        return_value=SimpleNamespace(
+            binding=SimpleNamespace(
+                model_dump=lambda **_kwargs: dict(plan_binding)
+            ),
+            artifact_refs=("art_profile", "art_skills", "art_plan"),
+            resolved_skillset_ref="art_skills",
+        )
+    )
+    monkeypatch.setattr(
+        "api_service.services.omnigent_execution_plan_service."
+        "compile_and_persist_execution_plan",
+        compile_plan,
+    )
+    monkeypatch.setattr(
+        "api_service.services.omnigent_execution_plan_service."
+        "persist_json_artifact",
+        AsyncMock(return_value=("art_task", "sha256:" + "c" * 64)),
+    )
+
+    async with recurring_db(tmp_path) as session_maker, session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id="codex-openai-oauth",
+                runtime_id="codex_cli",
+                provider_id="openai",
+            )
+        )
+        await session.flush()
+        service = RecurringWorkflowsService(
+            session,
+            temporal_client_adapter=mock_temporal_adapter,
+            artifact_service=SimpleNamespace(),
+        )
+        definition = await service.create_definition(
+            name="Profile schedule",
+            description=None,
+            enabled=True,
+            schedule_type="cron",
+            cron="0 6 * * *",
+            timezone="UTC",
+            scope_type="personal",
+            scope_ref=None,
+            owner_user_id=uuid4(),
+            target={
+                "workflowType": "MoonMind.UserWorkflow",
+                "initialParameters": {
+                    "targetRuntime": "omnigent",
+                    "omnigent": {
+                        "executionTargetRef": "omnigent-codex@1",
+                        "launchPolicyRef": "codex-on-demand@1",
+                    },
+                    "workflow": {
+                        "instructions": "Run the selected profile.",
+                        "runtime": {"mode": "omnigent"},
+                    },
+                },
+            },
+            policy=None,
+            agent_profile_selection={
+                "profileId": "omnigent-bootstrap-default",
+                "providerProfileRef": "codex-openai-oauth",
+            },
+            actor=SimpleNamespace(id=uuid4()),
+        )
+
+    initial_parameters = definition.target["initialParameters"]
+    assert initial_parameters["agentProfileSnapshot"] == snapshot
+    assert initial_parameters["omnigent"] == {
+        "executionTargetRef": "omnigent-codex@1",
+        "launchPolicyRef": "codex-on-demand@1",
+    }
+    assert "agentProfileRef" not in initial_parameters["omnigent"]
+    assert "executionProfileRef" not in initial_parameters["omnigent"]
+    assert initial_parameters["omnigentExecutionPlan"] == plan_binding
+    assert initial_parameters["resolvedSkillsetRef"] == "art_skills"
+    assert compile_plan.await_count == 1
+    scheduled_parameters = mock_temporal_adapter.create_schedule.await_args.kwargs[
+        "workflow_input"
+    ]["initial_parameters"]
+    assert scheduled_parameters["agentProfileSnapshot"] == snapshot
+    assert scheduled_parameters["omnigent"] == initial_parameters["omnigent"]
+    assert scheduled_parameters["omnigentExecutionPlan"] == plan_binding
 
 
 async def test_started_at_by_workflow_id_orders_duplicate_rows_deterministically() -> None:
@@ -648,6 +771,365 @@ async def test_reconcile_repairs_existing_schedule_action_payload(
                 "MoonMind.UserWorkflow"
             )
             assert "workflowType" not in call_kwargs["workflow_input"]
+
+
+async def test_update_definition_cannot_replace_recorded_omnigent_plan(
+    tmp_path: Path, mock_temporal_adapter
+) -> None:
+    plan = {
+        "planRef": "omnigent-execution-plan:sha256:" + "1" * 64,
+        "planDigest": "sha256:" + "1" * 64,
+        "planArtifactRef": "art_plan",
+        "taskInputSnapshotRef": "art_task",
+        "taskInputSnapshotDigest": "sha256:" + "2" * 64,
+    }
+    async with recurring_db(tmp_path) as session_maker, session_maker() as session:
+        service = RecurringWorkflowsService(
+            session, temporal_client_adapter=mock_temporal_adapter
+        )
+        definition = await service.create_definition(
+            name="Immutable Omnigent schedule",
+            description=None,
+            enabled=True,
+            schedule_type="cron",
+            cron="0 6 * * *",
+            timezone="UTC",
+            scope_type="personal",
+            scope_ref=None,
+            owner_user_id=uuid4(),
+            target={
+                "workflowType": "MoonMind.UserWorkflow",
+                "initialParameters": {
+                    "targetRuntime": "omnigent",
+                    "omnigentExecutionPlan": plan,
+                },
+            },
+            policy={},
+        )
+
+        with pytest.raises(
+            RecurringWorkflowValidationError, match="replacement plan"
+        ):
+            await service.update_definition(
+                definition,
+                target={
+                    "workflowType": "MoonMind.UserWorkflow",
+                    "initialParameters": {"targetRuntime": "omnigent"},
+                },
+            )
+
+
+async def test_managed_refresh_recompiles_recorded_omnigent_plan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = RecurringWorkflowsService(AsyncMock(spec=AsyncSession))
+    definition = SimpleNamespace(
+        target={
+            "initialParameters": {
+                "omnigentExecutionPlan": {
+                    "planRef": "omnigent-execution-plan:sha256:" + "3" * 64
+                }
+            }
+        }
+    )
+    refresh = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        service,
+        "_refresh_omnigent_execution_plan_target",
+        refresh,
+    )
+
+    assert await service._refresh_managed_bootstrap_target(definition) is True
+    refresh.assert_awaited_once()
+
+
+async def test_managed_bootstrap_policy_cutover_refreshes_schedule_action(
+    tmp_path: Path,
+    mock_temporal_adapter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    old_digest = "sha256:" + "3" * 64
+    new_digest = "sha256:" + "4" * 64
+    old_snapshot = {
+        "profileId": "omnigent-bootstrap-default",
+        "version": 2,
+        "digest": old_digest,
+        "providerProfileRef": "codex_openai_oauth",
+        "executionProfileRef": "omnigent-codex@1",
+        "launchPolicyRef": "codex-on-demand@3",
+        "document": {"model": {}, "capture": {}, "rag": {}, "publish": {}},
+    }
+    new_snapshot = {
+        **old_snapshot,
+        "version": 3,
+        "digest": new_digest,
+        "launchPolicyRef": "codex-on-demand@4",
+    }
+    refresh_calls: list[dict[str, object]] = []
+
+    async def refresh_snapshot(
+        session,
+        *,
+        parameters,
+        consumer_type,
+        consumer_id,
+        user,
+        replace_existing_usage,
+    ):
+        refresh_calls.append(
+            {
+                "consumerType": consumer_type,
+                "consumerId": consumer_id,
+                "replaceExistingUsage": replace_existing_usage,
+            }
+        )
+        return {
+            **dict(parameters),
+            "agentProfile": {
+                "profileId": "omnigent-bootstrap-default",
+                "version": 3,
+                "digest": new_digest,
+            },
+            "agentProfileSnapshot": new_snapshot,
+            "omnigent": {
+                "executionTargetRef": "omnigent-codex@1",
+                "launchPolicyRef": "codex-on-demand@4",
+            },
+        }
+
+    monkeypatch.setattr(
+        "api_service.services.recurring_workflows_service."
+        "refresh_managed_bootstrap_snapshot",
+        refresh_snapshot,
+    )
+
+    async with recurring_db(tmp_path) as session_maker, session_maker() as session:
+        service = RecurringWorkflowsService(
+            session,
+            temporal_client_adapter=mock_temporal_adapter,
+        )
+        definition = await service.create_definition(
+            name="Daily Dependabot Resolver",
+            description=None,
+            enabled=True,
+            schedule_type="cron",
+            cron="0 13 * * *",
+            timezone="UTC",
+            scope_type="personal",
+            scope_ref=None,
+            owner_user_id=uuid4(),
+            target={
+                "workflowType": "MoonMind.UserWorkflow",
+                "initialParameters": {
+                    "targetRuntime": "omnigent",
+                    "agentProfile": {
+                        "profileId": "omnigent-bootstrap-default",
+                        "version": 2,
+                        "digest": old_digest,
+                    },
+                    "agentProfileSnapshot": old_snapshot,
+                    "omnigent": {
+                        "executionTargetRef": "omnigent-codex@1",
+                        "launchPolicyRef": "codex-on-demand@3",
+                    },
+                },
+                "agentProfile": {
+                    "profileId": "omnigent-bootstrap-default",
+                    "version": 2,
+                    "digest": old_digest,
+                },
+                "agentProfileSnapshot": old_snapshot,
+            },
+            policy={},
+        )
+        session.add(
+            OmnigentAgentProfile(
+                profile_id="omnigent-bootstrap-default",
+                display_name="Codex via Omnigent",
+                visibility="workspace",
+                state="active",
+                active_version=3,
+                default_for_runtime=True,
+            )
+        )
+        session.add(
+            OmnigentAgentProfileVersion(
+                profile_id="omnigent-bootstrap-default",
+                version=3,
+                digest=new_digest,
+                document={
+                    "execution": {
+                        "allowedLaunchPolicyRefs": ["codex-on-demand@4"],
+                    }
+                },
+                validation_result={"ready": True},
+            )
+        )
+        binding = OmnigentOAuthHostBindingRecord(
+            binding_ref="codex-openai-oauth-host",
+            provider_profile_id="codex_openai_oauth",
+            endpoint_ref="default",
+            harness="codex-native",
+            credential_mount_template_json={
+                "authVolumeRef": {
+                    "providerProfileId": "codex_openai_oauth",
+                    "runtimeId": "codex_cli",
+                    "providerId": "openai",
+                    "volumeRef": "codex_auth_volume",
+                    "credentialGeneration": 1,
+                    "ownerUserId": "user-1",
+                },
+                "targetPath": "/home/app/.codex",
+                "accessMode": "read_write",
+                "runtimeUid": 1000,
+                "runtimeGid": 1000,
+            },
+            launch_policy_ref="codex-on-demand@3",
+        )
+        session.add(binding)
+        await session.commit()
+
+        old_workflow_type, old_workflow_input = (
+            service._workflow_bundle_for_definition(definition)
+        )
+        mock_temporal_adapter.create_schedule.reset_mock()
+        mock_temporal_adapter.update_schedule.reset_mock()
+        mock_temporal_adapter.describe_schedule.return_value = SimpleNamespace(
+            schedule=SimpleNamespace(
+                action=SimpleNamespace(
+                    workflow=old_workflow_type,
+                    id=make_scheduled_workflow_id_base(definition.id),
+                    args=[old_workflow_input],
+                    task_queue="mm.workflow.user.v2",
+                )
+            )
+        )
+
+        assert await service.refresh_managed_bootstrap_schedules() == 0
+        mock_temporal_adapter.update_schedule.assert_not_called()
+        assert refresh_calls == []
+
+        binding.launch_policy_ref = "codex-on-demand@4"
+        await session.commit()
+
+        assert await service.refresh_managed_bootstrap_schedules() == 1
+
+        await session.refresh(definition)
+        assert definition.version == 2
+        assert definition.target["agentProfile"]["version"] == 3
+        assert definition.target["initialParameters"]["omnigent"] == {
+            "executionTargetRef": "omnigent-codex@1",
+            "launchPolicyRef": "codex-on-demand@4",
+        }
+        assert refresh_calls == [
+            {
+                "consumerType": "schedule",
+                "consumerId": str(definition.id),
+                "replaceExistingUsage": True,
+            }
+        ]
+        update = mock_temporal_adapter.update_schedule.call_args.kwargs
+        assert update["workflow_input"]["initial_parameters"]["omnigent"][
+            "launchPolicyRef"
+        ] == "codex-on-demand@4"
+
+
+async def test_managed_bootstrap_refresh_contains_individual_failures(
+    tmp_path: Path,
+    mock_temporal_adapter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with recurring_db(tmp_path) as session_maker, session_maker() as session:
+        service = RecurringWorkflowsService(
+            session,
+            temporal_client_adapter=mock_temporal_adapter,
+        )
+        definitions = []
+        for name in ("Broken", "Healthy"):
+            definitions.append(
+                await service.create_definition(
+                    name=name,
+                    description=None,
+                    enabled=True,
+                    schedule_type="cron",
+                    cron="0 13 * * *",
+                    timezone="UTC",
+                    scope_type="personal",
+                    scope_ref=None,
+                    owner_user_id=uuid4(),
+                    target={
+                        "workflowType": "MoonMind.UserWorkflow",
+                        "initialParameters": {"task": {"instructions": name}},
+                    },
+                    policy={},
+                )
+            )
+        definition_ids = [definition.id for definition in definitions]
+
+        visited: list[object] = []
+
+        async def refresh_target(definition):
+            visited.append(definition.id)
+            if definition.id == definition_ids[0]:
+                raise RecurringWorkflowValidationError("missing usage row")
+            return True
+
+        monkeypatch.setattr(service, "_refresh_managed_bootstrap_target", refresh_target)
+        monkeypatch.setattr(
+            service,
+            "_ensure_schedule_action_current",
+            AsyncMock(),
+        )
+
+        assert await service.refresh_managed_bootstrap_schedules() == 1
+        assert set(visited) == set(definition_ids)
+
+
+async def test_update_definition_rejects_stale_target_version(
+    tmp_path: Path,
+    mock_temporal_adapter,
+) -> None:
+    async with recurring_db(tmp_path) as session_maker, session_maker() as session:
+        service = RecurringWorkflowsService(
+            session,
+            temporal_client_adapter=mock_temporal_adapter,
+        )
+        original_target = {
+            "workflowType": "MoonMind.UserWorkflow",
+            "initialParameters": {"omnigent": {"launchPolicyRef": "policy@1"}},
+        }
+        current_target = {
+            "workflowType": "MoonMind.UserWorkflow",
+            "initialParameters": {"omnigent": {"launchPolicyRef": "policy@2"}},
+        }
+        definition = await service.create_definition(
+            name="Daily Resolver",
+            description=None,
+            enabled=True,
+            schedule_type="cron",
+            cron="0 13 * * *",
+            timezone="UTC",
+            scope_type="personal",
+            scope_ref=None,
+            owner_user_id=uuid4(),
+            target=original_target,
+            policy={},
+        )
+        definition.target = current_target
+        definition.version = 2
+        await session.commit()
+        mock_temporal_adapter.update_schedule.reset_mock()
+
+        with pytest.raises(RecurringWorkflowConflictError, match="refresh and retry"):
+            await service.update_definition(
+                definition,
+                target=original_target,
+                expected_version=1,
+            )
+
+        assert definition.target == current_target
+        mock_temporal_adapter.update_schedule.assert_not_called()
+
 
 async def test_reconcile_skips_update_when_metadata_and_action_match(
     tmp_path: Path, mock_temporal_adapter

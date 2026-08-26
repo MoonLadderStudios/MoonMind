@@ -24,26 +24,6 @@ from moonmind.workflow_docker_mode import normalize_workflow_docker_mode
 
 _ALLOWED_TARGET_DEFAULTS = ("workflow_repo", "moonmind", "both")
 _ALLOWED_PROPOSAL_SEVERITIES = ("low", "medium", "high", "critical")
-_PENTEST_ALLOWED_OPERATION_MODES = (
-    "recon_only",
-    "validate_hypothesis",
-    "full_authorized",
-)
-_PENTEST_ALLOWED_EVIDENCE_LEVELS = ("minimal", "standard", "full")
-_PENTEST_APPROVED_RUNNER_IMAGE_REPOSITORY = (
-    "ghcr.io/moonladderstudios/moonmind-pentestgpt"
-)
-_PENTEST_APPROVED_RUNNER_IMAGE_TAGS = frozenset(("1.0",))
-_PENTEST_DEFAULT_RUNNER_IMAGE = (
-    "ghcr.io/moonladderstudios/moonmind-pentestgpt:1.0"
-)
-_PENTEST_RUNNER_IMAGE_PATTERN = re.compile(
-    r"^(?P<repository>"
-    + re.escape(_PENTEST_APPROVED_RUNNER_IMAGE_REPOSITORY)
-    + r")"
-    r"(?::(?P<tag>[A-Za-z0-9_.-]+))?"
-    r"(?:@(?P<digest>sha256:[a-f0-9]{64}))?$"
-)
 _OWNER_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _JIRA_PROJECT_KEY_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9]+$")
 _JIRA_ALLOWED_ACTIONS = frozenset(
@@ -139,6 +119,10 @@ class TemporalSettings(BaseSettings):
     activity_agent_runtime_task_queue: str = Field(
         "mm.activity.agent_runtime",
         validation_alias="TEMPORAL_ACTIVITY_AGENT_RUNTIME_TASK_QUEUE",
+    )
+    activity_agent_runtime_control_task_queue: str = Field(
+        "mm.activity.agent_runtime.control",
+        validation_alias="TEMPORAL_ACTIVITY_AGENT_RUNTIME_CONTROL_TASK_QUEUE",
     )
     activity_deployment_task_queue: str = Field(
         "mm.activity.deployment",
@@ -716,7 +700,7 @@ class WorkflowSettings(BaseSettings):
         description="Override container image for Codex login status checks.",
     )
     default_runtime: str = Field(
-        "codex",
+        "omnigent",
         validation_alias=AliasChoices(
             "WORKFLOW_DEFAULT_RUNTIME",
             "MOONMIND_DEFAULT_RUNTIME",
@@ -735,6 +719,7 @@ class WorkflowSettings(BaseSettings):
                 "apply_mode": "next_workflow",
                 "title": "Default Runtime",
                 "options": [
+                    ("omnigent", "Omnigent (OpenCode)"),
                     ("codex", "Codex"),
                     ("codex_cli", "Codex CLI"),
                     ("claude_code", "Claude Code"),
@@ -786,7 +771,7 @@ class WorkflowSettings(BaseSettings):
             "with an environment-class outcome (verdict BLOCKED, or "
             "NO_DETERMINATION produced by a degraded/malformed gate payload): "
             "'fail' fails the run fail-closed; 'draft_pr' publishes a draft "
-            "pull request annotated as verification-incomplete and completes "
+            "pull request annotated as verification-incomplete, then fails "
             "the run with attention_required."
         ),
         json_schema_extra={
@@ -803,7 +788,7 @@ class WorkflowSettings(BaseSettings):
                 "title": "MoonSpec Environment-Blocked Publish Action",
                 "options": [
                     ("fail", "Fail the run (fail closed)"),
-                    ("draft_pr", "Publish draft PR with attention flag"),
+                    ("draft_pr", "Publish draft PR, then fail the run"),
                 ],
                 "applies_to": ["publishing"],
                 "order": 21,
@@ -1301,11 +1286,11 @@ class WorkflowSettings(BaseSettings):
         (codex, claude) and normalizes them to canonical form so internal state
         is consistent with the runtime_defaults canonical-first direction.
         """
-        normalized = str(value or "").strip().lower() or "codex_cli"
+        normalized = str(value or "").strip().lower() or "omnigent"
         # Map legacy aliases to canonical before validation.
         _aliases = {"codex": "codex_cli", "claude": "claude_code"}
         normalized = _aliases.get(normalized, normalized)
-        allowed = {"codex_cli", "claude_code", "jules"}
+        allowed = {"omnigent", "codex_cli", "claude_code", "jules"}
         if normalized not in allowed:
             supported = ", ".join(sorted(allowed))
             raise ValueError(f"default_runtime must be one of: {supported}")
@@ -1428,312 +1413,7 @@ class SecuritySettings(BaseSettings):
 
     model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
 
-class PentestSettings(BaseSettings):
-    """Policy and deployment settings for the curated PentestGPT tool."""
 
-    enabled: bool = Field(
-        True,
-        validation_alias=AliasChoices("MOONMIND_PENTEST_ENABLED"),
-        description=(
-            "Enable discovery and execution of security.pentest.run. Discovery is "
-            "enabled by default; set MOONMIND_PENTEST_ENABLED=false to disable it "
-            "as an operator override."
-        ),
-        json_schema_extra={
-            "moonmind": {
-                "expose": True,
-                "key": "pentest.enabled",
-                "section": "operations",
-                "category": "Pentest",
-                "scopes": ["deployment"],
-                "ui": "toggle",
-                "type": "boolean",
-                "requires_reload": True,
-                "apply_mode": "worker_reload",
-                "title": "Enable PentestGPT",
-                "applies_to": ["tool_discovery", "workflow_runtime"],
-                "order": 10,
-            }
-        },
-    )
-    runner_image: str = Field(
-        _PENTEST_DEFAULT_RUNNER_IMAGE,
-        validation_alias=AliasChoices("MOONMIND_PENTEST_RUNNER_IMAGE"),
-        description=(
-            "Curated PentestGPT runner image reference. Use an explicit "
-            "digest-pinned override for production deployments that require "
-            "immutable image selection."
-        ),
-    )
-    unsafe_dev_runner_image_override: bool = Field(
-        False,
-        validation_alias=AliasChoices(
-            "MOONMIND_PENTEST_UNSAFE_DEV_RUNNER_IMAGE_OVERRIDE"
-        ),
-        description=(
-            "Allow an unapproved PentestGPT runner image for explicit local "
-            "development only."
-        ),
-    )
-    allowed_runner_profiles: Annotated[tuple[str, ...], NoDecode] = Field(
-        ("pentestgpt-claude-oauth",),
-        validation_alias=AliasChoices("MOONMIND_PENTEST_ALLOWED_RUNNER_PROFILES"),
-        description="Comma-delimited allowlist of Pentest runner profile ids.",
-    )
-    default_runner_profile: str = Field(
-        "pentestgpt-claude-oauth",
-        validation_alias=AliasChoices("MOONMIND_PENTEST_DEFAULT_RUNNER_PROFILE"),
-    )
-    allow_claude_oauth_profile: bool = Field(
-        True,
-        validation_alias=AliasChoices("MOONMIND_PENTEST_ALLOW_CLAUDE_OAUTH_PROFILE"),
-        description=(
-            "Enable the Claude Code OAuth subscription runner/provider profile for "
-            "PentestGPT. The backing OAuth volume must be provisioned out of band "
-            "via MoonMind.OAuthSession."
-        ),
-    )
-    claude_oauth_runner_profile_id: str = Field(
-        "pentestgpt-claude-oauth",
-        validation_alias=AliasChoices(
-            "MOONMIND_PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID"
-        ),
-    )
-    claude_oauth_provider_profile_id: str = Field(
-        "pentestgpt_claude_oauth",
-        validation_alias=AliasChoices(
-            "MOONMIND_PENTEST_CLAUDE_OAUTH_PROVIDER_PROFILE_ID"
-        ),
-    )
-    claude_oauth_volume: str = Field(
-        "claude_auth_volume",
-        validation_alias=AliasChoices("MOONMIND_PENTEST_CLAUDE_OAUTH_VOLUME"),
-        description="Durable Claude Code OAuth subscription volume mounted for PentestGPT.",
-    )
-    claude_oauth_mount_path: str = Field(
-        "/home/pentester/.claude",
-        validation_alias=AliasChoices("MOONMIND_PENTEST_CLAUDE_OAUTH_MOUNT_PATH"),
-        description="In-container Claude config home the PentestGPT runner authenticates against.",
-    )
-    claude_oauth_credential_profile_ref: str | None = Field(
-        "claude_anthropic",
-        validation_alias=AliasChoices(
-            "MOONMIND_PENTEST_CLAUDE_OAUTH_CREDENTIAL_PROFILE_REF"
-        ),
-        description=(
-            "Optional canonical Claude provider profile id the PentestGPT OAuth "
-            "profile shares its backing credential lease with."
-        ),
-    )
-    claude_oauth_seed_per_run_home: bool = Field(
-        True,
-        validation_alias=AliasChoices(
-            "MOONMIND_PENTEST_CLAUDE_OAUTH_SEED_PER_RUN_HOME"
-        ),
-        description=(
-            "Seed a writable per-run Claude home from the read-only durable OAuth "
-            "volume instead of mutating the durable volume in place."
-        ),
-    )
-    default_provider_profile: str | None = Field(
-        "pentestgpt_claude_oauth",
-        validation_alias=AliasChoices("MOONMIND_PENTEST_DEFAULT_PROVIDER_PROFILE"),
-        description="Optional default PentestGPT provider profile id.",
-    )
-    provider_profiles_file: str | None = Field(
-        None,
-        validation_alias=AliasChoices("MOONMIND_PENTEST_PROVIDER_PROFILES_FILE"),
-    )
-    enabled_provider_profiles: Annotated[tuple[str, ...], NoDecode] = Field(
-        ("pentestgpt_claude_oauth",),
-        validation_alias=AliasChoices("MOONMIND_PENTEST_ENABLED_PROVIDER_PROFILES"),
-        description="Comma-delimited allowlist of PentestGPT provider profile ids.",
-    )
-    provider_slot_wait_seconds: int = Field(
-        300,
-        ge=1,
-        validation_alias=AliasChoices("MOONMIND_PENTEST_PROVIDER_SLOT_WAIT_SECONDS"),
-    )
-    provider_lease_seconds: int | None = Field(
-        None,
-        ge=60,
-        validation_alias=AliasChoices("MOONMIND_PENTEST_PROVIDER_LEASE_SECONDS"),
-    )
-    default_operation_mode: str = Field(
-        "recon_only",
-        validation_alias=AliasChoices("MOONMIND_PENTEST_DEFAULT_OPERATION_MODE"),
-    )
-    allowed_operation_modes: Annotated[tuple[str, ...], NoDecode] = Field(
-        ("recon_only", "validate_hypothesis"),
-        validation_alias=AliasChoices("MOONMIND_PENTEST_ALLOWED_OPERATION_MODES"),
-        description="Comma-delimited allowlist of Pentest operation modes.",
-    )
-    default_evidence_level: str = Field(
-        "standard",
-        validation_alias=AliasChoices("MOONMIND_PENTEST_DEFAULT_EVIDENCE_LEVEL"),
-    )
-    allowed_evidence_levels: Annotated[tuple[str, ...], NoDecode] = Field(
-        ("minimal", "standard", "full"),
-        validation_alias=AliasChoices("MOONMIND_PENTEST_ALLOWED_EVIDENCE_LEVELS"),
-    )
-    default_time_budget_minutes: int = Field(
-        60,
-        ge=1,
-        validation_alias=AliasChoices("MOONMIND_PENTEST_DEFAULT_TIME_BUDGET_MINUTES"),
-    )
-    max_time_budget_minutes: int = Field(
-        480,
-        ge=1,
-        validation_alias=AliasChoices("MOONMIND_PENTEST_MAX_TIME_BUDGET_MINUTES"),
-    )
-    require_approved_scope: bool = Field(
-        True,
-        validation_alias=AliasChoices("MOONMIND_PENTEST_REQUIRE_APPROVED_SCOPE"),
-    )
-    require_manual_approval_for_external: bool = Field(
-        True,
-        validation_alias=AliasChoices(
-            "MOONMIND_PENTEST_REQUIRE_MANUAL_APPROVAL_FOR_EXTERNAL"
-        ),
-    )
-    require_manual_approval_for_full_authorized: bool = Field(
-        True,
-        validation_alias=AliasChoices(
-            "MOONMIND_PENTEST_REQUIRE_MANUAL_APPROVAL_FOR_FULL_AUTHORIZED"
-        ),
-    )
-    allow_external_targets: bool = Field(
-        True,
-        validation_alias=AliasChoices("MOONMIND_PENTEST_ALLOW_EXTERNAL_TARGETS"),
-    )
-    telemetry_enabled: bool = Field(
-        False,
-        validation_alias=AliasChoices("MOONMIND_PENTEST_TELEMETRY_ENABLED"),
-    )
-
-    model_config = SettingsConfigDict(
-        populate_by_name=True,
-        env_prefix="",
-        env_file=str(ENV_FILE),
-        env_file_encoding="utf-8",
-        extra="ignore",
-    )
-
-    @field_validator(
-        "allowed_runner_profiles",
-        "enabled_provider_profiles",
-        "allowed_operation_modes",
-        "allowed_evidence_levels",
-        mode="before",
-    )
-    @classmethod
-    def _split_csv(cls, value: object) -> tuple[str, ...]:
-        if value is None:
-            return ()
-        if isinstance(value, str):
-            raw_items: Sequence[object] = value.split(",")
-        elif isinstance(value, Sequence) and not isinstance(
-            value, (bytes, bytearray, str)
-        ):
-            raw_items = value
-        else:
-            raw_items = (value,)
-        return tuple(
-            dict.fromkeys(str(item).strip() for item in raw_items if str(item).strip())
-        )
-
-    @field_validator(
-        "default_provider_profile",
-        "provider_profiles_file",
-        "claude_oauth_credential_profile_ref",
-        "provider_lease_seconds",
-        mode="before",
-    )
-    @classmethod
-    def _blank_to_none(cls, value: object) -> str | None:
-        if value in (None, ""):
-            return None
-        normalized = str(value).strip()
-        return normalized or None
-
-    @field_validator("default_operation_mode", mode="before")
-    @classmethod
-    def _normalize_default_operation_mode(cls, value: object) -> str:
-        normalized = str(value or "recon_only").strip()
-        if normalized not in _PENTEST_ALLOWED_OPERATION_MODES:
-            allowed = ", ".join(_PENTEST_ALLOWED_OPERATION_MODES)
-            raise ValueError(f"default pentest operation mode must be one of: {allowed}")
-        return normalized
-
-    @field_validator("allowed_operation_modes")
-    @classmethod
-    def _validate_allowed_operation_modes(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        invalid = set(value) - set(_PENTEST_ALLOWED_OPERATION_MODES)
-        if invalid:
-            allowed = ", ".join(_PENTEST_ALLOWED_OPERATION_MODES)
-            raise ValueError(f"allowed pentest operation modes must be one of: {allowed}")
-        return value or ("recon_only",)
-
-    @field_validator("default_evidence_level", mode="before")
-    @classmethod
-    def _normalize_default_evidence_level(cls, value: object) -> str:
-        normalized = str(value or "standard").strip()
-        if normalized not in _PENTEST_ALLOWED_EVIDENCE_LEVELS:
-            allowed = ", ".join(_PENTEST_ALLOWED_EVIDENCE_LEVELS)
-            raise ValueError(f"default pentest evidence level must be one of: {allowed}")
-        return normalized
-
-    @field_validator("allowed_evidence_levels")
-    @classmethod
-    def _validate_allowed_evidence_levels(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        invalid = set(value) - set(_PENTEST_ALLOWED_EVIDENCE_LEVELS)
-        if invalid:
-            allowed = ", ".join(_PENTEST_ALLOWED_EVIDENCE_LEVELS)
-            raise ValueError(f"allowed pentest evidence levels must be one of: {allowed}")
-        return value or ("minimal", "standard", "full")
-
-    @model_validator(mode="after")
-    def _validate_default_values_are_allowlisted(self) -> Self:
-        if not self.unsafe_dev_runner_image_override:
-            _validate_pentest_runner_image(self.runner_image)
-        if self.default_operation_mode not in self.allowed_operation_modes:
-            raise ValueError(
-                "default pentest operation mode must be included in "
-                "allowed pentest operation modes"
-            )
-        if self.default_evidence_level not in self.allowed_evidence_levels:
-            raise ValueError(
-                "default pentest evidence level must be included in "
-                "allowed pentest evidence levels"
-            )
-        effective_profiles = set(self.allowed_runner_profiles)
-        if self.default_runner_profile not in effective_profiles:
-            raise ValueError(
-                "default pentest runner profile must be included in allowed "
-                "pentest runner profiles"
-            )
-        return self
-
-def _validate_pentest_runner_image(value: str) -> None:
-    image = str(value or "").strip()
-    match = _PENTEST_RUNNER_IMAGE_PATTERN.fullmatch(image)
-    if not match:
-        raise ValueError(
-            "Pentest runner image must be an approved MoonMind-owned "
-            "ghcr.io/moonladderstudios/moonmind-pentestgpt tag or digest-pinned "
-            "reference"
-        )
-    if match.group("repository") != _PENTEST_APPROVED_RUNNER_IMAGE_REPOSITORY:
-        raise ValueError("Pentest runner image repository is not approved")
-    tag = match.group("tag")
-    digest = match.group("digest")
-    if not tag and not digest:
-        raise ValueError("Pentest runner image must include an approved tag or digest")
-    if tag and tag not in _PENTEST_APPROVED_RUNNER_IMAGE_TAGS:
-        raise ValueError(
-            "Pentest runner image tag is not approved; use an approved "
-            "MoonMind-owned tag, digest pin, or explicit unsafe dev override"
-        )
 
 DEFAULT_GOOGLE_EMBEDDING_DIMENSIONS: int = 3072
 
@@ -1793,10 +1473,8 @@ class GitHubSettings(BaseSettings):
     model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
 
 class GoogleDriveSettings(BaseSettings):
-    """Google Drive settings"""
+    """Google credentials available to manifest reader adapters."""
 
-    google_drive_enabled: bool = Field(False, alias="GOOGLE_DRIVE_ENABLED")
-    google_drive_folder_id: Optional[str] = Field(None, alias="GOOGLE_DRIVE_FOLDER_ID")
     google_application_credentials: Optional[str] = Field(
         None, alias="GOOGLE_APPLICATION_CREDENTIALS"
     )
@@ -1819,9 +1497,6 @@ class OpenAISettings(BaseSettings):
 class ConfluenceSettings(BaseSettings):
     """Confluence specific settings"""
 
-    confluence_space_keys: Optional[str] = Field(
-        None, alias="ATLASSIAN_CONFLUENCE_SPACE_KEYS"
-    )
     confluence_enabled: bool = Field(False, alias="ATLASSIAN_CONFLUENCE_ENABLED")
 
     model_config = SettingsConfigDict(
@@ -2108,24 +1783,6 @@ class MemorySettings(BaseSettings):
         extra="ignore",
     )
 
-class LocalDataSettings(BaseSettings):
-    """Settings for local data indexing"""
-
-    local_data_path: Optional[str] = Field(
-        None,
-        validation_alias=AliasChoices("LocalData", "LOCAL_DATA_PATH"),
-    )
-    # Add local_data_enabled if we want a separate boolean flag, but for now, path presence implies enabled.
-    # local_data_enabled: bool = Field(False, alias="LOCAL_DATA_ENABLED")
-
-    model_config = SettingsConfigDict(
-        populate_by_name=True,
-        env_prefix="",
-        env_file=".env",
-        env_file_encoding="utf-8",
-        extra="ignore",
-    )
-
 class OIDCSettings(BaseSettings):
     """OIDC settings"""
 
@@ -2172,6 +1829,296 @@ class FeatureFlagsSettings(BaseSettings):
         description=(
             "Enable /api/sessions compatibility facades over canonical "
             "AgentRun managed-session APIs."
+        ),
+    )
+    container_jobs_enabled: bool = Field(
+        False,
+        validation_alias=AliasChoices(
+            "MOONMIND_CONTAINER_JOBS_ENABLED",
+            "FEATURE_FLAGS__CONTAINER_JOBS_ENABLED",
+            "CONTAINER_JOBS_ENABLED",
+        ),
+        description=(
+            "Expose the authenticated asynchronous container-job lifecycle over "
+            "HTTP and MCP (container.submit/status/logs/artifacts/cancel). "
+            "Disabled by default because the surface starts Docker-backed "
+            "execution and requires a configured, reachable backend and worker "
+            "routes; enable it once the Docker backend service is provisioned."
+        ),
+    )
+    checkpoint_resume_promotion_state: Literal[
+        "disabled", "shadow_capture", "shadow_restore", "internal", "limited",
+        "broad", "ga", "paused",
+    ] = Field(
+        "disabled",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CHECKPOINT_RESUME_PROMOTION_STATE",
+            "CHECKPOINT_RESUME_PROMOTION_STATE",
+        ),
+        description="Auditable managed-checkpoint promotion state; disabled by default.",
+    )
+    managed_checkpoint_capture_enabled: bool = Field(
+        False, validation_alias=AliasChoices(
+            "FEATURE_FLAGS__MANAGED_CHECKPOINT_CAPTURE_ENABLED",
+            "MANAGED_CHECKPOINT_CAPTURE_ENABLED",
+        )
+    )
+    checkpoint_shadow_restore_enabled: bool = Field(
+        False, validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CHECKPOINT_SHADOW_RESTORE_ENABLED",
+            "CHECKPOINT_SHADOW_RESTORE_ENABLED",
+        )
+    )
+    checkpoint_resume_action_enabled: bool = Field(
+        False, validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CHECKPOINT_RESUME_ACTION_ENABLED",
+            "CHECKPOINT_RESUME_ACTION_ENABLED",
+        )
+    )
+    checkpoint_resume_admission_enabled: bool = Field(
+        False, validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CHECKPOINT_RESUME_ADMISSION_ENABLED",
+            "CHECKPOINT_RESUME_ADMISSION_ENABLED",
+        )
+    )
+    checkpoint_resume_allowed_runtime_ids: str = Field(
+        "codex_cli", validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CHECKPOINT_RESUME_ALLOWED_RUNTIME_IDS",
+            "CHECKPOINT_RESUME_ALLOWED_RUNTIME_IDS",
+        )
+    )
+    checkpoint_resume_allowed_owner_ids: str = Field(
+        "", validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CHECKPOINT_RESUME_ALLOWED_OWNER_IDS",
+            "CHECKPOINT_RESUME_ALLOWED_OWNER_IDS",
+        )
+    )
+    checkpoint_resume_allowed_repositories: str = Field(
+        "", validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CHECKPOINT_RESUME_ALLOWED_REPOSITORIES",
+            "CHECKPOINT_RESUME_ALLOWED_REPOSITORIES",
+        )
+    )
+    checkpoint_resume_deployment_generation: str = Field(
+        "", validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CHECKPOINT_RESUME_DEPLOYMENT_GENERATION",
+            "CHECKPOINT_RESUME_DEPLOYMENT_GENERATION",
+        )
+    )
+    checkpoint_resume_capture_route_ready: bool = Field(
+        False, validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CHECKPOINT_RESUME_CAPTURE_ROUTE_READY",
+            "CHECKPOINT_RESUME_CAPTURE_ROUTE_READY",
+        )
+    )
+    checkpoint_resume_restore_route_ready: bool = Field(
+        False, validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CHECKPOINT_RESUME_RESTORE_ROUTE_READY",
+            "CHECKPOINT_RESUME_RESTORE_ROUTE_READY",
+        )
+    )
+    checkpoint_resume_artifact_store_ready: bool = Field(
+        False, validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CHECKPOINT_RESUME_ARTIFACT_STORE_READY",
+            "CHECKPOINT_RESUME_ARTIFACT_STORE_READY",
+        )
+    )
+    checkpoint_resume_managed_run_store_ready: bool = Field(
+        False, validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CHECKPOINT_RESUME_MANAGED_RUN_STORE_READY",
+            "CHECKPOINT_RESUME_MANAGED_RUN_STORE_READY",
+        )
+    )
+    checkpoint_resume_max_archive_bytes: int = Field(
+        0, ge=0, validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CHECKPOINT_RESUME_MAX_ARCHIVE_BYTES",
+            "CHECKPOINT_RESUME_MAX_ARCHIVE_BYTES",
+        )
+    )
+    checkpoint_resume_promotion_evidence_json: str = Field(
+        "", validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CHECKPOINT_RESUME_PROMOTION_EVIDENCE_JSON",
+            "CHECKPOINT_RESUME_PROMOTION_EVIDENCE_JSON",
+        ),
+        description="Recorded generation-bound CI, shadow restore, and live canary evidence.",
+    )
+    checkpoint_resume_minimum_shadow_samples: int = Field(
+        10, ge=1, validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CHECKPOINT_RESUME_MINIMUM_SHADOW_SAMPLES",
+            "CHECKPOINT_RESUME_MINIMUM_SHADOW_SAMPLES",
+        )
+    )
+    checkpoint_resume_minimum_shadow_success_ratio: float = Field(
+        0.99, ge=0.0, le=1.0, validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CHECKPOINT_RESUME_MINIMUM_SHADOW_SUCCESS_RATIO",
+            "CHECKPOINT_RESUME_MINIMUM_SHADOW_SUCCESS_RATIO",
+        )
+    )
+    publication_recovery_enabled: bool = Field(
+        False,
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__PUBLICATION_RECOVERY_ENABLED",
+            "PUBLICATION_RECOVERY_ENABLED",
+        ),
+    )
+    publication_recovery_shadow: bool = Field(
+        False,
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__PUBLICATION_RECOVERY_SHADOW",
+            "PUBLICATION_RECOVERY_SHADOW",
+        ),
+    )
+    publication_recovery_canary_repositories: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__PUBLICATION_RECOVERY_CANARY_REPOSITORIES",
+            "PUBLICATION_RECOVERY_CANARY_REPOSITORIES",
+        ),
+    )
+    publication_recovery_canary_owner_ids: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__PUBLICATION_RECOVERY_CANARY_OWNER_IDS",
+            "PUBLICATION_RECOVERY_CANARY_OWNER_IDS",
+        ),
+    )
+    publication_recovery_allowed_modes: str = Field(
+        "pr,draft_pr",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__PUBLICATION_RECOVERY_ALLOWED_MODES",
+            "PUBLICATION_RECOVERY_ALLOWED_MODES",
+        ),
+    )
+    publication_recovery_generation: str = Field(
+        "disabled",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__PUBLICATION_RECOVERY_GENERATION",
+            "PUBLICATION_RECOVERY_GENERATION",
+        ),
+    )
+    control_stop_continuation_enabled: bool = Field(
+        False,
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CONTROL_STOP_CONTINUATION_ENABLED",
+            "CONTROL_STOP_CONTINUATION_ENABLED",
+        ),
+    )
+    control_stop_continuation_shadow: bool = Field(
+        False,
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CONTROL_STOP_CONTINUATION_SHADOW",
+            "CONTROL_STOP_CONTINUATION_SHADOW",
+        ),
+    )
+    control_stop_continuation_canary_owner_ids: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CONTROL_STOP_CONTINUATION_CANARY_OWNER_IDS",
+            "CONTROL_STOP_CONTINUATION_CANARY_OWNER_IDS",
+        ),
+    )
+    control_stop_continuation_allowed_provider_profile_ids: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CONTROL_STOP_CONTINUATION_ALLOWED_PROVIDER_PROFILE_IDS",
+            "CONTROL_STOP_CONTINUATION_ALLOWED_PROVIDER_PROFILE_IDS",
+        ),
+    )
+    control_stop_continuation_allowed_execution_profile_refs: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CONTROL_STOP_CONTINUATION_ALLOWED_EXECUTION_PROFILE_REFS",
+            "CONTROL_STOP_CONTINUATION_ALLOWED_EXECUTION_PROFILE_REFS",
+        ),
+    )
+    control_stop_continuation_allowed_launch_policy_refs: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CONTROL_STOP_CONTINUATION_ALLOWED_LAUNCH_POLICY_REFS",
+            "CONTROL_STOP_CONTINUATION_ALLOWED_LAUNCH_POLICY_REFS",
+        ),
+    )
+    control_stop_continuation_generation: str = Field(
+        "disabled",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CONTROL_STOP_CONTINUATION_GENERATION",
+            "CONTROL_STOP_CONTINUATION_GENERATION",
+        ),
+    )
+    omnigent_session_supervisor_admission_mode: Literal[
+        "disabled", "canary", "enabled"
+    ] = Field(
+        "enabled",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ADMISSION_MODE",
+            "OMNIGENT_SESSION_SUPERVISOR_ADMISSION_MODE",
+        ),
+        description=(
+            "Controls only admission of new profile-bound Omnigent session "
+            "supervisors; admitted histories remain operational."
+        ),
+    )
+    omnigent_session_supervisor_canary_owner_ids: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_CANARY_OWNER_IDS",
+            "OMNIGENT_SESSION_SUPERVISOR_CANARY_OWNER_IDS",
+        ),
+    )
+    omnigent_session_supervisor_enabled: bool = Field(
+        False,
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ENABLED",
+            "OMNIGENT_SESSION_SUPERVISOR_ENABLED",
+        ),
+    )
+    omnigent_session_supervisor_shadow: bool = Field(
+        False,
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_SHADOW",
+            "OMNIGENT_SESSION_SUPERVISOR_SHADOW",
+        ),
+    )
+    omnigent_session_supervisor_allowed_owner_ids: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ALLOWED_OWNER_IDS",
+            "OMNIGENT_SESSION_SUPERVISOR_ALLOWED_OWNER_IDS",
+        ),
+    )
+    omnigent_session_supervisor_allowed_execution_profile_refs: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ALLOWED_EXECUTION_PROFILE_REFS",
+            "OMNIGENT_SESSION_SUPERVISOR_ALLOWED_EXECUTION_PROFILE_REFS",
+        ),
+    )
+    omnigent_session_supervisor_generation: str = Field(
+        "omnigent-session-v1",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_GENERATION",
+            "OMNIGENT_SESSION_SUPERVISOR_GENERATION",
+        ),
+    )
+    omnigent_session_supervisor_allowed_launch_policy_refs: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ALLOWED_LAUNCH_POLICY_REFS",
+            "OMNIGENT_SESSION_SUPERVISOR_ALLOWED_LAUNCH_POLICY_REFS",
+        ),
+    )
+    omnigent_session_supervisor_allowed_provider_profile_ids: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ALLOWED_PROVIDER_PROFILE_IDS",
+            "OMNIGENT_SESSION_SUPERVISOR_ALLOWED_PROVIDER_PROFILE_IDS",
+        ),
+    )
+    omnigent_session_supervisor_rollback_mode: str = Field(
+        "none",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ROLLBACK_MODE",
+            "OMNIGENT_SESSION_SUPERVISOR_ROLLBACK_MODE",
         ),
     )
     live_logs_session_timeline_rollout: Literal[
@@ -2615,7 +2562,6 @@ class AppSettings(BaseSettings):
     # Sub-settings
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     security: SecuritySettings = Field(default_factory=SecuritySettings)
-    pentest: PentestSettings = Field(default_factory=PentestSettings)
     google: GoogleSettings = Field(default_factory=GoogleSettings)
     openai: OpenAISettings = Field(default_factory=OpenAISettings)
     anthropic: AnthropicSettings = Field(default_factory=AnthropicSettings)
@@ -2625,7 +2571,6 @@ class AppSettings(BaseSettings):
     rag: RAGSettings = Field(default_factory=RAGSettings)
     memory: MemorySettings = Field(default_factory=MemorySettings)
     atlassian: AtlassianSettings = Field(default_factory=AtlassianSettings)
-    local_data: LocalDataSettings = Field(default_factory=LocalDataSettings)
     oidc: OIDCSettings = Field(default_factory=OIDCSettings)
 
     temporal: TemporalSettings = Field(default_factory=TemporalSettings)
@@ -2702,13 +2647,13 @@ class AppSettings(BaseSettings):
         None,
         alias="MOONMIND_UNREAL_CCACHE_VOLUME_NAME",
         exclude=True,
-        description="Compatibility passthrough for ccache volume in DooD workflows.",
+        description="Deployment-owned ccache volume for approved container jobs.",
     )
     moonmind_unreal_ubt_volume_name: Optional[str] = Field(
         None,
         alias="MOONMIND_UNREAL_UBT_VOLUME_NAME",
         exclude=True,
-        description="Compatibility passthrough for UBT metadata volume in DooD workflows.",
+        description="Deployment-owned UBT metadata volume for approved container jobs.",
     )
     workflow_git_user_name: Optional[str] = Field(
         None,
@@ -2820,17 +2765,7 @@ class AppSettings(BaseSettings):
     # Other settings
     fastapi_reload: bool = Field(False, alias="FASTAPI_RELOAD")
     fernet_key: Optional[str] = Field(None, alias="FERNET_KEY")
-    hf_access_token: Optional[str] = Field(None, alias="HF_ACCESS_TOKEN")
-
-    langchain_api_key: Optional[str] = Field(None, alias="LANGCHAIN_API_KEY")
-    langchain_tracing_v2: str = Field("true", alias="LANGCHAIN_TRACING_V2")
-    langchain_project: str = Field("MoonMind", alias="LANGCHAIN_PROJECT")
-
-    model_directory: str = Field("/app/model_data", alias="MODEL_DIRECTORY")
-
     postgres_version: int = Field(14, alias="POSTGRES_VERSION")
-    rabbitmq_user: Optional[str] = Field(None, alias="RABBITMQ_USER")
-    rabbitmq_password: Optional[str] = Field(None, alias="RABBITMQ_PASSWORD")
 
     # ------------------------------------------------------------------
     # Validators

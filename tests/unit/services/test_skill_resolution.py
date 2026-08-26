@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -15,6 +16,8 @@ from moonmind.services.skill_resolution import (
     LocalSkillLoader,
     RepoSkillLoader,
     DeploymentSkillLoader,
+    _terminal_contract_from_side_effect,
+    extract_required_capabilities_from_skill_markdown,
     extract_side_effect_metadata_from_skill_markdown,
 )
 
@@ -41,6 +44,62 @@ metadata:
         "owner": "agent",
         "outcomeArtifact": "artifacts/result.json",
     }
+
+
+async def test_enqueue_children_derives_execution_fanout_capability() -> None:
+    markdown = """---
+name: batch-skill
+metadata:
+  required-capabilities:
+    - gh
+  sideEffect:
+    kind: enqueue_children
+---
+# Batch Skill
+"""
+
+    assert extract_required_capabilities_from_skill_markdown(
+        markdown,
+        skill_name="batch-skill",
+    ) == ("gh", "execution.fanout")
+
+
+async def test_explicit_execution_fanout_capability_is_not_duplicated() -> None:
+    markdown = """---
+name: batch-skill
+metadata:
+  required-capabilities:
+    - execution.fanout
+  sideEffect:
+    kind: enqueue_children
+---
+# Batch Skill
+"""
+
+    assert extract_required_capabilities_from_skill_markdown(
+        markdown,
+        skill_name="batch-skill",
+    ) == ("execution.fanout",)
+
+
+async def test_tactics_test_declares_canonical_docker_capability() -> None:
+    skill_path = Path(__file__).parents[3] / ".agents" / "skills" / "tactics-test" / "SKILL.md"
+
+    assert extract_required_capabilities_from_skill_markdown(
+        skill_path.read_text(encoding="utf-8"),
+        skill_name="tactics-test",
+    ) == ("docker",)
+
+
+async def test_terminal_contract_rejects_rooted_posix_path() -> None:
+    with pytest.raises(ValueError, match="outcomeArtifact is unsafe"):
+        _terminal_contract_from_side_effect(
+            {
+                "terminalContractId": "batch_workflows_fanout.v1",
+                "outcomeArtifact": "/absolute/result.json",
+            },
+            owner="batch-workflows",
+        )
 
 
 async def test_resolver_can_resolve_empty_selector():
@@ -96,6 +155,23 @@ async def test_built_in_loader_discovers_packaged_agent_skills():
     assert discovered["moonspec-breakdown"].provenance.source_kind == AgentSkillSourceKind.BUILT_IN
     assert discovered["moonspec-breakdown"].provenance.source_path
 
+
+async def test_built_in_pr_resolver_requires_skill_owned_cli_execution():
+    results = await BuiltInSkillLoader().load_skills(
+        SkillSelector(include=[{"name": "pr-resolver"}]),
+        SkillResolutionContext(snapshot_id="snap-pr-resolver"),
+    )
+
+    entry = next(item for item in results if item.skill_name == "pr-resolver")
+    assert entry.implementation is not None
+    assert entry.implementation.contract == "pr-resolver-core/v1"
+    assert entry.implementation.supported_hosts == ["cli"]
+    assert entry.implementation.native_host_eligible is False
+    assert entry.provenance.source_kind == AgentSkillSourceKind.BUILT_IN
+    assert entry.terminal_contract is not None
+    assert entry.terminal_contract.contract_id == "pr_resolver_terminal.v1"
+    assert entry.terminal_contract.relative_path == "var/pr_resolver/result.json"
+
 async def test_built_in_loader_resolves_batch_dependabot_resolver_by_name(tmp_path):
     """FR-012: batch-dependabot-resolver MUST be resolvable by name through the
     built-in fallback list so a recurring queue_task schedule can target it.
@@ -114,6 +190,26 @@ async def test_built_in_loader_resolves_batch_dependabot_resolver_by_name(tmp_pa
     assert "batch-dependabot-resolver" in resolved_names
     # Parity: the general-purpose batch resolver is guaranteed by the same path.
     assert "batch-pr-resolver" in resolved_names
+
+
+async def test_built_in_batch_dependabot_resolver_declares_terminal_contract():
+    results = await BuiltInSkillLoader().load_skills(
+        SkillSelector(include=[{"name": "batch-dependabot-resolver"}]),
+        SkillResolutionContext(snapshot_id="snap-batch-dependabot-resolver"),
+    )
+
+    entry = next(
+        item for item in results if item.skill_name == "batch-dependabot-resolver"
+    )
+    assert entry.terminal_contract is not None
+    assert (
+        entry.terminal_contract.contract_id
+        == "batch_dependabot_resolver_fanout.v1"
+    )
+    assert (
+        entry.terminal_contract.relative_path
+        == "artifacts/batch_dependabot_resolver_result.json"
+    )
 
 async def test_builtin_loader_ignores_cwd_agents_skills_projection(
     monkeypatch,

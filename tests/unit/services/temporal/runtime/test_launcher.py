@@ -1,19 +1,40 @@
 import asyncio
+import hashlib
 import json
 import os
 import subprocess
+import time
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from moonmind.auth.github_credentials import ResolvedGitHubCredential
+from moonmind.config.settings import settings
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+from moonmind.schemas.agent_runtime_models import resolve_execution_budget
 from moonmind.schemas.agent_runtime_models import ManagedRuntimeProfile
 from moonmind.schemas.agent_runtime_models import RuntimeCommandRenderResult
+from moonmind.security.execution_fanout_capabilities import (
+    ExecutionFanoutCapabilityError,
+    verify_execution_fanout_capability,
+)
+from moonmind.workflows.executions.repository_contract import (
+    RepositoryClientEvidence,
+    RepositoryClientPolicy,
+    RepositoryConnection,
+    RepositoryContractError,
+    compile_repository_target,
+    materialize_resolved_repository_target,
+    persist_repository_connection,
+)
 from moonmind.workflows.temporal.runtime.launcher import (
     ManagedRuntimeLauncher,
 )
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+from moonmind.workflows.temporal.runtime.lore_repository_adapter import (
+    LoreCliReadinessAdapter,
+)
 
 def _make_profile(**overrides) -> ManagedRuntimeProfile:
     defaults = dict(
@@ -38,6 +59,662 @@ def _make_request(**overrides) -> AgentExecutionRequest:
     )
     defaults.update(overrides)
     return AgentExecutionRequest(**defaults)
+
+
+@pytest.mark.asyncio
+async def test_prepare_workspace_does_not_select_an_unrelated_checkout(tmp_path):
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    launcher = ManagedRuntimeLauncher(store)
+    unrelated = tmp_path / "workspaces" / "other-run" / "repo" / ".git"
+    unrelated.mkdir(parents=True)
+
+    resolved = await launcher._prepare_workspace(
+        run_id="current-run",
+        request=_make_request(workspace_spec={}),
+        workspace_path=None,
+    )
+
+    assert resolved is None
+    assert not (tmp_path / "workspaces" / "current-run").exists()
+
+
+@pytest.mark.asyncio
+async def test_prepare_workspace_clones_candidate_and_checks_out_pinned_revision(
+    tmp_path,
+):
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    launcher = ManagedRuntimeLauncher(store)
+    head_sha = "1da4e5fed31bb7821999af47c6f04c2865a8c2e5"
+    checked_calls: list[tuple[object, ...]] = []
+    run_calls: list[tuple[object, ...]] = []
+
+    async def fake_checked(*args, **_kwargs):
+        checked_calls.append(args)
+        if args[:2] == ("git", "clone"):
+            Path(str(args[-1])).mkdir(parents=True)
+
+    async def fake_run(*args, **_kwargs):
+        run_calls.append(args)
+        if args[-2:] == ("rev-parse", "HEAD"):
+            return 0, f"{head_sha}\n", ""
+        return 0, "", ""
+
+    launcher._run_checked_command = fake_checked
+    launcher._run_command = fake_run
+    request = _make_request(
+        workspace_spec={
+            "repository": "MoonLadderStudios/Tactics",
+            "repositoryTarget": {
+                "provider": "git",
+                "repository": {"name": "MoonLadderStudios/Tactics"},
+                "branch": {"name": "feature/remediation"},
+                "revision": {"kind": "git_commit", "commitSha": head_sha},
+            },
+            "resolvedRepositoryTarget": {
+                "remoteTipExpectation": {"kind": "read_only"},
+                "preparedRevision": {"kind": "git_commit", "commitSha": head_sha},
+            },
+            "startingBranch": "main",
+            "targetBranch": "feature/remediation",
+        }
+    )
+
+    resolved = await launcher._prepare_workspace_path(
+        run_id="pinned-candidate",
+        request=request,
+        workspace_path=None,
+    )
+
+    clone_call = next(call for call in checked_calls if call[:2] == ("git", "clone"))
+    assert clone_call[2:5] == ("--branch", "feature/remediation", "--single-branch")
+    assert any(
+        call[-4:] == ("checkout", "-B", "feature/remediation", head_sha)
+        for call in checked_calls
+    )
+    assert any(call[-2:] == ("checkout", "feature/remediation") for call in run_calls)
+    assert resolved == str(
+        (tmp_path / "workspaces" / "pinned-candidate" / "repo").resolve()
+    )
+
+
+@pytest.mark.asyncio
+async def test_prepare_workspace_trusts_reused_runtime_owned_repository(tmp_path):
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    launcher = ManagedRuntimeLauncher(store)
+    run_id = "reused-workspace"
+    repo_path = (tmp_path / "workspaces" / run_id / "repo").resolve()
+    repo_path.mkdir(parents=True)
+    head_sha = "49ed3d9af7e54e047a47bc9a0e3be8b8c33284d0"
+    checked_calls: list[tuple[object, ...]] = []
+    run_calls: list[tuple[object, ...]] = []
+
+    async def fake_checked(*args, **_kwargs):
+        checked_calls.append(args)
+
+    async def fake_run(*args, **_kwargs):
+        run_calls.append(args)
+        return 0, f"{head_sha}\n", ""
+
+    launcher._run_checked_command = fake_checked
+    launcher._run_command = fake_run
+    request = _make_request(
+        workspace_spec={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetBranch": "github-issue-implement-moonladderstudios-97b98c29",
+            "resolvedRepositoryTarget": {
+                "remoteTipExpectation": {"kind": "read_only"},
+                "preparedRevision": {
+                    "kind": "git_commit",
+                    "commitSha": head_sha,
+                },
+            },
+        }
+    )
+
+    resolved = await launcher._prepare_workspace_path(
+        run_id=run_id,
+        request=request,
+        workspace_path=None,
+    )
+
+    safe_prefix = (
+        "git",
+        "-c",
+        f"safe.directory={repo_path}",
+        "-C",
+        str(repo_path),
+    )
+    assert checked_calls == [
+        (
+            *safe_prefix,
+            "checkout",
+            "-B",
+            "github-issue-implement-moonladderstudios-97b98c29",
+            head_sha,
+        )
+    ]
+    assert run_calls == [(*safe_prefix, "rev-parse", "HEAD")]
+    assert resolved == str(repo_path)
+
+
+@pytest.mark.asyncio
+async def test_repository_readiness_blocks_before_workspace_mutation(tmp_path):
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    readiness = AsyncMock(
+        side_effect=RepositoryContractError(
+            "REPOSITORY_CLIENT_MISMATCH",
+            "observed client does not match deployment policy",
+        )
+    )
+    launcher = ManagedRuntimeLauncher(
+        store,
+        repository_readiness_boundary=readiness,
+    )
+    request = _make_request(
+        workspace_spec={
+            "repository": "file:///tmp/readiness-test-repository",
+            "repositoryTarget": {
+                "provider": "git",
+                "connectionRef": "repository-connection:git-default",
+                "repository": {"name": "MoonLadderStudios/MoonMind"},
+                "branch": {"name": "main"},
+            },
+        },
+        parameters={"publishMode": "pr"},
+    )
+
+    with pytest.raises(RepositoryContractError, match="REPOSITORY_CLIENT_MISMATCH"):
+        await launcher.launch(
+            run_id="readiness-blocked",
+            request=request,
+            profile=_make_profile(command_template=["echo", "hello"]),
+        )
+
+    readiness.assert_awaited_once()
+    assert not (tmp_path / "workspaces").exists()
+
+
+def _repository_readiness_request(
+    *, publish_mode: str = "pr", skill_capabilities: list[str] | None = None
+) -> AgentExecutionRequest:
+    return _make_request(
+        workspace_spec={
+            "repository": "MoonLadderStudios/MoonMind",
+            "repositoryTarget": {
+                "provider": "git",
+                "connectionRef": "repository-connection:git-default",
+                "repository": {"name": "MoonLadderStudios/MoonMind"},
+                "branch": {"name": "main"},
+            },
+        },
+        parameters={"publishMode": publish_mode},
+        skill={"requiredCapabilities": skill_capabilities or []},
+    )
+
+
+@pytest.mark.asyncio
+async def test_default_repository_readiness_requires_deployment_client_policy(tmp_path):
+    launcher = ManagedRuntimeLauncher(ManagedRunStore(tmp_path / "managed_runs"))
+    launcher._observe_git_client = AsyncMock()
+
+    with pytest.raises(
+        RepositoryContractError, match="REPOSITORY_CONNECTION_UNAVAILABLE"
+    ):
+        await launcher._ensure_repository_ready_for_launch(
+            _repository_readiness_request(publish_mode="none"), None
+        )
+
+    launcher._observe_git_client.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_default_repository_readiness_rejects_observed_client_policy_mismatch(
+    tmp_path,
+):
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    launcher = ManagedRuntimeLauncher(
+        store,
+        repository_client_policy=RepositoryClientPolicy(
+            pinnedVersion="2.46.0",
+            toolBundleRef="repository-client:git-system",
+            executableSha256="sha256:expected",
+        ),
+    )
+    launcher._observe_git_client = AsyncMock(
+        return_value=RepositoryClientEvidence(
+            toolBundleRef="repository-client:git-system",
+            clientVersion="2.47.0",
+            executableSha256="sha256:observed",
+        )
+    )
+
+    with pytest.raises(RepositoryContractError, match="REPOSITORY_CLIENT_MISMATCH"):
+        await launcher._ensure_repository_ready_for_launch(
+            _repository_readiness_request(publish_mode="none"), None
+        )
+
+
+@pytest.mark.asyncio
+async def test_default_repository_readiness_rejects_unknown_skill_capability(tmp_path):
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    evidence = RepositoryClientEvidence(
+        toolBundleRef="repository-client:git-system",
+        clientVersion="2.46.0",
+        executableSha256="sha256:git",
+    )
+    launcher = ManagedRuntimeLauncher(
+        store,
+        repository_client_policy=RepositoryClientPolicy(
+            pinnedVersion=evidence.client_version,
+            toolBundleRef=evidence.tool_bundle_ref,
+            executableSha256=evidence.executable_sha256,
+        ),
+    )
+    launcher._observe_git_client = AsyncMock(return_value=evidence)
+
+    with pytest.raises(RepositoryContractError, match="REPOSITORY_CAPABILITY_UNKNOWN"):
+        await launcher._ensure_repository_ready_for_launch(
+            _repository_readiness_request(
+                publish_mode="none", skill_capabilities=["unknown.repository.tool"]
+            ),
+            None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_default_repository_readiness_returns_exact_resolved_metadata(tmp_path):
+    evidence = RepositoryClientEvidence(
+        toolBundleRef="repository-client:git-system",
+        clientVersion="2.46.0",
+        executableSha256="sha256:git",
+    )
+    launcher = ManagedRuntimeLauncher(
+        ManagedRunStore(tmp_path / "managed_runs"),
+        repository_client_policy=RepositoryClientPolicy(
+            pinnedVersion=evidence.client_version,
+            toolBundleRef=evidence.tool_bundle_ref,
+            executableSha256=evidence.executable_sha256,
+        ),
+    )
+    launcher._observe_git_client = AsyncMock(return_value=evidence)
+    launcher._observe_git_remote_tip = AsyncMock(return_value="abcdef0123456789")
+    with patch(
+        "moonmind.auth.github_credentials.resolve_github_credential",
+        AsyncMock(return_value=ResolvedGitHubCredential(token="test-token")),
+    ):
+        resolved = await launcher._ensure_repository_ready_for_launch(
+            _repository_readiness_request(publish_mode="none"), None
+        )
+    assert resolved is not None
+    assert resolved.prepared_revision.commit_sha == "abcdef0123456789"
+    assert resolved.remote_tip_expectation["revision"]["commitSha"] == "abcdef0123456789"
+    assert resolved.client_evidence == evidence
+    assert resolved.compatible_server_versions == ()
+
+
+@pytest.mark.asyncio
+async def test_default_repository_readiness_allows_gh_for_read_only_skill(tmp_path):
+    evidence = RepositoryClientEvidence(
+        toolBundleRef="repository-client:git-system",
+        clientVersion="2.46.0",
+        executableSha256="sha256:git",
+    )
+    launcher = ManagedRuntimeLauncher(
+        ManagedRunStore(tmp_path / "managed_runs"),
+        repository_client_policy=RepositoryClientPolicy(
+            pinnedVersion=evidence.client_version,
+            toolBundleRef=evidence.tool_bundle_ref,
+            executableSha256=evidence.executable_sha256,
+        ),
+    )
+    launcher._observe_git_client = AsyncMock(return_value=evidence)
+    launcher._observe_git_remote_tip = AsyncMock(return_value="abcdef0123456789")
+
+    with patch(
+        "moonmind.auth.github_credentials.resolve_github_credential",
+        AsyncMock(return_value=ResolvedGitHubCredential(token="test-token")),
+    ):
+        resolved = await launcher._ensure_repository_ready_for_launch(
+            _repository_readiness_request(
+                publish_mode="none",
+                skill_capabilities=["gh"],
+            ),
+            None,
+        )
+
+    assert resolved is not None
+    assert resolved.prepared_revision.commit_sha == "abcdef0123456789"
+    assert resolved.remote_tip_expectation["kind"] == "must_equal"
+
+
+@pytest.mark.asyncio
+async def test_default_repository_readiness_defers_execution_fanout_to_runtime(
+    tmp_path,
+):
+    """Replay mm:91c47b8e at the repository-to-runtime readiness handoff."""
+
+    evidence = RepositoryClientEvidence(
+        toolBundleRef="repository-client:git-system",
+        clientVersion="2.46.0",
+        executableSha256="sha256:git",
+    )
+    launcher = ManagedRuntimeLauncher(
+        ManagedRunStore(tmp_path / "managed_runs"),
+        repository_client_policy=RepositoryClientPolicy(
+            pinnedVersion=evidence.client_version,
+            toolBundleRef=evidence.tool_bundle_ref,
+            executableSha256=evidence.executable_sha256,
+        ),
+    )
+    launcher._observe_git_client = AsyncMock(return_value=evidence)
+    launcher._observe_git_remote_tip = AsyncMock(return_value="abcdef0123456789")
+
+    with patch(
+        "moonmind.auth.github_credentials.resolve_github_credential",
+        AsyncMock(return_value=ResolvedGitHubCredential(token="test-token")),
+    ):
+        resolved = await launcher._ensure_repository_ready_for_launch(
+            _repository_readiness_request(
+                publish_mode="none",
+                skill_capabilities=["gh", "execution.fanout"],
+            ),
+            None,
+        )
+
+    assert resolved is not None
+    assert resolved.prepared_revision.commit_sha == "abcdef0123456789"
+
+
+@pytest.mark.asyncio
+async def test_default_repository_readiness_rejects_unresolved_gh_credential(
+    tmp_path,
+):
+    evidence = RepositoryClientEvidence(
+        toolBundleRef="repository-client:git-system",
+        clientVersion="2.46.0",
+        executableSha256="sha256:git",
+    )
+    launcher = ManagedRuntimeLauncher(
+        ManagedRunStore(tmp_path / "managed_runs"),
+        repository_client_policy=RepositoryClientPolicy(
+            pinnedVersion=evidence.client_version,
+            toolBundleRef=evidence.tool_bundle_ref,
+            executableSha256=evidence.executable_sha256,
+        ),
+    )
+    launcher._observe_git_client = AsyncMock(return_value=evidence)
+    launcher._observe_git_remote_tip = AsyncMock(return_value="abcdef0123456789")
+
+    with patch(
+        "moonmind.auth.github_credentials.resolve_github_credential",
+        AsyncMock(
+            return_value=ResolvedGitHubCredential(
+                diagnostic="GitHub auth is unavailable for the repository."
+            )
+        ),
+    ):
+        with pytest.raises(
+            RepositoryContractError, match="REPOSITORY_CREDENTIAL_UNAVAILABLE"
+        ):
+            await launcher._ensure_repository_ready_for_launch(
+                _repository_readiness_request(
+                    publish_mode="none",
+                    skill_capabilities=["gh"],
+                ),
+                None,
+            )
+
+    launcher._observe_git_remote_tip.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_lore_readiness_uses_policy_owned_adapter_and_preserves_exact_identity(
+    tmp_path,
+):
+    evidence = RepositoryClientEvidence(
+        toolBundleRef="tool-bundle:lore-1.2.3",
+        clientVersion="1.2.3",
+        executableSha256="sha256:lore",
+        serverVersion="2026.08",
+    )
+    target_payload = {
+        "provider": "lore",
+        "connectionRef": "repository-connection:tactics",
+        "repository": {"name": "tactics-id"},
+        "branch": {"name": "Main"},
+        "revision": {
+            "kind": "lore_revision",
+            "revisionSignature": "lore-revision-123",
+        },
+    }
+    adapter = AsyncMock(
+        return_value=materialize_resolved_repository_target(
+            compile_repository_target(target_payload),
+            observed_revision="lore-revision-123",
+            evidence=evidence,
+            client_policy=RepositoryClientPolicy(
+                pinnedVersion="1.2.3",
+                compatibleServerVersions=("2026.08",),
+                toolBundleRef="tool-bundle:lore-1.2.3",
+                executableSha256="sha256:lore",
+            ),
+            repository_id="lore-repository-uuid",
+            branch_id="branch-id-main",
+        )
+    )
+    launcher = ManagedRuntimeLauncher(
+        ManagedRunStore(tmp_path / "managed_runs"),
+        lore_repository_readiness_adapter=adapter,
+    )
+    request = _make_request(
+        workspace_spec={
+            "repository": "tactics-id",
+            "repositoryTarget": target_payload,
+        },
+        parameters={"publishMode": "none"},
+    )
+
+    resolved = await launcher._ensure_repository_ready_for_launch(request, None)
+
+    assert resolved is not None
+    assert resolved.repository.id == "lore-repository-uuid"
+    assert resolved.prepared_revision.revision_signature == "lore-revision-123"
+    assert resolved.remote_tip_expectation == {"kind": "read_only"}
+    assert resolved.compatible_server_versions == ("2026.08",)
+    adapter.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_portable_lore_adapter_validates_connection_and_exact_cli_evidence(
+    tmp_path,
+):
+    executable = tmp_path / "lore"
+    executable.write_bytes(b"fake-lore-client")
+    executable.chmod(0o755)
+    digest = hashlib.sha256(executable.read_bytes()).hexdigest()
+    connection = RepositoryConnection.model_validate(
+        {
+            "schemaVersion": "moonmind.repository-connection.v1",
+            "id": "repository-connection:tactics",
+            "provider": "lore",
+            "displayName": "Tactics Lore",
+            "endpointRef": "lore-endpoint:tactics",
+            "allowedRepositoryIds": ["lore-repository-uuid"],
+            "allowedOperations": ["read"],
+            "clientPolicy": {
+                "pinnedVersion": "1.2.3",
+                "compatibleServerVersions": ["2026.08"],
+                "toolBundleRef": "tool-bundle:lore-1.2.3",
+                "executableSha256": f"sha256:{digest}",
+            },
+            "credential": {
+                "source": "secret_ref",
+                "credentialRef": {"provider": "env", "key": "LORE_TOKEN"},
+            },
+        }
+    )
+    connections_dir = tmp_path / "connections"
+    persist_repository_connection(connection, connections_dir / "tactics.json")
+    adapter = LoreCliReadinessAdapter(
+        connections_dir=connections_dir,
+        executable=str(executable),
+        tool_bundle_ref="tool-bundle:lore-1.2.3",
+    )
+    adapter._run = AsyncMock(
+        side_effect=[
+            (0, "lore 1.2.3\n", ""),
+            (
+                0,
+                json.dumps(
+                    {
+                        "repositoryId": "lore-repository-uuid",
+                        "repositoryName": "tactics",
+                        "branchId": "branch-main-id",
+                        "branchName": "Main",
+                        "revisionSignature": "lore-revision-123",
+                        "serverVersion": "2026.08",
+                    }
+                ),
+                "",
+            ),
+        ]
+    )
+    target = compile_repository_target(
+        {
+            "provider": "lore",
+            "connectionRef": connection.id,
+            "repository": {"name": "tactics"},
+            "branch": {"name": "Main"},
+        }
+    )
+
+    resolved = await adapter(
+        target,
+        _make_request(parameters={"publishMode": "none"}),
+    )
+
+    assert resolved.repository.id == "lore-repository-uuid"
+    assert resolved.prepared_branch.id == "branch-main-id"
+    assert resolved.prepared_revision.revision_signature == "lore-revision-123"
+    assert resolved.client_evidence.server_version == "2026.08"
+
+
+@pytest.mark.asyncio
+async def test_lore_without_configured_adapter_has_structured_readiness_failure(
+    tmp_path,
+):
+    launcher = ManagedRuntimeLauncher(ManagedRunStore(tmp_path / "managed_runs"))
+    request = _make_request(
+        workspace_spec={
+            "repository": "tactics-id",
+            "repositoryTarget": {
+                "provider": "lore",
+                "connectionRef": "repository-connection:tactics",
+                "repository": {"name": "tactics-id"},
+                "branch": {"name": "Main"},
+            },
+        },
+        parameters={"publishMode": "none"},
+    )
+
+    with pytest.raises(RepositoryContractError, match="LORE_CONNECTION_NOT_READY"):
+        await launcher._ensure_repository_ready_for_launch(request, None)
+
+
+@pytest.mark.asyncio
+async def test_default_repository_readiness_rejects_unready_known_capability(tmp_path):
+    evidence = RepositoryClientEvidence(
+        toolBundleRef="repository-client:git-system",
+        clientVersion="2.46.0",
+        executableSha256="sha256:git",
+    )
+    launcher = ManagedRuntimeLauncher(
+        ManagedRunStore(tmp_path / "managed_runs"),
+        repository_client_policy=RepositoryClientPolicy(
+            pinnedVersion=evidence.client_version,
+            toolBundleRef=evidence.tool_bundle_ref,
+            executableSha256=evidence.executable_sha256,
+        ),
+    )
+    launcher._observe_git_client = AsyncMock(return_value=evidence)
+
+    with pytest.raises(RepositoryContractError, match="REPOSITORY_CAPABILITY_UNREADY"):
+        await launcher._ensure_repository_ready_for_launch(
+            _repository_readiness_request(
+                publish_mode="none", skill_capabilities=["repo.write"]
+            ),
+            None,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tips", [[None], ["aaaa", "bbbb"]])
+async def test_default_repository_readiness_rejects_missing_or_changed_remote_tip(
+    tmp_path, tips
+):
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    evidence = RepositoryClientEvidence(
+        toolBundleRef="repository-client:git-system",
+        clientVersion="2.46.0",
+        executableSha256="sha256:git",
+    )
+    launcher = ManagedRuntimeLauncher(
+        store,
+        repository_client_policy=RepositoryClientPolicy(
+            pinnedVersion=evidence.client_version,
+            toolBundleRef=evidence.tool_bundle_ref,
+            executableSha256=evidence.executable_sha256,
+        ),
+    )
+    launcher._observe_git_client = AsyncMock(return_value=evidence)
+    launcher._observe_git_remote_tip = AsyncMock(side_effect=tips)
+
+    with patch(
+        "moonmind.auth.github_credentials.resolve_github_credential",
+        AsyncMock(return_value=ResolvedGitHubCredential(token="test-token")),
+    ):
+        with pytest.raises(
+            RepositoryContractError, match="REPOSITORY_REMOTE_TIP_MISMATCH"
+        ):
+            await launcher._ensure_repository_ready_for_launch(
+                _repository_readiness_request(), None
+            )
+
+
+@pytest.mark.asyncio
+async def test_default_repository_readiness_rejects_changed_pinned_branch_tip(
+    tmp_path,
+):
+    evidence = RepositoryClientEvidence(
+        toolBundleRef="repository-client:git-system",
+        clientVersion="2.46.0",
+        executableSha256="sha256:git",
+    )
+    launcher = ManagedRuntimeLauncher(
+        ManagedRunStore(tmp_path / "managed_runs"),
+        repository_client_policy=RepositoryClientPolicy(
+            pinnedVersion=evidence.client_version,
+            toolBundleRef=evidence.tool_bundle_ref,
+            executableSha256=evidence.executable_sha256,
+        ),
+    )
+    launcher._observe_git_client = AsyncMock(return_value=evidence)
+    launcher._observe_git_remote_tip = AsyncMock(
+        return_value="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    )
+    request = _repository_readiness_request()
+    request.workspace_spec["repositoryTarget"]["revision"] = {
+        "kind": "git_commit",
+        "commitSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    }
+
+    with pytest.raises(
+        RepositoryContractError,
+        match="remote branch tip does not match the verifier-pinned revision",
+    ):
+        await launcher._ensure_repository_ready_for_launch(request, None)
+
+    launcher._observe_git_remote_tip.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -1566,7 +2243,9 @@ async def test_idempotent_launch_returns_existing_for_active(tmp_path, monkeypat
     assert exc_process is None
 
 @pytest.mark.asyncio
-async def test_launch_prepares_workspace_from_existing_repo(tmp_path, monkeypatch):
+async def test_launch_rejects_branch_without_repository_workspace_source(
+    tmp_path, monkeypatch
+):
     monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
 
     existing_repo = tmp_path / "workspaces" / "existing-run" / "repo"
@@ -1590,18 +2269,19 @@ async def test_launch_prepares_workspace_from_existing_repo(tmp_path, monkeypatc
         workspace_spec={"targetBranch": "chore/update-pause-system-docs-16784273446666462405"}
     )
 
-    record, process, _cleanup, _deferred_cleanup = await launcher.launch(
-        run_id="run-2",
-        request=request,
-        profile=profile,
-    )
-    stdout, _stderr = await process.communicate()
+    with pytest.raises(
+        RuntimeError,
+        match="branch-bearing workspaceSpec requires an explicit repository",
+    ):
+        await launcher.launch(
+            run_id="run-2",
+            request=request,
+            profile=profile,
+        )
 
-    expected_workspace = tmp_path / "workspaces" / "run-2" / "repo"
-    assert record.workspace_path == str(expected_workspace)
-    assert record.live_stream_capable is True
-    assert expected_workspace.exists()
-    assert str(expected_workspace) in stdout.decode("utf-8", errors="replace")
+    unexpected_workspace = tmp_path / "workspaces" / "run-2" / "repo"
+    assert not unexpected_workspace.exists()
+    assert store.load("run-2") is None
 
 @pytest.mark.asyncio
 async def test_launch_prepares_workspace_from_repository_spec(tmp_path, monkeypatch):
@@ -1638,6 +2318,16 @@ async def test_launch_prepares_workspace_from_repository_spec(tmp_path, monkeypa
         async def communicate(self) -> tuple[bytes, bytes]:
             return self._stdout_bytes, self._stderr_bytes
 
+    expected_workspace = str(
+        (tmp_path / "workspaces" / "workspace-run-1" / "repo").resolve()
+    )
+    safe_prefix = (
+        "git",
+        "-c",
+        f"safe.directory={expected_workspace}",
+        "-C",
+        expected_workspace,
+    )
     calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
 
     async def _fake_create_subprocess_exec(*args, **kwargs):
@@ -1646,7 +2336,7 @@ async def test_launch_prepares_workspace_from_repository_spec(tmp_path, monkeypa
             repo_path = Path(str(args[-1]))
             repo_path.mkdir(parents=True, exist_ok=True)
             return _FakeProcess(pid=1001)
-        if args[:2] == ("git", "-C") and args[3:] == (
+        if args[: len(safe_prefix)] == safe_prefix and args[len(safe_prefix):] == (
             "checkout",
             "feature/test",
         ):
@@ -1658,7 +2348,7 @@ async def test_launch_prepares_workspace_from_repository_spec(tmp_path, monkeypa
                     b"file(s) known to git"
                 ),
             )
-        if args[:2] == ("git", "-C") and args[3:] == (
+        if args[: len(safe_prefix)] == safe_prefix and args[len(safe_prefix):] == (
             "checkout",
             "-b",
             "feature/test",
@@ -1680,9 +2370,6 @@ async def test_launch_prepares_workspace_from_repository_spec(tmp_path, monkeypa
     )
     await process.wait()
 
-    expected_workspace = str(
-        (tmp_path / "workspaces" / "workspace-run-1" / "repo").resolve()
-    )
     assert record.workspace_path == expected_workspace
     assert record.live_stream_capable is True
     assert process.pid == 2001
@@ -1696,8 +2383,8 @@ async def test_launch_prepares_workspace_from_repository_spec(tmp_path, monkeypa
     checkout_call = next(
         args
         for args, _ in calls
-        if args[:2] == ("git", "-C")
-        and args[3:] == ("checkout", "-b", "feature/test")
+        if args[: len(safe_prefix)] == safe_prefix
+        and args[len(safe_prefix):] == ("checkout", "-b", "feature/test")
     )
     assert checkout_call[-2:] == ("-b", "feature/test")
 
@@ -1869,6 +2556,21 @@ async def test_launch_reuses_existing_new_branch_when_present(tmp_path, monkeypa
         async def communicate(self) -> tuple[bytes, bytes]:
             return self._stdout_bytes, self._stderr_bytes
 
+    expected_workspace = str(
+        (
+            tmp_path
+            / "workspaces"
+            / "workspace-run-existing-branch"
+            / "repo"
+        ).resolve()
+    )
+    safe_prefix = (
+        "git",
+        "-c",
+        f"safe.directory={expected_workspace}",
+        "-C",
+        expected_workspace,
+    )
     calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
 
     async def _fake_create_subprocess_exec(*args, **kwargs):
@@ -1877,7 +2579,7 @@ async def test_launch_reuses_existing_new_branch_when_present(tmp_path, monkeypa
             repo_path = Path(str(args[-1]))
             repo_path.mkdir(parents=True, exist_ok=True)
             return _FakeProcess(pid=1001)
-        if args[:2] == ("git", "-C") and args[3:] == (
+        if args[: len(safe_prefix)] == safe_prefix and args[len(safe_prefix):] == (
             "checkout",
             "main",
         ):
@@ -1901,7 +2603,8 @@ async def test_launch_reuses_existing_new_branch_when_present(tmp_path, monkeypa
     checkout_call = next(
         args
         for args, _ in calls
-        if args[:2] == ("git", "-C") and args[3:] == ("checkout", "main")
+        if args[: len(safe_prefix)] == safe_prefix
+        and args[len(safe_prefix):] == ("checkout", "main")
     )
     assert checkout_call[-1] == "main"
     assert "-b" not in checkout_call
@@ -3822,6 +4525,131 @@ async def test_launch_generic_env_uses_logical_step_id_for_artifacts_dir(
         run_root / "artifacts" / "implement"
     )
     assert (run_root / "artifacts" / "implement").is_dir()
+
+
+@pytest.mark.asyncio
+async def test_direct_managed_launch_materializes_scoped_execution_fanout(
+    tmp_path, monkeypatch
+):
+    """Replay mm:91c47b8e through the direct Claude launch environment."""
+
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
+    monkeypatch.setenv("MOONMIND_URL", "http://api:8000")
+    captured_env = _patch_generic_env_subprocess(monkeypatch)
+    workspace = tmp_path / "workspaces" / "agent-run-1" / "repo"
+    workspace.mkdir(parents=True)
+    launcher = ManagedRuntimeLauncher(ManagedRunStore(tmp_path / "managed_runs"))
+    request = _make_request(
+        parameters={"requiredCapabilities": ["execution.fanout"]},
+        timeout_policy={"timeout_seconds": 300},
+        step_execution={
+            "workflowId": "mm:parent",
+            "runId": "workflow-run-1",
+            "logicalStepId": "batch-workflows",
+            "executionOrdinal": 1,
+            "stepExecutionId": (
+                "mm:parent:workflow-run-1:batch-workflows:execution:1"
+            ),
+            "runtimeContextPolicy": "fresh_agent_run",
+            "skillSourcePolicy": {
+                "executionFanout": {
+                    "authorized": True,
+                    "selectedSkill": "batch-workflows",
+                    "sourceKind": "built_in",
+                    "reasonCode": "trusted_resolved_skill_requirement",
+                }
+            },
+        },
+    )
+
+    _record, process, _cleanup, _deferred = await launcher.launch(
+        run_id="agent-run-1",
+        workflow_id="mm:parent",
+        request=request,
+        profile=_make_profile(
+            runtime_id="claude_code",
+            command_template=["echo", "hello"],
+        ),
+        workspace_path=str(workspace),
+    )
+    await process.wait()
+
+    capability = verify_execution_fanout_capability(
+        captured_env["MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN"],
+        secret=str(settings.security.JWT_SECRET_KEY),
+    )
+    assert capability.parent_workflow_id == "mm:parent"
+    assert capability.agent_run_id == "agent-run-1"
+    assert capability.step_id == "batch-workflows"
+    assert capability.session_id == "agent-run-1"
+    assert capability.runtime_id == "claude_code"
+    assert capability.source_kind == "managed_process"
+    assert captured_env["MOONMIND_TASK_WORKFLOW_ID"] == "mm:parent"
+    assert captured_env["MOONMIND_AGENT_RUN_ID"] == "agent-run-1"
+    assert captured_env["MOONMIND_RUNTIME_ID"] == "claude_code"
+    assert captured_env["MOONMIND_STEP_ID"] == "batch-workflows"
+    # The capability must still be valid at the execution ceiling. It is minted
+    # before the broker, workspace ownership changes, and process creation that
+    # precede the supervisor starting its clock, so a lifetime of exactly the
+    # ceiling can expire while the run is still legally executing.
+    budget = resolve_execution_budget(
+        agent_kind=request.agent_kind, timeout_policy=request.timeout_policy
+    )
+    assert capability.expires_at > int(time.time()) + budget.max_seconds
+
+
+def test_direct_managed_launch_removes_unrequested_ambient_fanout_authority() -> None:
+    environment = {
+        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN": "stale-inline-token",
+        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE": "/stale/token-file",
+    }
+
+    ManagedRuntimeLauncher._materialize_execution_fanout_environment(
+        environment=environment,
+        request=_make_request(parameters={"requiredCapabilities": []}),
+        workflow_id="mm:parent",
+        run_id="agent-run-1",
+        runtime_id="claude_code",
+    )
+
+    assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN" not in environment
+    assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE" not in environment
+
+
+def test_direct_managed_launch_rejects_denied_fanout_authorization() -> None:
+    request = _make_request(
+        parameters={"requiredCapabilities": ["execution.fanout"]},
+        step_execution={
+            "workflowId": "mm:parent",
+            "runId": "workflow-run-1",
+            "logicalStepId": "batch-workflows",
+            "executionOrdinal": 1,
+            "stepExecutionId": (
+                "mm:parent:workflow-run-1:batch-workflows:execution:1"
+            ),
+            "runtimeContextPolicy": "fresh_agent_run",
+            "skillSourcePolicy": {
+                "executionFanout": {
+                    "authorized": False,
+                    "selectedSkill": "batch-workflows",
+                    "sourceKind": "repo",
+                    "reasonCode": "resolved_skill_policy_denied",
+                }
+            },
+        },
+    )
+    environment: dict[str, str] = {}
+
+    with pytest.raises(ExecutionFanoutCapabilityError, match="not authorized"):
+        ManagedRuntimeLauncher._materialize_execution_fanout_environment(
+            environment=environment,
+            request=request,
+            workflow_id="mm:parent",
+            run_id="agent-run-1",
+            runtime_id="claude_code",
+        )
+
+    assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN" not in environment
 
 
 @pytest.mark.asyncio

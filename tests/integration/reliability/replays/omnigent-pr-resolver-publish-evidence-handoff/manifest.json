@@ -1,0 +1,9 @@
+{
+  "incidentWorkflowId": "mm:a5460547-b43c-4b1d-9052-ac6612e9975b",
+  "incidentRunId": "019fd552-d243-71b4-9df3-908d6c9dd2dc",
+  "stepExecutionId": "mm:a5460547-b43c-4b1d-9052-ac6612e9975b:019fd552-d243-71b4-9df3-908d6c9dd2dc:node-1:execution:1",
+  "terminalEvidencePath": "var/pr_resolver/result.json",
+  "publishEvidencePath": "artifacts/publish_result.json",
+  "mergeAutomationDisposition": "already_merged",
+  "failureReason": "auto_publish_evidence_missing"
+}

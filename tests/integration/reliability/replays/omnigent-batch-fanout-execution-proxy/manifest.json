@@ -1,0 +1,10 @@
+{
+  "incidentWorkflowId": "mm:2d8480da-045c-4569-81b3-5b0b0a0ee9a0-2026-08-18T05:59:33Z",
+  "incidentRunId": "01a01374-2246-7406-9dd9-904665031723",
+  "terminalFailureCode": "CHILD_WORKFLOW_QUEUE_FAILED",
+  "matchedPrs": 10,
+  "attempts": 4,
+  "moonmindUrl": "http://api:8000",
+  "failureShape": "the skill found ten Dependabot PRs and wrote valid terminal evidence, but the Omnigent proxy denied every POST /api/executions request before it reached MoonMind; three full retries repeated the same unreachable fan-out path",
+  "boundary": "isolated Omnigent runner through the restricted proxy to the MoonMind execution API"
+}

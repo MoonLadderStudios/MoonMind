@@ -533,6 +533,7 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
         env_aliases=("WORKFLOW_DEFAULT_RUNTIME", "MOONMIND_DEFAULT_RUNTIME"),
         apply_mode="next_workflow",
         options=(
+            ("omnigent", "Codex via Omnigent"),
             ("codex", "Codex"),
             ("codex_cli", "Codex CLI"),
             ("claude_code", "Claude Code"),

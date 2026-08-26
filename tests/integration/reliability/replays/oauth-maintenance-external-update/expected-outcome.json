@@ -1,0 +1,6 @@
+{
+  "leaseAcquired": true,
+  "acknowledgedBy": "AcquireCredentialMaintenanceLease",
+  "ownerIsWorkflow": true,
+  "externalWorkflowHandleUpdateAttempted": false
+}

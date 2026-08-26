@@ -285,6 +285,20 @@ class RunnerProfileRegistry:
     ) -> None:
         resources = request.resources
         limits = profile.resources
+        if resources.gpu is not None:
+            # Profile-backed workloads are bounded by the profile's device
+            # policy, which grants no device access. The unrestricted container
+            # path realizes GPU requests without consulting this policy.
+            raise WorkloadPolicyError(
+                "gpu resource request is not allowed by profile devicePolicy "
+                f"mode {profile.device_policy.mode!r}",
+                reason="unsupported_gpu_request",
+                details={
+                    "resource": "gpu",
+                    "profileId": profile.id,
+                    "devicePolicyMode": profile.device_policy.mode,
+                },
+            )
         if resources.cpu is not None and limits.max_cpu is not None:
             if parse_cpu_units(resources.cpu) > parse_cpu_units(limits.max_cpu):
                 raise WorkloadPolicyError(

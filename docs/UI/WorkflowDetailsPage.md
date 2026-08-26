@@ -2,6 +2,8 @@
 
 ## Purpose
 
+For **Codex via Omnigent** (canonical identity `agentKind=external`, `agentId=omnigent`, nested harness `codex-native`), the runtime label, lifecycle stages, safe refs, controls, terminal envelope, and post-cleanup evidence are defined by [`docs/Omnigent/CodexCreateToHostContract.md`](../Omnigent/CodexCreateToHostContract.md) and reconciled end-to-end by [`docs/Omnigent/NormalCodexProductPathReconciliation.md`](../Omnigent/NormalCodexProductPathReconciliation.md).
+
 The Workflow Details page is the canonical view for inspecting a single MoonMind Workflow Execution. It presents the Workflow identity, current state, original Workflow configuration, execution history, outputs, errors, and all actions that are available for the Workflow in its current state.
 
 The page is declarative and state-driven. Every visible control is derived from the Workflow Execution status, the Workflow type, and explicit backend capabilities. A failed Workflow presents the user with the complete set of available recovery actions, which may include **Remediate**, **Edit Workflow**, **Rerun**, and **Resume**.
@@ -585,6 +587,42 @@ Panel button destination:
 
 The remediation panel never replaces the header action buttons.
 
+### Authoritative remediation relationships
+
+The Artifacts view renders a distinct **Remediation** region from canonical
+remediation links, immutable Workflow inputs, context artifacts, lifecycle
+artifacts, approval state, and Checkpoint Branch records. It never parses logs,
+chat text, or model prose as authority.
+
+The target-side **Remediation Workflows** list preserves the target's original
+outcome separately and shows each remediation Workflow/run link, pinned target
+run and selected step/checkpoint, current target state, phase/mode/authority,
+profile and policy identity, mutation lock and release, diagnosis, latest action
+delivery, approval, explicit repair verification, resolution, prevention,
+created branch/run/PR, and cleanup evidence.
+
+The remediation-side **Remediation Target** list additionally shows the complete
+authored remediation contract; per-class context availability, freshness,
+boundedness, and degradation; live-follow cursor/status; the bounded action
+request and result authority chain; cumulative candidate attempt/head state;
+Checkpoint Branch source, isolated work branch, publication/promotion/archive;
+and the final repair, prevention, cleanup, lease-release, and unresolved-operator
+work summary. Durable artifact refs remain available for the full evidence.
+
+Action delivery and repair verification are separate. Branch creation, branch
+execution, action delivery, and verification each have their own state. Actions
+are offered only when the capability matrix says the execution, approval, and
+verification backends are ready; disabled actions show bounded reasons.
+
+Pending approval UI shows action, risk, expected state, policy, expiration,
+blast radius, and artifact evidence. Authorized operators can approve or deny
+with a rationale, which is sent as the durable decision `comment`. Expired or
+stale decisions explain why a new request is required. Operator **Take over and
+pause**, **Resume remediation**, and **Cancel remediation** use ordinary durable
+Workflow signal/cancel endpoints; takeover never exposes credentials or raw
+runtime/session authority. All controls retain labels, keyboard access,
+loading/error states, and responsive layout.
+
 ## Outputs section
 
 The outputs section is present when outputs exist.
@@ -1027,6 +1065,13 @@ When the user clicks **Resume** on a failed Workflow:
 ## Non-goals
 
 The Workflow Details page does not mutate terminal executions in place.
+
+Workflow Detail renders pending and completed remediation approvals from each
+link's durable `approvalState`; it never reconstructs decisions from logs. The
+projection includes bounded request/action/risk identity, status, actors,
+decision and expiration timestamps, rationale, and audit/artifact references,
+without credential bodies or raw infrastructure authority. The same projection
+appears for the remediation execution and its target.
 
 The Workflow Details page does not hide valid failed-Workflow actions merely because remediation is available.
 

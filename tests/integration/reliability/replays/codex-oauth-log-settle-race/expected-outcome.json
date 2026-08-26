@@ -1,0 +1,7 @@
+{
+  "runtimeFailureClass": "permanent",
+  "failureClass": "user_error",
+  "providerErrorCode": "401",
+  "retryRecommendation": "reauthenticate",
+  "reason": "Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again."
+}

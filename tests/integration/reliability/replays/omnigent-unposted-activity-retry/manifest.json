@@ -1,0 +1,8 @@
+{
+  "incidentWorkflowId": "mm:651a14f6-ff53-43e9-a91b-b37ad276f9ef",
+  "failureShape": "a failed host-preflight Activity terminalized the bridge row before first-message delivery; the Temporal retry reused that row, inferred firstMessagePosted from terminal state, and created an idle session with no user message",
+  "idempotencyKey": "replay-unposted-activity-retry",
+  "terminalRefs": {
+    "summary": "host preflight failed before first-message delivery"
+  }
+}

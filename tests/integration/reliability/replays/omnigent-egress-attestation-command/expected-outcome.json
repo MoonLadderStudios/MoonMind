@@ -1,0 +1,11 @@
+{
+  "invariant": "the OAuth host adapter translates attestation subcommands into complete Docker CLI invocations before crossing the process boundary",
+  "runtimeCommand": [
+    "docker",
+    "network",
+    "inspect",
+    "--format",
+    "{{json .}}",
+    "moonmind_omnigent-egress-network"
+  ]
+}

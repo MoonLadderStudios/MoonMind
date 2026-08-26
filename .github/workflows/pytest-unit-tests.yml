@@ -1,4 +1,4 @@
-name: Run Pytest Unit Tests
+name: CI / Test Suite
 
 on:
   push:
@@ -24,34 +24,30 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       unit_fast: ${{ steps.select.outputs.unit_fast }}
+      unit_slow: ${{ steps.select.outputs.unit_slow }}
       api_component: ${{ steps.select.outputs.api_component }}
       temporal_boundary: ${{ steps.select.outputs.temporal_boundary }}
       integration_ci: ${{ steps.select.outputs.integration_ci }}
+      reliability_journey: ${{ steps.select.outputs.reliability_journey }}
+      exact_artifact: ${{ steps.select.outputs.exact_artifact }}
       full_backend: ${{ steps.select.outputs.full_backend }}
+      frontend_static: ${{ steps.select.outputs.frontend_static }}
+      frontend_browser_chromium: ${{ steps.select.outputs.frontend_browser_chromium }}
+      frontend_browser_firefox: ${{ steps.select.outputs.frontend_browser_firefox }}
+      full_frontend: ${{ steps.select.outputs.full_frontend }}
     steps:
       - name: Check out code
         uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 0
-          submodules: recursive
+          fetch-depth: 1
 
       - name: Compute changed files
         shell: bash
         run: |
           set -euo pipefail
-
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            base_sha="${{ github.event.pull_request.base.sha }}"
-            head_sha="${{ github.event.pull_request.head.sha }}"
-            git diff --name-only "$base_sha...$head_sha" > /tmp/changed-files.txt
-          elif [[ "${{ github.event_name }}" == "push" && -n "${{ github.event.before }}" && "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]]; then
-            git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" > /tmp/changed-files.txt
-          else
-            : > /tmp/changed-files.txt
-          fi
-
+          bash tools/ci/compute_changed_files.sh /tmp/changed-files.txt
           echo "Changed files:"
           sed 's/^/  - /' /tmp/changed-files.txt || true
 
@@ -65,6 +61,141 @@ jobs:
           set -euo pipefail
           python3 tools/select_test_suites.py < /tmp/changed-files.txt
 
+  preflight-policy:
+    # Static repository policy checks run in parallel with test selection so they
+    # are off the serial tail of required CI (MoonLadderStudios/MoonMind#3326).
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+      - name: Compute changed files
+        id: changed-files
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/compute_changed_files.sh /tmp/changed-files.txt | tee /tmp/changed-files-resolution.txt
+          cat /tmp/changed-files-resolution.txt >> "$GITHUB_OUTPUT"
+          echo "Changed files:"
+          sed 's/^/  - /' /tmp/changed-files.txt || true
+      - name: Check docs terminology guardrails
+        run: |
+          set -euo pipefail
+          ./tools/check_terminology.sh
+      - name: Verify workflow terminology guardrails
+        run: |
+          set -euo pipefail
+          python3 tools/verify_workflow_terminology.py --mode all
+      - name: Check removed capability semantics
+        run: |
+          set -euo pipefail
+          python3 tools/check_removed_capability_semantics.py
+      - name: Audit status token domains
+        run: |
+          set -euo pipefail
+          python3 tools/status_domain_audit.py
+      - name: Audit status tokens
+        run: |
+          set -euo pipefail
+          python3 tools/audit_status_tokens.py --fail-on-unknown > /tmp/status-token-audit.csv
+      - name: Reject task-specific GitHub workflow names
+        run: |
+          set -euo pipefail
+          python3 tools/check_github_workflow_names.py
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install system dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/azure-cli.list /etc/apt/sources.list.d/microsoft-prod.list
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev pkg-config
+      - name: Install runtime dependencies via uv
+        run: |
+          python -m pip install --upgrade pip uv
+          uv pip install --system -e .
+      - name: Validate AgentSession deployment safety
+        if: steps.changed-files.outputs.resolution == 'known'
+        run: |
+          set -euo pipefail
+          ./tools/validate_agent_session_deployment_safety.py --changed-files-file /tmp/changed-files.txt
+      - name: Block deployment safety validation on an unknown diff
+        if: steps.changed-files.outputs.resolution != 'known'
+        run: |
+          echo "Unable to resolve the exact changed-file set; deployment safety cannot be validated." >&2
+          exit 1
+      - name: Summarize policy checks
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "## Repository policy checks"
+            echo ""
+            echo "All static repository policy checks passed:"
+            echo ""
+            echo "- docs terminology guardrails"
+            echo "- workflow terminology guardrails"
+            echo "- removed capability semantics"
+            echo "- status token domains"
+            echo "- status token audit (\`--fail-on-unknown\`)"
+            echo "- GitHub workflow display-name guard"
+            echo "- AgentSession deployment safety (exact changed files)"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload status token audit
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: status-token-audit
+          path: /tmp/status-token-audit.csv
+          if-no-files-found: ignore
+
+  omnigent-deterministic-conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+      - name: Initialize pinned Omnigent verifier source
+        run: git submodule update --init --depth 1 -- omnigent
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip uv
+          uv pip install --system -e .[tests]
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install frontend dependencies
+        run: npm ci --no-fund --no-audit
+      - name: Run deterministic Omnigent conformance
+        run: |
+          python tools/run_omnigent_conformance.py \
+            --server-image fake-server@sha256:0000000000000000000000000000000000000000000000000000000000000000 \
+            --host-image fake-host@sha256:0000000000000000000000000000000000000000000000000000000000000000 \
+            --host-architecture linux/amd64
+      - name: Upload conformance evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: omnigent-deterministic-conformance
+          path: artifacts/omnigent-conformance
+          if-no-files-found: error
+
   unit-fast:
     needs: select-test-suites
     if: needs.select-test-suites.outputs.unit_fast == 'true'
@@ -76,14 +207,9 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 0
-          submodules: recursive
-      - name: Check docs terminology guardrails
-        run: |
-          set -euo pipefail
-          ./tools/check_terminology.sh
+          fetch-depth: 1
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install system dependencies
@@ -102,49 +228,30 @@ jobs:
         run: |
           python -m pip install --upgrade pip uv
           uv pip install --system -e .[tests]
-      - name: Set up Node.js for full backend path
-        if: needs.select-test-suites.outputs.full_backend == 'true'
-        uses: actions/setup-node@v6
-        with:
-          node-version: "20"
-          cache: npm
-      - name: Build frontend assets for full backend path
-        if: needs.select-test-suites.outputs.full_backend == 'true'
-        run: |
-          npm ci
-          npm run ui:build
+      - name: Initialize MoonSpec test fixtures
+        run: git submodule update --init --depth 1 -- moonspec omnigent
       - name: Run selected unit suite
         env:
-          GITHUB_TOKEN: ${{ github.token }}
-          MOONMIND_PYTEST_DURATIONS: "50"
-          MOONMIND_PYTEST_JUNITXML: artifacts/pytest-unit.xml
+          # A failing generated fault-lab seed serializes a reproduction-complete,
+          # secret-safe bundle here so the first regression leaves replayable
+          # evidence for the upload step below.
+          MOONMIND_FAULTLAB_DIAGNOSTICS_DIR: artifacts/faultlab-generated
         run: |
           set -euo pipefail
-          if [[ "${{ needs.select-test-suites.outputs.full_backend }}" == "true" ]]; then
-            ./tools/test_unit.sh --python-only
-          else
-            python -m pytest tests/unit \
-              --ignore=tests/unit/workflows/temporal \
-              --ignore=tests/unit/api \
-              --ignore=tests/unit/api_service \
-              -m "not temporal_boundary and not component and not slow" \
-              -q -n auto --dist loadfile --durations=25 \
-              --junitxml=artifacts/pytest-unit-fast.xml
-          fi
-      - name: Verify workflow terminology guardrails
-        run: |
-          set -euo pipefail
-          python tools/verify_workflow_terminology.py --mode all
-      - name: Validate AgentSession deployment safety
-        run: |
-          set -euo pipefail
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            ./tools/validate_agent_session_deployment_safety.py --base-ref "${{ github.event.pull_request.base.sha }}"
-          elif [[ -n "${{ github.event.before }}" && "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]]; then
-            ./tools/validate_agent_session_deployment_safety.py --base-ref "${{ github.event.before }}"
-          else
-            ./tools/validate_agent_session_deployment_safety.py --base-ref "HEAD~1"
-          fi
+          python -m pytest tests/unit \
+            --ignore=tests/unit/workflows/temporal \
+            --ignore=tests/unit/api \
+            --ignore=tests/unit/api_service \
+            -m "unit_fast and not provider_verification and not requires_credentials" \
+            -q -n auto --dist loadfile --durations=25 \
+            --junitxml=artifacts/pytest-unit-fast.xml
+      - name: Upload generated fault-lab diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: faultlab-generated-diagnostics
+          path: artifacts/faultlab-generated
+          if-no-files-found: ignore
 
   moonspec-projection:
     runs-on: ubuntu-latest
@@ -156,9 +263,12 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 1
-          submodules: recursive
+      - name: Initialize MoonSpec submodule
+        run: |
+          set -euo pipefail
+          git submodule update --init --depth 1 -- moonspec
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Check vendored MoonSpec projection
@@ -166,6 +276,39 @@ jobs:
           set -euo pipefail
           python -m pip install --upgrade pip PyYAML
           python3 tools/sync_moonspec.py --check
+
+  unit-slow:
+    needs: select-test-suites
+    if: needs.select-test-suites.outputs.unit_slow == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install system dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/azure-cli.list /etc/apt/sources.list.d/microsoft-prod.list
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev pkg-config
+      - name: Install dependencies via uv
+        run: |
+          python -m pip install --upgrade pip uv
+          uv pip install --system -e .[tests]
+      - name: Run slow unit suite
+        run: |
+          set -euo pipefail
+          python -m pytest tests/unit \
+            -m "slow and not provider_verification and not requires_credentials and not integration" \
+            -q --durations=50 \
+            --junitxml=artifacts/pytest-unit-slow.xml
 
   api-component:
     needs: select-test-suites
@@ -179,9 +322,8 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 1
-          submodules: recursive
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install system dependencies
@@ -197,7 +339,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m pytest tests/unit/api tests/unit/api_service tests/component/api \
-            -m "not temporal_boundary and not slow" \
+            -m "component and not temporal_boundary and not slow and not provider_verification and not requires_credentials" \
             -q -n auto --dist loadfile --durations=25 \
             --junitxml=artifacts/pytest-api-component.xml
 
@@ -214,7 +356,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 1
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install dependencies via uv
@@ -225,7 +367,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m pytest tests/unit/workflows/temporal \
-            -m "not slow" \
+            -m "temporal_boundary and not slow and not provider_verification and not requires_credentials" \
             -q --durations=25 \
             --junitxml=artifacts/pytest-temporal-boundary.xml
 
@@ -241,7 +383,8 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 1
-          submodules: recursive
+      - name: Initialize pinned Omnigent verifier source
+        run: git submodule update --init --depth 1 -- omnigent
       - name: Run hermetic integration CI suite
         env:
           MOONMIND_FORCE_LOCAL_TESTS: "1"
@@ -284,16 +427,11 @@ jobs:
           path: /tmp/pytest-integration-ci
           if-no-files-found: error
 
-  ci-required:
-    needs:
-      - select-test-suites
-      - moonspec-projection
-      - unit-fast
-      - api-component
-      - temporal-boundary
-      - integration-ci
-    if: always()
+  reliability-journey-checkpoint-resume:
+    needs: select-test-suites
+    if: needs.select-test-suites.outputs.reliability_journey == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Check out code
         uses: actions/checkout@v7
@@ -301,60 +439,435 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 1
-          submodules: recursive
-      - name: Check docs terminology guardrails
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install system dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/azure-cli.list /etc/apt/sources.list.d/microsoft-prod.list
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev pkg-config
+      - name: Install dependencies via uv
+        run: |
+          python -m pip install --upgrade pip uv
+          uv pip install --system -e .[tests]
+      - name: Run hermetic checkpoint-resume reliability journey
+        env:
+          MOONMIND_FORCE_LOCAL_TESTS: "1"
         run: |
           set -euo pipefail
-          ./tools/check_terminology.sh
-      - name: Audit status token domains
+          python -m pytest tests/integration/reliability \
+            -m reliability_journey \
+            -q --durations=25 \
+            --junitxml=artifacts/pytest-reliability-journey.xml
+      - name: Collect reliability journey diagnostics
+        if: failure()
         run: |
-          set -euo pipefail
-          python3 tools/audit_status_tokens.py --fail-on-unknown > /tmp/status-token-audit.csv
-      - name: Verify selected suites passed
+          set -uo pipefail
+          mkdir -p /tmp/pytest-reliability-journey
+          for path in artifacts tests/integration/reliability/replays var/artifacts var/pr_resolver; do
+            if [[ -e "$path" ]]; then
+              cp -R --parents "$path" /tmp/pytest-reliability-journey/
+            fi
+          done
+          find . -type f \
+            \( -name 'workspace-manifest*.json' -o -name 'provider-transcript*.jsonl' \
+               -o -name 'temporal-diagnostics*.json' -o -name 'replay-manifest*.json' \) \
+            -exec cp --parents '{}' /tmp/pytest-reliability-journey/ \; 2>/dev/null || true
+      - name: Upload reliability journey diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pytest-reliability-journey-diagnostics
+          path: /tmp/pytest-reliability-journey
+          if-no-files-found: error
+
+  omnigent-exact-artifact:
+    # Tier 1 (MoonLadderStudios/MoonMind#3710): the required, per-PR,
+    # NONCREDENTIALED exact deployable-artifact conformance gate.  It builds the
+    # exact deployable image and tests THAT IMMUTABLE ARTIFACT through its real
+    # entrypoints: the in-image capability probe, HTTP/SSE/WebSocket route
+    # handshakes, clean and materialized-prior-revision PostgreSQL migrations
+    # against separate databases, an entrypoint restart against the migrated
+    # schema, worker task-queue/readiness advertisement against a real Temporal
+    # server, and a browser capture proving the compiled native UI baked into
+    # the image renders from its hosted boot payload with no root /v1 traffic.
+    #
+    # Restart/terminal replay after a fake provider host is removed is NOT
+    # asserted here: this job runs no provider execution, and the
+    # reliability-journey / embedded-recovery gates own that boundary on the
+    # same commit.
+    #
+    # It uses no protected credentials and no self-hosted runner, so a Tier-2
+    # credentialed canary, Tier-3 post-deployment synthetic, or Tier-4
+    # scheduled-soak outage never flips this gate closed.  Runs on the standard
+    # Docker-enabled ubuntu-latest merge infrastructure.
+    needs: select-test-suites
+    if: needs.select-test-suites.outputs.exact_artifact == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16@sha256:6efd0df010dc3cb40d5e33e3ef84acecc5e73161bd3df06029ee8698e5e12c60
+        env:
+          POSTGRES_USER: moonmind
+          POSTGRES_PASSWORD: moonmind
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U moonmind"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+      - name: Initialize pinned Omnigent verifier source
+        run: git submodule update --init --depth 1 -- omnigent
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install driver dependencies via uv
+        run: |
+          python -m pip install --upgrade pip uv
+          uv pip install --system -e .
+      - name: Set up Node for the hosted-UI capture
+        uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: npm
+      - name: Install the browser controller's Playwright runtime
+        # The hosted-UI capture runs on the job host against the container's
+        # hosted origin, so Playwright belongs here and not in the deployable
+        # image.
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build the exact deployable image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: api_service/Dockerfile
+          load: true
+          tags: moonmind-exact-artifact:candidate
+          # A local single-arch image so its digest is the immutable artifact
+          # under test.
+      - name: Resolve the immutable image identity
+        id: digest
         shell: bash
         run: |
           set -euo pipefail
+          # The compiled UI is baked into the app image, and the worker runs
+          # from the same image with a different entrypoint, so all three
+          # deployable roles share one immutable digest.
+          #
+          # `ref` is the digest-pinned identity recorded in the evidence.
+          # `runnable` is the same content id in the form Docker can resolve
+          # locally: a locally loaded image has no registry repo digest, so
+          # `name@sha256:<id>` would send Docker to a registry and fail.
+          IMAGE_ID="$(docker image inspect moonmind-exact-artifact:candidate --format '{{ .Id }}')"
+          DIGEST="${IMAGE_ID#sha256:}"
+          echo "ref=moonmind-exact-artifact@sha256:${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "digest=sha256:${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "runnable=sha256:${DIGEST}" >> "$GITHUB_OUTPUT"
+      - name: Start Temporal for the worker readiness probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The worker runtime connects to Temporal before it can advertise
+          # readiness, so a reachable server is a prerequisite of the probe and
+          # not an optional extra. This is the same image and configuration the
+          # canonical Compose deployment uses, on the job's PostgreSQL service,
+          # and it needs no credentials.
+          docker run -d --name exact-artifact-temporal --network host \
+            -e DB=postgres12 \
+            -e DB_PORT=5432 \
+            -e POSTGRES_SEEDS=127.0.0.1 \
+            -e POSTGRES_USER=moonmind \
+            -e POSTGRES_PWD=moonmind \
+            -e DBNAME=temporal \
+            -e VISIBILITY_DBNAME=temporal_visibility \
+            -e NUM_HISTORY_SHARDS=1 \
+            -e SKIP_ADD_CUSTOM_SEARCH_ATTRIBUTES=true \
+            -e BIND_ON_IP=0.0.0.0 \
+            -e DYNAMIC_CONFIG_FILE_PATH=/etc/temporal/dynamicconfig/development-sql.yaml \
+            -v "$PWD/services/temporal/dynamicconfig:/etc/temporal/dynamicconfig:ro" \
+            temporalio/auto-setup:1.29.1
+          for _ in $(seq 1 120); do
+            if python -c "import socket; socket.create_connection(('127.0.0.1', 7233), timeout=2).close()" 2>/dev/null; then
+              echo "temporal is accepting connections on 127.0.0.1:7233"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::Temporal did not become reachable on 127.0.0.1:7233"
+          exit 1
+      - name: Show Temporal startup logs on failure
+        if: failure()
+        run: docker logs exact-artifact-temporal || true
+      - name: Gather exact-image runtime evidence
+        id: runtime
+        shell: bash
+        env:
+          # The postgres service publishes 5432 to the job host, and the probes
+          # run the exact image with --network host, so the container reaches
+          # PostgreSQL at 127.0.0.1. This is the admin URL: the probes create a
+          # dedicated database per migration scenario from it.
+          DATABASE_URL: postgresql://moonmind:moonmind@127.0.0.1:5432/postgres
+        run: |
+          set -euo pipefail
+          python tools/gather_exact_artifact_runtime_evidence.py \
+            --image "${{ steps.digest.outputs.runnable }}" \
+            --database-url "$DATABASE_URL" \
+            --temporal-address 127.0.0.1:7233 \
+            --output runtime-evidence.json
+      - name: Evaluate exact deployable-artifact conformance
+        shell: bash
+        run: |
+          set -euo pipefail
+          REF="${{ steps.digest.outputs.ref }}"
+          DIGEST="${{ steps.digest.outputs.digest }}"
+          printf '{"digests": {"server": "%s", "worker": "%s", "ui": "%s"}}\n' \
+            "$DIGEST" "$DIGEST" "$DIGEST" > compatibility-manifest.json
+          python tools/run_omnigent_exact_artifact_conformance.py \
+            --server-image "$REF" \
+            --worker-image "$REF" \
+            --ui-image "$REF" \
+            --runnable-image "${{ steps.digest.outputs.runnable }}" \
+            --source-commit "${{ github.event.pull_request.head.sha || github.sha }}" \
+            --runtime-evidence runtime-evidence.json \
+            --compatibility-manifest compatibility-manifest.json \
+            --output-dir artifacts/omnigent-exact-artifact
+      - name: Collect exact-artifact diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          mkdir -p artifacts/omnigent-exact-artifact
+          cp runtime-evidence.json artifacts/omnigent-exact-artifact/ 2>/dev/null || true
+          docker logs exact-artifact-temporal \
+            > artifacts/omnigent-exact-artifact/temporal.log 2>&1 || true
+      - name: Stop the Temporal server
+        if: always()
+        run: docker rm -f exact-artifact-temporal || true
+      - name: Upload exact-artifact evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: omnigent-exact-artifact-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/omnigent-exact-artifact
+          if-no-files-found: warn
+          retention-days: 14
 
-          if [[ "${{ needs.select-test-suites.result }}" != "success" ]]; then
-            echo "::error::select-test-suites ended with result=${{ needs.select-test-suites.result }}"
-            exit 1
-          fi
+  omnigent-fault-rotating-seeds:
+    # AC8 (MoonLadderStudios/MoonMind#3709): the larger, rotating fault-lab seed
+    # corpus. Required PR CI runs a fixed deterministic corpus
+    # (tests/unit/omnigent/faultlab/test_generated_properties.py and the
+    # reliability journey); this job runs an expanded, date-rotated window on
+    # main/schedule only. It is intentionally NOT a required PR gate and is not
+    # in the ci-required aggregator.
+    if: >-
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install system dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/azure-cli.list /etc/apt/sources.list.d/microsoft-prod.list
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev pkg-config
+      - name: Install dependencies via uv
+        run: |
+          python -m pip install --upgrade pip uv
+          uv pip install --system -e .[tests]
+      - name: Compute date-rotated seed window
+        id: window
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Rotate the covered slice daily so successive scheduled runs explore a
+          # fresh, non-overlapping window on top of the fixed PR corpus. The seed
+          # space wraps at 1,000,000 to keep offsets bounded.
+          count=2000
+          days=$(( $(date -u +%s) / 86400 ))
+          offset=$(( (days * count) % 1000000 ))
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "offset=$offset" >> "$GITHUB_OUTPUT"
+          echo "Rotating fault-lab seed window: offset=$offset count=$count"
+      - name: Run rotating fault-lab seed corpus
+        env:
+          MOONMIND_FAULTLAB_ROTATING_SEEDS: "1"
+          MOONMIND_FAULTLAB_SEED_OFFSET: ${{ steps.window.outputs.offset }}
+          MOONMIND_FAULTLAB_SEED_COUNT: ${{ steps.window.outputs.count }}
+          MOONMIND_FAULTLAB_TIME_BUDGET_SECONDS: "900"
+          MOONMIND_FAULTLAB_DIAGNOSTICS_DIR: artifacts/faultlab-rotating
+        run: |
+          set -euo pipefail
+          python -m pytest \
+            tests/unit/omnigent/faultlab/test_rotating_seed_corpus.py \
+            -q --durations=25 \
+            --junitxml=artifacts/pytest-faultlab-rotating.xml
+      - name: Upload rotating fault-lab diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: faultlab-rotating-diagnostics
+          path: |
+            artifacts/faultlab-rotating
+            artifacts/pytest-faultlab-rotating.xml
+          if-no-files-found: ignore
 
-          if [[ "${{ needs.moonspec-projection.result }}" != "success" ]]; then
-            echo "::error::moonspec-projection ended with result=${{ needs.moonspec-projection.result }}"
-            exit 1
-          fi
+  verify-test-shard-ownership:
+    needs: select-test-suites
+    if: needs.select-test-suites.outputs.full_backend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install system dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/azure-cli.list /etc/apt/sources.list.d/microsoft-prod.list
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev pkg-config
+      - name: Install dependencies via uv
+        run: |
+          python -m pip install --upgrade pip uv
+          uv pip install --system -e .[tests]
+      - name: Verify exclusive backend shard ownership
+        run: python tools/verify_test_shard_ownership.py
 
-          check_result() {
-            local selected="$1"
-            local result="$2"
-            local name="$3"
+  ci-required:
+    # Pure, no-checkout result aggregator for required backend CI
+    # (MoonLadderStudios/MoonMind#3326). It performs no repository operations:
+    # no checkout, no submodules, no Python/Node setup, no repository command.
+    # It evaluates every dependency and reports every failure before exiting.
+    needs:
+      - select-test-suites
+      - preflight-policy
+      - moonspec-projection
+      - unit-fast
+      - unit-slow
+      - api-component
+      - temporal-boundary
+      - integration-ci
+      - reliability-journey-checkpoint-resume
+      - omnigent-exact-artifact
+      - verify-test-shard-ownership
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Aggregate required backend results
+        shell: bash
+        run: |
+          set -uo pipefail
 
-            if [[ "$selected" == "true" && "$result" != "success" ]]; then
-              echo "::error::$name was selected but ended with result=$result"
-              exit 1
+          failures=0
+
+          {
+            echo "## Required backend CI"
+            echo ""
+            echo "| Check | Selected | Result |"
+            echo "|---|---:|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          record() {
+            local name="$1" selected="$2" result="$3"
+            echo "| \`$name\` | $selected | \`$result\` |" >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          require_always() {
+            local name="$1" result="$2"
+            record "$name" "always" "$result"
+            if [[ "$result" != "success" ]]; then
+              echo "::error::$name is always required but ended with result=$result"
+              failures=$((failures + 1))
             fi
           }
 
-          check_result "${{ needs.select-test-suites.outputs.unit_fast }}" \
-                       "${{ needs.unit-fast.result }}" \
-                       "unit-fast"
+          require_selected() {
+            local name="$1" selected="$2" result="$3"
+            record "$name" "$selected" "$result"
+            if [[ "$selected" == "true" ]]; then
+              if [[ "$result" != "success" ]]; then
+                echo "::error::$name was selected but ended with result=$result"
+                failures=$((failures + 1))
+              fi
+            elif [[ "$result" != "skipped" ]]; then
+              echo "::error::$name was not selected but ended with result=$result (expected skipped)"
+              failures=$((failures + 1))
+            fi
+          }
 
-          check_result "${{ needs.select-test-suites.outputs.api_component }}" \
-                       "${{ needs.api-component.result }}" \
-                       "api-component"
+          require_always "select-test-suites" "${{ needs.select-test-suites.result }}"
+          require_always "preflight-policy" "${{ needs.preflight-policy.result }}"
+          require_always "moonspec-projection" "${{ needs.moonspec-projection.result }}"
 
-          check_result "${{ needs.select-test-suites.outputs.temporal_boundary }}" \
-                       "${{ needs.temporal-boundary.result }}" \
-                       "temporal-boundary"
+          require_selected "unit-fast" \
+            "${{ needs.select-test-suites.outputs.unit_fast }}" \
+            "${{ needs.unit-fast.result }}"
+          require_selected "unit-slow" \
+            "${{ needs.select-test-suites.outputs.unit_slow }}" \
+            "${{ needs.unit-slow.result }}"
+          require_selected "api-component" \
+            "${{ needs.select-test-suites.outputs.api_component }}" \
+            "${{ needs.api-component.result }}"
+          require_selected "temporal-boundary" \
+            "${{ needs.select-test-suites.outputs.temporal_boundary }}" \
+            "${{ needs.temporal-boundary.result }}"
+          require_selected "integration-ci" \
+            "${{ needs.select-test-suites.outputs.integration_ci }}" \
+            "${{ needs.integration-ci.result }}"
+          require_selected "reliability-journey-checkpoint-resume" \
+            "${{ needs.select-test-suites.outputs.reliability_journey }}" \
+            "${{ needs.reliability-journey-checkpoint-resume.result }}"
+          require_selected "omnigent-exact-artifact" \
+            "${{ needs.select-test-suites.outputs.exact_artifact }}" \
+            "${{ needs.omnigent-exact-artifact.result }}"
+          require_selected "verify-test-shard-ownership" \
+            "${{ needs.select-test-suites.outputs.full_backend }}" \
+            "${{ needs.verify-test-shard-ownership.result }}"
 
-          check_result "${{ needs.select-test-suites.outputs.integration_ci }}" \
-                       "${{ needs.integration-ci.result }}" \
-                       "integration-ci"
+          if [[ "$failures" -gt 0 ]]; then
+            echo "::error::$failures required backend check(s) did not pass; see annotations above."
+            exit 1
+          fi
 
-          echo "All selected backend suites passed."
+          echo "All required backend checks passed."
 
-  test-frontend:
+  frontend-static:
+    needs: select-test-suites
+    if: needs.select-test-suites.outputs.frontend_static == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -365,7 +878,7 @@ jobs:
         token: ${{ secrets.GITHUB_TOKEN }}
         fetch-depth: 1
     - name: Set up Node.js
-      uses: actions/setup-node@v6
+      uses: actions/setup-node@v7
       with:
         node-version: '20'
         cache: npm
@@ -373,12 +886,89 @@ jobs:
       run: npm ci
     - name: Run frontend CI
       run: npm run frontend:ci
-    - name: Upload dashboard dist artifact
-      uses: actions/upload-artifact@v7
+
+  frontend-browser:
+    needs: select-test-suites
+    if: needs.select-test-suites.outputs.frontend_browser_chromium == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container:
+      image: mcr.microsoft.com/playwright:v1.61.1-noble@sha256:5b8f294aff9041b7191c34a4bab3ac270157a28774d4b0660e9743297b697e48
+    env:
+      # GitHub overrides the container HOME with /github/home (owned by
+      # pwuser), but the job runs as root. Firefox refuses that mismatch.
+      HOME: /root
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: ${{ fromJSON(needs.select-test-suites.outputs.frontend_browser_firefox == 'true' && '["chromium","firefox"]' || '["chromium"]') }}
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v7
       with:
-        name: dashboard-dist
-        path: api_service/static/workflow_console/dist/
-        if-no-files-found: error
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+        token: ${{ secrets.GITHUB_TOKEN }}
+        fetch-depth: 1
+    - name: Set up Node.js
+      uses: actions/setup-node@v7
+      with:
+        node-version: '20'
+        cache: npm
+    - name: Install Node dependencies
+      run: npm ci --no-audit --no-fund
+    - name: Report Playwright environment
+      run: npx playwright --version
+    - name: Run real-browser style regression suite
+      env:
+        MOONMIND_BROWSER_ENGINES: ${{ matrix.engine }}
+      run: npm run ui:test:browser
+
+  test-frontend:
+    needs:
+      - select-test-suites
+      - frontend-static
+      - frontend-browser
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+    - name: Verify frontend validation status
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        static_selected="${{ needs.select-test-suites.outputs.frontend_static }}"
+        browser_selected="${{ needs.select-test-suites.outputs.frontend_browser_chromium }}"
+        static_result="${{ needs.frontend-static.result }}"
+        browser_result="${{ needs.frontend-browser.result }}"
+
+        {
+          echo "## Frontend validation"
+          echo "| Check | Selected | Result |"
+          echo "|---|---:|---|"
+          echo "| Static | $static_selected | $static_result |"
+          echo "| Chromium | $browser_selected | $browser_result |"
+          echo "| Firefox | ${{ needs.select-test-suites.outputs.frontend_browser_firefox }} | $browser_result |"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        if [[ "${{ needs.select-test-suites.result }}" != "success" ]]; then
+          echo "::error::select-test-suites ended with result=${{ needs.select-test-suites.result }}"
+          exit 1
+        fi
+        if [[ "$static_selected" == "true" && "$static_result" != "success" ]]; then
+          echo "::error::frontend-static was selected but ended with result=$static_result"
+          exit 1
+        fi
+        if [[ "$browser_selected" == "true" && "$browser_result" != "success" ]]; then
+          echo "::error::frontend-browser was selected but ended with result=$browser_result"
+          exit 1
+        fi
+
+        if [[ "$static_selected" != "true" && "$browser_selected" != "true" ]]; then
+          echo "Known non-frontend change; frontend validation skipped intentionally."
+        else
+          echo "All selected frontend checks passed."
+        fi
 
   detect-openapi-contract-impact:
     runs-on: ubuntu-latest
@@ -398,34 +988,17 @@ jobs:
       run: |
         set -euo pipefail
 
-        ensure_commit_available() {
-          local sha="$1"
-
-          if git cat-file -e "${sha}^{commit}" 2>/dev/null; then
-            return 0
-          fi
-
-          git fetch --no-tags --depth=1 origin "$sha"
-        }
-
-        if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-          base_sha="${{ github.event.pull_request.base.sha }}"
-          head_sha="${{ github.event.pull_request.head.sha }}"
-          ensure_commit_available "$base_sha"
-          ensure_commit_available "$head_sha"
-          changed_files="$(git diff --name-only "$base_sha" "$head_sha")"
-        elif [[ -n "${{ github.event.before }}" && "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]]; then
-          base_sha="${{ github.event.before }}"
-          head_sha="${{ github.sha }}"
-          ensure_commit_available "$base_sha"
-          ensure_commit_available "$head_sha"
-          changed_files="$(git diff --name-only "$base_sha" "$head_sha")"
-        else
+        # Reuse the shared event classifier so the detector, the selector, and
+        # deployment-safety validation share one changed-file resolution path
+        # (MoonLadderStudios/MoonMind#3326). An unknown change set stays
+        # conservative and runs the generated-contract check.
+        resolution="$(bash tools/ci/compute_changed_files.sh /tmp/contract-changed-files.txt)"
+        if [[ "$resolution" == "resolution=unknown" ]]; then
           echo "run_check=true" >> "$GITHUB_OUTPUT"
           exit 0
         fi
 
-        if bash tools/check_openapi_affecting_changes.sh <<< "$changed_files"; then
+        if bash tools/check_openapi_affecting_changes.sh < /tmp/contract-changed-files.txt; then
           echo "run_check=true" >> "$GITHUB_OUTPUT"
         else
           echo "run_check=false" >> "$GITHUB_OUTPUT"
@@ -444,14 +1017,14 @@ jobs:
         token: ${{ secrets.GITHUB_TOKEN }}
         fetch-depth: 1
     - name: Set up Node.js
-      uses: actions/setup-node@v6
+      uses: actions/setup-node@v7
       with:
         node-version: '20'
         cache: npm
     - name: Install OpenAPI TypeScript generator
       run: bash tools/install_openapi_typescript.sh
     - name: Set up Python for OpenAPI generation
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@v7
       with:
         python-version: '3.12'
     - name: Install system dependencies for backend API check

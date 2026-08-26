@@ -18,6 +18,7 @@ from temporalio import client, exceptions
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.workflows.merge_gate import (
     build_resolver_run_request,
 )
@@ -87,6 +88,212 @@ def test_gated_parameters_are_recognized_as_merge_automation_owned(
 def test_standalone_resolver_parameters_are_not_gated() -> None:
     workflow = MoonMindRunWorkflow()
     assert workflow._is_merge_automation_gated(_ungated_resolver_parameters()) is False
+
+
+def _agent_request(**updates: Any) -> AgentExecutionRequest:
+    payload: dict[str, Any] = {
+        "agentKind": "external",
+        "agentId": "omnigent",
+        "correlationId": "mm:standalone-resolver",
+        "idempotencyKey": "mm:standalone-resolver:node-1:execution:1",
+    }
+    payload.update(updates)
+    return AgentExecutionRequest.model_validate(payload)
+
+
+def test_standalone_runtime_instruction_denies_parent_owned_continuation() -> None:
+    instruction = MoonMindRunWorkflow._terminal_continuation_authority_instruction(
+        _agent_request()
+    )
+
+    assert "continuation authority: none" in instruction
+    assert "Treat this execution as standalone" in instruction
+    assert "keep supported bounded waits in the foreground" in instruction
+
+
+def test_gated_runtime_instruction_names_validated_authority() -> None:
+    instruction = MoonMindRunWorkflow._terminal_continuation_authority_instruction(
+        _agent_request(
+            terminalContinuationAuthority={
+                "schemaVersion": "terminal-continuation-authority/v1",
+                "gateType": "merge_automation",
+                "ownerWorkflowId": "merge-automation:1",
+                "ownerRunId": "merge-run-1",
+                "ownerWorkflowType": "MoonMind.MergeAutomation",
+                "allowedActions": ["reenter_gate"],
+                "source": "validated_temporal_parent",
+            }
+        )
+    )
+
+    assert "continuation authority: validated" in instruction
+    assert "MoonMind.MergeAutomation" in instruction
+    assert "reenter_gate" in instruction
+
+
+def test_continuation_authority_is_exposed_to_runtime_adapter_metadata() -> None:
+    request = _agent_request(
+        parameters={
+            "metadata": {"moonmind": {"latestContextPackRef": "artifact://context"}},
+            "title": "Resolve PR",
+        }
+    )
+    authority_instruction = (
+        MoonMindRunWorkflow._terminal_continuation_authority_instruction(request)
+    )
+
+    parameters = (
+        MoonMindRunWorkflow._parameters_with_terminal_continuation_authority_instruction(
+            request,
+            authority_instruction=authority_instruction,
+        )
+    )
+
+    assert parameters["title"] == "Resolve PR"
+    assert (
+        parameters["metadata"]["moonmind"]["latestContextPackRef"]
+        == "artifact://context"
+    )
+    assert (
+        parameters["metadata"]["moonmind"][
+            "terminalContinuationAuthorityInstruction"
+        ]
+        == authority_instruction
+    )
+
+
+@pytest.mark.parametrize(
+    ("metadata", "provider_error_code"),
+    [
+        (
+            {
+                "terminalContractOutcome": "terminal_failure",
+                "terminalContractRecoveryOutcome": "unsupported_or_exhausted",
+                "mergeAutomationDisposition": "manual_review",
+            },
+            None,
+        ),
+        (
+            {
+                "terminalContractOutcome": "terminal_failure",
+                "terminalContractRecoveryOutcome": "unsupported_or_exhausted",
+                "mergeAutomationDisposition": "failed",
+            },
+            None,
+        ),
+        (
+            {
+                "terminalContractOutcome": "continuation_requested",
+                "terminalContractRecoveryOutcome": "continuation_rejected_unowned",
+                "mergeAutomationDisposition": "reenter_gate",
+            },
+            "PR_RESOLVER_REENTER_GATE",
+        ),
+    ],
+)
+def test_terminal_contract_decisions_do_not_trigger_generic_runtime_retry(
+    monkeypatch: pytest.MonkeyPatch,
+    metadata: dict[str, str],
+    provider_error_code: str | None,
+) -> None:
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
+    workflow = MoonMindRunWorkflow()
+    result = {
+        "status": "FAILED",
+        "outputs": {
+            "error": "execution_error",
+            "failureClass": "execution_error",
+            "providerErrorCode": provider_error_code,
+            "metadata": metadata,
+        },
+    }
+
+    assert (
+        workflow._activity_result_retryable(
+            result,
+            failure_message="execution_error",
+            tool_type="agent_runtime",
+        )
+        is False
+    )
+
+
+def test_missing_terminal_evidence_remains_retryable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
+    workflow = MoonMindRunWorkflow()
+    result = {
+        "status": "FAILED",
+        "outputs": {
+            "error": "execution_error",
+            "failureClass": "execution_error",
+            "metadata": {
+                "terminalContractOutcome": "terminal_failure",
+                "terminalContractRecoveryOutcome": "continuation_boundary_unavailable",
+                "terminalContractMissingEvidence": ["var/pr_resolver/result.json"],
+            },
+        },
+    }
+
+    assert workflow._activity_result_retryable(
+        result,
+        failure_message="execution_error",
+        tool_type="agent_runtime",
+    )
+
+
+def test_real_provider_failure_with_rejected_continuation_remains_retryable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
+    workflow = MoonMindRunWorkflow()
+    result = {
+        "status": "FAILED",
+        "outputs": {
+            "error": "execution_error",
+            "failureClass": "execution_error",
+            "providerErrorCode": "RATE_LIMITED",
+            "retryRecommendation": "retry",
+            "metadata": {
+                "terminalContractOutcome": "continuation_requested",
+                "terminalContractRecoveryOutcome": (
+                    "continuation_rejected_failure_provenance"
+                ),
+                "mergeAutomationDisposition": "reenter_gate",
+            },
+        },
+    }
+
+    assert workflow._activity_result_retryable(
+        result,
+        failure_message="execution_error",
+        tool_type="agent_runtime",
+    )
+
+
+def test_existing_history_preserves_provider_retry_decision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: False)
+    workflow = MoonMindRunWorkflow()
+    result = {
+        "status": "FAILED",
+        "outputs": {
+            "error": "execution_error",
+            "failureClass": "execution_error",
+            "metadata": {
+                "terminalContractOutcome": "terminal_failure",
+                "mergeAutomationDisposition": "manual_review",
+            },
+        },
+    }
+
+    assert workflow._activity_result_retryable(
+        result,
+        failure_message="execution_error",
+        tool_type="agent_runtime",
+    )
 
 
 def test_empty_merge_gate_without_parent_is_not_gated() -> None:
@@ -179,6 +386,7 @@ def test_legacy_reenter_gate_maps_to_typed_gated_continuation() -> None:
             "workflow-owned merge gate to continue."
         ),
         "sideEffects": {"externalPullRequest": True},
+        "headSha": "abc123",
     }
     assert (
         workflow._publish_context["gatedContinuation"]
@@ -221,6 +429,25 @@ def test_typed_gated_continuation_records_bounded_evidence() -> None:
         "sideEffects": {"externalPullRequest": True},
         "budget": {"maxAttempts": 3, "remaining": 2},
     }
+
+
+def test_typed_gated_continuation_accepts_snake_case_retry_seconds() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    workflow._record_execution_context(
+        node_id="resolve-pr",
+        execution_result={
+            "outputs": {
+                "gated_continuation": {
+                    "gate_type": "merge_automation",
+                    "action": "reenter_gate",
+                    "retry_after_seconds": 90,
+                }
+            }
+        },
+    )
+
+    assert workflow._gated_continuation_request["retryAfterSeconds"] == 90
 
 
 def test_typed_merge_automation_continuation_exposes_parent_disposition() -> None:

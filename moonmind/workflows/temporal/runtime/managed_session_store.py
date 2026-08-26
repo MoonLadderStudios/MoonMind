@@ -106,13 +106,31 @@ class ManagedSessionStore:
     def iter_all(self) -> Iterable[CodexManagedSessionRecord]:
         """Return all session records, including terminal records.
 
-        Unlike active reconciliation, retained-state cleanup must fail closed
-        when any durable owner record is unreadable.
+        Raises on the first unreadable record. Retained-state cleanup uses
+        :meth:`iter_all_entries` so one unreadable record fails closed for the
+        paths it may own instead of aborting the whole pass.
+        """
+        for path, record, error in self.iter_all_entries():
+            if error is not None:
+                raise ValueError(f"{path.name}: {error}")
+            assert record is not None
+            yield record
+
+    def iter_all_entries(
+        self,
+    ) -> Iterable[tuple[Path, CodexManagedSessionRecord | None, str | None]]:
+        """Yield ``(path, record, error)`` for every persisted session record.
+
+        A record that cannot be read or validated yields ``error`` text instead
+        of a record so callers can fail closed per record.
         """
         self.store_root.mkdir(parents=True, exist_ok=True)
         for path in self.store_root.glob("*.json"):
-            data = json.loads(path.read_text(encoding="utf-8"))
-            yield CodexManagedSessionRecord(**data)
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                yield path, CodexManagedSessionRecord(**data), None
+            except (OSError, ValueError) as exc:
+                yield path, None, str(exc)
 
     def delete(self, session_id: str) -> None:
         """Delete one session record by explicit session id."""

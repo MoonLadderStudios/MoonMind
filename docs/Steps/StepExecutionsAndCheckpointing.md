@@ -1,5 +1,16 @@
 # Step Executions and Checkpointing
 
+## Plane-aware checkpoints
+
+Policy callers select session state, workspace state, or both. Session evidence
+supports reattach or cold-session decisions; workspace evidence supports repository
+continuation and must satisfy the artifact contract, digest, and boundary map in the
+frozen workspace capability. A session `external_state_ref` never represents files,
+git metadata, generated tests, or uncommitted changes. Omnigent workspace boundaries
+therefore use MoonMind `worktree_archive` checkpoints and
+`workspace.apply_checkpoint`, while replay consumes the recorded capability snapshot
+instead of performing a mutable registry lookup.
+
 Status: Desired State
 Owners: MoonMind Engineering
 Last Updated: 2026-06-13
@@ -185,6 +196,12 @@ Broad Temporal workflow retries are not a substitute for Step Executions when wo
 15. Resume must not silently degrade to full rerun if checkpoint validation or restoration fails.
 16. Runtime adapters may execute work, but MoonMind owns Step Execution identity, checkpoint policy, durable evidence refs, and final advancement decisions.
 17. New Step Execution and checkpoint contracts that affect Temporal payloads must preserve in-flight compatibility or use an explicit versioned cutover plan.
+18. Every Checkpoint Branch turn is a new server-owned Step Execution. The
+    caller supplies branch intent only; MoonMind allocates execution and runtime
+    identities before the corresponding side effects.
+19. A continued or forked Checkpoint Branch turn pins the exact accepted output
+    checkpoint and Step Execution of its recorded parent turn. Replays reuse the
+    persisted identities and never create another semantic execution.
 
 ### 5.1 Conformance gate for MM-822+ changes
 
@@ -612,6 +629,38 @@ MoonMind creates or updates checkpoint evidence at these canonical boundaries (`
 
 Checkpoint writes must be idempotent because Activities and workflow tasks may retry.
 
+Adjacent checkpoint boundaries reuse the prior workspace artifact evidence only
+while the workflow remains in the same explicit workspace-mutation generation.
+The workflow still writes a distinct Step Execution checkpoint for every
+boundary. Immediately before preflight or execution can mutate the authoritative
+workspace, it advances the generation; the next checkpoint must capture fresh
+workspace evidence. Independently, identical immutable checkpoint bytes share a
+content-addressed artifact blob while retaining boundary-specific logical
+artifact rows and retention authority.
+
+For Omnigent, the canonical writer attaches one versioned `omnigentCheckpoint`
+object to this Step Execution checkpoint. Capture occurs after workspace
+preparation and before the first message, after each completed turn or logical
+step, before controlled drain/reset, before recovery or Checkpoint Branch
+creation, and during terminal harvest when recoverable state remains. These are
+logical lifecycle triggers mapped to the nearest canonical boundary above; they
+do not create an adapter-owned checkpoint lane.
+
+The Omnigent object preserves four separate authority planes:
+
+| Plane | Required evidence |
+| --- | --- |
+| Session | `externalStateRef` and digest, bridge/session/host ids, idempotency key, last committed bridge cursor, first-message id and digest, terminal and diagnostics refs |
+| Workspace | `WorkspaceLocator`, baseline commit, head/diff/checkpoint refs and digests, source/output branch and publication state |
+| Host realization | endpoint, execution profile, launch policy, effective-launch snapshot, Provider Profile, provider/host lease and binding refs, resource/capture manifests and patch capability |
+| Credentials | credential reference and generation only; never a credential body, OAuth home, or copied volume content |
+
+The object also pins workflow, run, logical-step, Step Execution, attempt and
+boundary lineage, immutable instruction/context refs, capture time, producer
+version, and its validation projection. A capability is `true` only when every
+evidence class it requires is independently resolvable. Partial capture records
+bounded reason codes and leaves the affected capability false.
+
 ### 9.2 Workspace checkpoint kinds
 
 Supported checkpoint kinds should be explicit.
@@ -662,6 +711,22 @@ Before a checkpoint can be used to start a new attempt or Resume execution, Moon
 7. workspace, branch, and commit consistency;
 8. checkpoint kind compatibility with the selected workspace policy;
 9. policy eligibility for replaying or preserving side effects.
+
+Omnigent restore validation additionally dereferences and digest-checks each
+required artifact, checks requested workflow/run/step lineage and repository
+baseline/head compatibility, and requires the current Provider Profile and
+credential generation to match. Provider URLs, raw local paths, container ids,
+OAuth volume contents, and provider-native ids are never artifact authority.
+Live session reattach, workspace cold restore, and branch creation are evaluated
+independently and return bounded machine-readable denial reasons.
+
+Checkpoint Branch launch applies this validation before acquiring a Provider
+Profile lease, mutating a host or repository, creating a session, or posting a
+message. It also validates the branch and turn lineage, expected branch-head
+version, immutable instruction ref and digest, isolated git binding, stored
+workspace/runtime policies, profile and launch snapshots, and current policy
+and credential-generation compatibility. The source workflow input and outcome
+remain immutable throughout branch execution.
 
 Validation failures must be typed, not prose. Canonical failure codes (`StepCheckpointValidationFailureCode`):
 
@@ -932,7 +997,9 @@ For Jira Orchestrate, the MoonSpec remediation loop is represented as bounded pl
 
 Remediation steps carry `annotations.jiraOrchestrateRole = "moonspec-remediation"` plus attempt and maximum-attempt metadata. Verification steps carry `annotations.jiraOrchestrateRole = "moonspec-verification-gate"` and mark only the final remediation verification as `moonSpecFinalRemediationGate`.
 
-`ADDITIONAL_WORK_NEEDED` is retryable only while a later MoonSpec remediation step remains in the plan. When no later remediation step remains, or when the gate reports a non-retryable blocking verdict such as `NO_DETERMINATION`, `BLOCKED`, or `FAILED_UNRECOVERABLE`, the parent workflow stops before publication and skips downstream handoff steps.
+A workflow-owned remediation loop authors its remediation and verification tools as `auto`, meaning the loop inherits the run's runtime selection. `auto` is a planning-time selection sentinel and never a runtime identity: each materialized attempt names the run's resolved agent runtime and carries that runtime's model, effort, and provider profile, so loop attempts route exactly like the authored steps of the same run. A loop whose controller step carries no resolved runtime fails when an attempt is admitted rather than routing to a substitute runtime or provider adapter.
+
+`ADDITIONAL_WORK_NEEDED` is retryable only while a later MoonSpec remediation step remains in the plan. When no later remediation step remains and publish mode is `pr`, the parent workflow publishes the accumulated work as a draft pull request with `attention_required: true`, then skips downstream promotion and trusted handoff steps. Non-retryable blocking verdicts such as `NO_DETERMINATION`, `BLOCKED`, or `FAILED_UNRECOVERABLE` stop before publication unless an explicit environment-blocked draft policy applies.
 
 ---
 
@@ -1134,6 +1201,10 @@ When an attempt fails or a gate requests more work, MoonMind must classify the n
 
 When a downstream step depends on a passing gate, the parent workflow must skip, block, invalidate, or revalidate that downstream step if the gate fails. Publication and external state transitions must not rely only on the downstream agent noticing the failed gate.
 
+A workflow-owned authority or contract check that rejects a step before its Step Execution launches must still record that step as a failed Step Execution, including allocating its execution ordinal. The failed logical step is the recovery manifest's key evidence: without it the manifest reports `no_failed_step_execution_to_resume`, and a run whose prior accepted attempt captured valid checkpoints loses checkpoint-based recovery even though the workspace evidence exists. A failed row left at ordinal `0` projects as a failed step with zero executions.
+
+A step rejected before launch captured no workspace of its own, so the runtime capability snapshot and checkpoint kind that govern resume belong to the step whose checkpoint the manifest actually restores. Resolve that step with the same failed-step-then-last-accepted-step rule the manifest uses to select its resume refs; selecting the checkpoint from one step and the capability snapshot from another leaves resume ineligible with `CHECKPOINT_CAPABILITY_SNAPSHOT_MISSING`.
+
 ---
 
 ## 19. Security and Side-Effect Guardrails
@@ -1174,7 +1245,7 @@ Desired behavior:
 
 The default Jira Orchestrate budget allows up to six remediation/verification pairs after the initial verification gate. The loop may exit earlier when any MoonSpec verification returns `FULLY_IMPLEMENTED`.
 
-If the post-remediation gate remains `ADDITIONAL_WORK_NEEDED` after budget exhaustion, `MoonMind.UserWorkflow` stops before pull request creation and Jira movement. The final state includes the latest verification report, remaining work, attempted remediation evidence, side-effect dispositions, and a recommended next action.
+If the post-remediation gate remains `ADDITIONAL_WORK_NEEDED` after budget exhaustion, `MoonMind.UserWorkflow` creates a draft pull request, fails with `attention_required: true`, and does not move Jira or perform any other downstream promotion. The draft is a recoverability handoff rather than success evidence. Its annotation and the failed final state include the latest verification report, remaining work, attempted remediation evidence, side-effect dispositions, and a recommended next action.
 
 ### 20.2 Failed-step recovery
 

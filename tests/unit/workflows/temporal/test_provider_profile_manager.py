@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -9,9 +10,14 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+    ACTIVITY_OWNED_LEASE_VERIFICATION_PATCH,
     BILLING_AWARE_PROFILE_SELECTION_PATCH,
+    CLAUDE_OAUTH_EXCLUSIVE_CAPACITY_PATCH,
+    CODEX_OAUTH_LEGACY_RESTORE_PATCH,
     DB_AUTHORITATIVE_PROFILE_SYNC_PATCH,
     DEFAULT_PROFILE_EXCLUSIVE_SELECTION_PATCH,
+    DURABLE_LEASE_GRANT_PATCH,
+    FRESH_START_DB_LEASE_RESTORE_PATCH,
     HandoffReservation,
     PendingRequest,
     PRIORITY_PENDING_REQUESTS_PATCH,
@@ -22,6 +28,7 @@ from moonmind.workflows.temporal.workflows.provider_profile_manager import (
     WORKFLOW_NAME,
     MoonMindProviderProfileManagerWorkflow,
     ProfileSlotState,
+    _validated_profile_capacity,
 )
 
 # ---------------------------------------------------------------------------
@@ -29,6 +36,32 @@ from moonmind.workflows.temporal.workflows.provider_profile_manager import (
 # ---------------------------------------------------------------------------
 
 class TestProfileSlotState:
+    def test_codex_oauth_capacity_validation_rejects_legacy_parallel_profile(self):
+        with pytest.raises(Exception, match="require max_parallel_runs=1"):
+            _validated_profile_capacity(
+                {
+                    "runtime_id": "codex_cli",
+                    "credential_source": "oauth_volume",
+                    "runtime_materialization_mode": "oauth_home",
+                    "max_parallel_runs": 2,
+                }
+            )
+
+    def test_claude_capacity_change_preserves_pre_patch_replay(self):
+        profile = {
+            "runtime_id": "claude_code",
+            "credential_source": "oauth_volume",
+            "runtime_materialization_mode": "oauth_home",
+            "max_parallel_runs": 2,
+        }
+
+        assert _validated_profile_capacity(
+            profile, apply_claude_exclusive_capacity=False
+        ) == 2
+        with pytest.raises(Exception, match="require max_parallel_runs=1"):
+            _validated_profile_capacity(profile)
+        assert CLAUDE_OAUTH_EXCLUSIVE_CAPACITY_PATCH.endswith("-v1")
+
     def test_available_slots_enabled(self):
         state = ProfileSlotState(
             profile_id="p1",
@@ -187,6 +220,129 @@ class TestProviderProfileManagerHelpers:
         assert len(wf._profiles) == 2
         assert wf._profiles["p1"].current_leases == ["wf1"]
         assert wf._profiles["p2"].cooldown_until == "2099-01-01T00:00:00+00:00"
+
+    def test_restore_legacy_codex_oauth_state_normalizes_without_evicting_leases(self):
+        wf = self._make_workflow()
+        wf._runtime_id = "codex_cli"
+        wf._restore_state(
+            {
+                "runtime_id": "codex_cli",
+                "profiles": [
+                    {
+                        "profile_id": "codex-oauth",
+                        "credential_source": "oauth_volume",
+                        "runtime_materialization_mode": "oauth_home",
+                        "max_parallel_runs": 3,
+                    }
+                ],
+                "leases": {"codex-oauth": ["wf-1", "wf-2"]},
+            }
+        )
+
+        state = wf._profiles["codex-oauth"]
+        assert state.max_parallel_runs == 1
+        assert state.current_leases == ["wf-1", "wf-2"]
+        assert state.over_capacity_legacy_snapshot is True
+        assert state.available_slots == 0
+        assert not state.reserve("wf-3", datetime.now(timezone.utc))
+
+    def test_authoritative_refresh_clears_legacy_diagnostic_after_leases_drain(self):
+        wf = self._make_workflow()
+        wf._runtime_id = "codex_cli"
+        wf._restore_state(
+            {
+                "profiles": [
+                    {
+                        "profile_id": "codex-oauth",
+                        "credential_source": "oauth_volume",
+                        "runtime_materialization_mode": "oauth_home",
+                        "max_parallel_runs": 3,
+                    }
+                ],
+                "leases": {"codex-oauth": ["wf-1", "wf-2"]},
+            }
+        )
+        wf._apply_profile_sync(
+            [
+                {
+                    "profile_id": "codex-oauth",
+                    "runtime_id": "codex_cli",
+                    "credential_source": "oauth_volume",
+                    "runtime_materialization_mode": "oauth_home",
+                    "max_parallel_runs": 1,
+                }
+            ],
+            authoritative=True,
+        )
+
+        state = wf._profiles["codex-oauth"]
+        assert state.over_capacity_legacy_snapshot is True
+        assert state.release("wf-1") is True
+        assert state.over_capacity_legacy_snapshot is False
+        assert state.available_slots == 0
+        assert state.release("wf-2") is True
+        assert state.available_slots == 1
+
+    @pytest.mark.parametrize(
+        ("runtime_id", "credential_source", "materialization_mode"),
+        [
+            ("claude_code", "oauth_volume", "oauth_home"),
+            ("codex_cli", "secret_ref", "api_key_env"),
+            ("codex_cli", "oauth_volume", "oauth_home"),
+        ],
+    )
+    def test_partial_sync_omitting_capacity_preserves_existing_capacity(
+        self,
+        runtime_id: str,
+        credential_source: str,
+        materialization_mode: str,
+    ) -> None:
+        wf = self._make_workflow()
+        wf._runtime_id = runtime_id
+        initial_capacity = 1 if credential_source == "oauth_volume" else 4
+        wf._profiles["profile"] = ProfileSlotState(
+            profile_id="profile",
+            max_parallel_runs=initial_capacity,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            credential_source=credential_source,
+            runtime_materialization_mode=materialization_mode,
+        )
+
+        wf._apply_profile_sync(
+            [
+                {
+                    "profile_id": "profile",
+                    "runtime_id": runtime_id,
+                    "credential_source": credential_source,
+                    "runtime_materialization_mode": materialization_mode,
+                    "enabled": False,
+                }
+            ]
+        )
+
+        assert wf._profiles["profile"].max_parallel_runs == initial_capacity
+
+    def test_authoritative_invalid_codex_oauth_payload_fails_closed(self):
+        wf = self._make_workflow()
+        wf._runtime_id = "codex_cli"
+        with pytest.raises(Exception, match="require max_parallel_runs=1"):
+            wf._apply_profile_sync(
+                [
+                    {
+                        "profile_id": "codex-oauth",
+                        "runtime_id": "codex_cli",
+                        "credential_source": "oauth_volume",
+                        "runtime_materialization_mode": "oauth_home",
+                        "max_parallel_runs": 2,
+                    }
+                ],
+                authoritative=True,
+            )
+
+    def test_legacy_restore_has_durable_replay_patch_marker(self):
+        assert CODEX_OAUTH_LEGACY_RESTORE_PATCH.endswith("-v1")
 
     def test_apply_profile_sync_adds_new(self):
         wf = self._make_workflow()
@@ -1672,6 +1828,58 @@ class TestProviderProfileManagerHelpers:
         assert wf._pending_requests == []
 
     @pytest.mark.asyncio
+    async def test_maintenance_lease_uses_same_ledger_on_disabled_profile(self):
+        wf = self._make_workflow()
+        wf._runtime_id = "codex_cli"
+        wf._profiles["codex_oauth"] = ProfileSlotState(
+            profile_id="codex_oauth",
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=False,
+            launch_ready=False,
+        )
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.now.return_value = datetime(2026, 7, 12, tzinfo=timezone.utc)
+            mock_wf.patched.return_value = False
+            acquired = await wf.acquire_credential_maintenance_lease(
+                {
+                    "requester_workflow_id": "oauth-session:oas-1",
+                    "runtime_id": "codex_cli",
+                    "execution_profile_ref": "codex_oauth",
+                    "purpose": "oauth_reconnect",
+                    "metadata": {
+                        "workflowId": "oauth-session:oas-1",
+                        "oauthSessionId": "oas-1",
+                    },
+                }
+            )
+
+        assert acquired["profile_id"] == "codex_oauth"
+        profile = wf._profiles["codex_oauth"]
+        assert profile.current_leases == ["oauth-session:oas-1"]
+        assert profile.available_slots == 0
+        assert profile.lease_metadata["oauth-session:oas-1"]["purpose"] == "oauth_reconnect"
+        assert profile.is_available() is False
+
+    @pytest.mark.asyncio
+    async def test_maintenance_lease_requires_exact_profile_without_selector(self):
+        wf = self._make_workflow()
+        wf._runtime_id = "codex_cli"
+        with pytest.raises(Exception, match="does not allow profile selectors"):
+            await wf.acquire_credential_maintenance_lease(
+                {
+                    "requester_workflow_id": "oauth-session:oas-1",
+                    "runtime_id": "codex_cli",
+                    "execution_profile_ref": "codex_oauth",
+                    "profile_selector": {"providerId": "openai"},
+                    "purpose": "oauth_connect",
+                }
+            )
+
+    @pytest.mark.asyncio
     async def test_release_slot_creates_short_handoff_reservation(self):
         wf = self._make_workflow()
         wf._profiles["p1"] = ProfileSlotState(
@@ -1968,6 +2176,81 @@ class TestProviderProfileManagerHelpers:
             "wf-shared"
         ]
 
+    @pytest.mark.asyncio
+    async def test_verify_activity_owned_lease_reclaims_terminal_parent(self):
+        wf = self._make_workflow()
+        lease_id = "profile-lease:execution_omnigent:abandoned"
+        wf._profiles["p1"] = ProfileSlotState(
+            profile_id="p1",
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            is_default=True,
+            current_leases=[lease_id],
+            lease_metadata={
+                lease_id: {
+                    "ownerIsWorkflow": False,
+                    "workflowId": "mm:terminal-parent",
+                }
+            },
+        )
+
+        async def fake_execute_activity(_name: str, payload: dict, **_kwargs):
+            assert payload == {"workflow_ids": ["mm:terminal-parent"]}
+            return {
+                "mm:terminal-parent": {"running": False, "status": "FAILED"}
+            }
+
+        wf._sync_leases_to_db = AsyncMock(return_value=True)  # type: ignore[method-assign]
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.execute_activity.side_effect = fake_execute_activity
+            mock_wf.patched.return_value = True
+            await wf._verify_active_workflows(
+                verify_lease_holders=True,
+                verify_activity_owned_leases=True,
+                verify_pending_requesters=False,
+            )
+
+        assert wf._profiles["p1"].current_leases == []
+        wf._sync_leases_to_db.assert_awaited_once()
+        assert ACTIVITY_OWNED_LEASE_VERIFICATION_PATCH.endswith("-v1")
+
+    @pytest.mark.asyncio
+    async def test_acquire_slot_v2_rejects_late_grant_for_terminal_parent(self):
+        wf = self._make_workflow()
+        wf._profiles["p1"] = ProfileSlotState(
+            profile_id="p1",
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            is_default=True,
+        )
+        wf._verify_workflow_statuses = AsyncMock(  # type: ignore[method-assign]
+            return_value={
+                "mm:terminal-parent": {"running": False, "status": "FAILED"}
+            }
+        )
+
+        with pytest.raises(Exception, match="owner workflow is terminal"):
+            await wf.acquire_slot_v2(
+                {
+                    "requester_workflow_id": "profile-lease:late-grant",
+                    "runtime_id": "codex_cli",
+                    "execution_profile_ref": "p1",
+                    "purpose": "execution_omnigent",
+                    "metadata": {
+                        "ownerIsWorkflow": False,
+                        "workflowId": "mm:terminal-parent",
+                    },
+                }
+            )
+
+        assert wf._profiles["p1"].current_leases == []
+
     def test_run_drains_queue_before_best_effort_pending_verification(self):
         import inspect
 
@@ -1976,6 +2259,299 @@ class TestProviderProfileManagerHelpers:
         verify_index = source.index("await self._verify_active_workflows(")
 
         assert drain_index < verify_index
+
+    def test_fresh_start_restores_db_leases_even_when_requests_are_pending(self):
+        """A reset-time request must not suppress authoritative lease recovery."""
+        import inspect
+
+        source = inspect.getsource(MoonMindProviderProfileManagerWorkflow.run)
+
+        assert "FRESH_START_DB_LEASE_RESTORE_PATCH" in source
+        assert "workflow.info().continued_run_id is None" in source
+        assert "await self._load_leases_from_db()" in source
+        assert source.index(
+            "leases_restored = await self._load_leases_from_db()"
+        ) < source.index("has_pending")
+
+    @pytest.mark.asyncio
+    async def test_run_restores_durable_lease_when_request_arrives_during_startup(
+        self,
+    ):
+        """Replay the startup race that previously granted duplicate capacity."""
+        wf = MoonMindProviderProfileManagerWorkflow()
+
+        async def load_profiles(*_args, **_kwargs) -> bool:
+            if not wf._profiles:
+                wf._profiles["p1"] = ProfileSlotState(
+                    profile_id="p1",
+                    max_parallel_runs=1,
+                    cooldown_after_429_seconds=300,
+                    rate_limit_policy="backoff",
+                    enabled=True,
+                    is_default=True,
+                )
+                wf.request_slot(
+                    {
+                        "requester_workflow_id": "waiting-agent-run",
+                        "runtime_id": "codex_cli",
+                    }
+                )
+            return True
+
+        async def load_leases() -> bool:
+            assert [
+                request.requester_workflow_id for request in wf._pending_requests
+            ] == ["waiting-agent-run"]
+            wf._profiles["p1"].current_leases.append("active-agent-run")
+            wf._shutdown_requested = True
+            return True
+
+        wf._load_profiles_from_db = AsyncMock(side_effect=load_profiles)
+        wf._load_leases_from_db = AsyncMock(side_effect=load_leases)
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.patched.return_value = True
+            mock_wf.info.return_value = SimpleNamespace(continued_run_id=None)
+            result = await wf.run({"runtime_id": "codex_cli"})
+
+        assert result["status"] == "shutdown"
+        assert wf._profiles["p1"].current_leases == ["active-agent-run"]
+        assert [
+            request.requester_workflow_id for request in wf._pending_requests
+        ] == ["waiting-agent-run"]
+        wf._load_leases_from_db.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_run_preserves_continue_as_new_lease_snapshot(self):
+        """Existing histories keep using their compact continuation snapshot."""
+        wf = MoonMindProviderProfileManagerWorkflow()
+        wf._shutdown_requested = True
+        wf._load_profiles_from_db = AsyncMock(return_value=True)
+        wf._load_leases_from_db = AsyncMock()
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.patched.return_value = True
+            mock_wf.info.return_value = SimpleNamespace(
+                continued_run_id="previous-manager-run"
+            )
+            result = await wf.run(
+                {
+                    "runtime_id": "codex_cli",
+                    "profiles": [
+                        {
+                            "profile_id": "p1",
+                            "max_parallel_runs": 1,
+                            "enabled": True,
+                        }
+                    ],
+                    "leases": {"p1": ["active-agent-run"]},
+                }
+            )
+
+        assert result["status"] == "shutdown"
+        assert wf._profiles["p1"].current_leases == ["active-agent-run"]
+        wf._load_leases_from_db.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_durable_restore_keeps_lease_after_ambiguous_signal_failure(self):
+        wf = self._make_workflow()
+        wf._profiles["p1"] = ProfileSlotState(
+            profile_id="p1",
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            is_default=True,
+        )
+        wf._signal_slot_assigned = AsyncMock(side_effect=RuntimeError("unavailable"))
+        wf._remove_lease_from_db = AsyncMock()
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.patched.side_effect = (
+                lambda patch_id: patch_id == DURABLE_LEASE_GRANT_PATCH
+            )
+            mock_wf.execute_activity = AsyncMock(
+                return_value={
+                    "leases": [
+                        {
+                            "workflow_id": "active-agent-run",
+                            "profile_id": "p1",
+                        }
+                    ]
+                }
+            )
+            restored = await wf._load_leases_from_db()
+
+        assert restored is True
+        assert wf._profiles["p1"].current_leases == ["active-agent-run"]
+        wf._remove_lease_from_db.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_durable_restore_fails_closed_for_unknown_profile(self):
+        wf = self._make_workflow()
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.patched.side_effect = (
+                lambda patch_id: patch_id == DURABLE_LEASE_GRANT_PATCH
+            )
+            mock_wf.execute_activity = AsyncMock(
+                return_value={
+                    "leases": [
+                        {
+                            "workflow_id": "active-agent-run",
+                            "profile_id": "missing-profile",
+                        }
+                    ]
+                }
+            )
+            restored = await wf._load_leases_from_db()
+
+        assert restored is False
+
+    @pytest.mark.asyncio
+    async def test_durable_grant_persists_before_signaling_consumer(self):
+        wf = self._make_workflow()
+        wf._profiles["p1"] = ProfileSlotState(
+            profile_id="p1",
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            is_default=True,
+        )
+        wf._pending_requests = [
+            PendingRequest(
+                requester_workflow_id="agent-run-1",
+                runtime_id="claude_code",
+                execution_profile_ref="p1",
+            )
+        ]
+        calls: list[str] = []
+
+        async def persist() -> bool:
+            calls.append("persist")
+            return True
+
+        async def signal(_workflow_id: str, _profile_id: str) -> None:
+            calls.append("signal")
+
+        wf._sync_leases_to_db = AsyncMock(side_effect=persist)
+        wf._signal_slot_assigned = AsyncMock(side_effect=signal)
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.now.return_value = datetime.now(timezone.utc)
+            mock_wf.patched.side_effect = (
+                lambda patch_id: patch_id == DURABLE_LEASE_GRANT_PATCH
+            )
+            await wf._drain_queue()
+
+        assert calls == ["persist", "signal"]
+        assert wf._profiles["p1"].current_leases == ["agent-run-1"]
+        assert wf._pending_requests == []
+
+    @pytest.mark.asyncio
+    async def test_durable_grant_blocks_when_lease_persistence_is_unavailable(self):
+        wf = self._make_workflow()
+        wf._profiles["p1"] = ProfileSlotState(
+            profile_id="p1",
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            is_default=True,
+        )
+        request = PendingRequest(
+            requester_workflow_id="agent-run-1",
+            runtime_id="claude_code",
+            execution_profile_ref="p1",
+        )
+        wf._pending_requests = [request]
+        wf._sync_leases_to_db = AsyncMock(return_value=False)
+        wf._signal_slot_assigned = AsyncMock()
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.now.return_value = datetime.now(timezone.utc)
+            mock_wf.patched.side_effect = (
+                lambda patch_id: patch_id == DURABLE_LEASE_GRANT_PATCH
+            )
+            await wf._drain_queue()
+
+        wf._signal_slot_assigned.assert_not_awaited()
+        assert wf._profiles["p1"].current_leases == ["agent-run-1"]
+        assert wf._pending_requests == [request]
+
+    @pytest.mark.asyncio
+    async def test_direct_update_does_not_return_unpersisted_lease(self):
+        wf = self._make_workflow()
+        wf._profiles["p1"] = ProfileSlotState(
+            profile_id="p1",
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            is_default=True,
+        )
+        wf._sync_leases_to_db = AsyncMock(return_value=False)
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.patched.return_value = True
+            mock_wf.now.return_value = datetime.now(timezone.utc)
+            with pytest.raises(Exception, match="persistence failed before direct grant"):
+                await wf.acquire_slot(
+                    {
+                        "requester_workflow_id": "container-job-1",
+                        "runtime_id": "claude_code",
+                    }
+                )
+
+        assert wf._profiles["p1"].current_leases == []
+
+    @pytest.mark.asyncio
+    async def test_maintenance_update_does_not_return_unpersisted_lease(self):
+        wf = self._make_workflow()
+        wf._profiles["p1"] = ProfileSlotState(
+            profile_id="p1",
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=False,
+            is_default=True,
+        )
+        wf._sync_leases_to_db = AsyncMock(return_value=False)
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.patched.return_value = True
+            mock_wf.now.return_value = datetime.now(timezone.utc)
+            with pytest.raises(
+                Exception,
+                match="persistence failed before maintenance grant",
+            ):
+                await wf.acquire_credential_maintenance_lease(
+                    {
+                        "requester_workflow_id": "oauth-session-1",
+                        "runtime_id": "claude_code",
+                        "execution_profile_ref": "p1",
+                        "purpose": "credential_validation",
+                    }
+                )
+
+        assert wf._profiles["p1"].current_leases == []
 
     def test_handoff_reservation_blocks_only_one_slot(self):
         wf = self._make_workflow()
@@ -2082,6 +2658,13 @@ def test_verify_pending_requests_patch_id():
         VERIFY_PENDING_REQUESTS_PATCH
         == "provider-profile-manager-verify-pending-requests-v1"
     )
+
+
+def test_profile_manager_reliability_patch_ids():
+    assert FRESH_START_DB_LEASE_RESTORE_PATCH.endswith(
+        "fresh-start-db-lease-restore-v1"
+    )
+    assert DURABLE_LEASE_GRANT_PATCH.endswith("durable-lease-grant-v1")
 
 def test_registered_workflow_types():
     from moonmind.workflows.temporal.workers import list_registered_workflow_types
@@ -2481,6 +3064,42 @@ def test_provider_profile_manager_state_activity_exists():
 
     assert hasattr(TemporalArtifactActivities, "provider_profile_manager_state")
 
+
+def test_legacy_reset_activity_never_terminates_manager():
+    import inspect
+
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactActivities
+
+    source = inspect.getsource(
+        TemporalArtifactActivities.provider_profile_reset_manager
+    )
+    assert "provider_profile_ensure_manager" in source
+    assert ".terminate(" not in source
+
+
+@pytest.mark.asyncio
+async def test_legacy_reset_activity_uses_non_destructive_ensure_contract():
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactActivities
+
+    activities = TemporalArtifactActivities(AsyncMock())
+    activities.provider_profile_ensure_manager = AsyncMock(
+        return_value={
+            "started": False,
+            "workflow_id": "provider-profile-manager:codex_cli",
+        }
+    )
+
+    result = await activities.provider_profile_reset_manager(runtime_id="codex_cli")
+
+    activities.provider_profile_ensure_manager.assert_awaited_once_with(
+        runtime_id="codex_cli"
+    )
+    assert result == {
+        "reset": False,
+        "started": False,
+        "workflow_id": "provider-profile-manager:codex_cli",
+    }
+
 @pytest.mark.asyncio
 async def test_provider_profile_manager_state_returns_compact_running_snapshot(
     monkeypatch,
@@ -2494,11 +3113,25 @@ async def test_provider_profile_manager_state_returns_compact_running_snapshot(
         async def query(self, query_name):
             assert query_name == "get_state"
             return {
-                "profiles": {"p1": {}, "p2": {}},
+                "profiles": {
+                    "p1": {
+                        "profile_id": "p1",
+                        "max_parallel_runs": 1,
+                        "current_leases": ["agent-run-active"],
+                        "cooldown_until": None,
+                        "enabled": True,
+                        "launch_ready": True,
+                    },
+                    "p2": {},
+                },
                 "pending_requests": [
-                    {"requester_workflow_id": "agent-run-1"},
+                    {
+                        "requester_workflow_id": "agent-run-1",
+                        "execution_profile_ref": "p1",
+                    },
                     {"requester_workflow_id": "agent-run-2"},
                 ],
+                "pending_requests_ordered": True,
                 "event_count": 7,
             }
 
@@ -2527,12 +3160,107 @@ async def test_provider_profile_manager_state_returns_compact_running_snapshot(
         "running": True,
         "workflow_id": "provider-profile-manager:claude_code",
         "status": "RUNNING",
+        "inspection_succeeded": True,
         "profile_count": 2,
         "pending_requests_count": 2,
         "event_count": 7,
         "requester_pending": True,
+        "requester_queue_position": 1,
+        "requested_profile": {
+            "profile_id": "p1",
+            "max_parallel_runs": 1,
+            "current_leases_count": 1,
+            "cooldown_until": None,
+            "enabled": True,
+            "launch_ready": True,
+        },
     }
     assert "state" not in result
+
+
+@pytest.mark.asyncio
+async def test_provider_profile_manager_state_resolves_unique_selector_profile(
+    monkeypatch,
+):
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactActivities
+
+    class FakeHandle:
+        async def describe(self):
+            return SimpleNamespace(status=SimpleNamespace(name="RUNNING"))
+
+        async def query(self, query_name):
+            assert query_name == "get_state"
+            return {
+                "profiles": {
+                    "openai": {
+                        "profile_id": "openai",
+                        "provider_id": "openai",
+                        "runtime_materialization_mode": "oauth",
+                        "tags": ["primary"],
+                        "max_parallel_runs": 1,
+                        "current_leases": ["agent-run-active"],
+                        "cooldown_until": None,
+                        "enabled": True,
+                        "launch_ready": True,
+                    },
+                    "anthropic": {
+                        "profile_id": "anthropic",
+                        "provider_id": "anthropic",
+                        "runtime_materialization_mode": "api_key",
+                        "tags": [],
+                        "max_parallel_runs": 2,
+                        "current_leases": [],
+                        "cooldown_until": None,
+                        "enabled": True,
+                        "launch_ready": True,
+                    },
+                },
+                "pending_requests": [
+                    {
+                        "requester_workflow_id": "agent-run-1",
+                        "execution_profile_ref": None,
+                        "profile_selector": {
+                            "providerId": "openai",
+                            "runtimeMaterializationMode": "oauth",
+                            "tagsAll": ["primary"],
+                        },
+                    }
+                ],
+                "pending_requests_ordered": False,
+                "event_count": 1,
+            }
+
+    class FakeClient:
+        def get_workflow_handle(self, workflow_id):
+            assert workflow_id == "provider-profile-manager:codex_cli"
+            return FakeHandle()
+
+    class FakeAdapter:
+        async def get_client(self):
+            return FakeClient()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.client.TemporalClientAdapter",
+        FakeAdapter,
+    )
+
+    result = await TemporalArtifactActivities(
+        object()
+    ).provider_profile_manager_state(
+        runtime_id="codex_cli",
+        requester_workflow_id="agent-run-1",
+    )
+
+    assert result["requester_pending"] is True
+    assert result["requester_queue_position"] is None
+    assert result["requested_profile"] == {
+        "profile_id": "openai",
+        "max_parallel_runs": 1,
+        "current_leases_count": 1,
+        "cooldown_until": None,
+        "enabled": True,
+        "launch_ready": True,
+    }
 
 @pytest.mark.asyncio
 async def test_provider_profile_manager_state_checks_status_before_query(
@@ -2573,5 +3301,62 @@ async def test_provider_profile_manager_state_checks_status_before_query(
         "running": False,
         "workflow_id": "provider-profile-manager:claude_code",
         "status": "COMPLETED",
+        "inspection_succeeded": True,
     }
     assert handle.queried is False
+
+
+@pytest.mark.asyncio
+async def test_provider_profile_manager_state_bounds_busy_workflow_query(
+    monkeypatch,
+):
+    from moonmind.workflows.temporal import artifacts as artifacts_module
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactActivities
+
+    query_cancelled = asyncio.Event()
+
+    class FakeHandle:
+        async def describe(self):
+            return SimpleNamespace(status=SimpleNamespace(name="RUNNING"))
+
+        async def query(self, query_name):
+            assert query_name == "get_state"
+            try:
+                await asyncio.Event().wait()
+            finally:
+                query_cancelled.set()
+
+    class FakeClient:
+        def get_workflow_handle(self, workflow_id):
+            assert workflow_id == "provider-profile-manager:codex_cli"
+            return FakeHandle()
+
+    class FakeAdapter:
+        async def get_client(self):
+            return FakeClient()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.client.TemporalClientAdapter",
+        FakeAdapter,
+    )
+    monkeypatch.setattr(
+        artifacts_module,
+        "_PROVIDER_PROFILE_MANAGER_QUERY_TIMEOUT_SECONDS",
+        0.01,
+    )
+
+    result = await TemporalArtifactActivities(
+        object()
+    ).provider_profile_manager_state(
+        runtime_id="codex_cli",
+        requester_workflow_id="agent-run-1",
+    )
+
+    assert result == {
+        "running": True,
+        "workflow_id": "provider-profile-manager:codex_cli",
+        "status": "RUNNING",
+        "inspection_succeeded": False,
+        "inspection_status": "QUERY_TIMEOUT",
+    }
+    assert query_cancelled.is_set()

@@ -9,48 +9,42 @@ description = "MoonMind RAG application and supporting tools."
 readme = "README.md"
 license = "Apache-2.0"
 authors = ["MoonMind Contributors <opensource@moonmind.ai>"]
-packages = [{ include = "moonmind" }]
+packages = [{ include = "moonmind" }, { include = "pr_resolver_core" }]
 
 [tool.poetry.dependencies]
 python = ">=3.10,<3.14"
-fastapi = ">=0.135.3,<0.140.0"
+fastapi = ">=0.135.3,<0.142.0"
 starlette = ">=0.49.1,<2.0.0"
 python-multipart = ">=0.0.26,<0.1.0"
 orjson = ">=3.11.5,<4.0.0"
-uvicorn = ">=0.44,<0.51"
+uvicorn = ">=0.44,<0.53"
+websockets = ">=14.0,<17.0"
 watchfiles = ">=1.1.1,<2.0.0"
 pydantic = ">=2.12.5,<2.14.0"
-pydantic-settings = ">=2.13.1,<2.15.0"
+pydantic-settings = ">=2.13.1,<2.16.0"
 llama-index = "~=0.14.15"
-llama-index-embeddings-google-genai = "~=0.5.0"
-llama-index-embeddings-openai = "~=0.5.2"
 llama-index-readers-confluence = "~=0.7.0"
-llama-index-readers-file = "~=0.5.6"
+llama-index-readers-file = ">=0.5.6,<0.7.0"
 llama-index-readers-github = "~=0.11.1"
 llama-index-readers-google = "~=0.7.2"
 llama-index-readers-jira = "~=0.6.0"
-llama-index-vector-stores-qdrant = "~=0.10.0"
-qdrant-client = ">=1.17.1,<1.19.0"
-PyGithub = "~=2.9.0"
+qdrant-client = ">=1.17.1,<1.20.0"
 google-generativeai = "~=0.8.6"
 openai = ">=2.31.0,<3.0.0"
-anthropic = ">=0.94,<0.117"
-llama-index-llms-anthropic = "~=0.11.2"
+anthropic = ">=0.94,<1.1"
 httpx = "~=0.28.1"
-atlassian-python-api = "~=4.0.7"
 requests = ">=2.33.1,<2.35.0"
 aiohttp = ">=3.13.5,<3.15.0"
 boto3 = ">=1.42.88,<1.44.0"
-nltk = "~=3.9.4"
 PyYAML = ">=6.0.2"
 asyncpg = "~=0.31.0"
 SQLAlchemy = "~=2.0.49"
-docker = "~=7.1.0"
+docker = ">=7.1,<7.3"
 "fastapi-users" = { version = "~=15.0.5", extras = ["sqlalchemy"] }
 "PyJWT" = { version = ">=2.11.0,<3.0.0", extras = ["crypto"] }
-alembic = "~=1.18.4"
+alembic = ">=1.18.4,<1.20.0"
 sqlalchemy-utils = "~=0.42.1"
-cryptography = ">=46.0.7,<49.1.0"
+cryptography = ">=46.0.7,<50.1.0"
 psycopg2-binary = "~=2.9.11"
 jinja2 = "~=3.1.4"
 toml = "~=0.10.2"
@@ -60,12 +54,14 @@ pytest-mock = { version = "~=3.15.1", optional = true }
 pytest-asyncio = { version = "^1.3.0", optional = true }
 pytest-xdist = { version = "~=3.8.0", optional = true }
 pytest-timeout = { version = "~=2.4.0", optional = true }
-typer = ">=0.23.1,<0.27.0"
+typer = ">=0.23.1,<0.28.0"
 click = "8.4.2"
 gitpython = "^3.1.46"
-temporalio = ">=1.25,<1.31"
+temporalio = ">=1.25,<1.32"
 opentelemetry-api = "^1.25.0"
 opentelemetry-sdk = "^1.25.0"
+opentelemetry-exporter-otlp = "^1.25.0"
+opentelemetry-instrumentation-fastapi = ">=0.46b0,<1.0"
 mem0ai = ">=2.0.4,<3.0.0"
 
 [tool.poetry.extras]
@@ -94,6 +90,7 @@ markers = [
     "unit_fast: cheap unit tests with no external process, network, docker, or Temporal server",
     "component: in-process app/router/service tests using TestClient or dependency overrides",
     "temporal_boundary: tests that start Temporal WorkflowEnvironment, Worker, or Replayer",
+    "reliability_journey: hermetic production journeys across Temporal, managed runtimes, adapters, terminal evidence, and finalization",
     "slow: valid tests that are too expensive for the default PR fast path",
     "moonspec: MoonSpec workflow tests.",
     "asyncio: marks tests that require an asyncio event loop.",
@@ -103,6 +100,7 @@ markers = [
     "codex: marks tests specific to the Codex provider.",
     "jules: marks tests specific to the Jules provider.",
     "requires_credentials: marks tests that require real provider credentials.",
+    "requires_gpu: marks tests that require a deployment-owned NVIDIA GPU host.",
 ]
 
 [tool.pre-commit]

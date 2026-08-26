@@ -51,9 +51,12 @@ We need repeatable, auditable, **declarative** pipelines for bringing text/code 
 
 **Key repo areas** this doc integrates with:
 
-* Ingest/indexing: `moonmind/indexers/*` (Jira, Google Drive, Local, GitHub)
-* Retrieval/query: `moonmind/rag/retriever.py`
-* API: `api_service/api/routers/chat.py`, DI in `api_service/api/dependencies.py`
+* Ingest/indexing: portable readers registered through `moonmind/manifest/adapters.py`
+  and executed by `moonmind/manifest/pipeline.py`
+* Retrieval/query: the managed retrieval service in `moonmind/rag/service.py`,
+  backed by `moonmind/rag/qdrant_client.py`
+* API: retrieval capability endpoints in
+  `api_service/api/routers/retrieval_capabilities.py`
 * Orchestration substrate: `moonmind/workflows/temporal/manifest_ingest.py` (Temporal workflow + Activities)
 * Manifest contract: `moonmind/workflows/agent_queue/manifest_contract.py` (validation, normalization, secret leak detection)
 * Schema models: `moonmind/schemas/manifest_ingest_models.py`, `moonmind/schemas/manifest_models.py`
@@ -483,11 +486,12 @@ curl -X POST /api/manifests/{name}/runs \
 
 See [ManifestIngestDesign.md](ManifestIngestDesign.md) for the full workflow input/output contract.
 
-**API integration**
+**Managed retrieval integration**
 
-* **Goal:** expose a **named retriever** (from `retrievers[].id`) into chat routes.
-* Wire DI in `api_service/api/dependencies.py` so `chat.py` can select `retriever="mm_hybrid"` at runtime.
-* `moonmind/rag/retriever.py` constructs retriever + postprocessors from manifest.
+Manifest readers populate the configured vector collection through the adapter
+and pipeline boundary. Runtime retrieval is owned by `RagService` and
+`RagQdrantClient`; callers use the retrieval capability API rather than a
+manifest-specific chat router or an in-process LlamaIndex retriever.
 
 ---
 

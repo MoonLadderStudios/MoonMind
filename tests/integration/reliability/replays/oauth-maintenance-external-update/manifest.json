@@ -1,0 +1,18 @@
+{
+  "failureShapeId": "oauth-maintenance-external-update",
+  "incidentReference": "oauth-screen-2026-07-13",
+  "runtimeId": "codex_cli",
+  "profileId": "codex_openai_oauth",
+  "workflowType": "MoonMind.OAuthSession",
+  "failure": {
+    "type": "AttributeError",
+    "message": "ExternalWorkflowHandle has no execute_update method"
+  },
+  "leaseRequest": {
+    "ownerId": "oauth-session:oas-replay",
+    "purpose": "oauth_reconnect",
+    "ownerIsWorkflow": true
+  },
+  "expectedActivityType": "provider_profile.acquire_credential_maintenance_lease",
+  "expectedTaskQueue": "mm.activity.artifacts"
+}

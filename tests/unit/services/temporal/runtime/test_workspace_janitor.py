@@ -339,4 +339,4 @@ async def test_activity_returns_disabled_structured_result(
     result = await activities.agent_runtime_cleanup_managed_runtime_files({})
 
     assert result["disabled"] is True
-    assert result["dryRun"] is True
+    assert result["dryRun"] is False

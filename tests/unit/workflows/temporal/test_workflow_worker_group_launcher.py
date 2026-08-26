@@ -152,12 +152,12 @@ def test_parent_health_endpoint_probes_child_health_urls() -> None:
     )
     parent_state = launcher.GroupHealthState(
         children=[FakeProcess()],
-        child_health_urls=[f"http://127.0.0.1:{child_server.server_port}/healthz"],
+        child_health_urls=[f"http://127.0.0.1:{child_server.server_port}/readyz"],
     )
     parent_server = launcher.start_health_server(parent_state, port=0)
     try:
         response = urllib.request.urlopen(
-            f"http://127.0.0.1:{parent_server.server_port}/healthz",
+            f"http://127.0.0.1:{parent_server.server_port}/readyz",
             timeout=5,
         )
         assert response.status == 200
@@ -167,7 +167,7 @@ def test_parent_health_endpoint_probes_child_health_urls() -> None:
 
         try:
             urllib.request.urlopen(
-                f"http://127.0.0.1:{parent_server.server_port}/healthz",
+                f"http://127.0.0.1:{parent_server.server_port}/readyz",
                 timeout=5,
             )
         except urllib.error.HTTPError as exc:
@@ -177,6 +177,36 @@ def test_parent_health_endpoint_probes_child_health_urls() -> None:
     finally:
         parent_server.shutdown()
         parent_server.server_close()
+
+
+def test_group_readiness_rejects_mixed_worker_registry_identity(monkeypatch) -> None:
+    payloads = iter(
+        [
+            {"ready": True, "registryFingerprint": "sha256:new", "buildId": "new"},
+            {"ready": True, "registryFingerprint": "sha256:old", "buildId": "old"},
+        ]
+    )
+    monkeypatch.setattr(launcher, "_read_child_readiness", lambda _url: next(payloads))
+    state = launcher.GroupHealthState(
+        children=[FakeProcess(), FakeProcess()],
+        child_health_urls=["http://child-one/readyz", "http://child-two/readyz"],
+    )
+
+    assert state.is_ready() is False
+
+
+def test_group_readiness_rejects_child_that_is_not_ready(monkeypatch) -> None:
+    monkeypatch.setattr(
+        launcher,
+        "_read_child_readiness",
+        lambda _url: {"ready": False, "registryFingerprint": "sha256:new"},
+    )
+    state = launcher.GroupHealthState(
+        children=[FakeProcess()],
+        child_health_urls=["http://child-one/readyz"],
+    )
+
+    assert state.is_ready() is False
 
 
 def test_supervisor_exits_nonzero_and_stops_group_when_child_exits() -> None:

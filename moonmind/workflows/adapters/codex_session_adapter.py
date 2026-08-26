@@ -25,11 +25,15 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRunResult,
     AgentRunState,
     AgentRunStatus,
+    AgentRuntimeStepExecutionLaunch,
+    AgentTerminalContract,
     ManagedRunRecord,
     ManagedRuntimeProfile,
     extract_durable_retrieval_metadata,
 )
+from moonmind.schemas.container_job_models import OwnerIdentity
 from moonmind.schemas.managed_session_models import (
+    CODEX_TURN_RUNTIME_SELECTION_CONTRACT,
     CodexManagedSessionArtifactsPublication,
     CodexManagedSessionBinding,
     CodexManagedSessionClearRequest,
@@ -44,6 +48,7 @@ from moonmind.schemas.managed_session_models import (
     PublishCodexManagedSessionArtifactsRequest,
     SendCodexManagedSessionTurnRequest,
     TerminateCodexManagedSessionRequest,
+    build_codex_managed_session_turn_environment,
     canonical_managed_session_runtime_id,
     managed_session_runtime_family_for_runtime_id,
 )
@@ -156,6 +161,8 @@ _SESSION_ARTIFACT_METADATA_FIELDS = (
     "canaryEvidence",
 )
 _TURN_METADATA_SCALAR_FIELDS = (
+    "model",
+    "effort",
     "reason",
     "continuationFailureType",
     "failureCause",
@@ -193,7 +200,6 @@ _SESSION_INTERVENTION_FIELDS = (
 )
 _EMPTY_ASSISTANT_MAX_CLEAR_SESSION_ATTEMPTS = 2
 _MAX_INCOMPLETE_TERMINAL_CONTRACT_CONTINUATIONS = 2
-_INCOMPLETE_TERMINAL_CONTRACT_FAILURE_CODE = "INCOMPLETE_TERMINAL_CONTRACT"
 _JIRA_CREATED_ISSUE_KEYS_PATTERN = re.compile(
     r"\b(?:created\s+(?:jira\s+)?(?:issues?|stories?|tickets?)|"
     r"created\s+(?:issue\s+)?keys?|issue\s+keys?\s+created)\b"
@@ -219,22 +225,13 @@ def _pr_resolver_terminal_contract(
         disposition = _pr_resolver_disposition(
             evidence.payload, merge_gate_owned=False
         )
-        if disposition in {"merged", "already_merged"} and (
+        if disposition in {"merged", "already_merged", "review_clean"} and (
             _load_auto_publish_result_payload(workspace_path) is None
         ):
             missing.append("artifacts/publish_result.json")
     metadata = _derive_pr_resolver_metadata(workspace_path)
     return not missing, missing, metadata
 
-
-def _terminal_contract_continuation_instruction(missing: list[str]) -> str:
-    evidence = ", ".join(f"`{path}`" for path in missing)
-    return (
-        "The selected skill has not satisfied its terminal contract. "
-        f"Missing required evidence: {evidence}. Resume the still-running "
-        "resolver if possible; otherwise rerun it from durable attempt state. "
-        "Do not declare completion until the terminal result contract is satisfied."
-    )
 
 def _result_ref_metadata(
     *,
@@ -498,6 +495,36 @@ def _jira_skill_blocker_summary(
         )
     return None
 
+
+def _managed_session_required_capabilities(
+    parameters: Mapping[str, Any],
+) -> list[Any] | None:
+    """Preserve omission for already-scheduled launch compatibility."""
+
+    if "requiredCapabilities" not in parameters:
+        return None
+    raw = parameters.get("requiredCapabilities")
+    if isinstance(raw, (list, tuple)):
+        return list(raw)
+    raise ValueError(
+        "requiredCapabilities must be a list when present on an agent request"
+    )
+
+
+def _execution_fanout_authorization(
+    request: AgentExecutionRequest,
+) -> dict[str, Any] | None:
+    step_execution = request.step_execution
+    if step_execution is None:
+        return None
+    policy = step_execution.skill_source_policy
+    if "executionFanout" not in policy:
+        return None
+    evidence = policy.get("executionFanout")
+    if not isinstance(evidence, Mapping):
+        raise ValueError("executionFanout authorization evidence must be a mapping")
+    return dict(evidence)
+
 def _application_error_metadata(error: ApplicationError) -> dict[str, Any]:
     for detail in error.details:
         if isinstance(detail, Mapping):
@@ -580,6 +607,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         session_image_ref: str,
         task_workflow_id: str | None = None,
         defer_turn_instructions_until_session_launch: bool = True,
+        replace_existing_on_resume_mismatch: bool = False,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
@@ -601,6 +629,9 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         self._task_workflow_id = str(task_workflow_id or "").strip() or None
         self._defer_turn_instructions_until_session_launch = bool(
             defer_turn_instructions_until_session_launch
+        )
+        self._replace_existing_on_resume_mismatch = bool(
+            replace_existing_on_resume_mismatch
         )
         self._run_states: dict[str, CodexSessionExecutionState] = {}
 
@@ -690,11 +721,41 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 request=request,
                 workspace_path=workspace_path,
             )
+        session_environment = dict(launch_context.delta_env_overrides)
+        active_skills_dir = str(
+            request.parameters.get("_moonmindActiveSkillsDir", "")
+        ).strip()
+        if active_skills_dir:
+            session_environment["MOONMIND_ACTIVE_SKILLS_DIR"] = active_skills_dir
+        if request.step_execution is not None:
+            session_environment["MOONMIND_STEP_EXECUTION_ID"] = (
+                request.step_execution.step_execution_id
+            )
+        turn_environment = build_codex_managed_session_turn_environment(
+            active_skills_dir=active_skills_dir or None,
+            step_execution_id=(
+                request.step_execution.step_execution_id
+                if request.step_execution is not None
+                else None
+            ),
+        )
         session_handle = await self._ensure_remote_session(
             binding=binding,
             request=request,
             workspace_path=workspace_path,
-            environment=launch_context.delta_env_overrides,
+            environment=session_environment,
+            workload_mode=launch_context.workload_mode,
+            container_job_owner=(
+                OwnerIdentity(
+                    principalId=launch_context.owner_user_id,
+                    principalType="user",
+                )
+                if launch_context.owner_user_id
+                else OwnerIdentity(
+                    principalId=run_id,
+                    principalType="service",
+                )
+            ),
             profile=self._profile_for_launch(
                 runtime_id=runtime_id,
                 profile=profile,
@@ -726,6 +787,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             started_at=started_at,
             finished_at=None,
             profile_id=launch_context.profile_id or None,
+            step_execution=request.step_execution,
         )
 
         current_locator = locator
@@ -743,9 +805,31 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     workspace_path=workspace_path,
                 )
             )
+            await self._publish_direct_codex_bridge_start(
+                request=request,
+                binding=binding,
+                locator=current_locator,
+                instructions=instructions,
+            )
             session_interventions: list[dict[str, Any]] = []
 
             async def _send_current_turn() -> CodexManagedSessionTurnResponse:
+                bridge_publication = None
+                if (
+                    self._publish_bridge_events is not None
+                    and _uses_omnigent_bridge_communication(request.parameters)
+                ):
+                    bridge_publication = {
+                        "request": request.model_dump(
+                            mode="json", by_alias=True, exclude_none=True
+                        ),
+                        "binding": binding.model_dump(mode="json", by_alias=True),
+                        "locator": current_locator.model_dump(
+                            mode="json", by_alias=True
+                        ),
+                        "compatibilityProfile": "moonmind.codex_direct_compat.v1",
+                        "producer": "direct_codex_managed_session",
+                    }
                 return await self._coerce_turn_response(
                     self._send_turn(
                         SendCodexManagedSessionTurnRequest(
@@ -755,6 +839,10 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                             threadId=current_locator.thread_id,
                             instructions=instructions,
                             requestId=f"{request.idempotency_key}:initial",
+                            model=request.parameters.get("model"),
+                            effort=request.parameters.get("effort"),
+                            bridgePublication=bridge_publication,
+                            environment=turn_environment,
                         )
                     )
                 )
@@ -972,121 +1060,13 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 session_state=turn_response.session_state,
                 runtime_epoch=turn_response.session_state.session_epoch,
             )
+            await self._publish_direct_codex_bridge_active(
+                request=request,
+                binding=binding,
+                locator=current_locator,
+                turn_response=turn_response,
+            )
             current_active_turn_id = turn_response.session_state.active_turn_id
-            selected_skill = selected_agent_skill(request.parameters)
-            continuation_history: list[dict[str, Any]] = []
-            terminal_contract_metadata: dict[str, Any] = {}
-            if turn_response.status == "completed" and selected_skill == "pr-resolver":
-                contract_satisfied, missing_evidence, terminal_contract_metadata = (
-                    _pr_resolver_terminal_contract(workspace_path)
-                )
-                for continuation_index in range(
-                    1, _MAX_INCOMPLETE_TERMINAL_CONTRACT_CONTINUATIONS + 1
-                ):
-                    if contract_satisfied:
-                        break
-                    continuation_reason = "missing_terminal_evidence"
-                    continuation_history.append(
-                        {
-                            "continuation": continuation_index,
-                            "reason": continuation_reason,
-                            "missingEvidence": list(missing_evidence),
-                            "outcome": "requested",
-                        }
-                    )
-                    if execution_deadline is not None:
-                        remaining_seconds = execution_deadline - time.monotonic()
-                        if remaining_seconds <= 0:
-                            continuation_history[-1]["outcome"] = "deadline_exhausted"
-                            break
-                    continuation_call = self._coerce_turn_response(
-                        self._send_turn(
-                            SendCodexManagedSessionTurnRequest(
-                                sessionId=current_locator.session_id,
-                                sessionEpoch=current_locator.session_epoch,
-                                containerId=current_locator.container_id,
-                                threadId=current_locator.thread_id,
-                                instructions=_terminal_contract_continuation_instruction(
-                                    missing_evidence
-                                ),
-                                reason="incomplete_terminal_contract",
-                                requestId=(
-                                    f"{request.idempotency_key}:terminal-contract:"
-                                    f"{continuation_index}"
-                                ),
-                            )
-                        )
-                    )
-                    try:
-                        if execution_deadline is None:
-                            turn_response = await continuation_call
-                        else:
-                            try:
-                                turn_response = await asyncio.wait_for(
-                                    continuation_call, timeout=remaining_seconds
-                                )
-                            except TimeoutError:
-                                continuation_history[-1]["outcome"] = "deadline_exhausted"
-                                break
-                    except Exception as exc:
-                        # Cancellation derives from BaseException and intentionally
-                        # bypasses this recovery path. Provider/activity failures,
-                        # however, must retain the contract context that caused the
-                        # continuation while preserving their underlying details.
-                        continuation_history[-1]["outcome"] = "provider_failure"
-                        failure_details: dict[str, Any] = {
-                            "reason": str(exc).strip()
-                            or "Managed-session continuation failed",
-                            "continuationFailureType": type(exc).__name__,
-                        }
-                        if isinstance(exc, ActivityError) and isinstance(
-                            exc.cause, ApplicationError
-                        ):
-                            failure_details.update(
-                                _turn_failure_metadata_from_activity_error(exc.cause)
-                            )
-                        turn_response = turn_response.model_copy(
-                            update={"status": "failed", "metadata": failure_details}
-                        )
-                        break
-                    turn_id = turn_response.turn_id
-                    current_locator = self._locator_from_state(
-                        session_state=turn_response.session_state,
-                        runtime_epoch=turn_response.session_state.session_epoch,
-                    )
-                    current_active_turn_id = turn_response.session_state.active_turn_id
-                    if turn_response.status != "completed":
-                        continuation_history[-1]["outcome"] = turn_response.status
-                        break
-                    contract_satisfied, missing_evidence, terminal_contract_metadata = (
-                        _pr_resolver_terminal_contract(workspace_path)
-                    )
-                    continuation_history[-1]["outcome"] = (
-                        "recovered" if contract_satisfied else "incomplete"
-                    )
-                if not contract_satisfied:
-                    incomplete_metadata = {
-                        **dict(turn_response.metadata or {}),
-                        **terminal_contract_metadata,
-                        "failureCode": (
-                            dict(turn_response.metadata or {}).get("failureCode")
-                            or _INCOMPLETE_TERMINAL_CONTRACT_FAILURE_CODE
-                        ),
-                        "terminalContractContinuationCount": len(continuation_history),
-                        "terminalContractReason": "missing_terminal_evidence",
-                        "terminalContractMissingEvidence": list(missing_evidence),
-                        "terminalContractContinuationHistory": continuation_history,
-                        "terminalContractRecoveryOutcome": (
-                            continuation_history[-1]["outcome"]
-                            if continuation_history
-                            and continuation_history[-1]["outcome"]
-                            in {"provider_failure", "deadline_exhausted"}
-                            else "exhausted"
-                        ),
-                    }
-                    turn_response = turn_response.model_copy(
-                        update={"status": "failed", "metadata": incomplete_metadata}
-                    )
             if turn_response.status != "completed":
                 raw_reason = turn_response.metadata.get("reason")
                 reason = _clamp_agent_run_result_summary(
@@ -1208,17 +1188,6 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     ),
                     "turnId": turn_id,
                 }
-                if continuation_history:
-                    result_metadata.update(terminal_contract_metadata)
-                    result_metadata.update(
-                        {
-                            "terminalContractContinuationCount": len(continuation_history),
-                            "terminalContractReason": "missing_terminal_evidence",
-                            "terminalContractMissingEvidence": [],
-                            "terminalContractContinuationHistory": continuation_history,
-                            "terminalContractRecoveryOutcome": "recovered",
-                        }
-                    )
                 if disposition:
                     result_metadata["outcomeDisposition"] = disposition
                     if disposition_reason:
@@ -1684,6 +1653,14 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 request,
                 prepared.get("durableRetrievalMetadata"),
             )
+            active_skills_dir = str(prepared.get("activeSkillsDir") or "").strip()
+            if active_skills_dir:
+                request.parameters["_moonmindActiveSkillsDir"] = active_skills_dir
+            terminal_contract = prepared.get("terminalContract")
+            if isinstance(terminal_contract, Mapping):
+                request.terminal_contract = AgentTerminalContract.model_validate(
+                    dict(terminal_contract)
+                )
             prepared = prepared.get("instructions")
         instructions = str(prepared or "").strip()
         if instructions:
@@ -1761,6 +1738,78 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 "terminalStatus": terminal_status,
                 "compatibilityProfile": "moonmind.codex_direct_compat.v1",
                 "producer": "direct_codex_managed_session",
+                "phase": "terminal",
+            }
+        )
+
+    async def _publish_direct_codex_bridge_active(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        binding: CodexManagedSessionBinding,
+        locator: CodexManagedSessionLocator,
+        turn_response: CodexManagedSessionTurnResponse,
+    ) -> None:
+        """Append typed runtime observations before terminal/resource synthesis.
+
+        ``observabilityEvents`` is the compact, runtime-owned event contract
+        produced by the managed-session controller.  Keeping this publication
+        separate from the terminal projection prevents terminal summaries from
+        becoming authority for assistant, tool, approval, or control evidence.
+        Activity retries are safe because every runtime observation carries its
+        source identity into the bridge append deduplication key.
+        """
+        if self._publish_bridge_events is None:
+            return
+        if not _uses_omnigent_bridge_communication(request.parameters):
+            return
+        observations = turn_response.metadata.get("observabilityEvents")
+        if not isinstance(observations, list) or not observations:
+            return
+        await self._publish_bridge_events(
+            {
+                "request": request.model_dump(
+                    mode="json", by_alias=True, exclude_none=True
+                ),
+                "binding": binding.model_dump(mode="json", by_alias=True),
+                "locator": locator.model_dump(mode="json", by_alias=True),
+                "turnId": turn_response.turn_id,
+                "observations": observations,
+                "phase": "active",
+                "compatibilityProfile": "moonmind.codex_direct_compat.v1",
+                "producer": "direct_codex_managed_session",
+            }
+        )
+
+    async def _publish_direct_codex_bridge_start(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        binding: CodexManagedSessionBinding,
+        locator: CodexManagedSessionLocator,
+        instructions: str,
+    ) -> None:
+        """Publish active-session evidence before the direct turn is sent.
+
+        This call intentionally carries only compact managed-session identity and
+        the submitted user text. Raw live logs remain on their existing artifact
+        path and are not duplicated into the bridge index.
+        """
+        if self._publish_bridge_events is None:
+            return
+        if not _uses_omnigent_bridge_communication(request.parameters):
+            return
+        await self._publish_bridge_events(
+            {
+                "request": request.model_dump(
+                    mode="json", by_alias=True, exclude_none=True
+                ),
+                "binding": binding.model_dump(mode="json", by_alias=True),
+                "locator": locator.model_dump(mode="json", by_alias=True),
+                "phase": "started",
+                "userMessage": instructions,
+                "compatibilityProfile": "moonmind.codex_direct_compat.v1",
+                "producer": "direct_codex_managed_session",
             }
         )
 
@@ -1777,9 +1826,12 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         request: AgentExecutionRequest,
         workspace_path: str,
         environment: dict[str, str],
+        workload_mode: str,
+        container_job_owner: OwnerIdentity,
         profile: ManagedRuntimeProfile,
     ) -> CodexManagedSessionHandle:
         snapshot = await self._load_snapshot(binding.workflow_id)
+        replace_existing = False
         if snapshot.container_id and snapshot.thread_id:
             locator = self._locator_from_snapshot(snapshot)
             try:
@@ -1796,6 +1848,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                         binding.session_id,
                     )
                     snapshot = refreshed_snapshot
+                    replace_existing = self._replace_existing_on_resume_mismatch
                 else:
                     refreshed_locator = self._locator_from_snapshot(refreshed_snapshot)
                     logger.warning(
@@ -1817,24 +1870,38 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                             refreshed_locator.session_id,
                         )
                         snapshot = refreshed_snapshot
+                        replace_existing = self._replace_existing_on_resume_mismatch
                     else:
-                        await self._signal_control_action(
-                            action="resume_session",
-                            reason=None,
-                            container_id=handle.session_state.container_id,
-                            thread_id=handle.session_state.thread_id,
-                            active_turn_id=handle.session_state.active_turn_id,
-                        )
-                        return handle
+                        if self._requires_runtime_selection_cutover(
+                            request=request,
+                            handle=handle,
+                        ):
+                            snapshot = refreshed_snapshot
+                            replace_existing = True
+                        else:
+                            await self._signal_control_action(
+                                action="resume_session",
+                                reason=None,
+                                container_id=handle.session_state.container_id,
+                                thread_id=handle.session_state.thread_id,
+                                active_turn_id=handle.session_state.active_turn_id,
+                            )
+                            return handle
             else:
-                await self._signal_control_action(
-                    action="resume_session",
-                    reason=None,
-                    container_id=handle.session_state.container_id,
-                    thread_id=handle.session_state.thread_id,
-                    active_turn_id=handle.session_state.active_turn_id,
-                )
-                return handle
+                if self._requires_runtime_selection_cutover(
+                    request=request,
+                    handle=handle,
+                ):
+                    replace_existing = True
+                else:
+                    await self._signal_control_action(
+                        action="resume_session",
+                        reason=None,
+                        container_id=handle.session_state.container_id,
+                        thread_id=handle.session_state.thread_id,
+                        active_turn_id=handle.session_state.active_turn_id,
+                    )
+                    return handle
 
         active_binding = snapshot.binding
         if active_binding.session_epoch < binding.session_epoch:
@@ -1855,6 +1922,9 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             binding=active_binding,
             environment=environment,
         )
+        required_capabilities = _managed_session_required_capabilities(
+            request.parameters
+        )
         launch_request = LaunchCodexManagedSessionRequest(
             runtimeFamily=managed_session_runtime_family_for_runtime_id(
                 active_binding.runtime_id
@@ -1864,11 +1934,16 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             sessionId=active_binding.session_id,
             sessionEpoch=active_binding.session_epoch,
             threadId=self._default_thread_id(active_binding),
+            replaceExisting=replace_existing,
             workspacePath=workspace_path,
             sessionWorkspacePath=str(self._session_root(binding) / "session"),
             artifactSpoolPath=str(self._session_root(binding) / "artifacts"),
             codexHomePath=str(self._session_root(binding) / ".moonmind" / "codex-home"),
             imageRef=self._session_image_ref,
+            workloadMode=workload_mode,
+            requiredCapabilities=required_capabilities,
+            executionFanoutAuthorization=_execution_fanout_authorization(request),
+            containerJobOwner=container_job_owner,
             turnCompletionTimeoutSeconds=turn_completion_timeout_seconds,
             environment=launch_environment,
             metadata=extract_durable_retrieval_metadata(request.parameters),
@@ -1878,8 +1953,12 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 else {}
             ),
         )
+        launch_request_payload = launch_request.model_dump(mode="json", by_alias=True)
+        if not replace_existing:
+            # Preserve the pre-replacement activity payload for Temporal replay.
+            launch_request_payload.pop("replaceExisting", None)
         launch_payload = {
-            "request": launch_request.model_dump(mode="json", by_alias=True),
+            "request": launch_request_payload,
             "profile": profile.model_dump(mode="json", by_alias=True),
         }
         handle = await self._coerce_handle(self._launch_session(launch_payload))
@@ -1898,13 +1977,42 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         )
         return handle
 
+    @staticmethod
+    def _requires_runtime_selection_cutover(
+        *,
+        request: AgentExecutionRequest,
+        handle: CodexManagedSessionHandle,
+    ) -> bool:
+        has_explicit_selection = any(
+            request.parameters.get(key) is not None for key in ("model", "effort")
+        )
+        if not has_explicit_selection:
+            return False
+        if (
+            handle.metadata.get("turnRuntimeSelectionContract")
+            == CODEX_TURN_RUNTIME_SELECTION_CONTRACT
+        ):
+            return False
+        if handle.session_state.active_turn_id is not None:
+            raise RuntimeError(
+                "cannot replace an active managed Codex session that predates "
+                "the turn runtime-selection contract"
+            )
+        logger.warning(
+            "Replacing managed Codex session %s before applying explicit model or "
+            "effort because its runtime predates %s.",
+            handle.session_state.session_id,
+            CODEX_TURN_RUNTIME_SELECTION_CONTRACT,
+        )
+        return True
+
     async def _prepare_launch_metadata_for_request(
         self,
         *,
         request: AgentExecutionRequest,
         workspace_path: str,
     ) -> None:
-        """Populate launch-safe durable metadata without installing skill projections."""
+        """Populate launch metadata, including the active skill projection."""
 
         if self._prepare_turn_instructions is None:
             return
@@ -1918,10 +2026,12 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     ),
                     "workspacePath": workspace_path,
                     "includePreparedRequestMetadata": True,
-                    "skipSkillMaterialization": True,
+                    "metadataOnly": True,
                 }
             )
         except Exception:
+            if selected_agent_skill(request.parameters):
+                raise
             logger.debug(
                 "Launch metadata preflight failed; real turn preparation will run after session launch.",
                 exc_info=True,
@@ -1932,6 +2042,14 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 request,
                 prepared.get("durableRetrievalMetadata"),
             )
+            active_skills_dir = str(prepared.get("activeSkillsDir") or "").strip()
+            if active_skills_dir:
+                request.parameters["_moonmindActiveSkillsDir"] = active_skills_dir
+            terminal_contract = prepared.get("terminalContract")
+            if isinstance(terminal_contract, Mapping):
+                request.terminal_contract = AgentTerminalContract.model_validate(
+                    dict(terminal_contract)
+                )
 
     def _managed_session_launch_environment(
         self,
@@ -2111,6 +2229,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         started_at: datetime,
         finished_at: datetime | None = None,
         profile_id: str | None = None,
+        step_execution: AgentRuntimeStepExecutionLaunch | None = None,
     ) -> None:
         self._run_states[run_id] = CodexSessionExecutionState(
             runId=run_id,
@@ -2138,6 +2257,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             status=status,
             started_at=started_at,
             finished_at=finished_at,
+            step_execution=step_execution,
         )
 
     def _persist_managed_run_record(
@@ -2154,6 +2274,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         status: AgentRunState,
         started_at: datetime,
         finished_at: datetime | None,
+        step_execution: AgentRuntimeStepExecutionLaunch | None = None,
     ) -> None:
         if self._run_store is None:
             return
@@ -2230,6 +2351,21 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         record = ManagedRunRecord(
             runId=record_key,
             workflowId=self._workflow_id,
+            ownerRunId=(
+                step_execution.run_id
+                if step_execution is not None
+                else (existing.owner_run_id if existing is not None else None)
+            ),
+            logicalStepId=(
+                step_execution.logical_step_id
+                if step_execution is not None
+                else (existing.logical_step_id if existing is not None else None)
+            ),
+            executionOrdinal=(
+                step_execution.execution_ordinal
+                if step_execution is not None
+                else (existing.execution_ordinal if existing is not None else None)
+            ),
             agentId=agent_id,
             runtimeId=runtime_id,
             status=status,

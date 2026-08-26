@@ -31,6 +31,10 @@ export type ChatSessionEventType =
   | 'runtime_status'
   | 'completion'
   | 'failure'
+  | 'resource'
+  | 'diagnostic'
+  | 'control'
+  | 'incompatible_schema'
   | 'system_status';
 
 export type ChatBlockKind =
@@ -103,8 +107,11 @@ const USER_MESSAGE_KINDS = new Set(['user_message_submitted']);
 const RESPONSE_STARTED_KINDS = new Set(['turn_started', 'response_started']);
 const ASSISTANT_DELTA_KINDS = new Set(['assistant_message_delta']);
 const ASSISTANT_FINAL_KINDS = new Set(['assistant_message_completed', 'assistant_message']);
-const TOOL_CALL_KINDS = new Set(['tool_call_started']);
-const TOOL_RESULT_KINDS = new Set(['tool_call_output', 'tool_call_completed', 'tool_call_failed']);
+const TOOL_CALL_KINDS = new Set(['tool_call_started', 'session_item_started']);
+const TOOL_RESULT_KINDS = new Set([
+  'tool_call_progress', 'tool_call_output', 'tool_call_completed', 'tool_call_failed',
+  'session_item_progress', 'session_item_output', 'session_item_completed',
+]);
 const APPROVAL_KINDS = new Set([
   'approval_requested',
   'approval_granted',
@@ -120,15 +127,37 @@ const BOUNDARY_KINDS = new Set([
   'session_terminated',
   'session_reset_boundary',
 ]);
-const STATUS_KINDS = new Set(['runtime_status', 'model_status', 'system_annotation']);
-const COMPLETION_KINDS = new Set(['turn_completed', 'response_completed']);
+const STATUS_KINDS = new Set([
+  'runtime_status', 'model_status', 'system_annotation', 'host_ready', 'session_ready',
+  'readiness_changed',
+]);
+const COMPLETION_KINDS = new Set([
+  'turn_completed', 'response_completed', 'session_completed', 'run_completed', 'completion',
+]);
 const FAILURE_KINDS = new Set([
   'turn_failed',
   'turn_interrupted',
   'response_failed',
   'tool_call_failed',
+  'session_item_failed',
   'empty_assistant_turn_detected',
+  'session_failed', 'run_failed', 'cancelled', 'canceled', 'session_cancelled',
+  'session_canceled', 'timeout', 'timed_out', 'session_timed_out', 'interrupted',
+  'stopped',
 ]);
+const RESOURCE_KINDS = new Set([
+  'resource_available', 'resource_published', 'changed_file', 'changed_files',
+  'snapshot_available', 'manifest_available', 'artifact_available',
+]);
+const DIAGNOSTIC_KINDS = new Set([
+  'diagnostic', 'diagnostics_available', 'evidence_degraded', 'retention_gap',
+  'contract_drift', 'cleanup_completed', 'cleanup_failed',
+]);
+const CONTROL_KINDS = new Set([
+  'elicitation_requested', 'elicitation_resolved', 'interrupt_requested', 'interrupt_resolved',
+  'stop_requested', 'cancel_requested',
+]);
+const SUPPORTED_SCHEMA_VERSION = 1;
 
 export function createChatSessionState(): ChatSessionState {
   return {
@@ -187,7 +216,10 @@ export function mapObservabilityEventToChatSessionEvent(
   const itemId = firstString(metadata.itemId, metadata.item_id, metadata.itemID);
   const callId = firstString(metadata.callId, metadata.call_id, metadata.callID, itemId);
   const sourceKind = kind || 'unknown';
-  const text = stringOrUndefined(row.text) || firstString(metadata.text, metadata.message, metadata.summary) || '';
+  const text = lifecycleEventText(kind, metadata)
+    || stringOrUndefined(row.text)
+    || firstString(metadata.text, metadata.message, metadata.summary)
+    || '';
   const event: ChatSessionEvent = {
     id: eventId({
       row,
@@ -200,7 +232,7 @@ export function mapObservabilityEventToChatSessionEvent(
       turnId,
       activeTurnId,
     }),
-    type: eventTypeForKind(sourceKind, row.stream),
+    type: eventTypeForKind(sourceKind, row.stream, metadata),
     text,
     timestamp: stringOrUndefined(row.timestamp),
     sourceKind,
@@ -221,6 +253,41 @@ export function mapObservabilityEventToChatSessionEvent(
     optimisticKey: firstString(metadata.optimisticKey, metadata.clientMessageId, metadata.client_message_id),
   };
   return stripUndefined(event);
+}
+
+function lifecycleEventText(
+  kind: string | undefined,
+  metadata: Record<string, unknown>,
+): string | undefined {
+  if (!kind?.startsWith('lifecycle.')) return undefined;
+  const stage = kind.slice('lifecycle.'.length).replaceAll('_', ' ');
+  const status = firstString(metadata.status) || 'updated';
+  const details = asRecord(metadata.metadata);
+  const parts = [`${stage}: ${status}`];
+  const code = firstString(metadata.code);
+  const summary = firstString(metadata.summary);
+  const remediation = firstString(metadata.remediationAction);
+  if (code) parts.push(`Reason: ${code}`);
+  if (summary) parts.push(summary);
+  for (const [label, value] of [
+    ['Profile', details.providerProfileId],
+    ['Host', details.omnigentHostId],
+    ['Host lease', details.hostLeaseRef],
+    ['Workflow', details.workflowId],
+    ['Step', details.stepExecutionId],
+  ] as const) {
+    const safeValue = firstString(value);
+    if (safeValue) parts.push(`${label}: ${safeValue}`);
+  }
+  if (typeof details.cleanupCompleted === 'boolean') {
+    parts.push(`Cleanup: ${details.cleanupCompleted ? 'completed' : 'incomplete'}`);
+  }
+  if (typeof details.leaseReleased === 'boolean') {
+    parts.push(`Profile lease: ${details.leaseReleased ? 'released' : 'held'}`);
+  }
+  if (details.janitorRequired === true) parts.push('Janitor reconciliation required');
+  if (remediation) parts.push(`Recommended action: ${remediation.replaceAll('_', ' ')}`);
+  return parts.join(' · ');
 }
 
 export function reduceChatSessionEvents(
@@ -299,13 +366,21 @@ export function reduceChatSessionEvent(
       appendBlock(next, event, 'status', event.text || event.status || 'Runtime status.');
       break;
     case 'failure':
-      if (event.sourceKind === 'tool_call_failed') {
+      if (event.sourceKind === 'tool_call_failed' || event.sourceKind === 'session_item_failed') {
         upsertToolBlock(next, event, event.text || event.status || 'Tool failed.');
         closeTool(next, event);
       }
       closeAssistant(next, event);
       next.toolBlockIdByScope.clear();
       appendBlock(next, event, 'error', event.text || event.status || 'Run failed.');
+      break;
+    case 'incompatible_schema':
+      appendBlock(next, event, 'error', event.text || 'This event requires a newer Workflow Chat schema.');
+      break;
+    case 'resource':
+    case 'diagnostic':
+    case 'control':
+      appendBlock(next, event, 'system', event.text || event.status || 'Session evidence updated.');
       break;
     case 'system_status':
       appendBlock(next, event, 'system', event.text || event.status || 'System event.');
@@ -444,7 +519,15 @@ function closeTool(state: ChatSessionState, event: ChatSessionEvent): void {
   state.toolBlockIdByScope.delete(toolScope(event));
 }
 
-function eventTypeForKind(kind: string, stream: string | null | undefined): ChatSessionEventType {
+function eventTypeForKind(
+  kind: string,
+  stream: string | null | undefined,
+  metadata: Record<string, unknown>,
+): ChatSessionEventType {
+  if (kind.startsWith('lifecycle.')) {
+    return metadata.status === 'failed' ? 'failure' : 'system_status';
+  }
+  if (isCriticalSchemaIncompatible(kind, metadata)) return 'incompatible_schema';
   if (USER_MESSAGE_KINDS.has(kind)) return 'user_message';
   if (RESPONSE_STARTED_KINDS.has(kind)) return 'response_started';
   if (ASSISTANT_DELTA_KINDS.has(kind)) return 'assistant_delta';
@@ -456,7 +539,17 @@ function eventTypeForKind(kind: string, stream: string | null | undefined): Chat
   if (STATUS_KINDS.has(kind)) return 'runtime_status';
   if (COMPLETION_KINDS.has(kind)) return 'completion';
   if (FAILURE_KINDS.has(kind)) return 'failure';
+  if (RESOURCE_KINDS.has(kind)) return 'resource';
+  if (DIAGNOSTIC_KINDS.has(kind)) return 'diagnostic';
+  if (CONTROL_KINDS.has(kind)) return 'control';
   return stream === 'stderr' ? 'failure' : 'system_status';
+}
+
+function isCriticalSchemaIncompatible(kind: string, metadata: Record<string, unknown>): boolean {
+  if (kind === 'incompatible_schema' || kind === 'schema_incompatible') return true;
+  const version = firstNumber(metadata.schemaVersion, metadata.schema_version);
+  const critical = metadata.executionCritical === true || metadata.execution_critical === true;
+  return critical && version !== undefined && version > SUPPORTED_SCHEMA_VERSION;
 }
 
 function eventId({

@@ -17,6 +17,9 @@ from moonmind.utils.logging import (
     redact_sensitive_text,
 )
 
+_AGENT_CATALOG_PAGE_SIZE = 1000
+_MAX_AGENT_CATALOG_PAGES = 100
+
 
 class OmnigentClientError(RuntimeError):
     """Structured client error for non-2xx Omnigent responses or transport failures."""
@@ -92,15 +95,136 @@ class OmnigentHttpClient:
         return headers
 
     async def list_agents(self) -> list[dict[str, Any]]:
-        data = await self._request("GET", "/api/agents")
-        if isinstance(data, list):
-            return [dict(item) for item in data if isinstance(item, Mapping)]
-        if isinstance(data, Mapping) and isinstance(data.get("agents"), list):
-            return [dict(item) for item in data["agents"] if isinstance(item, Mapping)]
-        return []
+        """Return the current stock Omnigent built-in-agent catalog.
+
+        ``GET /v1/agents`` is a paginated, read-only list of agents that may be
+        bound by ``POST /v1/sessions``.  MoonMind's profile projection models
+        that bindability as the portable ``session.start`` capability, which
+        the stock response does not repeat on every agent object.
+        """
+
+        agents: list[dict[str, Any]] = []
+        after: str | None = None
+        seen_cursors: set[str] = set()
+        for _page_number in range(_MAX_AGENT_CATALOG_PAGES):
+            path = f"/v1/agents?limit={_AGENT_CATALOG_PAGE_SIZE}"
+            if after:
+                path += f"&after={quote(after, safe='')}"
+            data = await self._request("GET", path)
+            if not isinstance(data, Mapping) or not isinstance(data.get("data"), list):
+                if not agents:
+                    return []
+                raise OmnigentClientError(
+                    "Omnigent agent catalog pagination returned an unsupported "
+                    "response shape",
+                    response_body=data,
+                    failure_class="integration_error",
+                )
+
+            for item in data["data"]:
+                if not isinstance(item, Mapping):
+                    continue
+                agent = dict(item)
+                if "capabilities" not in agent:
+                    agent["capabilities"] = ["session.start"]
+                agents.append(agent)
+
+            if data.get("has_more") is not True:
+                return agents
+            next_cursor = str(data.get("last_id") or "").strip()
+            if not next_cursor or next_cursor in seen_cursors:
+                raise OmnigentClientError(
+                    "Omnigent agent catalog pagination did not advance its cursor",
+                    response_body=data,
+                    failure_class="integration_error",
+                )
+            seen_cursors.add(next_cursor)
+            after = next_cursor
+
+        raise OmnigentClientError(
+            "Omnigent agent catalog exceeded the bounded pagination limit",
+            failure_class="integration_error",
+        )
 
     async def get_agent(self, agent_id: str) -> dict[str, Any]:
         return await self._request("GET", f"/api/agents/{quote(agent_id, safe='')}")
+
+    async def list_harnesses(self) -> list[dict[str, Any]]:
+        """List harnesses from Omnigent catalog (generic, harness-neutral)."""
+        data = await self._request("GET", "/v1/harnesses")
+        if isinstance(data, list):
+            return [dict(item) for item in data if isinstance(item, Mapping)]
+        if isinstance(data, Mapping) and isinstance(data.get("harnesses"), list):
+            return [
+                dict(item) for item in data["harnesses"] if isinstance(item, Mapping)
+            ]
+        if isinstance(data, Mapping) and isinstance(data.get("data"), list):
+            return [dict(item) for item in data["data"] if isinstance(item, Mapping)]
+        raise OmnigentClientError(
+            "Omnigent harness catalog has an unsupported response shape",
+            response_body=data,
+            failure_class="integration_error",
+        )
+
+    async def get_version(self) -> str:
+        """Return the authenticated endpoint's installed package version."""
+
+        data = await self._request("GET", "/api/version")
+        version = str(data.get("version") or "").strip()
+        if not version:
+            raise OmnigentClientError(
+                "Omnigent version endpoint did not return a version",
+                response_body=data,
+                failure_class="integration_error",
+            )
+        return version
+
+    async def get_host(self, host_id: str) -> dict[str, Any]:
+        return await self._request("GET", f"/v1/hosts/{quote(host_id, safe='')}")
+
+    async def get_host_model_options(
+        self, host_id: str, harness_id: str
+    ) -> dict[str, Any]:
+        return await self._request(
+            "GET",
+            f"/v1/hosts/{quote(host_id, safe='')}/harnesses/"
+            f"{quote(harness_id, safe='')}/model-options",
+        )
+
+    async def detect_host_credentials(self, host_id: str) -> dict[str, Any]:
+        return await self._request(
+            "GET", f"/v1/hosts/{quote(host_id, safe='')}/credentials/detect"
+        )
+
+    async def store_host_credential(
+        self, host_id: str, payload: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        return await self._request(
+            "POST",
+            f"/v1/hosts/{quote(host_id, safe='')}/credentials",
+            json=dict(payload),
+        )
+
+    async def install_host_harness(
+        self, host_id: str, payload: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        return await self._request(
+            "POST",
+            f"/v1/hosts/{quote(host_id, safe='')}/harnesses/install",
+            json=dict(payload),
+        )
+
+    async def list_hosts(self) -> list[dict[str, Any]]:
+        data = await self._request("GET", "/v1/hosts")
+        if isinstance(data, list):
+            return [dict(item) for item in data if isinstance(item, Mapping)]
+        if isinstance(data, Mapping) and isinstance(data.get("hosts"), list):
+            return [dict(item) for item in data["hosts"] if isinstance(item, Mapping)]
+        raise OmnigentClientError(
+            "Omnigent host catalog has an unsupported response shape",
+            response_body=data,
+            failure_class="integration_error",
+        )
 
     async def create_agent_bundle(
         self,
@@ -137,6 +261,7 @@ class OmnigentHttpClient:
                     "GET",
                     f"{self._base}{path}",
                     headers=self._headers(accept="text/event-stream"),
+                    timeout=self._stream_timeout,
                 ) as response:
                     async for event in self._iter_stream_response(response):
                         yield event
@@ -262,6 +387,7 @@ class OmnigentHttpClient:
                     method,
                     f"{self._base}{path}",
                     headers=self._headers(),
+                    timeout=self._timeout,
                     **kwargs,
                 )
             except httpx.HTTPError as exc:
@@ -309,6 +435,7 @@ class OmnigentHttpClient:
                     method,
                     f"{self._base}{path}",
                     headers=self._headers(),
+                    timeout=self._timeout,
                 )
             except httpx.HTTPError as exc:
                 raise OmnigentClientError(
@@ -392,8 +519,7 @@ def _scrub_payload_with_redactor(payload: Any, *, redactor: SecretRedactor) -> A
         }
     if isinstance(payload, list):
         return [
-            _scrub_payload_with_redactor(item, redactor=redactor)
-            for item in payload
+            _scrub_payload_with_redactor(item, redactor=redactor) for item in payload
         ]
     return payload
 

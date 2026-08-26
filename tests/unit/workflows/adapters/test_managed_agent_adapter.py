@@ -28,6 +28,7 @@ from api_service.db.models import (
     ProviderCredentialSource,
     ProviderProfileAuthMethod,
     ProviderProfileAuthState,
+    ProviderProfileSlotLease,
     RuntimeMaterializationMode,
 )
 from moonmind.auth.env_shaping import (
@@ -37,6 +38,7 @@ from moonmind.auth.env_shaping import (
 )
 from moonmind.workflows.adapters.managed_agent_adapter import (
     ManagedAgentAdapter,
+    ManagedProfileLaunchContext,
     ProfileResolutionError,
     _derive_pr_resolver_failure,
     _derive_pr_resolver_metadata,
@@ -45,6 +47,7 @@ from moonmind.workflows.adapters.managed_agent_adapter import (
     _pr_resolver_status,
     build_managed_profile_launch_context,
 )
+from moonmind.workflows.executions.runtime_capabilities import RuntimeCapabilityError
 from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore,
     TemporalArtifactActivities,
@@ -162,7 +165,11 @@ def test_pr_resolver_metadata_distinguishes_invalid_stale_and_missing(
     assert stale["failureCode"] == "TERMINAL_ARTIFACT_STALE"
 
     result_path.unlink()
-    missing = _derive_pr_resolver_metadata(str(tmp_path), merge_gate_owned=True)
+    missing = _derive_pr_resolver_metadata(
+        str(tmp_path),
+        merge_gate_owned=True,
+        supports_same_session_continuation=True,
+    )
     assert missing["failureCode"] == "INCOMPLETE_TERMINAL_CONTRACT"
     assert missing["retryRecommendation"] == "continue_same_session"
 
@@ -344,6 +351,52 @@ async def test_launch_context_exports_execution_profile_ref() -> None:
         context.delta_env_overrides["MOONMIND_EXECUTION_PROFILE_RUNTIME"]
         == "codex_cli"
     )
+
+
+async def test_launch_context_preserves_profile_workload_mode_and_owner() -> None:
+    context = build_managed_profile_launch_context(
+        profile={
+            "profile_id": "codex-no-docker",
+            "credential_source": "oauth_volume",
+            "owner_user_id": "user-123",
+            "runtime_profile": {
+                "workloadMode": "no-docker",
+                "workspace": {
+                    "volume": "agent_workspaces",
+                    "mountPath": "/work/agent_jobs",
+                    "lifecycle": "session",
+                },
+                "agent": {
+                    "workspace": {"mountPath": "/work/agent_jobs"},
+                    "dockerClient": {
+                        "enabled": False,
+                        "composePlugin": False,
+                        "daemonInAgent": False,
+                    },
+                },
+                "labels": {"moonmind.workload_mode": "no-docker"},
+            },
+        },
+        runtime_for_profile="codex_cli",
+        workflow_id="wf-agent-run-1",
+        default_credential_source="oauth_volume",
+    )
+
+    assert context.workload_mode == "no-docker"
+    assert context.owner_user_id == "user-123"
+
+
+async def test_pre_cutover_launch_context_defaults_to_container_jobs() -> None:
+    context = ManagedProfileLaunchContext(
+        profile_id="legacy-profile",
+        credential_source="oauth_volume",
+        delta_env_overrides={},
+        passthrough_env_keys=[],
+        env_keys_count=0,
+    )
+
+    assert context.workload_mode == "container-jobs"
+    assert context.owner_user_id is None
 
 async def test_launch_context_rejects_non_mapping_runtime_profile() -> None:
     with pytest.raises(
@@ -707,6 +760,75 @@ async def test_start_uses_passthrough_keys_for_github_tokens(
     assert "GITHUB_TOKEN" not in env_overrides
     assert "OPENAI_API_KEY" not in env_overrides
 
+
+async def test_start_reuses_authoritative_managed_workspace_for_continuation(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "existing-run" / "repo"
+    workspace.mkdir(parents=True)
+    captured_payload: dict[str, Any] = {}
+
+    class _Store:
+        store_root = tmp_path / "managed_runs"
+
+        @staticmethod
+        def load(run_id: str):
+            assert run_id == "existing-run"
+            return type(
+                "Record",
+                (),
+                {
+                    "workspace_path": str(workspace),
+                    "workflow_id": "wf-continuation",
+                },
+            )()
+
+    async def _run_launcher(**kwargs: Any):
+        captured_payload.update(kwargs["payload"])
+        return {"status": "launching"}
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles(
+            [
+                {
+                    "profile_id": "claude-profile",
+                    "credential_source": ProviderCredentialSource.OAUTH_VOLUME,
+                    "command_template": ["claude"],
+                }
+            ]
+        ),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-continuation",
+        runtime_id="claude_code",
+        run_store=_Store(),
+        run_launcher=_run_launcher,
+    )
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+
+    await adapter.start(
+        AgentExecutionRequest(
+            agentKind="managed",
+            agentId="claude_code",
+            executionProfileRef="claude-profile",
+            correlationId="corr-continuation",
+            idempotencyKey="idem-continuation",
+            workspaceSpec={
+                "workspaceLocator": {
+                    "kind": "managed_runtime",
+                    "runtimeId": "claude_code",
+                    "agentRunId": "existing-run",
+                    "relativePath": "repo",
+                }
+            },
+        )
+    )
+
+    assert captured_payload["run_id"] == "existing-run"
+    assert captured_payload["workspace_path"] == str(workspace)
+    assert captured_payload["restoration_requirement"] is None
+
 async def test_start_applies_runtime_env_overrides_and_key_target() -> None:
     profiles = [
         {
@@ -948,6 +1070,47 @@ async def test_start_falls_back_to_runtime_default_model_when_profile_blank() ->
     assert profile_payload.get("defaultModel") == "gpt-5.5"
     assert profile_payload.get("defaultEffort") == "high"
 
+
+async def test_start_carries_launcher_terminal_contract_back_to_workflow_request() -> None:
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+
+    async def _run_launcher(**_kwargs: Any):
+        return {
+            "status": "launching",
+            "terminalContract": {
+                "contractId": "batch_workflows_fanout.v1",
+                "owner": "agent",
+                "evidenceKind": "workspace_json",
+                "relativePath": "artifacts/batch-workflows-result.json",
+                "expectedSchemaVersion": "moonmind.batch-workflows-result.v1",
+                "executionRef": "step-1",
+            },
+        }
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles(
+            [{"profile_id": "claude-default", "command_template": ["claude"]}]
+        ),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-terminal-contract",
+        runtime_id="claude_code",
+        run_launcher=_run_launcher,
+    )
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="claude_code",
+        executionProfileRef="claude-default",
+        correlationId="corr-terminal-contract",
+        idempotencyKey="idem-terminal-contract",
+    )
+
+    await adapter.start(request)
+
+    assert request.terminal_contract is not None
+    assert request.terminal_contract.contract_id == "batch_workflows_fanout.v1"
+
 async def test_start_applies_proxy_mode_when_tagged_proxy_first(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION", "1")
     profiles = [
@@ -1072,6 +1235,37 @@ async def test_start_rejects_non_managed_agent_kind():
     with pytest.raises(ValueError, match="managed"):
         await adapter.start(request)
 
+
+async def test_start_rejects_unknown_runtime_before_profile_lookup_or_launch():
+    profile_lookups = 0
+
+    async def profile_fetcher(**_kwargs: Any) -> list[dict[str, Any]]:
+        nonlocal profile_lookups
+        profile_lookups += 1
+        return [{"profile_id": "custom", "credential_source": "secret_ref"}]
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=profile_fetcher,
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-custom",
+        runtime_id="custom_runtime",
+    )
+
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="custom_runtime",
+        executionProfileRef="auto",
+        correlationId="corr-custom",
+        idempotencyKey="idem-custom",
+    )
+    with pytest.raises(RuntimeCapabilityError, match="unknown agent runtime"):
+        await adapter.start(request)
+    assert profile_lookups == 0
+
 # ---------------------------------------------------------------------------
 # Slot release and 429 cooldown tests
 # ---------------------------------------------------------------------------
@@ -1179,9 +1373,9 @@ async def test_provider_profile_list_returns_enabled_profiles(tmp_path: Path):
                     credential_source=ProviderCredentialSource.OAUTH_VOLUME,
                     runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
                     volume_ref="oauth-volume://claude",
-                    volume_mount_path="/mnt/auth",
+                    volume_mount_path="/home/app/.claude",
                     account_label="primary",
-                    max_parallel_runs=2,
+                    max_parallel_runs=1,
                     cooldown_after_429_seconds=300,
                     rate_limit_policy=ManagedAgentRateLimitPolicy.BACKOFF,
                     enabled=True,
@@ -1225,7 +1419,17 @@ async def test_provider_profile_list_returns_enabled_profiles(tmp_path: Path):
         assert profiles[0]["credential_source"] == "oauth_volume"
         assert profiles[0]["enabled"] is True
         assert profiles[0]["auth_state"] == "connected"
-        assert profiles[0]["max_parallel_runs"] == 2
+        assert profiles[0]["max_parallel_runs"] == 1
+        assert {status["profile_id"] for status in result["profile_statuses"]} == {
+            "gprofile-1",
+            "gprofile-disabled",
+        }
+        disabled_status = next(
+            status
+            for status in result["profile_statuses"]
+            if status["profile_id"] == "gprofile-disabled"
+        )
+        assert disabled_status["launch_ready"] is False
 
 async def test_provider_profile_list_returns_empty_for_unknown_runtime(tmp_path: Path):
     async with _in_memory_db(tmp_path) as session_factory:
@@ -1244,7 +1448,7 @@ async def test_provider_profile_list_returns_empty_for_unknown_runtime(tmp_path:
         finally:
             _db_base_mod.get_async_session_context = orig
 
-        assert result == {"profiles": []}
+        assert result == {"profiles": [], "profile_statuses": []}
 
 async def test_provider_profile_list_filters_by_runtime_id(tmp_path: Path):
     async with _in_memory_db(tmp_path) as session_factory:
@@ -1366,6 +1570,87 @@ async def test_provider_profile_list_filters_to_launch_ready_profiles(
         assert [profile["profile_id"] for profile in result["profiles"]] == [
             "ready-secret"
         ]
+        assert {
+            status["profile_id"] for status in result["profile_statuses"]
+        } == {
+            "ready-secret",
+            "disabled-setup-stub",
+            "connected-secret-without-binding",
+            "connected-oauth-without-volume",
+        }
+
+
+async def test_provider_profile_list_includes_unavailable_profiles_with_leases(
+    tmp_path: Path,
+):
+    """Lease recovery retains disabled/unready owners without routing to them."""
+    async with _in_memory_db(tmp_path) as session_factory:
+        async with session_factory() as session:
+            session.add_all(
+                [
+                    ManagedAgentProviderProfile(
+                        profile_id="disabled-leased",
+                        runtime_id="codex_cli",
+                        credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                        runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                        max_parallel_runs=1,
+                        cooldown_after_429_seconds=300,
+                        rate_limit_policy=ManagedAgentRateLimitPolicy.BACKOFF,
+                        enabled=False,
+                        auth_state=ProviderProfileAuthState.CONNECTED,
+                        last_auth_method=ProviderProfileAuthMethod.OAUTH_VOLUME,
+                    ),
+                    ManagedAgentProviderProfile(
+                        profile_id="unready-leased",
+                        runtime_id="codex_cli",
+                        credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                        runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                        max_parallel_runs=1,
+                        cooldown_after_429_seconds=300,
+                        rate_limit_policy=ManagedAgentRateLimitPolicy.BACKOFF,
+                        enabled=True,
+                        auth_state=ProviderProfileAuthState.CONNECTED,
+                        last_auth_method=ProviderProfileAuthMethod.OAUTH_VOLUME,
+                    ),
+                    ProviderProfileSlotLease(
+                        runtime_id="codex_cli",
+                        workflow_id="disabled-owner",
+                        profile_id="disabled-leased",
+                    ),
+                    ProviderProfileSlotLease(
+                        runtime_id="codex_cli",
+                        workflow_id="unready-owner",
+                        profile_id="unready-leased",
+                    ),
+                ]
+            )
+            await session.commit()
+
+        service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        activities = TemporalArtifactActivities(service)
+
+        import api_service.db.base as _db_base_mod
+
+        orig = _db_base_mod.get_async_session_context
+        _db_base_mod.get_async_session_context = lambda: _patched_session_context(
+            session_factory
+        )
+        try:
+            result = await activities.provider_profile_list(runtime_id="codex_cli")
+        finally:
+            _db_base_mod.get_async_session_context = orig
+
+        profiles = {
+            profile["profile_id"]: profile for profile in result["profiles"]
+        }
+        assert set(profiles) == {"disabled-leased", "unready-leased"}
+        assert profiles["disabled-leased"]["enabled"] is False
+        assert profiles["disabled-leased"]["launch_ready"] is False
+        assert profiles["unready-leased"]["enabled"] is True
+        assert profiles["unready-leased"]["launch_ready"] is False
 
 async def test_provider_profile_list_preserves_secret_ref_materialization_fields(
     tmp_path: Path,
@@ -1624,6 +1909,7 @@ async def test_fetch_result_surfaces_auto_publish_evidence_for_fix_comments(
             '  "mode": "auto",\n'
             '  "owner": "agent",\n'
             '  "skillId": "fix-comments",\n'
+            '  "executionRef": "workflow:run:fix-comments:execution:1",\n'
             '  "status": "verified",\n'
             '  "action": "push",\n'
             '  "repository": "MoonLadderStudios/Tactics",\n'
@@ -1707,6 +1993,7 @@ async def test_fetch_result_ignores_stale_auto_publish_evidence(
             '  "mode": "auto",\n'
             '  "owner": "agent",\n'
             '  "skillId": "fix-comments",\n'
+            '  "executionRef": "workflow:run:fix-comments:execution:1",\n'
             '  "status": "verified",\n'
             '  "action": "push",\n'
             '  "repository": "MoonLadderStudios/Tactics",\n'
@@ -1786,6 +2073,7 @@ async def test_fetch_result_does_not_bypass_pr_resolver_publish_normalization(
             '  "mode": "auto",\n'
             '  "owner": "agent",\n'
             '  "skillId": "pr-resolver",\n'
+            '  "executionRef": "workflow:run:pr-resolver:execution:1",\n'
             '  "status": "verified",\n'
             '  "action": "merge",\n'
             '  "repository": "MoonLadderStudios/MoonMind",\n'
@@ -2708,6 +2996,7 @@ async def test_fetch_result_normalizes_pr_resolver_publish_result_evidence(
             '  "status": "merged",\n'
             '  "merge_outcome": "merged",\n'
             '  "mergeAutomationDisposition": "merged",\n'
+            '  "executionRef": "workflow:run:pr-resolver:execution:1",\n'
             '  "reason": "ci_complete"\n'
             "}\n"
         ),
@@ -2828,6 +3117,45 @@ async def test_fetch_result_fails_when_expected_pr_resolver_artifact_missing(
     assert result.metadata["latestAttemptRef"].endswith("attempt-1.json")
     assert result.metadata["prResolverLatestAttempt"]["reason"] == "ci_running"
     assert "mergeAutomationDisposition" not in result.metadata
+
+
+async def test_fetch_result_omits_pr_resolver_metadata_when_not_expected(
+    tmp_path: Path,
+):
+    from datetime import UTC, datetime
+
+    from moonmind.schemas.agent_runtime_models import ManagedRunRecord
+    from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    store = ManagedRunStore(tmp_path / "run_store")
+    store.save(
+        ManagedRunRecord(
+            run_id="run-result-batch-skill",
+            agent_id="codex_cli",
+            runtime_id="codex_cli",
+            status="completed",
+            started_at=datetime.now(tz=UTC),
+            workspace_path=str(workspace_path),
+        )
+    )
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles([]),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-result-batch-skill",
+        run_store=store,
+    )
+
+    result = await adapter.fetch_result("run-result-batch-skill")
+
+    assert result.failure_class is None
+    assert "contractId" not in result.metadata
+    assert "failureCode" not in result.metadata
+    assert "terminalResultPresent" not in result.metadata
+    assert "missingEvidence" not in result.metadata
 
 
 async def test_fetch_result_fails_when_pr_resolver_artifact_and_attempts_missing(

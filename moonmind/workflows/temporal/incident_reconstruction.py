@@ -410,6 +410,7 @@ def build_incident_reconstruction_manifest(
     workspace_changes: Sequence[Mapping[str, Any]] | None = None,
     logs_ref: str | None = None,
     artifact_refs: Mapping[str, str] | None = None,
+    control_stop: Mapping[str, Any] | None = None,
 ) -> IncidentReconstructionManifestModel:
     """Build the incident reconstruction manifest for a failed run.
 
@@ -454,6 +455,13 @@ def build_incident_reconstruction_manifest(
         checkpoint = recovery_manifest.recovery_eligibility.model_dump(
             by_alias=True, mode="json", exclude_none=True
         )
+        if recovery_manifest.blocked_reason:
+            # Incident reconstruction is the operator-facing replay projection.
+            # Keep its established specific reason (missing evidence,
+            # authorization, side-effect compensation, and so on) while the
+            # recoveryEligibility object remains the authority for the newer
+            # typed capability decision on the recovery manifest itself.
+            checkpoint["disabledReasonCode"] = recovery_manifest.blocked_reason
 
     normalized_policy_ref = _normalize_policy_ref(policy_ref)
     provider = _build_provider_context(
@@ -563,6 +571,7 @@ def build_incident_reconstruction_manifest(
         failureCategory=failure_category,
         failedLogicalStepId=failed_logical_step_id,
         failedExecutionOrdinal=_positive_int(failed_execution_ordinal),
+        controlStop=dict(control_stop) if isinstance(control_stop, Mapping) else None,
         policyRef=normalized_policy_ref,
         provider=provider,
         cost=cost,

@@ -11,12 +11,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from moonmind.config.settings import settings
+from moonmind.security.execution_fanout_capabilities import (
+    EXECUTION_FANOUT_REQUIRED_CAPABILITY,
+)
 from moonmind.schemas.agent_skill_models import (
     AgentSkillFormat,
     AgentSkillProvenance,
     AgentSkillSourceKind,
     ResolvedSkillEntry,
     ResolvedSkillSet,
+    SkillImplementationContract,
+    SkillTerminalContract,
     SkillSelector,
 )
 
@@ -178,6 +183,10 @@ class DeploymentSkillLoader(SkillLoader):
                     metadata,
                     owner=definition.slug,
                 )
+                implementation = _implementation_from_artifact_metadata(
+                    metadata,
+                    owner=definition.slug,
+                )
                 results.append(
                     ResolvedSkillEntry(
                         skill_name=definition.slug,
@@ -186,6 +195,7 @@ class DeploymentSkillLoader(SkillLoader):
                         content_digest=definition.content_digest,
                         required_skills=list(required_skills),
                         required_capabilities=list(required_capabilities),
+                        implementation=implementation,
                         provenance=AgentSkillProvenance(
                             source_kind=AgentSkillSourceKind.DEPLOYMENT
                         ),
@@ -209,16 +219,62 @@ def _scan_for_skills(
         if item.name in skip_names:
             continue
         if item.is_dir() and (item / "SKILL.md").exists():
+            frontmatter = _load_skill_frontmatter(item)
+            side_effect = _side_effect_metadata_from_frontmatter(
+                frontmatter, owner=item.name
+            )
+            terminal_contract = _terminal_contract_from_side_effect(
+                side_effect, owner=item.name
+            )
             results.append(
                 ResolvedSkillEntry(
                     skill_name=item.name,
+                    implementation=_implementation_from_frontmatter(
+                        frontmatter,
+                        owner=item.name,
+                    ),
                     provenance=AgentSkillProvenance(
                         source_kind=source_kind,
                         source_path=str(item),
                     ),
+                    terminal_contract=terminal_contract,
                 )
             )
     return results
+
+
+def _terminal_contract_from_side_effect(
+    side_effect: dict[str, typing.Any], *, owner: str
+) -> SkillTerminalContract | None:
+    contract_id = str(side_effect.get("terminalContractId") or "").strip()
+    if not contract_id:
+        return None
+    known = {
+        "batch_dependabot_resolver_fanout.v1": (
+            "moonmind.batch-dependabot-resolver-result.v1"
+        ),
+        "batch_workflows_fanout.v1": "moonmind.batch-workflows-result.v1",
+        "pr_resolver_terminal.v1": "moonmind.pr-resolver-result.v1",
+    }
+    if contract_id not in known:
+        raise ValueError(
+            f"skill '{owner}' selects unknown terminal contract '{contract_id}'"
+        )
+    relative_path = str(side_effect.get("outcomeArtifact") or "").strip()
+    normalized_path = relative_path.replace("\\", "/")
+    path = Path(normalized_path)
+    if (
+        not relative_path
+        or normalized_path.startswith("/")
+        or path.is_absolute()
+        or ".." in path.parts
+    ):
+        raise ValueError(f"skill '{owner}' terminal outcomeArtifact is unsafe")
+    return SkillTerminalContract(
+        contract_id=contract_id,
+        relative_path=normalized_path,
+        expected_schema_version=known[contract_id],
+    )
 
 
 def _is_moonmind_active_projection(skills_dir: Path) -> bool:
@@ -400,10 +456,20 @@ def _required_capabilities_from_frontmatter(
     metadata = frontmatter.get("metadata") or {}
     if not isinstance(metadata, dict):
         raise ValueError(f"skill '{owner}' metadata must be a mapping")
-    return _required_capabilities_from_metadata(
-        metadata.get(_REQUIRED_CAPABILITIES_METADATA_KEY),
-        owner=owner,
+    required = list(
+        _required_capabilities_from_metadata(
+            metadata.get(_REQUIRED_CAPABILITIES_METADATA_KEY),
+            owner=owner,
+        )
     )
+    side_effect = _side_effect_metadata_from_frontmatter(frontmatter, owner=owner)
+    side_effect_kind = str(side_effect.get("kind") or "").strip().lower()
+    if (
+        side_effect_kind == "enqueue_children"
+        and EXECUTION_FANOUT_REQUIRED_CAPABILITY not in required
+    ):
+        required.append(EXECUTION_FANOUT_REQUIRED_CAPABILITY)
+    return tuple(required)
 
 
 def extract_required_capabilities_from_skill_markdown(
@@ -453,6 +519,39 @@ def _side_effect_metadata_from_frontmatter(
     if not isinstance(raw_side_effect, dict):
         raise ValueError(f"skill '{owner}' metadata.sideEffect must be a mapping")
     return dict(raw_side_effect)
+
+
+def _implementation_from_frontmatter(
+    frontmatter: dict[str, typing.Any],
+    *,
+    owner: str,
+) -> SkillImplementationContract | None:
+    metadata = frontmatter.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        raise ValueError(f"skill '{owner}' metadata must be a mapping")
+    raw = metadata.get("implementation")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"skill '{owner}' metadata.implementation must be a mapping"
+        )
+    return SkillImplementationContract.model_validate(raw)
+
+
+def _implementation_from_artifact_metadata(
+    metadata: dict[str, typing.Any],
+    *,
+    owner: str,
+) -> SkillImplementationContract | None:
+    raw = metadata.get("implementation")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"skill '{owner}' artifact metadata.implementation must be a mapping"
+        )
+    return SkillImplementationContract.model_validate(raw)
 
 
 def extract_publish_metadata_from_skill_markdown(

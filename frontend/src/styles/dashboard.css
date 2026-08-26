@@ -21,21 +21,34 @@
   --mm-danger: 244 63 94;
   --mm-action-primary: 21 147 118;
   --mm-shadow: 0 18px 32px -26px rgb(10 8 30 / 0.55);
-  --mm-atmosphere-violet: radial-gradient(
-    circle at 8% 0%,
-    rgb(var(--mm-accent) / 0.18),
-    transparent 44%
-  );
-  --mm-atmosphere-cyan: radial-gradient(
-    circle at 98% 0%,
-    rgb(var(--mm-accent-2) / 0.14),
-    transparent 42%
-  );
-  --mm-atmosphere-warm: radial-gradient(
-    circle at 50% 100%,
-    rgb(var(--mm-accent-warm) / 0.1),
-    transparent 52%
-  );
+  /* Highlight-edge treatment, liquid-glass style. The edge light is a masked
+   * gradient ring (--mm-highlight-edge-ring, applied via pseudo-element):
+   * two corner-anchored radial gradients — white bleeding out of the top-left
+   * corner, violet out of the bottom-right — fading to nothing before they
+   * reach the top-right and bottom-left corners. Radials (not a 135° linear)
+   * so the light hugs the corners at any button aspect ratio, and a gradient
+   * (not box-shadow insets) because a shadow cannot fade along an edge. The
+   * shadow tokens carry only the faint under-glow, kept almost entirely on
+   * the bottom edge (the negative spread pulls the blur off the sides); the
+   * hover variant swaps it to light blue. */
+  --mm-highlight-edge-ring:
+    radial-gradient(
+      130% 220% at 0% 0%,
+      rgb(255 255 255 / 0.6) 0%,
+      rgb(255 255 255 / 0.12) 22%,
+      transparent 45%
+    ),
+    radial-gradient(
+      130% 220% at 100% 100%,
+      rgb(167 139 250 / 0.7) 0%,
+      rgb(167 139 250 / 0.16) 22%,
+      transparent 45%
+    );
+  --mm-shadow-highlight-edge: 0 5px 9px -5px rgb(var(--mm-accent) / 0.45);
+  --mm-shadow-highlight-edge-hover: 0 5px 9px -5px rgb(110 180 255 / 0.6);
+  --mm-atmosphere-violet: radial-gradient(circle at 8% 0%, rgb(var(--mm-accent) / 0.18), transparent 44%);
+  --mm-atmosphere-cyan: radial-gradient(circle at 98% 0%, rgb(var(--mm-accent-2) / 0.14), transparent 42%);
+  --mm-atmosphere-warm: radial-gradient(circle at 50% 100%, rgb(var(--mm-accent-warm) / 0.10), transparent 52%);
   --mm-atmosphere-base: rgb(var(--mm-bg));
   --mm-glass-fill: rgb(var(--mm-panel) / 0.74);
   --mm-glass-border: rgb(var(--mm-border) / 0.8);
@@ -43,16 +56,14 @@
   --mm-input-well: rgb(var(--mm-panel) / 0.68);
   --mm-elevation-panel: var(--mm-shadow);
   --mm-elevation-floating:
-    inset 0 1px 0 var(--mm-glass-edge), inset 0 -1px 0 rgb(255 255 255 / 0.08),
-    0 24px 70px -28px rgb(0 0 0 / 0.58), 0 0 0 1px rgb(0 0 0 / 0.18);
+    inset 0 1px 0 var(--mm-glass-edge),
+    inset 0 -1px 0 rgb(255 255 255 / 0.08),
+    0 24px 70px -28px rgb(0 0 0 / 0.58),
+    0 0 0 1px rgb(0 0 0 / 0.18);
   --mm-control-hover-scale: 1.018;
   --mm-control-press-scale: 0.988;
-  --mm-control-transition:
-    transform 150ms cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 150ms ease,
-    border-color 150ms ease, background 150ms ease, filter 150ms ease;
-  --mm-control-focus-ring:
-    0 0 0 2px rgb(var(--mm-accent-2) / 0.82),
-    0 0 0 4px rgb(var(--mm-accent-2) / 0.18);
+  --mm-control-transition: transform 150ms cubic-bezier(.2,.8,.2,1), box-shadow 150ms ease, border-color 150ms ease, background 150ms ease, filter 150ms ease;
+  --mm-control-focus-ring: 0 0 0 2px rgb(var(--mm-accent-2) / 0.82), 0 0 0 4px rgb(var(--mm-accent-2) / 0.18);
   --mm-control-disabled-opacity: 0.48;
   --mm-control-shell: rgb(var(--mm-panel) / 0.78);
   --mm-control-shell-hover: rgb(var(--mm-accent) / 0.12);
@@ -63,23 +74,27 @@
   --mm-mobile-nav-shadow: 0 20px 50px rgb(0 0 0 / 0.26);
   --mm-mobile-nav-text: rgb(var(--mm-muted) / 0.86);
   --mm-mobile-nav-hover: rgb(var(--mm-accent) / 0.12);
-  --mm-mobile-nav-active-start: rgb(var(--mm-accent) / 0.3);
-  --mm-mobile-nav-active-end: rgb(var(--mm-accent) / 0.1);
+  --mm-mobile-nav-active-start: rgb(var(--mm-accent) / 0.30);
+  --mm-mobile-nav-active-end: rgb(var(--mm-accent) / 0.10);
   --mm-mobile-nav-active-edge: rgb(var(--mm-accent) / 0.88);
   --mm-font-sans: "IBM Plex Sans", system-ui, sans-serif;
   --mm-executing-sweep-cycle-duration: 2600ms;
-  /* MM-1048: slightly more horizontal shimmer path while preserving the shared
-     compatibility token names used by existing status-pill selectors. */
-  --mm-executing-sweep-angle: -20deg;
+  /* Approved shimmer geometry (MM-1036 palette/geometry as shipped and
+     operator-reviewed). The sweep angle was steepened from the original -18deg
+     to -28deg per operator review so the shimmer line sits ~10deg further from
+     horizontal (closer to vertical). MM-1048's abandoned -20deg / +/-120%
+     re-angle broke gradient resolution and never rendered, so it is not a
+     baseline. Change the angle only with an operator-reviewed visual baseline
+     update. */
+  --mm-executing-sweep-angle: -28deg;
   --mm-executing-sweep-band-width: 24%;
   --mm-executing-sweep-band-height: 180%;
   --mm-executing-sweep-halo-width-multiplier: 10;
   --mm-executing-sweep-core-width-multiplier: 9.1667;
-  /* MM-1048: horizontal travel delta (270%) exceeds the vertical delta (240%). */
   --mm-executing-sweep-start-x: 135%;
-  --mm-executing-sweep-start-y: 120%;
+  --mm-executing-sweep-start-y: 160%;
   --mm-executing-sweep-end-x: -135%;
-  --mm-executing-sweep-end-y: -120%;
+  --mm-executing-sweep-end-y: -160%;
   --mm-executing-sweep-layer-offset-x: -12%;
   --mm-executing-sweep-layer-offset-y: -10%;
   --mm-executing-sweep-core-opacity: 0.34;
@@ -87,33 +102,22 @@
   --mm-executing-border-glint-outset: 1px;
   --mm-executing-border-glint-width: 3px;
   --mm-executing-border-glint-opacity: 0.95;
-  --mm-executing-letter-cycle-duration: var(
-    --mm-executing-sweep-cycle-duration
-  );
+  --mm-executing-letter-cycle-duration: var(--mm-executing-sweep-cycle-duration);
   --mm-executing-letter-sweep-start-ratio: 0.2;
   --mm-executing-letter-sweep-travel-ratio: 0.18;
   --mm-executing-letter-sweep-direction: 1;
-  --mm-executing-letter-halo: var(--mm-status-shimmer-letter-halo);
-  --mm-executing-letter-bright: var(--mm-status-shimmer-letter-bright);
   --workflow-list-header-row-height: 2.75rem;
   --workflow-list-body-row-height: 4rem;
   --workflow-list-compact-body-row-height: 3rem;
   --workflow-list-column-workflow-width: 20rem;
   --workflow-list-divider-width: 1px;
   --workflow-list-divider-color: rgb(var(--mm-border) / 0.72);
-  --mm-executing-moving-light-gradient:
-    linear-gradient(
-      var(--mm-executing-sweep-angle),
-      transparent 0 36%,
-      var(--mm-status-shimmer-halo) 50%,
-      transparent 64%
-    ),
-    linear-gradient(
-      var(--mm-executing-sweep-angle),
-      transparent 0 44%,
-      var(--mm-status-shimmer-core) 50%,
-      transparent 56%
-    );
+  /* Visible block size available to a collection workspace below the dashboard
+   * chrome (masthead, banners, alert strip). The route shell overrides this
+   * precisely from the panel's top coordinate + visualViewport height; the
+   * 100dvh default keeps the shared rail full-height before/without that
+   * measurement so its size never depends on the row count. */
+  --mm-collection-workspace-block-size: 100dvh;
   --mm-font-headline: var(--mm-font-sans);
   --mm-font-mono: "IBM Plex Mono", ui-monospace, monospace;
 }
@@ -137,21 +141,9 @@
   --mm-danger: 251 113 133;
   --mm-action-primary: 26 153 123;
   --mm-shadow: 0 24px 52px -34px rgb(0 0 0 / 0.88);
-  --mm-atmosphere-violet: radial-gradient(
-    circle at 12% -6%,
-    rgb(var(--mm-accent) / 0.36),
-    transparent 46%
-  );
-  --mm-atmosphere-cyan: radial-gradient(
-    circle at 95% -8%,
-    rgb(var(--mm-accent-2) / 0.22),
-    transparent 44%
-  );
-  --mm-atmosphere-warm: radial-gradient(
-    circle at 50% 112%,
-    rgb(var(--mm-warn) / 0.18),
-    transparent 56%
-  );
+  --mm-atmosphere-violet: radial-gradient(circle at 12% -6%, rgb(var(--mm-accent) / 0.36), transparent 46%);
+  --mm-atmosphere-cyan: radial-gradient(circle at 95% -8%, rgb(var(--mm-accent-2) / 0.22), transparent 44%);
+  --mm-atmosphere-warm: radial-gradient(circle at 50% 112%, rgb(var(--mm-warn) / 0.18), transparent 56%);
   --mm-atmosphere-base: rgb(var(--mm-bg));
   --mm-glass-fill: rgb(var(--mm-panel) / 0.78);
   --mm-glass-border: rgb(var(--mm-border) / 0.74);
@@ -159,8 +151,10 @@
   --mm-input-well: rgb(10 9 22 / 0.62);
   --mm-elevation-panel: var(--mm-shadow);
   --mm-elevation-floating:
-    inset 0 1px 0 var(--mm-glass-edge), inset 0 -1px 0 rgb(255 255 255 / 0.06),
-    0 28px 76px -30px rgb(0 0 0 / 0.72), 0 0 0 1px rgb(255 255 255 / 0.08);
+    inset 0 1px 0 var(--mm-glass-edge),
+    inset 0 -1px 0 rgb(255 255 255 / 0.06),
+    0 28px 76px -30px rgb(0 0 0 / 0.72),
+    0 0 0 1px rgb(255 255 255 / 0.08);
   --mm-control-shell: rgb(var(--mm-panel) / 0.82);
   --mm-control-shell-hover: rgb(var(--mm-accent) / 0.18);
   --mm-control-border: rgb(var(--mm-border) / 0.76);
@@ -187,9 +181,7 @@ body {
   min-height: 100vh;
   color: rgb(var(--mm-ink));
   /* Keep atmosphere consistent across routes regardless of content height. */
-  background:
-    var(--mm-atmosphere-violet), var(--mm-atmosphere-cyan),
-    var(--mm-atmosphere-warm), var(--mm-atmosphere-base);
+  background: var(--mm-atmosphere-violet), var(--mm-atmosphere-cyan), var(--mm-atmosphere-warm), var(--mm-atmosphere-base);
   background-attachment: fixed;
   background-repeat: no-repeat;
 }
@@ -202,9 +194,7 @@ samp {
 }
 
 .dark body {
-  background:
-    var(--mm-atmosphere-violet), var(--mm-atmosphere-cyan),
-    var(--mm-atmosphere-warm), var(--mm-atmosphere-base);
+  background: var(--mm-atmosphere-violet), var(--mm-atmosphere-cyan), var(--mm-atmosphere-warm), var(--mm-atmosphere-base);
   background-attachment: fixed;
   background-repeat: no-repeat;
 }
@@ -256,15 +246,26 @@ samp {
   width: 100%;
 }
 
-.dashboard-collection-utilities {
-  display: flex;
-  justify-content: flex-start;
-  padding: 0.65rem 0;
-}
-
 .dashboard-alerts-region {
   min-width: 0;
   width: 100%;
+}
+
+/* Version-skew alert: the served JS bundle and the API registry disagree, so
+   the browser is running UI assets from a different build than the server. */
+.ui-version-skew-banner {
+  padding: 0.55rem 1rem;
+  border-bottom: 1px solid rgb(var(--mm-danger) / 0.55);
+  background: rgb(var(--mm-danger) / 0.14);
+  color: rgb(var(--mm-ink));
+  font-size: 0.86rem;
+  line-height: 1.4;
+}
+
+.ui-version-skew-banner p {
+  margin: 0;
+  max-width: min(72rem, calc(100vw - 2rem));
+  margin-inline: auto;
 }
 
 .masthead {
@@ -274,7 +275,11 @@ samp {
   z-index: 50;
   isolation: isolate;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  /* Equal-weight side columns keep the primary nav (middle, content-sized)
+   * centered on the masthead regardless of what sits in the brand group — so
+   * Workflows / Create / System do not shift when the list display radio
+   * buttons appear or disappear on desktop. */
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
   column-gap: 0.7rem;
   padding: 0.65rem 1rem var(--masthead-padding-block-end);
@@ -299,6 +304,14 @@ samp {
   right: calc(50% - 50cqw - 1rem);
   bottom: 0;
   border-bottom: 1px solid rgb(var(--mm-border) / 0.7);
+}
+
+.masthead-brand-group {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: 0.7rem;
+  min-width: 0;
 }
 
 .masthead-brand {
@@ -340,27 +353,76 @@ samp {
 }
 
 .workflow-list-display-control {
+  --list-display-active-index: 0;
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-self: start;
-  gap: 0.25rem;
+  gap: 0.2rem;
   min-width: 0;
-  padding: 0.18rem;
-  border: 1px solid rgb(var(--mm-border) / 0.7);
-  border-radius: 0.55rem;
-  background: rgb(var(--mm-panel) / 0.68);
+  /* Tightened so the group no longer out-sizes the always-present nav buttons
+   * and its presence/absence stops changing the masthead height. */
+  padding: 0.12rem;
+  /* Same highlight-edge treatment as the primary nav buttons: a bright
+   * top-edge inset, a hairline ring that closes the shape so the bottom edge
+   * reads as lit, and an accent under-glow. */
+  border: 0;
+  border-radius: 0.5rem;
+  background: transparent;
+  box-shadow: var(--mm-shadow-highlight-edge);
+}
+
+/* Sliding selection thumb, echoing the create page's segmented control: the
+ * checked option's index (derived below via :has(), like the loud segmented
+ * tier) drives a translateX so the accent fill glides between slots. Pitch is
+ * the fixed option width (1.6rem) plus the control gap (0.2rem). Options sit
+ * at z-index 1, so icons, hover tints, and focus rings paint above the thumb. */
+.workflow-list-display-control::before {
+  content: "";
+  position: absolute;
+  top: 0.12rem;
+  left: 0.12rem;
+  z-index: 0;
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 0.4rem;
+  background: rgb(var(--mm-accent) / 0.14);
+  box-shadow: inset 0 0 0 1px rgb(var(--mm-accent) / 0.6);
+  transform: translateX(calc(var(--list-display-active-index) * 1.8rem));
+  transition: transform 360ms cubic-bezier(0.34, 1.3, 0.5, 1);
+  pointer-events: none;
+}
+
+.workflow-list-display-control:not(:has(.workflow-list-display-option[aria-checked="true"]))::before {
+  opacity: 0;
+}
+
+.workflow-list-display-control:has(.workflow-list-display-option:nth-child(2)[aria-checked="true"]) {
+  --list-display-active-index: 1;
+}
+
+.workflow-list-display-control:has(.workflow-list-display-option:nth-child(3)[aria-checked="true"]) {
+  --list-display-active-index: 2;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workflow-list-display-control::before {
+    transition: none;
+  }
 }
 
 .workflow-list-display-option {
+  position: relative;
+  z-index: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 2rem;
-  height: 2rem;
-  min-width: 2rem;
+  width: 1.6rem;
+  height: 1.6rem;
+  min-width: 1.6rem;
   padding: 0;
   border: 1px solid transparent;
-  border-radius: 0.42rem;
+  border-radius: 0.4rem;
   background: transparent;
   color: rgb(var(--mm-muted));
   box-shadow: none;
@@ -382,10 +444,10 @@ samp {
   box-shadow: var(--mm-control-focus-ring);
 }
 
+/* The sliding thumb on the control's ::before carries the selected fill and
+ * ring, so the selected option itself only tints its icon. */
 .workflow-list-display-option--selected,
 .workflow-list-display-option[aria-checked="true"] {
-  border-color: rgb(var(--mm-accent) / 0.6);
-  background: rgb(var(--mm-accent) / 0.14);
   color: rgb(var(--mm-accent));
 }
 
@@ -410,21 +472,6 @@ samp {
   font-size: 0.76rem;
   line-height: 1.15;
   white-space: normal;
-}
-
-.workflow-row-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  flex-wrap: nowrap;
-}
-
-.workflow-row-actions button {
-  display: inline-flex;
-  align-items: center;
-  padding: 0.25rem 0.5rem;
-  font-size: 0.8rem;
-  white-space: nowrap;
 }
 
 .masthead-title-meta {
@@ -550,8 +597,15 @@ h1 {
   min-width: 0;
 }
 
+.route-nav-primary {
+  display: flex;
+  align-items: stretch;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
 @media (min-width: 1181px) {
-  .masthead-brand {
+  .masthead-brand-group {
     grid-column: 1;
     grid-row: 1;
   }
@@ -560,7 +614,15 @@ h1 {
     grid-column: 2;
     grid-row: 1;
     max-width: 100%;
-    overflow-x: auto;
+  }
+
+  .route-nav {
+    flex-wrap: nowrap;
+    min-width: 0;
+  }
+
+  .route-nav-primary {
+    flex: 1 1 auto;
   }
 
   .masthead-title-meta {
@@ -582,10 +644,7 @@ h1 {
   background: rgb(var(--mm-panel) / 0.7);
   color: rgb(var(--mm-ink));
   cursor: pointer;
-  transition:
-    border-color 130ms ease,
-    background 130ms ease,
-    transform 130ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition: border-color 130ms ease, background 130ms ease, transform 130ms cubic-bezier(.2,.8,.2,1);
 }
 
 .dashboard-nav-backdrop {
@@ -638,9 +697,49 @@ h1 {
   padding: 0.48rem 0.82rem;
   font-size: 0.9rem;
   background: transparent;
-  transition:
-    background 130ms ease,
-    color 130ms ease;
+  transition: background 130ms ease, color 130ms ease;
+}
+
+/* Workflows and Create share the liquid-glass highlight-edge treatment with
+ * the System trigger. Scoped to `.route-nav-primary` so the System popover
+ * menu items — which also match `.route-nav a` — keep their flat menu-row
+ * look. The shadows are non-layout-affecting and the hover scale is a
+ * transform, so the link box height, and thus the active underline on the
+ * masthead edge, is unchanged. :focus-visible / .active rules have higher
+ * specificity and still win. */
+.route-nav-primary a {
+  box-shadow: var(--mm-shadow-highlight-edge);
+  transition: var(--mm-control-transition), color 130ms ease;
+}
+
+/* Hovered nav buttons brighten, grow slightly, and swap the purple under-glow
+ * for light blue — matching the System trigger's hover feel. */
+.route-nav-primary a:hover {
+  box-shadow: var(--mm-shadow-highlight-edge-hover);
+  transform: scale(var(--mm-control-hover-scale));
+  filter: brightness(1.08) saturate(1.04);
+}
+
+/* Diagonal liquid-glass edge: a 1px gradient ring drawn on a pseudo-element
+ * (the border-box gradient is masked down to the ring between border-box and
+ * content-box), bright white at the top-left corner and violet at the
+ * bottom-right, fading to nothing at the other two corners. The radio group
+ * uses ::after because its ::before is the sliding selection thumb. The ring
+ * scales with the hover transform and never intercepts pointer events. */
+.route-nav-primary a::before,
+.dashboard-system-trigger::before,
+.workflow-list-display-control::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: var(--mm-highlight-edge-ring);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
 }
 
 .route-nav-icon {
@@ -684,6 +783,131 @@ h1 {
   box-shadow: var(--mm-control-focus-ring);
 }
 
+.dashboard-system-menu {
+  position: relative;
+  display: flex;
+}
+
+.dashboard-system-trigger {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.42rem;
+  padding: 0.48rem 0.82rem;
+  border: 0;
+  border-radius: 0.5rem;
+  /* Liquid-glass highlight-edge button: transparent fill with the shared
+   * asymmetric edge shadows. Non-layout-affecting, so the box size — and
+   * therefore the active underline position on the masthead's bottom edge —
+   * is unchanged. */
+  background: transparent;
+  box-shadow: var(--mm-shadow-highlight-edge);
+  color: rgb(var(--mm-ink) / 0.82);
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+/* The open and hover states share the highlighted surface and cyan under-glow.
+ * Stating box-shadow here also keeps the global button:hover rule (ring + wide
+ * purple glow, for filled CTAs) from leaking onto the trigger. */
+.dashboard-system-trigger:hover,
+.dashboard-system-trigger[aria-expanded="true"] {
+  background: rgb(var(--mm-ink) / 0.06);
+  color: rgb(var(--mm-ink));
+  box-shadow: var(--mm-shadow-highlight-edge-hover);
+}
+
+/* Keep hover-only motion and brightening out of the persistent open state. */
+.dashboard-system-trigger:hover {
+  transform: scale(var(--mm-control-hover-scale));
+  filter: brightness(1.08) saturate(1.04);
+}
+
+.dashboard-system-trigger.active {
+  color: rgb(var(--mm-ink));
+  text-shadow: 0.5px 0 0 currentColor;
+}
+
+.dashboard-system-trigger.active::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(-1 * var(--masthead-padding-block-end));
+  height: 3px;
+  background: rgb(var(--mm-accent));
+}
+
+.dashboard-system-trigger:focus-visible,
+.dashboard-system-popover a:focus-visible {
+  outline: none;
+  box-shadow: var(--mm-control-focus-ring);
+}
+
+.dashboard-system-popover {
+  position: absolute;
+  top: calc(100% + 0.65rem);
+  right: 0;
+  z-index: 60;
+  width: 18rem;
+  padding: 0.55rem;
+  border: 1px solid rgb(var(--mm-border) / 0.8);
+  border-radius: 0.8rem;
+  background: rgb(var(--mm-panel));
+  box-shadow: var(--mm-elevation-panel);
+}
+
+.dashboard-system-menu-section + .dashboard-system-menu-section:has(.dashboard-system-menu-label) {
+  margin-top: 0.45rem;
+  padding-top: 0.45rem;
+  border-top: 1px solid rgb(var(--mm-border) / 0.55);
+}
+
+.dashboard-system-menu-label,
+.dashboard-system-inline-heading {
+  padding: 0.35rem 0.75rem 0.2rem;
+  color: rgb(var(--mm-muted));
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.dashboard-system-popover a {
+  display: flex;
+  width: 100%;
+}
+
+/* The System trigger keeps its purple underline when a System destination is
+ * active, but the selected row inside the open popover must not repeat that
+ * underline. Suppress the masthead underline on every popover row (it also
+ * matches `.route-nav a`) and mark the open selection the way the collection
+ * sidebar does instead: a left accent bar plus a faint accent fill. */
+.dashboard-system-popover a::after,
+.dashboard-system-popover a.active::after {
+  content: none;
+}
+
+.dashboard-system-popover a.active {
+  color: rgb(var(--mm-ink));
+  background: rgb(var(--mm-accent) / 0.12);
+  box-shadow: inset 3px 0 0 rgb(var(--mm-accent));
+}
+
+/* The active-row rule above shares specificity with the earlier
+ * `.dashboard-system-popover a:focus-visible` rule, so on the currently active
+ * destination it would otherwise clobber the focus ring and leave keyboard
+ * users without a distinct focus indicator. Combine both here so the focused
+ * active row keeps its selected-row accent and regains the focus ring. */
+.dashboard-system-popover a.active:focus-visible {
+  box-shadow: var(--mm-control-focus-ring), inset 3px 0 0 rgb(var(--mm-accent));
+}
+
+.dashboard-system-inline {
+  display: none;
+}
+
 .panel {
   margin-top: 0;
   margin-left: 0;
@@ -697,7 +921,7 @@ h1 {
   box-shadow: var(--mm-elevation-panel);
   padding: 1rem;
   min-height: 320px;
-  animation: panel-enter 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  animation: panel-enter 220ms cubic-bezier(.2,.8,.2,1);
 }
 
 .panel:has(.queue-submit-form) {
@@ -790,9 +1014,7 @@ h1 {
   justify-content: space-between;
 }
 
-.evidence-workspace > header nav {
-  justify-content: flex-start;
-}
+.evidence-workspace > header nav { justify-content: flex-start; }
 .evidence-collection {
   border: 1px solid rgb(var(--mm-border) / 0.8);
   border-radius: 1rem;
@@ -800,43 +1022,15 @@ h1 {
   gap: 1rem;
   padding: 1rem;
 }
-.evidence-collection__header h2 {
-  margin: 0;
-}
-.evidence-collection__header p {
-  margin: 0.25rem 0 0;
-}
-.evidence-collection__filter {
-  display: grid;
-  gap: 0.35rem;
-  max-width: 28rem;
-}
-.evidence-collection__table-wrap {
-  overflow-x: auto;
-}
-.evidence-collection table {
-  border-collapse: collapse;
-  min-width: 52rem;
-  width: 100%;
-}
-.evidence-collection th,
-.evidence-collection td {
-  border-bottom: 1px solid rgb(var(--mm-border) / 0.65);
-  padding: 0.7rem;
-  text-align: left;
-  vertical-align: top;
-}
-.evidence-collection td small {
-  display: block;
-  margin-top: 0.25rem;
-}
-.evidence-collection td a + a {
-  margin-left: 0.75rem;
-}
-.evidence-collection__pagination > div {
-  display: flex;
-  gap: 0.5rem;
-}
+.evidence-collection__header h2 { margin: 0; }
+.evidence-collection__header p { margin: 0.25rem 0 0; }
+.evidence-collection__filter { display: grid; gap: 0.35rem; max-width: 28rem; }
+.evidence-collection__table-wrap { overflow-x: auto; }
+.evidence-collection table { border-collapse: collapse; min-width: 52rem; width: 100%; }
+.evidence-collection th, .evidence-collection td { border-bottom: 1px solid rgb(var(--mm-border) / 0.65); padding: 0.7rem; text-align: left; vertical-align: top; }
+.evidence-collection td small { display: block; margin-top: 0.25rem; }
+.evidence-collection td a + a { margin-left: 0.75rem; }
+.evidence-collection__pagination > div { display: flex; gap: 0.5rem; }
 
 .loading {
   color: rgb(var(--mm-muted));
@@ -881,6 +1075,7 @@ h1 {
   flex-wrap: wrap;
   margin-left: auto;
 }
+
 
 .table-sort-button {
   display: inline-flex;
@@ -1150,8 +1345,7 @@ h1 {
   box-shadow: var(--mm-elevation-panel);
 }
 
-.workflow-list-header-cell:nth-last-child(-n + 2)
-  .workflow-list-column-filter-popover {
+.workflow-list-header-cell:nth-last-child(-n + 2) .workflow-list-column-filter-popover {
   left: auto;
   right: 0;
 }
@@ -1170,8 +1364,7 @@ h1 {
  */
 .workflow-list-column-filter-popover .workflow-list-filter-control,
 .workflow-list-column-filter-popover .workflow-list-filter-control:hover,
-.workflow-list-column-filter-popover
-  .workflow-list-filter-control:focus-within {
+.workflow-list-column-filter-popover .workflow-list-filter-control:focus-within {
   display: grid;
   gap: 0.65rem;
   align-items: stretch;
@@ -1367,9 +1560,7 @@ h1 {
   -webkit-backdrop-filter: blur(26px) saturate(1.65);
 }
 
-@supports not (
-  (backdrop-filter: blur(2px)) or (-webkit-backdrop-filter: blur(2px))
-) {
+@supports not ((backdrop-filter: blur(2px)) or (-webkit-backdrop-filter: blur(2px))) {
   .surface--glass-control,
   .panel--controls,
   .panel--floating,
@@ -1423,9 +1614,7 @@ h1 {
 
 .index-health-generated strong {
   color: rgb(var(--mm-ink));
-  font-family:
-    "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
-    "Liberation Mono", monospace;
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: 0.86rem;
 }
 
@@ -1455,9 +1644,7 @@ h1 {
 
 .index-health-metric strong {
   color: rgb(var(--mm-ink));
-  font-family:
-    "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
-    "Liberation Mono", monospace;
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: 1.55rem;
   line-height: 1;
 }
@@ -1511,9 +1698,7 @@ h1 {
 
 .index-health-table code {
   color: rgb(var(--mm-ink));
-  font-family:
-    "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
-    "Liberation Mono", monospace;
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: 0.83rem;
 }
 
@@ -1521,9 +1706,7 @@ h1 {
   display: block;
   margin-top: 0.18rem;
   color: rgb(var(--mm-muted));
-  font-family:
-    "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
-    "Liberation Mono", monospace;
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: 0.72rem;
 }
 
@@ -1563,6 +1746,13 @@ h1 {
 
 .schedules-page {
   width: 100%;
+}
+
+/* Recurring Schedules list: the routed panel bleeds to the nav's bottom border,
+ * so give the heading a little breathing room below that line. The detail view
+ * lives in a workspace shell that already insets its content, so exclude it. */
+.schedules-page:not(.schedules-detail-page) {
+  padding-top: 1.25rem;
 }
 
 .entity-detail-frame {
@@ -1612,10 +1802,7 @@ h1 {
 
 .entity-detail-frame__body {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(
-      13rem,
-      var(--mm-detail-facts-rail-width, 18rem)
-    );
+  grid-template-columns: minmax(0, 1fr) minmax(13rem, var(--mm-detail-facts-rail-width, 18rem));
   gap: 1rem;
   align-items: start;
 }
@@ -2224,9 +2411,7 @@ h1 {
 .workflow-list-filter-chip:has(.workflow-list-filter-chip-open:hover),
 .workflow-list-filter-chip:has(.workflow-list-filter-chip-open:focus-visible),
 .workflow-list-filter-chip:has(.workflow-list-filter-chip-remove:hover),
-.workflow-list-filter-chip:has(
-  .workflow-list-filter-chip-remove:focus-visible
-) {
+.workflow-list-filter-chip:has(.workflow-list-filter-chip-remove:focus-visible) {
   border-color: rgb(var(--mm-accent) / 0.7);
   background: rgb(var(--mm-accent) / 0.08);
   color: rgb(var(--mm-ink));
@@ -2392,6 +2577,7 @@ tbody tr:hover {
   justify-content: flex-start;
 }
 
+
 .workflow-list-footer-page-summary {
   justify-content: flex-end;
   text-align: right;
@@ -2451,20 +2637,23 @@ tbody tr:hover {
  * into the page (which scrolls) instead of being cut off, and the fixed-layout
  * table never needs horizontal scrolling.
  */
-.workflow-list-data-slab
-  .queue-table-wrapper:has(.td-workflow-actions-popover) {
+.workflow-list-data-slab .queue-table-wrapper:has(
+  .td-workflow-actions-popover
+) {
   overflow: visible;
 }
 
-.workflow-list-data-slab
-  .queue-table-wrapper:has(.workflow-list-column-filter-popover) {
+.workflow-list-data-slab .queue-table-wrapper:has(
+  .workflow-list-column-filter-popover
+) {
   overflow: visible;
 }
 
 /* The Actions-header "View options" popover (desktop) escapes the table edge the
  * same way the per-column filter popovers do. */
-.workflow-list-data-slab
-  .queue-table-wrapper:has(.workflow-list-view-options-popover) {
+.workflow-list-data-slab .queue-table-wrapper:has(
+  .workflow-list-view-options-popover
+) {
   overflow: visible;
 }
 
@@ -2576,19 +2765,19 @@ tbody tr:hover {
 }
 
 /* MM-964: compact density preference tightens the workflow list rows. */
-.queue-table-wrapper[data-density="compact"] {
+.queue-table-wrapper[data-density='compact'] {
   --workflow-list-body-row-height: var(--workflow-list-compact-body-row-height);
 }
 
-.queue-table-wrapper[data-density="compact"] th,
-.queue-table-wrapper[data-density="compact"] td {
+.queue-table-wrapper[data-density='compact'] th,
+.queue-table-wrapper[data-density='compact'] td {
   padding: 0.3rem 0.45rem;
   font-size: 0.82rem;
 }
 
-.queue-table-wrapper[data-density="compact"] .queue-table-cell-compact,
-.queue-table-wrapper[data-density="compact"] .queue-table-cell-date,
-.queue-table-wrapper[data-density="compact"] .queue-table-cell-progress {
+.queue-table-wrapper[data-density='compact'] .queue-table-cell-compact,
+.queue-table-wrapper[data-density='compact'] .queue-table-cell-date,
+.queue-table-wrapper[data-density='compact'] .queue-table-cell-progress {
   font-size: 0.76rem;
 }
 
@@ -2768,7 +2957,7 @@ tbody tr:hover {
 }
 
 .workflow-list-progress:empty::before {
-  content: "—";
+  content: '—';
   color: rgb(var(--mm-muted));
 }
 
@@ -2845,13 +3034,13 @@ tbody tr:hover {
 }
 
 .provider-profile-status-details > summary::before {
-  content: "\25b8";
+  content: '\25b8';
   font-size: 0.65rem;
   line-height: 1;
 }
 
 .provider-profile-status-details[open] > summary::before {
-  content: "\25be";
+  content: '\25be';
 }
 
 @media (max-width: 720px) {
@@ -2859,8 +3048,7 @@ tbody tr:hover {
     display: block;
   }
 
-  .workflow-workspace-shell[data-recurring-list-display-mode="sidebar"]
-    .collection-sidebar {
+  .workflow-workspace-shell[data-recurring-list-display-mode="sidebar"] .collection-sidebar {
     display: none;
   }
 
@@ -2989,10 +3177,7 @@ tbody tr:hover {
 
 tr[data-proposal-id].proposal-consuming,
 .queue-card[data-proposal-id].proposal-consuming {
-  transition:
-    opacity 0.18s ease,
-    transform 0.18s ease,
-    box-shadow 0.18s ease;
+  transition: opacity 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
   opacity: 0.55;
   transform: scale(0.985);
   animation: proposal-consume-flash 320ms ease-out;
@@ -3316,20 +3501,35 @@ tr[data-proposal-id].proposal-consuming td {
 
 .status[data-effect="shimmer-sweep"],
 .status-running.is-executing {
-  --mm-status-shimmer-halo: color-mix(in srgb, currentColor 30%, transparent);
-  --mm-status-shimmer-core: color-mix(in srgb, currentColor 70%, white 30%);
-  --mm-status-shimmer-letter-halo: color-mix(
-    in srgb,
-    currentColor 32%,
-    transparent
-  );
-  --mm-status-shimmer-letter-bright: color-mix(
-    in srgb,
-    currentColor 68%,
-    white 32%
-  );
+  /* Approved shimmer palette (MM-1036 as shipped and operator-reviewed): a
+     translucent accent halo under a translucent accent-2 core. MM-1048 swapped
+     these for brighter currentColor mixes (30% halo, opaque whitened core),
+     but the same commit broke gradient resolution, so that treatment never
+     rendered on screen; restoring the effect must not silently adopt it.
+     Change only with an operator-reviewed visual baseline update. */
+  --mm-status-shimmer-halo: rgb(var(--mm-accent) / var(--mm-executing-sweep-halo-opacity));
+  --mm-status-shimmer-core: rgb(var(--mm-accent-2) / var(--mm-executing-sweep-core-opacity));
+  --mm-status-shimmer-letter-halo: color-mix(in srgb, currentColor 32%, transparent);
+  --mm-status-shimmer-letter-bright: color-mix(in srgb, currentColor 68%, white 32%);
   --mm-executing-letter-halo: var(--mm-status-shimmer-letter-halo);
   --mm-executing-letter-bright: var(--mm-status-shimmer-letter-bright);
+  /* The gradient must be declared where its shimmer color inputs are defined:
+     a custom property that references vars only defined on descendants resolves
+     to the guaranteed-invalid value at computed-value time, so consuming layers
+     end up with background-image: none while the animation keeps running. */
+  --mm-status-moving-light-gradient:
+    linear-gradient(
+      var(--mm-executing-sweep-angle),
+      transparent 0 36%,
+      var(--mm-status-shimmer-halo) 50%,
+      transparent 64%
+    ),
+    linear-gradient(
+      var(--mm-executing-sweep-angle),
+      transparent 0 44%,
+      var(--mm-status-shimmer-core) 50%,
+      transparent 56%
+    );
   position: relative;
   overflow: hidden;
   isolation: isolate;
@@ -3348,31 +3548,15 @@ tr[data-proposal-id].proposal-consuming td {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background-image: var(--mm-executing-moving-light-gradient);
+  background-image: var(--mm-status-moving-light-gradient);
   background-repeat: no-repeat;
   background-size:
-    calc(
-        var(--mm-executing-sweep-band-width) *
-          var(--mm-executing-sweep-halo-width-multiplier)
-      )
-      var(--mm-executing-sweep-band-height),
-    calc(
-        var(--mm-executing-sweep-band-width) *
-          var(--mm-executing-sweep-core-width-multiplier)
-      )
-      var(--mm-executing-sweep-band-height);
+    calc(var(--mm-executing-sweep-band-width) * var(--mm-executing-sweep-halo-width-multiplier)) var(--mm-executing-sweep-band-height),
+    calc(var(--mm-executing-sweep-band-width) * var(--mm-executing-sweep-core-width-multiplier)) var(--mm-executing-sweep-band-height);
   background-position:
     var(--mm-executing-sweep-start-x) var(--mm-executing-sweep-start-y),
-    calc(
-        var(--mm-executing-sweep-start-x) +
-          var(--mm-executing-sweep-layer-offset-x)
-      )
-      calc(
-        var(--mm-executing-sweep-start-y) +
-          var(--mm-executing-sweep-layer-offset-y)
-      );
-  animation: mm-status-pill-shimmer var(--mm-executing-sweep-cycle-duration)
-    linear infinite;
+    calc(var(--mm-executing-sweep-start-x) + var(--mm-executing-sweep-layer-offset-x)) calc(var(--mm-executing-sweep-start-y) + var(--mm-executing-sweep-layer-offset-y));
+  animation: mm-status-pill-shimmer var(--mm-executing-sweep-cycle-duration) linear infinite;
   mix-blend-mode: plus-lighter;
 }
 
@@ -3412,49 +3596,19 @@ tr[data-proposal-id].proposal-consuming td {
   0% {
     background-position:
       var(--mm-executing-sweep-start-x) var(--mm-executing-sweep-start-y),
-      calc(
-          var(--mm-executing-sweep-start-x) +
-            var(--mm-executing-sweep-layer-offset-x)
-        )
-        calc(
-          var(--mm-executing-sweep-start-y) +
-            var(--mm-executing-sweep-layer-offset-y)
-        );
+      calc(var(--mm-executing-sweep-start-x) + var(--mm-executing-sweep-layer-offset-x)) calc(var(--mm-executing-sweep-start-y) + var(--mm-executing-sweep-layer-offset-y));
     background-size:
-      calc(
-          var(--mm-executing-sweep-band-width) *
-            var(--mm-executing-sweep-halo-width-multiplier)
-        )
-        var(--mm-executing-sweep-band-height),
-      calc(
-          var(--mm-executing-sweep-band-width) *
-            var(--mm-executing-sweep-core-width-multiplier)
-        )
-        var(--mm-executing-sweep-band-height);
+      calc(var(--mm-executing-sweep-band-width) * var(--mm-executing-sweep-halo-width-multiplier)) var(--mm-executing-sweep-band-height),
+      calc(var(--mm-executing-sweep-band-width) * var(--mm-executing-sweep-core-width-multiplier)) var(--mm-executing-sweep-band-height);
   }
 
   100% {
     background-position:
       var(--mm-executing-sweep-end-x) var(--mm-executing-sweep-end-y),
-      calc(
-          var(--mm-executing-sweep-end-x) +
-            var(--mm-executing-sweep-layer-offset-x)
-        )
-        calc(
-          var(--mm-executing-sweep-end-y) +
-            var(--mm-executing-sweep-layer-offset-y)
-        );
+      calc(var(--mm-executing-sweep-end-x) + var(--mm-executing-sweep-layer-offset-x)) calc(var(--mm-executing-sweep-end-y) + var(--mm-executing-sweep-layer-offset-y));
     background-size:
-      calc(
-          var(--mm-executing-sweep-band-width) *
-            var(--mm-executing-sweep-halo-width-multiplier)
-        )
-        var(--mm-executing-sweep-band-height),
-      calc(
-          var(--mm-executing-sweep-band-width) *
-            var(--mm-executing-sweep-core-width-multiplier)
-        )
-        var(--mm-executing-sweep-band-height);
+      calc(var(--mm-executing-sweep-band-width) * var(--mm-executing-sweep-halo-width-multiplier)) var(--mm-executing-sweep-band-height),
+      calc(var(--mm-executing-sweep-band-width) * var(--mm-executing-sweep-core-width-multiplier)) var(--mm-executing-sweep-band-height);
   }
 }
 
@@ -3478,31 +3632,15 @@ tr[data-proposal-id].proposal-consuming td {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background-image: var(--mm-executing-moving-light-gradient);
+  background-image: var(--mm-status-moving-light-gradient);
   background-repeat: no-repeat;
   background-size:
-    calc(
-        var(--mm-executing-sweep-band-width) *
-          var(--mm-executing-sweep-halo-width-multiplier)
-      )
-      var(--mm-executing-sweep-band-height),
-    calc(
-        var(--mm-executing-sweep-band-width) *
-          var(--mm-executing-sweep-core-width-multiplier)
-      )
-      var(--mm-executing-sweep-band-height);
+    calc(var(--mm-executing-sweep-band-width) * var(--mm-executing-sweep-halo-width-multiplier)) var(--mm-executing-sweep-band-height),
+    calc(var(--mm-executing-sweep-band-width) * var(--mm-executing-sweep-core-width-multiplier)) var(--mm-executing-sweep-band-height);
   background-position:
     var(--mm-executing-sweep-start-x) var(--mm-executing-sweep-start-y),
-    calc(
-        var(--mm-executing-sweep-start-x) +
-          var(--mm-executing-sweep-layer-offset-x)
-      )
-      calc(
-        var(--mm-executing-sweep-start-y) +
-          var(--mm-executing-sweep-layer-offset-y)
-      );
-  animation: mm-status-pill-shimmer var(--mm-executing-sweep-cycle-duration)
-    linear infinite;
+    calc(var(--mm-executing-sweep-start-x) + var(--mm-executing-sweep-layer-offset-x)) calc(var(--mm-executing-sweep-start-y) + var(--mm-executing-sweep-layer-offset-y));
+  animation: mm-status-pill-shimmer var(--mm-executing-sweep-cycle-duration) linear infinite;
   background-clip: text;
   -webkit-background-clip: text;
   color: transparent;
@@ -3520,18 +3658,12 @@ tr[data-proposal-id].proposal-consuming td {
   .status[data-effect="shimmer-sweep"] .status-letter-wave__glyph,
   .status-running.is-executing .status-letter-wave__glyph {
     animation-name: mm-executing-letter-brighten;
-    animation-duration: var(
-      --mm-executing-letter-cycle-duration,
-      var(--mm-executing-sweep-cycle-duration, 2200ms)
-    );
+    animation-duration: var(--mm-executing-letter-cycle-duration, var(--mm-executing-sweep-cycle-duration, 2200ms));
     animation-timing-function: linear;
     animation-iteration-count: infinite;
     animation-delay: calc(
-      var(
-          --mm-executing-letter-cycle-duration,
-          var(--mm-executing-sweep-cycle-duration, 2200ms)
-        ) *
-        (var(--mm-letter-phase) - 0.22)
+      var(--mm-executing-letter-cycle-duration, var(--mm-executing-sweep-cycle-duration, 2200ms)) *
+      (var(--mm-letter-phase) - 0.22)
     );
   }
 }
@@ -3539,20 +3671,19 @@ tr[data-proposal-id].proposal-consuming td {
 .status-letter-wave__glyph {
   --mm-letter-phase: calc(
     var(--mm-executing-letter-sweep-start-ratio) +
+    (
       (
         (
-            (
-                var(--mm-letter-index) *
-                  var(--mm-executing-letter-sweep-direction)
-              ) +
-              (
-                (var(--mm-letter-count) - 1 - var(--mm-letter-index)) *
-                  (1 - var(--mm-executing-letter-sweep-direction))
-              )
-          ) /
-          max(var(--mm-letter-count) - 1, 1)
-      ) *
-      var(--mm-executing-letter-sweep-travel-ratio)
+          var(--mm-letter-index) * var(--mm-executing-letter-sweep-direction)
+        ) +
+        (
+          (var(--mm-letter-count) - 1 - var(--mm-letter-index)) *
+          (1 - var(--mm-executing-letter-sweep-direction))
+        )
+      ) /
+      max(var(--mm-letter-count) - 1, 1)
+    ) *
+    var(--mm-executing-letter-sweep-travel-ratio)
   );
   display: inline-block;
   color: inherit;
@@ -3580,11 +3711,7 @@ tr[data-proposal-id].proposal-consuming td {
   }
 
   27% {
-    color: color-mix(
-      in srgb,
-      var(--mm-executing-letter-bright) 72%,
-      currentColor 28%
-    );
+    color: color-mix(in srgb, var(--mm-executing-letter-bright) 72%, currentColor 28%);
     text-shadow: 0 0 6px var(--mm-executing-letter-halo);
     filter: brightness(1.08);
   }
@@ -3593,15 +3720,12 @@ tr[data-proposal-id].proposal-consuming td {
 @media (prefers-reduced-motion: reduce) {
   .status[data-effect="shimmer-sweep"],
   .status-running.is-executing {
-    background-image: var(--mm-executing-moving-light-gradient);
+    background-image: var(--mm-status-moving-light-gradient);
     background-repeat: no-repeat;
     background-position:
       50% 50%,
-      calc(50% + (var(--mm-executing-sweep-layer-offset-x) / 2))
-        calc(50% + (var(--mm-executing-sweep-layer-offset-y) / 2));
-    background-size:
-      160% var(--mm-executing-sweep-band-height),
-      140% var(--mm-executing-sweep-band-height);
+      calc(50% + (var(--mm-executing-sweep-layer-offset-x) / 2)) calc(50% + (var(--mm-executing-sweep-layer-offset-y) / 2));
+    background-size: 160% var(--mm-executing-sweep-band-height), 140% var(--mm-executing-sweep-band-height);
   }
 
   .status[data-effect="shimmer-sweep"]::before,
@@ -3657,9 +3781,7 @@ tr[data-proposal-id].proposal-consuming td {
   --beam-border-radius: 16px;
   --beam-border-width: 1.5px;
   --beam-inner-inset: var(--beam-border-width);
-  --beam-inner-radius: calc(
-    var(--beam-border-radius) - var(--beam-border-width)
-  );
+  --beam-inner-radius: calc(var(--beam-border-radius) - var(--beam-border-width));
   --beam-head-arc: 12deg;
   --beam-tail-arc: 28deg;
   --beam-head-end: 332deg;
@@ -3747,24 +3869,17 @@ tr[data-proposal-id].proposal-consuming td {
     var(--beam-head-color) var(--beam-head-start) var(--beam-head-end),
     transparent var(--beam-fade-end)
   );
-  mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   mask-composite: exclude;
-  -webkit-mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
-  transition:
-    opacity var(--beam-enter-duration) ease-out,
-    visibility var(--beam-exit-duration) ease-in;
+  transition: opacity var(--beam-enter-duration) ease-out, visibility var(--beam-exit-duration) ease-in;
   animation: masked-conic-border-beam-orbit var(--beam-speed) linear infinite;
 }
 
 .masked-conic-border-beam[data-active="false"] .masked-conic-border-beam__layer,
 .masked-conic-border-beam[data-active="false"] .masked-conic-border-beam__glow,
-.masked-conic-border-beam[data-active="false"]
-  .masked-conic-border-beam__companion {
+.masked-conic-border-beam[data-active="false"] .masked-conic-border-beam__companion {
   opacity: 0;
   visibility: hidden;
 }
@@ -3777,22 +3892,15 @@ tr[data-proposal-id].proposal-consuming td {
     from 0deg,
     transparent 0deg calc(var(--beam-tail-start) - 8deg),
     var(--beam-glow-color) calc(var(--beam-tail-end) - 2deg),
-    var(--beam-head-color) var(--beam-head-start)
-      calc(var(--beam-head-end) + 2deg),
+    var(--beam-head-color) var(--beam-head-start) calc(var(--beam-head-end) + 2deg),
     transparent var(--beam-fade-end)
   );
   filter: blur(5px);
-  mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   mask-composite: exclude;
-  -webkit-mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
-  transition:
-    opacity var(--beam-enter-duration) ease-out,
-    visibility var(--beam-exit-duration) ease-in;
+  transition: opacity var(--beam-enter-duration) ease-out, visibility var(--beam-exit-duration) ease-in;
   animation: masked-conic-border-beam-orbit var(--beam-speed) linear infinite;
 }
 
@@ -3806,56 +3914,31 @@ tr[data-proposal-id].proposal-consuming td {
     var(--beam-head-color) var(--beam-head-end),
     transparent calc(var(--beam-head-end) + 18deg) 360deg
   );
-  mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   mask-composite: exclude;
-  -webkit-mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
-  transition:
-    opacity var(--beam-enter-duration) ease-out,
-    visibility var(--beam-exit-duration) ease-in;
+  transition: opacity var(--beam-enter-duration) ease-out, visibility var(--beam-exit-duration) ease-in;
   animation: masked-conic-border-beam-orbit var(--beam-speed) linear infinite;
 }
 
-.masked-conic-border-beam[data-direction="counterclockwise"]
-  .masked-conic-border-beam__layer,
-.masked-conic-border-beam[data-direction="counterclockwise"]
-  .masked-conic-border-beam__glow,
-.masked-conic-border-beam[data-direction="counterclockwise"]
-  .masked-conic-border-beam__companion {
+.masked-conic-border-beam[data-direction="counterclockwise"] .masked-conic-border-beam__layer,
+.masked-conic-border-beam[data-direction="counterclockwise"] .masked-conic-border-beam__glow,
+.masked-conic-border-beam[data-direction="counterclockwise"] .masked-conic-border-beam__companion {
   animation-direction: reverse;
 }
 
 .masked-conic-border-beam[data-trail="none"] .masked-conic-border-beam__layer {
-  background: conic-gradient(
-    from 0deg,
-    transparent 0deg var(--beam-head-start),
-    var(--beam-head-color) var(--beam-head-start) var(--beam-head-end),
-    transparent calc(var(--beam-head-end) + var(--beam-head-arc)) 360deg
-  );
+  background: conic-gradient(from 0deg, transparent 0deg var(--beam-head-start), var(--beam-head-color) var(--beam-head-start) var(--beam-head-end), transparent calc(var(--beam-head-end) + var(--beam-head-arc)) 360deg);
 }
 
-.masked-conic-border-beam[data-trail="defined"]
-  .masked-conic-border-beam__layer {
-  background: conic-gradient(
-    from 0deg,
-    transparent 0deg calc(var(--beam-tail-start) - 8deg),
-    var(--beam-tail-color) var(--beam-tail-end),
-    var(--beam-head-color) var(--beam-head-start)
-      calc(var(--beam-head-end) + 2deg),
-    transparent 360deg
-  );
+.masked-conic-border-beam[data-trail="defined"] .masked-conic-border-beam__layer {
+  background: conic-gradient(from 0deg, transparent 0deg calc(var(--beam-tail-start) - 8deg), var(--beam-tail-color) var(--beam-tail-end), var(--beam-head-color) var(--beam-head-start) calc(var(--beam-head-end) + 2deg), transparent 360deg);
 }
 
-.masked-conic-border-beam[data-reduced-motion="minimal"]
-  .masked-conic-border-beam__layer,
-.masked-conic-border-beam[data-reduced-motion="minimal"]
-  .masked-conic-border-beam__glow,
-.masked-conic-border-beam[data-reduced-motion="minimal"]
-  .masked-conic-border-beam__companion {
+.masked-conic-border-beam[data-reduced-motion="minimal"] .masked-conic-border-beam__layer,
+.masked-conic-border-beam[data-reduced-motion="minimal"] .masked-conic-border-beam__glow,
+.masked-conic-border-beam[data-reduced-motion="minimal"] .masked-conic-border-beam__companion {
   animation: none;
   transform: rotate(42deg);
   opacity: 0;
@@ -3876,17 +3959,14 @@ tr[data-proposal-id].proposal-consuming td {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .masked-conic-border-beam[data-reduced-motion="auto"]
-    .masked-conic-border-beam__layer {
+  .masked-conic-border-beam[data-reduced-motion="auto"] .masked-conic-border-beam__layer {
     animation: none;
     transform: rotate(42deg);
     opacity: var(--beam-opacity);
   }
 
-  .masked-conic-border-beam[data-reduced-motion="auto"]
-    .masked-conic-border-beam__glow,
-  .masked-conic-border-beam[data-reduced-motion="auto"]
-    .masked-conic-border-beam__companion {
+  .masked-conic-border-beam[data-reduced-motion="auto"] .masked-conic-border-beam__glow,
+  .masked-conic-border-beam[data-reduced-motion="auto"] .masked-conic-border-beam__companion {
     animation: none;
     transform: rotate(42deg);
     opacity: 0;
@@ -4243,6 +4323,21 @@ form {
   border: 0;
 }
 
+.queue-remediation-pinned-target,
+.queue-remediation-repair-intent {
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.queue-remediation-pinned-target > legend,
+.queue-remediation-repair-intent > legend {
+  padding: 0;
+  font-weight: 700;
+  color: rgb(var(--mm-ink));
+}
+
 label {
   font-weight: 600;
   font-size: 0.9rem;
@@ -4342,47 +4437,23 @@ button {
   transition: var(--mm-control-transition);
 }
 
-button:where(
-  :not(
-    .secondary,
-    .queue-action,
-    .queue-submit-primary,
-    .queue-step-icon-button,
-    .queue-step-attachment-add-button,
-    .queue-step-extension-button,
-    .table-sort-button,
-    .td-instructions-toggle
-  )
-) {
+button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)) {
   border-color: rgb(255 255 255 / 0.52);
   color: #fff;
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.2),
-    0 12px 24px -16px rgb(var(--mm-accent) / 0.82);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.2), 0 12px 24px -16px rgb(var(--mm-accent) / 0.82);
 }
 
-button:where(
-    :not(
-      .secondary,
-      .queue-action,
-      .queue-submit-primary,
-      .queue-step-icon-button,
-      .queue-step-attachment-add-button,
-      .queue-step-extension-button,
-      .table-sort-button,
-      .td-instructions-toggle
-    )
-  ):hover {
+button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)):hover {
   background-image: linear-gradient(
     160deg,
     rgb(var(--mm-accent) / 1) 0%,
     rgb(var(--mm-accent) / 0.98) 100%
   );
   border-color: rgb(255 255 255 / 0.82);
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.26),
-    0 0 0 1px rgb(255 255 255 / 0.34),
-    0 18px 32px -16px rgb(var(--mm-accent) / 0.94);
+  /* Filled CTAs keep their own hover shadow (ring + wide glow): the shared
+   * highlight-edge token is side-open by design, but a hovered solid button
+   * still wants its full outline pop. */
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.26), 0 0 0 1px rgb(255 255 255 / 0.34), 0 18px 32px -16px rgb(var(--mm-accent) / 0.94);
   transform: scale(var(--mm-control-hover-scale));
   filter: brightness(1.08) saturate(1.04);
 }
@@ -4392,30 +4463,8 @@ button:focus-visible {
   box-shadow: var(--mm-control-focus-ring);
 }
 
-button:where(
-    :not(
-      .secondary,
-      .queue-action,
-      .queue-submit-primary,
-      .queue-step-icon-button,
-      .queue-step-attachment-add-button,
-      .queue-step-extension-button,
-      .table-sort-button,
-      .td-instructions-toggle
-    )
-  ):active,
-button:where(
-    :not(
-      .secondary,
-      .queue-action,
-      .queue-submit-primary,
-      .queue-step-icon-button,
-      .queue-step-attachment-add-button,
-      .queue-step-extension-button,
-      .table-sort-button,
-      .td-instructions-toggle
-    )
-  ).is-clicked {
+button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)):active,
+button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)).is-clicked {
   background-image: linear-gradient(
     160deg,
     rgb(var(--mm-accent) / 1) 0%,
@@ -4439,9 +4488,7 @@ button.secondary {
 button.secondary:hover {
   background: rgb(var(--mm-accent) / 0.08);
   border-color: rgb(var(--mm-accent));
-  box-shadow:
-    0 0 0 1px rgb(var(--mm-accent) / 0.22),
-    0 12px 24px -18px rgb(var(--mm-accent) / 0.55);
+  box-shadow: 0 0 0 1px rgb(var(--mm-accent) / 0.22), 0 12px 24px -18px rgb(var(--mm-accent) / 0.55);
   transform: scale(var(--mm-control-hover-scale));
 }
 
@@ -4489,46 +4536,22 @@ button.workflow-list-column-filter-button.is-active {
   transition: var(--mm-control-transition);
 }
 
-.button:where(
-  :not(
-    .secondary,
-    .queue-action,
-    .queue-submit-primary,
-    .queue-step-icon-button,
-    .queue-step-attachment-add-button,
-    .queue-step-extension-button,
-    .table-sort-button,
-    .td-instructions-toggle
-  )
-) {
+.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)) {
   border-color: rgb(255 255 255 / 0.52);
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.2),
-    0 12px 24px -16px rgb(var(--mm-accent) / 0.82);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.2), 0 12px 24px -16px rgb(var(--mm-accent) / 0.82);
 }
 
-.button:where(
-    :not(
-      .secondary,
-      .queue-action,
-      .queue-submit-primary,
-      .queue-step-icon-button,
-      .queue-step-attachment-add-button,
-      .queue-step-extension-button,
-      .table-sort-button,
-      .td-instructions-toggle
-    )
-  ):hover {
+.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)):hover {
   background-image: linear-gradient(
     160deg,
     rgb(var(--mm-accent) / 1) 0%,
     rgb(var(--mm-accent) / 0.98) 100%
   );
   border-color: rgb(255 255 255 / 0.82);
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.26),
-    0 0 0 1px rgb(255 255 255 / 0.34),
-    0 18px 32px -16px rgb(var(--mm-accent) / 0.94);
+  /* Filled CTAs keep their own hover shadow (ring + wide glow): the shared
+   * highlight-edge token is side-open by design, but a hovered solid button
+   * still wants its full outline pop. */
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.26), 0 0 0 1px rgb(255 255 255 / 0.34), 0 18px 32px -16px rgb(var(--mm-accent) / 0.94);
   transform: scale(var(--mm-control-hover-scale));
   filter: brightness(1.08) saturate(1.04);
 }
@@ -4538,30 +4561,8 @@ button.workflow-list-column-filter-button.is-active {
   box-shadow: var(--mm-control-focus-ring);
 }
 
-.button:where(
-    :not(
-      .secondary,
-      .queue-action,
-      .queue-submit-primary,
-      .queue-step-icon-button,
-      .queue-step-attachment-add-button,
-      .queue-step-extension-button,
-      .table-sort-button,
-      .td-instructions-toggle
-    )
-  ):active,
-.button:where(
-    :not(
-      .secondary,
-      .queue-action,
-      .queue-submit-primary,
-      .queue-step-icon-button,
-      .queue-step-attachment-add-button,
-      .queue-step-extension-button,
-      .table-sort-button,
-      .td-instructions-toggle
-    )
-  ).is-clicked {
+.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)):active,
+.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)).is-clicked {
   background-image: linear-gradient(
     160deg,
     rgb(var(--mm-accent) / 1) 0%,
@@ -4585,9 +4586,7 @@ button.workflow-list-column-filter-button.is-active {
 .button.secondary:hover {
   background: rgb(var(--mm-accent) / 0.08);
   border-color: rgb(var(--mm-accent));
-  box-shadow:
-    0 0 0 1px rgb(var(--mm-accent) / 0.22),
-    0 12px 24px -18px rgb(var(--mm-accent) / 0.55);
+  box-shadow: 0 0 0 1px rgb(var(--mm-accent) / 0.22), 0 12px 24px -18px rgb(var(--mm-accent) / 0.55);
   transform: scale(var(--mm-control-hover-scale));
 }
 
@@ -4595,58 +4594,14 @@ button:disabled,
 button:disabled:hover,
 button.secondary:disabled,
 button.secondary:disabled:hover,
-button:where(
-    :not(
-      .secondary,
-      .queue-action,
-      .queue-submit-primary,
-      .queue-step-icon-button,
-      .queue-step-attachment-add-button,
-      .queue-step-extension-button,
-      .table-sort-button,
-      .td-instructions-toggle
-    )
-  ):disabled,
-button:where(
-    :not(
-      .secondary,
-      .queue-action,
-      .queue-submit-primary,
-      .queue-step-icon-button,
-      .queue-step-attachment-add-button,
-      .queue-step-extension-button,
-      .table-sort-button,
-      .td-instructions-toggle
-    )
-  ):disabled:hover,
+button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)):disabled,
+button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)):disabled:hover,
 .button[aria-disabled="true"],
 .button[aria-disabled="true"]:hover,
 .button.secondary[aria-disabled="true"],
 .button.secondary[aria-disabled="true"]:hover,
-.button:where(
-    :not(
-      .secondary,
-      .queue-action,
-      .queue-submit-primary,
-      .queue-step-icon-button,
-      .queue-step-attachment-add-button,
-      .queue-step-extension-button,
-      .table-sort-button,
-      .td-instructions-toggle
-    )
-  )[aria-disabled="true"],
-.button:where(
-    :not(
-      .secondary,
-      .queue-action,
-      .queue-submit-primary,
-      .queue-step-icon-button,
-      .queue-step-attachment-add-button,
-      .queue-step-extension-button,
-      .table-sort-button,
-      .td-instructions-toggle
-    )
-  )[aria-disabled="true"]:hover {
+.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle))[aria-disabled="true"],
+.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle))[aria-disabled="true"]:hover {
   cursor: not-allowed;
   opacity: var(--mm-control-disabled-opacity);
   transform: none;
@@ -4660,21 +4615,14 @@ button:where(
   background-color: rgb(var(--queue-action-color));
   background-image: linear-gradient(
     100deg,
-    color-mix(
-        in srgb,
-        rgb(var(--queue-action-color)) 72%,
-        rgb(var(--mm-accent-2))
-      )
-      0%,
+    color-mix(in srgb, rgb(var(--queue-action-color)) 72%, rgb(var(--mm-accent-2))) 0%,
     rgb(var(--queue-action-color)) 58%,
     color-mix(in srgb, rgb(var(--queue-action-color)) 88%, white) 100%
   );
   color: #fff;
   font-weight: 400;
   border: 1px solid rgb(255 255 255 / 0.58);
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.22),
-    0 12px 24px -14px rgb(var(--queue-action-color) / 0.84);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.22), 0 12px 24px -14px rgb(var(--queue-action-color) / 0.84);
 }
 
 .queue-submit-primary--with-arrow {
@@ -4784,6 +4732,9 @@ button:where(
   justify-content: center;
   width: 1.35rem;
   height: 1.35rem;
+  /* Reset the .status pill padding; with border-box it starves the content
+     box and the flex-shrinking svg collapses to a few pixels. */
+  padding: 0;
   border-radius: 50%;
   flex-shrink: 0;
   border: 1.5px solid rgb(var(--mm-border) / 0.6);
@@ -4794,7 +4745,9 @@ button:where(
 .step-tl-icon svg {
   width: 1.05rem;
   height: 1.05rem;
-  stroke-width: 2.4;
+  /* flex: none keeps the declared size authoritative inside the circle. */
+  flex: none;
+  stroke-width: 2;
 }
 
 .step-tl-icon.status-completed {
@@ -4831,13 +4784,8 @@ button:where(
 }
 
 @keyframes step-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.5;
-  }
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
 }
 
 .step-tl-line {
@@ -5418,21 +5366,8 @@ button:where(
 
 .chat-session-blocks {
   display: grid;
-  max-height: min(62vh, 44rem);
   gap: 0.65rem;
-  overflow-y: auto;
   padding-right: 0.2rem;
-  scrollbar-color: rgb(var(--mm-border) / 0.55) transparent;
-  scrollbar-width: thin;
-}
-
-.chat-session-blocks::-webkit-scrollbar {
-  width: 0.5rem;
-}
-
-.chat-session-blocks::-webkit-scrollbar-thumb {
-  border-radius: 999px;
-  background: rgb(var(--mm-border) / 0.55);
 }
 
 .chat-session-block {
@@ -6133,9 +6068,7 @@ button:where(
   column-gap: 0.5rem;
 }
 
-:is(.queue-step-attachments-list, #queue-dependency-list)
-  li
-  > span:first-child {
+:is(.queue-step-attachments-list, #queue-dependency-list) li > span:first-child {
   min-width: 0;
   overflow-wrap: anywhere;
 }
@@ -6153,23 +6086,19 @@ button:where(
   justify-self: end;
 }
 
-:is(.queue-step-attachments-list, #queue-dependency-list)
-  .queue-step-icon-button {
+:is(.queue-step-attachments-list, #queue-dependency-list) .queue-step-icon-button {
   width: 1.85rem;
   height: 1.85rem;
   border-radius: 0.5rem;
   flex: 0 0 auto;
 }
 
-:is(.queue-step-attachments-list, #queue-dependency-list)
-  .queue-step-icon-button
-  svg {
+:is(.queue-step-attachments-list, #queue-dependency-list) .queue-step-icon-button svg {
   width: 1rem;
   height: 1rem;
 }
 
-:is(.queue-step-attachments-list, #queue-dependency-list)
-  .queue-step-capability-chip-remove {
+:is(.queue-step-attachments-list, #queue-dependency-list) .queue-step-capability-chip-remove {
   width: 0.82rem;
   height: 0.82rem;
   min-width: 0.82rem;
@@ -6177,9 +6106,7 @@ button:where(
   border-radius: 999px;
 }
 
-:is(.queue-step-attachments-list, #queue-dependency-list)
-  .queue-step-capability-chip-remove
-  svg {
+:is(.queue-step-attachments-list, #queue-dependency-list) .queue-step-capability-chip-remove svg {
   width: 0.48rem;
   height: 0.48rem;
 }
@@ -6191,8 +6118,15 @@ button:where(
   object-fit: contain;
 }
 
+/* Create workflow page: the routed panel bleeds to the nav's bottom border, so
+ * give the page's first heading a little breathing room below that line. */
+.workflow-start-page {
+  padding-top: 1.25rem;
+}
+
 .workflow-start-heading {
   margin-bottom: 0.35rem;
+  text-align: center;
 }
 
 .queue-advanced-settings-body {
@@ -6389,33 +6323,27 @@ button:where(
 }
 
 .segmented-control[data-intensity="quiet"] .segmented-control-item:hover,
-.segmented-control[data-intensity="quiet"]
-  .segmented-control-item:focus-visible,
-.segmented-control[data-intensity="quiet"]
-  .segmented-control-item[aria-current="page"] {
+.segmented-control[data-intensity="quiet"] .segmented-control-item:focus-visible,
+.segmented-control[data-intensity="quiet"] .segmented-control-item[aria-current="page"] {
   color: rgb(var(--mm-ink));
 }
 
-.segmented-control[data-intensity="quiet"]
-  .segmented-control-item:focus-visible {
+.segmented-control[data-intensity="quiet"] .segmented-control-item:focus-visible {
   outline: none;
   box-shadow: var(--mm-control-focus-ring);
 }
 
-.segmented-control[data-intensity="loud"]
-  .segmented-control-item:hover:not(:has(input:checked)) {
+.segmented-control[data-intensity="loud"] .segmented-control-item:hover:not(:has(input:checked)) {
   color: rgb(var(--mm-accent));
 }
 
-.segmented-control[data-intensity="loud"]
-  .segmented-control-item:has(input:checked) {
+.segmented-control[data-intensity="loud"] .segmented-control-item:has(input:checked) {
   color: rgb(var(--mm-accent-contrast));
   font-weight: 700;
   text-shadow: 0 1px 2px rgb(0 0 0 / 0.45);
 }
 
-.segmented-control[data-intensity="loud"]
-  .segmented-control-item:has(input:focus-visible) {
+.segmented-control[data-intensity="loud"] .segmented-control-item:has(input:focus-visible) {
   box-shadow: var(--mm-control-focus-ring);
   border-radius: 9px;
   z-index: 4;
@@ -6449,10 +6377,7 @@ button:where(
   stroke-linejoin: round;
 }
 
-.segmented-control[data-intensity="loud"]
-  .segmented-control-item:has(input:checked)
-  .segmented-control-item-icon
-  svg {
+.segmented-control[data-intensity="loud"] .segmented-control-item:has(input:checked) .segmented-control-item-icon svg {
   filter: drop-shadow(0 0 6px rgb(var(--mm-accent-contrast) / 0.55));
 }
 
@@ -6501,9 +6426,7 @@ button:where(
     display: none;
   }
 
-  .settings-page
-    .segmented-control[data-intensity="loud"]
-    .segmented-control-item {
+  .settings-page .segmented-control[data-intensity="loud"] .segmented-control-item {
     justify-content: flex-start;
     min-height: 2.75rem;
     width: 100%;
@@ -6513,23 +6436,17 @@ button:where(
     text-align: left;
   }
 
-  .settings-page
-    .segmented-control[data-intensity="loud"]
-    .segmented-control-item:first-of-type {
+  .settings-page .segmented-control[data-intensity="loud"] .segmented-control-item:first-of-type {
     border-top-left-radius: 9px;
     border-top-right-radius: 9px;
   }
 
-  .settings-page
-    .segmented-control[data-intensity="loud"]
-    .segmented-control-item:last-of-type {
+  .settings-page .segmented-control[data-intensity="loud"] .segmented-control-item:last-of-type {
     border-bottom-left-radius: 9px;
     border-bottom-right-radius: 9px;
   }
 
-  .settings-page
-    .segmented-control[data-intensity="loud"]
-    .segmented-control-item:has(input:checked) {
+  .settings-page .segmented-control[data-intensity="loud"] .segmented-control-item:has(input:checked) {
     background:
       linear-gradient(
           115deg,
@@ -6542,7 +6459,7 @@ button:where(
         135deg,
         color-mix(in srgb, rgb(var(--mm-accent)) 82%, black) 0%,
         color-mix(in srgb, rgb(var(--mm-accent-2)) 70%, black) 100%
-      );
+    );
     box-shadow:
       0 0 0 1px rgb(var(--mm-accent) / 0.55),
       0 0 18px rgb(var(--mm-accent) / 0.55),
@@ -6550,9 +6467,7 @@ button:where(
       inset 0 1px 0 rgb(255 255 255 / 0.22);
   }
 
-  .settings-page
-    .segmented-control[data-intensity="loud"]
-    .segmented-control-item-label {
+  .settings-page .segmented-control[data-intensity="loud"] .segmented-control-item-label {
     white-space: normal;
     overflow-wrap: anywhere;
     line-height: 1.2;
@@ -6806,12 +6721,13 @@ button:where(
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  background: linear-gradient(
-    135deg,
-    rgb(255 255 255 / 0.16) 0%,
-    rgb(255 255 255 / 0.03) 42%,
-    rgb(255 255 255 / 0.12) 100%
-  );
+  background:
+    linear-gradient(
+      135deg,
+      rgb(255 255 255 / 0.16) 0%,
+      rgb(255 255 255 / 0.03) 42%,
+      rgb(255 255 255 / 0.12) 100%
+    );
   opacity: 0.9;
   pointer-events: none;
   z-index: 0;
@@ -6933,30 +6849,10 @@ button:where(
     transform 180ms ease-out;
 }
 
-.queue-submit-primary--icon .queue-submit-primary-arrow-glyph--check {
-  opacity: 0;
-  transform: scale(0.6);
-}
-
-.queue-submit-primary--icon:not(.queue-submit-primary--arrow-exit):not(
-    :disabled
-  ):not([aria-disabled="true"]):hover
+.queue-submit-primary--icon:not(.queue-submit-primary--arrow-exit):not(:disabled):not([aria-disabled="true"]):hover
   .queue-submit-primary-arrow
   svg {
-  animation: queue-submit-primary-arrow-cycle 460ms
-    cubic-bezier(0.33, 0, 0.2, 1) both;
-}
-
-.queue-submit-primary--icon.queue-submit-primary--arrow-exit
-  .queue-submit-primary-arrow-glyph[data-submit-icon="arrow"] {
-  animation: queue-submit-primary-arrow-exit 230ms cubic-bezier(0.33, 0, 0.2, 1)
-    both;
-}
-
-.queue-submit-primary--icon.queue-submit-primary--arrow-exit
-  .queue-submit-primary-arrow-glyph[data-submit-icon="check"] {
-  animation: queue-submit-primary-check-pop 260ms
-    cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  animation: queue-submit-primary-arrow-cycle 460ms cubic-bezier(0.33, 0, 0.2, 1) both;
 }
 
 .queue-submit-primary--icon:hover {
@@ -6984,6 +6880,13 @@ button:where(
     0 0 16px 1px rgb(var(--mm-action-primary) / 0.68);
 }
 
+.queue-submit-primary--icon.queue-submit-primary--arrow-exit {
+  background-color: rgb(var(--mm-action-primary) / 0.12);
+  background-image: none;
+  color: rgb(var(--mm-action-primary));
+  border-color: rgb(var(--mm-action-primary));
+}
+
 @keyframes queue-submit-primary-arrow-cycle {
   0% {
     transform: translateX(0);
@@ -6996,32 +6899,6 @@ button:where(
   }
   100% {
     transform: translateX(0);
-  }
-}
-
-@keyframes queue-submit-primary-arrow-exit {
-  0% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  100% {
-    opacity: 0;
-    transform: scale(0.6);
-  }
-}
-
-@keyframes queue-submit-primary-check-pop {
-  0% {
-    opacity: 0;
-    transform: scale(0.4);
-  }
-  60% {
-    opacity: 1;
-    transform: scale(1.15);
-  }
-  100% {
-    opacity: 1;
-    transform: scale(1);
   }
 }
 
@@ -7055,8 +6932,7 @@ button:where(
     0 0 38px 8px rgb(var(--mm-action-primary) / 0.28);
   filter: none;
   transform-origin: center;
-  animation: queue-submit-primary-ripple 620ms cubic-bezier(0.22, 0.61, 0.36, 1)
-    forwards;
+  animation: queue-submit-primary-ripple 620ms cubic-bezier(0.22, 0.61, 0.36, 1) forwards;
 }
 
 @keyframes queue-submit-primary-ripple {
@@ -7082,17 +6958,6 @@ button:where(
   .queue-submit-primary--icon .queue-submit-primary-arrow-glyph {
     animation: none !important;
     transition: none !important;
-  }
-
-  .queue-submit-primary--icon.queue-submit-primary--arrow-exit
-    .queue-submit-primary-arrow-glyph[data-submit-icon="arrow"] {
-    opacity: 0;
-  }
-
-  .queue-submit-primary--icon.queue-submit-primary--arrow-exit
-    .queue-submit-primary-arrow-glyph[data-submit-icon="check"] {
-    opacity: 1;
-    transform: scale(1);
   }
 
   .queue-submit-primary-ripple {
@@ -7132,9 +6997,7 @@ button:where(
     justify-content: stretch;
   }
 
-  .workflow-start-workspace
-    .queue-floating-bar-row
-    .queue-inline-selector--repo {
+  .workflow-start-workspace .queue-floating-bar-row .queue-inline-selector--repo {
     grid-column: 1 / -1;
   }
 
@@ -7242,8 +7105,7 @@ button:where(
 
 .oauth-terminal-paste-input {
   font-family:
-    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
-    monospace;
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   min-height: 5.5rem;
   resize: vertical;
 }
@@ -7428,11 +7290,7 @@ button:where(
   border-radius: 0.65rem;
   border: 1px solid rgb(var(--mm-border) / 0.7);
   background-color: rgb(var(--mm-panel));
-  background-image: linear-gradient(
-    145deg,
-    rgb(var(--mm-panel) / 0.95),
-    rgb(var(--mm-panel) / 0.65)
-  );
+  background-image: linear-gradient(145deg, rgb(var(--mm-panel) / 0.95), rgb(var(--mm-panel) / 0.65));
   color: rgb(var(--mm-ink));
   box-shadow: 0 10px 25px -18px rgb(var(--mm-ink) / 0.8);
   transition: var(--mm-control-transition);
@@ -7449,27 +7307,17 @@ button:where(
 }
 
 .queue-step-icon-button:hover {
-  background-image: linear-gradient(
-    145deg,
-    rgb(var(--mm-accent) / 0.35),
-    rgb(var(--mm-accent-2) / 0.25)
-  );
+  background-image: linear-gradient(145deg, rgb(var(--mm-accent) / 0.35), rgb(var(--mm-accent-2) / 0.25));
   color: rgb(var(--mm-ink));
   border-color: rgb(var(--mm-accent));
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.28),
-    0 12px 24px -14px rgb(var(--mm-accent) / 0.78);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.28), 0 12px 24px -14px rgb(var(--mm-accent) / 0.78);
   transform: scale(var(--mm-control-hover-scale));
   filter: brightness(1.08) saturate(1.04);
 }
 
 .queue-step-icon-button:active,
 .queue-step-icon-button.is-clicked {
-  background-image: linear-gradient(
-    145deg,
-    rgb(var(--mm-accent) / 0.5),
-    rgb(var(--mm-accent-2) / 0.4)
-  );
+  background-image: linear-gradient(145deg, rgb(var(--mm-accent) / 0.5), rgb(var(--mm-accent-2) / 0.4));
   box-shadow:
     inset 0 1px 0 rgb(255 255 255 / 0.42),
     0 0 0 1px rgb(255 255 255 / 0.56),
@@ -7484,26 +7332,16 @@ button:where(
 }
 
 .queue-step-icon-button.destructive:hover {
-  background: linear-gradient(
-    145deg,
-    rgb(var(--mm-danger) / 0.25),
-    rgb(var(--mm-accent-warm) / 0.2)
-  );
+  background: linear-gradient(145deg, rgb(var(--mm-danger) / 0.25), rgb(var(--mm-accent-warm) / 0.2));
   border-color: rgb(var(--mm-danger));
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.28),
-    0 12px 24px -14px rgb(var(--mm-danger) / 0.75);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.28), 0 12px 24px -14px rgb(var(--mm-danger) / 0.75);
   transform: scale(var(--mm-control-hover-scale));
   filter: brightness(1.08) saturate(1.04);
 }
 
 .queue-step-icon-button.destructive:active,
 .queue-step-icon-button.destructive.is-clicked {
-  background: linear-gradient(
-    145deg,
-    rgb(var(--mm-danger) / 0.4),
-    rgb(var(--mm-accent-warm) / 0.35)
-  );
+  background: linear-gradient(145deg, rgb(var(--mm-danger) / 0.4), rgb(var(--mm-accent-warm) / 0.35));
   box-shadow:
     inset 0 1px 0 rgb(255 255 255 / 0.42),
     0 0 0 1px rgb(255 255 255 / 0.56),
@@ -7766,9 +7604,7 @@ button:where(
 .queue-inline-filter:hover {
   background: var(--mm-control-shell-hover);
   border-color: rgb(var(--mm-accent) / 0.72);
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.24),
-    0 10px 24px -20px rgb(var(--mm-accent) / 0.7);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.24), 0 10px 24px -20px rgb(var(--mm-accent) / 0.7);
   transform: scale(var(--mm-control-hover-scale));
 }
 
@@ -7909,6 +7745,10 @@ button:where(
     display: contents;
   }
 
+  .route-nav-primary {
+    display: contents;
+  }
+
   .route-nav {
     position: fixed;
     top: 7rem;
@@ -7951,6 +7791,21 @@ button:where(
     display: flex;
   }
 
+  .dashboard-system-menu {
+    display: none;
+  }
+
+  .dashboard-system-inline {
+    display: block;
+    margin-top: 0.35rem;
+    padding-top: 0.35rem;
+    border-top: 1px solid var(--mm-mobile-nav-border);
+  }
+
+  .dashboard-system-inline .dashboard-system-menu-label {
+    padding-left: 1rem;
+  }
+
   .route-nav a {
     display: flex;
     align-items: center;
@@ -7968,6 +7823,12 @@ button:where(
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
     transform: none;
+  }
+
+  /* The collapsed nav renders flat menu rows: drop the desktop liquid-glass
+   * gradient ring along with the shadows it accompanies. */
+  .route-nav-primary a::before {
+    content: none;
   }
 
   .route-nav a:hover {
@@ -8041,6 +7902,14 @@ button:where(
     transition: none !important;
     transform: none !important;
   }
+
+  .route-nav-primary a,
+  .dashboard-system-trigger,
+  .dashboard-system-popover {
+    animation: none !important;
+    transition: none !important;
+    transform: none !important;
+  }
 }
 
 /* Task detail: grouped flat facts */
@@ -8051,7 +7920,12 @@ button:where(
   max-width: 100%;
 }
 
-.workflow-workspace-shell {
+/* Shared edge-rail workspace geometry. `.collection-workspace--edge-rail` is
+ * the neutral modifier every collection workspace (Workflows, Skills, ...)
+ * opts into; `.workflow-workspace-shell` is the legacy class name kept on the
+ * workflow surfaces until they migrate to the neutral name. */
+.workflow-workspace-shell,
+.collection-workspace--edge-rail {
   /* MM-1138 Q1: the rail consumes the same edge-bleed the data slab uses to
    * cancel `.dashboard-root`'s inline padding. The token lives on the slab for
    * the list page; mirror it here so the split-view rail can reach the screen
@@ -8070,6 +7944,30 @@ button:where(
   column-gap: 1.25rem;
   width: 100%;
   max-width: none;
+  /* The workspace owns its visible block size (route area below the dashboard
+   * chrome), so the sidebar rail can fill it regardless of how many rows the
+   * list holds. This is a floor: a taller detail pane still grows the shell. */
+  min-block-size: var(--mm-collection-workspace-block-size);
+}
+
+/*
+ * The collection rail's separator is its own right border, not a pseudo-element
+ * pinned beside the list scrollbar. The scrollbar is painted inside this border
+ * regardless of its platform-specific width, so the line stays at the rail's
+ * true outer edge whether or not a scrollbar exists. Scoped to the shared
+ * edge-rail layouts (Workflows, Recurring, Skills) via the neutral
+ * `.collection-sidebar` primitive so all three stay consistent. Global
+ * border-box sizing keeps the border inside the existing rail width (no shift).
+ */
+.workflow-workspace-shell > .collection-sidebar,
+.collection-workspace--edge-rail > .collection-sidebar {
+  align-self: stretch;
+  block-size: var(--mm-collection-workspace-block-size);
+  max-block-size: var(--mm-collection-workspace-block-size);
+  border-inline-end:
+    var(--workflow-list-divider-width)
+    solid
+    var(--workflow-list-divider-color);
 }
 
 .collection-workspace {
@@ -8084,7 +7982,7 @@ button:where(
   display: block;
 }
 
-.collection-workspace--with-sidebar:not(.workflow-workspace-shell) {
+.collection-workspace--with-sidebar:not(.workflow-workspace-shell):not(.collection-workspace--edge-rail) {
   display: grid;
   grid-template-columns:
     [sidebar-start] var(--mm-collection-sidebar-width)
@@ -8094,13 +7992,11 @@ button:where(
   column-gap: 1.25rem;
 }
 
-.collection-workspace--with-sidebar:not(.workflow-workspace-shell)
-  > .collection-sidebar {
+.collection-workspace--with-sidebar:not(.workflow-workspace-shell):not(.collection-workspace--edge-rail) > .collection-sidebar {
   grid-column: sidebar-start / primary-start;
 }
 
-.collection-workspace:not(.workflow-workspace-shell)
-  > .collection-workspace__primary {
+.collection-workspace:not(.workflow-workspace-shell):not(.collection-workspace--edge-rail) > .collection-workspace__primary {
   grid-column: primary-start / primary-end;
   min-width: 0;
 }
@@ -8114,7 +8010,9 @@ button:where(
 
 .workflow-start-workspace {
   --mm-content-max: 72rem;
-  --workflow-start-primary-offset: calc((var(--mm-rail-width) + 1.25rem) / 2);
+  --workflow-start-primary-offset: calc(
+    (var(--mm-rail-width) + 1.25rem) / 2
+  );
   --workflow-start-primary-available-width: calc(
     100% - var(--mm-rail-width) - 1.25rem - 2rem
   );
@@ -8126,20 +8024,16 @@ button:where(
 }
 
 .workflow-workspace-sidebar {
-  /* Width of the sidebar list's thin scrollbar; the divider below sits directly
-   * to its left, and the ::-webkit-scrollbar rule keeps the two in sync. */
-  --workflow-list-sidebar-scrollbar-width: 6px;
-
   position: sticky;
   top: 0;
   display: flex;
   flex-direction: column;
   gap: 0;
-  max-height: 100vh;
   overflow: visible;
   /* Not a card: the sidebar is a plain left column. It is separated from the
-   * detail by the grid gap plus a single thin divider (::after) that sits
-   * directly to the left of the list scrollbar — see below. */
+   * detail by the grid gap plus its own right border (border-inline-end on the
+   * shared collection rail — see the edge-rail block above). The rail fills the
+   * workspace block size; the list below is the only scroll container. */
   padding: 0;
   /* MM-1138 Q1: bleed the rail's left edge to the screen edge like the list
    * table's first column. The right edge stays on the grid-column boundary, so
@@ -8159,33 +8053,157 @@ button:where(
   width: var(--mm-rail-width);
 }
 
-.skills-page.collection-workspace {
-  --mm-rail-width: var(--workflow-list-column-workflow-width);
-  --mm-rail-bleed: 1rem;
-
-  display: grid;
-  grid-template-columns:
-    [rail-start] var(--mm-rail-width)
-    [content-start] minmax(0, 1fr) [content-end];
-  width: 100%;
-  min-height: calc(100vh - var(--mm-header-height, 0px));
-}
-
-.skills-page .skills-primary {
+/* Skills catalog table surface: the full-width table page keeps the fluid
+ * route-root geometry; the first column shares the sidebar rail width token so
+ * switching display modes reads as the same list collapsing or expanding. */
+.skills-catalog-page .skills-catalog-primary {
   max-width: none;
+  /* Inline bleed used to run the table edge to edge; tracks the primary's own
+   * horizontal padding (px-4 / sm:px-6) so the header spans the full width. */
+  --skills-table-bleed: 1rem;
 }
 
-@media (max-width: 1023px) {
-  .skills-page.collection-workspace {
-    display: block;
+@media (min-width: 640px) {
+  .skills-catalog-page .skills-catalog-primary {
+    --skills-table-bleed: 1.5rem;
   }
+}
 
-  .skills-page .collection-sidebar {
-    position: relative;
-    width: 100%;
-    max-height: 18rem;
-    margin-left: 0;
+/* Match the workflows table: the catalog is not a bordered card. Drop the slab
+ * fill, border, rounding, shadow, and height clamp, and bleed it to the page
+ * edges so only the sticky header carries a dark background while the body runs
+ * transparent over the page surface. */
+.skills-catalog-page .data-table-slab {
+  max-width: none;
+  width: auto;
+  max-height: none;
+  margin-inline: calc(var(--skills-table-bleed) * -1);
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* The catalog table is not responsive: it keeps a fixed 20rem skill column plus
+ * four more columns. On narrow viewports that grows wider than the page, and
+ * because `.dashboard-root` uses `overflow-x: clip`, the desktop `overflow:
+ * visible` above would leave the right-side columns unreachable — clipped with
+ * no way to scroll to them. Restore a horizontal scroll container at the small
+ * breakpoints. Wide screens keep `overflow: visible`, so the edge-to-edge bleed
+ * and the page-sticky header are unchanged there. */
+@media (max-width: 900px) {
+  .skills-catalog-page .data-table-slab {
+    overflow-x: auto;
   }
+}
+
+.skills-catalog-page .data-table thead th {
+  background: rgb(var(--mm-panel) / 0.98);
+  border-bottom: 0;
+  box-shadow: 0 1px 0 rgb(var(--mm-border) / 0.6);
+}
+
+.skills-catalog-page .data-table tbody tr,
+.skills-catalog-page .data-table tbody tr:nth-child(2n) {
+  background: transparent;
+}
+
+.skills-catalog-page .data-table tbody tr:hover {
+  background: rgb(var(--mm-accent) / 0.08);
+}
+
+.dark .skills-catalog-page .data-table tbody tr:hover {
+  background: rgb(var(--mm-accent) / 0.18);
+}
+
+/* Re-inset the bled edges so header labels and cell text stay aligned with the
+ * rest of the page content. */
+.skills-catalog-page .data-table th:first-child,
+.skills-catalog-page .data-table td:first-child {
+  padding-left: var(--skills-table-bleed);
+}
+
+.skills-catalog-page .data-table th:last-child,
+.skills-catalog-page .data-table td:last-child {
+  padding-right: var(--skills-table-bleed);
+}
+
+/* Skill descriptions are long prose: let catalog cells wrap instead of
+ * inheriting the data-table nowrap default, and keep the description column
+ * from stretching the table past the viewport. */
+.skills-catalog-page .data-table {
+  white-space: normal;
+}
+
+.skills-catalog-page .data-table td[data-column-key="description"] {
+  max-width: 44rem;
+  overflow-wrap: anywhere;
+}
+
+.skills-catalog-title-link {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.15rem;
+  color: rgb(var(--mm-ink));
+  text-decoration: none;
+}
+
+.skills-catalog-title-link:hover .skills-catalog-title {
+  text-decoration: underline;
+}
+
+.skills-catalog-title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.skills-catalog-id {
+  font-size: 0.78rem;
+  color: rgb(var(--mm-ink) / 0.65);
+  overflow-wrap: anywhere;
+}
+
+/* Green "+" affordance that lives in the masthead nav (to the right of the
+ * System dropdown) and opens the create-skill drawer on the Skills pages. The
+ * accessible name and native tooltip both read "Create New Skill". It uses the
+ * same inset glass-border technique as the nav buttons, tinted with the success
+ * green, and stays a touch shorter than the nav links so it never drives the
+ * masthead height. */
+.skills-create-nav-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.45rem 0.55rem;
+  border: 0;
+  border-radius: 0.5rem;
+  background: rgb(var(--mm-ok) / 0.16);
+  box-shadow:
+    inset 0 0 0 1px rgb(var(--mm-ok) / 0.55),
+    inset 0 1px 0 var(--mm-glass-edge);
+  color: rgb(var(--mm-ok));
+  cursor: pointer;
+  transition: background 130ms ease, color 130ms ease, box-shadow 130ms ease;
+}
+
+.skills-create-nav-button:hover {
+  background: rgb(var(--mm-ok) / 0.24);
+  box-shadow:
+    inset 0 0 0 1px rgb(var(--mm-ok) / 0.8),
+    inset 0 1px 0 var(--mm-glass-edge);
+}
+
+.skills-create-nav-button:focus-visible {
+  outline: none;
+  box-shadow: var(--mm-control-focus-ring);
+}
+
+.skills-create-nav-button svg {
+  width: 1.125rem;
+  height: 1.125rem;
+  flex: 0 0 auto;
+  stroke-width: 2.4;
 }
 
 .workflow-start-primary,
@@ -8194,23 +8212,13 @@ button:where(
 }
 
 /*
- * A thin vertical line directly to the left of the sidebar scrollbar, running
- * the full height of the rail (over the sticky header too). It is scoped to the
- * sidebar, so the full-screen workflow table — which has no sidebar and no inner
- * scrollbar — never draws it. Offset by the scrollbar width so the scrollbar
- * sits in the narrow gutter just to its right; z-index clears the sticky header
- * (z-index 8) and pinned list (z-index 6) so the line stays continuous.
+ * The old scrollbar-positioned divider is gone: the rail's separator is now its
+ * own border-inline-end (see the edge-rail block above), which is deterministic
+ * across scrollbar width, overlay scrollbars, and display scaling. Keep the
+ * pseudo-element explicitly empty so nothing re-draws a second line.
  */
 .workflow-workspace-sidebar::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  right: var(--workflow-list-sidebar-scrollbar-width);
-  z-index: 9;
-  width: var(--workflow-list-divider-width);
-  background: var(--workflow-list-divider-color);
-  pointer-events: none;
+  content: none;
 }
 
 .workflow-workspace-sidebar-header {
@@ -8265,6 +8273,14 @@ button:where(
 .workflow-workspace-sidebar-table {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
+  /* Pack the header and list rows at the top. The rail now owns a full
+   * `--mm-collection-workspace-block-size` height and this table fills it
+   * (flex: 1 1 auto), so a short list leaves free vertical space. Without an
+   * explicit `align-content`, a grid defaults to `stretch` and would grow the
+   * auto rows — most visibly ballooning the sticky header — to absorb that
+   * slack. `start` keeps the header and rows at their natural height and lets
+   * the leftover space fall below the list instead. */
+  align-content: start;
   flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
@@ -8274,10 +8290,15 @@ button:where(
   margin: 0;
   scrollbar-width: thin;
   scrollbar-color: rgb(var(--mm-border) / 0.55) transparent;
+  /* Reserve the scrollbar gutter so the header and rows keep a constant width
+   * whether or not a classic scrollbar is painted. The rail's right border is
+   * outside this element and stays put regardless. This is purely cosmetic —
+   * no separator geometry depends on the scrollbar width. */
+  scrollbar-gutter: stable;
 }
 
 .workflow-workspace-sidebar-table::-webkit-scrollbar {
-  width: var(--workflow-list-sidebar-scrollbar-width);
+  width: 6px;
 }
 
 .workflow-workspace-sidebar-table::-webkit-scrollbar-thumb {
@@ -8313,18 +8334,26 @@ button:where(
   min-width: 0;
   height: var(--workflow-list-body-row-height);
   max-height: var(--workflow-list-body-row-height);
-  border-bottom: var(--workflow-list-divider-width) solid
-    var(--workflow-list-divider-color);
+  border-bottom: var(--workflow-list-divider-width) solid var(--workflow-list-divider-color);
 }
 
-.workflow-workspace-sidebar-table
-  > :last-child
-  .workflow-workspace-sidebar-row-frame:last-child {
+.workflow-workspace-sidebar-table > :last-child .workflow-workspace-sidebar-row-frame:last-child {
   border-bottom: 0;
 }
 
 .workflow-workspace-sidebar-cell {
   min-width: 0;
+}
+
+/* Defensive reset: sidebar rows are flat table slices. If a future
+ * implementation renders a row as a <button>, the global primary-button
+ * styling (pill radius, shadow, hover/press scale) must never leak in. */
+button.workflow-workspace-sidebar-row,
+button.workflow-workspace-sidebar-row:hover,
+button.workflow-workspace-sidebar-row:active {
+  border-radius: 0;
+  box-shadow: none;
+  transform: none;
 }
 
 .workflow-workspace-sidebar-row {
@@ -8460,7 +8489,8 @@ button:where(
 }
 
 @media (max-width: 114rem) and (min-width: 768px) {
-  .workflow-workspace-shell {
+  .workflow-workspace-shell,
+  .collection-workspace--edge-rail {
     grid-template-columns: var(--mm-rail-width) minmax(0, 1fr);
   }
 
@@ -8474,14 +8504,14 @@ button:where(
     grid-column: 2;
   }
 
-  .workflow-workspace-shell[data-sidebar-collapsed="true"] {
+  .workflow-workspace-shell[data-sidebar-collapsed="true"],
+  .collection-workspace--edge-rail[data-sidebar-collapsed="true"] {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .workflow-workspace-shell[data-sidebar-collapsed="true"]
-    .workflow-workspace-detail,
-  .workflow-start-workspace[data-sidebar-collapsed="true"]
-    .workflow-start-primary {
+  .workflow-workspace-shell[data-sidebar-collapsed="true"] .workflow-workspace-detail,
+  .collection-workspace--edge-rail[data-sidebar-collapsed="true"] .workflow-workspace-detail,
+  .workflow-start-workspace[data-sidebar-collapsed="true"] .workflow-start-primary {
     grid-column: 1 / -1;
   }
 
@@ -8512,7 +8542,8 @@ button:where(
 }
 
 @media (max-width: 767px) {
-  .workflow-workspace-shell {
+  .workflow-workspace-shell,
+  .collection-workspace--edge-rail {
     --mm-rail-bleed: 0rem;
     --workflow-list-slab-bleed-inline: 0rem;
     display: block;
@@ -8663,6 +8694,82 @@ button:where(
   min-width: 0;
 }
 
+/* Native Omnigent Workflow Chat surface (MoonLadderStudios/MoonMind#3638). The
+   native app is served through a MoonMind-scoped route and embedded in an
+   iframe; it fills the Workflow Detail chat content area. */
+.td-native-chat {
+  min-width: 0;
+}
+
+.td-native-chat-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.td-native-chat-readonly {
+  margin-right: auto;
+}
+
+.td-native-chat-frame {
+  width: 100%;
+  min-height: 640px;
+  height: 70vh;
+  border: 0;
+  border-radius: var(--mm-radius, 8px);
+  background: var(--mm-surface, #fff);
+}
+
+.td-native-chat-unavailable {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.td-native-chat-evidence {
+  border: 1px solid var(--mm-border, #e2e8f0);
+  border-radius: var(--mm-radius, 8px);
+  background: var(--mm-surface-muted, #f8fafc);
+  padding: 0.5rem 0.75rem;
+}
+
+.td-native-chat-evidence-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.td-native-chat-continue-error {
+  color: var(--mm-danger, #b91c1c);
+  text-align: right;
+}
+
+.td-native-chat-terminal-actions {
+  gap: 0.5rem;
+}
+
+.td-native-chat-continue-form {
+  border: 1px solid var(--mm-border, #e2e8f0);
+  border-radius: var(--mm-radius, 8px);
+  background: var(--mm-surface-muted, #f8fafc);
+  padding: 0.75rem;
+  gap: 0.5rem;
+}
+
+.td-native-chat-continue-form .field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.td-native-chat-continue-form input,
+.td-native-chat-continue-form textarea {
+  width: 100%;
+}
+
 .td-facts-region,
 .td-run-summary-region,
 .td-steps-region,
@@ -8672,6 +8779,30 @@ button:where(
 .td-timeline-region,
 .td-observation-region {
   overflow-wrap: anywhere;
+}
+
+.td-continuation-budget {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem 1rem;
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0.9rem;
+  border: 1px solid rgb(var(--mm-border) / 0.72);
+  border-radius: 0.75rem;
+  background: rgb(var(--mm-panel) / 0.42);
+}
+
+.td-continuation-budget legend {
+  padding-inline: 0.35rem;
+  color: rgb(var(--mm-ink));
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.td-continuation-budget input {
+  width: 100%;
+  min-width: 0;
 }
 
 .td-remediation-list {
@@ -8700,6 +8831,32 @@ button:where(
   display: grid;
   gap: 0.6rem;
   margin-top: 0.65rem;
+}
+
+.td-remediation-approval-controls,
+.td-remediation-operator-controls,
+.td-remediation-lifecycle {
+  margin-top: 0.65rem;
+  padding: 0.7rem;
+  border: 1px solid rgb(var(--mm-border) / 0.68);
+  border-radius: 0.7rem;
+  background: rgb(var(--mm-panel) / 0.38);
+}
+
+.td-remediation-approval-controls textarea {
+  width: 100%;
+  min-width: 0;
+}
+
+.td-remediation-canonical pre {
+  max-height: 24rem;
+  margin: 0.55rem 0 0;
+  padding: 0.65rem;
+  overflow: auto;
+  border-radius: 0.55rem;
+  background: rgb(var(--mm-panel) / 0.86);
+  color: rgb(var(--mm-ink));
+  white-space: pre-wrap;
 }
 
 .td-remediation-create-preview {
@@ -8781,9 +8938,7 @@ button:where(
   box-shadow: none;
   transform: none;
   filter: none;
-  transition:
-    background 120ms ease,
-    border-color 120ms ease;
+  transition: background 120ms ease, border-color 120ms ease;
 }
 
 /* Pointer hover / active and programmatic focus: one calm filled-row cue. */
@@ -8948,9 +9103,7 @@ button:where(
   border-radius: 6px;
   cursor: pointer;
   white-space: nowrap;
-  transition:
-    background 120ms ease,
-    color 120ms ease;
+  transition: background 120ms ease, color 120ms ease;
 }
 
 .td-instructions-toggle:hover {
@@ -9181,6 +9334,10 @@ button:where(
 @media (max-width: 720px) {
   .td-remediation-region {
     padding: 0.7rem;
+  }
+
+  .td-continuation-budget {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .td-remediation-list {
@@ -9744,24 +9901,14 @@ button:where(
   height: var(--loading-placeholder-row-height);
   border-radius: 6px;
   background:
-    linear-gradient(
-      90deg,
-      transparent,
-      rgb(var(--mm-border) / 0.5),
-      transparent
-    ),
+    linear-gradient(90deg, transparent, rgb(var(--mm-border) / 0.5), transparent),
     rgb(var(--mm-muted) / 0.14);
-  background-size:
-    220% 100%,
-    100% 100%;
-  background-position:
-    -120% 50%,
-    50% 50%;
+  background-size: 220% 100%, 100% 100%;
+  background-position: -120% 50%, 50% 50%;
   animation: loading-placeholder-sweep 1.4s ease-in-out infinite;
 }
 
-.loading-placeholder[data-variant="compact-controls"]
-  .loading-placeholder__block {
+.loading-placeholder[data-variant="compact-controls"] .loading-placeholder__block {
   border-radius: 999px;
 }
 
@@ -9773,16 +9920,13 @@ button:where(
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
-.loading-placeholder[data-variant="detail"]
-  .loading-placeholder__row:first-child {
+.loading-placeholder[data-variant="detail"] .loading-placeholder__row:first-child {
   grid-template-columns: minmax(0, 1.6fr) minmax(0, 0.8fr);
 }
 
 @keyframes loading-placeholder-sweep {
   to {
-    background-position:
-      120% 50%,
-      50% 50%;
+    background-position: 120% 50%, 50% 50%;
   }
 }
 
@@ -9792,8 +9936,7 @@ button:where(
   }
 
   .loading-placeholder[data-variant="metric-strip"] .loading-placeholder__row,
-  .loading-placeholder[data-variant="detail"]
-    .loading-placeholder__row:first-child {
+  .loading-placeholder[data-variant="detail"] .loading-placeholder__row:first-child {
     grid-template-columns: minmax(0, 1fr);
   }
 }
@@ -9801,9 +9944,7 @@ button:where(
 @media (prefers-reduced-motion: reduce) {
   .loading-placeholder__block {
     animation: none !important;
-    background-position:
-      50% 50%,
-      50% 50%;
+    background-position: 50% 50%, 50% 50%;
   }
 }
 .omnigent-inventory {
@@ -9820,26 +9961,185 @@ button:where(
 
 .omnigent-inventory label,
 .omnigent-inventory td strong,
-.omnigent-inventory td small {
-  display: block;
-}
-.omnigent-inventory input[type="search"] {
-  margin-top: 0.35rem;
-  max-width: 28rem;
-  width: 100%;
-}
-.omnigent-inventory__table-wrap {
-  margin-top: 1rem;
-  overflow-x: auto;
-}
-.omnigent-inventory table {
-  border-collapse: collapse;
-  width: 100%;
-}
+.omnigent-inventory td small { display: block; }
+.omnigent-inventory input[type='search'] { margin-top: .35rem; max-width: 28rem; width: 100%; }
+.omnigent-policy-editor textarea { display: block; font-family: monospace; margin-top: .35rem; max-width: 70rem; width: 100%; }
+.omnigent-inventory__table-wrap { margin-top: 1rem; overflow-x: auto; }
+.omnigent-inventory table { border-collapse: collapse; width: 100%; }
 .omnigent-inventory th,
-.omnigent-inventory td {
+.omnigent-inventory td { border-bottom: 1px solid rgb(var(--mm-border)); padding: .75rem; text-align: left; vertical-align: top; }
+
+/* Context retrieval (RAG) authoring controls (MoonMind#3514). */
+.context-retrieval-controls { display: grid; gap: 1rem; }
+.context-retrieval-section {
+  border: 1px solid rgb(var(--mm-border));
+  border-radius: 0.5rem;
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.85rem 1rem;
+}
+.context-retrieval-section legend { font-weight: 600; padding: 0 0.35rem; }
+.context-retrieval-field { display: grid; gap: 0.3rem; }
+.context-retrieval-label { font-weight: 500; }
+.context-retrieval-ceiling-hint { color: rgb(var(--mm-muted)); font-weight: 400; }
+.context-retrieval-collections { display: flex; flex-wrap: wrap; gap: 0.75rem; }
+.context-retrieval-collection { align-items: center; display: inline-flex; gap: 0.35rem; }
+.context-retrieval-ceilings { color: rgb(var(--mm-muted)); }
+.context-retrieval-denials ul { margin: 0.35rem 0 0; padding-left: 1.1rem; }
+.context-retrieval-diagnostics { display: grid; gap: 0.75rem; }
+.context-retrieval-diagnostics .context-retrieval-capability {
+  border: 1px solid rgb(var(--mm-border));
+  border-radius: 0.5rem;
+  padding: 0.6rem 0.8rem;
+}
+
+/* Workflow Detail native Omnigent Chat route (MoonLadderStudios/MoonMind#3639).
+   MoonMind owns a thin context bar; the native application fills the primary
+   pane. Keep the context bar visually subordinate to the native surface. */
+.wf-native-chat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  min-width: 0;
+}
+.wf-native-chat__context-bar {
+  align-items: center;
   border-bottom: 1px solid rgb(var(--mm-border));
-  padding: 0.75rem;
-  text-align: left;
-  vertical-align: top;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  justify-content: space-between;
+  padding-bottom: 0.5rem;
+}
+.wf-native-chat__identity {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.75rem;
+  min-width: 0;
+}
+.wf-native-chat__title {
+  color: rgb(var(--mm-ink));
+  font-weight: 600;
+  max-width: 40ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wf-native-chat__meta {
+  align-items: center;
+  color: rgb(var(--mm-muted));
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+  gap: 0.35rem 0.6rem;
+}
+.wf-native-chat__status-label,
+.wf-native-chat__step,
+.wf-native-chat__runtime {
+  color: rgb(var(--mm-muted));
+}
+.wf-native-chat__status-label {
+  border: 1px solid rgb(var(--mm-border));
+  border-radius: 999px;
+  padding: 0.05rem 0.5rem;
+}
+.wf-native-chat__actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.wf-native-chat__surface {
+  display: flex;
+  min-height: min(70vh, 760px);
+  position: relative;
+}
+.wf-native-chat__frame {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: inherit;
+  position: relative;
+  width: 100%;
+}
+.wf-native-chat__iframe {
+  border: 0;
+  flex: 1 1 auto;
+  height: 100%;
+  min-height: inherit;
+  width: 100%;
+}
+.wf-native-chat__loading {
+  align-items: center;
+  background: rgb(var(--mm-bg));
+  color: rgb(var(--mm-muted));
+  display: flex;
+  gap: 0.6rem;
+  inset: 0;
+  justify-content: center;
+  position: absolute;
+  z-index: 1;
+}
+.wf-native-chat__state {
+  align-items: center;
+  border: 1px dashed rgb(var(--mm-border));
+  border-radius: 0.75rem;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0.5rem;
+  justify-content: center;
+  padding: 2rem 1.25rem;
+  text-align: center;
+}
+.wf-native-chat__state-title {
+  margin: 0;
+}
+.wf-native-chat__state-desc {
+  color: rgb(var(--mm-muted));
+  margin: 0;
+  max-width: 52ch;
+}
+.wf-native-chat__state-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: center;
+}
+.wf-native-chat__spinner {
+  animation: wf-native-chat-spin 0.9s linear infinite;
+  border: 2px solid rgb(var(--mm-border));
+  border-radius: 50%;
+  border-top-color: rgb(var(--mm-accent));
+  height: 1.1rem;
+  width: 1.1rem;
+}
+@keyframes wf-native-chat-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (max-width: 720px) {
+  .wf-native-chat__context-bar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .wf-native-chat__surface {
+    min-height: min(80vh, 620px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wf-native-chat__spinner {
+    animation: none;
+  }
+}
+@media (forced-colors: active) {
+  .wf-native-chat__iframe,
+  .wf-native-chat__state {
+    border: 1px solid CanvasText;
+  }
+  .wf-native-chat__spinner {
+    border-color: CanvasText;
+    border-top-color: Highlight;
+  }
 }

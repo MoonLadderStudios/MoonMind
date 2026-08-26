@@ -101,6 +101,26 @@ class TestBuildDefaultRegistry:
         assert "omnigent" in registry
         assert "omnigent_session" not in registry
 
+    def test_omnigent_rollback_disables_only_new_adapter_selection(self):
+        enabled = {
+            "OMNIGENT_ENABLED": "true",
+            "OMNIGENT_SERVER_URL": "https://omnigent.test",
+        }
+        historical_registry = build_default_registry(env=enabled)
+        historical_adapter = historical_registry.create("omnigent")
+
+        rolled_back_registry = build_default_registry(
+            env={
+                "OMNIGENT_ENABLED": "false",
+                "OMNIGENT_SERVER_URL": "https://omnigent.test",
+            }
+        )
+
+        assert historical_adapter is not None
+        assert "omnigent" not in rolled_back_registry
+        with pytest.raises(ValueError, match="No external adapter registered"):
+            rolled_back_registry.create("omnigent")
+
     def test_both_registered_when_both_enabled(self):
         env = {
             "JULES_ENABLED": "true",

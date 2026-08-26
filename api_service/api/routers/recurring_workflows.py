@@ -24,6 +24,7 @@ from api_service.db.models import (
 from api_service.services.recurring_workflows_service import (
     RecurringScheduleRuntimeSummary,
     RecurringWorkflowAuthorizationError,
+    RecurringWorkflowConflictError,
     RecurringWorkflowNotFoundError,
     RecurringWorkflowsService,
     RecurringWorkflowValidationError,
@@ -144,6 +145,7 @@ class UpdateRecurringWorkflowRequest(BaseModel):
     scope_ref: Optional[str] = Field(None, alias="scopeRef")
     target: Optional[dict[str, Any]] = Field(None, alias="target")
     policy: Optional[dict[str, Any]] = Field(None, alias="policy")
+    version: int = Field(..., ge=1, alias="version")
 
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 
@@ -531,6 +533,14 @@ def _map_error(exc: Exception) -> HTTPException:
                 "message": str(exc),
             },
         )
+    if isinstance(exc, RecurringWorkflowConflictError):
+        return HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "recurring_workflow_version_conflict",
+                "message": str(exc),
+            },
+        )
     if isinstance(exc, RecurringWorkflowValidationError):
         return HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -725,6 +735,12 @@ async def create_recurring_workflow(
             owner_user_id=owner_user_id,
             target=payload.target,
             policy=payload.policy,
+            agent_profile_selection=(
+                payload.target.get("agentProfile")
+                if isinstance(payload.target.get("agentProfile"), dict)
+                else None
+            ),
+            actor=user,
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
         _log_route_exception(
@@ -805,6 +821,7 @@ async def update_recurring_workflow(
             scope_ref=payload.scope_ref,
             target=payload.target,
             policy=payload.policy,
+            expected_version=payload.version,
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
         _log_route_exception(

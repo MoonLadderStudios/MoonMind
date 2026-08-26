@@ -1,0 +1,5 @@
+{
+  "owner": "managed_runtime",
+  "pathTemplate": "/work/agent_jobs/<run>/repo",
+  "checkpointBoundary": "after_execution"
+}

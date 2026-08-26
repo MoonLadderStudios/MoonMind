@@ -74,6 +74,7 @@ def test_provider_failure_search_markers_cover_classification_markers() -> None:
         "usage_limit_reached",
         "hit your weekly limit",
         "http 401",
+        "oauth session expired",
         "http 403",
         "insufficient scope",
     ):
@@ -127,10 +128,34 @@ def test_classifies_claude_not_logged_in_as_auth_user_error() -> None:
     assert result.retry_recommendation == "reauthenticate"
 
 
+def test_classifies_claude_expired_oauth_session_as_auth_user_error() -> None:
+    result = classify_provider_failure(
+        "Failed to authenticate: OAuth session expired and could not be refreshed"
+    )
+
+    assert result is not None
+    assert result.failure_class == "user_error"
+    assert result.provider_error_code == "401"
+    assert result.retry_recommendation == "reauthenticate"
+
+
 def test_classifies_codex_revoked_refresh_token_as_auth_user_error() -> None:
     result = classify_provider_failure(
         "Your access token could not be refreshed because your refresh token "
         "was revoked. Please log out and sign in again."
+    )
+
+    assert result is not None
+    assert result.failure_class == "user_error"
+    assert result.provider_error_code == "401"
+    assert result.retry_recommendation == "reauthenticate"
+
+
+def test_classifies_codex_reused_refresh_token_as_auth_user_error() -> None:
+    result = classify_provider_failure(
+        "Your access token could not be refreshed because your refresh token "
+        "was already used. Please log out and sign in again. "
+        "error_code=refresh_token_reused"
     )
 
     assert result is not None

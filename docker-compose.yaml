@@ -16,12 +16,13 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    networks: [local-network]
+    networks: [control-plane-network]
     restart: unless-stopped
 
   api:
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     init: true
+    restart: unless-stopped
     ports:
       - "${MOONMIND_API_HOST_PORT:-7000}:8000"
     environment:
@@ -47,11 +48,78 @@ services:
       - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
       - TEMPORAL_DASHBOARD_SUBMIT_ENABLED=true
       - TEMPORAL_WORKFLOW_EDITING_ENABLED=${TEMPORAL_WORKFLOW_EDITING_ENABLED:-true}
-      - SYSTEM_DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
+      - MOONMIND_CONTAINER_JOBS_ENABLED=${MOONMIND_CONTAINER_JOBS_ENABLED:-true}
+      # Omnigent is a normal local runtime. Operators can still disable or
+      # redirect it explicitly, but the canonical Compose path needs no hidden
+      # enablement variables.
+      - OMNIGENT_ENABLED=${OMNIGENT_ENABLED:-true}
+      - OMNIGENT_SERVER_URL=${OMNIGENT_SERVER_URL:-http://omnigent:8000}
+      # Native Omnigent Workflow Chat UI is served through MoonMind-scoped routes
+      # (MoonLadderStudios/MoonMind#3638): the browser reaches the native UI at
+      # /omnigent-ui/workflow-chat/{chatBindingId} on the MoonMind origin, never
+      # the upstream server directly. Enabled by default. The compatibility
+      # version is derived from the same immutable server image evidence the
+      # execution catalog already requires (OMNIGENT_IMAGE_REF digest), so
+      # pinning the image is the only step needed to serve native chat. A
+      # mutable tag stays unverified and the gate fails closed
+      # (MoonLadderStudios/MoonMind#3685). OMNIGENT_NATIVE_UI_VERSION is the
+      # explicit override an operator sets after a new build passes conformance.
+      - OMNIGENT_NATIVE_UI_ENABLED=${OMNIGENT_NATIVE_UI_ENABLED:-true}
+      - OMNIGENT_NATIVE_UI_VERSION=${OMNIGENT_NATIVE_UI_VERSION:-}
+      - OMNIGENT_IMAGE_REF=${OMNIGENT_IMAGE_REF:-}
+      - OMNIGENT_BUILD_DIGEST=${OMNIGENT_BUILD_DIGEST:-}
+      - OMNIGENT_IMAGE=${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}
+      - OMNIGENT_IMAGE_TAG=${OMNIGENT_IMAGE_TAG:-latest}
+      - OMNIGENT_HOST_IMAGE_REF=${OMNIGENT_HOST_IMAGE_REF:-}
+      - OMNIGENT_HOST_IMAGE=${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}
+      - OMNIGENT_HOST_IMAGE_TAG=${OMNIGENT_HOST_IMAGE_TAG:-latest}
+      - OMNIGENT_OPENCODE_HOST_IMAGE_REF=${OMNIGENT_OPENCODE_HOST_IMAGE_REF:-}
+      - OMNIGENT_OPENCODE_HOST_IMAGE=${OMNIGENT_OPENCODE_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-opencode}
+      - OMNIGENT_OPENCODE_HOST_IMAGE_TAG=${OMNIGENT_OPENCODE_HOST_IMAGE_TAG:-1.18.11}
+      - OMNIGENT_PI_HOST_IMAGE_REF=${OMNIGENT_PI_HOST_IMAGE_REF:-}
+      - MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED=${MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED:-true}
+      - MOONMIND_OMNIGENT_OPENCODE_ENABLED=${MOONMIND_OMNIGENT_OPENCODE_ENABLED:-true}
+      - MOONMIND_OMNIGENT_EVIDENCE_POLICY=${MOONMIND_OMNIGENT_EVIDENCE_POLICY:-either}
+      - MOONMIND_OMNIGENT_DEPLOYMENT_EVIDENCE=${MOONMIND_OMNIGENT_DEPLOYMENT_EVIDENCE:-/workspace/omnigent-evidence/deployment-execution-evidence.json}
+      - MOONMIND_OMNIGENT_HOST_SERVER_URL=${MOONMIND_OMNIGENT_HOST_SERVER_URL:-http://omnigent:8000}
+      - MOONMIND_OMNIGENT_EXPECTED_HOST_OWNER=${MOONMIND_OMNIGENT_EXPECTED_HOST_OWNER:-local}
+      - MOONMIND_OMNIGENT_TOOLS_VOLUME_REF=${MOONMIND_OMNIGENT_TOOLS_VOLUME_REF:-moonmind-omnigent-tools-gh-2.76.2}
+      - MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE=${MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE:-opt_in}
+      - MOONMIND_CODEX_OMNIGENT_DEPLOYED_PHASE=${MOONMIND_CODEX_OMNIGENT_DEPLOYED_PHASE:-opt_in}
+      - MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF=${MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF:-/workspace/cutover/promotion.json}
+      - MOONMIND_OMNIGENT_REMEDIATION_RELEASE_EVIDENCE_REF=${MOONMIND_OMNIGENT_REMEDIATION_RELEASE_EVIDENCE_REF:-/workspace/cutover/remediation-release.json}
+      # Release-support evidence the catalog reads for the deployed commit
+      # (MoonLadderStudios/MoonMind#3710). These default to the durable
+      # evidence directory mounted below, so `tools/materialize_omnigent_evidence.py`
+      # is the only step an operator runs to make the deployed catalog report
+      # real acceptance, exact-artifact, and protected-live status. No env
+      # configuration is required for the default deployment path.
+      - MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST=${MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST:-/workspace/omnigent-evidence/acceptance-manifest.json}
+      - MOONMIND_OMNIGENT_EXECUTION_SUPPORT_EVIDENCE=${MOONMIND_OMNIGENT_EXECUTION_SUPPORT_EVIDENCE:-/workspace/omnigent-evidence/execution-support-evidence.json}
+      - MOONMIND_OMNIGENT_EXACT_ARTIFACT_EVIDENCE=${MOONMIND_OMNIGENT_EXACT_ARTIFACT_EVIDENCE:-/workspace/omnigent-evidence/exact-artifact-projection.json}
+      - MOONMIND_OMNIGENT_LIVE_HEALTH_PROJECTION=${MOONMIND_OMNIGENT_LIVE_HEALTH_PROJECTION:-/workspace/omnigent-evidence/live-health-projection.json}
+      # The API needs DOCKER_HOST only for its remaining direct Docker paths
+      # (terminal exec, OAuth auth-runner teardown). SYSTEM_DOCKER_HOST is a
+      # trusted-worker-only backend selector and is not read by the API service.
       - DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
+      - MOONMIND_CONTROL_PLANE_NETWORK=${MOONMIND_CONTROL_PLANE_NETWORK:-moonmind_control-plane-network}
+      - MOONMIND_DEPLOYMENT_PROJECT_NAME=${MOONMIND_DEPLOYMENT_PROJECT_NAME:-moonmind}
       - MOONMIND_OAUTH_RUNNER_IMAGE=${MOONMIND_OAUTH_RUNNER_IMAGE:-${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}}
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
       - MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE=${MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE:-/workspace/deployment_state/desired-state.json}
+      # Managed-runtime cleanup is operational by default. The API owns the
+      # Temporal schedule state; the agent-runtime worker performs each pass.
+      - MOONMIND_AGENT_RUNTIME_STORE=${MOONMIND_AGENT_RUNTIME_STORE:-/work/agent_jobs}
+      - MOONMIND_AGENT_RUNTIME_ARTIFACTS=${MOONMIND_AGENT_RUNTIME_ARTIFACTS:-/work/agent_jobs/artifacts}
+      - MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED=${MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED:-true}
+      - MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN=${MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN:-false}
+      - MOONMIND_MANAGED_RUNTIME_WORKSPACE_RETENTION_DAYS=${MOONMIND_MANAGED_RUNTIME_WORKSPACE_RETENTION_DAYS:-10}
+      - MOONMIND_MANAGED_RUNTIME_ARTIFACT_RETENTION_DAYS=${MOONMIND_MANAGED_RUNTIME_ARTIFACT_RETENTION_DAYS:-90}
+      - MOONMIND_MANAGED_RUNTIME_RECORD_RETENTION_DAYS=${MOONMIND_MANAGED_RUNTIME_RECORD_RETENTION_DAYS:-}
+      - MOONMIND_MANAGED_RUNTIME_JANITOR_GRACE_SECONDS=${MOONMIND_MANAGED_RUNTIME_JANITOR_GRACE_SECONDS:-3600}
+      - MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_PATHS=${MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_PATHS:-100}
+      - MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_BYTES=${MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_BYTES:-}
+      - MOONMIND_MANAGED_RUNTIME_JANITOR_LOCK_PATH=${MOONMIND_MANAGED_RUNTIME_JANITOR_LOCK_PATH:-/work/agent_jobs/.janitor.lock}
       # OIDC specific variables for API service
       - AUTH_PROVIDER=${AUTH_PROVIDER:-disabled} # local, google, or disabled
       - OIDC_ISSUER_URL=${OIDC_ISSUER_URL:-http://keycloak:8080/realms/moonmind} # For 'local'
@@ -62,19 +130,28 @@ services:
       - path: .env
         required: false
     volumes:
-      - ./model_data:/app/model_data
       - ./api_service:/app/api_service
       - ./moonmind:/app/moonmind:ro
       - ./docs:/app/docs:ro
       - ./.agents:/app/.agents:ro
       - ./deploy/state:/workspace/deployment_state:ro
+      - ${MOONMIND_CODEX_OMNIGENT_EVIDENCE_DIR:-./var/cutover}:/workspace/cutover:ro
+      # Durable release-support evidence for the deployed commit, materialized by
+      # tools/materialize_omnigent_evidence.py. Read-only: the API consumes
+      # published evidence and never produces it.
+      - ${MOONMIND_OMNIGENT_EVIDENCE_DIR:-./var/omnigent-evidence}:/workspace/omnigent-evidence:rw
+      - ./var/omnigent-runtime-state:/app/var/omnigent-runtime-state:rw
       - ./keycloak:/app/keycloak:ro # Mount keycloak configs if needed by api, or remove if only for keycloak service
       - moonmind_secrets:/app/var/secrets
+      # Live retrieval capability authority, accounting, and bounded evidence.
+      # Must outlive container recreation or an update would invalidate
+      # still-live capabilities and discard durable retrieval records.
+      - moonmind_retrieval_state:/app/var/retrieval-follow-up
       - agent_workspaces:/work/agent_jobs:ro
       - workflow_workspaces:/work/runs:ro
     command: sh /app/api_service/entrypoint.sh
     networks:
-      - local-network
+      - control-plane-network
       - docker-proxy-network
     healthcheck:
       test: [
@@ -118,7 +195,7 @@ services:
     expose:
       - "5432"
     networks:
-      local-network:
+      control-plane-network:
         aliases:
           - moonmind-api-db
           - temporal-db
@@ -156,7 +233,7 @@ services:
       postgres:
         condition: service_healthy
     networks:
-      local-network:
+      control-plane-network:
         aliases:
           - temporal-internal
       sandbox-egress-network:
@@ -183,7 +260,7 @@ services:
     volumes:
       - minio-data:/data
     networks:
-      local-network:
+      control-plane-network:
         aliases:
           - moonmind-temporal-artifacts-s3
       sandbox-egress-network:
@@ -208,7 +285,7 @@ services:
       temporal:
         condition: service_started
     networks:
-      - local-network
+      - control-plane-network
     restart: "no"
 
   temporal-visibility-rehearsal:
@@ -234,7 +311,7 @@ services:
       temporal-namespace-init:
         condition: service_completed_successfully
     networks:
-      - local-network
+      - control-plane-network
     restart: "no"
 
   temporal-admin-tools:
@@ -249,7 +326,7 @@ services:
       temporal-namespace-init:
         condition: service_completed_successfully
     networks:
-      - local-network
+      - control-plane-network
     restart: unless-stopped
 
   temporal-ui:
@@ -265,7 +342,7 @@ services:
       temporal-namespace-init:
         condition: service_completed_successfully
     networks:
-      - local-network
+      - control-plane-network
     restart: unless-stopped
 
   temporal-worker-workflow:
@@ -283,6 +360,12 @@ services:
       - TEMPORAL_MERGE_AUTOMATION_WORKFLOW_TASK_QUEUE=${TEMPORAL_MERGE_AUTOMATION_WORKFLOW_TASK_QUEUE:-mm.workflow.merge_automation}
       - TEMPORAL_WORKFLOW_WORKER_CONCURRENCY=${TEMPORAL_WORKFLOW_WORKER_CONCURRENCY:-8}
       - TEMPORAL_MERGE_AUTOMATION_WORKFLOW_WORKER_CONCURRENCY=${TEMPORAL_MERGE_AUTOMATION_WORKFLOW_WORKER_CONCURRENCY:-2}
+      - TEMPORAL_WORKER_VERSIONING_ENABLED=${TEMPORAL_WORKER_VERSIONING_ENABLED:-false}
+      - TEMPORAL_WORKER_DEPLOYMENT_NAME=${TEMPORAL_WORKER_DEPLOYMENT_NAME:-moonmind-workflow-fleet}
+      - MOONMIND_BUILD_SHA=${MOONMIND_BUILD_SHA:-}
+      - MOONMIND_IMAGE_DIGEST=${MOONMIND_IMAGE_DIGEST:-}
+      - MOONMIND_DEPLOYMENT_MODE=${MOONMIND_DEPLOYMENT_MODE:-development}
+      - TEMPORAL_WORKFLOW_READINESS_URL=${TEMPORAL_WORKFLOW_READINESS_URL:-http://temporal-worker-workflow:8080/readyz}
       - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-python -m
         moonmind.workflows.temporal.worker_runtime}
       - MOONMIND_URL=${MOONMIND_URL:-http://api:8000}
@@ -312,7 +395,7 @@ services:
           "python",
           "-c",
           "import urllib.request;
-          urllib.request.urlopen('http://localhost:8080/healthz')",
+          urllib.request.urlopen('http://localhost:8080/readyz')",
         ]
       interval: 30s
       timeout: 10s
@@ -324,7 +407,7 @@ services:
       temporal-namespace-init:
         condition: service_completed_successfully
     networks:
-      - local-network
+      - control-plane-network
     restart: unless-stopped
 
   temporal-worker-artifacts:
@@ -380,7 +463,7 @@ services:
       minio:
         condition: service_started
     networks:
-      - local-network
+      - control-plane-network
     restart: unless-stopped
 
   temporal-worker-llm:
@@ -438,7 +521,7 @@ services:
       temporal-namespace-init:
         condition: service_completed_successfully
     networks:
-      - local-network
+      - control-plane-network
     restart: unless-stopped
 
   temporal-worker-sandbox:
@@ -453,6 +536,7 @@ services:
       - TEMPORAL_WORKER_FLEET=sandbox
       - TEMPORAL_ACTIVITY_SANDBOX_TASK_QUEUE=${TEMPORAL_ACTIVITY_SANDBOX_TASK_QUEUE:-mm.activity.sandbox}
       - TEMPORAL_SANDBOX_WORKER_CONCURRENCY=${TEMPORAL_SANDBOX_WORKER_CONCURRENCY:-2}
+      - WORKFLOW_WORKSPACE_ROOT=/work/agent_jobs
       - CODEX_VOLUME_PATH=${CODEX_VOLUME_PATH:-/home/app/.codex}
       - CODEX_HOME=${CODEX_VOLUME_PATH:-/home/app/.codex}
       - CODEX_CONFIG_HOME=${CODEX_VOLUME_PATH:-/home/app/.codex}
@@ -538,6 +622,7 @@ services:
       - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-default}
       - TEMPORAL_WORKER_FLEET=agent_runtime
       - TEMPORAL_ACTIVITY_AGENT_RUNTIME_TASK_QUEUE=${TEMPORAL_ACTIVITY_AGENT_RUNTIME_TASK_QUEUE:-mm.activity.agent_runtime}
+      - TEMPORAL_ACTIVITY_AGENT_RUNTIME_CONTROL_TASK_QUEUE=${TEMPORAL_ACTIVITY_AGENT_RUNTIME_CONTROL_TASK_QUEUE:-mm.activity.agent_runtime.control}
       - TEMPORAL_AGENT_RUNTIME_WORKER_CONCURRENCY=${TEMPORAL_AGENT_RUNTIME_WORKER_CONCURRENCY:-4}
       - MOONMIND_URL=${MOONMIND_URL:-http://api:8000}
       - MOONMIND_OAUTH_RUNNER_IMAGE=${MOONMIND_OAUTH_RUNNER_IMAGE:-${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}}
@@ -565,16 +650,62 @@ services:
       - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
       - SYSTEM_DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
       - DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
+      - MOONMIND_CONTROL_PLANE_NETWORK=${MOONMIND_CONTROL_PLANE_NETWORK:-moonmind_control-plane-network}
+      - MOONMIND_CONTAINER_BACKEND_ENABLED=${MOONMIND_CONTAINER_BACKEND_ENABLED:-true}
+      - MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_MEMORY_MIB=${MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_MEMORY_MIB:-}
+      - MOONMIND_CONTAINER_JOBS_ENABLED=${MOONMIND_CONTAINER_JOBS_ENABLED:-true}
+      - OMNIGENT_ENABLED=${OMNIGENT_ENABLED:-true}
+      - OMNIGENT_SERVER_URL=${OMNIGENT_SERVER_URL:-http://omnigent:8000}
+      - OMNIGENT_IMAGE_REF=${OMNIGENT_IMAGE_REF:-}
+      - OMNIGENT_BUILD_DIGEST=${OMNIGENT_BUILD_DIGEST:-}
+      - OMNIGENT_OPENCODE_HOST_IMAGE_REF=${OMNIGENT_OPENCODE_HOST_IMAGE_REF:-}
+      - OMNIGENT_OPENCODE_HOST_IMAGE=${OMNIGENT_OPENCODE_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-opencode}
+      - OMNIGENT_OPENCODE_HOST_IMAGE_TAG=${OMNIGENT_OPENCODE_HOST_IMAGE_TAG:-1.18.11}
+      - OMNIGENT_PI_HOST_IMAGE_REF=${OMNIGENT_PI_HOST_IMAGE_REF:-}
+      - MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED=${MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED:-true}
+      - MOONMIND_OMNIGENT_OPENCODE_ENABLED=${MOONMIND_OMNIGENT_OPENCODE_ENABLED:-true}
+      - MOONMIND_OMNIGENT_EVIDENCE_POLICY=${MOONMIND_OMNIGENT_EVIDENCE_POLICY:-either}
+      - MOONMIND_OMNIGENT_DEPLOYMENT_EVIDENCE=${MOONMIND_OMNIGENT_DEPLOYMENT_EVIDENCE:-/workspace/omnigent-evidence/deployment-execution-evidence.json}
+      - MOONMIND_OMNIGENT_HOST_SERVER_URL=${MOONMIND_OMNIGENT_HOST_SERVER_URL:-http://omnigent:8000}
+      - MOONMIND_OMNIGENT_EXPECTED_HOST_OWNER=${MOONMIND_OMNIGENT_EXPECTED_HOST_OWNER:-local}
+      - MOONMIND_OMNIGENT_TOOLS_VOLUME_REF=${MOONMIND_OMNIGENT_TOOLS_VOLUME_REF:-moonmind-omnigent-tools-gh-2.76.2}
+      - MOONMIND_AGENT_WORKSPACES_VOLUME_NAME=${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}
+      # Optional prebuilt override. Empty selects the deployment-owned local
+      # recipe, which is built lazily by the first Python-test job.
+      - MOONMIND_PYTHON_TEST_IMAGE=${MOONMIND_PYTHON_TEST_IMAGE:-}
+      - MOONMIND_PYTHON_TEST_IMAGE_MAX_AGE_SECONDS=${MOONMIND_PYTHON_TEST_IMAGE_MAX_AGE_SECONDS:-604800}
+      - DOCKER_BUILDKIT=1
       - MOONMIND_DOCKER_PROXY_NETWORK=${MOONMIND_DOCKER_PROXY_NETWORK:-moonmind_docker-proxy-network}
-      # GHCR pull credentials for managed-session Docker sidecars (e.g. pulling the
-      # prebuilt Unreal toolchain image). Injected into the session Docker config by
-      # resolve_ghcr_pull_credentials_for_launch when set; empty => anonymous pulls.
-      - GHCR_PULL_USER=${GHCR_PULL_USER:-}
-      - GHCR_PULL_TOKEN=${GHCR_PULL_TOKEN:-}
-      # Optional pinned image (digest or non-latest tag) so the Docker sidecar preflight
-      # can `docker manifest inspect` it and fail fast before the agent runs.
-      - MOONMIND_UNREAL_ENGINE_IMAGE=${MOONMIND_UNREAL_ENGINE_IMAGE:-}
-      - MOONMIND_DOCKER_PREFLIGHT_IMAGE_REF=${MOONMIND_DOCKER_PREFLIGHT_IMAGE_REF:-}
+      # Keep these values identical to the API service. This worker applies the
+      # retention and deletion policy selected by the startup reconciler.
+      - MOONMIND_AGENT_RUNTIME_STORE=${MOONMIND_AGENT_RUNTIME_STORE:-/work/agent_jobs}
+      - WORKFLOW_WORKSPACE_ROOT=/work/agent_jobs
+      - WORKFLOW_DOCKER_DAEMON_MODE=remote
+      # The Omnigent runtime resolves this named volume's authoritative
+      # Mountpoint from the selected Docker daemon before creating bind mounts.
+      # Do not derive a host path from an assumed Docker data-root location.
+      - MOONMIND_AGENT_RUNTIME_ARTIFACTS=${MOONMIND_AGENT_RUNTIME_ARTIFACTS:-/work/agent_jobs/artifacts}
+      - MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED=${MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED:-true}
+      - MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN=${MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN:-false}
+      - MOONMIND_MANAGED_RUNTIME_WORKSPACE_RETENTION_DAYS=${MOONMIND_MANAGED_RUNTIME_WORKSPACE_RETENTION_DAYS:-10}
+      - MOONMIND_MANAGED_RUNTIME_ARTIFACT_RETENTION_DAYS=${MOONMIND_MANAGED_RUNTIME_ARTIFACT_RETENTION_DAYS:-90}
+      - MOONMIND_MANAGED_RUNTIME_RECORD_RETENTION_DAYS=${MOONMIND_MANAGED_RUNTIME_RECORD_RETENTION_DAYS:-}
+      - MOONMIND_MANAGED_RUNTIME_JANITOR_GRACE_SECONDS=${MOONMIND_MANAGED_RUNTIME_JANITOR_GRACE_SECONDS:-3600}
+      - MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_PATHS=${MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_PATHS:-100}
+      - MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_BYTES=${MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_BYTES:-}
+      - MOONMIND_MANAGED_RUNTIME_JANITOR_LOCK_PATH=${MOONMIND_MANAGED_RUNTIME_JANITOR_LOCK_PATH:-/work/agent_jobs/.janitor.lock}
+      - MOONMIND_DOCKER_STORAGE_JANITOR_ENABLED=${MOONMIND_DOCKER_STORAGE_JANITOR_ENABLED:-true}
+      - MOONMIND_DOCKER_STORAGE_HIGH_WATERMARK_PERCENT=${MOONMIND_DOCKER_STORAGE_HIGH_WATERMARK_PERCENT:-80}
+      - MOONMIND_DOCKER_STORAGE_CRITICAL_WATERMARK_PERCENT=${MOONMIND_DOCKER_STORAGE_CRITICAL_WATERMARK_PERCENT:-90}
+      - MOONMIND_DOCKER_STORAGE_IMAGE_MIN_AGE_HOURS=${MOONMIND_DOCKER_STORAGE_IMAGE_MIN_AGE_HOURS:-168}
+      - MOONMIND_DOCKER_STORAGE_BUILD_CACHE_MIN_AGE_HOURS=${MOONMIND_DOCKER_STORAGE_BUILD_CACHE_MIN_AGE_HOURS:-24}
+      # Deployment-approved Unreal image in the shared host daemon.
+      # First use pulls a missing image through the trusted deployment daemon;
+      # operators may explicitly select `never` when prewarming is required.
+      - MOONMIND_UNREAL_ENGINE_IMAGE=${MOONMIND_UNREAL_ENGINE_IMAGE:-ghcr.io/moonladderstudios/tactics-ue-base:5.8}
+      - MOONMIND_UNREAL_ENGINE_IMAGE_PULL_POLICY=${MOONMIND_UNREAL_ENGINE_IMAGE_PULL_POLICY:-if-missing}
+      - MOONMIND_UNREAL_CCACHE_VOLUME_NAME=${MOONMIND_UNREAL_CCACHE_VOLUME_NAME:-unreal_ccache_volume}
+      - MOONMIND_UNREAL_UBT_VOLUME_NAME=${MOONMIND_UNREAL_UBT_VOLUME_NAME:-unreal_ubt_volume}
       - MOONMIND_DEPLOYMENT_PROJECT_DIR=${MOONMIND_DEPLOYMENT_PROJECT_DIR:-}
       - MOONMIND_DEPLOYMENT_COMPOSE_FILE=${MOONMIND_DEPLOYMENT_COMPOSE_FILE:-}
       - MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR=/workspace/host_project
@@ -595,6 +726,8 @@ services:
       - ./services:/app/services:ro
       - ./.agents:/app/.agents:ro
       - moonmind_secrets:/app/var/secrets
+      - ./var/omnigent-evidence:/workspace/omnigent-evidence:rw
+      - ./var/omnigent-runtime-state:/app/var/omnigent-runtime-state:rw
       - codex_auth_volume:${CODEX_VOLUME_PATH:-/home/app/.codex}
       - claude_auth_volume:${CLAUDE_VOLUME_PATH:-/home/app/.claude}
       - agent_workspaces:/work/agent_jobs
@@ -624,10 +757,14 @@ services:
         condition: service_completed_successfully
       claude-auth-init:
         condition: service_completed_successfully
+      omnigent-tools-init:
+        condition: service_completed_successfully
+      omnigent-runtime-bootstrap:
+        condition: service_completed_successfully
       docker-proxy:
         condition: service_started
     networks:
-      - local-network
+      - control-plane-network
       - docker-proxy-network
     restart: unless-stopped
 
@@ -653,6 +790,7 @@ services:
       - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
       - SYSTEM_DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
       - DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
+      - MOONMIND_CONTROL_PLANE_NETWORK=${MOONMIND_CONTROL_PLANE_NETWORK:-moonmind_control-plane-network}
       - MOONMIND_DEPLOYMENT_PROJECT_DIR=${MOONMIND_DEPLOYMENT_PROJECT_DIR:-}
       - MOONMIND_DEPLOYMENT_COMPOSE_FILE=${MOONMIND_DEPLOYMENT_COMPOSE_FILE:-}
       - MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR=/workspace/host_project
@@ -674,6 +812,8 @@ services:
       - ./services:/app/services:ro
       - ./.agents:/app/.agents:ro
       - moonmind_secrets:/app/var/secrets
+      - ./var/omnigent-evidence:/workspace/omnigent-evidence:rw
+      - ./var/omnigent-runtime-state:/app/var/omnigent-runtime-state:rw
     entrypoint:
       - /bin/sh
       - /app/services/temporal/scripts/start-worker.sh
@@ -697,7 +837,7 @@ services:
       docker-proxy:
         condition: service_started
     networks:
-      - local-network
+      - control-plane-network
       - docker-proxy-network
     restart: unless-stopped
 
@@ -716,6 +856,8 @@ services:
       - JULES_ENABLED=${JULES_ENABLED:-true}
       - JULES_API_URL=${JULES_API_URL:-}
       - JULES_API_KEY=${JULES_API_KEY:-}
+      - OMNIGENT_ENABLED=${OMNIGENT_ENABLED:-true}
+      - OMNIGENT_SERVER_URL=${OMNIGENT_SERVER_URL:-http://omnigent:8000}
       - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-python -m
         moonmind.workflows.temporal.worker_runtime}
       - TEMPORAL_ARTIFACT_BACKEND=${TEMPORAL_ARTIFACT_BACKEND:-s3}
@@ -755,7 +897,7 @@ services:
       temporal-namespace-init:
         condition: service_completed_successfully
     networks:
-      - local-network
+      - control-plane-network
     restart: unless-stopped
 
   qdrant:
@@ -766,31 +908,297 @@ services:
     volumes:
       - qdrant-storage:/qdrant/storage
     networks:
-      - local-network
+      - control-plane-network
+
+  omnigent-runtime-bootstrap:
+    image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
+    init: true
+    environment:
+      - PYTHONPATH=/app
+      - OMNIGENT_IMAGE=${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}
+      - OMNIGENT_IMAGE_TAG=${OMNIGENT_IMAGE_TAG:-latest}
+      - OMNIGENT_IMAGE_REF=${OMNIGENT_IMAGE_REF:-}
+      - OMNIGENT_BUILD_DIGEST=${OMNIGENT_BUILD_DIGEST:-}
+      - OMNIGENT_OPENCODE_HOST_IMAGE=${OMNIGENT_OPENCODE_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-opencode}
+      - OMNIGENT_OPENCODE_HOST_IMAGE_TAG=${OMNIGENT_OPENCODE_HOST_IMAGE_TAG:-1.18.11}
+      - OMNIGENT_OPENCODE_HOST_IMAGE_REF=${OMNIGENT_OPENCODE_HOST_IMAGE_REF:-}
+      - MOONMIND_OMNIGENT_EVIDENCE_POLICY=${MOONMIND_OMNIGENT_EVIDENCE_POLICY:-either}
+      - DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
+    volumes:
+      - ./moonmind:/app/moonmind:ro
+      - ./var:/app/var:rw
+      - moonmind_secrets:/app/var/secrets
+    command: ["python", "-m", "moonmind.omnigent.bootstrap.infrastructure"]
+    networks:
+      - control-plane-network
+      - docker-proxy-network
+    depends_on:
+      docker-proxy:
+        condition: service_started
+    restart: "no"
+
+  omnigent-tools-init:
+    image: ${OMNIGENT_GH_IMAGE:-serversideup/github-cli:alpine-2.76.2}
+    user: "0:0"
+    entrypoint: ["/opt/moonmind/init-mounted-tools.sh"]
+    environment:
+      MOONMIND_GH_SOURCE: /usr/local/bin/gh
+      MOONMIND_GH_VERSION: ${OMNIGENT_GH_VERSION:-2.76.2}
+    volumes:
+      - omnigent-tools:/output
+      - ./services/omnigent/scripts:/opt/moonmind:ro
+    restart: "no"
 
   omnigent-host:
     profiles: ["omnigent-host"]
-    image: ${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:${OMNIGENT_HOST_IMAGE_TAG:-latest}
-    command: ["omnigent", "host", "--server", "http://omnigent:8000", "--non-interactive"]
+    image: ${OMNIGENT_HOST_IMAGE_REF:-${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:${OMNIGENT_HOST_IMAGE_TAG:-latest}}
+    entrypoint: ["/opt/moonmind/start-host-with-projections.sh"]
     environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      PATH: /opt/moonmind-tools/bin:${OMNIGENT_HOST_BASE_PATH:-/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin}
+      MOONMIND_ACTIVE_SKILLS_DIR: /opt/moonmind-skills
+      OMNIGENT_RUNNER_ENV_PASSTHROUGH: MOONMIND_ACTIVE_SKILLS_DIR
+      OMNIGENT_SERVER_URL: http://omnigent:8000
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
     env_file:
       - path: .env
         required: false
     volumes:
       - omnigent-host-state:/root/.omnigent
-      - ./omnigent_workspaces:/workspaces
-      # Mount an operator-managed sanitized workspace, not the repo root with local secrets.
-      - ${OMNIGENT_MOONMIND_WORKSPACE:-./omnigent_workspaces/MoonMind}:/workspaces/MoonMind:ro
+      - omnigent-host-artifacts:/artifacts
+      - omnigent-host-cache:/root/.cache
+      - omnigent-tools:/opt/moonmind-tools:ro
+      - ${OMNIGENT_ACTIVE_SKILLS_DIR:-./omnigent_workspaces/.moonmind/skills_active}:/opt/moonmind-skills:ro
+      - ./services/omnigent/scripts/moonmind-tools.sh:/etc/profile.d/moonmind-tools.sh:ro
+      - ./services/omnigent/scripts:/opt/moonmind:ro
+      # The owning worker supplies the canonical daemon-visible source.
+      - ${OMNIGENT_RUN_WORKSPACE:-./omnigent_workspaces/run}:/workspaces/run
     depends_on:
       omnigent:
         condition: service_started
+      omnigent-tools-init:
+        condition: service_completed_successfully
     networks:
-      - local-network
+      - control-plane-network
     restart: unless-stopped
+
+  omnigent-host-claude:
+    profiles: ["omnigent-host-claude"]
+    image: ${OMNIGENT_HOST_IMAGE_REF:-${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:${OMNIGENT_HOST_IMAGE_TAG:-latest}}
+    hostname: omnigent-host-claude
+    user: "1000:1000"
+    working_dir: /home/app
+    cpus: ${OMNIGENT_HOST_CPU_LIMIT:-2}
+    mem_limit: ${OMNIGENT_HOST_MEMORY_LIMIT:-4096m}
+    pids_limit: ${OMNIGENT_HOST_PIDS_LIMIT:-256}
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=${OMNIGENT_HOST_TMPFS_LIMIT:-256m}
+    stop_grace_period: ${OMNIGENT_HOST_STOP_GRACE_SECONDS:-20}s
+    labels:
+      moonmind.egress.profile: ${OMNIGENT_EGRESS_PROFILE_REF:-unattested}
+      moonmind.egress.profile_digest: ${OMNIGENT_EGRESS_PROFILE_DIGEST:-unattested}
+      moonmind.egress.applied_rule_digest: ${OMNIGENT_EGRESS_APPLIED_RULE_DIGEST:-unattested}
+    entrypoint: ["/opt/moonmind/start-claude-oauth-host.sh"]
+    environment:
+      HTTP_PROXY: http://omnigent-egress-proxy:3129
+      HTTPS_PROXY: http://omnigent-egress-proxy:3129
+      http_proxy: http://omnigent-egress-proxy:3129
+      https_proxy: http://omnigent-egress-proxy:3129
+      NO_PROXY: localhost,127.0.0.1
+      no_proxy: localhost,127.0.0.1
+      OMNIGENT_RUNNER_ENV_PASSTHROUGH: HTTP_PROXY,HTTPS_PROXY,http_proxy,https_proxy,NO_PROXY,no_proxy,MOONMIND_ACTIVE_SKILLS_DIR
+      PATH: /opt/moonmind-tools/bin:${OMNIGENT_HOST_BASE_PATH:-/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin}
+      MOONMIND_ACTIVE_SKILLS_DIR: /opt/moonmind-skills
+      OMNIGENT_SERVER_URL: http://omnigent:8000
+      HOME: /home/app
+      CLAUDE_HOME: /home/app/.claude
+      CLAUDE_VOLUME_PATH: /home/app/.claude
+      CLAUDE_CONFIG_DIR: /home/app/.claude
+      CLAUDE_CREDENTIAL_GENERATION: ${CLAUDE_CREDENTIAL_GENERATION:-1}
+      ANTHROPIC_API_KEY: ""
+      ANTHROPIC_AUTH_TOKEN: ""
+      CLAUDE_API_KEY: ""
+      CLAUDE_CODE_OAUTH_TOKEN: ""
+      OPENAI_API_KEY: ""
+      GEMINI_API_KEY: ""
+      GOOGLE_API_KEY: ""
+    volumes:
+      - omnigent-host-claude-home:/home/app
+      - omnigent-host-claude-state:/home/app/.omnigent
+      - omnigent-host-artifacts:/artifacts
+      - omnigent-host-cache:/home/app/.cache
+      - omnigent-tools:/opt/moonmind-tools:ro
+      - ${OMNIGENT_ACTIVE_SKILLS_DIR:-./omnigent_workspaces/.moonmind/skills_active}:/opt/moonmind-skills:ro
+      - ./services/omnigent/scripts/moonmind-tools.sh:/etc/profile.d/moonmind-tools.sh:ro
+      - ./services/omnigent/scripts:/opt/moonmind:ro
+      - claude_auth_volume:/home/app/.claude
+      - ${OMNIGENT_RUN_WORKSPACE:-./omnigent_workspaces/run}:/workspaces/run
+    depends_on:
+      omnigent:
+        condition: service_started
+      omnigent-host-claude-init:
+        condition: service_completed_successfully
+      omnigent-tools-init:
+        condition: service_completed_successfully
+      sandbox-egress-proxy:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "/opt/moonmind/check-claude-oauth-host.sh && /opt/moonmind/check-runner-projections.sh",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks:
+      - omnigent-egress-network
+    restart: unless-stopped
+  omnigent-host-claude-init:
+    profiles: ["omnigent-host-claude"]
+    image: ${OMNIGENT_HOST_IMAGE_REF:-${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:${OMNIGENT_HOST_IMAGE_TAG:-latest}}
+    user: "0:0"
+    network_mode: none
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - FOWNER
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    entrypoint: ["/opt/moonmind/init-oauth-host.sh"]
+    environment:
+      OMNIGENT_STATE_PATH: /home/app/.omnigent
+      OAUTH_HOME: /home/app/.claude
+    volumes:
+      - omnigent-host-claude-state:/home/app/.omnigent
+      - omnigent-host-artifacts:/artifacts
+      - omnigent-host-cache:/home/app/.cache
+      - claude_auth_volume:/home/app/.claude
+      - ./services/omnigent/scripts:/opt/moonmind:ro
+    depends_on:
+      claude-auth-init:
+        condition: service_completed_successfully
+    restart: "no"
+
+  omnigent-host-codex-init:
+    profiles: ["omnigent-host-codex"]
+    image: ${OMNIGENT_HOST_IMAGE_REF:-${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:${OMNIGENT_HOST_IMAGE_TAG:-latest}}
+    user: "0:0"
+    network_mode: none
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - FOWNER
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    entrypoint: ["/opt/moonmind/init-codex-oauth-host.sh"]
+    environment:
+      OMNIGENT_STATE_PATH: /home/app/.omnigent
+      CODEX_HOME: /home/app/.codex
+    volumes:
+      - omnigent-host-codex-state:/home/app/.omnigent
+      - omnigent-host-artifacts:/artifacts
+      - omnigent-host-cache:/home/app/.cache
+      - codex_auth_volume:/home/app/.codex
+      - ./services/omnigent/scripts:/opt/moonmind:ro
+    depends_on:
+      codex-auth-init:
+        condition: service_completed_successfully
+    restart: "no"
+
+  omnigent-host-codex:
+    profiles: ["omnigent-host-codex"]
+    image: ${OMNIGENT_HOST_IMAGE_REF:-${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:${OMNIGENT_HOST_IMAGE_TAG:-latest}}
+    hostname: omnigent-host-codex
+    user: "1000:1000"
+    working_dir: /home/app
+    cpus: ${OMNIGENT_HOST_CPU_LIMIT:-2}
+    mem_limit: ${OMNIGENT_HOST_MEMORY_LIMIT:-4096m}
+    pids_limit: ${OMNIGENT_HOST_PIDS_LIMIT:-256}
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=${OMNIGENT_HOST_TMPFS_LIMIT:-256m}
+    stop_grace_period: ${OMNIGENT_HOST_STOP_GRACE_SECONDS:-20}s
+    labels:
+      moonmind.effective_launch_ref: ${OMNIGENT_EFFECTIVE_LAUNCH_REF:-bootstrap}
+      moonmind.capture_required: "true"
+      moonmind.capture_retention_days: ${OMNIGENT_CAPTURE_RETENTION_DAYS:-30}
+      moonmind.cleanup_mode: drain
+      moonmind.control_capabilities: ${OMNIGENT_CONTROL_CAPABILITIES:-interrupt,terminate,clear_context}
+      moonmind.egress.profile: ${OMNIGENT_EGRESS_PROFILE_REF:-unattested}
+      moonmind.egress.profile_digest: ${OMNIGENT_EGRESS_PROFILE_DIGEST:-unattested}
+      moonmind.egress.applied_rule_digest: ${OMNIGENT_EGRESS_APPLIED_RULE_DIGEST:-unattested}
+    entrypoint: ["/usr/bin/env", "-u", "OPENAI_API_KEY", "-u", "CODEX_ACCESS_TOKEN", "-u", "OPENAI_BASE_URL", "-u", "MINIMAX_API_KEY", "-u", "ANTHROPIC_API_KEY", "-u", "ANTHROPIC_AUTH_TOKEN", "-u", "CLAUDE_API_KEY", "-u", "CLAUDE_CODE_OAUTH_TOKEN", "-u", "GEMINI_API_KEY", "-u", "GOOGLE_API_KEY"]
+    command: ["/opt/moonmind/start-codex-oauth-host.sh"]
+    environment:
+      HTTP_PROXY: http://omnigent-egress-proxy:3129
+      HTTPS_PROXY: http://omnigent-egress-proxy:3129
+      http_proxy: http://omnigent-egress-proxy:3129
+      https_proxy: http://omnigent-egress-proxy:3129
+      NO_PROXY: localhost,127.0.0.1
+      no_proxy: localhost,127.0.0.1
+      OMNIGENT_RUNNER_ENV_PASSTHROUGH: HTTP_PROXY,HTTPS_PROXY,http_proxy,https_proxy,NO_PROXY,no_proxy,MOONMIND_ACTIVE_SKILLS_DIR
+      PATH: /opt/moonmind-tools/bin:${OMNIGENT_HOST_BASE_PATH:-/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin}
+      MOONMIND_ACTIVE_SKILLS_DIR: /opt/moonmind-skills
+      HOME: /home/app
+      CODEX_HOME: /home/app/.codex
+      CODEX_CONFIG_HOME: /home/app/.codex
+      CODEX_CONFIG_PATH: /home/app/.codex/config.toml
+      CODEX_VOLUME_PATH: /home/app/.codex
+      CODEX_CREDENTIAL_GENERATION: ${CODEX_CREDENTIAL_GENERATION:-1}
+      OMNIGENT_SERVER_URL: http://omnigent:8000
+      OMNIGENT_EXECUTION_TIMEOUT_SECONDS: ${OMNIGENT_HOST_TIMEOUT_SECONDS:-5400}
+      OMNIGENT_EXECUTION_TIMEOUT_OWNER: temporal_workflow
+      OMNIGENT_CAPTURE_OWNER: moonmind_bridge
+      OMNIGENT_CAPTURE_RETENTION_DAYS: ${OMNIGENT_CAPTURE_RETENTION_DAYS:-30}
+    volumes:
+      - omnigent-host-codex-state:/home/app/.omnigent
+      - omnigent-host-artifacts:/artifacts
+      - omnigent-host-cache:/home/app/.cache
+      - omnigent-tools:/opt/moonmind-tools:ro
+      - ${OMNIGENT_ACTIVE_SKILLS_DIR:-./omnigent_workspaces/.moonmind/skills_active}:/opt/moonmind-skills:ro
+      - ./services/omnigent/scripts/moonmind-tools.sh:/etc/profile.d/moonmind-tools.sh:ro
+      - codex_auth_volume:/home/app/.codex
+      - ./services/omnigent/scripts:/opt/moonmind:ro
+      - ${OMNIGENT_RUN_WORKSPACE:-./omnigent_workspaces/run}:/workspaces/run
+    depends_on:
+      omnigent:
+        condition: service_started
+      omnigent-host-codex-init:
+        condition: service_completed_successfully
+      omnigent-tools-init:
+        condition: service_completed_successfully
+      sandbox-egress-proxy:
+        condition: service_healthy
+    networks:
+      - omnigent-egress-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/opt/moonmind/check-codex-oauth-host.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   init-db:
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
@@ -809,12 +1217,11 @@ services:
       - ./tools:/app/tools:ro
       - ./api_service:/app/api_service:ro
       - ./docs:/app/docs:ro
-      - ./model_data:/app/model_data:ro
       - moonmind_secrets:/app/var/secrets
       - ./init_db:/app/init_db
     command: sh /app/init_db/init_db_entrypoint.sh
     networks:
-      - local-network
+      - control-plane-network
     restart: "no"
     depends_on:
       postgres:
@@ -864,11 +1271,11 @@ services:
       postgres:
         condition: service_healthy
     networks:
-      - local-network
+      - control-plane-network
     restart: "no"
 
   omnigent:
-    image: ${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}:${OMNIGENT_IMAGE_TAG:-latest}
+    image: ${OMNIGENT_IMAGE_REF:-${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}:${OMNIGENT_IMAGE_TAG:-latest}}
     env_file:
       - path: .env
         required: false
@@ -901,6 +1308,13 @@ services:
       - OMNIGENT_HOST_IMAGE=${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}
       - OMNIGENT_HOST_IMAGE_TAG=${OMNIGENT_HOST_IMAGE_TAG:-latest}
     ports:
+      # Development-only direct exposure of the stock Omnigent server. Workflow
+      # Chat never uses this published port: the browser reaches the native UI
+      # exclusively through MoonMind-scoped routes (/omnigent-ui/workflow-chat/*)
+      # and the API facade (/api/workflow-chat-bindings/*), and MoonMind reaches
+      # the server over the internal Compose network (OMNIGENT_SERVER_URL).
+      # Set OMNIGENT_PORT to an unroutable/loopback binding to disable it
+      # (MoonLadderStudios/MoonMind#3638 §7).
       - "${OMNIGENT_PORT:-8000}:8000"
     volumes:
       - omnigent-data:/data
@@ -910,7 +1324,8 @@ services:
       omnigent-db-init:
         condition: service_completed_successfully
     networks:
-      - local-network
+      - control-plane-network
+      - omnigent-egress-network
     restart: unless-stopped
 
   agent-workspaces-init:
@@ -953,6 +1368,8 @@ services:
       CONTAINERS: 1
       EXEC: 1
       IMAGES: 1
+      BUILD: 1
+      SESSION: 1
       NETWORKS: 1
       POST: 1
       VOLUMES: 1
@@ -964,19 +1381,40 @@ services:
     restart: unless-stopped
 
   sandbox-egress-proxy:
+    container_name: moonmind-sandbox-egress-proxy
     image: ubuntu/squid:latest
+    labels:
+      moonmind.egress.profile-set-digest: sha256:210bb382a9738300138bca5e4f6885c2e472c725816504040a559a22a7909e82
+      moonmind.egress.enforcer: docker-internal-proxy/v1
+      moonmind.egress.config-digest: sha256:a64c798e3fed5252e86811d344ad8f509332e81b06ee75ddc6ad2f2198fc3713
     volumes:
       - ./docker/sandbox-egress-proxy/squid.conf:/etc/squid/squid.conf:ro
     expose:
       - "3128"
+      - "3129"
     networks:
-      - local-network
-      - sandbox-egress-network
+      control-plane-network: {}
+      sandbox-egress-network: {}
+      restricted-egress-network: {}
+      omnigent-egress-network:
+        aliases:
+          - omnigent-egress-proxy
+    healthcheck:
+      test: ["CMD-SHELL", "squid -k parse && test \"$$(sha256sum /etc/squid/squid.conf | cut -d' ' -f1)\" = a64c798e3fed5252e86811d344ad8f509332e81b06ee75ddc6ad2f2198fc3713"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     restart: unless-stopped
 
 volumes:
   qdrant-storage:
   omnigent-host-state:
+  omnigent-host-claude-state:
+  omnigent-host-claude-home:
+  omnigent-host-codex-state:
+  omnigent-tools:
+    name: moonmind-omnigent-tools-gh-${OMNIGENT_GH_VERSION:-2.76.2}
   postgres-data:
   minio-data:
   workflow_workspaces:
@@ -984,10 +1422,14 @@ volumes:
     name: ${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}
   moonmind_secrets:
     name: ${MOONMIND_SECRETS_VOLUME_NAME:-moonmind_secrets}
+  moonmind_retrieval_state:
+    name: ${MOONMIND_RETRIEVAL_STATE_VOLUME_NAME:-moonmind_retrieval_state}
   unreal_ccache_volume:
-    name: unreal_ccache_volume
+    name: ${MOONMIND_UNREAL_CCACHE_VOLUME_NAME:-unreal_ccache_volume}
+  omnigent-host-artifacts:
+  omnigent-host-cache:
   unreal_ubt_volume:
-    name: unreal_ubt_volume
+    name: ${MOONMIND_UNREAL_UBT_VOLUME_NAME:-unreal_ubt_volume}
   codex_auth_volume:
     name: ${CODEX_VOLUME_NAME:-codex_auth_volume}
   claude_auth_volume:
@@ -995,11 +1437,17 @@ volumes:
   omnigent-data:
 
 networks:
-  local-network:
-    external: true
+  control-plane-network:
+    name: ${MOONMIND_CONTROL_PLANE_NETWORK:-moonmind_control-plane-network}
   docker-proxy-network:
     name: ${MOONMIND_DOCKER_PROXY_NETWORK:-moonmind_docker-proxy-network}
     internal: true
   sandbox-egress-network:
     name: ${MOONMIND_SANDBOX_EGRESS_NETWORK:-moonmind_sandbox-egress-network}
+    internal: true
+  restricted-egress-network:
+    name: ${MOONMIND_RESTRICTED_EGRESS_NETWORK:-moonmind_restricted-egress-network}
+    internal: true
+  omnigent-egress-network:
+    name: ${MOONMIND_OMNIGENT_EGRESS_NETWORK:-moonmind_omnigent-egress-network}
     internal: true

@@ -12,6 +12,7 @@ import { act, fireEvent, screen, waitFor, within } from "@testing-library/react"
 import { MemoryRouter } from "react-router-dom";
 
 import type { BootPayload } from "../boot/parseBootPayload";
+import type { components } from "../generated/openapi";
 import { navigateTo } from "../lib/navigation";
 import { requestWorkflowStartRouteChange } from "../lib/workflowStartRouteGuard";
 import {
@@ -27,11 +28,14 @@ import {
   CAPABILITY_CATALOG,
   capabilityChipProvenanceLabel,
   LIQUID_GL_OPTIONS,
+  OMNIGENT_READINESS_REFRESH_MS,
   buildEditParametersPatch,
+  omnigentReadinessRefetchInterval,
   preferredTemplate,
   previewModelTier,
   deriveExplicitWorkflowTitle,
   resolveDefaultProviderProfileId,
+  resolveLoadedProviderProfileId,
   resolveObjectiveInstructions,
   workflowStartFormSnapshot,
   WORKFLOW_START_HEADING_QUOTES,
@@ -195,6 +199,58 @@ describe("buildEditParametersPatch", () => {
         effort: "high",
         profileId: "profile:codex-default",
       },
+    });
+  });
+
+  it("clears inherited rag/followUpRetrieval when the submission omits them", () => {
+    const patch = buildEditParametersPatch({
+      execution: {
+        workflowId: "mm:edit-retrieval-clear",
+        inputParameters: {
+          rag: { collections: ["repo"], required: true },
+          followUpRetrieval: { enabled: true, collections: ["repo"] },
+          workflow: { instructions: "Keep going.", runtime: { mode: "codex_cli" } },
+        },
+      },
+      submittedPayload: {
+        task: { instructions: "Keep going.", runtime: { mode: "codex_cli" } },
+      },
+      submittedWorkflow: {
+        instructions: "Keep going.",
+        runtime: { mode: "codex_cli" },
+      },
+    });
+
+    // The operator disabled retrieval authoring, so the inherited authority must
+    // not silently persist through the edit patch.
+    expect("rag" in patch).toBe(false);
+    expect("followUpRetrieval" in patch).toBe(false);
+  });
+
+  it("keeps rag/followUpRetrieval when the submission carries them", () => {
+    const patch = buildEditParametersPatch({
+      execution: {
+        workflowId: "mm:edit-retrieval-keep",
+        inputParameters: {
+          rag: { collections: ["repo"] },
+          workflow: { instructions: "Keep going.", runtime: { mode: "codex_cli" } },
+        },
+      },
+      submittedPayload: {
+        rag: { collections: ["docs"] },
+        followUpRetrieval: { enabled: true, collections: ["docs"] },
+        task: { instructions: "Keep going.", runtime: { mode: "codex_cli" } },
+      },
+      submittedWorkflow: {
+        instructions: "Keep going.",
+        runtime: { mode: "codex_cli" },
+      },
+    });
+
+    expect(patch.rag).toEqual({ collections: ["docs"] });
+    expect(patch.followUpRetrieval).toEqual({
+      enabled: true,
+      collections: ["docs"],
     });
   });
 });
@@ -471,7 +527,7 @@ const mockDashboardConfig = {
       codex_cli: "medium",
       claude_code: "low",
     },
-    supportedAgentRuntimes: ["codex_cli", "claude_code"],
+    supportedAgentRuntimes: ["omnigent", "codex_cli", "claude_code"],
     providerProfiles: {
       list: "/api/v1/provider-profiles",
     },
@@ -498,6 +554,1257 @@ const mockPayload: BootPayload = {
     dashboardConfig: mockDashboardConfig,
   },
 };
+
+function defaultBranchOptionsResponse(): Response {
+  return {
+    ok: true,
+    json: async () => ({
+      items: [{ value: "main", label: "main", source: "github" }],
+      defaultBranch: "main",
+      error: null,
+    }),
+  } as Response;
+}
+
+describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
+  let fetchSpy: MockInstance;
+  let readinessRequests: number;
+
+  beforeEach(() => {
+    window.history.pushState({}, "Create Workflow", "/workflows/new");
+    readinessRequests = 0;
+    fetchSpy = vi.spyOn(window, "fetch").mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/omnigent/codex-catalog-readiness") {
+        readinessRequests += 1;
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            schemaVersion: "moonmind.omnigent-codex-readiness.v2",
+            runtimeId: "omnigent",
+            displayName: "Codex via Omnigent",
+            available: false,
+            eligibleProviderProfiles: [],
+            gateReasons: [{
+              code: "no_eligible_codex_oauth_profile",
+              message: "Connect and validate a Codex OAuth Provider Profile.",
+              remediationHref: "/settings#provider-profiles",
+            }],
+          }),
+        } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [] } as Response);
+      }
+      if (url.startsWith("/api/github/branches")) {
+        return Promise.resolve(defaultBranchOptionsResponse());
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+    });
+  });
+
+  afterEach(() => fetchSpy.mockRestore());
+
+  function omnigentPayload(): BootPayload {
+    return {
+      ...mockPayload,
+      initialData: {
+        dashboardConfig: {
+          ...mockDashboardConfig,
+          system: {
+            ...mockDashboardConfig.system,
+            supportedAgentRuntimes: ["omnigent", "codex_cli", "claude_code", "jules"],
+            omnigentExecutionCatalog: {
+              profiles: [{ ref: "omnigent-codex-default", displayName: "Codex default", defaultPolicyRef: "on-demand-v1", providerRuntime: "codex_cli" }],
+              policies: [{ ref: "on-demand-v1", displayName: "On-demand v1", hostMode: "on_demand_docker" }],
+            },
+          },
+        },
+      },
+    } as BootPayload;
+  }
+
+  const readyOmnigentCatalog = {
+    schemaVersion: "moonmind.omnigent-codex-readiness.v2",
+    runtimeId: "omnigent",
+    displayName: "Codex via Omnigent",
+    agentKind: "external",
+    agentId: "omnigent",
+    harness: "codex-native",
+    available: true,
+    defaultExecutionProfileRef: "omnigent-codex-default",
+    executionProfiles: [{
+      ref: "omnigent-codex-default",
+      displayName: "Codex default",
+      available: true,
+      launchPolicies: [{ ref: "on-demand-v1", displayName: "On-demand Docker", hostMode: "on_demand_docker", isDefault: true }],
+      gateReasons: [],
+    }],
+    eligibleProviderProfiles: [{ profileId: "oauth-1", label: "Codex OAuth", providerId: "openai", runtimeId: "codex_cli", busy: false, queueWhenBusy: true }],
+    ineligibleProviderProfiles: [],
+    hostModes: ["on_demand_docker"],
+    gateReasons: [],
+    supportGateReasons: [],
+    compatibilityDiagnostics: {},
+    cutover: {},
+    remediationRelease: {
+      policyVersion: "moonmind.operator-remediation-release/v1",
+      matrixVersion: "operator-remediation-support-matrix/v1",
+      manualDiagnosisSupported: true,
+      manualMutationSupported: true,
+      autonomousRolloutAuthorized: false,
+      promotionAllowed: false,
+      manualPromotionAllowed: true,
+      rollbackRequired: false,
+      generatedAt: "2026-08-13T00:00:00Z",
+      expiresAt: "2026-08-20T00:00:00Z",
+      telemetry: {
+        schemaVersion: "moonmind.operator-remediation-telemetry/v1",
+        groups: {},
+      },
+      alerts: [{
+        code: "autonomous_rollout_gate_closed",
+        severity: "warning",
+        operatorAction: "keep_autonomous_mutation_disabled",
+      }],
+      blockers: ["autonomous_rollout_gate_closed"],
+    },
+    admissionReadiness: {},
+  } satisfies components["schemas"]["OmnigentCodexCatalogReadiness"];
+  const readyAgentProfiles = [{
+    profileId: "team-codex",
+    displayName: "Team Codex",
+    state: "active",
+    activeVersion: 1,
+    defaultForRuntime: true,
+    versions: [{
+      version: 1,
+      digest: `sha256:${"a".repeat(64)}`,
+      document: {
+        execution: {
+          defaultExecutionProfileRef: "omnigent-codex-default",
+        },
+      },
+      validationResult: { ready: true },
+    }],
+  }];
+
+  it("polls recoverable readiness gates and stops after recovery", () => {
+    const endpointStartingReason = {
+      code: "bridge_endpoint_not_ready",
+      message: "The configured Omnigent endpoint is starting.",
+      remediationHref: "/settings#omnigent",
+    };
+    const startingCatalog = {
+      ...readyOmnigentCatalog,
+      available: false,
+      executionProfiles: readyOmnigentCatalog.executionProfiles.map((profile) => ({
+        ...profile,
+        available: false,
+        gateReasons: [endpointStartingReason],
+      })),
+      gateReasons: [endpointStartingReason],
+    };
+
+    expect(omnigentReadinessRefetchInterval(startingCatalog)).toBe(
+      OMNIGENT_READINESS_REFRESH_MS,
+    );
+    expect(omnigentReadinessRefetchInterval(readyOmnigentCatalog)).toBe(false);
+    const endpointUnconfiguredReason = {
+      code: "bridge_endpoint_unavailable",
+      message: "Configure the selected Omnigent endpoint.",
+      remediationHref: "/settings#omnigent",
+    };
+    expect(omnigentReadinessRefetchInterval({
+      ...startingCatalog,
+      gateReasons: [endpointUnconfiguredReason],
+      executionProfiles: startingCatalog.executionProfiles.map((profile) => ({
+        ...profile,
+        gateReasons: [endpointUnconfiguredReason],
+      })),
+    })).toBe(false);
+    expect(omnigentReadinessRefetchInterval({
+      ...startingCatalog,
+      gateReasons: [
+        endpointStartingReason,
+        {
+          code: "rollout_gate_disabled",
+          message: "Enable the Omnigent runtime rollout gate.",
+          remediationHref: "/settings#omnigent",
+        },
+      ],
+      executionProfiles: startingCatalog.executionProfiles.map((profile) => ({
+        ...profile,
+        gateReasons: [
+          endpointStartingReason,
+          {
+            code: "rollout_gate_disabled",
+            message: "Enable the Omnigent runtime rollout gate.",
+            remediationHref: "/settings#omnigent",
+          },
+        ],
+      })),
+    })).toBe(false);
+  });
+
+  it("polls a recoverable selected target when another target is available", () => {
+    const selectedTargetRef = "omnigent-claude-static";
+    const catalog = {
+      ...readyOmnigentCatalog,
+      available: true,
+      executionProfiles: [
+        ...readyOmnigentCatalog.executionProfiles,
+        {
+          ref: selectedTargetRef,
+          displayName: "Claude static",
+          available: false,
+          launchPolicies: [],
+          gateReasons: [{
+            code: "static_host_not_ready",
+            message: "Start and validate the selected static Omnigent host.",
+            remediationHref: "/settings#omnigent",
+          }],
+        },
+      ],
+    };
+
+    expect(omnigentReadinessRefetchInterval(catalog, {
+      executionTargetRef: selectedTargetRef,
+    })).toBe(OMNIGENT_READINESS_REFRESH_MS);
+  });
+
+  it("automatically clears a transient endpoint startup gate", async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/omnigent/codex-catalog-readiness") {
+        readinessRequests += 1;
+        const endpointStartingReason = {
+          code: "bridge_endpoint_not_ready",
+          message: "The configured Omnigent endpoint is starting.",
+          remediationHref: "/settings#omnigent",
+        };
+        const body = readinessRequests === 1
+          ? {
+              ...readyOmnigentCatalog,
+              available: false,
+              executionProfiles: readyOmnigentCatalog.executionProfiles.map(
+                (profile) => ({
+                  ...profile,
+                  available: false,
+                  gateReasons: [endpointStartingReason],
+                }),
+              ),
+              gateReasons: [endpointStartingReason],
+            }
+          : readyOmnigentCatalog;
+        return Promise.resolve({ ok: true, json: async () => body } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [{ profile_id: "oauth-1", account_label: "Codex OAuth", provider_id: "openai" }] } as Response);
+      }
+      if (url === "/api/omnigent/agent-profiles") {
+        return Promise.resolve({ ok: true, json: async () => readyAgentProfiles } as Response);
+      }
+      if (url.startsWith("/api/github/branches")) {
+        return Promise.resolve(defaultBranchOptionsResponse());
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+    });
+
+    renderWorkflowStartPage(omnigentPayload());
+    fireEvent.change(await screen.findByLabelText("Runtime"), {
+      target: { value: "omnigent" },
+    });
+
+    expect((await screen.findAllByText(/endpoint is starting/)).length).toBeGreaterThan(0);
+    await waitFor(
+      () => expect(readinessRequests).toBeGreaterThanOrEqual(2),
+      { timeout: OMNIGENT_READINESS_REFRESH_MS + 1_500 },
+    );
+    await waitFor(() => {
+      expect(screen.queryAllByText(/endpoint is starting/)).toHaveLength(0);
+      expect(
+        screen.queryByText(/Codex via Omnigent cannot be submitted/),
+      ).toBeNull();
+    });
+  });
+
+  it("keeps an unready runtime selectable and explicitly revalidates stale readiness", async () => {
+    renderWorkflowStartPage(mockPayload);
+
+    const option = await screen.findByRole("option", { name: "Codex via Omnigent" });
+    expect((option as HTMLOptionElement).disabled).toBe(false);
+    fireEvent.change(screen.getByLabelText("Runtime"), {
+      target: { value: "omnigent" },
+    });
+    expect(
+      screen.getAllByText(/Connect and validate a Codex OAuth Provider Profile/),
+    ).toHaveLength(2);
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh readiness" }));
+    await waitFor(() => expect(readinessRequests).toBe(2));
+  });
+
+  it("gates a busy Omnigent selection and hides unsupported model authority", async () => {
+    const payload = {
+      ...mockPayload,
+      initialData: {
+        dashboardConfig: {
+          ...mockDashboardConfig,
+          system: {
+            ...mockDashboardConfig.system,
+            omnigentExecutionCatalog: {
+              profiles: [{ ref: "omnigent-codex-default", displayName: "Codex default", defaultPolicyRef: "on-demand-v1", providerRuntime: "codex_cli" }],
+              policies: [{ ref: "on-demand-v1", hostMode: "on_demand_docker" }],
+            },
+          },
+        },
+      },
+    } as BootPayload;
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/omnigent/codex-catalog-readiness") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            schemaVersion: "moonmind.omnigent-codex-readiness.v2",
+            runtimeId: "omnigent",
+            displayName: "Codex via Omnigent",
+            available: true,
+            defaultExecutionProfileRef: "omnigent-codex-default",
+            executionProfiles: [{
+              ref: "omnigent-codex-default",
+              displayName: "Codex default",
+              available: true,
+              launchPolicies: [{ ref: "on-demand-v1", displayName: "On-demand Docker", hostMode: "on_demand_docker", isDefault: true }],
+              gateReasons: [],
+            }],
+            eligibleProviderProfiles: [{ profileId: "oauth-1", label: "Codex OAuth", providerId: "openai", runtimeId: "codex_cli", busy: true, queueWhenBusy: false }],
+            ineligibleProviderProfiles: [],
+            gateReasons: [],
+          }),
+        } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [{ profile_id: "oauth-1", account_label: "Codex OAuth", provider_id: "openai" }] } as Response);
+      }
+      if (url.startsWith("/api/github/branches")) {
+        return Promise.resolve(defaultBranchOptionsResponse());
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+    });
+
+    renderWorkflowStartPage(payload);
+    fireEvent.change(await screen.findByLabelText("Runtime"), { target: { value: "omnigent" } });
+    fireEvent.change(await screen.findByLabelText("Provider profile"), { target: { value: "oauth-1" } });
+
+    expect(await screen.findByText(/busy and does not support queued waiting/)).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Start Workflow" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByLabelText("Workflow model tier intent")).toBeNull();
+    expect(screen.queryByLabelText("Hard override model")).toBeNull();
+    expect(document.querySelector('[name="hostId"], [name*="volume"], [name*="token"]')).toBeNull();
+  });
+
+  it("revalidates and submits only canonical Omnigent intent before opening Workflow Detail", async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/omnigent/codex-catalog-readiness") {
+        readinessRequests += 1;
+        return Promise.resolve({ ok: true, json: async () => readyOmnigentCatalog } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [{ profile_id: "oauth-1", account_label: "Codex OAuth", provider_id: "openai" }] } as Response);
+      }
+      if (url === "/api/omnigent/agent-profiles") {
+        return Promise.resolve({ ok: true, json: async () => readyAgentProfiles } as Response);
+      }
+      if (url === "/api/executions" && init?.method === "POST") {
+        return Promise.resolve({ ok: true, json: async () => ({ workflowId: "mm:omnigent-created" }) } as Response);
+      }
+      if (url.startsWith("/api/github/branches")) {
+        return Promise.resolve(defaultBranchOptionsResponse());
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+    });
+
+    renderWorkflowStartPage(omnigentPayload());
+    const runtime = await screen.findByLabelText("Runtime");
+    expect(within(runtime).getByRole("option", { name: "Codex CLI" })).toBeTruthy();
+    expect(within(runtime).getByRole("option", { name: "Claude Code" })).toBeTruthy();
+    expect(within(runtime).getByRole("option", { name: "Jules" })).toBeTruthy();
+    runtime.focus();
+    expect(document.activeElement).toBe(runtime);
+    fireEvent.change(runtime, { target: { value: "omnigent" } });
+    expect((runtime as HTMLSelectElement).value).toBe("omnigent");
+    fireEvent.change(await screen.findByLabelText("Provider profile"), { target: { value: "oauth-1" } });
+    fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Exercise the Omnigent submit boundary." } });
+
+    expect(await screen.findByText("Runtime: Codex via Omnigent")).toBeTruthy();
+    expect(screen.getByText("Host mode: On-demand Docker")).toBeTruthy();
+    expect(screen.getByLabelText("Execution target").getAttribute("name")).toBe("omnigentExecutionTargetRef");
+    expect(screen.getByLabelText("Execution target").closest(".grid-2")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => expect(navigateTo).toHaveBeenCalledWith("/workflows/mm%3Aomnigent-created?source=temporal"));
+    expect(readinessRequests).toBeGreaterThanOrEqual(2);
+    const createCall = fetchSpy.mock.calls.find(([url, options]) => String(url) === "/api/executions" && (options as RequestInit | undefined)?.method === "POST");
+    const request = JSON.parse(String((createCall?.[1] as RequestInit | undefined)?.body));
+    expect(request.payload).toMatchObject({
+      targetRuntime: "omnigent",
+      agentProfile: {
+        profileId: "team-codex",
+        providerProfileRef: "oauth-1",
+        launchPolicyRef: "on-demand-v1",
+      },
+      omnigent: { executionTargetRef: "omnigent-codex-default", launchPolicyRef: "on-demand-v1" },
+      task: {
+        runtime: {
+          mode: "omnigent",
+          profileId: "oauth-1",
+          agentProfile: {
+            profileId: "team-codex",
+            providerProfileRef: "oauth-1",
+            launchPolicyRef: "on-demand-v1",
+          },
+        },
+      },
+    });
+    expect(JSON.stringify(request)).not.toMatch(/hostId|volume|credential|registrationToken|image|network|mount/i);
+  });
+
+  it("submits the exact generic v2 profile digest selected from readiness", async () => {
+    vi.mocked(navigateTo).mockClear();
+    const digest = `sha256:${"d".repeat(64)}`;
+    const genericProfiles = [{
+      profileId: "omnigent-opencode-default",
+      displayName: "OpenCode via Omnigent",
+      state: "active",
+      activeVersion: 1,
+      defaultForRuntime: true,
+      versions: [{
+        version: 1,
+        digest,
+        document: {
+          schemaVersion: "moonmind.omnigent-agent-profile.v2",
+          execution: {
+            defaultExecutionProfileRef: "omnigent-opencode-default@1",
+          },
+        },
+        validationResult: { ready: true },
+      }],
+    }];
+    const genericReadiness = {
+      schemaVersion: "moonmind.omnigent-execution-readiness.v3",
+      runtimeId: "omnigent",
+      displayName: "Omnigent",
+      executionTargets: [{
+        ref: "omnigent-opencode-default@1",
+        harnessId: "opencode-native",
+        agentProfileRef: {
+          profileId: "omnigent-opencode-default",
+          version: 1,
+          digest,
+        },
+        available: true,
+        supportTier: "experimental",
+        compatibleProviderProfiles: [{
+          profileId: "opencode-1",
+          label: "OpenCode Go",
+          providerId: "opencode-go",
+          runtimeId: "opencode",
+        }],
+        compatibleHostClasses: ["omnigent-opencode@1"],
+        policies: ["omnigent-on-demand@1"],
+        models: ["opencode-go/test-model"],
+        gateReasons: [],
+      }],
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/omnigent/codex-catalog-readiness") {
+        return Promise.resolve({ ok: true, json: async () => readyOmnigentCatalog } as Response);
+      }
+      if (url === "/api/omnigent/execution-readiness") {
+        return Promise.resolve({ ok: true, json: async () => genericReadiness } as Response);
+      }
+      if (url === "/api/omnigent/agent-profiles") {
+        return Promise.resolve({ ok: true, json: async () => genericProfiles } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{
+            profile_id: "opencode-1",
+            account_label: "OpenCode Go",
+            provider_id: "opencode-go",
+          }],
+        } as Response);
+      }
+      if (url === "/api/executions" && init?.method === "POST") {
+        return Promise.resolve({ ok: true, json: async () => ({ workflowId: "mm:opencode-created" }) } as Response);
+      }
+      if (url.startsWith("/api/github/branches")) {
+        return Promise.resolve(defaultBranchOptionsResponse());
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+    });
+
+    renderWorkflowStartPage(omnigentPayload());
+    fireEvent.change(await screen.findByLabelText("Runtime"), {
+      target: { value: "omnigent" },
+    });
+    fireEvent.change(await screen.findByLabelText("Provider profile"), {
+      target: { value: "opencode-1" },
+    });
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Read the repository through OpenCode." },
+    });
+    await waitFor(() => expect(
+      (screen.getByLabelText("Execution target") as HTMLSelectElement).value,
+    ).toBe("omnigent-opencode-default@1"));
+    const startButton = screen.getByRole("button", { name: "Start Workflow" });
+    await waitFor(() => expect((startButton as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(startButton);
+
+    await waitFor(() => expect(navigateTo).toHaveBeenCalledWith(
+      "/workflows/mm%3Aopencode-created?source=temporal",
+    ));
+    const createCall = fetchSpy.mock.calls.find(([url, options]) =>
+      String(url) === "/api/executions" &&
+      (options as RequestInit | undefined)?.method === "POST",
+    );
+    const request = JSON.parse(String((createCall?.[1] as RequestInit | undefined)?.body));
+    expect(request.payload.agentProfile).toEqual({
+      profileId: "omnigent-opencode-default",
+      version: 1,
+      digest,
+      providerProfileRef: "opencode-1",
+      launchPolicyRef: "omnigent-on-demand@1",
+    });
+    expect(request.payload.task.runtime.agentProfile).toEqual(request.payload.agentProfile);
+    expect(request.payload.omnigent).toEqual({
+      executionTargetRef: "omnigent-opencode-default@1",
+      launchPolicyRef: "omnigent-on-demand@1",
+    });
+  });
+
+  it("synchronizes the execution target when the Agent Profile changes", async () => {
+    const payload = omnigentPayload();
+    const initialData = payload.initialData as {
+      dashboardConfig: { system: Record<string, unknown> };
+    };
+    initialData.dashboardConfig.system.omnigentExecutionCatalog = {
+      profiles: [
+        {
+          ref: "omnigent-codex-default",
+          displayName: "Codex default",
+          defaultPolicyRef: "on-demand-v1",
+          providerRuntime: "codex_cli",
+        },
+        {
+          ref: "omnigent-claude-default",
+          displayName: "Claude default",
+          defaultPolicyRef: "claude-on-demand-v1",
+          providerRuntime: "claude_code",
+        },
+      ],
+      policies: [
+        {
+          ref: "on-demand-v1",
+          displayName: "Codex on-demand",
+          hostMode: "on_demand_docker",
+        },
+        {
+          ref: "claude-on-demand-v1",
+          displayName: "Claude on-demand",
+          hostMode: "on_demand_docker",
+        },
+      ],
+    };
+    const catalog = {
+      ...readyOmnigentCatalog,
+      executionProfiles: [
+        ...readyOmnigentCatalog.executionProfiles,
+        {
+          ref: "omnigent-claude-default",
+          displayName: "Claude default",
+          available: true,
+          launchPolicies: [{
+            ref: "claude-on-demand-v1",
+            displayName: "Claude on-demand",
+            hostMode: "on_demand_docker",
+            isDefault: true,
+          }],
+          gateReasons: [],
+        },
+      ],
+    };
+    const profiles = [
+      readyAgentProfiles[0],
+      {
+        profileId: "team-claude",
+        displayName: "Team Claude",
+        state: "active",
+        activeVersion: 1,
+        defaultForRuntime: false,
+        versions: [{
+          version: 1,
+          digest: `sha256:${"b".repeat(64)}`,
+          document: {
+            execution: {
+              defaultExecutionProfileRef: "omnigent-claude-default",
+            },
+          },
+          validationResult: { ready: true },
+        }],
+      },
+    ];
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/omnigent/codex-catalog-readiness") {
+        return Promise.resolve({ ok: true, json: async () => catalog } as Response);
+      }
+      if (url === "/api/omnigent/agent-profiles") {
+        return Promise.resolve({ ok: true, json: async () => profiles } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [] } as Response);
+      }
+      if (url.startsWith("/api/github/branches")) {
+        return Promise.resolve(defaultBranchOptionsResponse());
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+    });
+
+    renderWorkflowStartPage(payload);
+    fireEvent.change(await screen.findByLabelText("Runtime"), {
+      target: { value: "omnigent" },
+    });
+    await waitFor(() => {
+      expect((screen.getByLabelText("Agent profile") as HTMLSelectElement).value)
+        .toBe("team-codex");
+      expect((screen.getByLabelText("Execution target") as HTMLSelectElement).value)
+        .toBe("omnigent-codex-default");
+    });
+
+    fireEvent.change(screen.getByLabelText("Agent profile"), {
+      target: { value: "team-claude" },
+    });
+
+    await waitFor(() => {
+      expect((screen.getByLabelText("Execution target") as HTMLSelectElement).value)
+        .toBe("omnigent-claude-default");
+    });
+  });
+
+  it("submits an imported remediation draft through the ordinary create boundary", async () => {
+    const draft = {
+      source: "remediation",
+      schemaVersion: 1,
+      createdAt: new Date().toISOString(),
+      target: {
+        workflowId: "mm:target-3623",
+        runId: "run-target-3623",
+        state: "failed",
+        stepSelectors: [{
+          logicalStepId: "run-tests",
+          checkpointRef: "artifact://checkpoint/run-tests",
+        }],
+      },
+      repository: "MoonLadderStudios/MoonMind",
+      branch: "main",
+      startingBranch: "main",
+      workBranch: "remediation/mm-3623",
+      publishMode: "pr",
+      executionProfileRef: "omnigent-codex-default",
+      launchPolicyRef: "on-demand-v1",
+      contextRetrieval: {
+        initial: { collections: ["docs"], allowStale: false, required: true },
+        followUp: {
+          enabled: true,
+          required: false,
+          collections: ["docs"],
+          budgetPreset: "balanced",
+          topK: 8,
+          maxContextTokens: 8192,
+          maxQueries: 12,
+          latencyMs: 5000,
+          maxLifetimeSeconds: 900,
+          overlayPolicy: "include",
+          staleOverlayAllowed: false,
+          fallbackAllowed: false,
+        },
+      },
+      runtime: { mode: "omnigent" },
+      agentProfile: {
+        profileId: "team-codex",
+        version: 1,
+        providerProfileRef: "oauth-1",
+      },
+      instructions: "Repair the pinned test failure.",
+      remediation: {
+        target: {
+          workflowId: "mm:target-3623",
+          runId: "run-target-3623",
+          stepSelectors: [{
+            logicalStepId: "run-tests",
+            checkpointRef: "artifact://checkpoint/run-tests",
+          }],
+        },
+        mode: "snapshot_then_follow",
+        authorityMode: "approval_gated",
+        actionPolicyRef: "admin_healer_default",
+        evidencePolicy: { includeStepLedger: true },
+        approvalPolicy: { requiredForHighRisk: true },
+        lockPolicy: { targetMutationLock: true },
+        verificationPolicy: { verifyAppliedActions: true },
+        checkpointBranchPolicy: {
+          actionKind: "checkpoint_branch.create_from_remediation_context",
+          runtimeContextPolicy: "fresh_agent_run",
+          workspacePolicy: "apply_previous_execution_diff_to_clean_baseline",
+          gitWorkBranch: "remediation/mm-3623",
+        },
+        trigger: { type: "manual" },
+      },
+    };
+    window.sessionStorage.setItem(
+      "moonmind.remediation-create-draft.issue-3623",
+      JSON.stringify(draft),
+    );
+    window.history.replaceState(
+      {},
+      "Create remediation",
+      "/workflows/new?intent=remediate&draftId=issue-3623",
+    );
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/omnigent/codex-catalog-readiness") {
+        return Promise.resolve({ ok: true, json: async () => readyOmnigentCatalog } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [{ profile_id: "oauth-1", account_label: "Codex OAuth", provider_id: "openai" }] } as Response);
+      }
+      if (url === "/api/omnigent/agent-profiles") {
+        return Promise.resolve({ ok: true, json: async () => readyAgentProfiles } as Response);
+      }
+      if (url === "/api/executions/mm%3Atarget-3623?source=temporal") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ workflowId: "mm:target-3623", runId: "run-target-3623" }),
+        } as Response);
+      }
+      if (url === "/api/executions" && init?.method === "POST") {
+        return Promise.resolve({ ok: true, json: async () => ({ workflowId: "mm:remediation-3623" }) } as Response);
+      }
+      if (url.startsWith("/api/github/branches")) {
+        return Promise.resolve(defaultBranchOptionsResponse());
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+    });
+
+    renderWorkflowStartPage(omnigentPayload());
+
+    expect(await screen.findByText("Remediation Draft")).toBeTruthy();
+    fireEvent.click(await screen.findByText("Operator remediation release status"));
+    expect(screen.getAllByText("Supported")).toHaveLength(2);
+    expect(screen.getByText("Allowed")).toBeTruthy();
+    expect(screen.getByText("Not required")).toBeTruthy();
+    expect(screen.getByText("moonmind.operator-remediation-telemetry/v1")).toBeTruthy();
+    expect(screen.getByText(/warning: autonomous_rollout_gate_closed/)).toBeTruthy();
+    const start = screen.getByRole("button", { name: "Start Workflow" });
+    await waitFor(() => expect((start as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(start);
+
+    await waitFor(() => expect(navigateTo).toHaveBeenCalledWith(
+      "/workflows/mm%3Aremediation-3623?source=temporal",
+    ));
+    const createCall = fetchSpy.mock.calls.find(([url, options]) =>
+      String(url) === "/api/executions" &&
+      (options as RequestInit | undefined)?.method === "POST"
+    );
+    const request = JSON.parse(String((createCall?.[1] as RequestInit | undefined)?.body));
+    expect(request).toMatchObject({
+      type: "task",
+      payload: {
+        targetRuntime: "omnigent",
+        repository: {
+          repository: { name: "MoonLadderStudios/MoonMind" },
+          branch: { name: "main" },
+        },
+        publishMode: "pr",
+        omnigent: {
+          executionTargetRef: "omnigent-codex-default",
+          launchPolicyRef: "on-demand-v1",
+        },
+        agentProfile: {
+          profileId: "team-codex",
+          version: 1,
+          providerProfileRef: "oauth-1",
+          launchPolicyRef: "on-demand-v1",
+        },
+        rag: { collections: ["docs"], required: true },
+        followUpRetrieval: { enabled: true, collections: ["docs"] },
+        task: {
+          remediation: draft.remediation,
+        },
+      },
+    });
+  });
+
+  it("adopts the active default policy version without requiring a host-policy choice", async () => {
+    const activePolicyCatalog = {
+      ...readyOmnigentCatalog,
+      executionProfiles: [{
+        ref: "omnigent-codex-default",
+        displayName: "Codex default",
+        available: true,
+        launchPolicies: [{
+          ref: "on-demand-v2",
+          displayName: "On-demand Docker",
+          hostMode: "on_demand_docker",
+          isDefault: true,
+        }],
+        gateReasons: [],
+      }],
+    } satisfies components["schemas"]["OmnigentCodexCatalogReadiness"];
+    const activePolicyAgentProfiles = [{
+      ...readyAgentProfiles[0],
+      versions: [{
+        version: 1,
+        digest: `sha256:${"a".repeat(64)}`,
+        document: {
+          execution: {
+            defaultExecutionProfileRef: "omnigent-codex-default",
+            allowedLaunchPolicyRefs: ["on-demand-v2"],
+          },
+          policyRef: "on-demand-v2",
+        },
+        validationResult: { ready: true },
+      }],
+    }];
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/omnigent/codex-catalog-readiness") {
+        return Promise.resolve({ ok: true, json: async () => activePolicyCatalog } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [{ profile_id: "oauth-1", account_label: "Codex OAuth", provider_id: "openai" }] } as Response);
+      }
+      if (url === "/api/omnigent/agent-profiles") {
+        return Promise.resolve({ ok: true, json: async () => activePolicyAgentProfiles } as Response);
+      }
+      if (url === "/api/executions" && init?.method === "POST") {
+        return Promise.resolve({ ok: true, json: async () => ({ workflowId: "mm:omnigent-active-policy" }) } as Response);
+      }
+      if (url.startsWith("/api/github/branches")) {
+        return Promise.resolve(defaultBranchOptionsResponse());
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+    });
+
+    renderWorkflowStartPage(omnigentPayload());
+    fireEvent.change(await screen.findByLabelText("Runtime"), { target: { value: "omnigent" } });
+    fireEvent.change(await screen.findByLabelText("Provider profile"), { target: { value: "oauth-1" } });
+
+    const hostPolicy = await screen.findByLabelText("Host policy");
+    await waitFor(() => expect((hostPolicy as HTMLSelectElement).value).toBe("on-demand-v2"));
+    expect(within(hostPolicy).getByRole("option", { name: "On-demand Docker (Default)" })).toBeTruthy();
+    expect(screen.queryByText(/Choose a compatible Omnigent host policy/)).toBeNull();
+
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Use the active default policy." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => expect(navigateTo).toHaveBeenCalledWith("/workflows/mm%3Aomnigent-active-policy?source=temporal"));
+    const createCall = fetchSpy.mock.calls.find(([url, options]) =>
+      String(url) === "/api/executions" && (options as RequestInit | undefined)?.method === "POST",
+    );
+    const request = JSON.parse(String((createCall?.[1] as RequestInit | undefined)?.body));
+    expect(request.payload.omnigent).toEqual({
+      executionTargetRef: "omnigent-codex-default",
+      launchPolicyRef: "on-demand-v2",
+    });
+    expect(request.payload.agentProfile.launchPolicyRef).toBe("on-demand-v2");
+    expect(request.payload.task.runtime.agentProfile.launchPolicyRef).toBe(
+      "on-demand-v2",
+    );
+  });
+
+  it("keeps a historical profile version compatible for an Omnigent rerun", async () => {
+    window.history.pushState(
+      {},
+      "Task Rerun",
+      "/workflows/new?rerunExecutionId=mm%3Aomnigent-history",
+    );
+    const versionedCatalog = {
+      ...readyOmnigentCatalog,
+      executionProfiles: [{
+        ref: "omnigent-codex-default",
+        displayName: "Codex default",
+        available: true,
+        launchPolicies: [
+          {
+            ref: "on-demand-v2",
+            displayName: "On-demand Docker v2",
+            hostMode: "on_demand_docker",
+            isDefault: true,
+          },
+          {
+            ref: "on-demand-v1",
+            displayName: "On-demand Docker v1",
+            hostMode: "on_demand_docker",
+            isDefault: false,
+          },
+        ],
+        gateReasons: [],
+      }],
+    } satisfies components["schemas"]["OmnigentCodexCatalogReadiness"];
+    const versionedAgentProfiles = [{
+      profileId: "team-codex",
+      displayName: "Team Codex",
+      state: "active",
+      activeVersion: 2,
+      defaultForRuntime: true,
+      versions: [
+        {
+          version: 1,
+          digest: `sha256:${"a".repeat(64)}`,
+          document: {
+            execution: {
+              defaultExecutionProfileRef: "omnigent-codex-default",
+              allowedLaunchPolicyRefs: ["on-demand-v1"],
+            },
+            policyRef: "on-demand-v1",
+          },
+          validationResult: { ready: true },
+        },
+        {
+          version: 2,
+          digest: `sha256:${"b".repeat(64)}`,
+          document: {
+            execution: {
+              defaultExecutionProfileRef: "omnigent-codex-default",
+              allowedLaunchPolicyRefs: ["on-demand-v2"],
+            },
+            policyRef: "on-demand-v2",
+          },
+          validationResult: { ready: true },
+        },
+      ],
+    }];
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/omnigent/codex-catalog-readiness") {
+        return Promise.resolve({ ok: true, json: async () => versionedCatalog } as Response);
+      }
+      if (url === "/api/omnigent/agent-profiles") {
+        return Promise.resolve({ ok: true, json: async () => versionedAgentProfiles } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{
+            profile_id: "oauth-1",
+            account_label: "Codex OAuth",
+            provider_id: "openai",
+          }],
+        } as Response);
+      }
+      if (url === "/api/executions/mm%3Aomnigent-history?source=temporal") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            workflowId: "mm:omnigent-history",
+            workflowType: "MoonMind.UserWorkflow",
+            state: "completed",
+            targetRuntime: "omnigent",
+            profileId: "oauth-1",
+            repository: "MoonLadderStudios/MoonMind",
+            branch: "main",
+            publishMode: "pr",
+            inputParameters: {
+              targetRuntime: "omnigent",
+              repository: "MoonLadderStudios/MoonMind",
+              branch: "main",
+              profileId: "oauth-1",
+              publishMode: "pr",
+              reportOutput: { enabled: false },
+              agentProfile: { profileId: "team-codex", version: 1 },
+              omnigent: {
+                executionTargetRef: "omnigent-codex-default",
+                launchPolicyRef: "on-demand-v1",
+              },
+              workflow: {
+                instructions: "Rerun the historical Omnigent policy.",
+                runtime: { mode: "omnigent", profileId: "oauth-1" },
+                publish: { mode: "pr" },
+                reportOutput: { enabled: false },
+              },
+            },
+            actions: { canUpdateInputs: false, canRerun: true },
+          }),
+        } as Response);
+      }
+      if (
+        url === "/api/executions/mm%3Aomnigent-history/update" &&
+        init?.method === "POST"
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            accepted: true,
+            applied: "continue_as_new",
+            execution: { workflowId: "mm:omnigent-history-rerun" },
+          }),
+        } as Response);
+      }
+      if (url.startsWith("/api/github/branches")) {
+        return Promise.resolve(defaultBranchOptionsResponse());
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+    });
+
+    renderWorkflowStartPage(omnigentPayload());
+
+    const hostPolicy = await screen.findByLabelText("Host policy");
+    await waitFor(() => {
+      expect((hostPolicy as HTMLSelectElement).value).toBe("on-demand-v1");
+    });
+    expect(screen.queryByText(/Choose a compatible Omnigent host policy/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Start New Run" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions/mm%3Aomnigent-history/update",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const updateCall = fetchSpy.mock.calls.find(
+      ([url]) => String(url) === "/api/executions/mm%3Aomnigent-history/update",
+    );
+    expect(JSON.parse(String(updateCall?.[1]?.body))).toMatchObject({
+      updateName: "RequestRerun",
+      parametersPatch: {
+        agentProfile: {
+          profileId: "team-codex",
+          version: 1,
+          providerProfileRef: "oauth-1",
+          launchPolicyRef: "on-demand-v1",
+        },
+        omnigent: {
+          executionTargetRef: "omnigent-codex-default",
+          launchPolicyRef: "on-demand-v1",
+        },
+      },
+    });
+  });
+
+  it("filters mixed Provider Profiles by execution target and resets an incompatible selection", async () => {
+    const payload = omnigentPayload();
+    const initialData = payload.initialData as {
+      dashboardConfig: { system: Record<string, unknown> };
+    };
+    initialData.dashboardConfig.system.omnigentExecutionCatalog = {
+      profiles: [
+        { ref: "omnigent-codex@1", displayName: "Omnigent Codex", defaultPolicyRef: "codex-static@1", providerRuntime: "codex_cli" },
+        { ref: "omnigent-claude@1", displayName: "Omnigent Claude", defaultPolicyRef: "claude-static@1", providerRuntime: "claude_code" },
+      ],
+      policies: [
+        { ref: "codex-static@1", displayName: "Codex static", hostMode: "static_compose" },
+        { ref: "claude-static@1", displayName: "Claude static", hostMode: "static_compose" },
+      ],
+    };
+    const catalog = {
+      ...readyOmnigentCatalog,
+      defaultExecutionProfileRef: "omnigent-codex@1",
+      executionProfiles: [
+        { ref: "omnigent-codex@1", displayName: "Omnigent Codex", available: true, launchPolicies: [{ ref: "codex-static@1", displayName: "Codex static", hostMode: "static_compose", isDefault: true }], gateReasons: [] },
+        { ref: "omnigent-claude@1", displayName: "Omnigent Claude", available: true, launchPolicies: [{ ref: "claude-static@1", displayName: "Claude static", hostMode: "static_compose", isDefault: true }], gateReasons: [] },
+      ],
+      eligibleProviderProfiles: [
+        { profileId: "codex-oauth", label: "OpenAI subscription", providerId: "openai", runtimeId: "codex_cli", busy: false, queueWhenBusy: true },
+        { profileId: "claude-oauth", label: "Anthropic subscription", providerId: "anthropic", runtimeId: "claude_code", busy: false, queueWhenBusy: true },
+      ],
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/omnigent/codex-catalog-readiness") {
+        return Promise.resolve({ ok: true, json: async () => catalog } as Response);
+      }
+      if (url.includes("runtime_id=claude_code")) {
+        return Promise.resolve({ ok: true, json: async () => [{ profile_id: "claude-oauth", account_label: "Anthropic subscription", provider_id: "anthropic" }] } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [{ profile_id: "codex-oauth", account_label: "OpenAI subscription", provider_id: "openai" }] } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+    });
+
+    renderWorkflowStartPage(payload);
+    fireEvent.change(await screen.findByLabelText("Runtime"), { target: { value: "omnigent" } });
+    const profileSelect = await screen.findByLabelText("Provider profile");
+    await waitFor(() => expect((profileSelect as HTMLSelectElement).value).toBe("codex-oauth"));
+    expect(within(profileSelect).queryByRole("option", { name: /Anthropic subscription/ })).toBeNull();
+
+    fireEvent.change(screen.getByLabelText("Execution target"), {
+      target: { value: "omnigent-claude@1" },
+    });
+
+    await waitFor(() => expect((profileSelect as HTMLSelectElement).value).toBe("claude-oauth"));
+    expect(within(profileSelect).queryByRole("option", { name: /OpenAI subscription/ })).toBeNull();
+    expect(within(profileSelect).getByRole("option", { name: /Anthropic subscription/ })).toBeTruthy();
+  });
+
+  it.each([
+    ["deferred", "deferred_minutes", "Minutes from now", "5", { mode: "once" }],
+    ["once", "once", "Scheduled For", "2099-01-01T12:00", { mode: "once", scheduledFor: new Date("2099-01-01T12:00").toISOString() }],
+    ["recurring", "recurring", "Cron Expression", "0 4 * * *", { mode: "recurring", cron: "0 4 * * *", timezone: "UTC" }],
+  ])("preserves canonical Omnigent refs in %s schedule submissions", async (_label, mode, fieldLabel, fieldValue, expectedSchedule) => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/omnigent/codex-catalog-readiness") {
+        readinessRequests += 1;
+        return Promise.resolve({ ok: true, json: async () => readyOmnigentCatalog } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [{ profile_id: "oauth-1", account_label: "Codex OAuth", provider_id: "openai" }] } as Response);
+      }
+      if (url === "/api/omnigent/agent-profiles") {
+        return Promise.resolve({ ok: true, json: async () => readyAgentProfiles } as Response);
+      }
+      if (url === "/api/executions" && init?.method === "POST") {
+        return Promise.resolve({ ok: true, json: async () => ({ workflowId: `mm:omnigent-${mode}` }) } as Response);
+      }
+      if (url.startsWith("/api/github/branches")) {
+        return Promise.resolve(defaultBranchOptionsResponse());
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+    });
+
+    renderWorkflowStartPage(omnigentPayload());
+    fireEvent.change(await screen.findByLabelText("Runtime"), { target: { value: "omnigent" } });
+    fireEvent.change(await screen.findByLabelText("Provider profile"), { target: { value: "oauth-1" } });
+    fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: `Exercise ${mode} scheduling.` } });
+    fireEvent.change(screen.getByLabelText("Schedule Mode"), { target: { value: mode } });
+    fireEvent.change(screen.getByLabelText(fieldLabel), { target: { value: fieldValue } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => expect(fetchSpy.mock.calls.some(([url, options]) => String(url) === "/api/executions" && (options as RequestInit | undefined)?.method === "POST")).toBe(true));
+    const createCall = fetchSpy.mock.calls.find(([url, options]) => String(url) === "/api/executions" && (options as RequestInit | undefined)?.method === "POST");
+    const request = JSON.parse(String((createCall?.[1] as RequestInit | undefined)?.body));
+    expect(request.payload).toMatchObject({
+      targetRuntime: "omnigent",
+      omnigent: { executionTargetRef: "omnigent-codex-default", launchPolicyRef: "on-demand-v1" },
+      task: { runtime: { mode: "omnigent", profileId: "oauth-1" } },
+      schedule: expectedSchedule,
+    });
+  });
+
+  it("rejects a selection revoked by no-cache submit-time readiness without substitution", async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/omnigent/codex-catalog-readiness") {
+        readinessRequests += 1;
+        const body = readinessRequests === 1
+          ? readyOmnigentCatalog
+          : { ...readyOmnigentCatalog, available: false, gateReasons: [{ code: "deployment_unready", message: "Omnigent deployment became unavailable." }] };
+        return Promise.resolve({ ok: true, json: async () => body } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [{ profile_id: "oauth-1", account_label: "Codex OAuth", provider_id: "openai" }] } as Response);
+      }
+      if (url === "/api/omnigent/agent-profiles") {
+        return Promise.resolve({ ok: true, json: async () => readyAgentProfiles } as Response);
+      }
+      if (url.startsWith("/api/github/branches")) {
+        return Promise.resolve(defaultBranchOptionsResponse());
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+    });
+
+    renderWorkflowStartPage(omnigentPayload());
+    fireEvent.change(await screen.findByLabelText("Runtime"), { target: { value: "omnigent" } });
+    fireEvent.change(await screen.findByLabelText("Provider profile"), { target: { value: "oauth-1" } });
+    fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Do not launch stale authority." } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    expect(await screen.findByText("Omnigent deployment became unavailable.")).toBeTruthy();
+    expect(fetchSpy.mock.calls.some(([url, options]) => String(url) === "/api/executions" && (options as RequestInit | undefined)?.method === "POST")).toBe(false);
+    expect((screen.getByLabelText("Provider profile") as HTMLSelectElement).value).toBe("oauth-1");
+    const readinessCalls = fetchSpy.mock.calls.filter(
+      ([url]) => String(url) === "/api/omnigent/codex-catalog-readiness",
+    );
+    expect(readinessCalls).toHaveLength(2);
+    expect((readinessCalls[1]?.[1] as RequestInit | undefined)?.cache).toBe("no-store");
+  });
+
+  it("fails closed when submit-time Omnigent readiness cannot be refreshed", async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/omnigent/codex-catalog-readiness") {
+        readinessRequests += 1;
+        if (readinessRequests > 1) {
+          return Promise.resolve({
+            ok: false,
+            status: 503,
+            json: async () => ({ detail: "readiness unavailable" }),
+          } as Response);
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => readyOmnigentCatalog,
+        } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [
+            {
+              profile_id: "oauth-1",
+              account_label: "Codex OAuth",
+              provider_id: "openai",
+            },
+          ],
+        } as Response);
+      }
+      if (url === "/api/omnigent/agent-profiles") {
+        return Promise.resolve({ ok: true, json: async () => readyAgentProfiles } as Response);
+      }
+      if (url.startsWith("/api/github/branches")) {
+        return Promise.resolve(defaultBranchOptionsResponse());
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ items: [] }),
+      } as Response);
+    });
+
+    renderWorkflowStartPage(omnigentPayload());
+    fireEvent.change(await screen.findByLabelText("Runtime"), {
+      target: { value: "omnigent" },
+    });
+    fireEvent.change(await screen.findByLabelText("Provider profile"), {
+      target: { value: "oauth-1" },
+    });
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Do not launch when readiness cannot be checked." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    expect(
+      await screen.findByText("Omnigent readiness could not be verified."),
+    ).toBeTruthy();
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url, options]) =>
+          String(url) === "/api/executions" &&
+          (options as RequestInit | undefined)?.method === "POST",
+      ),
+    ).toBe(false);
+  });
+});
 
 const historicalRuntimeCommand = {
   kind: "slash_command",
@@ -1024,6 +2331,11 @@ describe("WorkflowStart CSS Layout", () => {
     expect(dashboardCss).toMatch(
       /@media \(max-width:\s*924px\) and \(min-width:\s*641px\)\s*\{[^}]*\.workflow-start-workspace \.queue-floating-bar-row\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s*minmax\(9\.5rem,\s*0\.8fr\)\s*auto;/s,
     );
+    // The execution target/policy pair used by Omnigent is a canonical grid-2
+    // row, which collapses to one keyboard-ordered column on narrow screens.
+    expect(dashboardCss).toMatch(
+      /@media \(max-width:\s*900px\)\s*\{[^}]*\.grid-2\s*\{[^}]*grid-template-columns:\s*1fr;/s,
+    );
   });
 });
 
@@ -1388,7 +2700,7 @@ describe.skip("Task Create Entrypoint", () => {
             json: async () => ({
               workflowId: "mm:edit-123",
               workflowType: "MoonMind.UserWorkflow",
-              state: "executing",
+              state: "awaiting_slot",
               targetRuntime: "claude_code",
               profileId: "profile:claude-default",
               model: "claude-sonnet-test",
@@ -5172,6 +6484,53 @@ describe.skip("Task Create Entrypoint", () => {
       ]),
     );
     window.removeEventListener("moonmind:temporal-task-editing", onTelemetry);
+  });
+
+  it("submits the selected runtime's default profile when editing an awaiting-slot workflow", async () => {
+    renderForEdit("mm:edit-123");
+
+    expect(await screen.findByRole("heading", { name: "Edit Workflow" })).toBeTruthy();
+    await waitFor(() => {
+      expect(
+        (screen.getByLabelText("Provider profile") as HTMLSelectElement).value,
+      ).toBe("profile:claude-default");
+    });
+
+    fireEvent.change(screen.getByLabelText("Runtime"), {
+      target: { value: "codex_cli" },
+    });
+
+    await waitFor(() => {
+      expect(
+        (screen.getByLabelText("Provider profile") as HTMLSelectElement).value,
+      ).toBe("profile:codex-default");
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions/mm%3Aedit-123/update",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const updateCall = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/executions/mm%3Aedit-123/update")
+      .at(-1);
+    const request = JSON.parse(String(updateCall?.[1]?.body || "{}"));
+    expect(request.parametersPatch).toMatchObject({
+      targetRuntime: "codex_cli",
+      profileId: "profile:codex-default",
+      model: null,
+      requestedModel: null,
+      resolvedModel: null,
+      effort: null,
+      workflow: {
+        runtime: {
+          mode: "codex_cli",
+          profileId: "profile:codex-default",
+        },
+      },
+    });
   });
 
   it("clears persisted merge automation when edit mode deselects the combined publish mode", async () => {
@@ -9845,39 +11204,6 @@ describe.skip("Task Create Entrypoint", () => {
     expect(task.git).toEqual({ branch: "trunk" });
   });
 
-  it("omits git branch when a user explicitly clears the branch field", async () => {
-    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
-
-    const branchInput = (await screen.findByLabelText(
-      "Branch",
-    )) as HTMLInputElement;
-    await waitFor(() => {
-      expect(branchInput.disabled).toBe(false);
-    });
-
-    fireEvent.change(branchInput, {
-      target: { value: "feature/create-page" },
-    });
-    fireEvent.change(branchInput, {
-      target: { value: "" },
-    });
-    fireEvent.change(screen.getByLabelText("Instructions"), {
-      target: { value: "Submit with an intentionally blank branch." },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
-
-    await waitFor(() => {
-      expect(fetchSpy).toHaveBeenCalledWith(
-        "/api/executions",
-        expect.objectContaining({ method: "POST" }),
-      );
-    });
-
-    const payload = latestCreateRequest().payload as Record<string, unknown>;
-    const task = payload.task as Record<string, unknown>;
-    expect(task).not.toHaveProperty("git");
-  });
-
   it("keeps branch loading text inside the dropdown only", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
@@ -13927,6 +15253,46 @@ describe("Task Create MM-641 authoring validation", () => {
             }),
           } as Response);
         }
+        // Rerun source whose run already authored context retrieval, used to
+        // prove the Advanced mode disclosure never hides an inherited policy.
+        if (url === "/api/executions/mm%3Aretrieval-rerun?source=temporal") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:retrieval-rerun",
+              workflowType: "MoonMind.UserWorkflow",
+              state: "completed",
+              targetRuntime: "codex_cli",
+              repository: "MoonLadderStudios/MoonMind",
+              startingBranch: "main",
+              publishMode: "pr",
+              inputParameters: {
+                targetRuntime: "codex_cli",
+                rag: { collections: ["docs"], required: true },
+                followUpRetrieval: { enabled: true, collections: ["docs"] },
+                workflow: {
+                  instructions: "Rerun a run that authored context retrieval.",
+                  runtime: { mode: "codex_cli" },
+                  git: { startingBranch: "main" },
+                  publish: { mode: "pr" },
+                },
+              },
+              actions: { canUpdateInputs: false, canRerun: true },
+            }),
+          } as Response);
+        }
+        if (url === "/api/executions/mm%3Aretrieval-rerun/update") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              accepted: true,
+              applied: "continue_as_new",
+              message: "Rerun requested. New execution created.",
+              execution: { workflowId: "mm:retrieval-rerun-created" },
+              continueAsNewCause: "manual_rerun",
+            }),
+          } as Response);
+        }
         if (url === "/api/executions") {
           return Promise.resolve({
             ok: true,
@@ -13972,6 +15338,104 @@ describe("Task Create MM-641 authoring validation", () => {
 
   afterEach(() => {
     fetchSpy.mockRestore();
+  });
+
+  it("blocks repository-backed submission when no default branch is available", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/github/branches")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: [], defaultBranch: null, error: null }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) as ReturnType<typeof fetch>;
+    });
+
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    const branchInput = await screen.findByLabelText("Branch");
+    await waitFor(() => {
+      expect(branchInput.getAttribute("placeholder")).not.toBe("Loading branches...");
+    });
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Do not launch without complete repository authority." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    expect(
+      await screen.findByText(
+        "No repository default branch is available. Enter a branch before starting this workflow.",
+      ),
+    ).toBeTruthy();
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url, init]) =>
+          String(url) === "/api/executions" && init?.method === "POST",
+      ),
+    ).toBe(false);
+  });
+
+  it("blocks repository-backed submission while the default branch is loading", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/github/branches")) {
+        return new Promise<Response>(() => {});
+      }
+      return defaultFetch?.(input, init) as ReturnType<typeof fetch>;
+    });
+
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    const branchInput = await screen.findByLabelText("Branch");
+    await waitFor(() => {
+      expect(branchInput.getAttribute("placeholder")).toBe("Loading branches...");
+    });
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Do not launch before repository authority is complete." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    expect(
+      await screen.findByText(
+        "Wait for the repository default branch to load, or enter a branch before starting this workflow.",
+      ),
+    ).toBeTruthy();
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url, init]) =>
+          String(url) === "/api/executions" && init?.method === "POST",
+      ),
+    ).toBe(false);
+  });
+
+  it("blocks repository-backed submission after an authored branch is cleared", async () => {
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    const branchInput = await screen.findByLabelText("Branch");
+    await waitFor(() => {
+      expect(branchInput.getAttribute("placeholder")).not.toBe("Loading branches...");
+    });
+    fireEvent.change(branchInput, { target: { value: "feature/mm-641" } });
+    fireEvent.change(branchInput, { target: { value: "" } });
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Keep repository authority explicit." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    expect(
+      await screen.findByText(
+        "Choose a branch before starting this repository-backed workflow.",
+      ),
+    ).toBeTruthy();
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url, init]) =>
+          String(url) === "/api/executions" && init?.method === "POST",
+      ),
+    ).toBe(false);
   });
 
   it("renders repository branch and publish mode inside the floating Submit bar", async () => {
@@ -14133,6 +15597,245 @@ describe("Task Create MM-641 authoring validation", () => {
     expect(request.maxAttempts).toBe(3);
   });
 
+  it("hides the Context retrieval (RAG) controls behind the Advanced mode toggle", async () => {
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    await screen.findByLabelText("Instructions");
+    const executionControls = document.querySelector<HTMLElement>(
+      '[data-canonical-create-section="Execution controls"]',
+    );
+    expect(executionControls).not.toBeNull();
+    const controls = executionControls as HTMLElement;
+
+    expect(within(controls).queryByText("Context retrieval (RAG)")).toBeNull();
+    expect(
+      document.querySelector('[data-testid="context-retrieval-controls"]'),
+    ).toBeNull();
+
+    fireEvent.click(within(controls).getByLabelText("Advanced mode"));
+    expect(within(controls).getByText("Context retrieval (RAG)")).toBeTruthy();
+    expect(
+      document.querySelector('[data-testid="context-retrieval-controls"]'),
+    ).not.toBeNull();
+
+    fireEvent.click(within(controls).getByLabelText("Advanced mode"));
+    expect(within(controls).queryByText("Context retrieval (RAG)")).toBeNull();
+    expect(
+      document.querySelector('[data-testid="context-retrieval-controls"]'),
+    ).toBeNull();
+  });
+
+  it("submits authored Context retrieval (RAG) values while Advanced mode is on", async () => {
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Run with narrowed retrieval." },
+    });
+    fireEvent.change(screen.getByLabelText(/GitHub Repo/), {
+      target: { value: "MoonLadderStudios/MoonMind" },
+    });
+
+    const controls = document.querySelector<HTMLElement>(
+      '[data-canonical-create-section="Execution controls"]',
+    ) as HTMLElement;
+    expect(controls).not.toBeNull();
+
+    fireEvent.click(within(controls).getByLabelText("Advanced mode"));
+    fireEvent.click(
+      screen.getByLabelText(
+        "Require initial context (fail the step if unavailable)",
+      ),
+    );
+    fireEvent.click(
+      screen.getByLabelText(
+        "Allow the session to request additional context during the run",
+      ),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const payload = latestCreateRequest().payload as Record<string, unknown>;
+    expect(payload.rag).toEqual({ required: true });
+    expect(payload.followUpRetrieval).toMatchObject({ enabled: true });
+  });
+
+  it("ignores hidden Context retrieval (RAG) authoring when Advanced mode is off", async () => {
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Run with deployment retrieval policy." },
+    });
+    fireEvent.change(screen.getByLabelText(/GitHub Repo/), {
+      target: { value: "MoonLadderStudios/MoonMind" },
+    });
+
+    const controls = document.querySelector<HTMLElement>(
+      '[data-canonical-create-section="Execution controls"]',
+    ) as HTMLElement;
+    expect(controls).not.toBeNull();
+
+    // Author retrieval in Advanced mode, then hide the controls again before
+    // submitting.
+    fireEvent.click(within(controls).getByLabelText("Advanced mode"));
+    fireEvent.click(
+      screen.getByLabelText(
+        "Require initial context (fail the step if unavailable)",
+      ),
+    );
+    fireEvent.click(
+      screen.getByLabelText(
+        "Allow the session to request additional context during the run",
+      ),
+    );
+    fireEvent.click(within(controls).getByLabelText("Advanced mode"));
+    expect(
+      document.querySelector('[data-testid="context-retrieval-controls"]'),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    // The hidden authoring is dropped, so the run uses deployment retrieval
+    // policy instead of a value the operator can no longer see.
+    const payload = latestCreateRequest().payload as Record<string, unknown>;
+    expect("rag" in payload).toBe(false);
+    expect("followUpRetrieval" in payload).toBe(false);
+  });
+
+  it("does not restore cleared Context retrieval (RAG) authoring when Advanced mode is re-enabled", async () => {
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Run after clearing retrieval authoring." },
+    });
+    fireEvent.change(screen.getByLabelText(/GitHub Repo/), {
+      target: { value: "MoonLadderStudios/MoonMind" },
+    });
+
+    const controls = document.querySelector<HTMLElement>(
+      '[data-canonical-create-section="Execution controls"]',
+    ) as HTMLElement;
+    expect(controls).not.toBeNull();
+
+    // Author retrieval, turn Advanced mode off to clear it, then turn it back
+    // on to adjust an unrelated advanced control.
+    fireEvent.click(within(controls).getByLabelText("Advanced mode"));
+    fireEvent.click(
+      screen.getByLabelText(
+        "Require initial context (fail the step if unavailable)",
+      ),
+    );
+    fireEvent.click(
+      screen.getByLabelText(
+        "Allow the session to request additional context during the run",
+      ),
+    );
+    fireEvent.click(within(controls).getByLabelText("Advanced mode"));
+    fireEvent.click(within(controls).getByLabelText("Advanced mode"));
+
+    // The reopened controls are unauthored again instead of showing the values
+    // the operator already cleared.
+    expect(
+      (
+        screen.getByLabelText(
+          "Require initial context (fail the step if unavailable)",
+        ) as HTMLInputElement
+      ).checked,
+    ).toBe(false);
+    expect(
+      (
+        screen.getByLabelText(
+          "Allow the session to request additional context during the run",
+        ) as HTMLInputElement
+      ).checked,
+    ).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    // Reopening Advanced mode cannot resubmit the cleared retrieval policy.
+    const payload = latestCreateRequest().payload as Record<string, unknown>;
+    expect("rag" in payload).toBe(false);
+    expect("followUpRetrieval" in payload).toBe(false);
+  });
+  it("reveals Advanced mode so an inherited rerun retrieval policy stays visible and resubmitted", async () => {
+    window.history.pushState(
+      {},
+      "Task Rerun",
+      "/workflows/new?rerunExecutionId=mm%3Aretrieval-rerun",
+    );
+
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    const instructions = (await screen.findByLabelText(
+      "Instructions",
+    )) as HTMLTextAreaElement;
+    await waitFor(() => {
+      expect(instructions.value).toBe(
+        "Rerun a run that authored context retrieval.",
+      );
+    });
+
+    const controls = document.querySelector<HTMLElement>(
+      '[data-canonical-create-section="Execution controls"]',
+    ) as HTMLElement;
+    expect(controls).not.toBeNull();
+    expect(
+      (within(controls).getByLabelText("Advanced mode") as HTMLInputElement)
+        .checked,
+    ).toBe(true);
+    expect(within(controls).getByText("Context retrieval (RAG)")).toBeTruthy();
+
+    fireEvent.change(instructions, {
+      target: { value: "Rerun with the inherited retrieval policy." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start New Run" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions/mm%3Aretrieval-rerun/update",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const updateCall = fetchSpy.mock.calls
+      .filter(
+        ([url]) =>
+          String(url) === "/api/executions/mm%3Aretrieval-rerun/update",
+      )
+      .at(-1);
+    const request = JSON.parse(String(updateCall?.[1]?.body)) as {
+      parametersPatch: Record<string, unknown>;
+    };
+    expect(request.parametersPatch.rag).toEqual({
+      collections: ["docs"],
+      required: true,
+    });
+    expect(request.parametersPatch.followUpRetrieval).toMatchObject({
+      enabled: true,
+      collections: ["docs"],
+    });
+  });
+
   it("does not serialize the primary Skill onto blank added steps", async () => {
     renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 
@@ -14278,7 +15981,13 @@ describe("Task Create MM-641 authoring validation", () => {
     expect(task.instructions).toBe(
       "Move repository branch publish controls into Steps.",
     );
-    expect(task.git).toEqual({ branch: "feature/mm-641-create-page" });
+    expect(task.git).toBeUndefined();
+    expect((request.payload as Record<string, unknown>).repository).toEqual({
+      provider: "git",
+      connectionRef: "repository-connection:git-default",
+      repository: { name: "MoonLadderStudios/MoonMind" },
+      branch: { name: "feature/mm-641-create-page" },
+    });
     expect(task.publish).toEqual({ mode: "branch" });
     expect(task.dependsOn).toEqual(["mm:dep-641"]);
     expect((task.steps as Array<Record<string, unknown>>)[0]).toMatchObject({
@@ -14335,7 +16044,13 @@ describe("Task Create MM-641 authoring validation", () => {
 
     const request = latestCreateRequest();
     const task = (request.payload as { task: Record<string, unknown> }).task;
-    expect(task.git).toEqual({ branch: "feature/pasted-while-loading" });
+    expect(task.git).toBeUndefined();
+    expect((request.payload as Record<string, unknown>).repository).toEqual({
+      provider: "git",
+      connectionRef: "repository-connection:git-default",
+      repository: { name: "MoonLadderStudios/MoonMind" },
+      branch: { name: "feature/pasted-while-loading" },
+    });
   });
 
   it("remembers the Propose Tasks selection across Create page mounts", async () => {
@@ -14428,21 +16143,16 @@ describe("Task Create submit arrow animation", () => {
     );
   });
 
-  it("morphs the create arrow into a check on click while preserving the shockwave", async () => {
+  it("outlines the create button on click while preserving its arrow and shockwave", async () => {
     expect(css).toMatch(
-      /\.queue-submit-primary--icon\.queue-submit-primary--arrow-exit\s*\.queue-submit-primary-arrow-glyph\[data-submit-icon="arrow"\]\s*\{[^}]*animation:\s*queue-submit-primary-arrow-exit\s+230ms\s+cubic-bezier\(0\.33,\s*0,\s*0\.2,\s*1\)\s+both;/s,
+      /\.queue-submit-primary--icon\.queue-submit-primary--arrow-exit\s*\{[^}]*background-color:\s*rgb\(var\(--mm-action-primary\) \/ 0\.12\);[^}]*background-image:\s*none;[^}]*color:\s*rgb\(var\(--mm-action-primary\)\);[^}]*border-color:\s*rgb\(var\(--mm-action-primary\)\);/s,
     );
+    expect(css).not.toContain('data-submit-icon="check"');
     expect(css).toMatch(
-      /\.queue-submit-primary--icon\.queue-submit-primary--arrow-exit\s*\.queue-submit-primary-arrow-glyph\[data-submit-icon="check"\]\s*\{[^}]*animation:\s*queue-submit-primary-check-pop\s+260ms\s+cubic-bezier\(0\.34,\s*1\.56,\s*0\.64,\s*1\)\s+both;/s,
+      /\.queue-submit-primary--icon\.queue-submit-primary--arrow-exit\s*\{[^}]*background-color:\s*rgb\(var\(--mm-action-primary\) \/ 0\.12\);[^}]*background-image:\s*none;[^}]*border-color:\s*rgb\(var\(--mm-action-primary\)\);/s,
     );
     expect(css).not.toMatch(
       /\.queue-submit-primary--icon[^{]*:active\s*\.queue-submit-primary-arrow\s*svg\s*\{[^}]*queue-submit-primary-arrow-exit/s,
-    );
-    expect(css).toMatch(
-      /@keyframes queue-submit-primary-arrow-exit\s*\{[\s\S]*0%\s*\{[\s\S]*opacity:\s*1;[\s\S]*transform:\s*scale\(1\);[\s\S]*100%\s*\{[\s\S]*opacity:\s*0;[\s\S]*transform:\s*scale\(0\.6\);/,
-    );
-    expect(css).toMatch(
-      /@keyframes queue-submit-primary-check-pop\s*\{[\s\S]*0%\s*\{[\s\S]*opacity:\s*0;[\s\S]*60%\s*\{[\s\S]*transform:\s*scale\(1\.15\);[\s\S]*100%\s*\{[\s\S]*transform:\s*scale\(1\);/,
     );
     expect(css).toMatch(
       /\.queue-submit-primary-ripple\s*\{[^}]*animation:\s*queue-submit-primary-ripple\s+620ms\s+cubic-bezier\(0\.22,\s*0\.61,\s*0\.36,\s*1\)\s+forwards;/s,
@@ -14504,6 +16214,8 @@ describe("Task Create submit arrow animation", () => {
               ok: true,
               json: async () => [],
             } as Response);
+          case url.startsWith("/api/github/branches"):
+            return Promise.resolve(defaultBranchOptionsResponse());
           case url === "/api/executions":
             return new Promise<Response>((resolve) => {
               resolveExecution = resolve;
@@ -14613,6 +16325,8 @@ describe("Task Create submit arrow animation", () => {
               ok: true,
               json: async () => [],
             } as Response);
+          case url.startsWith("/api/github/branches"):
+            return Promise.resolve(defaultBranchOptionsResponse());
           case url === "/api/executions":
             return Promise.resolve(
               new Response(
@@ -14790,6 +16504,7 @@ describe("Task Create MM-578 Preset expansion", () => {
               id: "tpl:mm-578-preset:1:01",
               title: "Fetch Jira issue",
               instructions: "Fetch MM-578.",
+              repositoryOperation: "read",
               tool: {
                 type: "tool",
                 id: "jira.get_issue",
@@ -14807,6 +16522,15 @@ describe("Task Create MM-578 Preset expansion", () => {
               id: "tpl:mm-578-preset:1:02",
               title: "Implement preset story",
               instructions: "Implement MM-578.",
+              repositoryOperation: "write",
+              annotations: {
+                issueImplementRole: "moonspec-remediation-loop",
+                remediationLoop: {
+                  hardMaxAttempts: 6,
+                  remediationTool: { selectedSkill: "remediate-issue" },
+                  verificationTool: { selectedSkill: "moonspec-verify" },
+                },
+              },
               skill: {
                 id: "moonspec-orchestrate",
                 args: { issueKey: "MM-578" },
@@ -14877,10 +16601,12 @@ describe("Task Create MM-578 Preset expansion", () => {
           state: "executing",
           targetRuntime: "codex_cli",
           repository: "MoonLadderStudios/MoonMind",
+          branch: "main",
           publishMode: "pr",
           inputParameters: {
             targetRuntime: "codex_cli",
             repository: "MoonLadderStudios/MoonMind",
+            branch: "main",
             workflow: {
               instructions: "Edit a trusted preset draft.",
               runtime: { mode: "codex_cli" },
@@ -14920,10 +16646,12 @@ describe("Task Create MM-578 Preset expansion", () => {
           state: "executing",
           targetRuntime: "codex_cli",
           repository: "MoonLadderStudios/MoonMind",
+          branch: "main",
           publishMode: "pr",
           inputParameters: {
             targetRuntime: "codex_cli",
             repository: "MoonLadderStudios/MoonMind",
+            branch: "main",
             workflow: {
               instructions: "Run Jira Implement for MM-901.",
               runtime: { mode: "codex_cli" },
@@ -15007,6 +16735,251 @@ describe("Task Create MM-578 Preset expansion", () => {
 
   afterEach(() => {
     fetchSpy.mockRestore();
+  });
+
+  it("carries submit-time preset workflow publish policy into execution creation", async () => {
+    const workflowPublish = {
+      mode: "none",
+      mergeAutomation: {
+        enabled: true,
+        checks: "required",
+        automatedReview: "required",
+        mergeMethod: "squash",
+        finishMode: "fix_only",
+        reviewLoop: {
+          enabled: true,
+          provider: "codex",
+          requestMode: "pr_comment",
+          requireFreshReviewForEveryHead: true,
+          requestAfterRemediation: true,
+          maxCycles: 5,
+          maxConsecutiveNoProgressCycles: 2,
+        },
+        timeouts: {
+          fallbackPollSeconds: 60,
+          expireAfterSeconds: 86400,
+        },
+      },
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/presets?scope=global")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [
+              {
+                slug: "pr-review-resolve",
+                scope: "global",
+                title: "Fix and Review Loop",
+                description: "Resolve and review an existing pull request.",
+                presetDigest: "digest-pr-review-resolve",
+                inputs: [
+                  {
+                    name: "pull_request",
+                    label: "Pull Request",
+                    type: "text",
+                    required: true,
+                  },
+                ],
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (url.startsWith("/api/presets/pr-review-resolve?scope=global")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            slug: "pr-review-resolve",
+            scope: "global",
+            title: "Fix and Review Loop",
+            description: "Resolve and review an existing pull request.",
+            presetDigest: "digest-pr-review-resolve",
+            inputs: [
+              {
+                name: "pull_request",
+                label: "Pull Request",
+                type: "text",
+                required: true,
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (
+        url.startsWith(
+          "/api/presets/pr-review-resolve:expand?scope=global",
+        )
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            steps: [
+              {
+                id: "tpl:pr-review-resolve:01:replay",
+                title: "Resolve target pull request",
+                type: "tool",
+                repositoryOperation: "read",
+                instructions: "Resolve pull request 242.",
+                tool: {
+                  type: "tool",
+                  id: "github.resolve_pull_request_target",
+                  inputs: {
+                    repository: "MoonLadderStudios/MoonMind",
+                    pullRequest: "242",
+                  },
+                },
+              },
+            ],
+            publish: workflowPublish,
+            appliedTemplate: {
+              slug: "pr-review-resolve",
+              presetDigest: "digest-pr-review-resolve",
+              inputs: { pull_request: "242" },
+              stepIds: ["tpl:pr-review-resolve:01:replay"],
+            },
+            capabilities: ["git", "gh"],
+            warnings: [],
+          }),
+        } as Response);
+      }
+      return mockMm578PresetFetch(input);
+    });
+
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    selectStepType(step, "Preset");
+    const presetSelect = within(step).getByLabelText(
+      "Preset Template",
+    ) as HTMLSelectElement;
+    await waitFor(() => {
+      expect(
+        Array.from(presetSelect.options).some(
+          (option) => option.value === "global::::pr-review-resolve",
+        ),
+      ).toBe(true);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::pr-review-resolve" },
+    });
+    fireEvent.change(await within(step).findByLabelText("Pull Request"), {
+      target: { value: "242" },
+    });
+
+    // Reproduce the escaped failure path: submit without manually expanding.
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const request = latestCreateRequest() as {
+      payload: {
+        publishMode?: string;
+        mergeAutomation?: Record<string, unknown>;
+        task: {
+          publish?: Record<string, unknown>;
+          appliedStepTemplates?: Array<Record<string, unknown>>;
+        };
+      };
+    };
+    expect(request.payload.publishMode).toBe("none");
+    expect(request.payload).not.toHaveProperty("mergeAutomation");
+    expect(request.payload.task.publish).toEqual(workflowPublish);
+    expect(request.payload.task.appliedStepTemplates?.[0]).not.toHaveProperty(
+      "workflowPublish",
+    );
+  });
+
+  it("preserves a publish override when a later submit-time preset has no policy", async () => {
+    const workflowPublish = {
+      mode: "pr",
+      mergeAutomation: { enabled: true },
+    };
+    let expansionCount = 0;
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (
+        url.startsWith(
+          "/api/presets/mm-578-preset:expand?scope=global",
+        )
+      ) {
+        expansionCount += 1;
+        const stepId = `tpl:mm-578-preset:override:${expansionCount}`;
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            steps: [
+              {
+                id: stepId,
+                title: `Expanded preset ${expansionCount}`,
+                type: "tool",
+                repositoryOperation: "read",
+                instructions: `Resolve preset ${expansionCount}.`,
+                tool: {
+                  type: "tool",
+                  id: "github.resolve_pull_request_target",
+                  inputs: { pullRequest: "3783" },
+                },
+              },
+            ],
+            ...(expansionCount === 1 ? { publish: workflowPublish } : {}),
+            appliedTemplate: {
+              slug: "mm-578-preset",
+              presetDigest: "digest-1",
+              stepIds: [stepId],
+            },
+            capabilities: ["gh"],
+            warnings: [],
+          }),
+        } as Response);
+      }
+      return mockMm578PresetFetch(input);
+    });
+
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    const firstStep = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    await chooseMm578Preset(firstStep);
+    fireEvent.click(within(firstStep).getByRole("button", { name: "Expand" }));
+    expect(await screen.findByDisplayValue("Resolve preset 1.")).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("Publish Mode"), {
+      target: { value: "branch" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add Step" }));
+    const secondStep = (await screen.findByText("Step 2")).closest(
+      "section",
+    ) as HTMLElement;
+    await chooseMm578Preset(secondStep);
+
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const request = latestCreateRequest() as {
+      payload: {
+        publishMode?: string;
+        mergeAutomation?: Record<string, unknown>;
+        task: { publish?: Record<string, unknown> };
+      };
+    };
+    expect(expansionCount).toBe(2);
+    expect(request.payload.publishMode).toBe("branch");
+    expect(request.payload).not.toHaveProperty("mergeAutomation");
+    expect(request.payload.task.publish).toEqual({ mode: "branch" });
   });
 
   it("submits Jira Orchestrate preset runs with the executable first-step skill", async () => {
@@ -15511,12 +17484,47 @@ describe("Task Create MM-578 Preset expansion", () => {
       throw new Error("Expected submitted first step");
     }
     expect(submittedStep.instructions).toBe("Edited generated MM-578 step.");
+    expect(submittedStep.repositoryOperation).toBeUndefined();
     expect(submittedStep.source).toMatchObject({
       kind: "detached",
       presetId: "mm-578-preset",
       includePath: ["root", "fetch"],
       originalStepId: "fetch-jira-issue",
     });
+  });
+
+  it("clears generated repository authority when the step type changes", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    selectStepType(step, "Preset");
+    const presetSelect = within(step).getByLabelText(
+      "Preset Template",
+    ) as HTMLSelectElement;
+    await waitFor(() => {
+      expect(presetSelect.options.length).toBeGreaterThan(1);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::mm-578-preset" },
+    });
+    fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
+    expect(await screen.findByDisplayValue("Fetch MM-578.")).toBeTruthy();
+
+    const generatedStep = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    selectStepType(generatedStep, "Skill");
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    expect(latestCreateTaskSteps()[0]?.repositoryOperation).toBeUndefined();
   });
 
   it("submits applied preset-generated Tool and Skill steps with executable binding and provenance", async () => {
@@ -15558,6 +17566,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       id: "tpl:mm-578-preset:1:01",
       title: "Fetch Jira issue",
       type: "tool",
+      repositoryOperation: "read",
       instructions: "Fetch MM-578.",
       tool: {
         type: "tool",
@@ -15577,7 +17586,16 @@ describe("Task Create MM-578 Preset expansion", () => {
       id: "tpl:mm-578-preset:1:02",
       title: "Implement preset story",
       type: "skill",
+      repositoryOperation: "write",
       instructions: "Implement MM-578.",
+      annotations: {
+        issueImplementRole: "moonspec-remediation-loop",
+        remediationLoop: {
+          hardMaxAttempts: 6,
+          remediationTool: { selectedSkill: "remediate-issue" },
+          verificationTool: { selectedSkill: "moonspec-verify" },
+        },
+      },
       skill: {
         id: "moonspec-orchestrate",
         args: { issueKey: "MM-578" },
@@ -15616,6 +17634,94 @@ describe("Task Create MM-578 Preset expansion", () => {
     });
   });
 
+  it("preserves remediation-loop annotations in artifact-backed preset submissions", async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/artifacts") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            artifact_ref: { artifact_id: "art-remediation-loop" },
+            upload: {
+              mode: "single_put",
+              upload_url: "/api/artifacts/art-remediation-loop/content",
+            },
+          }),
+        } as Response);
+      }
+      if (url === "/api/artifacts/art-remediation-loop/content") {
+        return Promise.resolve({ ok: true, text: async () => "" } as Response);
+      }
+      if (url === "/api/artifacts/art-remediation-loop/complete") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifact_id: "art-remediation-loop" }),
+        } as Response);
+      }
+      if (url === "/api/artifacts/art-remediation-loop/links") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifact_id: "art-remediation-loop" }),
+        } as Response);
+      }
+      return mockMm578PresetFetch(input);
+    });
+
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    selectStepType(step, "Preset");
+    const presetSelect = within(step).getByLabelText(
+      "Preset Template",
+    ) as HTMLSelectElement;
+    await waitFor(() => {
+      expect(presetSelect.options.length).toBeGreaterThan(1);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::mm-578-preset" },
+    });
+    fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
+    const remediationInstructions = await screen.findByDisplayValue(
+      "Implement MM-578.",
+    );
+
+    fireEvent.change(remediationInstructions, {
+      target: { value: "Continue remediation work. ".repeat(400) },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/artifacts/art-remediation-loop/content",
+        expect.objectContaining({ method: "PUT" }),
+      );
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const uploadCall = fetchSpy.mock.calls
+      .filter(
+        ([url]) =>
+          String(url) === "/api/artifacts/art-remediation-loop/content",
+      )
+      .at(-1);
+    const artifactInput = JSON.parse(String(uploadCall?.[1]?.body || "{}")) as {
+      workflow?: { steps?: Array<Record<string, unknown>> };
+    };
+    expect(artifactInput.workflow?.steps?.[1]?.annotations).toEqual({
+      issueImplementRole: "moonspec-remediation-loop",
+      remediationLoop: {
+        hardMaxAttempts: 6,
+        remediationTool: { selectedSkill: "remediate-issue" },
+        verificationTool: { selectedSkill: "moonspec-verify" },
+      },
+    });
+  });
+
   it("auto-expands an unresolved Preset during Create submit without mutating the visible draft", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
@@ -15638,6 +17744,10 @@ describe("Task Create MM-578 Preset expansion", () => {
     const steps = latestCreateTaskSteps();
     expect(steps).toHaveLength(2);
     expect(steps.map((entry) => entry.type)).toEqual(["tool", "skill"]);
+    expect(steps.map((entry) => entry.repositoryOperation)).toEqual([
+      "read",
+      "write",
+    ]);
     expect(steps.some((entry) => entry.type === "preset")).toBe(false);
     expect(steps[0]?.source).toEqual({
       kind: "preset-derived",
@@ -16172,7 +18282,14 @@ describe("Task Create schema-driven capability inputs", () => {
       return Promise.resolve({
         ok: true,
         json: async () => ({
-          items: { worker: ["schema.skill", "schema.other", "no-schema.skill"] },
+          items: {
+            worker: [
+              "schema.skill",
+              "schema.other",
+              "no-schema.skill",
+              "pr-resolver",
+            ],
+          },
           legacyItems: [
             {
               id: "schema.skill",
@@ -16240,6 +18357,11 @@ describe("Task Create schema-driven capability inputs", () => {
                     title: "Starts at",
                   },
                   metadata: { type: "object", title: "Metadata" },
+                  json_metadata: {
+                    type: "object",
+                    title: "JSON metadata",
+                    "x-moonmind-widget": "json",
+                  },
                   unsupported_widget: {
                     type: "string",
                     title: "Unsupported widget",
@@ -16286,6 +18408,30 @@ describe("Task Create schema-driven capability inputs", () => {
               id: "no-schema.skill",
               description: "Instruction-driven Skill fixture.",
               inputSchema: {},
+              uiSchema: {},
+              defaults: {},
+            },
+            {
+              id: "pr-resolver",
+              description: "Resolve a pull request.",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  pr: {
+                    type: "string",
+                    title: "Pull request",
+                    description:
+                      "PR number or PR URL. MoonMind requires either this value or a head branch so the resolver cannot target the wrong PR.",
+                  },
+                  branch: {
+                    type: "string",
+                    title: "Head branch",
+                    description:
+                      "PR head branch. MoonMind requires either this value or a PR number or URL so the resolver cannot target the wrong PR.",
+                  },
+                },
+                anyOf: [{ required: ["pr"] }, { required: ["branch"] }],
+              },
               uiSchema: {},
               defaults: {},
             },
@@ -16575,7 +18721,9 @@ describe("Task Create schema-driven capability inputs", () => {
               },
             },
           },
-          uiSchema: {},
+          uiSchema: {
+            urgent: { widget: "checkbox" },
+          },
           defaults: {
             summary: "Default summary",
             urgent: false,
@@ -16780,8 +18928,11 @@ describe("Task Create schema-driven capability inputs", () => {
 
     const issueInput = await within(step).findByLabelText("GitHub issue");
     fireEvent.change(issueInput, {
-      target: { value: "https://github.com/MoonLadderStudios/MoonMind/issues/123" },
+      target: { value: "https://github.com/MoonLadderStudios/Tactics/issues/123" },
     });
+    expect((screen.getByLabelText("GitHub Repo") as HTMLInputElement).value).toBe(
+      "MoonLadderStudios/Tactics",
+    );
     fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
 
     await waitFor(() => {
@@ -16794,9 +18945,9 @@ describe("Task Create schema-driven capability inputs", () => {
             inputs?: { github_issue?: { repository?: string; number?: number; url?: string } };
           };
           return (
-            payload.inputs?.github_issue?.repository === "MoonLadderStudios/MoonMind" &&
+            payload.inputs?.github_issue?.repository === "MoonLadderStudios/Tactics" &&
             payload.inputs?.github_issue?.number === 123 &&
-            payload.inputs?.github_issue?.url === "https://github.com/MoonLadderStudios/MoonMind/issues/123"
+            payload.inputs?.github_issue?.url === "https://github.com/MoonLadderStudios/Tactics/issues/123"
           );
         }),
       ).toBe(true);
@@ -16874,12 +19025,22 @@ describe("Task Create schema-driven capability inputs", () => {
     expect(within(step).getByText("Metadata")).toBeTruthy();
     expect((within(step).getByLabelText("Assignee email") as HTMLInputElement).type).toBe("email");
     expect(within(step).getByLabelText("Mode")).toBeTruthy();
-    expect(within(step).getByText("Unsupported field widget.")).toBeTruthy();
+    const urgent = within(step).getByLabelText("Urgent") as HTMLInputElement;
+    expect(urgent.type).toBe("checkbox");
+    expect(urgent.checked).toBe(false);
+    expect(within(urgent.closest("label") as HTMLElement).queryByText(/unavailable/)).toBeNull();
+    fireEvent.click(urgent);
+    expect(urgent.checked).toBe(true);
+    expect(
+      within(step).getByText(
+        "Widget external.lookup is unavailable; using a text field.",
+      ),
+    ).toBeTruthy();
     expect((within(step).getByLabelText("Unsafe default") as HTMLInputElement).value).toBe("");
     expect(within(step).queryByDisplayValue("token=raw-secret")).toBeNull();
   });
 
-  it("renders direct skill inputs through the same schema behavior", async () => {
+  it("shows required Skill inputs by default and reveals optional schema fields in Advanced mode", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
     const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
     selectStepType(step, "Skill");
@@ -16888,7 +19049,17 @@ describe("Task Create schema-driven capability inputs", () => {
     });
 
     expect(await within(step).findByLabelText("Repository name")).toBeTruthy();
-    expect(within(step).getByLabelText("Branch")).toBeTruthy();
+    expect(within(step).queryByLabelText("Branch")).toBeNull();
+    expect(
+      within(step).getByTestId("skill-optional-inputs-notice-0").textContent,
+    ).toContain("Advanced mode");
+
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+
+    expect(await within(step).findByLabelText("Branch")).toBeTruthy();
+    expect(
+      within(step).queryByTestId("skill-optional-inputs-notice-0"),
+    ).toBeNull();
     expect(within(step).getByLabelText("Notes").tagName).toBe("TEXTAREA");
     expect(within(step).getByLabelText("Markdown").tagName).toBe("TEXTAREA");
     expect((within(step).getByLabelText("Effort") as HTMLInputElement).type).toBe("number");
@@ -16902,8 +19073,65 @@ describe("Task Create schema-driven capability inputs", () => {
     expect((within(step).getByLabelText("Due") as HTMLInputElement).type).toBe("date");
     expect((within(step).getByLabelText("Starts at") as HTMLInputElement).type).toBe("datetime-local");
     expect(within(step).getByLabelText("Metadata").tagName).toBe("TEXTAREA");
-    expect(within(step).getByText("Unsupported field widget.")).toBeTruthy();
+    expect(
+      within(step).getByText(
+        "Widget external.lookup is unavailable; using a text field.",
+      ),
+    ).toBeTruthy();
   });
+
+  it.each([
+    ["Pull request", "2733", "pr"],
+    ["Head branch", "agent/fix-selector", "branch"],
+  ])(
+    "requires a pr-resolver selector and submits %s structurally",
+    async (fieldLabel, selectorValue, inputKey) => {
+      renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+      const step = (await screen.findByText("Step 1")).closest(
+        "section",
+      ) as HTMLElement;
+      selectStepType(step, "Skill");
+      fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
+        target: { value: "pr-resolver" },
+      });
+
+      const selector = await within(step).findByLabelText(fieldLabel);
+      expect(await within(step).findByLabelText("Pull request")).toBeTruthy();
+      expect(within(step).getByLabelText("Head branch")).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+      expect(
+        await within(step).findByText(
+          "Pull request or Head branch is required.",
+        ),
+      ).toBeTruthy();
+      expect(
+        fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
+      ).toBe(false);
+
+      fireEvent.change(selector, { target: { value: selectorValue } });
+      fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+      await waitFor(() => {
+        expect(
+          fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
+        ).toBe(true);
+      });
+      const request = latestSchemaCreateRequest() as {
+        payload: {
+          task: {
+            inputs?: Record<string, unknown>;
+            skill?: { inputs?: Record<string, unknown> };
+            tool?: { inputs?: Record<string, unknown> };
+          };
+        };
+      };
+      expect(request.payload.task.inputs?.[inputKey]).toBe(selectorValue);
+      expect(request.payload.task.skill?.inputs?.[inputKey]).toBe(selectorValue);
+      expect(request.payload.task.tool?.inputs?.[inputKey]).toBe(selectorValue);
+    },
+  );
 
   it("preserves MM-1056 Skill fallback values under step.skill.inputs for MM-1047 traceability", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
@@ -16912,6 +19140,11 @@ describe("Task Create schema-driven capability inputs", () => {
     fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
       target: { value: "schema.skill" },
     });
+    expect(
+      await within(step).findByTestId("skill-optional-inputs-notice-0"),
+    ).toBeTruthy();
+    expect(within(step).queryByTestId("skill-schema-fallback-0")).toBeNull();
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
 
     fireEvent.change(await within(step).findByLabelText("Repository name"), {
       target: { value: "MoonLadderStudios/MoonMind" },
@@ -16924,6 +19157,9 @@ describe("Task Create schema-driven capability inputs", () => {
     });
     fireEvent.change(within(step).getByLabelText("Metadata"), {
       target: { value: '{"sourceIssue":"MM-1047"}' },
+    });
+    fireEvent.change(within(step).getByLabelText("JSON metadata"), {
+      target: { value: '{"review":"structured"}' },
     });
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
@@ -16950,6 +19186,7 @@ describe("Task Create schema-driven capability inputs", () => {
       branch: "feature/mm-1056",
       unsupported_widget: "manual fallback survives",
       metadata: { sourceIssue: "MM-1047" },
+      json_metadata: { review: "structured" },
     });
     expect(request.payload.task.skill?.inputContractDigest).toBe(
       "sha256:current-skill-contract",
@@ -17040,6 +19277,11 @@ describe("Task Create schema-driven capability inputs", () => {
     fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
       target: { value: "schema.skill" },
     });
+    expect(
+      await within(step).findByTestId("skill-optional-inputs-notice-0"),
+    ).toBeTruthy();
+    expect(within(step).queryByTestId("skill-schema-fallback-0")).toBeNull();
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
 
     const unsupported = (await waitFor(() => {
       const input = step.querySelector<HTMLInputElement>(
@@ -17082,6 +19324,7 @@ describe("Task Create schema-driven capability inputs", () => {
                 id: "deployment.skill",
                 inputSchema: {
                   type: "object",
+                  required: ["repository"],
                   properties: {
                     repository: { type: "string", title: "Deployment repository" },
                   },
@@ -17163,6 +19406,7 @@ describe("Task Create schema-driven capability inputs", () => {
     fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
       target: { value: "schema.skill" },
     });
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
 
     fireEvent.change(await within(step).findByLabelText("Repository name"), {
       target: { value: "MoonLadderStudios/SavedSchemaRepo" },
@@ -17261,6 +19505,7 @@ describe("Task Create schema-driven capability inputs", () => {
     fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
       target: { value: "schema.skill" },
     });
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
 
     const effortInput = (await within(step).findByLabelText("Effort")) as HTMLInputElement;
     expect(effortInput.value).toBe("2");
@@ -18222,6 +20467,9 @@ describe("Task Create runtime command previews", () => {
             json: async () => [],
           } as Response);
         }
+        if (url.startsWith("/api/github/branches")) {
+          return Promise.resolve(defaultBranchOptionsResponse());
+        }
         if (url === "/api/executions") {
           return Promise.resolve({
             ok: true,
@@ -18276,7 +20524,8 @@ describe("Task Create runtime command previews", () => {
   it("warns when a remediation draft target run changed before submit", async () => {
     const draft = {
       source: "remediation",
-      createdAt: "2026-07-07T00:00:00.000Z",
+      schemaVersion: 1,
+      createdAt: new Date().toISOString(),
       target: {
         workflowId: "mm:remediation-target",
         runId: "run-original",
@@ -18306,6 +20555,7 @@ describe("Task Create runtime command previews", () => {
           actionKind: "checkpoint_branch.create_from_remediation_context",
           runtimeContextPolicy: "fresh_agent_run",
         },
+        trigger: { type: "manual" },
       },
     };
     window.sessionStorage.setItem(
@@ -18356,11 +20606,140 @@ describe("Task Create runtime command previews", () => {
     renderWithClient(<WorkflowStartPage payload={withRuntimeCommandPreview()} />);
 
     expect(await screen.findByText("Remediation Draft")).toBeTruthy();
+    const remediationMode = screen.getByLabelText("Remediation mode");
+    const remediationAuthority = screen.getByLabelText("Authority");
+    const actionPolicy = screen.getByLabelText("Action policy");
+    fireEvent.change(remediationMode, { target: { value: "live_follow" } });
+    fireEvent.change(remediationAuthority, { target: { value: "observe_only" } });
+    fireEvent.click(screen.getByLabelText("Diagnostics"));
+
+    expect((remediationMode as HTMLSelectElement).value).toBe("live_follow");
+    expect((remediationAuthority as HTMLSelectElement).value).toBe("observe_only");
+    expect((actionPolicy as HTMLSelectElement).value).toBe("admin_healer_default");
+    expect(within(actionPolicy).queryByRole("option", {
+      name: "operator_review_only",
+    })).toBeNull();
+    expect((screen.getByLabelText("Diagnostics") as HTMLInputElement).checked).toBe(false);
     expect(
       await screen.findByText(
         "Target workflow changed after this remediation draft was created. Open Remediate again before submitting.",
       ),
     ).toBeTruthy();
+  });
+
+  it("imports the complete remediation draft once and keeps pinned identity separate from editable intent", async () => {
+    const draft = {
+      source: "remediation",
+      schemaVersion: 1,
+      createdAt: new Date().toISOString(),
+      target: {
+        workflowId: "mm:remediation-target",
+        runId: "run-original",
+        title: "Failed workflow",
+        state: "failed",
+        stepSelectors: [
+          {
+            logicalStepId: "test",
+            checkpointRef: "artifact://checkpoint/test",
+          },
+        ],
+      },
+      repository: "MoonLadderStudios/MoonMind",
+      branch: "main",
+      startingBranch: "main",
+      workBranch: "repair/mm-3623",
+      publishMode: "pr",
+      executionProfileRef: "execution-profile:codex",
+      launchPolicyRef: "launch-policy:remediation",
+      contextRetrieval: {
+        initial: { collections: ["docs"], allowStale: false, required: true },
+        followUp: {
+          enabled: false,
+          required: false,
+          collections: [],
+          budgetPreset: "balanced",
+          topK: 8,
+          maxContextTokens: 8192,
+          maxQueries: 12,
+          latencyMs: 5000,
+          maxLifetimeSeconds: 900,
+          overlayPolicy: "include",
+          staleOverlayAllowed: false,
+          fallbackAllowed: false,
+        },
+      },
+      instructions: "Repair the failed workflow.",
+      runtime: { mode: "omnigent" },
+      remediation: {
+        target: {
+          workflowId: "mm:remediation-target",
+          runId: "run-original",
+          stepSelectors: [
+            {
+              logicalStepId: "test",
+              checkpointRef: "artifact://checkpoint/test",
+            },
+          ],
+        },
+        mode: "snapshot_then_follow",
+        authorityMode: "approval_gated",
+        actionPolicyRef: "admin_healer_default",
+        checkpointBranchPolicy: {
+          actionKind: "checkpoint_branch.create_from_remediation_context",
+          runtimeContextPolicy: "fresh_agent_run",
+          gitWorkBranch: "repair/mm-3623",
+        },
+        trigger: { type: "manual" },
+      },
+    };
+    window.sessionStorage.setItem(
+      "moonmind.remediation-create-draft.complete",
+      JSON.stringify(draft),
+    );
+    window.history.pushState(
+      {},
+      "Task Create",
+      "/workflows/new?intent=remediate&draftId=complete",
+    );
+
+    renderWithClient(<WorkflowStartPage payload={withRuntimeCommandPreview()} />);
+
+    expect(await screen.findByText("Remediation Draft")).toBeTruthy();
+    expect(screen.getByLabelText("Pinned target identity")).toBeTruthy();
+    expect(screen.getByLabelText("Editable repair intent")).toBeTruthy();
+    expect((screen.getByLabelText("Target workflow") as HTMLInputElement).readOnly).toBe(true);
+    expect((screen.getByLabelText("Pinned run") as HTMLInputElement).readOnly).toBe(true);
+    expect((screen.getByLabelText("Starting branch") as HTMLInputElement).value).toBe("main");
+    expect((screen.getByLabelText("Checkpoint work branch") as HTMLInputElement).value).toBe("repair/mm-3623");
+    expect((screen.getByLabelText("Publish Mode") as HTMLSelectElement).value).toBe("pr");
+    expect(
+      window.sessionStorage.getItem(
+        "moonmind.remediation-create-draft.complete",
+      ),
+    ).toBeNull();
+  });
+
+  it("reports a copied cross-tab remediation URL without importing content", async () => {
+    window.localStorage.setItem(
+      "moonmind.remediation-create-draft-presence.other-tab",
+      JSON.stringify({ createdAt: new Date().toISOString() }),
+    );
+    window.history.pushState(
+      {},
+      "Task Create",
+      "/workflows/new?intent=remediate&draftId=other-tab",
+    );
+
+    renderWithClient(<WorkflowStartPage payload={withRuntimeCommandPreview()} />);
+
+    expect(
+      (await screen.findAllByText(/belongs to another browser tab/i)).length,
+    ).toBeGreaterThan(0);
+    expect(screen.queryByText("Remediation Draft")).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Discard draft reference" }),
+    );
+    expect(window.location.search).toBe("");
   });
 
   it("previews unknown valid slash commands as opaque pass-through", async () => {
@@ -18538,6 +20917,28 @@ describe("resolveDefaultProviderProfileId", () => {
       "high-priority",
     );
   });
+
+  it("preserves an unavailable saved profile while editing unrelated fields", () => {
+    expect(
+      resolveLoadedProviderProfileId({
+        profiles,
+        providerProfile: "deleted-billing-profile",
+        configuredDefaultRef: "codex",
+        preserveUnavailableProfile: true,
+      }),
+    ).toBe("deleted-billing-profile");
+  });
+
+  it("selects the new runtime default after an explicit runtime switch clears the profile", () => {
+    expect(
+      resolveLoadedProviderProfileId({
+        profiles,
+        providerProfile: "",
+        configuredDefaultRef: "codex",
+        preserveUnavailableProfile: true,
+      }),
+    ).toBe("codex");
+  });
 });
 
 describe("Task Create runtime switch layout stability", () => {
@@ -18588,7 +20989,13 @@ describe("Task Create runtime switch layout stability", () => {
                 profile_id: "profile:codex-default",
                 account_label: "Codex Default",
                 is_default: true,
-                default_effort: "high",
+                default_model: null,
+                default_effort: null,
+                model_tiers: [
+                  { label: "Plan", model: "gpt-plan", effort: "medium" },
+                  { label: "Default", model: "gpt-profile-default", effort: "high" },
+                ],
+                default_model_tier: 2,
               },
               {
                 profile_id: "profile:codex-secondary",
@@ -18758,6 +21165,41 @@ describe("Task Create runtime switch layout stability", () => {
     expect(request.payload.task.runtime).not.toHaveProperty("tierFallback");
     expect(request.payload.task.runtime).not.toHaveProperty("model");
     expect(request.payload.task.runtime).not.toHaveProperty("effort");
+  });
+
+  it("defaults hard overrides from the selected profile until manually changed", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect((screen.getByLabelText("Provider profile") as HTMLSelectElement).value).toBe(
+        "profile:codex-default",
+      );
+      expect((screen.getByLabelText("Hard override model") as HTMLInputElement).value).toBe(
+        "gpt-profile-default",
+      );
+      expect((screen.getByLabelText("Hard override effort") as HTMLInputElement).value).toBe(
+        "high",
+      );
+    });
+
+    fireEvent.change(screen.getByLabelText("Hard override model"), {
+      target: { value: "gpt-manual" },
+    });
+    fireEvent.change(screen.getByLabelText("Hard override effort"), {
+      target: { value: "xhigh" },
+    });
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Trigger an unrelated form render." },
+    });
+
+    await waitFor(() => {
+      expect((screen.getByLabelText("Hard override model") as HTMLInputElement).value).toBe(
+        "gpt-manual",
+      );
+      expect((screen.getByLabelText("Hard override effort") as HTMLInputElement).value).toBe(
+        "xhigh",
+      );
+    });
   });
 });
 

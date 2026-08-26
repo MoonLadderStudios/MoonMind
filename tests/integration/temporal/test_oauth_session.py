@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 
 import pytest
-from temporalio import activity
+from temporalio import activity, workflow
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker, UnsandboxedWorkflowRunner
 
@@ -58,6 +58,23 @@ async def mock_stop_auth_runner(request: dict) -> dict:
 @activity.defn(name="oauth_session.mark_failed")
 async def mock_mark_failed(request: dict) -> dict:
     return {}
+
+
+@workflow.defn(name="MoonMind.TestOAuthMaintenanceLeaseBoundary")
+class TestOAuthMaintenanceLeaseBoundaryWorkflow:
+    @workflow.run
+    async def run(self, request: dict) -> dict:
+        oauth_workflow = MoonMindOAuthSessionWorkflow()
+        oauth_workflow._session_id = request["session_id"]
+        await oauth_workflow._acquire_maintenance_lease(
+            runtime_id=request["runtime_id"],
+            profile_id=request["profile_id"],
+            purpose=request["purpose"],
+        )
+        return {
+            "acquired": oauth_workflow._maintenance_lease_acquired,
+            "lease_id": oauth_workflow._maintenance_lease_id,
+        }
 
 @asynccontextmanager
 async def _oauth_workers(
@@ -129,6 +146,62 @@ async def test_oauth_session_workflow_success() -> None:
             
             assert result["session_id"] == "sess_default"
             assert result["status"] == "succeeded"
+
+
+async def test_oauth_maintenance_lease_uses_acknowledged_activity_boundary() -> None:
+    requests: list[dict] = []
+
+    @activity.defn(
+        name="provider_profile.acquire_credential_maintenance_lease"
+    )
+    async def acquire_maintenance_lease(request: dict) -> dict:
+        requests.append(request)
+        return {
+            "profile_id": request["profile_id"],
+            "lease_id": request["owner_id"],
+            "already_held": False,
+        }
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue=ACTIVITY_TASK_QUEUE,
+            activities=[acquire_maintenance_lease],
+        ), Worker(
+            env.client,
+            task_queue=WORKFLOW_TASK_QUEUE,
+            workflows=[TestOAuthMaintenanceLeaseBoundaryWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            result = await env.client.execute_workflow(
+                TestOAuthMaintenanceLeaseBoundaryWorkflow.run,
+                {
+                    "session_id": "oas-lease-boundary",
+                    "runtime_id": "codex_cli",
+                    "profile_id": "codex_openai_oauth",
+                    "purpose": "oauth_reconnect",
+                },
+                id="test-oauth-maintenance-lease-boundary",
+                task_queue=WORKFLOW_TASK_QUEUE,
+            )
+
+    assert result == {
+        "acquired": True,
+        "lease_id": "oauth-session:oas-lease-boundary",
+    }
+    assert requests == [
+        {
+            "runtime_id": "codex_cli",
+            "profile_id": "codex_openai_oauth",
+            "owner_id": "oauth-session:oas-lease-boundary",
+            "purpose": "oauth_reconnect",
+            "metadata": {
+                "workflowId": "test-oauth-maintenance-lease-boundary",
+                "oauthSessionId": "oas-lease-boundary",
+                "ownerIsWorkflow": True,
+            },
+        }
+    ]
             
 async def test_oauth_session_workflow_cancel() -> None:
     """Test OAuth session workflow cancellation."""

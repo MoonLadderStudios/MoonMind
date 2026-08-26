@@ -1,0 +1,7 @@
+{
+  "invariant": "exact host resolution covers the observed catalog propagation tail while retaining deterministic name and online-status checks",
+  "hostId": "host-long-publication-replay",
+  "catalogReadCount": 41,
+  "sleepCount": 40,
+  "sleepSeconds": 2
+}

@@ -8,6 +8,11 @@ import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+MOUNTED_TOOL_PATH = (
+    "/opt/moonmind-tools/bin:"
+    "${OMNIGENT_HOST_BASE_PATH:-/opt/venv/bin:/usr/local/bin:/usr/local/sbin:"
+    "/usr/bin:/usr/sbin:/bin:/sbin}"
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
@@ -43,6 +48,32 @@ def _load_compose() -> dict:
         compose_path.read_text(encoding="utf-8"),
         Loader=UniqueKeySafeLoader,
     )
+
+
+def _render_codex_host_compose() -> dict:
+    _require_docker_compose()
+    result = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "--env-file",
+            "/dev/null",
+            "-f",
+            "docker-compose.yaml",
+            "--profile",
+            "omnigent-host-codex",
+            "config",
+            "--format",
+            "json",
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
 
 def _require_docker_compose() -> None:
     if shutil.which("docker") is None:
@@ -129,6 +160,10 @@ def test_temporal_compose_topology_and_private_exposure():
     compose = _load_compose()
     services = compose["services"]
 
+    assert compose["networks"]["control-plane-network"] == {
+        "name": "${MOONMIND_CONTROL_PLANE_NETWORK:-moonmind_control-plane-network}"
+    }
+
     # temporal-db is now a network alias on the postgres service, not its own service.
     assert "postgres" in services
     postgres_aliases = []
@@ -143,12 +178,62 @@ def test_temporal_compose_topology_and_private_exposure():
     temporal_service = services["temporal"]
     # Temporal now publishes port 7233 via ports (host-accessible for local dev).
     assert temporal_service.get("ports") == ["7233:7233"]
-    # Temporal sits on local-network with alias temporal-internal.
+    # Temporal sits on the control-plane network with alias temporal-internal.
     temporal_networks = temporal_service.get("networks", {})
     if isinstance(temporal_networks, dict):
-        assert "local-network" in temporal_networks
+        assert "control-plane-network" in temporal_networks
     elif isinstance(temporal_networks, list):
-        assert "local-network" in temporal_networks
+        assert "control-plane-network" in temporal_networks
+
+
+def test_omnigent_hosts_use_versioned_read_only_tool_bundle():
+    compose = _load_compose()
+    services = compose["services"]
+    initializer = services["omnigent-tools-init"]
+    tool_manifest = json.loads(
+        (REPO_ROOT / "services/omnigent/tools/manifest.lock.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    configured_version = initializer["environment"]["MOONMIND_GH_VERSION"]
+    compose_default_version = configured_version.removesuffix("}").rsplit(":-", 1)[1]
+    assert tool_manifest["bundleVersion"] == f"gh-{compose_default_version}-1"
+    assert tool_manifest["tools"][0]["version"] == compose_default_version
+
+    assert initializer["image"] == (
+        "${OMNIGENT_GH_IMAGE:-serversideup/github-cli:alpine-2.76.2}"
+    )
+    assert initializer["user"] == "0:0"
+    assert initializer["restart"] == "no"
+    assert "profiles" not in initializer
+    assert initializer["environment"] == {
+        "MOONMIND_GH_SOURCE": "/usr/local/bin/gh",
+        "MOONMIND_GH_VERSION": "${OMNIGENT_GH_VERSION:-2.76.2}",
+    }
+    assert initializer["volumes"] == [
+        "omnigent-tools:/output",
+        "./services/omnigent/scripts:/opt/moonmind:ro",
+    ]
+    assert compose["volumes"]["omnigent-tools"]["name"] == (
+        "moonmind-omnigent-tools-gh-${OMNIGENT_GH_VERSION:-2.76.2}"
+    )
+    assert services["temporal-worker-agent-runtime"]["depends_on"][
+        "omnigent-tools-init"
+    ] == {"condition": "service_completed_successfully"}
+
+    for service_name in ("omnigent-host", "omnigent-host-claude", "omnigent-host-codex"):
+        host = services[service_name]
+        environment = _env_map(host["environment"])
+        assert environment["PATH"].startswith("/opt/moonmind-tools/bin:")
+        assert host["depends_on"]["omnigent-tools-init"] == {
+            "condition": "service_completed_successfully"
+        }
+        assert "omnigent-tools:/opt/moonmind-tools:ro" in host["volumes"]
+        assert (
+            "./services/omnigent/scripts/moonmind-tools.sh:"
+            "/etc/profile.d/moonmind-tools.sh:ro"
+        ) in host["volumes"]
 
 def test_api_host_port_mapping_and_optional_env_file_for_mm_969():
     compose = _load_compose()
@@ -156,12 +241,77 @@ def test_api_host_port_mapping_and_optional_env_file_for_mm_969():
 
     api_service = services["api"]
     assert api_service["ports"] == ["${MOONMIND_API_HOST_PORT:-7000}:8000"]
+    assert api_service["restart"] == "unless-stopped"
 
     healthcheck = " ".join(str(part) for part in api_service["healthcheck"]["test"])
     assert "http://localhost:8000/healthz" in healthcheck
 
+    agent_runtime_environment = services["temporal-worker-agent-runtime"][
+        "environment"
+    ]
+    assert any(
+        item.startswith("MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_MEMORY_MIB=")
+        for item in agent_runtime_environment
+    )
+
     api_env = _env_map(api_service["environment"])
     assert api_env["MODEL_CONTEXT_PROTOCOL_PORT"] == "8000"
+    assert api_env["OMNIGENT_ENABLED"] == "${OMNIGENT_ENABLED:-true}"
+    assert api_env["OMNIGENT_SERVER_URL"] == (
+        "${OMNIGENT_SERVER_URL:-http://omnigent:8000}"
+    )
+    assert api_env["OMNIGENT_IMAGE"] == (
+        "${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}"
+    )
+    assert api_env["OMNIGENT_IMAGE_TAG"] == "${OMNIGENT_IMAGE_TAG:-latest}"
+    assert api_env["OMNIGENT_HOST_IMAGE"] == (
+        "${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}"
+    )
+    assert api_env["OMNIGENT_HOST_IMAGE_TAG"] == (
+        "${OMNIGENT_HOST_IMAGE_TAG:-latest}"
+    )
+    assert api_env["MOONMIND_DEPLOYMENT_PROJECT_NAME"] == (
+        "${MOONMIND_DEPLOYMENT_PROJECT_NAME:-moonmind}"
+    )
+    assert api_env["MOONMIND_OMNIGENT_REMEDIATION_RELEASE_EVIDENCE_REF"] == (
+        "${MOONMIND_OMNIGENT_REMEDIATION_RELEASE_EVIDENCE_REF:-"
+        "/workspace/cutover/remediation-release.json}"
+    )
+    # Release-support evidence the Omnigent catalog reads must have a working
+    # default in the canonical deployment (MoonLadderStudios/MoonMind#3710):
+    # without one, every catalog response permanently reports the support
+    # failures even after both gates pass.
+    assert api_env["MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST"] == (
+        "${MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST:-"
+        "/workspace/omnigent-evidence/acceptance-manifest.json}"
+    )
+    assert api_env["MOONMIND_OMNIGENT_EXECUTION_SUPPORT_EVIDENCE"] == (
+        "${MOONMIND_OMNIGENT_EXECUTION_SUPPORT_EVIDENCE:-"
+        "/workspace/omnigent-evidence/execution-support-evidence.json}"
+    )
+    assert api_env["MOONMIND_OMNIGENT_EXACT_ARTIFACT_EVIDENCE"] == (
+        "${MOONMIND_OMNIGENT_EXACT_ARTIFACT_EVIDENCE:-"
+        "/workspace/omnigent-evidence/exact-artifact-projection.json}"
+    )
+    assert api_env["MOONMIND_OMNIGENT_LIVE_HEALTH_PROJECTION"] == (
+        "${MOONMIND_OMNIGENT_LIVE_HEALTH_PROJECTION:-"
+        "/workspace/omnigent-evidence/live-health-projection.json}"
+    )
+    # ...and the directory those defaults point at must actually be mounted.
+    # The API now mounts the evidence dir read-write for materialization.
+    assert (
+        "${MOONMIND_OMNIGENT_EVIDENCE_DIR:-./var/omnigent-evidence}"
+        ":/workspace/omnigent-evidence:rw"
+    ) in services["api"]["volumes"]
+    for worker_name in (
+        "temporal-worker-agent-runtime",
+        "temporal-worker-integrations",
+    ):
+        worker_env = _env_map(services[worker_name]["environment"])
+        assert worker_env["OMNIGENT_ENABLED"] == "${OMNIGENT_ENABLED:-true}"
+        assert worker_env["OMNIGENT_SERVER_URL"] == (
+            "${OMNIGENT_SERVER_URL:-http://omnigent:8000}"
+        )
 
     assert services["postgres"]["environment"]["POSTGRES_PASSWORD"] == (
         "${POSTGRES_PASSWORD:-password}"
@@ -185,6 +335,41 @@ def test_api_host_port_mapping_and_optional_env_file_for_mm_969():
         line.strip() == "MOONMIND_API_HOST_PORT=7000"
         for line in env_template.splitlines()
     )
+
+def test_managed_runtime_cleanup_defaults_match_api_and_agent_runtime_worker():
+    compose = _load_compose()
+    api_env = _env_map(compose["services"]["api"]["environment"])
+    worker_env = _env_map(
+        compose["services"]["temporal-worker-agent-runtime"]["environment"]
+    )
+    expected = {
+        "MOONMIND_AGENT_RUNTIME_STORE": "${MOONMIND_AGENT_RUNTIME_STORE:-/work/agent_jobs}",
+        "MOONMIND_AGENT_RUNTIME_ARTIFACTS": "${MOONMIND_AGENT_RUNTIME_ARTIFACTS:-/work/agent_jobs/artifacts}",
+        "MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED": "${MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED:-true}",
+        "MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN": "${MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN:-false}",
+        "MOONMIND_MANAGED_RUNTIME_WORKSPACE_RETENTION_DAYS": "${MOONMIND_MANAGED_RUNTIME_WORKSPACE_RETENTION_DAYS:-10}",
+        "MOONMIND_MANAGED_RUNTIME_ARTIFACT_RETENTION_DAYS": "${MOONMIND_MANAGED_RUNTIME_ARTIFACT_RETENTION_DAYS:-90}",
+        "MOONMIND_MANAGED_RUNTIME_RECORD_RETENTION_DAYS": "${MOONMIND_MANAGED_RUNTIME_RECORD_RETENTION_DAYS:-}",
+        "MOONMIND_MANAGED_RUNTIME_JANITOR_GRACE_SECONDS": "${MOONMIND_MANAGED_RUNTIME_JANITOR_GRACE_SECONDS:-3600}",
+        "MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_PATHS": "${MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_PATHS:-100}",
+        "MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_BYTES": "${MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_BYTES:-}",
+        "MOONMIND_MANAGED_RUNTIME_JANITOR_LOCK_PATH": "${MOONMIND_MANAGED_RUNTIME_JANITOR_LOCK_PATH:-/work/agent_jobs/.janitor.lock}",
+    }
+
+    assert {key: api_env[key] for key in expected} == expected
+    assert {key: worker_env[key] for key in expected} == expected
+
+    docker_storage_expected = {
+        "MOONMIND_DOCKER_STORAGE_JANITOR_ENABLED": "${MOONMIND_DOCKER_STORAGE_JANITOR_ENABLED:-true}",
+        "MOONMIND_DOCKER_STORAGE_HIGH_WATERMARK_PERCENT": "${MOONMIND_DOCKER_STORAGE_HIGH_WATERMARK_PERCENT:-80}",
+        "MOONMIND_DOCKER_STORAGE_CRITICAL_WATERMARK_PERCENT": "${MOONMIND_DOCKER_STORAGE_CRITICAL_WATERMARK_PERCENT:-90}",
+        "MOONMIND_DOCKER_STORAGE_IMAGE_MIN_AGE_HOURS": "${MOONMIND_DOCKER_STORAGE_IMAGE_MIN_AGE_HOURS:-168}",
+        "MOONMIND_DOCKER_STORAGE_BUILD_CACHE_MIN_AGE_HOURS": "${MOONMIND_DOCKER_STORAGE_BUILD_CACHE_MIN_AGE_HOURS:-24}",
+    }
+    assert {
+        key: worker_env[key] for key in docker_storage_expected
+    } == docker_storage_expected
+
 
 def test_documented_compose_startup_config_succeeds_without_env_file(tmp_path):
     _require_docker_compose()
@@ -278,6 +463,19 @@ def test_workflow_worker_service_supervises_normal_and_merge_automation_roles():
     assert workflow_env["TEMPORAL_MERGE_AUTOMATION_WORKFLOW_WORKER_CONCURRENCY"] == (
         "${TEMPORAL_MERGE_AUTOMATION_WORKFLOW_WORKER_CONCURRENCY:-2}"
     )
+    assert workflow_env["TEMPORAL_WORKER_VERSIONING_ENABLED"] == (
+        "${TEMPORAL_WORKER_VERSIONING_ENABLED:-false}"
+    )
+    assert workflow_env["MOONMIND_DEPLOYMENT_MODE"] == (
+        "${MOONMIND_DEPLOYMENT_MODE:-development}"
+    )
+    assert workflow_env["TEMPORAL_WORKFLOW_READINESS_URL"] == (
+        "${TEMPORAL_WORKFLOW_READINESS_URL:-http://temporal-worker-workflow:8080/readyz}"
+    )
+    healthcheck = " ".join(
+        str(part) for part in workflow_worker["healthcheck"]["test"]
+    )
+    assert "http://localhost:8080/readyz" in healthcheck
 
 
 def test_sandbox_worker_compose_egress_is_restricted_for_mm_785():
@@ -286,6 +484,7 @@ def test_sandbox_worker_compose_egress_is_restricted_for_mm_785():
     networks = compose["networks"]
 
     assert networks["sandbox-egress-network"]["internal"] is True
+    assert networks["omnigent-egress-network"]["internal"] is True
     assert _network_names(services["temporal-worker-sandbox"]) == {
         "sandbox-egress-network"
     }
@@ -304,12 +503,29 @@ def test_sandbox_worker_compose_egress_is_restricted_for_mm_785():
 
     proxy_service = services["sandbox-egress-proxy"]
     assert _network_names(proxy_service) == {
-        "local-network",
+        "control-plane-network",
         "sandbox-egress-network",
+        "restricted-egress-network",
+        "omnigent-egress-network",
     }
-    assert proxy_service["expose"] == ["3128"]
+    assert proxy_service["expose"] == ["3128", "3129"]
+    assert "omnigent-egress-proxy" in _network_aliases(
+        proxy_service,
+        "omnigent-egress-network",
+    )
+    assert proxy_service["labels"][
+        "moonmind.egress.profile-set-digest"
+    ].startswith("sha256:")
+    assert proxy_service["labels"]["moonmind.egress.config-digest"].startswith(
+        "sha256:"
+    )
+    assert "squid -k parse" in proxy_service["healthcheck"]["test"][1]
 
     sandbox_env = _env_map(services["temporal-worker-sandbox"]["environment"])
+    assert sandbox_env["WORKFLOW_WORKSPACE_ROOT"] == "/work/agent_jobs"
+    assert "agent_workspaces:/work/agent_jobs" in services[
+        "temporal-worker-sandbox"
+    ]["volumes"]
     assert sandbox_env["HTTPS_PROXY"] == (
         "${MOONMIND_SANDBOX_HTTPS_PROXY:-http://sandbox-egress-proxy:3128}"
     )
@@ -332,6 +548,44 @@ def test_sandbox_worker_compose_egress_is_restricted_for_mm_785():
         ]
     }
     assert "http_access deny all" in squid_config
+    assert "dns_nameservers 127.0.0.11" in squid_config
+    assert "request_timeout 300 seconds" in squid_config
+    assert "read_timeout 300 seconds" in squid_config
+    assert "http_port omnigent-egress-proxy:3129 name=omnigent_control" in squid_config
+    assert "http_access allow omnigent_listener omnigent_control omnigent_control_port" in squid_config
+    assert "^/mcp/container/tools/call$" in squid_config
+    assert (
+        "http_access allow omnigent_listener moonmind_api moonmind_api_port "
+        "moonmind_container_tool POST"
+    ) in squid_config
+    assert (
+        "acl moonmind_execution_create urlpath_regex ^/api/executions$"
+        in squid_config
+    )
+    assert (
+        "acl moonmind_execution_describe urlpath_regex "
+        "-i ^/api/executions/([a-z0-9._~:-]|%3a)+$"
+    ) in squid_config
+    assert (
+        "acl moonmind_execution_fanout req_header "
+        "X-MoonMind-Execution-Fanout ^v1$"
+    ) in squid_config
+    assert (
+        "acl moonmind_execution_bearer req_header Authorization -i "
+        "^Bearer[[:space:]]+[^[:space:]]+$"
+    ) in squid_config
+    assert (
+        "http_access allow omnigent_listener moonmind_api moonmind_api_port "
+        "moonmind_execution_create moonmind_execution_fanout "
+        "moonmind_execution_bearer POST"
+    ) in squid_config
+    assert (
+        "http_access allow omnigent_listener moonmind_api moonmind_api_port "
+        "moonmind_execution_describe moonmind_execution_fanout "
+        "moonmind_execution_bearer GET"
+    ) in squid_config
+    assert "::/0" in squid_config
+    assert "acl connection_limit maxconn 128" in squid_config
     assert expected_proxy_domains <= set(squid_config.split())
 
 def test_temporal_persistence_and_visibility_environment_defaults():
@@ -391,43 +645,284 @@ def test_omnigent_host_profile_service_is_wired_for_mm_971():
         server_service["depends_on"]["omnigent-db-init"]["condition"]
         == "service_completed_successfully"
     )
-    assert _network_names(server_service) == {"local-network"}
+    assert _network_names(server_service) == {
+        "control-plane-network",
+        "omnigent-egress-network",
+    }
 
     host_service = services["omnigent-host"]
     assert host_service["profiles"] == ["omnigent-host"]
     assert host_service["image"] == (
-        "${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:"
-        "${OMNIGENT_HOST_IMAGE_TAG:-latest}"
+        "${OMNIGENT_HOST_IMAGE_REF:-${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:"
+        "${OMNIGENT_HOST_IMAGE_TAG:-latest}}"
     )
-    assert host_service["command"] == [
-        "omnigent",
-        "host",
-        "--server",
-        "http://omnigent:8000",
-        "--non-interactive",
-    ]
+    assert host_service["entrypoint"] == ["/opt/moonmind/start-host-with-projections.sh"]
     assert host_service["depends_on"]["omnigent"]["condition"] == "service_started"
-    assert _network_names(host_service) == {"local-network"}
+    assert _network_names(host_service) == {"control-plane-network"}
 
     host_env = _env_map(host_service["environment"])
+    assert host_env["OMNIGENT_RUNNER_ENV_PASSTHROUGH"] == (
+        "MOONMIND_ACTIVE_SKILLS_DIR"
+    )
     assert host_env["OPENAI_API_KEY"] == "${OPENAI_API_KEY:-}"
     assert "CODEX_HOME" not in host_env
     assert host_env["ANTHROPIC_API_KEY"] == "${ANTHROPIC_API_KEY:-}"
     assert host_env["GEMINI_API_KEY"] == "${GEMINI_API_KEY:-}"
     assert host_env["GOOGLE_API_KEY"] == "${GOOGLE_API_KEY:-}"
 
-    host_volumes = set(host_service["volumes"])
+    host_volumes = {
+        volume for volume in host_service["volumes"] if isinstance(volume, str)
+    }
     assert "omnigent-host-state:/root/.omnigent" in host_volumes
-    assert "./omnigent_workspaces:/workspaces" in host_volumes
-    assert "codex_auth_volume:/root/.codex" not in host_volumes
-    # Operator-managed sanitized workspace, exposed read-only.
     assert (
-        "${OMNIGENT_MOONMIND_WORKSPACE:-./omnigent_workspaces/MoonMind}:"
-        "/workspaces/MoonMind:ro"
-    ) in host_volumes
+        "${OMNIGENT_RUN_WORKSPACE:-./omnigent_workspaces/run}:/workspaces/run"
+        in host_volumes
+    )
+    assert "codex_auth_volume:/root/.codex" not in host_volumes
+    assert "omnigent-host-artifacts:/artifacts" in host_volumes
+    assert "omnigent-host-cache:/root/.cache" in host_volumes
     assert "omnigent-host-state" in volumes
     assert "codex_auth_volume" in volumes
     assert "omnigent-server-state" not in volumes
+
+
+def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
+    compose = _load_compose()
+    host_service = compose["services"]["omnigent-host-claude"]
+
+    assert host_service["profiles"] == ["omnigent-host-claude"]
+    assert host_service["hostname"] == "omnigent-host-claude"
+    assert host_service["image"] == (
+        "${OMNIGENT_HOST_IMAGE_REF:-${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:"
+        "${OMNIGENT_HOST_IMAGE_TAG:-latest}}"
+    )
+    assert host_service["entrypoint"] == ["/opt/moonmind/start-claude-oauth-host.sh"]
+    assert host_service["user"] == "1000:1000"
+    assert host_service["working_dir"] == "/home/app"
+    assert "env_file" not in host_service
+
+    host_env = _env_map(host_service["environment"])
+    assert host_env == {
+        "HTTP_PROXY": "http://omnigent-egress-proxy:3129",
+        "HTTPS_PROXY": "http://omnigent-egress-proxy:3129",
+        "http_proxy": "http://omnigent-egress-proxy:3129",
+        "https_proxy": "http://omnigent-egress-proxy:3129",
+            "NO_PROXY": "localhost,127.0.0.1",
+            "no_proxy": "localhost,127.0.0.1",
+        "OMNIGENT_RUNNER_ENV_PASSTHROUGH": (
+            "HTTP_PROXY,HTTPS_PROXY,http_proxy,https_proxy,NO_PROXY,no_proxy,"
+            "MOONMIND_ACTIVE_SKILLS_DIR"
+        ),
+        "MOONMIND_ACTIVE_SKILLS_DIR": "/opt/moonmind-skills",
+        "OMNIGENT_SERVER_URL": "http://omnigent:8000",
+        "HOME": "/home/app",
+        "PATH": MOUNTED_TOOL_PATH,
+        "CLAUDE_HOME": "/home/app/.claude",
+        "CLAUDE_VOLUME_PATH": "/home/app/.claude",
+        "CLAUDE_CONFIG_DIR": "/home/app/.claude",
+        "CLAUDE_CREDENTIAL_GENERATION": "${CLAUDE_CREDENTIAL_GENERATION:-1}",
+        "ANTHROPIC_API_KEY": "",
+        "ANTHROPIC_AUTH_TOKEN": "",
+        "CLAUDE_API_KEY": "",
+        "CLAUDE_CODE_OAUTH_TOKEN": "",
+        "OPENAI_API_KEY": "",
+        "GEMINI_API_KEY": "",
+        "GOOGLE_API_KEY": "",
+    }
+
+    host_volumes = {
+        volume for volume in host_service["volumes"] if isinstance(volume, str)
+    }
+    assert "omnigent-host-claude-home:/home/app" in host_volumes
+    assert "omnigent-host-claude-state:/home/app/.omnigent" in host_volumes
+    assert "claude_auth_volume:/home/app/.claude" in host_volumes
+    assert (
+        "${OMNIGENT_RUN_WORKSPACE:-./omnigent_workspaces/run}:/workspaces/run"
+        in host_volumes
+    )
+    assert "omnigent-tools:/opt/moonmind-tools:ro" in host_volumes
+    assert (
+        "${OMNIGENT_ACTIVE_SKILLS_DIR:-./omnigent_workspaces/.moonmind/skills_active}:"
+        "/opt/moonmind-skills:ro"
+    ) in host_volumes
+    assert "omnigent-host-claude-state" in compose["volumes"]
+    assert "omnigent-host-claude-home" in compose["volumes"]
+
+    assert host_service["depends_on"] == {
+        "omnigent": {"condition": "service_started"},
+        "omnigent-host-claude-init": {"condition": "service_completed_successfully"},
+        "omnigent-tools-init": {"condition": "service_completed_successfully"},
+        "sandbox-egress-proxy": {"condition": "service_healthy"},
+    }
+    assert _network_names(host_service) == {"omnigent-egress-network"}
+    init_service = compose["services"]["omnigent-host-claude-init"]
+    assert init_service["network_mode"] == "none"
+    assert init_service["cap_drop"] == ["ALL"]
+    assert init_service["cap_add"] == ["CHOWN", "FOWNER"]
+    assert init_service["security_opt"] == ["no-new-privileges:true"]
+    assert init_service["read_only"] is True
+    assert init_service["tmpfs"] == ["/tmp:rw,noexec,nosuid,size=16m"]
+    assert host_service["labels"] == {
+        "moonmind.egress.profile": "${OMNIGENT_EGRESS_PROFILE_REF:-unattested}",
+        "moonmind.egress.profile_digest": (
+            "${OMNIGENT_EGRESS_PROFILE_DIGEST:-unattested}"
+        ),
+        "moonmind.egress.applied_rule_digest": (
+            "${OMNIGENT_EGRESS_APPLIED_RULE_DIGEST:-unattested}"
+        ),
+    }
+    assert host_service["cap_drop"] == ["ALL"]
+    assert host_service["security_opt"] == ["no-new-privileges:true"]
+    assert host_service["restart"] == "unless-stopped"
+    assert host_service["healthcheck"] == {
+        "test": [
+            "CMD-SHELL",
+            "/opt/moonmind/check-claude-oauth-host.sh && /opt/moonmind/check-runner-projections.sh",
+        ],
+        "interval": "10s",
+        "timeout": "5s",
+        "retries": 12,
+        "start_period": "30s",
+    }
+
+
+def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
+    compose = _load_compose()
+    host_service = compose["services"]["omnigent-host-codex"]
+    expected_image = (
+        "${OMNIGENT_HOST_IMAGE_REF:-${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:"
+        "${OMNIGENT_HOST_IMAGE_TAG:-latest}}"
+    )
+
+    assert host_service["profiles"] == ["omnigent-host-codex"]
+    assert host_service["hostname"] == "omnigent-host-codex"
+    assert host_service["image"] == expected_image
+    assert compose["services"]["omnigent-host-codex-init"]["image"] == expected_image
+    assert host_service["user"] == "1000:1000"
+    assert host_service["working_dir"] == "/home/app"
+    assert "env_file" not in host_service
+    assert _env_map(host_service["environment"]) == {
+        # Restricted-egress enforcement (MoonLadderStudios/MoonMind#3516): the
+        # static Codex host is routed through the trusted proxy on the internal
+        # network. Only same-container loopback bypasses the proxy so Codex's
+        # native TUI can connect to its local app-server WebSocket.
+        "HTTP_PROXY": "http://omnigent-egress-proxy:3129",
+        "HTTPS_PROXY": "http://omnigent-egress-proxy:3129",
+        "http_proxy": "http://omnigent-egress-proxy:3129",
+        "https_proxy": "http://omnigent-egress-proxy:3129",
+            "NO_PROXY": "localhost,127.0.0.1",
+            "no_proxy": "localhost,127.0.0.1",
+        "OMNIGENT_RUNNER_ENV_PASSTHROUGH": (
+            "HTTP_PROXY,HTTPS_PROXY,http_proxy,https_proxy,NO_PROXY,no_proxy,"
+            "MOONMIND_ACTIVE_SKILLS_DIR"
+        ),
+        "MOONMIND_ACTIVE_SKILLS_DIR": "/opt/moonmind-skills",
+        "HOME": "/home/app",
+        "PATH": MOUNTED_TOOL_PATH,
+        "CODEX_HOME": "/home/app/.codex",
+        "CODEX_CONFIG_HOME": "/home/app/.codex",
+        "CODEX_CONFIG_PATH": "/home/app/.codex/config.toml",
+        "CODEX_VOLUME_PATH": "/home/app/.codex",
+        "CODEX_CREDENTIAL_GENERATION": "${CODEX_CREDENTIAL_GENERATION:-1}",
+        "OMNIGENT_SERVER_URL": "http://omnigent:8000",
+        "OMNIGENT_EXECUTION_TIMEOUT_SECONDS": "${OMNIGENT_HOST_TIMEOUT_SECONDS:-5400}",
+        "OMNIGENT_EXECUTION_TIMEOUT_OWNER": "temporal_workflow",
+        "OMNIGENT_CAPTURE_OWNER": "moonmind_bridge",
+        "OMNIGENT_CAPTURE_RETENTION_DAYS": "${OMNIGENT_CAPTURE_RETENTION_DAYS:-30}",
+    }
+    assert host_service["stop_grace_period"] == "${OMNIGENT_HOST_STOP_GRACE_SECONDS:-20}s"
+    entrypoint = host_service["entrypoint"]
+    assert entrypoint[:2] == ["/usr/bin/env", "-u"]
+    assert set(entrypoint[2::2]) == {
+        "OPENAI_API_KEY",
+        "CODEX_ACCESS_TOKEN",
+        "OPENAI_BASE_URL",
+        "MINIMAX_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "CLAUDE_API_KEY",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+    }
+    assert set(entrypoint[1::2]) == {"-u"}
+    assert {
+        volume for volume in host_service["volumes"] if isinstance(volume, str)
+    } == {
+        "omnigent-host-codex-state:/home/app/.omnigent",
+        "codex_auth_volume:/home/app/.codex",
+        "omnigent-tools:/opt/moonmind-tools:ro",
+        "${OMNIGENT_RUN_WORKSPACE:-./omnigent_workspaces/run}:/workspaces/run",
+        "omnigent-host-artifacts:/artifacts",
+        "omnigent-host-cache:/home/app/.cache",
+        "./services/omnigent/scripts:/opt/moonmind:ro",
+        "./services/omnigent/scripts/moonmind-tools.sh:/etc/profile.d/moonmind-tools.sh:ro",
+        "omnigent-tools:/opt/moonmind-tools:ro",
+        (
+            "${OMNIGENT_ACTIVE_SKILLS_DIR:-./omnigent_workspaces/.moonmind/skills_active}:"
+            "/opt/moonmind-skills:ro"
+        ),
+    }
+    assert "omnigent-host-codex-state" in compose["volumes"]
+    assert host_service["depends_on"] == {
+        "omnigent": {"condition": "service_started"},
+        "omnigent-host-codex-init": {
+            "condition": "service_completed_successfully"
+        },
+        "omnigent-tools-init": {"condition": "service_completed_successfully"},
+        "sandbox-egress-proxy": {"condition": "service_healthy"},
+    }
+    init_service = compose["services"]["omnigent-host-codex-init"]
+    assert init_service["user"] == "0:0"
+    assert init_service["network_mode"] == "none"
+    assert init_service["cap_drop"] == ["ALL"]
+    assert init_service["cap_add"] == ["CHOWN", "FOWNER"]
+    assert init_service["security_opt"] == ["no-new-privileges:true"]
+    assert init_service["read_only"] is True
+    assert init_service["tmpfs"] == ["/tmp:rw,noexec,nosuid,size=16m"]
+    assert "omnigent-host-artifacts:/artifacts" in init_service["volumes"]
+    assert "omnigent-host-cache:/home/app/.cache" in init_service["volumes"]
+    assert init_service["depends_on"] == {
+        "codex-auth-init": {"condition": "service_completed_successfully"}
+    }
+    assert init_service["entrypoint"] == [
+        "/opt/moonmind/init-codex-oauth-host.sh"
+    ]
+    # Restricted egress: the host attaches only to the internal enforcing
+    # network (MoonLadderStudios/MoonMind#3516), never the routable
+    # control-plane network.
+    assert _network_names(host_service) == {"omnigent-egress-network"}
+    assert host_service["labels"]["moonmind.egress.profile"] == (
+        "${OMNIGENT_EGRESS_PROFILE_REF:-unattested}"
+    )
+    assert host_service["labels"]["moonmind.egress.profile_digest"] == (
+        "${OMNIGENT_EGRESS_PROFILE_DIGEST:-unattested}"
+    )
+    assert host_service["labels"]["moonmind.egress.applied_rule_digest"] == (
+        "${OMNIGENT_EGRESS_APPLIED_RULE_DIGEST:-unattested}"
+    )
+
+
+def test_canonical_omnigent_codex_host_uses_base_owned_oauth_volume():
+    config = _render_codex_host_compose()
+    host_service = config["services"]["omnigent-host-codex"]
+    mounts = host_service["volumes"]
+    oauth_mount = next(
+        mount for mount in mounts if mount.get("target") == "/home/app/.codex"
+    )
+
+    assert oauth_mount["type"] == "volume"
+    assert oauth_mount["source"] == "codex_auth_volume"
+    assert host_service["working_dir"] == "/home/app"
+    assert config["volumes"]["codex_auth_volume"]["name"] == "codex_auth_volume"
+    assert config["volumes"]["codex_auth_volume"].get("external") is not True
+    assert config["volumes"]["omnigent-host-codex-state"].get("name")
+
+
+def test_oauth_hosts_have_no_platform_specific_compose_overlays():
+    assert not (REPO_ROOT / "docker-compose.claude-host.yaml").exists()
+    assert not (REPO_ROOT / "docker-compose.codex-host.yaml").exists()
+
 
 def test_visibility_schema_rehearsal_service_is_wired():
     compose = _load_compose()
@@ -468,6 +963,112 @@ def test_runtime_image_includes_agent_skill_sources():
     )
 
     assert "COPY .agents /app/.agents/" in dockerfile
+    assert "COPY pr_resolver_core /app/pr_resolver_core/" in dockerfile
+
+
+def test_python_test_runtime_is_provisioned_on_demand_outside_compose_startup():
+    dockerfile = (REPO_ROOT / "api_service" / "Dockerfile").read_text(
+        encoding="utf-8"
+    )
+    cache_script = (
+        REPO_ROOT / "api_service" / "docker" / "cache_temporal_test_server.py"
+    ).read_text(encoding="utf-8")
+    test_conftest = (REPO_ROOT / "tests" / "conftest.py").read_text(
+        encoding="utf-8"
+    )
+    test_stage = dockerfile.index("FROM runtime-dependencies AS test-runtime")
+    production_stage = dockerfile.index("FROM runtime-dependencies AS runtime-base")
+    omnigent_copy = dockerfile.index("COPY omnigent/omnigent /app/omnigent/omnigent/")
+
+    assert test_stage < production_stage < omnigent_copy
+    assert "USER app" in dockerfile[test_stage:production_stage]
+    assert "COPY api_service/docker/cache_temporal_test_server.py" in dockerfile[
+        test_stage:production_stage
+    ]
+    assert "python /tmp/cache_temporal_test_server.py" in dockerfile[
+        test_stage:production_stage
+    ]
+    assert "WorkflowEnvironment.start_time_skipping()" in cache_script
+    assert "test_server_download_version" not in cache_script
+    assert "test_server_download_version" not in test_conftest
+    assert "docker-buildx-plugin" in dockerfile[:test_stage]
+    assert "docker buildx version" in dockerfile[:test_stage]
+
+    compose = _load_compose()
+    services = compose["services"]
+    worker = services["temporal-worker-agent-runtime"]
+    worker_env = _env_map(worker["environment"])
+    api_env = _env_map(services["api"]["environment"])
+
+    assert all("build" not in service for service in services.values())
+    assert "python-test-runtime-ready" not in services
+    assert "python-test-runtime-ready" not in worker["depends_on"]
+    assert worker_env["MOONMIND_CONTAINER_BACKEND_ENABLED"] == (
+        "${MOONMIND_CONTAINER_BACKEND_ENABLED:-true}"
+    )
+    assert worker_env["MOONMIND_AGENT_WORKSPACES_VOLUME_NAME"] == (
+        "${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}"
+    )
+    assert "WORKFLOW_WORKSPACE_DAEMON_ROOT" not in worker_env
+    assert worker_env["MOONMIND_PYTHON_TEST_IMAGE"] == (
+        "${MOONMIND_PYTHON_TEST_IMAGE:-}"
+    )
+    assert worker_env["MOONMIND_PYTHON_TEST_IMAGE_MAX_AGE_SECONDS"] == (
+        "${MOONMIND_PYTHON_TEST_IMAGE_MAX_AGE_SECONDS:-604800}"
+    )
+    assert worker_env["MOONMIND_UNREAL_ENGINE_IMAGE"] == (
+        "${MOONMIND_UNREAL_ENGINE_IMAGE:-ghcr.io/moonladderstudios/tactics-ue-base:5.8}"
+    )
+    assert worker_env["MOONMIND_UNREAL_ENGINE_IMAGE_PULL_POLICY"] == (
+        "${MOONMIND_UNREAL_ENGINE_IMAGE_PULL_POLICY:-if-missing}"
+    )
+    assert worker_env["MOONMIND_UNREAL_CCACHE_VOLUME_NAME"] == (
+        "${MOONMIND_UNREAL_CCACHE_VOLUME_NAME:-unreal_ccache_volume}"
+    )
+    assert worker_env["MOONMIND_UNREAL_UBT_VOLUME_NAME"] == (
+        "${MOONMIND_UNREAL_UBT_VOLUME_NAME:-unreal_ubt_volume}"
+    )
+    assert worker_env["DOCKER_BUILDKIT"] == "1"
+    assert api_env["MOONMIND_CONTAINER_JOBS_ENABLED"] == (
+        "${MOONMIND_CONTAINER_JOBS_ENABLED:-true}"
+    )
+    assert worker_env["MOONMIND_CONTAINER_JOBS_ENABLED"] == (
+        "${MOONMIND_CONTAINER_JOBS_ENABLED:-true}"
+    )
+    assert worker_env["MOONMIND_CONTROL_PLANE_NETWORK"] == (
+        "${MOONMIND_CONTROL_PLANE_NETWORK:-moonmind_control-plane-network}"
+    )
+    assert api_env["MOONMIND_CONTROL_PLANE_NETWORK"] == (
+        "${MOONMIND_CONTROL_PLANE_NETWORK:-moonmind_control-plane-network}"
+    )
+    deployment_env = _env_map(
+        services["temporal-worker-deployment-control"]["environment"]
+    )
+    assert deployment_env["MOONMIND_CONTROL_PLANE_NETWORK"] == (
+        "${MOONMIND_CONTROL_PLANE_NETWORK:-moonmind_control-plane-network}"
+    )
+    assert compose["volumes"]["agent_workspaces"]["name"] == (
+        "${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}"
+    )
+    assert compose["volumes"]["unreal_ccache_volume"]["name"] == (
+        "${MOONMIND_UNREAL_CCACHE_VOLUME_NAME:-unreal_ccache_volume}"
+    )
+    assert compose["volumes"]["unreal_ubt_volume"]["name"] == (
+        "${MOONMIND_UNREAL_UBT_VOLUME_NAME:-unreal_ubt_volume}"
+    )
+    assert services["docker-proxy"]["environment"]["BUILD"] == 1
+    assert services["docker-proxy"]["environment"]["SESSION"] == 1
+
+    test_compose = yaml.safe_load(
+        (REPO_ROOT / "docker-compose.test.yaml").read_text(encoding="utf-8")
+    )
+    pytest_service = test_compose["services"]["pytest"]
+    assert "control-plane-network" in test_compose["networks"]
+    assert "local-network" not in test_compose["networks"]
+    assert pytest_service["image"] == (
+        "${MOONMIND_PYTHON_TEST_IMAGE:-moonmind-python-tests:local}"
+    )
+    assert pytest_service["build"]["target"] == "test-runtime"
 
 
 def test_omnigent_shared_postgres_compose_topology_for_mm_970():
@@ -483,7 +1084,7 @@ def test_omnigent_shared_postgres_compose_topology_for_mm_970():
     init_service = services["omnigent-db-init"]
     assert init_service["restart"] == "no"
     assert init_service["depends_on"]["postgres"]["condition"] == "service_healthy"
-    assert _network_names(init_service) == {"local-network"}
+    assert _network_names(init_service) == {"control-plane-network"}
 
     init_env = _env_map(init_service["environment"])
     assert init_env["OMNIGENT_POSTGRES_USER"] == (
@@ -511,14 +1112,17 @@ def test_omnigent_shared_postgres_compose_topology_for_mm_970():
         == "service_completed_successfully"
     )
     assert omnigent_service["ports"] == ["${OMNIGENT_PORT:-8000}:8000"]
-    assert _network_names(omnigent_service) == {"local-network"}
+    assert _network_names(omnigent_service) == {
+        "control-plane-network",
+        "omnigent-egress-network",
+    }
     assert "omnigent-data:/data" in omnigent_service["volumes"]
     assert "omnigent-data" in compose["volumes"]
 
     omnigent_env = _env_map(omnigent_service["environment"])
     assert omnigent_service["image"] == (
-        "${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}:"
-        "${OMNIGENT_IMAGE_TAG:-latest}"
+        "${OMNIGENT_IMAGE_REF:-${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}:"
+        "${OMNIGENT_IMAGE_TAG:-latest}}"
     )
     assert omnigent_env["DATABASE_URL"] == (
         "postgresql://${OMNIGENT_POSTGRES_USER:-omnigent}:"
@@ -554,6 +1158,9 @@ def test_omnigent_shared_postgres_compose_topology_for_mm_970():
 def test_omnigent_env_template_and_example_config_for_mm_970():
     env_template = (REPO_ROOT / ".env-template").read_text(encoding="utf-8")
     for expected_name in (
+        "OMNIGENT_ENABLED",
+        "OMNIGENT_SERVER_URL",
+        "OMNIGENT_IMAGE_REF",
         "OMNIGENT_IMAGE",
         "OMNIGENT_IMAGE_TAG",
         "OMNIGENT_PORT",
@@ -582,10 +1189,15 @@ def test_omnigent_env_template_and_example_config_for_mm_970():
         "OMNIGENT_OIDC_ALLOW_INVITES",
         "OMNIGENT_DOMAIN",
         "OMNIGENT_CONFIG",
+        "OMNIGENT_HOST_IMAGE_REF",
         "OMNIGENT_HOST_IMAGE",
         "OMNIGENT_HOST_IMAGE_TAG",
+        "COMPOSE_PROFILES",
     ):
         assert f"{expected_name}=" in env_template
+    env_lines = env_template.splitlines()
+    assert not any(line.startswith("COMPOSE_FILE=") for line in env_lines)
+    assert not any(line.startswith("COMPOSE_PATH_SEPARATOR=") for line in env_lines)
     for removed_name in (
         "OMNIGENT_BUILTIN_ADMIN_EMAIL",
         "OMNIGENT_BUILTIN_ADMIN_PASSWORD",

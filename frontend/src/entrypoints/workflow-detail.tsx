@@ -6,6 +6,7 @@ import {
   type CSSProperties,
   type Dispatch,
   type KeyboardEvent,
+  type ReactElement,
   type ReactNode,
   type SetStateAction,
 } from 'react';
@@ -14,10 +15,24 @@ import Anser from 'anser';
 import { Virtuoso } from 'react-virtuoso';
 import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
-import { ExecutionStatusPill, StepExecutionStatusPill, StepLedgerStatusPill } from '../components/ExecutionStatusPill';
+import {
+  ExecutionStatusPill,
+  StepExecutionStatusPill,
+  StepLedgerStatusPill,
+  WorkflowLifecycleStatusPill,
+} from '../components/ExecutionStatusPill';
+import { resolveWorkflowDisplayStatus } from '../status/workflowStatus';
 import { DashboardActionDialog } from '../components/DashboardActionDialog';
 import { EntityDetailFrame } from '../components/EntityDetailFrame';
 import { CollectionWorkspace } from '../components/CollectionWorkspace';
+import { ContextRetrievalControls } from '../components/ContextRetrievalControls';
+import {
+  type ContextRetrievalAuthoring,
+  compileContextRetrievalParameters,
+  defaultContextRetrievalAuthoring,
+  hasAuthoredContextRetrieval,
+  retrievalCeilingsFromRuntimeConfig,
+} from '../lib/contextRetrievalAuthoring';
 import {
   DashboardToastProvider,
   useDashboardToast,
@@ -50,6 +65,7 @@ import {
 } from '../components/workflows/WorkflowWorkspaceSidebar';
 import { workflowWorkspaceRowFromDetail } from '../lib/workflowWorkspaceList';
 import { WorkflowActionsMenu } from '../components/WorkflowActionsMenu';
+import { WorkflowChatNative } from './WorkflowChatNative';
 import {
   buildWorkflowActionMenuItems,
   DEFAULT_REMEDIATION_ACTION_POLICY,
@@ -76,6 +92,7 @@ import {
   workflowDetailSubrouteFromPath,
   workflowDetailSubrouteHref,
 } from '../lib/workflowDetailRoutes';
+import { WorkflowNativeChatRoute } from '../features/workflow-native-chat';
 
 export {
   WORKFLOW_SIDEBAR_ANIMATED_RESTART_MS,
@@ -102,6 +119,7 @@ type DashboardConfig = {
     temporal?: Record<string, string>;
     agentRuns?: Record<string, string>;
   };
+  system?: { retrievalAuthoring?: Record<string, unknown> };
 };
 
 type LiveLogsSessionTimelineRollout = 'off' | 'internal' | 'codex_managed' | 'all_managed';
@@ -700,13 +718,40 @@ const EvidenceRefStatusSchema = z
 const RecoveryEligibilitySchema = z
   .object({
     eligible: z.boolean(),
-    defaultAction: z.enum(['resume_from_checkpoint', 'full_retry', 'environment_fix', 'none']),
+    requestedAction: z.enum(['continue_same_session', 'resume_from_workspace_checkpoint', 'full_retry', 'fix_environment', 'manual_intervention']).optional(),
+    defaultAction: z.enum(['continue_same_session', 'resume_from_workspace_checkpoint', 'full_retry', 'fix_environment', 'manual_intervention', 'resume_from_checkpoint', 'environment_fix', 'none']),
     disabledReasonCode: z.string().nullable().optional(),
+    checkpointBoundary: z.string().nullable().optional(),
     requiredBoundary: z.string().nullable().optional(),
+    resumePhase: z.enum(['rerun_failed_step', 'continue_to_gate', 'continue_after_gate', 'resume_publication', 'retry_restoration']).nullable().optional(),
     checkpointRef: z.string().nullable().optional(),
+    checkpointKind: z.string().nullable().optional(),
+    targetRuntimeId: z.string().nullable().optional(),
+    restoreActivity: z.string().nullable().optional(),
     sourceWorkflowId: z.string().nullable().optional(),
     sourceRunId: z.string().nullable().optional(),
-    operatorGuidance: z.enum(['resume', 'full_retry', 'fix_environment', 'needs_human']),
+    runtimeId: z.string().nullable().optional(),
+    deploymentGeneration: z.string().nullable().optional(),
+    capabilitySetVersion: z.string().nullable().optional(),
+    capabilityDigest: z.string().nullable().optional(),
+    promotionState: z.string().nullable().optional(),
+    liveSessionId: z.string().nullable().optional(),
+    supportsSameSessionContinuation: z.boolean().nullable().optional(),
+    sessionRecoverable: z.boolean().nullable().optional(),
+    workspaceRecoverable: z.boolean().nullable().optional(),
+    branchCreationAvailable: z.boolean().nullable().optional(),
+    liveReattachReason: z.string().nullable().optional(),
+    workspaceRestoreReason: z.string().nullable().optional(),
+    branchCreationReason: z.string().nullable().optional(),
+    requiredProfileRef: z.string().nullable().optional(),
+    requiredPolicyRef: z.string().nullable().optional(),
+    capacityBlocked: z.boolean().nullable().optional(),
+    readinessBlocked: z.boolean().nullable().optional(),
+    checkpointDigests: z.record(z.string(), z.string()).default({}),
+    checkpointValidationStatus: z.string().nullable().optional(),
+    authoritativeWorkspaceCheckpointKind: z.string().nullable().optional(),
+    partialRecoveryReason: z.string().nullable().optional(),
+    operatorGuidance: z.enum(['continue_same_session', 'resume_from_workspace_checkpoint', 'full_retry', 'fix_environment', 'manual_intervention', 'resume', 'needs_human']),
     evidence: z.array(EvidenceRefStatusSchema).default([]),
   })
   .passthrough();
@@ -855,12 +900,49 @@ const ExecutionDetailSchema = z
     resolvedModel: z.string().nullable().optional(),
     modelSource: z.string().nullable().optional(),
     profileId: z.string().nullable().optional(),
+    inputParameters: z.record(z.string(), z.unknown()).default({}),
+    omnigentExecutionPlan: z
+      .object({
+        planRef: z.string(),
+        planDigest: z.string(),
+        planArtifactRef: z.string(),
+      })
+      .passthrough()
+      .nullable()
+      .optional(),
+    omnigentRuntimeBinding: z
+      .object({
+        runtimeBindingRef: z.string(),
+        revision: z.number().nullable().optional(),
+        fencingGeneration: z.number().nullable().optional(),
+        state: z.string().nullable().optional(),
+      })
+      .passthrough()
+      .nullable()
+      .optional(),
+    agentProfile: z.object({
+      profileId: z.string(),
+      version: z.number().int().positive().optional(),
+      providerProfileRef: z.string().optional(),
+    }).nullable().optional(),
     providerId: z.string().nullable().optional(),
     providerLabel: z.string().nullable().optional(),
     effort: z.string().nullable().optional(),
     priority: z.number().nullable().optional(),
     startingBranch: z.string().nullable().optional(),
     targetBranch: z.string().nullable().optional(),
+    outputBranch: z
+      .object({
+        name: z.string(),
+        url: z.string().nullable().optional(),
+        headSha: z.string().nullable().optional(),
+        baseBranch: z.string().nullable().optional(),
+        intent: z.enum(['normal', 'terminal_checkpoint']),
+        status: z.string(),
+        evidenceRef: z.string().nullable().optional(),
+      })
+      .nullable()
+      .optional(),
     repository: z.string().nullable().optional(),
     prUrl: z.string().nullable().optional(),
     resolvedSkillsetRef: z.string().nullable().optional(),
@@ -899,6 +981,7 @@ const ExecutionDetailSchema = z
       .nullable()
       .optional(),
     actions: ExecutionActionsSchema.optional(),
+    finishSummary: z.unknown().nullable().optional(),
     resume: z
       .object({
         available: z.boolean().optional(),
@@ -969,6 +1052,29 @@ const RemediationApprovalStateSchema = z
     decisionAt: z.string().nullable().optional(),
     canDecide: z.boolean().default(false),
     auditRef: z.string().nullable().optional(),
+    approvalRef: z.string().nullable().optional(),
+    requestingActor: z.string().nullable().optional(),
+    requestedAt: z.string().nullable().optional(),
+    expiresAt: z.string().nullable().optional(),
+    rationale: z.string().nullable().optional(),
+    status: z.string().nullable().optional(),
+    decidedAt: z.string().nullable().optional(),
+    consumedAt: z.string().nullable().optional(),
+    consumedByActionId: z.string().nullable().optional(),
+    expectedTargetState: z.string().nullable().optional(),
+    checkpointRef: z.string().nullable().optional(),
+    stepExecutionId: z.string().nullable().optional(),
+    bridgeSessionId: z.string().nullable().optional(),
+    omnigentSessionId: z.string().nullable().optional(),
+    hostRef: z.string().nullable().optional(),
+    hostLeaseRef: z.string().nullable().optional(),
+    providerProfileLeaseRef: z.string().nullable().optional(),
+    credentialGeneration: z.number().int().nullable().optional(),
+    policyRef: z.string().nullable().optional(),
+    policyDigest: z.string().nullable().optional(),
+    policySnapshotRef: z.string().nullable().optional(),
+    securityProfileRef: z.string().nullable().optional(),
+    artifactRefs: z.record(z.string(), z.string()).nullable().optional(),
   })
   .passthrough();
 
@@ -991,6 +1097,45 @@ const RemediationLockOutcomeSchema = z
   })
   .passthrough();
 
+const RemediationActionCapabilitySchema = z
+  .object({
+    actionKind: z.string(),
+    requestable: z.boolean(),
+    dryRunSupported: z.boolean(),
+    executionBackendReady: z.boolean(),
+    approvalBackendReady: z.boolean(),
+    verificationBackendReady: z.boolean(),
+    supportedTargetRuntimes: z.array(z.string()),
+    supportedHostModes: z.array(z.string()),
+    requiredEvidenceClasses: z.array(z.string()),
+    blockedReasons: z.array(z.string()),
+  })
+  .passthrough();
+
+const RemediationLifecycleArtifactSchema = z
+  .object({
+    artifactRef: z.string(),
+    artifactType: z.string(),
+    status: z.string(),
+    label: z.string().nullable().optional(),
+    createdAt: z.string().nullable().optional(),
+    expiresAt: z.string().nullable().optional(),
+    freshness: z.string(),
+    bounded: z.boolean().default(true),
+    metadata: z.record(z.string(), z.unknown()).default({}),
+  })
+  .passthrough();
+
+const RemediationOperatorControlsSchema = z
+  .object({
+    canCancel: z.boolean().default(false),
+    canTakeOver: z.boolean().default(false),
+    canResume: z.boolean().default(false),
+    paused: z.boolean().default(false),
+    disabledReasons: z.record(z.string(), z.string()).default({}),
+  })
+  .passthrough();
+
 const RemediationLinkSchema = z
   .object({
     remediationWorkflowId: z.string(),
@@ -1003,11 +1148,14 @@ const RemediationLinkSchema = z
     activeLockScope: z.string().nullable().optional(),
     activeLockHolder: z.string().nullable().optional(),
     latestActionSummary: z.string().nullable().optional(),
+    deliveryStatus: z.string().nullable().optional(),
+    verificationOutcome: z.string().nullable().optional(),
     resolution: z.string().nullable().optional(),
     contextArtifactRef: z.string().nullable().optional(),
     selectedSteps: z.array(z.string()).nullable().optional(),
     currentTargetState: z.string().nullable().optional(),
     allowedActions: z.array(z.string()).nullable().optional(),
+    actionCapabilities: z.array(RemediationActionCapabilitySchema).optional().default([]),
     evidenceDegraded: z.boolean().nullable().optional(),
     unavailableEvidenceClasses: z.array(z.string()).nullable().optional(),
     liveObservation: RemediationLiveObservationSchema.nullable().optional(),
@@ -1020,8 +1168,66 @@ const RemediationLinkSchema = z
             workflowId: z.string(),
             branchId: z.string(),
             branchTurnId: z.string().nullable().optional(),
+            logicalStepId: z.string().nullable().optional(),
+            branchState: z.string().nullable().optional(),
+            workspacePolicy: z.string().nullable().optional(),
+            runtimeContextPolicy: z.string().nullable().optional(),
+            gitBaseBranch: z.string().nullable().optional(),
+            gitWorkBranch: z.string().nullable().optional(),
+            currentHeadCommit: z.string().nullable().optional(),
+            pullRequestUrl: z.string().nullable().optional(),
+            publishStatus: z.string().nullable().optional(),
+            promotionEvidence: z.record(z.string(), z.unknown()).nullable().optional(),
+            archiveReason: z.string().nullable().optional(),
+            promotedAt: z.string().nullable().optional(),
+            archivedAt: z.string().nullable().optional(),
+            turnState: z.string().nullable().optional(),
+            runtimeAgentRunId: z.string().nullable().optional(),
+            providerSessionId: z.string().nullable().optional(),
+            instructionRef: z.string().nullable().optional(),
+            turnStartedAt: z.string().nullable().optional(),
+            turnCompletedAt: z.string().nullable().optional(),
+            outputArtifacts: z.record(z.string(), z.string()).nullable().optional(),
+            comparisonArtifacts: z.record(z.string(), z.string()).nullable().optional(),
+            turns: z.array(z.object({
+              branchTurnId: z.string(),
+              parentTurnId: z.string().nullable().optional(),
+              status: z.string(),
+              createdStepExecutionId: z.string().nullable().optional(),
+              runtimeAgentRunId: z.string().nullable().optional(),
+              providerSessionId: z.string().nullable().optional(),
+              instructionRef: z.string(),
+              instructionDigest: z.string(),
+              sourceCheckpointRef: z.string(),
+              contextBundleRef: z.string().nullable().optional(),
+              stepExecutionManifestRef: z.string().nullable().optional(),
+              gitWorkBranch: z.string().nullable().optional(),
+              startedAt: z.string().nullable().optional(),
+              completedAt: z.string().nullable().optional(),
+              createdAt: z.string(),
+              updatedAt: z.string(),
+              outputArtifacts: z.record(z.string(), z.string()).default({}),
+              comparisonArtifacts: z.record(z.string(), z.string()).default({}),
+            }).passthrough()).default([]),
             checkpointRef: z.string().nullable().optional(),
             contextArtifactRef: z.string().nullable().optional(),
+            loopId: z.string().nullable().optional(),
+            rootCheckpointRef: z.string().nullable().optional(),
+            rootWorkspaceDigest: z.string().nullable().optional(),
+            headCheckpointRef: z.string().nullable().optional(),
+            headWorkspaceDigest: z.string().nullable().optional(),
+            headStepExecutionId: z.string().nullable().optional(),
+            headAttemptOrdinal: z.number().int().nullable().optional(),
+            headVersion: z.number().int().nullable().optional(),
+            headStatus: z.string().nullable().optional(),
+            latestVerificationRef: z.string().nullable().optional(),
+            latestVerificationVerdict: z.string().nullable().optional(),
+            remainingWorkRef: z.string().nullable().optional(),
+            nextActionBaseline: z.object({
+              checkpointRef: z.string(),
+              workspaceDigest: z.string(),
+              headVersion: z.number().int(),
+            }).nullable().optional(),
             operation: z.string().nullable().optional(),
             idempotencyKey: z.string().nullable().optional(),
             createdAt: z.string().nullable().optional(),
@@ -1029,6 +1235,17 @@ const RemediationLinkSchema = z
           .passthrough(),
       )
       .default([]),
+    authoredContract: z.record(z.string(), z.unknown()).nullable().optional(),
+    selectedStepEvidence: z.array(z.record(z.string(), z.unknown())).nullable().optional(),
+    contextGeneratedAt: z.string().nullable().optional(),
+    contextEvidenceAvailability: z.array(z.record(z.string(), z.unknown())).nullable().optional(),
+    contextBoundedness: z.record(z.string(), z.unknown()).nullable().optional(),
+    diagnosisHints: z.array(z.string()).nullable().optional(),
+    lifecycleArtifacts: z.array(RemediationLifecycleArtifactSchema).nullable().optional(),
+    latestActionRequest: z.record(z.string(), z.unknown()).nullable().optional(),
+    latestActionResult: z.record(z.string(), z.unknown()).nullable().optional(),
+    lifecycleSummary: z.record(z.string(), z.unknown()).nullable().optional(),
+    operatorControls: RemediationOperatorControlsSchema.nullable().optional(),
     createdAt: z.string().nullable().optional(),
     updatedAt: z.string().nullable().optional(),
   })
@@ -1196,7 +1413,12 @@ const ArtifactSessionProjectionSchema = z.object({
 });
 
 const ArtifactSessionControlResponseSchema = z.object({
-  action: z.enum(['send_follow_up', 'clear_session', 'interrupt_turn', 'cancel_session']),
+  action: z.enum(['continue_same_session', 'clear_session', 'interrupt_turn', 'cancel_session']),
+  controlRequestId: z.string().default('legacy-control-request'),
+  status: z.enum(['accepted', 'rejected', 'completed', 'failed', 'delivery_unknown']).default('completed'),
+  stableReasonCode: z.string().nullable().optional(),
+  controlEventRef: z.string().nullable().optional(),
+  completedAt: z.string().nullable().optional(),
   projection: ArtifactSessionProjectionSchema,
 });
 
@@ -1219,6 +1441,14 @@ const SessionResourceSchema = z
     contentUrl: z.string().optional(),
     download_url: z.string().optional(),
     downloadUrl: z.string().optional(),
+    preview_available: z.boolean().optional(),
+    previewAvailable: z.boolean().optional(),
+    download_available: z.boolean().optional(),
+    downloadAvailable: z.boolean().optional(),
+    completeness_status: z.enum(['complete', 'degraded', 'pending']).optional(),
+    completenessStatus: z.enum(['complete', 'degraded', 'pending']).optional(),
+    unavailable_reason: z.string().nullable().optional(),
+    unavailableReason: z.string().nullable().optional(),
     metadata: z.record(z.string(), z.unknown()).default({}),
   })
   .passthrough()
@@ -1232,6 +1462,10 @@ const SessionResourceSchema = z
     sizeBytes: resource.sizeBytes ?? resource.size_bytes ?? null,
     contentUrl: resource.contentUrl ?? resource.content_url ?? null,
     downloadUrl: resource.downloadUrl ?? resource.download_url ?? null,
+    previewAvailable: resource.previewAvailable ?? resource.preview_available ?? false,
+    downloadAvailable: resource.downloadAvailable ?? resource.download_available ?? true,
+    completenessStatus: resource.completenessStatus ?? resource.completeness_status ?? 'complete',
+    unavailableReason: resource.unavailableReason ?? resource.unavailable_reason ?? null,
     metadata: resource.metadata ?? {},
   }));
 
@@ -1245,7 +1479,12 @@ const SessionResourceListSchema = z.object({
 type ArtifactSessionControlAction = z.infer<typeof ArtifactSessionControlResponseSchema>['action'];
 
 type ArtifactSessionControlRequest = {
+  schemaVersion: 1;
+  controlRequestId: string;
+  idempotencyKey: string;
   action: ArtifactSessionControlAction;
+  expectedSessionEpoch: number;
+  expectedTurnId?: string;
   message?: string;
   reason?: string;
 };
@@ -1259,7 +1498,7 @@ type ChatSessionMessageEvent = {
 };
 
 type OptimisticChatSessionMessage = ChatSessionMessageEvent & {
-  status: 'pending' | 'failed';
+  status: 'pending' | 'delivery_unknown' | 'failed';
   error?: string;
 };
 
@@ -1269,12 +1508,18 @@ const InterventionCapabilitiesSchema = z
     clearSession: z.boolean().default(false),
     interruptTurn: z.boolean().default(false),
     cancelSession: z.boolean().default(false),
+    resolveElicitation: z.boolean().default(false),
+    harvestResources: z.boolean().default(false),
+    terminalCleanup: z.boolean().default(false),
   })
   .default({
     sendFollowUp: false,
     clearSession: false,
     interruptTurn: false,
     cancelSession: false,
+    resolveElicitation: false,
+    harvestResources: false,
+    terminalCleanup: false,
   });
 
 const SessionSnapshotSchema = z
@@ -1346,11 +1591,67 @@ const ObservabilityEventSchema = RawObservabilityEventSchema.transform((event) =
   normalizeObservabilityEvent(event),
 );
 
-const ObservabilityEventsResponseSchema = z.object({
+const LegacyObservabilityEventsResponseSchema = z.object({
+  schemaVersion: z.never().optional(),
   events: z.array(ObservabilityEventSchema).default([]),
   truncated: z.boolean().default(false),
   sessionSnapshot: SessionSnapshotSchema.nullable().optional(),
 });
+
+const BridgeSessionEventsPageSchema = z
+  .object({
+    schemaVersion: z.literal('moonmind.bridge-session-events-page.v1'),
+    bridgeSessionId: z.string(),
+    items: z.array(ObservabilityEventSchema).default([]),
+    after: z.number().int().nonnegative(),
+    nextCursor: z.string().nullable(),
+    hasMore: z.boolean(),
+    terminal: z.boolean(),
+    latestSequence: z.number().int().nonnegative(),
+    retentionGap: z
+      .object({ requestedAfter: z.number().int(), earliestAvailable: z.number().int() })
+      .nullable()
+      .optional(),
+    terminalEnvelope: z
+      .object({
+        schemaVersion: z.literal('moonmind.bridge-session-terminal.v1'),
+        status: z.enum(['completed', 'failed', 'canceled', 'timed_out']),
+        failureClass: z.string().nullable().optional(),
+        failureCode: z.string().nullable().optional(),
+        summary: z.string().nullable().optional(),
+        diagnosticsRef: z.string().nullable().optional(),
+        captureManifestRef: z.string().nullable().optional(),
+        initialSnapshotRef: z.string().nullable().optional(),
+        finalSnapshotRef: z.string().nullable().optional(),
+        rawEventsRef: z.string().nullable().optional(),
+        normalizedEventsRef: z.string().nullable().optional(),
+        externalStateRef: z.string().nullable().optional(),
+        cleanupState: z.string().nullable().optional(),
+        leaseReleaseState: z.string().nullable().optional(),
+        evidenceIncompleteReason: z.string().nullable().optional(),
+      })
+      .passthrough()
+      .nullable()
+      .optional(),
+  })
+  .transform((page) => ({
+    events: page.items,
+    truncated: page.retentionGap != null,
+    sessionSnapshot: undefined,
+    nextCursor: page.nextCursor,
+    hasMore: page.hasMore,
+    terminal: page.terminal,
+    terminalEnvelope: page.terminalEnvelope ?? null,
+  }));
+
+const ObservabilityEventsResponseSchema = z.union([
+  BridgeSessionEventsPageSchema,
+  LegacyObservabilityEventsResponseSchema,
+]);
+
+export function parseObservabilityEventsResponse(value: unknown) {
+  return ObservabilityEventsResponseSchema.parse(value);
+}
 
 const ArtifactListSchema = z.object({
   artifacts: z
@@ -1586,12 +1887,94 @@ const RunSummaryArtifactSchema = z
       })
       .passthrough()
       .optional(),
+    failure: z
+      .object({
+        failureCode: z.string().nullable().optional(),
+        queuedChildCount: z.number().int().nonnegative().optional(),
+        queuedChildren: z
+          .array(
+            z.object({
+              workflowId: z.string().nullable().optional(),
+              executionId: z.string().nullable().optional(),
+              ref: z.string().nullable().optional(),
+            }).passthrough(),
+          )
+          .optional(),
+      })
+      .passthrough()
+      .optional(),
     publishContext: z
       .object({
         branch: z.string().nullable().optional(),
         baseRef: z.string().nullable().optional(),
         commitCount: z.union([z.number(), z.string()]).nullable().optional(),
         pullRequestUrl: z.string().nullable().optional(),
+        remediationLoop: z
+          .object({
+            loopId: z.string(),
+            status: z.string(),
+            attemptOrdinal: z.number().int().nonnegative(),
+            hardMaxAttempts: z.number().int().positive(),
+            workspaceHeadRef: z.string().nullable().optional(),
+            latestVerdict: z.string().nullable().optional(),
+            continuationReason: z.string().nullable().optional(),
+            continueAsNewCount: z.number().int().nonnegative().optional(),
+            sourceRunId: z.string().nullable().optional(),
+            consumedBudgets: z.record(z.string(), z.unknown()).optional(),
+            materializedAttempts: z.array(z.object({
+              attempt: z.number().int().positive(),
+              remediationStepExecutionId: z.string().nullable().optional(),
+              remediationStatus: z.string().nullable().optional(),
+              verificationStepExecutionId: z.string().nullable().optional(),
+              verificationStatus: z.string().nullable().optional(),
+            }).passthrough()).optional(),
+          })
+          .passthrough()
+          .optional(),
+        boundedStoryLoop: z.object({
+          continuationDecision: z.object({
+            reason: z.string().optional(),
+            continueLoop: z.boolean().optional(),
+            progressVectorDigest: z.string().optional(),
+            gate: z.object({
+              progressVector: z.object({
+                classification: z.string(),
+                unresolvedGapScore: z.number().int().nonnegative(),
+                priorUnresolvedGapScore: z.number().int().nonnegative().nullable().optional(),
+                requiredChecks: z.record(z.string(), z.number().int().nonnegative()),
+                priorRequiredChecks: z.record(z.string(), z.number().int().nonnegative()).nullable().optional(),
+                regressions: z.array(z.string()).optional(),
+                repeatedFailureSignatures: z.array(z.string()).optional(),
+                newAuthoritativeEvidenceDigest: z.string().nullable().optional(),
+                relevantDiffDigest: z.string().nullable().optional(),
+                gaps: z.array(z.object({ status: z.string() }).passthrough()).optional(),
+              }).passthrough().optional(),
+            }).passthrough().optional(),
+            budget: z.object({
+              maxAttempts: z.number().int().positive().optional(),
+              maxElapsedSeconds: z.number().int().positive().nullable().optional(),
+              providerBudget: z.number().int().nonnegative().nullable().optional(),
+              tokenBudget: z.number().int().nonnegative().nullable().optional(),
+              costBudget: z.number().int().nonnegative().nullable().optional(),
+              consumed: z.record(z.string(), z.number().int().nonnegative()),
+            }).passthrough().optional(),
+          }).passthrough().optional(),
+        }).passthrough().optional(),
+      })
+      .passthrough()
+      .optional(),
+    controlStop: z
+      .object({
+        kind: z.string(),
+        controlStopId: z.string().nullable().optional(),
+        verdict: z.string().nullable().optional(),
+        reasonCode: z.string().nullable().optional(),
+        remainingWorkRef: z.string().nullable().optional(),
+        workspaceHeadRef: z.string().nullable().optional(),
+        publicationFeasible: z.boolean().optional(),
+        publicationFeasibilityReason: z.string().nullable().optional(),
+        publicationAttempted: z.boolean().optional(),
+        auxiliaryOutcomes: z.record(z.string(), z.unknown()).optional(),
       })
       .passthrough()
       .optional(),
@@ -2314,8 +2697,12 @@ function chatSessionMessageEventToControlRequest(
   event: ChatSessionMessageEvent,
 ): ArtifactSessionControlRequest {
   return {
-    action: 'send_follow_up',
+    schemaVersion: 1,
+    controlRequestId: event.clientEventKey,
+    idempotencyKey: event.clientEventKey,
+    action: 'continue_same_session',
     message: event.message,
+    expectedSessionEpoch: event.sessionEpoch,
   };
 }
 
@@ -2366,15 +2753,323 @@ async function fetchObservabilityEvents(
 type BridgeSessionProjection = {
   bridgeSessionId: string;
   workflowId?: string | undefined;
+  runId?: string | undefined;
+  stepExecutionId?: string | undefined;
   agentRunId?: string | undefined;
   idempotencyKey?: string | undefined;
   status?: string | undefined;
+  compatibilityProfile?: string | undefined;
+  providerProfileId?: string | undefined;
+  providerLeaseRef?: string | undefined;
+  credentialGeneration?: number | undefined;
+  hostBindingRef?: string | undefined;
+  hostLeaseRef?: string | undefined;
+  hostMode?: string | undefined;
+  executionProfileRef?: string | undefined;
+  launchPolicyRef?: string | undefined;
+  effectiveLaunchSnapshotRef?: string | undefined;
+  providerSessionRef?: string | undefined;
+  omnigentHostRef?: string | undefined;
+  omnigentRunnerRef?: string | undefined;
+  firstMessageState?: string | undefined;
+  compatibilityDiagnostics?: Record<string, unknown> | undefined;
+  initialRetrieval?: Record<string, unknown> | undefined;
+  capabilities: Record<string, boolean>;
 };
 
-function bridgeSessionRoute(apiBase: string, bridgeSessionId: string, suffix: 'events' | 'stream'): string {
+function bridgeSessionRoute(apiBase: string, bridgeSessionId: string, suffix: 'events' | 'stream' | 'resources'): string {
   return joinApiBasePath(
     apiBase,
     `/omnigent/bridge-sessions/${encodeURIComponent(bridgeSessionId)}/${suffix}`,
+  );
+}
+
+type BridgeResourceProjection = {
+  completeness: string;
+  groups: Array<{ groupKey: string; title: string; resources: Array<{
+    label: string;
+    artifactRef?: string;
+    relatedArtifactRefs?: string[];
+    path?: string;
+    status: string;
+    unavailableReason?: string;
+    sourceEventSequence?: number;
+    previewAvailable?: boolean;
+    downloadAvailable?: boolean;
+  }> }>;
+};
+
+type BridgeResource = BridgeResourceProjection['groups'][number]['resources'][number];
+
+function chatBlockEventSequences(block: ProjectedChatBlock): Set<number> {
+  const sequences = new Set<number>();
+  for (const eventId of block.sourceEventIds) {
+    const match = eventId.match(/^(\d+)-|(?::seq:|:)(\d+)(?::|$)/);
+    const sequence = match?.[1] ?? match?.[2];
+    if (sequence) sequences.add(Number(sequence));
+  }
+  return sequences;
+}
+
+function ContextualBridgeResourceLinks({
+  apiBase,
+  block,
+  resources,
+}: {
+  apiBase: string;
+  block: ProjectedChatBlock;
+  resources: BridgeResource[];
+}) {
+  const sequences = chatBlockEventSequences(block);
+  const contextual = resources.filter((resource) =>
+    resource.sourceEventSequence != null && sequences.has(resource.sourceEventSequence));
+  if (contextual.length === 0) return null;
+  return <div className="timeline-artifact-links" aria-label="Resources announced by this event">
+    {contextual.map((resource, index) => {
+      const href = resource.artifactRef ? artifactRefHref(apiBase, resource.artifactRef) : null;
+      return <span key={`${resource.label}-${index}`}>
+        {href && resource.previewAvailable
+          ? <a href={href} target="_blank" rel="noreferrer" aria-label={`Open ${resource.label}`}>Open {resource.label}</a>
+          : <span>{resource.label}: {resource.status === 'pending' ? 'Harvesting…' : resource.unavailableReason || resource.status}</span>}
+      </span>;
+    })}
+  </div>;
+}
+
+type BridgeTerminalEnvelope = {
+  status: 'completed' | 'failed' | 'canceled' | 'timed_out';
+  failureClass?: string | null | undefined;
+  failureCode?: string | null | undefined;
+  summary?: string | null | undefined;
+  diagnosticsRef?: string | null | undefined;
+  captureManifestRef?: string | null | undefined;
+  initialSnapshotRef?: string | null | undefined;
+  finalSnapshotRef?: string | null | undefined;
+  rawEventsRef?: string | null | undefined;
+  normalizedEventsRef?: string | null | undefined;
+  externalStateRef?: string | null | undefined;
+  cleanupState?: string | null | undefined;
+  leaseReleaseState?: string | null | undefined;
+  evidenceIncompleteReason?: string | null | undefined;
+};
+
+function BridgeTerminalEvidence({ apiBase, envelope }: { apiBase: string; envelope: BridgeTerminalEnvelope }) {
+  const evidence = [
+    ['Final snapshot', envelope.finalSnapshotRef],
+    ['Capture manifest', envelope.captureManifestRef],
+    ['Diagnostics', envelope.diagnosticsRef],
+    ['Raw event journal', envelope.rawEventsRef],
+    ['Normalized event journal', envelope.normalizedEventsRef],
+    ['External-state evidence', envelope.externalStateRef],
+  ] as const;
+  const links = evidence.flatMap(([label, ref]) => {
+    const href = ref ? artifactRefHref(apiBase, ref) : null;
+    return href ? [{ label, href }] : [];
+  });
+  return <section className={`notice ${envelope.status === 'completed' ? '' : 'warning'}`} aria-label="Terminal outcome evidence">
+    <strong>Terminal outcome: {formatStatusLabel(envelope.status)}</strong>
+    {envelope.summary ? <p>{envelope.summary}</p> : null}
+    {links.length > 0 ? <div className="button-group">
+      {links.map(({ label, href }) => <a key={label} className="button secondary small" href={href} target="_blank" rel="noreferrer" aria-label={`Open terminal ${label.toLowerCase()}`}>{label}</a>)}
+    </div> : null}
+    {envelope.evidenceIncompleteReason ? <p className="small">Evidence incomplete: {envelope.evidenceIncompleteReason}</p> : null}
+    {envelope.cleanupState || envelope.leaseReleaseState ? <p className="small">{[
+      envelope.cleanupState ? `Cleanup: ${formatStatusLabel(envelope.cleanupState)}` : null,
+      envelope.leaseReleaseState ? `Lease release: ${formatStatusLabel(envelope.leaseReleaseState)}` : null,
+    ].filter(Boolean).join(' — ')}</p> : null}
+    {envelope.failureClass || envelope.failureCode ? <p className="small">Failure: {[envelope.failureClass, envelope.failureCode].filter(Boolean).join(' — ')}</p> : null}
+  </section>;
+}
+
+async function fetchBridgeSessionResources(apiBase: string, bridgeSessionId: string): Promise<BridgeResourceProjection> {
+  const resp = await fetch(bridgeSessionRoute(apiBase, bridgeSessionId, 'resources'), { credentials: 'include' });
+  if (!resp.ok) throw buildObservabilityRequestError(resp.status);
+  const body = (await resp.json()) as Partial<BridgeResourceProjection>;
+  return {
+    completeness: body.completeness || 'pending',
+    groups: Array.isArray(body.groups) ? body.groups : [],
+  };
+}
+
+// Follow-up (in-session) retrieval operator diagnostics (MoonMind#3514).
+type FollowUpRetrievalRequest = {
+  evidenceRef?: string;
+  state?: string;
+  classification?: string | null;
+  resultCount?: number;
+  contextBytes?: number;
+  latencyMs?: number | null;
+  truncated?: boolean;
+  contextPackRef?: string | null;
+  delivery?: { state?: string } | null;
+};
+type FollowUpRetrievalCapability = {
+  capabilityId: string;
+  state: string;
+  expiresAt?: number;
+  revokedAt?: number | null;
+  queryCount?: number;
+  maxQueries?: number;
+  activeRequests?: number;
+  maxConcurrency?: number;
+  collections?: string[];
+  policyVersion?: string;
+  overlayPolicy?: string;
+  fallbackAllowed?: boolean;
+  scope?: Record<string, unknown>;
+  requests?: FollowUpRetrievalRequest[];
+};
+export type FollowUpRetrievalDiagnostics = {
+  bridgeSessionId: string;
+  capabilityCount: number;
+  capabilities: FollowUpRetrievalCapability[];
+  aggregate: Record<string, number>;
+};
+
+async function fetchFollowUpRetrievalDiagnostics(
+  apiBase: string,
+  bridgeSessionId: string,
+): Promise<FollowUpRetrievalDiagnostics | null> {
+  const resp = await fetch(
+    joinApiBasePath(
+      apiBase,
+      `/retrieval/bridge-sessions/${encodeURIComponent(bridgeSessionId)}/follow-up-retrieval`,
+    ),
+    { credentials: 'include' },
+  );
+  if (!resp.ok) {
+    if (resp.status === 404) return null;
+    throw buildObservabilityRequestError(resp.status);
+  }
+  const body = (await resp.json()) as Partial<FollowUpRetrievalDiagnostics>;
+  return {
+    bridgeSessionId,
+    capabilityCount: typeof body.capabilityCount === 'number' ? body.capabilityCount : 0,
+    capabilities: Array.isArray(body.capabilities) ? body.capabilities : [],
+    aggregate:
+      body.aggregate && typeof body.aggregate === 'object'
+        ? (body.aggregate as Record<string, number>)
+        : {},
+  };
+}
+
+function formatCapabilityExpiry(capability: FollowUpRetrievalCapability): string {
+  if (capability.state === 'revoked') {
+    return capability.revokedAt
+      ? `revoked ${new Date(capability.revokedAt * 1000).toLocaleString()}`
+      : 'revoked';
+  }
+  if (capability.state === 'expired') {
+    return 'expired';
+  }
+  return capability.expiresAt
+    ? `active until ${new Date(capability.expiresAt * 1000).toLocaleString()}`
+    : 'active';
+}
+
+export function FollowUpRetrievalDiagnosticsSection({
+  diagnostics,
+  isLoading,
+  error,
+}: {
+  diagnostics: FollowUpRetrievalDiagnostics | null;
+  isLoading: boolean;
+  error: unknown;
+}): ReactElement | null {
+  if (error) {
+    return (
+      <div className="small stack" data-testid="omnigent-follow-up-retrieval">
+        <p>Follow-up retrieval diagnostics are unavailable.</p>
+      </div>
+    );
+  }
+  if (isLoading && !diagnostics) {
+    return null;
+  }
+  if (!diagnostics || diagnostics.capabilityCount === 0) {
+    return (
+      <div className="small stack" data-testid="omnigent-follow-up-retrieval">
+        <p>Follow-up retrieval: no in-session retrieval capability issued.</p>
+      </div>
+    );
+  }
+  const aggregate = diagnostics.aggregate ?? {};
+  const metric = (key: string): number => Number(aggregate[key] ?? 0);
+  return (
+    <div
+      className="small stack context-retrieval-diagnostics"
+      data-testid="omnigent-follow-up-retrieval"
+    >
+      <p>
+        Follow-up retrieval: {metric('requestCount')} request
+        {metric('requestCount') === 1 ? '' : 's'} across {diagnostics.capabilityCount}{' '}
+        capabilit{diagnostics.capabilityCount === 1 ? 'y' : 'ies'}
+        {' · '}
+        {metric('succeeded')} ok · {metric('empty')} empty · {metric('denied')} denied ·{' '}
+        {metric('failed')} failed
+      </p>
+      <p>
+        Fallback {metric('fallback')} · truncated {metric('truncated')} · budget-exhausted{' '}
+        {metric('budgetExhausted')} · timed-out {metric('timedOut')} · max latency{' '}
+        {metric('maxLatencyMs')}ms · context {metric('totalContextBytes')} bytes
+      </p>
+      <p>
+        Delivery — delivered {metric('delivered')} · not delivered {metric('notDelivered')} ·
+        unknown {metric('deliveryUnknown')} · cancelled {metric('cancelled')}
+      </p>
+      <p>
+        Capabilities — active {metric('activeCapabilities')} · expired{' '}
+        {metric('expiredCapabilities')} · revoked {metric('revokedCapabilities')}
+      </p>
+      {diagnostics.capabilities.map((capability) => (
+        <div key={capability.capabilityId} className="context-retrieval-capability stack">
+          <p>
+            <code className="text-xs">{capability.capabilityId}</code> · {formatCapabilityExpiry(capability)}
+            {' · '}
+            {Number(capability.queryCount ?? 0)}/{Number(capability.maxQueries ?? 0)} queries
+          </p>
+          {capability.scope ? (
+            <p>
+              Scope:{' '}
+              {Object.entries(capability.scope)
+                .filter(([, value]) => String(value ?? '').trim())
+                .map(([key, value]) => `${key}=${String(value)}`)
+                .join(', ')}
+            </p>
+          ) : null}
+          {Array.isArray(capability.collections) && capability.collections.length ? (
+            <p>
+              Collections: {capability.collections.join(', ')}
+              {capability.overlayPolicy ? ` · overlay ${capability.overlayPolicy}` : ''}
+              {capability.fallbackAllowed ? ' · fallback allowed' : ''}
+            </p>
+          ) : null}
+          {Array.isArray(capability.requests) && capability.requests.length ? (
+            <ul className="stack">
+              {capability.requests.map((request, index) => (
+                <li key={request.evidenceRef ?? `${capability.capabilityId}-${index}`}>
+                  {String(request.state ?? 'unknown')}
+                  {request.classification ? ` (${request.classification})` : ''}
+                  {' · '}
+                  {Number(request.resultCount ?? 0)} results
+                  {request.truncated ? ' · truncated' : ''}
+                  {typeof request.latencyMs === 'number' ? ` · ${request.latencyMs}ms` : ''}
+                  {request.delivery?.state ? ` · delivery ${request.delivery.state}` : ''}
+                  {request.contextPackRef ? (
+                    <>
+                      {' · '}
+                      <code className="text-xs break-all">{request.contextPackRef}</code>
+                    </>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p>No follow-up retrieval requests recorded yet.</p>
+          )}
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -2409,9 +3104,34 @@ async function resolveBridgeSessionProjection({
   return {
     bridgeSessionId,
     workflowId: typeof body.workflowId === 'string' ? body.workflowId : undefined,
+    runId: typeof body.runId === 'string' ? body.runId : undefined,
+    stepExecutionId: typeof body.stepExecutionId === 'string' ? body.stepExecutionId : undefined,
     agentRunId: typeof body.agentRunId === 'string' ? body.agentRunId : undefined,
     idempotencyKey: typeof body.idempotencyKey === 'string' ? body.idempotencyKey : undefined,
     status: typeof body.status === 'string' ? body.status : undefined,
+    compatibilityProfile: typeof body.compatibilityProfile === 'string' ? body.compatibilityProfile : undefined,
+    providerProfileId: typeof body.providerProfileId === 'string' ? body.providerProfileId : undefined,
+    providerLeaseRef: typeof body.providerLeaseRef === 'string' ? body.providerLeaseRef : undefined,
+    credentialGeneration: typeof body.credentialGeneration === 'number' ? body.credentialGeneration : undefined,
+    hostBindingRef: typeof body.hostBindingRef === 'string' ? body.hostBindingRef : undefined,
+    hostLeaseRef: typeof body.hostLeaseRef === 'string' ? body.hostLeaseRef : undefined,
+    hostMode: typeof body.hostMode === 'string' ? body.hostMode : undefined,
+    executionProfileRef: typeof body.executionProfileRef === 'string' ? body.executionProfileRef : undefined,
+    launchPolicyRef: typeof body.launchPolicyRef === 'string' ? body.launchPolicyRef : undefined,
+    effectiveLaunchSnapshotRef: typeof body.effectiveLaunchSnapshotRef === 'string' ? body.effectiveLaunchSnapshotRef : undefined,
+    providerSessionRef: typeof body.providerSessionRef === 'string' ? body.providerSessionRef : undefined,
+    omnigentHostRef: typeof body.omnigentHostRef === 'string' ? body.omnigentHostRef : undefined,
+    omnigentRunnerRef: typeof body.omnigentRunnerRef === 'string' ? body.omnigentRunnerRef : undefined,
+    firstMessageState: typeof body.firstMessageState === 'string' ? body.firstMessageState : undefined,
+    compatibilityDiagnostics: body.compatibilityDiagnostics && typeof body.compatibilityDiagnostics === 'object'
+      ? body.compatibilityDiagnostics as Record<string, unknown>
+      : undefined,
+    initialRetrieval: body.initialRetrieval && typeof body.initialRetrieval === 'object'
+      ? body.initialRetrieval as Record<string, unknown>
+      : undefined,
+    capabilities: body.capabilities && typeof body.capabilities === 'object'
+      ? Object.fromEntries(Object.entries(body.capabilities).filter((entry): entry is [string, boolean] => typeof entry[1] === 'boolean'))
+      : {},
   };
 }
 
@@ -2419,14 +3139,30 @@ async function fetchBridgeSessionEvents(
   apiBase: string,
   bridgeSessionId: string,
 ): Promise<z.infer<typeof ObservabilityEventsResponseSchema> | null> {
-  const resp = await fetch(bridgeSessionRoute(apiBase, bridgeSessionId, 'events'), {
-    credentials: 'include',
-  });
-  if (!resp.ok) {
-    if (resp.status === 404) return null;
-    throw buildObservabilityRequestError(resp.status);
-  }
-  return ObservabilityEventsResponseSchema.parse(await resp.json());
+  const events: z.infer<typeof ObservabilityEventSchema>[] = [];
+  let cursor: string | null = null;
+  let truncated = false;
+  let terminalEnvelope: z.infer<typeof BridgeSessionEventsPageSchema>['terminalEnvelope'] = null;
+  let terminal = false;
+  do {
+    const route = bridgeSessionRoute(apiBase, bridgeSessionId, 'events');
+    const url = cursor ? `${route}?cursor=${encodeURIComponent(cursor)}` : route;
+    const resp = await fetch(url, { credentials: 'include' });
+    if (!resp.ok) {
+      if (resp.status === 404) return null;
+      throw buildObservabilityRequestError(resp.status);
+    }
+    const page = BridgeSessionEventsPageSchema.parse(await resp.json());
+    events.push(...page.events);
+    truncated ||= page.truncated;
+    terminal ||= page.terminal;
+    terminalEnvelope = page.terminalEnvelope ?? terminalEnvelope;
+    cursor = page.hasMore ? page.nextCursor : null;
+    if (page.hasMore && cursor == null) {
+      throw new Error('Bridge event page hasMore without nextCursor');
+    }
+  } while (cursor != null);
+  return { events, truncated, sessionSnapshot: undefined, terminal, terminalEnvelope };
 }
 
 async function fetchStepLedger(stepsHref: string): Promise<z.infer<typeof StepLedgerSnapshotSchema>> {
@@ -2558,7 +3294,7 @@ function usePageVisibility() {
 type ObservabilityEvent = z.infer<typeof ObservabilityEventSchema>;
 type SessionSnapshot = z.infer<typeof SessionSnapshotSchema>;
 type TimelineStream = 'stdout' | 'stderr' | 'system' | 'session' | 'unknown';
-type TimelineRow = {
+export type TimelineRow = {
   id: string;
   text: string;
   stream: TimelineStream;
@@ -2686,7 +3422,7 @@ export function classifyTimelineRow(event: ObservabilityEvent): TimelineRow['row
   if (OPERATOR_ATTENTION_EVENT_KINDS.has(kind)) {
     return 'approval';
   }
-  if (event.stream === 'system') {
+  if (event.stream === 'system' || kind.startsWith('lifecycle_')) {
     return 'system';
   }
   if (event.stream === 'session') {
@@ -2724,16 +3460,45 @@ function eventToTimelineRows(event: ObservabilityEvent): TimelineRow[] {
   }));
 }
 
-function mapEventsToTimelineRows(
+export function mapEventsToTimelineRows(
   payload: z.infer<typeof ObservabilityEventsResponseSchema> | null | undefined,
 ): TimelineRow[] {
   if (!payload) return [];
   return payload.events.flatMap((event) => eventToTimelineRows(event));
 }
 
+// The event index and every live reconnect fold into the visible timeline
+// through this reducer: rows are keyed by their deterministic `id`
+// (`<sequence>-<line>-<kind>`) so a re-delivered (duplicate) frontier collapses
+// to one row, and the result is sorted by sequence so an out-of-order (reordered)
+// delivery still renders monotonically. This is the production dedup/order the
+// Workflow Detail client relies on to absorb the transport faults the fault lab
+// injects; it is exported so tests can assert the real normalization result
+// rather than re-deriving it.
+export function mergeObservabilityTimelineRows(
+  previous: TimelineRow[],
+  incoming: TimelineRow[],
+): TimelineRow[] {
+  const rowsById = new Map(previous.map((row) => [row.id, row]));
+  for (const row of incoming) {
+    rowsById.set(row.id, row);
+  }
+  return Array.from(rowsById.values()).sort(
+    (a, b) => (a.sequence ?? 0) - (b.sequence ?? 0),
+  );
+}
+
 function timelineRowsToObservabilityRows(rows: TimelineRow[]): RunObservabilityEventRow[] {
   return rows
-    .filter((row) => row.rowType !== 'fallback' && row.rowType !== 'output' && row.rowType !== 'system')
+    .filter((row) => (
+      row.rowType !== 'fallback'
+      && row.rowType !== 'output'
+      && (
+        row.rowType !== 'system'
+        || row.kind?.startsWith('lifecycle.')
+        || row.kind?.startsWith('lifecycle_')
+      )
+    ))
     .map((row) => ({
       id: row.id,
       runId: null,
@@ -2742,7 +3507,9 @@ function timelineRowsToObservabilityRows(rows: TimelineRow[]): RunObservabilityE
       timestamp: row.timestamp,
       stream: row.stream,
       text: row.text,
-      kind: row.kind,
+      kind: row.kind?.startsWith('lifecycle_')
+        ? `lifecycle.${row.kind.slice('lifecycle_'.length)}`
+        : row.kind,
       sessionId: row.sessionId,
       sessionEpoch: row.sessionEpoch,
       turnId: row.turnId,
@@ -3248,20 +4015,29 @@ function buildTimelineArtifactLinks(row: TimelineRow, apiBase: string): Timeline
   };
 
   if (row.kind === 'summary_published') {
-    addLink('Open summary artifact', row.metadata.summaryRef ?? row.metadata.artifactRef);
+    addLink('Open summary artifact', row.metadata?.summaryRef ?? row.metadata?.artifactRef);
   }
   if (row.kind === 'checkpoint_published') {
-    addLink('Open checkpoint artifact', row.metadata.checkpointRef ?? row.metadata.artifactRef);
+    addLink('Open checkpoint artifact', row.metadata?.checkpointRef ?? row.metadata?.artifactRef);
   }
   if (row.kind === 'session_cleared' || row.kind === 'session_reset_boundary') {
     addLink(
       'Open control event artifact',
-      row.metadata.controlEventRef ?? (row.kind === 'session_cleared' ? row.metadata.artifactRef : null),
+      row.metadata?.controlEventRef ?? (row.kind === 'session_cleared' ? row.metadata?.artifactRef : null),
     );
     addLink(
       'Open reset boundary artifact',
-      row.metadata.resetBoundaryRef ?? (row.kind === 'session_reset_boundary' ? row.metadata.artifactRef : null),
+      row.metadata?.resetBoundaryRef ?? (row.kind === 'session_reset_boundary' ? row.metadata?.artifactRef : null),
     );
+  }
+  if (row.metadata?.terminalStatus) {
+    addLink('Open diagnostics', row.metadata?.diagnosticsRef);
+    addLink('Open capture manifest', row.metadata?.captureManifestRef);
+    addLink('Open initial snapshot', row.metadata?.initialSnapshotRef);
+    addLink('Open final snapshot', row.metadata?.finalSnapshotRef);
+    addLink('Open raw events', row.metadata?.rawEventsRef);
+    addLink('Open normalized events', row.metadata?.normalizedEventsRef);
+    addLink('Open external state', row.metadata?.externalStateRef);
   }
 
   return links;
@@ -3407,11 +4183,23 @@ function chatBlockArtifactLinks(block: ProjectedChatBlock, apiBase: string): Tim
       metadata.resetBoundaryRef ?? (sourceKind === 'session_reset_boundary' ? metadata.artifactRef : null),
     );
   }
+  if (sourceKind?.startsWith('lifecycle.')) {
+    addLink('Open diagnostics', metadata.diagnosticsRef);
+  }
+  if (metadata.terminalStatus) {
+    addLink('Open diagnostics', metadata.diagnosticsRef);
+    addLink('Open capture manifest', metadata.captureManifestRef);
+    addLink('Open initial snapshot', metadata.initialSnapshotRef);
+    addLink('Open final snapshot', metadata.finalSnapshotRef);
+    addLink('Open raw events', metadata.rawEventsRef);
+    addLink('Open normalized events', metadata.normalizedEventsRef);
+    addLink('Open external state', metadata.externalStateRef);
+  }
 
   return links;
 }
 
-function renderChatBlock(block: ProjectedChatBlock, wrapLines: boolean, apiBase: string): ReactNode {
+function renderChatBlock(block: ProjectedChatBlock, wrapLines: boolean, apiBase: string, resources: BridgeResource[] = []): ReactNode {
   const className = [
     'chat-session-block',
     `chat-session-block-${block.kind}`,
@@ -3443,6 +4231,7 @@ function renderChatBlock(block: ProjectedChatBlock, wrapLines: boolean, apiBase:
           {block.text || block.toolName || 'Tool call'}
         </div>
         <TimelineArtifactLinks links={artifactLinks} />
+        <ContextualBridgeResourceLinks apiBase={apiBase} block={block} resources={resources} />
       </div>
     );
   }
@@ -3484,6 +4273,7 @@ function renderChatBlock(block: ProjectedChatBlock, wrapLines: boolean, apiBase:
         {block.text}
       </div>
       <TimelineArtifactLinks links={artifactLinks} />
+      <ContextualBridgeResourceLinks apiBase={apiBase} block={block} resources={resources} />
     </div>
   );
 }
@@ -3493,57 +4283,20 @@ function ChatSessionView({
   chatBlocks,
   rows,
   wrapLines,
+  resources = [],
+  liveAnnouncement,
 }: {
   apiBase: string;
   chatBlocks: ProjectedChatBlock[];
   rows: TimelineRow[];
   wrapLines: boolean;
+  resources?: BridgeResource[];
+  liveAnnouncement?: string | undefined;
 }) {
   const hasFallbackRows = rows.some((row) => row.rowType === 'fallback' || row.rowType === 'output');
-  const blockListRef = useRef<HTMLDivElement | null>(null);
-  const shouldStickToBottomRef = useRef(true);
-  const scrollFrameRef = useRef<number | null>(null);
-  const lastBlockSignature = chatBlocks.length > 0
-    ? `${chatBlocks.at(-1)?.id}:${chatBlocks.at(-1)?.text}`
-    : 'empty';
-
-  const updateStickToBottom = () => {
-    const currentElement = blockListRef.current;
-    if (currentElement) {
-      const distanceFromBottom = currentElement.scrollHeight - currentElement.scrollTop - currentElement.clientHeight;
-      shouldStickToBottomRef.current = distanceFromBottom <= 48;
-    }
-    if (scrollFrameRef.current !== null) return;
-    scrollFrameRef.current = window.requestAnimationFrame(() => {
-      scrollFrameRef.current = null;
-      const element = blockListRef.current;
-      if (!element) return;
-      const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
-      shouldStickToBottomRef.current = distanceFromBottom <= 48;
-    });
-  };
-
-  useEffect(() => () => {
-    if (scrollFrameRef.current !== null) {
-      window.cancelAnimationFrame(scrollFrameRef.current);
-    }
-  }, []);
-
-  const scrollToBottom = () => {
-    const element = blockListRef.current;
-    if (!element) return;
-    window.requestAnimationFrame(() => {
-      element.scrollTop = element.scrollHeight;
-    });
-  };
-
-  useEffect(() => {
-    if (!shouldStickToBottomRef.current) return;
-    scrollToBottom();
-  }, [lastBlockSignature]);
-
   return (
     <div className="chat-session-view" aria-label="Chat session projection">
+      {liveAnnouncement ? <div className="sr-only" aria-live="polite" aria-atomic="true">{liveAnnouncement}</div> : null}
       <div className="chat-session-header">
         <div>
           <h3>Chat Session</h3>
@@ -3559,12 +4312,16 @@ function ChatSessionView({
         </div>
       ) : (
         <div
-          ref={blockListRef}
           className="chat-session-blocks"
           data-testid="chat-session-blocks"
-          onScroll={updateStickToBottom}
         >
-          {chatBlocks.map((block, index) => renderChatBlock({ ...block, id: `${block.id}:${index}` }, wrapLines, apiBase))}
+          <Virtuoso
+            style={{ height: 'min(480px, 62vh)' }}
+            data={chatBlocks}
+            followOutput={(atBottom) => atBottom ? 'smooth' : false}
+            computeItemKey={(index, block) => `${block.id}:${index}`}
+            itemContent={(index, block) => renderChatBlock({ ...block, id: `${block.id}:${index}` }, wrapLines, apiBase, resources)}
+          />
         </div>
       )}
     </div>
@@ -3744,7 +4501,7 @@ function StepMetadataList({
 }
 
 type RemediationCadenceInfo = {
-  role: 'remediation' | 'verification';
+  role: 'controller' | 'remediation' | 'verification';
   attempt: number | null;
   maxAttempts: number | null;
 };
@@ -3770,21 +4527,33 @@ function remediationCadenceInfo(row: z.infer<typeof StepLedgerRowSchema>): Remed
     || title.startsWith('remediate remaining gaps');
   const isVerification = role === 'moonspec-verification-gate'
     || title.startsWith('verify remediation');
-  if (!isRemediation && !isVerification) return null;
+  const isController = role === 'moonspec-remediation-loop';
+  if (!isController && !isRemediation && !isVerification) return null;
+  const loop = annotations.remediationLoop;
+  const loopBudgets = loop && typeof loop === 'object' && !Array.isArray(loop)
+    ? (loop as Record<string, unknown>).budgets
+    : null;
+  const hardMaxAttempts = loopBudgets && typeof loopBudgets === 'object' && !Array.isArray(loopBudgets)
+    ? (loopBudgets as Record<string, unknown>).hardMaxAttempts
+    : null;
   const titleMatch = rowTitle
     ? (rowTitle.match(/\battempt\s+(\d+)\s+of\s+(\d+)\b/i) ?? rowTitle.match(/\b(\d+)\s+of\s+(\d+)\b/i))
     : null;
   return {
-    role: isRemediation ? 'remediation' : 'verification',
+    role: isController ? 'controller' : (isRemediation ? 'remediation' : 'verification'),
     attempt: positiveInt(annotations.moonSpecRemediationAttempt) ?? positiveInt(titleMatch?.[1]),
-    maxAttempts: positiveInt(annotations.moonSpecRemediationMaxAttempts) ?? positiveInt(titleMatch?.[2]),
+    maxAttempts: positiveInt(annotations.moonSpecRemediationMaxAttempts)
+      ?? positiveInt(titleMatch?.[2])
+      ?? positiveInt(hardMaxAttempts),
   };
 }
 
 function RemediationCadenceChip({ row }: { row: z.infer<typeof StepLedgerRowSchema> }) {
   const cadence = remediationCadenceInfo(row);
   if (!cadence) return null;
-  const attemptLabel = cadence.attempt && cadence.maxAttempts
+  const attemptLabel = cadence.role === 'controller' && cadence.maxAttempts
+    ? `Up to ${cadence.maxAttempts} attempts`
+    : cadence.attempt && cadence.maxAttempts
     ? `Attempt ${cadence.attempt} of ${cadence.maxAttempts}`
     : 'Attempt scoped';
   return (
@@ -3794,7 +4563,7 @@ function RemediationCadenceChip({ row }: { row: z.infer<typeof StepLedgerRowSche
         ? 'Full verification for the remediation attempt.'
         : 'Attempt-scoped remediation; gap details and targeted checks belong inside this attempt.'}
     >
-      {cadence.role === 'verification' ? 'Full verification' : 'Remediation'} · {attemptLabel}
+      {cadence.role === 'controller' ? 'Remediation loop' : cadence.role === 'verification' ? 'Full verification' : 'Remediation'} · {attemptLabel}
     </span>
   );
 }
@@ -3802,7 +4571,9 @@ function RemediationCadenceChip({ row }: { row: z.infer<typeof StepLedgerRowSche
 function RemediationCadenceDetails({ row }: { row: z.infer<typeof StepLedgerRowSchema> }) {
   const cadence = remediationCadenceInfo(row);
   if (!cadence) return null;
-  const attemptLabel = cadence.attempt && cadence.maxAttempts
+  const attemptLabel = cadence.role === 'controller' && cadence.maxAttempts
+    ? `0 of ${cadence.maxAttempts} attempts materialized initially`
+    : cadence.attempt && cadence.maxAttempts
     ? `Attempt ${cadence.attempt} of ${cadence.maxAttempts}`
     : 'Attempt scoped';
   return (
@@ -3810,7 +4581,7 @@ function RemediationCadenceDetails({ row }: { row: z.infer<typeof StepLedgerRowS
       <h4>Remediation cadence</h4>
       <ul className="step-detail-list">
         <li><strong>Attempt progress:</strong> {attemptLabel}</li>
-        <li><strong>Cadence role:</strong> {cadence.role === 'verification' ? 'Full attempt verification' : 'Remediation attempt'}</li>
+        <li><strong>Cadence role:</strong> {cadence.role === 'controller' ? 'Workflow-owned loop controller' : cadence.role === 'verification' ? 'Full attempt verification' : 'Remediation attempt'}</li>
         <li><strong>Gap progress:</strong> Recorded inside the remediation attempt artifact.</li>
         <li><strong>Targeted checks:</strong> Recorded inside the remediation attempt, not as sibling full-verifier steps.</li>
       </ul>
@@ -3872,6 +4643,7 @@ function StepObservabilityGroup({
   sessionTimelineEnabled,
   structuredHistoryEnabled,
   row,
+  workflowId,
   routes,
 }: {
   apiBase: string;
@@ -3879,6 +4651,7 @@ function StepObservabilityGroup({
   sessionTimelineEnabled: boolean;
   structuredHistoryEnabled: boolean;
   row: z.infer<typeof StepLedgerRowSchema>;
+  workflowId: string;
   routes: AgentRunRouteTemplates;
 }) {
   const agentRunId = row.refs.agentRunId;
@@ -3889,27 +4662,28 @@ function StepObservabilityGroup({
     row.refs.omnigent_bridge_session_id ||
     '';
   const bridgeIdempotencyKey = row.refs.idempotencyKey || row.refs.idempotency_key || '';
-  const bridgeWorkflowId = typeof row.workflowId === 'string' ? row.workflowId : '';
+  const bridgeWorkflowId = workflowId;
   const bridgeResolutionQuery = useQuery({
     queryKey: [
       'omnigent-bridge-step-projection',
       bridgeWorkflowId,
       row.logicalStepId,
       row.executionOrdinal,
+      agentRunId,
       bridgeIdempotencyKey,
     ],
     queryFn: () =>
       resolveBridgeSessionProjection({
         apiBase,
         workflowId: bridgeWorkflowId,
-        idempotencyKey: bridgeIdempotencyKey,
+        agentRunId: agentRunId ?? null,
+        idempotencyKey: agentRunId ? null : bridgeIdempotencyKey,
       }),
     enabled: Boolean(
         logStreamingEnabled &&
-        !agentRunId &&
         !explicitBridgeSessionId &&
         bridgeWorkflowId &&
-        bridgeIdempotencyKey,
+        (agentRunId || bridgeIdempotencyKey),
     ),
     staleTime: stepTerminal(row.status) ? Infinity : 2000,
     retry: false,
@@ -3929,6 +4703,7 @@ function StepObservabilityGroup({
           apiBase={apiBase}
           bridgeSessionId={bridgeSessionId}
           isTerminal={stepTerminal(row.status)}
+          projection={bridgeResolutionQuery.data ?? { bridgeSessionId, capabilities: {} }}
         />
       );
     }
@@ -4055,18 +4830,52 @@ type BranchCreateDraft = {
   publishMode: string;
   gitWorkBranch: string;
   maxBudgetUsd: string;
+  providerProfileRef: string;
+  agentProfileId: string;
+  agentProfileVersion: number | null;
+  executionProfileRef: string;
+  model: string;
+  effort: string;
+};
+
+type CheckpointAgentProfileOption = {
+  profileId: string;
+  displayName: string;
+  state: string;
+  activeVersion: number | null;
+  versions: Array<{
+    version: number;
+    validationResult?: { ready?: boolean } | null;
+  }>;
 };
 
 type BranchMutationKind = 'create' | 'continue' | 'fork' | 'promote' | 'publish' | 'archive' | 'compare';
 
 type BranchMutationRequest =
-  | { kind: 'create'; draft: BranchCreateDraft; source: StepLedgerRow; idempotencyKey: string }
-  | { kind: 'continue'; branch: CheckpointBranch; instructions: string; idempotencyKey: string }
-  | { kind: 'fork'; branch: CheckpointBranch; instructions: string; idempotencyKey: string }
+  | { kind: 'create'; draft: BranchCreateDraft; source: StepLedgerRow; idempotencyKey: string; contextRetrieval?: ContextRetrievalAuthoring | undefined }
+  | { kind: 'continue'; branch: CheckpointBranch; instructions: string; idempotencyKey: string; contextRetrieval?: ContextRetrievalAuthoring | undefined }
+  | { kind: 'fork'; branch: CheckpointBranch; instructions: string; idempotencyKey: string; contextRetrieval?: ContextRetrievalAuthoring | undefined }
   | { kind: 'promote'; branch: CheckpointBranch; competingBranches: CheckpointBranch[]; idempotencyKey: string }
   | { kind: 'publish'; branch: CheckpointBranch; idempotencyKey: string }
   | { kind: 'archive'; branch: CheckpointBranch; idempotencyKey: string }
   | { kind: 'compare'; branch: CheckpointBranch; againstBranchId: string };
+
+// Attach an authored follow-up retrieval override to a branch-turn request body
+// (MoonMind#3514). The checkpoint-branch API accepts (and records) the override;
+// launch inherits the parent run's compiled policy unless a narrower override is
+// authored here. Compiled values are always bounded by deployment ceilings.
+function applyBranchRetrievalOverride(
+  body: Record<string, unknown>,
+  contextRetrieval: ContextRetrievalAuthoring | undefined,
+): void {
+  if (!contextRetrieval) {
+    return;
+  }
+  const compiled = compileContextRetrievalParameters(contextRetrieval);
+  if (compiled.followUpRetrieval) {
+    body.followUpRetrieval = compiled.followUpRetrieval;
+  }
+}
 
 const BRANCH_MUTATING_STATES = new Set(['created', 'active', 'blocked', 'failed', 'succeeded', 'promotable']);
 const DEFAULT_BRANCH_CREATE_DRAFT: BranchCreateDraft = {
@@ -4078,6 +4887,12 @@ const DEFAULT_BRANCH_CREATE_DRAFT: BranchCreateDraft = {
   publishMode: 'none',
   gitWorkBranch: '',
   maxBudgetUsd: '',
+  providerProfileRef: '',
+  agentProfileId: '',
+  agentProfileVersion: null,
+  executionProfileRef: '',
+  model: '',
+  effort: '',
 };
 
 function stepCheckpointRef(row: StepLedgerRow): string | null {
@@ -4277,6 +5092,7 @@ function BranchExplorerPanel({
   latestCompare,
   onSelectBranch,
   onBranchAction,
+  retrievalCeilings,
 }: {
   apiBase: string;
   workflowId: string;
@@ -4293,12 +5109,31 @@ function BranchExplorerPanel({
   latestCompare: z.infer<typeof CheckpointBranchCompareSchema> | null;
   onSelectBranch: (branchId: string) => void;
   onBranchAction: (request: BranchMutationRequest) => void;
+  retrievalCeilings: ReturnType<typeof retrievalCeilingsFromRuntimeConfig>;
 }) {
+  const agentProfilesQuery = useQuery({
+    queryKey: ['workflow-detail', 'omnigent-agent-profiles'],
+    queryFn: async (): Promise<CheckpointAgentProfileOption[]> => {
+      const response = await fetch(`${apiBase}/omnigent/agent-profiles`, { credentials: 'include' });
+      if (!response.ok) throw new Error(await response.text() || 'Failed to load agent profiles.');
+      const value: unknown = await response.json();
+      return Array.isArray(value) ? value as CheckpointAgentProfileOption[] : [];
+    },
+  });
+  const readyAgentProfiles = (agentProfilesQuery.data || []).filter((profile) => {
+    const active = (profile.versions || []).find((version) => version.version === profile.activeVersion);
+    return profile.state === 'active' && active?.validationResult?.ready === true;
+  });
   const checkpointRows = rows.filter((row) => isSupportedCheckpointRef(stepCheckpointRef(row)));
   const branchGroups = useMemo(() => buildBranchGroups(branches), [branches]);
   const [draft, setDraft] = useState<BranchCreateDraft>(() => DEFAULT_BRANCH_CREATE_DRAFT);
   const [branchInstructions, setBranchInstructions] = useState('Continue this branch with bounded instructions.');
   const [againstBranchId, setAgainstBranchId] = useState('');
+  const [branchContextRetrieval, setBranchContextRetrieval] =
+    useState<ContextRetrievalAuthoring>(defaultContextRetrievalAuthoring);
+  const branchRetrievalOverride = hasAuthoredContextRetrieval(branchContextRetrieval)
+    ? branchContextRetrieval
+    : undefined;
 
   useEffect(() => {
     const firstCheckpointRow = checkpointRows[0];
@@ -4486,6 +5321,51 @@ function BranchExplorerPanel({
             </select>
           </label>
           <label>
+            Agent profile
+            <select
+              value={draft.agentProfileId}
+              disabled={busy || agentProfilesQuery.isFetching}
+              onChange={(event) => {
+                const selected = readyAgentProfiles.find((profile) => profile.profileId === event.target.value);
+                setDraft((current) => ({
+                  ...current,
+                  agentProfileId: event.target.value,
+                  agentProfileVersion: selected?.activeVersion ?? null,
+                }));
+              }}
+            >
+              <option value="">Inherit no agent profile</option>
+              {readyAgentProfiles.map((profile) => (
+                <option key={profile.profileId} value={profile.profileId}>
+                  {profile.displayName} · v{profile.activeVersion}
+                </option>
+              ))}
+            </select>
+            {agentProfilesQuery.isError ? <span className="small" role="alert">Agent-profile readiness is unavailable.</span> : null}
+          </label>
+          <label>
+            Provider profile
+            <input value={draft.providerProfileRef} disabled={busy} placeholder="Automatic authorized profile" onChange={(event) => setDraft((current) => ({ ...current, providerProfileRef: event.target.value }))} />
+          </label>
+          <label>
+            Execution profile / launch policy
+            <input value={draft.executionProfileRef} disabled={busy} placeholder="Inherited launch policy" onChange={(event) => setDraft((current) => ({ ...current, executionProfileRef: event.target.value }))} />
+          </label>
+          <label>
+            Model
+            <input value={draft.model} disabled={busy} placeholder="Runtime default" onChange={(event) => setDraft((current) => ({ ...current, model: event.target.value }))} />
+          </label>
+          <label>
+            Effort
+            <select value={draft.effort} disabled={busy} onChange={(event) => setDraft((current) => ({ ...current, effort: event.target.value }))}>
+              <option value="">Runtime default</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+              <option value="xhigh">Extra high</option>
+            </select>
+          </label>
+          <label>
             Publish mode
             <select value={draft.publishMode} disabled={busy} onChange={(event) => setDraft((current) => ({ ...current, publishMode: event.target.value }))}>
               <option value="none">None</option>
@@ -4521,6 +5401,7 @@ function BranchExplorerPanel({
             draft,
             source: selectedSource,
             idempotencyKey: branchIdempotencyKey('create', workflowId, stepBranchKey(selectedSource)),
+            contextRetrieval: branchRetrievalOverride,
           })}
         >
           Create branch from checkpoint
@@ -4569,6 +5450,17 @@ function BranchExplorerPanel({
             Branch action instructions
             <textarea value={branchInstructions} disabled={busy} rows={2} onChange={(event) => setBranchInstructions(event.target.value)} />
           </label>
+          <details className="branch-context-retrieval">
+            <summary>Context retrieval (RAG) for this turn</summary>
+            <ContextRetrievalControls
+              value={branchContextRetrieval}
+              onChange={setBranchContextRetrieval}
+              ceilings={retrievalCeilings}
+              showInitialControls={false}
+              disabled={busy}
+              description="Continue/fork turns inherit the parent run's retrieval policy. Set an override here to narrow in-session follow-up retrieval for the new turn within deployment ceilings."
+            />
+          </details>
           <label>
             Compare against
             <select value={againstBranchId} disabled={busy || branches.length < 2} onChange={(event) => setAgainstBranchId(event.target.value)}>
@@ -4579,8 +5471,8 @@ function BranchExplorerPanel({
             </select>
           </label>
           <div className="button-row">
-            <button type="button" disabled={Boolean(continueBlockedReason)} title={continueBlockedReason || undefined} onClick={() => onBranchAction({ kind: 'continue', branch: selectedBranch, instructions: branchInstructions, idempotencyKey: branchIdempotencyKey('continue', workflowId, selectedBranch.branchId) })}>Continue branch</button>
-            <button type="button" className="secondary" disabled={Boolean(forkBlockedReason)} title={forkBlockedReason || undefined} onClick={() => onBranchAction({ kind: 'fork', branch: selectedBranch, instructions: branchInstructions, idempotencyKey: branchIdempotencyKey('fork', workflowId, selectedBranch.branchId) })}>Fork from this branch</button>
+            <button type="button" disabled={Boolean(continueBlockedReason)} title={continueBlockedReason || undefined} onClick={() => onBranchAction({ kind: 'continue', branch: selectedBranch, instructions: branchInstructions, idempotencyKey: branchIdempotencyKey('continue', workflowId, selectedBranch.branchId), contextRetrieval: branchRetrievalOverride })}>Continue branch</button>
+            <button type="button" className="secondary" disabled={Boolean(forkBlockedReason)} title={forkBlockedReason || undefined} onClick={() => onBranchAction({ kind: 'fork', branch: selectedBranch, instructions: branchInstructions, idempotencyKey: branchIdempotencyKey('fork', workflowId, selectedBranch.branchId), contextRetrieval: branchRetrievalOverride })}>Fork from this branch</button>
             <button type="button" className="secondary" disabled={compareDisabled} title={compareBlockedReason || undefined} onClick={() => onBranchAction({ kind: 'compare', branch: selectedBranch, againstBranchId })}>Compare branches</button>
             <button type="button" className="secondary" disabled={promoteDisabled} title={promoteBlockedReason || undefined} onClick={() => onBranchAction({ kind: 'promote', branch: selectedBranch, competingBranches, idempotencyKey: branchIdempotencyKey('promote', workflowId, selectedBranch.branchId) })}>Promote branch</button>
             <button type="button" className="secondary" disabled={publishDisabled} title={publishBlockedReason || undefined} onClick={() => onBranchAction({ kind: 'publish', branch: selectedBranch, idempotencyKey: branchIdempotencyKey('publish', workflowId, selectedBranch.branchId) })}>Publish branch</button>
@@ -5062,6 +5954,7 @@ function StepLedgerRowCard({
                 sessionTimelineEnabled={sessionTimelineEnabled}
                 structuredHistoryEnabled={structuredHistoryEnabled}
                 row={row}
+                workflowId={workflowId}
                 routes={routes}
               />
             </section>
@@ -5480,23 +6373,37 @@ function LiveLogsPanel({
   );
 }
 
+/**
+ * Read-only bridge-event diagnostic projection (MoonLadderStudios/MoonMind#3640).
+ *
+ * The native Omnigent application is the only interactive Workflow Chat surface.
+ * This panel projects durable evidence only — the normalized chat view, the Raw
+ * Timeline escape hatch, runtime identity, compatibility/launch diagnostics,
+ * terminal evidence, and harvested resource groups. It carries no composer,
+ * approval cards, or interrupt/stop/clear/cancel/harvest/remove controls, so no
+ * legacy bridge-control endpoint remains an easier policy bypass around the
+ * scoped native path.
+ */
 function BridgeSessionLogsPanel({
   apiBase,
   bridgeSessionId,
   isTerminal,
+  projection,
 }: {
   apiBase: string;
   bridgeSessionId: string;
   isTerminal: boolean;
+  projection: BridgeSessionProjection;
 }) {
   const [logContent, setLogContent] = useState<TimelineRow[]>([]);
   const [viewerState, setViewerState] = useState<LogViewerState>('starting');
   const [wrapLines, setWrapLines] = useState(true);
+  const [liveAnnouncement, setLiveAnnouncement] = useState('');
   const lastSeqRef = useRef<number | null>(null);
   const esRef = useRef<EventSource | null>(null);
   const isVisible = usePageVisibility();
   const chatBlocks = useMemo(
-    () => reduceTimelineRowsToChatBlocks(logContent, bridgeSessionId),
+    () => reduceTimelineRowsToChatBlocks(logContent, bridgeSessionId, []),
     [bridgeSessionId, logContent],
   );
 
@@ -5507,7 +6414,85 @@ function BridgeSessionLogsPanel({
     staleTime: Infinity,
     retry: false,
   });
-  const historyRows = useMemo(() => mapEventsToTimelineRows(eventsQuery.data), [eventsQuery.data]);
+  const resourcesQuery = useQuery({
+    queryKey: ['omnigent-bridge-session-resources', bridgeSessionId],
+    queryFn: () => fetchBridgeSessionResources(apiBase, bridgeSessionId),
+    enabled: Boolean(bridgeSessionId),
+    refetchInterval: (query) => {
+      const completeness = (query.state.data as BridgeResourceProjection | undefined)?.completeness;
+      return isTerminal && completeness && completeness !== 'pending'
+        ? false
+        : SESSION_PROJECTION_POLL_MS;
+    },
+    retry: false,
+  });
+  const followUpRetrievalQuery = useQuery({
+    queryKey: ['omnigent-follow-up-retrieval', bridgeSessionId],
+    queryFn: () => fetchFollowUpRetrievalDiagnostics(apiBase, bridgeSessionId),
+    enabled: Boolean(bridgeSessionId),
+    refetchInterval: isTerminal ? false : SESSION_PROJECTION_POLL_MS,
+    retry: false,
+  });
+  const historyRows = useMemo(() => {
+    const rows = mapEventsToTimelineRows(eventsQuery.data);
+    const envelope = eventsQuery.data && 'terminalEnvelope' in eventsQuery.data
+      ? eventsQuery.data.terminalEnvelope
+      : null;
+    if (envelope) {
+      const refs = [
+        envelope.diagnosticsRef,
+        envelope.captureManifestRef,
+        envelope.initialSnapshotRef,
+        envelope.finalSnapshotRef,
+        envelope.rawEventsRef,
+        envelope.normalizedEventsRef,
+        envelope.externalStateRef,
+      ].filter((ref): ref is string => Boolean(ref));
+      const details = [
+        envelope.failureClass ? `Failure class: ${envelope.failureClass}.` : '',
+        envelope.failureCode ? `Reason: ${envelope.failureCode}.` : '',
+        envelope.evidenceIncompleteReason ? `Evidence incomplete: ${envelope.evidenceIncompleteReason}` : '',
+        envelope.cleanupState ? `Cleanup: ${envelope.cleanupState}.` : '',
+        envelope.leaseReleaseState ? `Lease release: ${envelope.leaseReleaseState}.` : '',
+        /configuration|profile|authori[sz]ation/i.test(`${envelope.failureClass ?? ''} ${envelope.failureCode ?? ''}`)
+          ? 'Remediation: verify the provider profile, credentials, and execution authorization, then retry.'
+          : '',
+      ].filter(Boolean).join(' ');
+      rows.push({
+        id: `${bridgeSessionId}-terminal-envelope`,
+        text: [envelope.summary || `Session ${envelope.status}.`, details].filter(Boolean).join(' '),
+        stream: 'system',
+        kind: envelope.status === 'completed' ? 'response_completed' : 'response_failed',
+        sequence: Math.max(0, ...rows.map((row) => row.sequence ?? 0)) + 1,
+        timestamp: null,
+        sessionId: bridgeSessionId,
+        sessionEpoch: null,
+        containerId: null,
+        threadId: null,
+        turnId: null,
+        activeTurnId: null,
+        metadata: { terminalStatus: envelope.status, artifactRefs: refs, ...envelope },
+        rowType: 'boundary',
+      });
+    }
+    if (!eventsQuery.data?.truncated) return rows;
+    return [{
+      id: `${bridgeSessionId}-retention-gap`,
+      text: 'Earlier bridge events are outside the retained replay window. Use diagnostic artifacts for missing evidence.',
+      stream: 'system' as TimelineStream,
+      kind: 'retention_gap',
+      sequence: 0,
+      timestamp: null,
+      sessionId: bridgeSessionId,
+      sessionEpoch: null,
+      containerId: null,
+      threadId: null,
+      turnId: null,
+      activeTurnId: null,
+      metadata: { degradedEvidence: true },
+      rowType: 'system' as const,
+    }, ...rows];
+  }, [bridgeSessionId, eventsQuery.data]);
 
   useEffect(() => {
     setLogContent([]);
@@ -5520,13 +6505,7 @@ function BridgeSessionLogsPanel({
     const sequences = eventsQuery.data?.events
       .map((event) => event.sequence)
       .filter((sequence) => Number.isFinite(sequence));
-    setLogContent((prev) => {
-      const rowsById = new Map(prev.map((row) => [row.id, row]));
-      for (const row of historyRows) {
-        rowsById.set(row.id, row);
-      }
-      return Array.from(rowsById.values()).sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0));
-    });
+    setLogContent((prev) => mergeObservabilityTimelineRows(prev, historyRows));
     if (sequences && sequences.length > 0) {
       lastSeqRef.current = Math.max(lastSeqRef.current ?? 0, ...sequences);
     }
@@ -5552,6 +6531,9 @@ function BridgeSessionLogsPanel({
         const data = ObservabilityEventSchema.parse(JSON.parse(event.data));
         lastSeqRef.current = data.sequence;
         setLogContent((prev) => [...prev, ...eventToTimelineRows(data)]);
+        if (data.kind !== 'assistant_message_delta') {
+          setLiveAnnouncement('New session activity is available.');
+        }
       } catch {
         // Ignore malformed bridge events; the fetched event index remains visible.
       }
@@ -5562,6 +6544,11 @@ function BridgeSessionLogsPanel({
     };
     es.onmessage = handleBridgeEvent;
     es.addEventListener('bridge_event', handleBridgeEvent);
+    es.addEventListener('terminal', () => {
+      if (cancelled) return;
+      setViewerState('ended');
+      void eventsQuery.refetch();
+    });
     es.onerror = () => {
       es.close();
       esRef.current = null;
@@ -5603,12 +6590,128 @@ function BridgeSessionLogsPanel({
       <p className="small">
         Bridge session <code className="text-xs">{bridgeSessionId}</code> - {statusLabel}
       </p>
+      {projection.initialRetrieval ? (
+        <div className="small stack" data-testid="omnigent-initial-retrieval">
+          <p>
+            Initial context: {String(projection.initialRetrieval.state ?? 'unknown')}
+            {' · '}{Number(projection.initialRetrieval.resultCount ?? 0)} sources
+            {projection.initialRetrieval.truncated ? ' · truncated' : ''}
+            {projection.initialRetrieval.reason ? ` · ${String(projection.initialRetrieval.reason)}` : ''}
+          </p>
+          {Array.isArray(projection.initialRetrieval.collections) && projection.initialRetrieval.collections.length
+            ? <p>Collections: {projection.initialRetrieval.collections.map(String).join(', ')}</p> : null}
+          {projection.initialRetrieval.scope && typeof projection.initialRetrieval.scope === 'object'
+            ? <p>Scope: {Object.entries(projection.initialRetrieval.scope as Record<string, unknown>).map(([key, value]) => `${key}=${String(value)}`).join(', ')}</p> : null}
+          {projection.initialRetrieval.budgets && typeof projection.initialRetrieval.budgets === 'object'
+            ? <p>Budgets: {Object.entries(projection.initialRetrieval.budgets as Record<string, unknown>).map(([key, value]) => `${key}=${String(value)}`).join(', ')}</p> : null}
+          <p>
+            Context consumed: {projection.initialRetrieval.firstMessageConsumedContextRef ? 'yes' : 'no'}
+            {projection.initialRetrieval.firstMessageDigest ? <> · first message <code className="text-xs">{String(projection.initialRetrieval.firstMessageDigest)}</code></> : null}
+            {projection.initialRetrieval.contextPackDigest ? <> · pack <code className="text-xs">{String(projection.initialRetrieval.contextPackDigest)}</code></> : null}
+          </p>
+          {projection.initialRetrieval.contextPackRef ? (
+            <p>ContextPack artifact: <code className="text-xs break-all">{String(projection.initialRetrieval.contextPackRef)}</code></p>
+          ) : null}
+        </div>
+      ) : null}
+      <FollowUpRetrievalDiagnosticsSection
+        diagnostics={followUpRetrievalQuery.data ?? null}
+        isLoading={followUpRetrievalQuery.isLoading}
+        error={followUpRetrievalQuery.error}
+      />
+      <section className="card stack" aria-label="Omnigent runtime identity">
+        <h3>Codex via Omnigent</h3>
+        <dl className="details-grid">
+          {([
+            ['Provider Profile', projection.providerProfileId],
+            ['Execution profile', projection.executionProfileRef],
+            ['Launch policy', projection.launchPolicyRef],
+            ['Host mode', projection.hostMode],
+            ['Launch snapshot', projection.effectiveLaunchSnapshotRef],
+            ['Source mode', projection.compatibilityProfile],
+            ['Workflow', projection.workflowId],
+            ['Agent run', projection.agentRunId],
+            ['Bridge session', bridgeSessionId],
+            ['Provider session', projection.providerSessionRef],
+            ['Omnigent host', projection.omnigentHostRef],
+            ['Omnigent runner', projection.omnigentRunnerRef],
+            ['Credential generation', projection.credentialGeneration],
+            ['Provider lease', projection.providerLeaseRef],
+            ['Host binding', projection.hostBindingRef],
+            ['Host lease', projection.hostLeaseRef],
+          ] as Array<[string, string | number | undefined]>).filter(([, value]) => value !== undefined && value !== '').map(([label, value]) => (
+            <div key={label}><dt>{label}</dt><dd><code className="text-xs break-all">{value}</code></dd></div>
+          ))}
+        </dl>
+      </section>
+      {projection.compatibilityDiagnostics ? (
+        <section className="card stack" aria-label="Omnigent compatibility diagnostics">
+          <h3>Compatibility diagnostics</h3>
+          <dl className="details-grid">
+            {Object.entries(projection.compatibilityDiagnostics)
+              .filter(([, value]) => value !== undefined && value !== null && value !== '')
+              .map(([key, value]) => (
+                <div key={key}>
+                  <dt>{formatStatusLabel(key.replace(/([A-Z])/g, '_$1'))}</dt>
+                  <dd><code className="text-xs break-all">{Array.isArray(value) ? value.join(', ') || 'none' : String(value)}</code></dd>
+                </div>
+              ))}
+          </dl>
+        </section>
+      ) : null}
+      {eventsQuery.data && 'terminalEnvelope' in eventsQuery.data && eventsQuery.data.terminalEnvelope
+        ? <BridgeTerminalEvidence apiBase={apiBase} envelope={eventsQuery.data.terminalEnvelope} />
+        : null}
+      <details className="card bridge-resource-evidence" open={isTerminal}>
+        <summary>Resource evidence — {resourcesQuery.data?.completeness || 'harvesting'}</summary>
+        {resourcesQuery.isError ? <div className="notice error">{(resourcesQuery.error as Error).message}</div> : null}
+        {resourcesQuery.data?.groups.some((group) => group.resources.length > 0) ? (
+          <div className="stack" style={{ marginTop: '0.75rem' }}>
+            {resourcesQuery.data.groups.filter((group) => group.resources.length > 0).map((group) => (
+              <section key={group.groupKey} aria-label={group.title}>
+                <h4>{group.title}</h4>
+                <ul className="stack gap-1">
+                  {group.resources.slice(0, 25).map((resource, index) => {
+                    const href = resource.artifactRef ? artifactRefHref(apiBase, resource.artifactRef) : null;
+                    return (
+                      <li key={`${group.groupKey}-${resource.label}-${index}`}>
+                        <span>{resource.label}</span>
+                        {resource.path ? <code className="text-xs break-all"> — {resource.path}</code> : null}
+                        {resource.sourceEventSequence != null ? <span className="small"> (event {resource.sourceEventSequence})</span> : null}
+                        {href && resource.previewAvailable ? (
+                          <a className="button secondary small" href={href} target="_blank" rel="noreferrer" aria-label={`Open ${resource.label}`}>Open</a>
+                        ) : null}
+                        {href && resource.downloadAvailable ? (
+                          <a className="button secondary small" href={href} download aria-label={`Download ${resource.label}`}>Download</a>
+                        ) : null}
+                        {resource.relatedArtifactRefs?.map((ref, relatedIndex) => {
+                          const relatedHref = artifactRefHref(apiBase, ref);
+                          return relatedHref ? <a key={ref} className="button secondary small" href={relatedHref} target="_blank" rel="noreferrer" aria-label={`Open related evidence ${relatedIndex + 1} for ${resource.label}`}>Related evidence</a> : null;
+                        })}
+                        {resource.unavailableReason ? <div className="small">Unavailable: {resource.unavailableReason}</div> : null}
+                      </li>
+                    );
+                  })}
+                  {group.resources.length > 25 ? <li className="small">Showing 25 of {group.resources.length} resources. Use the capture manifest for the complete bounded index.</li> : null}
+                </ul>
+              </section>
+            ))}
+          </div>
+        ) : <p className="small">{isTerminal ? 'No harvested resource evidence is available.' : 'Harvesting resource evidence…'}</p>}
+      </details>
       <div className={`live-logs-viewer-shell ${wrapLines ? 'is-wrapped' : 'is-unwrapped'}`}>
         {logContent.length === 0 ? (
           <div className="live-logs-empty">(waiting for bridge session events...)</div>
         ) : (
           <div data-testid="chat-session-viewer" className="chat-session-viewer">
-            <ChatSessionView apiBase={apiBase} chatBlocks={chatBlocks} rows={logContent} wrapLines={wrapLines} />
+            <ChatSessionView
+              apiBase={apiBase}
+              chatBlocks={chatBlocks}
+              rows={logContent}
+              wrapLines={wrapLines}
+              resources={resourcesQuery.data?.groups.flatMap((group) => group.resources) || []}
+              liveAnnouncement={liveAnnouncement}
+            />
             <details className="raw-timeline-escape-hatch">
               <summary>Raw Timeline</summary>
               <div data-testid="live-logs-timeline-viewer" className="live-logs-viewer">
@@ -5901,7 +7004,7 @@ function RecoveryEvidencePanel({
   const diagnosticsRecovery = diagnostics?.recovery ?? null;
   if (!recovery && !diagnosticsRecovery && !resume?.checkpointRef) return null;
   const checkpointRef = recovery?.checkpointRef || resume?.checkpointRef || diagnostics?.recovery?.checkpointRef || null;
-  const requiredBoundary = recovery?.requiredBoundary || 'before_execution';
+  const requiredBoundary = recovery?.checkpointBoundary || recovery?.requiredBoundary || 'before_execution';
   const disabledReason = recovery?.disabledReasonCode || resume?.disabledReason || null;
   const sourceWorkflowId = recovery?.sourceWorkflowId || diagnostics?.recovery?.sourceWorkflowId || null;
   const sourceRunId = recovery?.sourceRunId || resume?.sourceRunId || diagnostics?.recovery?.sourceRunId || null;
@@ -5909,6 +7012,27 @@ function RecoveryEvidencePanel({
     ['environment', 'provider_lease', 'preflight', 'sidecar', 'ghcr', 'diagnostics'].includes(item.category),
   ) || [];
   const preservedSteps = diagnosticsRecovery?.preservedSteps || [];
+  const disabledGuidance = (() => {
+    const runtime = recovery?.targetRuntimeId || 'the selected runtime';
+    const kind = recovery?.checkpointKind || 'the selected checkpoint kind';
+    const route = recovery?.restoreActivity || 'a registered restore route';
+    switch (disabledReason) {
+      case 'CHECKPOINT_RESTORE_UNSUPPORTED': return `${runtime} does not support workspace checkpoint restore. Retry from source.`;
+      case 'CHECKPOINT_RESTORE_ROUTE_MISSING': return `${runtime} has no registered restore route (${route}). Retry from source.`;
+      case 'CHECKPOINT_KIND_INCOMPATIBLE': return `${runtime} cannot restore ${kind}. Retry from source.`;
+      case 'CHECKPOINT_DESTINATION_IDENTITY_MISMATCH': return 'The selected destination runtime changed. Refresh recovery evidence before retrying.';
+      case 'CHECKPOINT_CAPABILITY_SNAPSHOT_MISSING': return 'The immutable runtime capability snapshot is missing. Refresh recovery evidence.';
+      case 'CHECKPOINT_CAPABILITY_DIGEST_MISMATCH': return `${runtime} capabilities changed. Refresh recovery evidence before retrying.`;
+      case 'CHECKPOINT_ARTIFACT_INVALID': return 'The checkpoint artifact or its source identity is invalid. Retry from source.';
+      case 'RECOVERY_TARGET_UNAVAILABLE': return 'The checkpoint is valid, but this run has no supported recovery target. Use Edit for rerun or Full retry.';
+      case 'CHECKPOINT_SIDE_EFFECT_UNSAFE': return 'Prior side effects make checkpoint restoration unsafe. Resolve them or retry from source.';
+      case 'CHECKPOINT_BOUNDARY_INCOMPATIBLE': return 'This checkpoint boundary has no legal continuation phase. Retry from source.';
+      case 'CHECKPOINT_CAPTURE_UNSUPPORTED': return `${runtime} cannot capture a restorable workspace checkpoint. Retry from source.`;
+      case 'SAME_SESSION_UNREACHABLE': return 'The prior session is no longer reachable. Retry from source.';
+      case 'SAME_SESSION_CONTINUATION_UNSUPPORTED': return `${runtime} does not support same-session continuation. Retry from source.`;
+      default: return null;
+    }
+  })();
 
   return (
     <section className="detail-section">
@@ -5923,7 +7047,7 @@ function RecoveryEvidencePanel({
           Resume from checkpoint is the default recovery action for boundary {formatStatusLabel(requiredBoundary)}.
         </p>
       ) : disabledReason ? (
-        <p className="small">Resume from checkpoint unavailable: {formatStatusLabel(disabledReason)}</p>
+        <p className="small">Resume from checkpoint unavailable: {disabledGuidance || formatStatusLabel(disabledReason)}</p>
       ) : null}
 
       <div className="action-row">
@@ -5934,7 +7058,7 @@ function RecoveryEvidencePanel({
         ) : null}
         {taskEditingOn ? (
           <button type="button" className="secondary" disabled={busy} onClick={onRerun}>
-            Full retry
+            Retry from source
           </button>
         ) : null}
       </div>
@@ -5951,6 +7075,54 @@ function RecoveryEvidencePanel({
         ) : null}
         {sourceRunId ? (
           <li><strong>Source run:</strong> <code className="text-xs break-all">{sourceRunId}</code></li>
+        ) : null}
+        {recovery?.checkpointKind ? (
+          <li><strong>Checkpoint kind:</strong> {formatStatusLabel(recovery.checkpointKind)}</li>
+        ) : null}
+        {recovery?.sessionRecoverable != null ? (
+          <li><strong>Session reattach:</strong> {recovery.sessionRecoverable ? 'supported' : `unavailable${recovery.liveReattachReason ? ` — ${formatStatusLabel(recovery.liveReattachReason)}` : ''}`}</li>
+        ) : null}
+        {recovery?.workspaceRecoverable != null ? (
+          <li><strong>Workspace restore:</strong> {recovery.workspaceRecoverable ? 'supported' : `unavailable${recovery.workspaceRestoreReason ? ` — ${formatStatusLabel(recovery.workspaceRestoreReason)}` : ''}`}</li>
+        ) : null}
+        {recovery?.branchCreationAvailable != null ? (
+          <li><strong>Checkpoint branch:</strong> {recovery.branchCreationAvailable ? 'supported' : `unavailable${recovery.branchCreationReason ? ` — ${formatStatusLabel(recovery.branchCreationReason)}` : ''}`}</li>
+        ) : null}
+        {recovery?.checkpointValidationStatus ? (
+          <li><strong>Checkpoint validation:</strong> {formatStatusLabel(recovery.checkpointValidationStatus)}</li>
+        ) : null}
+        {recovery?.requiredProfileRef ? (
+          <li><strong>Required profile:</strong> <code className="text-xs break-all">{recovery.requiredProfileRef}</code></li>
+        ) : null}
+        {recovery?.requiredPolicyRef ? (
+          <li><strong>Required policy:</strong> <code className="text-xs break-all">{recovery.requiredPolicyRef}</code></li>
+        ) : null}
+        {recovery?.capacityBlocked ? (
+          <li><strong>Capacity:</strong> blocked</li>
+        ) : null}
+        {recovery?.readinessBlocked ? (
+          <li><strong>Readiness:</strong> blocked</li>
+        ) : null}
+        {recovery?.authoritativeWorkspaceCheckpointKind ? (
+          <li><strong>Authoritative workspace checkpoint:</strong> {formatStatusLabel(recovery.authoritativeWorkspaceCheckpointKind)}</li>
+        ) : null}
+        {recovery?.partialRecoveryReason ? (
+          <li><strong>Partial recovery:</strong> {recovery.partialRecoveryReason}</li>
+        ) : null}
+        {recovery?.runtimeId ? (
+          <li><strong>Runtime:</strong> {formatStatusLabel(recovery.runtimeId)}</li>
+        ) : null}
+        {recovery?.deploymentGeneration ? (
+          <li><strong>Deployment generation:</strong> <code>{recovery.deploymentGeneration}</code></li>
+        ) : null}
+        {recovery?.promotionState ? (
+          <li><strong>Promotion state:</strong> {formatStatusLabel(recovery.promotionState)}</li>
+        ) : null}
+        {recovery?.capabilitySetVersion ? (
+          <li><strong>Capability set:</strong> <code>{recovery.capabilitySetVersion}</code></li>
+        ) : null}
+        {recovery?.capabilityDigest ? (
+          <li><strong>Capability digest:</strong> <code className="text-xs break-all">{recovery.capabilityDigest}</code></li>
         ) : null}
         {diagnosticsEvidence.map((item, index) => (
           <li key={`${item.category}-${item.artifactRef || item.reasonCode || index}`}>
@@ -6074,7 +7246,7 @@ function SessionContinuityPanel({
       );
       void queryClient.invalidateQueries({ queryKey: ['observability-summary', agentRunId] });
       invalidateWorkflowDetail();
-      if (result.action === 'send_follow_up') {
+      if (result.action === 'continue_same_session') {
         setFollowUpMessage('');
       }
     },
@@ -6161,6 +7333,15 @@ function SessionContinuityPanel({
 
   const projection = projectionQuery.data;
   const sessionResources = resourcesQuery.data?.resources ?? [];
+  const sessionResourceGroups = Array.from(
+    sessionResources.reduce((groups, resource) => {
+      const key = resource.groupKey || 'resources';
+      const existing = groups.get(key) ?? { title: resource.groupTitle, resources: [] as typeof sessionResources };
+      existing.resources.push(resource);
+      groups.set(key, existing);
+      return groups;
+    }, new Map<string, { title: string; resources: typeof sessionResources }>()),
+  );
   const latestBadges = [
     ['Latest Summary', projection.latest_summary_ref?.artifact_id ?? null],
     ['Latest Checkpoint', projection.latest_checkpoint_ref?.artifact_id ?? null],
@@ -6205,23 +7386,45 @@ function SessionContinuityPanel({
   };
 
   const clearSession = () => {
+    if (!window.confirm('Clear this managed session and start a new context boundary?')) return;
+    const requestId = crypto.randomUUID();
     setPanelError(null);
     controlMutation.mutate({
+      schemaVersion: 1,
+      controlRequestId: requestId,
+      idempotencyKey: requestId,
       action: 'clear_session',
+      expectedSessionEpoch: sessionSnapshot?.sessionEpoch ?? projection.session_epoch,
+      reason: 'Operator confirmed clear session',
     });
   };
 
   const interruptTurn = () => {
+    const activeTurnId = sessionSnapshot?.activeTurnId;
+    if (!activeTurnId) return;
+    const requestId = crypto.randomUUID();
     setPanelError(null);
     controlMutation.mutate({
+      schemaVersion: 1,
+      controlRequestId: requestId,
+      idempotencyKey: requestId,
       action: 'interrupt_turn',
+      expectedSessionEpoch: sessionSnapshot?.sessionEpoch ?? projection.session_epoch,
+      expectedTurnId: activeTurnId,
     });
   };
 
   const cancelSession = () => {
+    if (!window.confirm('Stop this managed session?')) return;
+    const requestId = crypto.randomUUID();
     setPanelError(null);
     controlMutation.mutate({
+      schemaVersion: 1,
+      controlRequestId: requestId,
+      idempotencyKey: requestId,
       action: 'cancel_session',
+      expectedSessionEpoch: sessionSnapshot?.sessionEpoch ?? projection.session_epoch,
+      reason: 'Operator confirmed stop session',
     });
   };
 
@@ -6317,8 +7520,11 @@ function SessionContinuityPanel({
       {!compact && sessionResources.length > 0 ? (
         <div className="stack">
           <h4>Resource Evidence</h4>
-          <div className="grid-2">
-            {sessionResources.map((resource) => {
+          {sessionResourceGroups.map(([groupKey, group]) => (
+          <details key={groupKey} className="card" open={group.resources.length <= 8}>
+            <summary>{group.title} ({group.resources.length})</summary>
+            <div className="grid-2" style={{ marginTop: '0.5rem' }}>
+            {group.resources.map((resource) => {
               const label = resource.label || resource.artifactId;
               const contentHref = resource.contentUrl
                 ? resolveApiBaseTemplate(apiBase, resource.contentUrl)
@@ -6329,20 +7535,23 @@ function SessionContinuityPanel({
               return (
                 <div key={resource.resourceId || resource.artifactId} className="card">
                   <strong>{label}</strong>
-                  <div className="small">{resource.groupTitle}</div>
+                  <div className="small">{resource.completenessStatus === 'pending' ? 'Harvesting…' : resource.completenessStatus}</div>
                   <code className="text-xs break-all">{resource.artifactId}</code>
+                  {resource.unavailableReason ? <p className="small notice warning">{resource.unavailableReason}</p> : null}
                   <div className="actions" style={{ marginTop: '0.5rem' }}>
-                    <a className="button secondary small" href={contentHref} target="_blank" rel="noreferrer">
+                    {resource.previewAvailable ? <a aria-label={`Open ${label}`} className="button secondary small" href={contentHref} target="_blank" rel="noreferrer">
                       Open
-                    </a>
-                    <a className="button secondary small" href={downloadHref} target="_blank" rel="noreferrer">
+                    </a> : null}
+                    {resource.downloadAvailable ? <a aria-label={`Download ${label}`} className="button secondary small" href={downloadHref} target="_blank" rel="noreferrer">
                       Download
-                    </a>
+                    </a> : null}
                   </div>
                 </div>
               );
             })}
-          </div>
+            </div>
+          </details>
+          ))}
         </div>
       ) : null}
 
@@ -6403,7 +7612,7 @@ function SessionContinuityPanel({
         ) : null}
         <div className="actions chat-session-control-actions">
           {renderControlButton({
-            label: 'Send follow-up',
+            label: 'Continue session',
             className: 'secondary',
             disabledReason: busy || !followUpMessage.trim() || !canSendFollowUp ? sendDisabledReason : null,
             onClick: submitFollowUp,
@@ -6496,10 +7705,78 @@ function remediationListValue(items: string[] | null | undefined): string {
   return items && items.length > 0 ? items.join(', ') : '—';
 }
 
+function RemediationCapabilityMatrix({
+  rows,
+}: {
+  rows: z.infer<typeof RemediationActionCapabilitySchema>[];
+}) {
+  if (rows.length === 0) return null;
+  return (
+    <details>
+      <summary>
+        Action capability matrix ({rows.filter((row) => row.requestable).length} executable / {rows.length} catalog)
+      </summary>
+      <ul className="td-remediation-list">
+        {rows.map((row) => (
+          <li key={row.actionKind}>
+            <code>{row.actionKind}</code>:{' '}
+            {row.requestable
+              ? 'requestable'
+              : `disabled — ${remediationListValue(row.blockedReasons)}`}
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
+// Post-action verification (issue #3622) publishes a compact classification into
+// the verification artifact metadata so the dashboard can render the trusted
+// repair-verification outcome separately from action delivery without fetching
+// the artifact body.
+function remediationVerificationSummary(
+  artifact: z.infer<typeof ArtifactSummarySchema>,
+): { outcome: string; delivery: string; verifierKind: string } | null {
+  const outcome = metadataString(artifact.metadata, 'verificationOutcome');
+  if (!outcome) return null;
+  return {
+    outcome,
+    delivery: metadataString(artifact.metadata, 'verificationDeliveryStatus'),
+    verifierKind: metadataString(artifact.metadata, 'verificationVerifierKind'),
+  };
+}
+
+function RemediationArtifactRefs({
+  apiBase,
+  refs,
+}: {
+  apiBase: string;
+  refs: Record<string, string> | null | undefined;
+}) {
+  const entries = Object.entries(refs || {}).filter(([, ref]) => Boolean(ref));
+  if (entries.length === 0) return <>—</>;
+  return (
+    <span className="live-logs-artifact-links">
+      {entries.map(([kind, ref]) => {
+        const href = artifactRefHref(apiBase, ref);
+        return href ? (
+          <a key={`${kind}:${ref}`} href={href} target="_blank" rel="noreferrer">
+            <code className="text-xs break-all">{ref}</code>
+          </a>
+        ) : (
+          <code key={`${kind}:${ref}`} className="text-xs break-all">{ref}</code>
+        );
+      })}
+    </span>
+  );
+}
+
 function RemediationCheckpointBranches({
   branches,
+  apiBase,
 }: {
   branches: z.infer<typeof RemediationLinkSchema>['checkpointBranches'];
+  apiBase: string;
 }) {
   if (!branches || branches.length === 0) return null;
   return (
@@ -6514,12 +7791,206 @@ function RemediationCheckpointBranches({
             <div className="grid-2">
               <Card label="Target Workflow"><code className="text-xs break-all">{branch.workflowId}</code></Card>
               <Card label="Turn">{branch.branchTurnId || '—'}</Card>
-              <Card label="Checkpoint">{branch.checkpointRef || '—'}</Card>
-              <Card label="Context">{branch.contextArtifactRef || '—'}</Card>
+              <Card label="Checkpoint"><RemediationArtifactRefs apiBase={apiBase} refs={branch.checkpointRef ? { checkpoint: branch.checkpointRef } : null} /></Card>
+              <Card label="Context"><RemediationArtifactRefs apiBase={apiBase} refs={branch.contextArtifactRef ? { context: branch.contextArtifactRef } : null} /></Card>
+              <Card label="Head status">{branch.headStatus ? formatStatusLabel(branch.headStatus) : '—'}</Card>
+              <Card label="Attempt / version">{branch.headAttemptOrdinal != null && branch.headVersion != null ? `${branch.headAttemptOrdinal} / ${branch.headVersion}` : '—'}</Card>
+              <Card label="Branch lifecycle">{branch.branchState ? formatStatusLabel(branch.branchState) : '—'}</Card>
+              <Card label="Selected step">{branch.logicalStepId || '—'}</Card>
+              <Card label="Workspace policy">{branch.workspacePolicy || '—'}</Card>
+              <Card label="Runtime context">{branch.runtimeContextPolicy || '—'}</Card>
+              <Card label="Base branch"><code className="text-xs break-all">{branch.gitBaseBranch || '—'}</code></Card>
+              <Card label="Isolated work branch"><code className="text-xs break-all">{branch.gitWorkBranch || '—'}</code></Card>
+              <Card label="Workspace head"><code className="text-xs break-all">{branch.currentHeadCommit || branch.headWorkspaceDigest || '—'}</code></Card>
+              <Card label="Publication">{branch.publishStatus || 'not published'}</Card>
+              <Card label="Resulting PR">{branch.pullRequestUrl ? <a href={branch.pullRequestUrl}>Open pull request</a> : '—'}</Card>
+              <Card label="Promotion">{branch.promotedAt ? `promoted ${formatWhen(branch.promotedAt)}` : 'not promoted'}</Card>
+              <Card label="Archive / cleanup">{branch.archivedAt ? `archived ${formatWhen(branch.archivedAt)}` : branch.archiveReason || 'active'}</Card>
+              <Card label="Turn execution">{branch.turnState ? formatStatusLabel(branch.turnState) : 'not started'}</Card>
+              <Card label="Resulting Agent Run"><code className="text-xs break-all">{branch.runtimeAgentRunId || '—'}</code></Card>
+              <Card label="Provider session"><code className="text-xs break-all">{branch.providerSessionId || '—'}</code></Card>
+              <Card label="Turn instructions"><RemediationArtifactRefs apiBase={apiBase} refs={branch.instructionRef ? { instructions: branch.instructionRef } : null} /></Card>
+              <Card label="Turn timing">{branch.turnStartedAt ? `${formatWhen(branch.turnStartedAt)}${branch.turnCompletedAt ? ` → ${formatWhen(branch.turnCompletedAt)}` : ' → running'}` : 'pending'}</Card>
+              <Card label="Output artifacts"><RemediationArtifactRefs apiBase={apiBase} refs={branch.outputArtifacts} /></Card>
+              <Card label="Comparison artifacts"><RemediationArtifactRefs apiBase={apiBase} refs={branch.comparisonArtifacts} /></Card>
+              <Card label="Root candidate"><code className="text-xs break-all">{branch.rootCheckpointRef || '—'}</code></Card>
+              <Card label="Current candidate"><code className="text-xs break-all">{branch.headCheckpointRef || '—'}</code></Card>
+              <Card label="Candidate digest"><code className="text-xs break-all">{branch.headWorkspaceDigest || '—'}</code></Card>
+              <Card label="Latest verification">
+                {branch.latestVerificationVerdict || '—'}{' '}
+                <RemediationArtifactRefs apiBase={apiBase} refs={branch.latestVerificationRef ? { verification: branch.latestVerificationRef } : null} />
+              </Card>
+              <Card label="Next attempt baseline"><code className="text-xs break-all">{branch.nextActionBaseline ? `${branch.nextActionBaseline.checkpointRef} @ v${branch.nextActionBaseline.headVersion}` : '—'}</code></Card>
+              <Card label="Remaining work"><RemediationArtifactRefs apiBase={apiBase} refs={branch.remainingWorkRef ? { remainingWork: branch.remainingWorkRef } : null} /></Card>
             </div>
+            {branch.turns.length > 0 ? (
+              <div className="td-remediation-live">
+                <strong>{`Checkpoint Branch turns (${branch.turns.length})`}</strong>
+                <ol
+                  className="td-remediation-list"
+                  aria-label={`Checkpoint Branch turns for ${branch.branchId}`}
+                >
+                  {branch.turns.map((turn) => (
+                    <li key={turn.branchTurnId} className="card">
+                      <div className="grid-2">
+                        <Card label="Turn ID"><code className="text-xs break-all">{turn.branchTurnId}</code></Card>
+                        <Card label="Parent turn"><code className="text-xs break-all">{turn.parentTurnId || 'root'}</code></Card>
+                        <Card label="Turn state">{formatStatusLabel(turn.status)}</Card>
+                        <Card label="Step Execution"><code className="text-xs break-all">{turn.createdStepExecutionId || '—'}</code></Card>
+                        <Card label="Agent Run"><code className="text-xs break-all">{turn.runtimeAgentRunId || '—'}</code></Card>
+                        <Card label="Provider session"><code className="text-xs break-all">{turn.providerSessionId || '—'}</code></Card>
+                        <Card label="Instructions"><RemediationArtifactRefs apiBase={apiBase} refs={{ instructions: turn.instructionRef }} /></Card>
+                        <Card label="Source checkpoint"><RemediationArtifactRefs apiBase={apiBase} refs={{ checkpoint: turn.sourceCheckpointRef }} /></Card>
+                        <Card label="Context bundle"><RemediationArtifactRefs apiBase={apiBase} refs={turn.contextBundleRef ? { context: turn.contextBundleRef } : null} /></Card>
+                        <Card label="Step manifest"><RemediationArtifactRefs apiBase={apiBase} refs={turn.stepExecutionManifestRef ? { manifest: turn.stepExecutionManifestRef } : null} /></Card>
+                        <Card label="Work branch"><code className="text-xs break-all">{turn.gitWorkBranch || branch.gitWorkBranch || '—'}</code></Card>
+                        <Card label="Timing">
+                          {turn.startedAt
+                            ? `${formatWhen(turn.startedAt)}${turn.completedAt ? ` → ${formatWhen(turn.completedAt)}` : ' → running'}`
+                            : `created ${formatWhen(turn.createdAt)}`}
+                        </Card>
+                        <Card label="Output"><RemediationArtifactRefs apiBase={apiBase} refs={turn.outputArtifacts} /></Card>
+                        <Card label="Comparison"><RemediationArtifactRefs apiBase={apiBase} refs={turn.comparisonArtifacts} /></Card>
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            ) : null}
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+function branchVerificationPhase(
+  branch: z.infer<typeof RemediationLinkSchema>['checkpointBranches'][number],
+): { phase: 'pending' | 'running' | 'terminal'; label: string } {
+  const verdict = String(branch.latestVerificationVerdict || '').trim();
+  if (verdict) return { phase: 'terminal', label: verdict };
+  if (branch.latestVerificationRef) {
+    return { phase: 'running', label: 'Verification running' };
+  }
+  return { phase: 'pending', label: 'Verification pending' };
+}
+
+function RemediationVerificationSummary({
+  branches,
+  outcome,
+}: {
+  branches: z.infer<typeof RemediationLinkSchema>['checkpointBranches'];
+  outcome?: string | null | undefined;
+}) {
+  if ((!branches || branches.length === 0) && !outcome) return null;
+  return (
+    <div className="td-remediation-live" aria-label="Repair verification">
+      <strong>Repair verification</strong>
+      {outcome ? <p className="small">Target-level outcome: {outcome}</p> : null}
+      <ul className="td-remediation-list">
+        {branches.map((branch) => {
+          const { phase, label } = branchVerificationPhase(branch);
+          return (
+            <li key={`verify:${branch.workflowId}:${branch.branchId}`} className="card">
+              <div className="grid-2">
+                <Card label="Branch"><code className="text-xs break-all">{`Verification for ${branch.branchId}`}</code></Card>
+                <Card label="Verification state">{formatStatusLabel(phase)}</Card>
+                <Card label="Verdict">{label}</Card>
+                <Card label="Evidence"><code className="text-xs break-all">{branch.latestVerificationRef || '—'}</code></Card>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+function RemediationCanonicalProjection({
+  title,
+  value,
+}: {
+  title: string;
+  value: Record<string, unknown> | null | undefined;
+}) {
+  if (!value || Object.keys(value).length === 0) return null;
+  return (
+    <details className="td-remediation-canonical">
+      <summary>{title}</summary>
+      <pre className="text-xs break-all">{JSON.stringify(value, null, 2)}</pre>
+    </details>
+  );
+}
+
+function RemediationLifecycleProjection({
+  item,
+  apiBase,
+}: {
+  item: z.infer<typeof RemediationLinkSchema>;
+  apiBase: string;
+}) {
+  const availability = item.contextEvidenceAvailability || [];
+  const artifacts = item.lifecycleArtifacts || [];
+  return (
+    <div className="stack td-remediation-lifecycle" aria-label="Authoritative remediation lifecycle">
+      <RemediationCanonicalProjection title="Authored remediation contract" value={item.authoredContract} />
+      {item.selectedStepEvidence?.length ? (
+        <RemediationCanonicalProjection
+          title="Pinned step and checkpoint evidence"
+          value={{ selectedSteps: item.selectedStepEvidence }}
+        />
+      ) : null}
+      {item.diagnosisHints?.length ? (
+        <p className="small"><strong>Latest diagnosis:</strong> {item.diagnosisHints.join('; ')}</p>
+      ) : null}
+      {item.contextGeneratedAt ? (
+        <p className="small"><strong>Context snapshot:</strong> {formatWhen(item.contextGeneratedAt)}</p>
+      ) : null}
+      {availability.length > 0 ? (
+        <div>
+          <strong>Context evidence availability</strong>
+          <div className="grid-2">
+            {availability.map((entry, index) => (
+              <Card key={`${String(entry.class || 'evidence')}:${index}`} label={String(entry.class || 'evidence')}>
+                {String(entry.status || 'unknown')}
+                {entry.freshness ? ` · ${String(entry.freshness)}` : ''}
+                {entry.bounded === true ? ' · bounded' : entry.bounded === false ? ' · unbounded' : ''}
+                {entry.degradedReason ? ` · ${String(entry.degradedReason)}` : ''}
+              </Card>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      {item.contextBoundedness ? (
+        <RemediationCanonicalProjection title="Context boundedness" value={item.contextBoundedness} />
+      ) : null}
+      <RemediationCanonicalProjection title="Latest action request and authority decision" value={item.latestActionRequest} />
+      <RemediationCanonicalProjection title="Latest action delivery result" value={item.latestActionResult} />
+      <RemediationCanonicalProjection title="Repair, prevention, cleanup, and unresolved work" value={item.lifecycleSummary} />
+      {artifacts.length > 0 ? (
+        <details>
+          <summary>Durable lifecycle artifacts ({artifacts.length})</summary>
+          <ul className="td-remediation-list">
+            {artifacts.map((artifact) => (
+              <li key={`${artifact.artifactType}:${artifact.artifactRef}`}>
+                <code>{artifact.artifactType}</code>{' '}
+                {artifactRefHref(apiBase, artifact.artifactRef) ? (
+                  <a
+                    href={artifactRefHref(apiBase, artifact.artifactRef) || undefined}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <code className="text-xs break-all">{artifact.artifactRef}</code>
+                  </a>
+                ) : (
+                  <code className="text-xs break-all">{artifact.artifactRef}</code>
+                )}{' '}
+                — {artifact.status}, {artifact.freshness}, {artifact.bounded ? 'bounded' : 'unbounded'}
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
     </div>
   );
 }
@@ -6530,7 +8001,8 @@ function RemediationApprovalSummary({
   approval: z.infer<typeof RemediationApprovalStateSchema>;
 }) {
   const hasDetails = Boolean(
-    approval.actionKind ||
+    approval.requestId ||
+      approval.actionKind ||
       approval.riskTier ||
       approval.preconditions ||
       approval.blastRadius ||
@@ -6539,6 +8011,14 @@ function RemediationApprovalSummary({
   );
 
   if (!hasDetails) return null;
+  const expired = approval.status === 'expired' || approval.decision === 'expired' || (
+    approval.expiresAt ? Date.parse(approval.expiresAt) <= Date.now() : false
+  );
+  const decisionRecorded =
+    approval.decision === 'approved' || approval.decision === 'rejected' || approval.decision === 'denied';
+  const staleDecision = approval.status === 'stale' || approval.decision === 'stale' || Boolean(
+    decisionRecorded && approval.canDecide && approval.requestId,
+  );
 
   return (
     <div className="td-remediation-approval">
@@ -6547,31 +8027,168 @@ function RemediationApprovalSummary({
         <Card label="Risk">{approval.riskTier || '—'}</Card>
         <Card label="Decision">{approval.decision || 'not_required'}</Card>
         <Card label="Audit">{approval.auditRef || '—'}</Card>
+        <Card label="Requester">{approval.requestingActor || '—'}</Card>
+        <Card label="Requested">{approval.requestedAt ? formatWhen(approval.requestedAt) : '—'}</Card>
+        <Card label="Expires">{approval.expiresAt ? formatWhen(approval.expiresAt) : '—'}</Card>
+        <Card label="Expected target state">{approval.expectedTargetState || '—'}</Card>
+        <Card label="Checkpoint"><code className="text-xs break-all">{approval.checkpointRef || '—'}</code></Card>
+        <Card label="Policy"><code className="text-xs break-all">{approval.policyRef || '—'}</code></Card>
+        <Card label="Policy digest"><code className="text-xs break-all">{approval.policyDigest || '—'}</code></Card>
+        <Card label="Policy snapshot"><code className="text-xs break-all">{approval.policySnapshotRef || '—'}</code></Card>
+        <Card label="Security profile"><code className="text-xs break-all">{approval.securityProfileRef || '—'}</code></Card>
         <Card label="Preconditions">{approval.preconditions || '—'}</Card>
         <Card label="Blast Radius">{approval.blastRadius || '—'}</Card>
+        <Card label="Decision rationale">{approval.rationale || '—'}</Card>
+        <Card label="Decision status">{approval.status || approval.decision || '—'}</Card>
+        <Card label="Decided by">{approval.decisionActor || '—'}</Card>
+        <Card label="Decided at">{approval.decidedAt || approval.decisionAt ? formatWhen(approval.decidedAt || approval.decisionAt) : '—'}</Card>
+        <Card label="Consumed by action">{approval.consumedByActionId || '—'}</Card>
       </div>
-      {approval.requestId && !approval.canDecide && approval.decision === 'pending' ? (
+      {approval.artifactRefs ? (
+        <div className="small">Evidence: {Object.entries(approval.artifactRefs).map(([kind, ref]) => `${kind}: ${ref}`).join(', ')}</div>
+      ) : null}
+      {expired ? (
+        <p className="notice warning" role="status">
+          This approval request expired. Refresh the target state and create a new request before acting.
+        </p>
+      ) : staleDecision ? (
+        <p className="notice warning" role="status">
+          This decision is stale because the action or pinned target evidence changed. A new approval request is required.
+        </p>
+      ) : approval.requestId && !approval.canDecide && approval.decision === 'pending' ? (
         <p className="notice subtle">Approval is read-only for this operator.</p>
       ) : null}
     </div>
   );
 }
 
+function RemediationApprovalControls({
+  remediationWorkflowId,
+  requestId,
+  busy,
+  onApprovalDecision,
+}: {
+  remediationWorkflowId: string;
+  requestId: string;
+  busy: boolean;
+  onApprovalDecision: (
+    workflowId: string,
+    requestId: string,
+    decision: 'approved' | 'rejected',
+    comment?: string,
+  ) => void;
+}) {
+  const [rationale, setRationale] = useState('');
+  return (
+    <div className="stack td-remediation-approval-controls">
+      <label>
+        Decision rationale (recorded in the approval audit trail)
+        <textarea
+          value={rationale}
+          onChange={(event) => setRationale(event.target.value)}
+          rows={2}
+          placeholder="Explain the bounded operator decision"
+        />
+      </label>
+      <div className="actions">
+        <button
+          type="button"
+          className="secondary"
+          disabled={busy}
+          onClick={() => onApprovalDecision(remediationWorkflowId, requestId, 'approved', rationale)}
+        >
+          Approve remediation action
+        </button>
+        <button
+          type="button"
+          className="secondary"
+          disabled={busy}
+          onClick={() => onApprovalDecision(remediationWorkflowId, requestId, 'rejected', rationale)}
+        >
+          Deny remediation action
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function RemediationOperatorControls({
+  item,
+  busy,
+  onOperatorControl,
+}: {
+  item: z.infer<typeof RemediationLinkSchema>;
+  busy: boolean;
+  onOperatorControl: (
+    workflowId: string,
+    action: 'cancel' | 'takeover' | 'resume',
+  ) => void;
+}) {
+  const controls = item.operatorControls;
+  if (!controls) return null;
+  const hasControl = controls.canCancel || controls.canTakeOver || controls.canResume;
+  return (
+    <div className="stack td-remediation-operator-controls">
+      <strong>Operator controls</strong>
+      <p className="small">
+        Takeover pauses autonomous remediation through the durable Workflow signal; it does not expose runtime credentials or raw session authority.
+      </p>
+      {hasControl ? (
+        <div className="actions" role="group" aria-label="Remediation operator controls">
+          {controls.canTakeOver ? (
+            <button type="button" className="secondary" disabled={busy} onClick={() => onOperatorControl(item.remediationWorkflowId, 'takeover')}>
+              Take over and pause
+            </button>
+          ) : null}
+          {controls.canResume ? (
+            <button type="button" className="secondary" disabled={busy} onClick={() => onOperatorControl(item.remediationWorkflowId, 'resume')}>
+              Resume remediation
+            </button>
+          ) : null}
+          {controls.canCancel ? (
+            <button type="button" className="queue-action-danger" disabled={busy} onClick={() => onOperatorControl(item.remediationWorkflowId, 'cancel')}>
+              Cancel remediation
+            </button>
+          ) : null}
+        </div>
+      ) : (
+        <p className="notice subtle">
+          Operator controls are unavailable: {Object.values(controls.disabledReasons).join(', ') || 'workflow state is terminal'}.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function RemediationRelationshipsPanel({
+  apiBase,
   inbound,
   outbound,
   inboundError,
   outboundError,
   onApprovalDecision,
   approvalBusy,
+  onOperatorControl,
+  operatorBusy,
   showEmpty,
 }: {
+  apiBase: string;
   inbound: z.infer<typeof RemediationLinksSchema> | undefined;
   outbound: z.infer<typeof RemediationLinksSchema> | undefined;
   inboundError: Error | null;
   outboundError: Error | null;
-  onApprovalDecision: (workflowId: string, requestId: string, decision: 'approved' | 'rejected') => void;
+  onApprovalDecision: (
+    workflowId: string,
+    requestId: string,
+    decision: 'approved' | 'rejected',
+    comment?: string,
+  ) => void;
   approvalBusy: boolean;
+  onOperatorControl: (
+    workflowId: string,
+    action: 'cancel' | 'takeover' | 'resume',
+  ) => void;
+  operatorBusy: boolean;
   showEmpty: boolean;
 }) {
   const inboundItems = inbound?.items ?? [];
@@ -6584,7 +8201,9 @@ function RemediationRelationshipsPanel({
     <section className="stack td-remediation-region td-evidence-region">
       <div>
         <h3>Remediation</h3>
-        <p className="small">Target and remediator relationships are shown from bounded remediation link metadata.</p>
+        <p className="small">
+          Target and remediator relationships are shown from canonical links and bounded artifacts. The original target outcome shown above is unchanged; later repair, verification, and prevention records are annotations in this separate lifecycle.
+        </p>
       </div>
       {inboundError || outboundError ? (
         <div className="notice error">
@@ -6601,38 +8220,39 @@ function RemediationRelationshipsPanel({
                   <code className="text-xs break-all">{item.remediationWorkflowId}</code>
                 </a>
                 <div className="grid-2">
+                  <Card label="Remediation Run"><code className="text-xs break-all">{item.remediationRunId || '—'}</code></Card>
+                  <Card label="Pinned Target Run"><code className="text-xs break-all">{item.targetRunId || '—'}</code></Card>
                   <Card label="Status">{formatStatusLabel(item.status)}</Card>
+                  <Card label="Mode">{item.mode || '—'}</Card>
                   <Card label="Authority">{item.authorityMode || '—'}</Card>
+                  <Card label="Selected Steps">{remediationListValue(item.selectedSteps)}</Card>
+                  <Card label="Current Target">{item.currentTargetState || '—'}</Card>
                   <Card label="Latest Action">{item.latestActionSummary || '—'}</Card>
+                  <Card label="Delivery">{item.deliveryStatus || '—'}</Card>
+                  <Card label="Repair verification">{item.verificationOutcome || 'pending'}</Card>
                   <Card label="Resolution">{item.resolution || '—'}</Card>
                   <Card label="Lock">{item.activeLockScope || 'None'}</Card>
                   {item.activeLockHolder && item.activeLockHolder !== item.remediationWorkflowId ? (
                     <Card label="Lock Holder">{item.activeLockHolder}</Card>
                   ) : null}
+                  {item.lockOutcome?.releasedAt ? (
+                    <Card label="Lock Released">{formatWhen(item.lockOutcome.releasedAt)}</Card>
+                  ) : null}
                   <Card label="Updated">{formatWhen(item.updatedAt)}</Card>
                 </div>
-                <RemediationCheckpointBranches branches={item.checkpointBranches} />
+                <RemediationLifecycleProjection item={item} apiBase={apiBase} />
+                <RemediationVerificationSummary branches={item.checkpointBranches} outcome={item.verificationOutcome} />
+                <RemediationCheckpointBranches branches={item.checkpointBranches} apiBase={apiBase} />
                 {item.approvalState ? <RemediationApprovalSummary approval={item.approvalState} /> : null}
                 {item.approvalState?.canDecide && item.approvalState.requestId ? (
-                  <div className="actions">
-                    <button
-                      type="button"
-                      className="secondary"
-                      disabled={approvalBusy}
-                      onClick={() => onApprovalDecision(item.remediationWorkflowId, item.approvalState!.requestId!, 'approved')}
-                    >
-                      Approve remediation action
-                    </button>
-                    <button
-                      type="button"
-                      className="secondary"
-                      disabled={approvalBusy}
-                      onClick={() => onApprovalDecision(item.remediationWorkflowId, item.approvalState!.requestId!, 'rejected')}
-                    >
-                      Reject remediation action
-                    </button>
-                  </div>
+                  <RemediationApprovalControls
+                    remediationWorkflowId={item.remediationWorkflowId}
+                    requestId={item.approvalState.requestId}
+                    busy={approvalBusy}
+                    onApprovalDecision={onApprovalDecision}
+                  />
                 ) : null}
+                <RemediationOperatorControls item={item} busy={operatorBusy} onOperatorControl={onOperatorControl} />
               </li>
             ))}
           </ul>
@@ -6654,7 +8274,19 @@ function RemediationRelationshipsPanel({
                   <Card label="Mode">{item.mode || '—'}</Card>
                   <Card label="Authority">{item.authorityMode || '—'}</Card>
                   <Card label="Status">{formatStatusLabel(item.status)}</Card>
-                  <Card label="Evidence Bundle">{item.contextArtifactRef || 'Missing'}</Card>
+                  <Card label="Action delivery">{item.deliveryStatus || '—'}</Card>
+                  <Card label="Repair verification">{item.verificationOutcome || 'pending'}</Card>
+                  <Card label="Evidence Bundle">
+                    {item.contextArtifactRef && artifactRefHref(apiBase, item.contextArtifactRef) ? (
+                      <a
+                        href={artifactRefHref(apiBase, item.contextArtifactRef) || undefined}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        <code className="text-xs break-all">{item.contextArtifactRef}</code>
+                      </a>
+                    ) : item.contextArtifactRef || 'Missing'}
+                  </Card>
                   <Card label="Approval">{item.approvalState?.decision || 'not_required'}</Card>
                   <Card label="Selected Steps">{remediationListValue(item.selectedSteps)}</Card>
                   <Card label="Current Target">{item.currentTargetState || '—'}</Card>
@@ -6662,7 +8294,18 @@ function RemediationRelationshipsPanel({
                   <Card label="Lock">{item.activeLockScope || 'None'}</Card>
                   <Card label="Lock Holder">{item.activeLockHolder || item.lockOutcome?.holder || '—'}</Card>
                   <Card label="Lock Outcome">{item.lockOutcome?.state || '—'}</Card>
+                  {item.lockOutcome?.releasedAt ? (
+                    <Card label="Lock Released">{formatWhen(item.lockOutcome.releasedAt)}</Card>
+                  ) : null}
                 </div>
+                {(!item.allowedActions || item.allowedActions.length === 0) ? (
+                  <p className="notice subtle">
+                    {item.authorityMode === 'observe_only'
+                      ? 'Observe-only authority: no mutating actions are offered for this target.'
+                      : 'No actions are currently offered; policy or backend readiness has bounded the action surface.'}
+                  </p>
+                ) : null}
+                <RemediationCapabilityMatrix rows={item.actionCapabilities} />
                 {item.evidenceDegraded ? (
                   <p className="notice subtle">
                     Evidence is degraded. Unavailable: {remediationListValue(item.unavailableEvidenceClasses)}.
@@ -6685,7 +8328,9 @@ function RemediationRelationshipsPanel({
                 {!item.contextArtifactRef ? (
                   <p className="notice subtle">Evidence bundle is missing.</p>
                 ) : null}
-                <RemediationCheckpointBranches branches={item.checkpointBranches} />
+                <RemediationLifecycleProjection item={item} apiBase={apiBase} />
+                <RemediationVerificationSummary branches={item.checkpointBranches} outcome={item.verificationOutcome} />
+                <RemediationCheckpointBranches branches={item.checkpointBranches} apiBase={apiBase} />
                 {item.mode?.includes('follow') && !item.contextArtifactRef ? (
                   <p className="notice subtle">
                     Live follow is unavailable; durable remediation artifacts remain authoritative.
@@ -6693,25 +8338,14 @@ function RemediationRelationshipsPanel({
                 ) : null}
                 {item.approvalState ? <RemediationApprovalSummary approval={item.approvalState} /> : null}
                 {item.approvalState?.canDecide && item.approvalState.requestId ? (
-                  <div className="actions">
-                    <button
-                      type="button"
-                      className="secondary"
-                      disabled={approvalBusy}
-                      onClick={() => onApprovalDecision(item.remediationWorkflowId, item.approvalState!.requestId!, 'approved')}
-                    >
-                      Approve remediation action
-                    </button>
-                    <button
-                      type="button"
-                      className="secondary"
-                      disabled={approvalBusy}
-                      onClick={() => onApprovalDecision(item.remediationWorkflowId, item.approvalState!.requestId!, 'rejected')}
-                    >
-                      Reject remediation action
-                    </button>
-                  </div>
+                  <RemediationApprovalControls
+                    remediationWorkflowId={item.remediationWorkflowId}
+                    requestId={item.approvalState.requestId}
+                    busy={approvalBusy}
+                    onApprovalDecision={onApprovalDecision}
+                  />
                 ) : null}
+                <RemediationOperatorControls item={item} busy={operatorBusy} onOperatorControl={onOperatorControl} />
               </li>
             ))}
           </ul>
@@ -6755,21 +8389,42 @@ function RemediationEvidencePanel({
             <tr>
               <th>Evidence</th>
               <th>Artifact</th>
+              <th>Verification</th>
               <th>Action</th>
             </tr>
           </thead>
           <tbody>
-            {remediationArtifacts.map(({ artifact, type }) => (
-              <tr key={artifact.artifactId}>
-                <td>{remediationArtifactLabel(type)}</td>
-                <td><code>{artifact.artifactId}</code></td>
-                <td>
-                  <a className="button secondary" href={artifactDownloadHref(apiBase, artifact)}>
-                    Open Evidence
-                  </a>
-                </td>
-              </tr>
-            ))}
+            {remediationArtifacts.map(({ artifact, type }) => {
+              const verification = remediationVerificationSummary(artifact);
+              return (
+                <tr key={artifact.artifactId}>
+                  <td>{remediationArtifactLabel(type)}</td>
+                  <td><code>{artifact.artifactId}</code></td>
+                  <td>
+                    {verification ? (
+                      <span className="td-verification-cell">
+                        <span title="Repair verification outcome">
+                          {formatStatusLabel(verification.outcome)}
+                        </span>
+                        {verification.delivery ? (
+                          <span className="small subtle" title="Action delivery status">
+                            {' '}
+                            (delivery: {formatStatusLabel(verification.delivery)})
+                          </span>
+                        ) : null}
+                      </span>
+                    ) : (
+                      '—'
+                    )}
+                  </td>
+                  <td>
+                    <a className="button secondary" href={artifactDownloadHref(apiBase, artifact)}>
+                      Open Evidence
+                    </a>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -7183,10 +8838,108 @@ function RunComparisonPanel({
   );
 }
 
+/**
+ * Read-only bridge-event diagnostic and compatibility fallback for the primary
+ * Workflow Chat route (MoonLadderStudios/MoonMind#3640).
+ *
+ * The native Omnigent application owns the one interactive composer and session
+ * controls; this surface only projects durable evidence — bridge events, the Raw
+ * Timeline escape hatch, resource groups, compatibility/launch diagnostics,
+ * terminal evidence, and legacy managed-run/merged-log fallback. It never mounts
+ * the custom follow-up textarea, an optimistic message lane, approval cards, or
+ * interrupt/stop/clear/cancel/harvest/remove controls: `actionsEnabled` stays
+ * false and no optimistic-message setter is wired. A clearly labeled "Diagnostic
+ * event history" heading distinguishes it from the native chat above
+ * (docs/UI/WorkflowChatPanel.md §11).
+ */
+function WorkflowChatDiagnostics({
+  apiBase,
+  logStreamingEnabled,
+  resolvedAgentRunId,
+  showAgentRunAttachNotice,
+  isTerminal,
+  routes,
+  sessionTimelineEnabled,
+  structuredHistoryEnabled,
+  resolvedBridgeSessionId,
+  bridgeProjection,
+  bridgeResolutionLoading,
+  missingAgentRunState,
+}: {
+  apiBase: string;
+  logStreamingEnabled: boolean;
+  resolvedAgentRunId: string | null;
+  showAgentRunAttachNotice: boolean;
+  isTerminal: boolean;
+  routes: AgentRunRouteTemplates;
+  sessionTimelineEnabled: boolean;
+  structuredHistoryEnabled: boolean;
+  resolvedBridgeSessionId: string;
+  bridgeProjection: BridgeSessionProjection;
+  bridgeResolutionLoading: boolean;
+  missingAgentRunState: MissingAgentRunState | null;
+}) {
+  return (
+    <section
+      className="stack td-chat-diagnostics"
+      aria-label="Diagnostic event history"
+      data-testid="workflow-chat-diagnostics"
+    >
+      <div>
+        <h4>Diagnostic event history</h4>
+        <p className="small">
+          Read-only bridge events, resource evidence, terminal artifacts, and merged logs for
+          this workflow. This diagnostic and compatibility surface never sends messages or controls
+          the session; use the native Omnigent chat for live interaction.
+        </p>
+      </div>
+      {logStreamingEnabled ? (
+        resolvedAgentRunId ? (
+          <>
+            {showAgentRunAttachNotice ? (
+              <p className="small">Waiting for managed runtime launch to create live logs.</p>
+            ) : null}
+            <LiveLogsPanel
+              apiBase={apiBase}
+              agentRunId={resolvedAgentRunId}
+              isTerminal={isTerminal}
+              autoExpand
+              disclosure={false}
+              routes={routes}
+              sessionTimelineEnabled={sessionTimelineEnabled}
+              structuredHistoryEnabled={structuredHistoryEnabled}
+            />
+          </>
+        ) : resolvedBridgeSessionId ? (
+          <BridgeSessionLogsPanel
+            apiBase={apiBase}
+            bridgeSessionId={resolvedBridgeSessionId}
+            isTerminal={isTerminal}
+            projection={bridgeProjection}
+          />
+        ) : bridgeResolutionLoading ? (
+          <p className="small">Checking bridge session evidence.</p>
+        ) : (
+          <p className="small">
+            {missingAgentRunState
+              ? renderMissingAgentRunCopy(missingAgentRunState)
+              : 'Waiting for managed runtime launch to create live logs.'}
+          </p>
+        )
+      ) : (
+        <p className="small">Live log streaming is disabled for this dashboard.</p>
+      )}
+    </section>
+  );
+}
+
 function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
   const queryClient = useQueryClient();
   const toast = useDashboardToast();
   const cfg = readDashboardConfig(payload);
+  const retrievalCeilings = retrievalCeilingsFromRuntimeConfig(
+    cfg?.system?.retrievalAuthoring,
+  );
   const agentRunRoutes = readAgentRunRouteTemplates(cfg);
   const detailPoll = cfg?.pollIntervalsMs?.detail ?? 2000;
   const actionsOn = Boolean(cfg?.features?.temporalDashboard?.actionsEnabled);
@@ -7238,6 +8991,11 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
   );
   const [selectedRecoveryStepId, setSelectedRecoveryStepId] = useState('');
   const [selectedBranchId, setSelectedBranchId] = useState('');
+  const [continuationMaxAttempts, setContinuationMaxAttempts] = useState(1);
+  const [
+    continuationMaxConsecutiveNoProgressAttempts,
+    setContinuationMaxConsecutiveNoProgressAttempts,
+  ] = useState(1);
   const [latestBranchCompare, setLatestBranchCompare] = useState<z.infer<typeof CheckpointBranchCompareSchema> | null>(null);
 
   const detailQuery = useQuery(
@@ -7270,7 +9028,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
   const executionIdempotencyKey = execution?.idempotencyKey || execution?.idempotency_key || '';
   const shouldResolveBridgeSession = Boolean(
     execution &&
-      detailSubroute === 'chat' &&
+      detailSubroute === 'debug' &&
       !resolvedAgentRunId &&
       !explicitBridgeSessionId &&
       workflowId,
@@ -7289,6 +9047,15 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
   });
   const resolvedBridgeSessionId =
     explicitBridgeSessionId || bridgeResolutionQuery.data?.bridgeSessionId || '';
+  const resolvedBridgeProjection: BridgeSessionProjection = (
+    bridgeResolutionQuery.data?.bridgeSessionId === resolvedBridgeSessionId
+      ? bridgeResolutionQuery.data
+      : undefined
+  ) ?? {
+    bridgeSessionId: resolvedBridgeSessionId,
+    status: execution?.status ?? undefined,
+    capabilities: {},
+  };
   const shouldFetchRemediationLinks = Boolean(execution && workflowId);
   const sessionTimelineEnabled = shouldEnableSessionTimelineViewer({
     config: cfg,
@@ -7385,6 +9152,21 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
     staleTime: evidenceStaleTime,
   });
   const latestRunId = stepsQuery.data?.runId || runId;
+  const continueRemediationEvidence =
+    execution?.actions?.actionEvidence?.continueRemediation;
+  const authorizedContinuationBudget =
+    continueRemediationEvidence?.continuationBudget;
+  useEffect(() => {
+    if (!authorizedContinuationBudget) return;
+    setContinuationMaxAttempts(authorizedContinuationBudget.maxAttempts);
+    setContinuationMaxConsecutiveNoProgressAttempts(
+      authorizedContinuationBudget.maxConsecutiveNoProgressAttempts,
+    );
+  }, [
+    authorizedContinuationBudget?.grantId,
+    authorizedContinuationBudget?.maxAttempts,
+    authorizedContinuationBudget?.maxConsecutiveNoProgressAttempts,
+  ]);
   const artifactRunId = execution?.stepsHref ? stepsQuery.data?.runId : runId;
   const selectedRecoveryOptions = useMemo(() => {
     const failedStepId = execution?.resume?.failedStepId || '';
@@ -7533,7 +9315,12 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
     enabled: artifactsTabActive && shouldFetchRemediationLinks,
     staleTime: evidenceStaleTime,
   });
-  const runSummary = runSummaryQuery.data;
+  const executionRunSummary = RunSummaryArtifactSchema.safeParse(
+    execution?.finishSummary,
+  );
+  const runSummary =
+    runSummaryQuery.data ||
+    (executionRunSummary.success ? executionRunSummary.data : null);
   const displayedMergeAutomation =
     execution?.mergeAutomation || runSummary?.mergeAutomation || null;
   const displayedSummary = runSummary?.operatorSummary || execution?.summary || '—';
@@ -7700,6 +9487,68 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
     onError: (error: Error) => setActionError(error.message),
   });
 
+  const retryPublicationMutation = useMutation({
+    mutationFn: async () => {
+      const response = await fetch(
+        `${payload.apiBase}/executions/${encodeURIComponent(workflowId)}/retry-publication`,
+        {
+          method: 'POST',
+          credentials: 'include',
+          headers: { Accept: 'application/json' },
+        },
+      );
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || response.statusText);
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      setActionNotice('Publication-only recovery started.');
+      invalidate();
+    },
+    onError: (error: Error) => setActionError(error.message),
+  });
+
+  const continueRemediationMutation = useMutation({
+    mutationFn: async () => {
+      if (!authorizedContinuationBudget?.grantId) {
+        throw new Error(
+          'Continue remediation requires an authorized continuation budget.',
+        );
+      }
+      const response = await fetch(
+        `${payload.apiBase}/executions/${encodeURIComponent(workflowId)}/actions/continue-remediation`,
+        {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({
+            proposedContinuationBudget: {
+              maxAttempts: continuationMaxAttempts,
+              maxConsecutiveNoProgressAttempts:
+                continuationMaxConsecutiveNoProgressAttempts,
+            },
+          }),
+        },
+      );
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || response.statusText);
+      }
+      return response.json();
+    },
+    onSuccess: (result: { destinationWorkflowId?: string }) => {
+      setActionNotice(
+        result.destinationWorkflowId
+          ? `Continuation started: ${result.destinationWorkflowId}`
+          : 'Continuation started.',
+      );
+      invalidate();
+    },
+    onError: (error: Error) => setActionError(error.message),
+  });
+
   const selectedStepRecoveryMutation = useMutation({
     mutationFn: async () => {
       const selectedStepId = selectedRecoveryStep?.logicalStepId || '';
@@ -7763,17 +9612,20 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
       remediationWorkflowId,
       requestId,
       decision,
+      comment,
     }: {
       remediationWorkflowId: string;
       requestId: string;
       decision: 'approved' | 'rejected';
+      comment?: string;
     }) => {
+      const trimmedComment = (comment || '').trim();
       const response = await fetch(
         `${payload.apiBase}/executions/${encodeURIComponent(remediationWorkflowId)}/remediation/approvals/${encodeURIComponent(requestId)}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify({ decision }),
+          body: JSON.stringify(trimmedComment ? { decision, comment: trimmedComment } : { decision }),
         },
       );
       if (!response.ok) {
@@ -7784,6 +9636,54 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
     },
     onSuccess: () => {
       setActionNotice('Remediation approval decision recorded.');
+      invalidate();
+    },
+    onError: (error: Error) => setActionError(error.message),
+  });
+
+  const remediationOperatorMutation = useMutation({
+    mutationFn: async ({
+      remediationWorkflowId,
+      action,
+    }: {
+      remediationWorkflowId: string;
+      action: 'cancel' | 'takeover' | 'resume';
+    }) => {
+      const encodedWorkflowId = encodeURIComponent(remediationWorkflowId);
+      const isCancel = action === 'cancel';
+      const response = await fetch(
+        `${payload.apiBase}/executions/${encodedWorkflowId}/${isCancel ? 'cancel' : 'signal'}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify(
+            isCancel
+              ? { action: 'cancel', graceful: true, reason: 'operator_remediation_control' }
+              : {
+                  signalName: action === 'takeover' ? 'Pause' : 'Resume',
+                  payload: {
+                    reason: action === 'takeover'
+                      ? 'operator_takeover'
+                      : 'operator_resume_after_takeover',
+                  },
+                },
+          ),
+        },
+      );
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || response.statusText);
+      }
+      return { action, body: await response.json() };
+    },
+    onSuccess: ({ action }) => {
+      setActionNotice(
+        action === 'cancel'
+          ? 'Remediation cancellation requested.'
+          : action === 'takeover'
+            ? 'Operator takeover requested; autonomous remediation is pausing.'
+            : 'Remediation resume requested.',
+      );
       invalidate();
     },
     onError: (error: Error) => setActionError(error.message),
@@ -7826,7 +9726,19 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
           idempotencyKey: request.idempotencyKey,
           gitWorkBranch: request.draft.gitWorkBranch.trim() || null,
           maxBudgetUsd: Number.isFinite(budget) ? budget : null,
+          providerProfileRef: request.draft.providerProfileRef.trim() || null,
+          agentProfile: request.draft.agentProfileId
+            ? {
+                profileId: request.draft.agentProfileId,
+                version: request.draft.agentProfileVersion,
+                providerProfileRef: request.draft.providerProfileRef.trim() || null,
+              }
+            : null,
+          executionProfileRef: request.draft.executionProfileRef.trim() || null,
+          model: request.draft.model.trim() || null,
+          effort: request.draft.effort || null,
         };
+        applyBranchRetrievalOverride(body, request.contextRetrieval);
       } else if (request.kind === 'continue') {
         url = `${branchBase}/${encodeURIComponent(request.branch.branchId)}/continue`;
         body = {
@@ -7837,6 +9749,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
           idempotencyKey: request.idempotencyKey,
           maxBudgetUsd: null,
         };
+        applyBranchRetrievalOverride(body, request.contextRetrieval);
       } else if (request.kind === 'fork') {
         url = `${branchBase}/${encodeURIComponent(request.branch.branchId)}/fork`;
         body = {
@@ -7847,6 +9760,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
           idempotencyKey: request.idempotencyKey,
           maxBudgetUsd: null,
         };
+        applyBranchRetrievalOverride(body, request.contextRetrieval);
       } else if (request.kind === 'promote') {
         url = `${branchBase}/${encodeURIComponent(request.branch.branchId)}/promote`;
         body = {
@@ -7980,6 +9894,8 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
     signalMutation.isPending ||
     cancelMutation.isPending ||
     failedStepResumeMutation.isPending ||
+    continueRemediationMutation.isPending ||
+    retryPublicationMutation.isPending ||
     selectedStepRecoveryMutation.isPending ||
     createRemediationMutation.isPending ||
     remediationApprovalMutation.isPending ||
@@ -8096,6 +10012,14 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
       onRerun,
       onResumeFromFailedStep,
       onRecoverFromSelectedStep,
+      onRetryPublication: () => {
+        setActionError(null);
+        retryPublicationMutation.mutate();
+      },
+      onContinueRemediation: () => {
+        setActionError(null);
+        continueRemediationMutation.mutate();
+      },
       onPause,
       onResume,
       onApprove,
@@ -8169,7 +10093,13 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
           <div className="toolbar-identity-row">
             <p className="page-meta">Workflow {taskId || '—'}</p>
             {execution ? (
-              <ExecutionStatusPill status={execution.rawState || execution.state || execution.status} enableMotion={false} />
+              <WorkflowLifecycleStatusPill
+                status={resolveWorkflowDisplayStatus(
+                  execution.rawState,
+                  execution.state,
+                  execution.status,
+                )}
+              />
             ) : null}
           </div>
         </div>
@@ -8302,58 +10232,71 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
           </div>
 
           {chatTabActive ? (
-            <section className="stack td-chat-region td-evidence-region" aria-label="Workflow chat">
+            execution ? (
+              <WorkflowNativeChatRoute
+                apiBase={payload.apiBase}
+                workflowId={workflowId}
+                routeWorkflowId={taskId ?? workflowId}
+                search={search}
+                workflowTitle={workflowSubject}
+                statusPill={
+                  <WorkflowLifecycleStatusPill
+                    status={resolveWorkflowDisplayStatus(
+                      execution.rawState,
+                      execution.state,
+                      execution.status,
+                    )}
+                  />
+                }
+                runtimeLabel={
+                  execution.targetRuntime ? formatRuntimeLabel(execution.targetRuntime) : null
+                }
+                workflowTerminal={isTerminalExecution}
+                pollIntervalMs={detailPoll}
+                onNavigate={setDetailSubroute}
+              />
+            ) : (
+              <p className="small" role="status">
+                Loading workflow chat…
+              </p>
+            )
+          ) : null}
+
+          {debugTabActive ? (
+            <section
+              className="stack td-chat-region td-evidence-region"
+              aria-label="Session diagnostics"
+            >
               <div>
-                <h3>Workflow Chat</h3>
+                <h3>Session diagnostics</h3>
                 <p className="small">
-                  Session transcript, live runtime events, and eligible operator controls for this workflow.
+                  Read-only bridge session transcript, live runtime events, and eligible operator
+                  controls. Diagnostics only — the native chat experience is on the Chat tab.
+                  When native chat is unavailable, this read-only diagnostic and compatibility
+                  fallback preserves the session evidence below.
                 </p>
               </div>
-              {logStreamingEnabled ? (
-                resolvedAgentRunId ? (
-                  <>
-                    {showAgentRunAttachNotice ? (
-                      <p className="small">Waiting for managed runtime launch to create live logs.</p>
-                    ) : null}
-                    <LiveLogsPanel
-                      apiBase={payload.apiBase}
-                      agentRunId={resolvedAgentRunId}
-                      isTerminal={isTerminalExecution}
-                      autoExpand
-                      disclosure={false}
-                      routes={agentRunRoutes}
-                      sessionTimelineEnabled={sessionTimelineEnabled}
-                      structuredHistoryEnabled={structuredHistoryEnabled}
-                      optimisticMessages={chatOptimisticMessages}
-                    />
-                  </>
-                ) : resolvedBridgeSessionId ? (
-                  <BridgeSessionLogsPanel
-                    apiBase={payload.apiBase}
-                    bridgeSessionId={resolvedBridgeSessionId}
-                    isTerminal={isTerminalExecution}
-                  />
-                ) : bridgeResolutionQuery.isLoading ? (
-                  <p className="small">Checking bridge session evidence.</p>
-                ) : (
-                  <p className="small">{missingAgentRunState ? renderMissingAgentRunCopy(missingAgentRunState) : 'Waiting for managed runtime launch to create live logs.'}</p>
-                )
-              ) : (
-                <p className="small">Live log streaming is disabled for this dashboard.</p>
-              )}
-              {resolvedAgentRunId && actionsOn ? (
-                <SessionContinuityPanel
+              <WorkflowChatNative
+                apiBase={payload.apiBase}
+                workflowId={execution.workflowId || execution.taskId || ''}
+                active={chatTabActive}
+                terminal={isTerminalExecution}
+              >
+                <WorkflowChatDiagnostics
                   apiBase={payload.apiBase}
-                  agentRunId={resolvedAgentRunId}
-                  targetRuntime={execution.targetRuntime}
+                  logStreamingEnabled={logStreamingEnabled}
+                  resolvedAgentRunId={resolvedAgentRunId}
+                  showAgentRunAttachNotice={showAgentRunAttachNotice}
                   isTerminal={isTerminalExecution}
-                  invalidateWorkflowDetail={invalidate}
                   routes={agentRunRoutes}
-                  optimisticMessages={chatOptimisticMessages}
-                  setOptimisticMessages={setChatOptimisticMessages}
-                  compact
+                  sessionTimelineEnabled={sessionTimelineEnabled}
+                  structuredHistoryEnabled={structuredHistoryEnabled}
+                  resolvedBridgeSessionId={resolvedBridgeSessionId}
+                  bridgeProjection={resolvedBridgeProjection}
+                  bridgeResolutionLoading={bridgeResolutionQuery.isLoading}
+                  missingAgentRunState={missingAgentRunState}
                 />
-              ) : null}
+              </WorkflowChatNative>
             </section>
           ) : null}
 
@@ -8420,6 +10363,37 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                 ) : null}
               </FactGroup>
 
+              {execution.omnigentExecutionPlan ? (
+                <FactGroup title="Omnigent authority">
+                  <Fact label="Execution Plan">
+                    <code className="text-xs break-all">
+                      {execution.omnigentExecutionPlan.planRef}
+                    </code>
+                  </Fact>
+                  <Fact label="Plan Digest">
+                    <code className="text-xs break-all">
+                      {execution.omnigentExecutionPlan.planDigest}
+                    </code>
+                  </Fact>
+                  {execution.omnigentRuntimeBinding ? (
+                    <>
+                      <Fact label="Runtime Binding">
+                        <code className="text-xs break-all">
+                          {execution.omnigentRuntimeBinding.runtimeBindingRef}
+                        </code>
+                      </Fact>
+                      <Fact label="Binding Fence">
+                        revision {execution.omnigentRuntimeBinding.revision ?? '—'} · generation{' '}
+                        {execution.omnigentRuntimeBinding.fencingGeneration ?? '—'} ·{' '}
+                        {formatStatusLabel(execution.omnigentRuntimeBinding.state)}
+                      </Fact>
+                    </>
+                  ) : (
+                    <Fact label="Runtime Binding">Pending post-lease acquisition</Fact>
+                  )}
+                </FactGroup>
+              ) : null}
+
               <FactGroup title="Git & Publish">
                 {execution.repository ? (
                   <Fact label="Repo">
@@ -8439,6 +10413,17 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                 {execution.targetBranch ? (
                   <Fact label="Target Branch">
                     <code className="text-xs break-all">{execution.targetBranch}</code>
+                  </Fact>
+                ) : null}
+                {execution.outputBranch ? (
+                  <Fact label={execution.outputBranch.intent === 'terminal_checkpoint' ? 'Saved Work Branch' : 'Published Branch'}>
+                    {execution.outputBranch.url ? (
+                      <a className="text-xs break-all" href={execution.outputBranch.url} target="_blank" rel="noreferrer">
+                        <code>{execution.outputBranch.name}</code>
+                      </a>
+                    ) : (
+                      <code className="text-xs break-all">{execution.outputBranch.name}</code>
+                    )}
                   </Fact>
                 ) : null}
                 {prUrl ? (
@@ -8506,6 +10491,136 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
           {overviewTabActive && runSummary ? (
             <section className="stack td-run-summary-region td-evidence-region">
               <h3>Run Summary</h3>
+              {runSummary.controlStop?.kind === 'workflow_gate' ? (
+                <div className="stack" aria-label="Quality gate outcome">
+                  <h4>Quality gate stopped this workflow</h4>
+                  <p>
+                    Every Step Execution completed as an operation, but the semantic quality gate
+                    did not accept the candidate. No failed Step Execution was fabricated.
+                  </p>
+                  <FlatFactGrid>
+                    <Fact label="Gate verdict">{runSummary.controlStop.verdict || '—'}</Fact>
+                    <Fact label="Stop reason">{runSummary.controlStop.reasonCode || '—'}</Fact>
+                    <Fact label="Publication feasible">
+                      {runSummary.controlStop.publicationFeasible ? 'Yes' : 'No'}
+                    </Fact>
+                    <Fact label="Publication outcome">
+                      {runSummary.controlStop.publicationAttempted ? 'Attempted' : 'Not attempted'}
+                    </Fact>
+                    <Fact label="Preserved candidate">
+                      <code className="text-xs break-all">{runSummary.controlStop.workspaceHeadRef || '—'}</code>
+                    </Fact>
+                    <Fact label="Authoritative remaining work">
+                      <code className="text-xs break-all">{runSummary.controlStop.remainingWorkRef || '—'}</code>
+                    </Fact>
+                    {continueRemediationEvidence?.sourceBudget ? (
+                      <Fact label="Exhausted source budget">
+                        {continueRemediationEvidence.sourceBudget.consumedAttempts}
+                        {' / '}
+                        {continueRemediationEvidence.sourceBudget.maxAttempts}
+                        {' · '}
+                        {formatStatusLabel(
+                          continueRemediationEvidence.sourceBudget.exhaustedDimension,
+                        )}
+                      </Fact>
+                    ) : null}
+                    {authorizedContinuationBudget ? (
+                      <Fact label="Authorized continuation grant">
+                        {authorizedContinuationBudget.maxAttempts} attempts
+                        {' · '}
+                        {authorizedContinuationBudget.maxConsecutiveNoProgressAttempts}
+                        {' consecutive no-progress'}
+                      </Fact>
+                    ) : null}
+                    {continueRemediationEvidence?.destinationWorkflowId ? (
+                      <Fact label="Linked continuation">
+                        <a
+                          href={`/workflows/${encodeURIComponent(
+                            continueRemediationEvidence.destinationWorkflowId,
+                          )}/overview?source=temporal`}
+                        >
+                          <code className="text-xs break-all">
+                            {continueRemediationEvidence.destinationWorkflowId}
+                          </code>
+                        </a>
+                      </Fact>
+                    ) : null}
+                    {continueRemediationEvidence?.restorationEvidenceRef ? (
+                      <Fact label="Restoration provenance">
+                        <code className="text-xs break-all">
+                          {continueRemediationEvidence.restorationEvidenceRef}
+                        </code>
+                      </Fact>
+                    ) : null}
+                  </FlatFactGrid>
+                  {authorizedContinuationBudget ? (
+                    <fieldset className="stack td-continuation-budget">
+                      <legend>Proposed continuation budget</legend>
+                      <label>
+                        Maximum attempts
+                        <input
+                          aria-label="Continuation maximum attempts"
+                          type="number"
+                          min={1}
+                          max={authorizedContinuationBudget.maxAttempts}
+                          value={continuationMaxAttempts}
+                          onChange={(event) =>
+                            setContinuationMaxAttempts(
+                              Math.max(
+                                1,
+                                Math.min(
+                                  authorizedContinuationBudget.maxAttempts,
+                                  Number(event.target.value) || 1,
+                                ),
+                              ),
+                            )}
+                        />
+                      </label>
+                      <label>
+                        Consecutive no-progress attempts
+                        <input
+                          aria-label="Continuation consecutive no-progress attempts"
+                          type="number"
+                          min={1}
+                          max={
+                            authorizedContinuationBudget
+                              .maxConsecutiveNoProgressAttempts
+                          }
+                          value={continuationMaxConsecutiveNoProgressAttempts}
+                          onChange={(event) =>
+                            setContinuationMaxConsecutiveNoProgressAttempts(
+                              Math.max(
+                                1,
+                                Math.min(
+                                  authorizedContinuationBudget
+                                    .maxConsecutiveNoProgressAttempts,
+                                  Number(event.target.value) || 1,
+                                ),
+                              ),
+                            )}
+                        />
+                      </label>
+                    </fieldset>
+                  ) : null}
+                  {continueRemediationEvidence?.hostSessionLifecycle ? (
+                    <details>
+                      <summary>Host/session lifecycle evidence</summary>
+                      <pre className="text-xs break-all">
+                        {JSON.stringify(
+                          continueRemediationEvidence.hostSessionLifecycle,
+                          null,
+                          2,
+                        )}
+                      </pre>
+                    </details>
+                  ) : null}
+                  <p className="small">
+                    Edit for rerun and Full retry reuse the original task input. Continue remediation,
+                    when admitted, consumes the preserved candidate and remaining-work evidence.
+                    Publication retry only retries the publication handoff; it does not accept the work.
+                  </p>
+                </div>
+              ) : null}
               <FlatFactGrid>
                 {runSummary.finishOutcome ? (
                   <>
@@ -8522,6 +10637,23 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
               </FlatFactGrid>
               {runSummary.publish?.reason ? (
                 <p className="whitespace-pre-wrap">{runSummary.publish.reason}</p>
+              ) : null}
+              {runSummary.failure?.failureCode ? (
+                <FlatFactGrid>
+                  <Fact label="Failure Code">{runSummary.failure.failureCode}</Fact>
+                  <Fact label="Queued Children">
+                    {runSummary.failure.queuedChildCount ?? runSummary.failure.queuedChildren?.length ?? 0}
+                  </Fact>
+                </FlatFactGrid>
+              ) : null}
+              {runSummary.failure?.queuedChildren?.length ? (
+                <FactGroup title="Queued Child Workflows">
+                  {runSummary.failure.queuedChildren.map((child, index) => (
+                    <Fact key={child.workflowId || child.executionId || `${child.ref || 'child'}-${index}`} label={child.ref || `Child ${index + 1}`}>
+                      <code className="text-xs break-all">{child.workflowId || child.executionId || '—'}</code>
+                    </Fact>
+                  ))}
+                </FactGroup>
               ) : null}
               {runSummary.publishContext ? (
                 <FlatFactGrid>
@@ -8541,6 +10673,63 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                   ) : null}
                 </FlatFactGrid>
               ) : null}
+              {runSummary.publishContext?.remediationLoop ? (
+                <FactGroup title="Remediation Loop">
+                  <Fact label="Loop Status">{formatStatusLabel(runSummary.publishContext.remediationLoop.status)}</Fact>
+                  <Fact label="Attempts Materialized">
+                    {runSummary.publishContext.remediationLoop.materializedAttempts?.length ?? 0} of {runSummary.publishContext.remediationLoop.hardMaxAttempts}
+                  </Fact>
+                  <Fact label="Latest Verdict">{runSummary.publishContext.remediationLoop.latestVerdict || '—'}</Fact>
+                  <Fact label="Decision Reason">{runSummary.publishContext.remediationLoop.continuationReason || '—'}</Fact>
+                  <Fact label="Workspace Head">
+                    <code className="text-xs break-all">{runSummary.publishContext.remediationLoop.workspaceHeadRef || '—'}</code>
+                  </Fact>
+                  <Fact label="Continue-As-New Count">{runSummary.publishContext.remediationLoop.continueAsNewCount ?? 0}</Fact>
+                  {runSummary.publishContext.remediationLoop.materializedAttempts?.map((attempt) => (
+                    <Fact key={attempt.attempt} label={`Attempt ${attempt.attempt}`}>
+                      Attempt {attempt.attempt}: remediation {formatStatusLabel(attempt.remediationStatus || 'pending')};
+                      {' '}verification {formatStatusLabel(attempt.verificationStatus || 'pending')}
+                    </Fact>
+                  ))}
+                </FactGroup>
+              ) : null}
+              {runSummary.publishContext?.boundedStoryLoop?.continuationDecision ? (() => {
+                const continuation = runSummary.publishContext.boundedStoryLoop.continuationDecision;
+                const progress = continuation.gate?.progressVector;
+                const consumed = continuation.budget?.consumed ?? {};
+                const attemptsUsed = consumed.attempts ?? 0;
+                const attemptsMaximum = continuation.budget?.maxAttempts;
+                const unresolvedGaps = progress?.gaps?.filter((gap) => !['passed', 'resolved', 'satisfied'].includes(gap.status)).length;
+                return (
+                  <section className="stack" aria-label="Remediation progress and budgets">
+                    <h4>Remediation progress</h4>
+                    <FlatFactGrid>
+                      <Fact label="Classification">{formatStatusLabel(progress?.classification) || '—'}</Fact>
+                      <Fact label="Gap trend">{progress ? `${unresolvedGaps ?? '—'} unresolved · score ${progress.unresolvedGapScore}${progress.priorUnresolvedGapScore === undefined || progress.priorUnresolvedGapScore === null ? '' : ` (${progress.unresolvedGapScore - progress.priorUnresolvedGapScore >= 0 ? '+' : ''}${progress.unresolvedGapScore - progress.priorUnresolvedGapScore})`}` : '—'}</Fact>
+                      <Fact label="Required checks">
+                        {progress ? `Passed ${progress.requiredChecks.passed ?? 0}${progress.priorRequiredChecks ? ` (${(progress.requiredChecks.passed ?? 0) - (progress.priorRequiredChecks.passed ?? 0) >= 0 ? '+' : ''}${(progress.requiredChecks.passed ?? 0) - (progress.priorRequiredChecks.passed ?? 0)})` : ''} · Failed ${progress.requiredChecks.failed ?? 0} · Not run ${progress.requiredChecks.not_run ?? 0}` : '—'}
+                      </Fact>
+                      <Fact label="Semantic no-progress cycles">{consumed.consecutiveNoProgressAttempts ?? 0}</Fact>
+                      <Fact label="Hard attempts used / remaining">
+                        {attemptsMaximum === undefined ? `${attemptsUsed} / —` : `${attemptsUsed} / ${Math.max(0, attemptsMaximum - attemptsUsed)}`}
+                      </Fact>
+                      <Fact label="Repeated failure signatures">{progress?.repeatedFailureSignatures?.length ?? 0}</Fact>
+                      <Fact label="Resource budgets">
+                        {`Provider ${consumed.provider ?? 0}/${continuation.budget?.providerBudget ?? '∞'} · Tokens ${consumed.tokens ?? 0}/${continuation.budget?.tokenBudget ?? '∞'} · Cost ${consumed.cost ?? 0}/${continuation.budget?.costBudget ?? '∞'} · Wall clock ${consumed.elapsedSeconds ?? 0}/${continuation.budget?.maxElapsedSeconds ?? '∞'}`}
+                      </Fact>
+                      <Fact label="Latest meaningful progress evidence">
+                        {progress?.classification === 'meaningful_progress'
+                          ? progress.newAuthoritativeEvidenceDigest || progress.relevantDiffDigest || 'Structured gap/check progress'
+                          : '—'}
+                      </Fact>
+                      <Fact label="Exact stop dimension">{continuation.continueLoop ? 'None' : formatStatusLabel(continuation.reason)}</Fact>
+                    </FlatFactGrid>
+                    {progress?.regressions?.length ? (
+                      <p className="small">Regressions: {progress.regressions.map((regression) => formatStatusLabel(regression)).join(', ')}</p>
+                    ) : null}
+                  </section>
+                );
+              })() : null}
               {runSummary.lastStep?.summary && runSummary.lastStep.summary !== displayedSummary ? (
                 <div>
                   <strong>Last Step</strong>
@@ -8709,6 +10898,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                       setActionError(null);
                       checkpointBranchMutation.mutate(request);
                     }}
+                    retrievalCeilings={retrievalCeilings}
                   />
                 </>
               ) : (
@@ -8869,15 +11059,26 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
 
           {artifactsTabActive ? (
             <RemediationRelationshipsPanel
+              apiBase={payload.apiBase}
               inbound={inboundRemediationsQuery.data}
               outbound={outboundRemediationsQuery.data}
               inboundError={inboundRemediationsQuery.isError ? (inboundRemediationsQuery.error as Error) : null}
               outboundError={outboundRemediationsQuery.isError ? (outboundRemediationsQuery.error as Error) : null}
               approvalBusy={remediationApprovalMutation.isPending}
+              operatorBusy={remediationOperatorMutation.isPending}
               showEmpty={shouldFetchRemediationLinks && (inboundRemediationsQuery.isSuccess || outboundRemediationsQuery.isSuccess)}
-              onApprovalDecision={(remediationWorkflowId, requestId, decision) => {
+              onApprovalDecision={(remediationWorkflowId, requestId, decision, comment) => {
                 setActionError(null);
-                remediationApprovalMutation.mutate({ remediationWorkflowId, requestId, decision });
+                remediationApprovalMutation.mutate({
+                  remediationWorkflowId,
+                  requestId,
+                  decision,
+                  ...(comment ? { comment } : {}),
+                });
+              }}
+              onOperatorControl={(remediationWorkflowId, action) => {
+                setActionError(null);
+                remediationOperatorMutation.mutate({ remediationWorkflowId, action });
               }}
             />
           ) : null}
@@ -8906,7 +11107,9 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                     >
                       <option value="approval_gated">Approval-gated admin remediation</option>
                       <option value="observe_only">Troubleshooting only</option>
-                      <option value="admin_auto">Admin remediation</option>
+                      <option value="admin_auto" disabled>
+                        Administrator automatic (release gated)
+                      </option>
                     </select>
                   </label>
                   <label>

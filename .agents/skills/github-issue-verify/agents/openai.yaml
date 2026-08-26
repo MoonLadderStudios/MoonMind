@@ -1,0 +1,4 @@
+interface:
+  display_name: "GitHub Issue Verify"
+  short_description: "Verify a branch against a GitHub issue"
+  default_prompt: "Use $github-issue-verify to check the current branch against GitHub issue MoonLadderStudios/MoonMind#123 and post the verdict to GitHub."

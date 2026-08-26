@@ -17,6 +17,24 @@ def _disable_rag_preflight_checks(monkeypatch) -> None:
 
     monkeypatch.setattr(cli, "ensure_rag_ready", lambda _settings: None)
 
+
+@pytest.mark.parametrize(
+    ("runtime", "expected"),
+    (
+        ("codex", ("codex", "git", "gh", "execution.fanout")),
+        (
+            "universal",
+            ("codex", "claude", "git", "gh", "execution.fanout"),
+        ),
+        ("jules", ("jules", "git", "gh")),
+    ),
+)
+def test_effective_worker_capabilities_include_supported_fanout_by_default(
+    runtime: str,
+    expected: tuple[str, ...],
+) -> None:
+    assert cli._effective_worker_capabilities({}, runtime) == expected
+
 def test_run_preflight_missing_codex_raises(monkeypatch) -> None:
     """Preflight should fail when codex binary is unavailable."""
 

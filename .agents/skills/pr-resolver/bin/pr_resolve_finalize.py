@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -18,15 +19,31 @@ from typing import Any
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
+for package_root in (SCRIPT_DIR.parent / "lib", *SCRIPT_DIR.parents):
+    if (package_root / "pr_resolver_core").is_dir():
+        sys.path.insert(0, str(package_root))
+        break
+
+from pr_resolver_core import (  # noqa: E402
+    classify_snapshot,
+    normalize_portable_snapshot,
+)
 
 from pr_resolve_contract import (  # noqa: E402
     EXIT_CODE_BLOCKED,
     EXIT_CODE_FAILED,
     EXIT_CODE_MERGED,
+    EXIT_CODE_REVIEW_CLEAN,
     FINALIZE_ONLY_RETRY_REASONS,
+    FINISH_MODE_FIX_ONLY,
+    FINISH_MODES,
     FULL_REMEDIATION_REASONS,
     RESULT_SCHEMA_VERSION,
+    REVIEW_REQUEST_REASONS,
+    build_gated_continuation,
+    current_execution_ref,
     merge_automation_disposition_for_result,
+    normalize_finish_mode,
     normalize_text,
     now_utc_iso,
     remediation_next_step,
@@ -84,6 +101,15 @@ def _snapshot_failed_reason(exc: subprocess.CalledProcessError) -> str:
         return "publish_unavailable"
     return "pr_not_found"
 
+def _env_flag(name: str) -> bool:
+    return str(os.environ.get(name, "")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def _is_conflicting(pr: dict[str, Any]) -> bool:
     mergeable = pr.get("mergeable")
     merge_state = normalize_text(pr.get("mergeStateStatus")).upper()
@@ -95,51 +121,32 @@ def _is_conflicting(pr: dict[str, Any]) -> bool:
     return mergeable_text in CONFLICTING_MERGEABLE
 
 def evaluate_finalize_action(snapshot: dict[str, Any]) -> dict[str, str]:
-    pr = snapshot.get("pr") if isinstance(snapshot.get("pr"), dict) else {}
-    ci = snapshot.get("ci") if isinstance(snapshot.get("ci"), dict) else {}
-    comments_fetch = (
-        snapshot.get("commentsFetch")
-        if isinstance(snapshot.get("commentsFetch"), dict)
-        else {}
-    )
-    comments_summary = (
-        snapshot.get("commentsSummary")
-        if isinstance(snapshot.get("commentsSummary"), dict)
-        else {}
-    )
-
-    if normalize_text(pr.get("state")).upper() == "MERGED":
+    decision = classify_snapshot(normalize_portable_snapshot(snapshot))
+    if decision.classification == "already_merged":
         return {"action": "already_merged", "reason": "already_merged"}
-
-    if _is_conflicting(pr):
-        return {"action": "blocked", "reason": "merge_conflicts"}
-    if not bool(comments_fetch.get("succeeded")):
-        return {"action": "blocked", "reason": "comments_unavailable"}
-    if comments_summary.get("includeBotReviewComments") is not True:
-        return {"action": "blocked", "reason": "comment_policy_not_enforced"}
-    if bool(comments_summary.get("hasActionableComments")):
-        return {"action": "blocked", "reason": "actionable_comments"}
-    if normalize_text(ci.get("signalQuality")).lower() not in {"", "ok"}:
-        return {"action": "blocked", "reason": "ci_signal_degraded"}
-    if bool(ci.get("hasFailures")):
-        return {"action": "blocked", "reason": "ci_failures"}
-    if bool(ci.get("isRunning")):
-        return {"action": "blocked", "reason": "ci_running"}
-    codex_review_grace = comments_summary.get("codexReviewGrace")
-    if isinstance(codex_review_grace, dict) and codex_review_grace.get("active") is True:
+    if decision.classification == "review_grace":
         return {"action": "blocked", "reason": "codex_review_grace_wait"}
-
-    merge_state = normalize_text(pr.get("mergeStateStatus")).upper()
-    if merge_state in DIRECT_MERGE_STATE:
+    if decision.classification == "ready_to_merge":
         return {"action": "merge_now", "reason": "ci_complete"}
+    return {"action": "blocked", "reason": decision.reason_code}
 
-    return {"action": "blocked", "reason": "merge_not_ready"}
-
-def _run_snapshot(snapshot_script: Path, pr: str | None, snapshot_path: Path) -> None:
+def _run_snapshot(
+    snapshot_script: Path,
+    pr: str | None,
+    snapshot_path: Path,
+    *,
+    review_provider: str = "",
+    require_fresh_review: bool = False,
+) -> None:
     cmd = [sys.executable, str(snapshot_script)]
     cmd.extend(["--snapshot-path", str(snapshot_path)])
     if pr:
         cmd.extend(["--pr", pr])
+    if review_provider:
+        cmd.extend(["--review-provider", review_provider])
+    cmd.append(
+        "--require-fresh-review" if require_fresh_review else "--no-require-fresh-review"
+    )
     # Capture output so auth-failure markers in stdout/stderr reach
     # CalledProcessError attributes; _snapshot_failed_reason inspects them
     # to distinguish publish_unavailable (auth) from pr_not_found.
@@ -177,9 +184,12 @@ def _write_result(
             next_step = "retry_finalize_after_backoff"
         if reason in FULL_REMEDIATION_REASONS:
             next_step = "run_full_remediation"
+        if reason in REVIEW_REQUEST_REASONS:
+            next_step = "request_automated_review"
 
     payload: dict[str, Any] = {
         "schema_version": RESULT_SCHEMA_VERSION,
+        "executionRef": current_execution_ref(),
         "tool": "pr_resolve_finalize",
         "timestamp": now_utc_iso(),
         "pr_number": pr.get("number"),
@@ -201,6 +211,18 @@ def _write_result(
     if reason:
         payload["reason"] = reason
         payload["final_reason"] = reason
+    if payload["mergeAutomationDisposition"] in {"reenter_gate", "request_review"}:
+        try:
+            payload["gatedContinuation"] = build_gated_continuation(
+                snapshot,
+                reason=reason or "resolver_wait",
+                execution_ref=payload["executionRef"] or "local:pr_resolve_finalize",
+            )
+        except ValueError:
+            # Missing/stale identity or timing evidence is not a handoff.  In
+            # particular, snapshot/provider failures must never be upgraded
+            # merely because their retry policy names re-entry.
+            payload["mergeAutomationDisposition"] = "failed"
     result_path.parent.mkdir(parents=True, exist_ok=True)
     result_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
@@ -240,7 +262,39 @@ def main() -> None:
         action="store_true",
         help="Return exit code 2 when blocked (default keeps blocked as exit code 0).",
     )
+    parser.add_argument(
+        "--review-provider",
+        default=os.environ.get("PR_RESOLVER_REVIEW_PROVIDER", ""),
+        help=(
+            "Automated review provider that must review every head SHA "
+            "(for example 'codex'). Empty or 'none' disables the review loop."
+        ),
+    )
+    parser.add_argument(
+        "--require-fresh-review",
+        dest="require_fresh_review",
+        action="store_true",
+        default=_env_flag("PR_RESOLVER_REQUIRE_FRESH_REVIEW"),
+        help="Require a fresh automated review for the current head SHA.",
+    )
+    parser.add_argument(
+        "--no-require-fresh-review",
+        dest="require_fresh_review",
+        action="store_false",
+        help="Do not require a fresh automated review for the current head SHA.",
+    )
+    parser.add_argument(
+        "--finish-mode",
+        default=os.environ.get("PR_RESOLVER_FINISH_MODE", "") or "merge",
+        choices=list(FINISH_MODES),
+        help=(
+            "'merge' finishes by merging the PR once the gate passes. "
+            "'fix_only' stops at a passing gate and reports review_clean "
+            "without merging."
+        ),
+    )
     args = parser.parse_args()
+    finish_mode = normalize_finish_mode(args.finish_mode)
 
     snapshot_script = Path(__file__).with_name("pr_resolve_snapshot.py")
     snapshot_path = Path(args.snapshot_path)
@@ -249,7 +303,13 @@ def main() -> None:
     try:
         if not args.skip_refresh:
             try:
-                _run_snapshot(snapshot_script, args.pr, snapshot_path)
+                _run_snapshot(
+                    snapshot_script,
+                    args.pr,
+                    snapshot_path,
+                    review_provider=args.review_provider,
+                    require_fresh_review=bool(args.require_fresh_review),
+                )
             except subprocess.CalledProcessError as exc:
                 if exc.returncode == EXIT_CODE_FAILED:
                     # The snapshot failed — but the PR may simply have been
@@ -333,6 +393,20 @@ def main() -> None:
             sys.exit(EXIT_CODE_MERGED)
 
         if action == "merge_now":
+            if finish_mode == FINISH_MODE_FIX_ONLY:
+                # Nothing is left to address and the gate is open, but this run
+                # was not granted merge authority. Report the clean state as a
+                # terminal success instead of merging.
+                _write_result(
+                    result_path,
+                    snapshot=snapshot,
+                    decision="merge gate passed; finish mode is fix_only",
+                    merge_outcome="skipped",
+                    status="review_clean",
+                    reason="finish_mode_fix_only",
+                )
+                print("Merge gate passed; no comments left to address (not merging).")
+                sys.exit(EXIT_CODE_REVIEW_CLEAN)
             if args.dry_run:
                 _write_result(
                     result_path,
@@ -345,6 +419,17 @@ def main() -> None:
                 print("Merge gate passed (dry-run).")
                 sys.exit(EXIT_CODE_BLOCKED if args.strict_exit_codes else 0)
             _merge_pr(pr_selector, args.merge_method)
+            if not _check_pr_merged(pr_selector):
+                _write_result(
+                    result_path,
+                    snapshot=snapshot,
+                    decision="merge requested; awaiting authoritative merged state",
+                    merge_outcome="blocked",
+                    status="blocked",
+                    reason="merge_pending",
+                )
+                print("Blocked: merge_pending")
+                sys.exit(EXIT_CODE_BLOCKED if args.strict_exit_codes else 0)
             _write_result(
                 result_path,
                 snapshot=snapshot,
@@ -369,6 +454,7 @@ def main() -> None:
     except (RuntimeError, subprocess.CalledProcessError) as exc:
         payload = {
             "schema_version": RESULT_SCHEMA_VERSION,
+            "executionRef": current_execution_ref(),
             "tool": "pr_resolve_finalize",
             "timestamp": now_utc_iso(),
             "decision": "failed",

@@ -1,6 +1,12 @@
 # Settings System
 
-**Related design documents:** [SecretsSystem.md](./SecretsSystem.md), [ProviderProfiles.md](./ProviderProfiles.md), [OAuthTerminal.md](../ManagedAgents/OAuthTerminal.md), [ManagedAndExternalAgentExecutionModel.md](../Temporal/ManagedAndExternalAgentExecutionModel.md)
+Omnigent settings bootstrap the persistent [Omnigent policy authority](../Omnigent/PolicyAuthority.md);
+environment values are not mutable per-run policy. Settings configure the Codex
+product path whose canonical identity is `agentKind=external`, `agentId=omnigent`,
+nested harness `codex-native`, reconciled end-to-end by
+[NormalCodexProductPathReconciliation.md](../Omnigent/NormalCodexProductPathReconciliation.md).
+
+**Related design documents:** [SecretsSystem.md](./SecretsSystem.md), [ProviderProfiles.md](./ProviderProfiles.md), [OAuthTerminal.md](../ManagedAgents/OAuthTerminal.md), [ManagedAndExternalAgentExecutionModel.md](../Temporal/ManagedAndExternalAgentExecutionModel.md), [Codex via Omnigent Create-to-host contract](../Omnigent/CodexCreateToHostContract.md)
 
 Status: **Desired-State Design**
 Owners: MoonMind Engineering

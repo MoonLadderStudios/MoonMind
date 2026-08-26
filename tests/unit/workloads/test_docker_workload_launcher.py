@@ -1,12 +1,23 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
+from moonmind.security.egress import (
+    CONTROL_PLANE_NETWORK_REF,
+    DEFAULT_EGRESS_PROFILE,
+    EGRESS_NETWORK_REF,
+    PROXY_URL,
+)
+from moonmind.security.egress_conformance_evidence import (
+    parse_and_verify_conformance_evidence,
+)
 from moonmind.schemas.workload_models import UnrestrictedDockerRequest, WorkloadRequest
 from moonmind.workloads.docker_launcher import (
     DockerContainerJanitor,
@@ -153,6 +164,7 @@ def _validated_helper_request(
     tmp_path: Path,
     *,
     workspace_root: Path = WORKSPACE_ROOT,
+    profiles: list[dict[str, object]] | None = None,
     **overrides: object,
 ):
     payload: dict[str, object] = {
@@ -173,7 +185,7 @@ def _validated_helper_request(
     return _validated_request(
         tmp_path,
         workspace_root=workspace_root,
-        profiles=[_helper_profile_payload(workspace_root=workspace_root)],
+        profiles=profiles or [_helper_profile_payload(workspace_root=workspace_root)],
         **payload,
     )
 
@@ -1552,6 +1564,8 @@ async def test_launcher_holds_helper_concurrency_lease_until_stop(
             return _Process(returncode=0, stdout=b"PONG\n")
         if args[1] == "logs":
             return _Process(returncode=0, stdout=b"service log\n")
+        if args[1] == "ps":
+            return _Process(returncode=0, stdout=b"")
         return _Process(returncode=0)
 
     monkeypatch.setattr(
@@ -1759,6 +1773,8 @@ async def test_launcher_tears_down_bounded_helper_after_multiple_sub_steps(
             return _Process(returncode=0, stdout=b"PONG\n")
         if args[1] == "logs":
             return _Process(returncode=0, stdout=b"helper stdout\n", stderr=b"warn\n")
+        if args[1] == "ps":
+            return _Process(returncode=0, stdout=b"")
         return _Process(returncode=0)
 
     monkeypatch.setattr(
@@ -1794,6 +1810,49 @@ async def test_launcher_tears_down_bounded_helper_after_multiple_sub_steps(
     assert stop_result.metadata["helper"]["teardown"]["reason"] == (
         "bounded_window_complete"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("network_policy", ["none", "docker_proxy"])
+async def test_helper_cleanup_failure_holds_lease_for_every_network_policy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    network_policy: str,
+) -> None:
+    cleanup_started = False
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        nonlocal cleanup_started
+        if args[1] == "run":
+            return _Process(returncode=0, stdout=b"helper123\n")
+        if args[1] == "exec":
+            return _Process(returncode=0, stdout=b"PONG\n")
+        if args[1] == "logs":
+            cleanup_started = True
+            return _Process(returncode=0, stdout=b"service log\n")
+        if args[1] == "ps" and cleanup_started:
+            return _Process(
+                returncode=0,
+                stdout=b"mm-helper-task-helper-step-service-1\n",
+            )
+        return _Process(returncode=0, stdout=b"")
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    limiter = DockerWorkloadConcurrencyLimiter(fleet_limit=1)
+    launcher = DockerWorkloadLauncher(concurrency_limiter=limiter)
+    validated = _validated_helper_request(
+        tmp_path,
+        profiles=[_helper_profile_payload(network_policy=network_policy)],
+    )
+    await launcher.start_helper(validated)
+
+    with pytest.raises(DockerWorkloadLauncherError, match="requires reconciliation"):
+        await launcher.stop_helper(validated)
+
+    assert limiter._active_total == 1
 
 @pytest.mark.asyncio
 async def test_container_janitor_sweeps_expired_bounded_helpers(
@@ -1835,3 +1894,693 @@ async def test_container_janitor_sweeps_expired_bounded_helpers(
         "--format",
         '{{.ID}}\t{{.Names}}\t{{.Label "moonmind.expires_at"}}',
     ]
+def test_restricted_profile_resolves_to_attested_network(tmp_path: Path) -> None:
+    request = _validated_request(
+        tmp_path,
+        profiles=[_profile_payload(network_policy="restricted_egress")],
+    )
+
+    args = DockerWorkloadLauncher().build_run_args(request)
+
+    assert args[args.index("--network") + 1] == EGRESS_NETWORK_REF
+    assert f"moonmind.egress.profile={DEFAULT_EGRESS_PROFILE.ref}" in args
+    assert f"moonmind.egress.profile_digest={DEFAULT_EGRESS_PROFILE.digest}" in args
+    assert f"HTTPS_PROXY={PROXY_URL}" in args
+    assert "NO_PROXY=" in args
+    assert "--privileged=false" in args
+    assert args[args.index("--cap-drop") + 1] == "ALL"
+
+
+def test_docker_proxy_profile_preserves_its_target_specific_route(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MOONMIND_DOCKER_PROXY_NETWORK", "custom_docker_proxy")
+    request = _validated_request(
+        tmp_path,
+        profiles=[_profile_payload(network_policy="docker_proxy")],
+    )
+
+    args = DockerWorkloadLauncher().build_run_args(request)
+
+    assert args[args.index("--network") + 1] == "custom_docker_proxy"
+    assert not any(value.startswith("HTTPS_PROXY=") for value in args)
+    assert not any("moonmind.egress.profile=" in value for value in args)
+
+
+
+
+@pytest.mark.asyncio
+async def test_restricted_launch_fails_before_process_when_egress_is_unattested(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = _validated_request(
+        tmp_path,
+        profiles=[_profile_payload(network_policy="restricted_egress")],
+    )
+    process_started = False
+
+    async def _fake_create_subprocess_exec(*_args: str, **_kwargs: Any) -> _Process:
+        nonlocal process_started
+        process_started = True
+        return _Process()
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    launcher = DockerWorkloadLauncher()
+
+    async def _unavailable(_args: list[str]) -> tuple[bytes, bytes, int]:
+        return b"", b"not found", 1
+
+    monkeypatch.setattr(launcher._janitor, "_run_control", _unavailable)
+
+    with pytest.raises(RuntimeError, match="network is unavailable"):
+        await launcher.run(request)
+
+    assert process_started is False
+
+
+def _healthy_egress_run_process(args: list[str]) -> _Process:
+    """Fake gateway, workload, cleanup, and helper responses for egress."""
+
+    from moonmind.security.egress import (
+        DEFAULT_EGRESS_PROFILE,
+        EGRESS_CONFIG_DIGEST,
+        EGRESS_NETWORK_REF,
+        EGRESS_PROFILE_SET_DIGEST,
+        ENFORCER_IMPLEMENTATION,
+        OMNIGENT_EGRESS_NETWORK_REF,
+    )
+
+    subcommand = args[1] if len(args) > 1 else ""
+    gateway_networks = {
+        EGRESS_NETWORK_REF: {},
+        "moonmind_sandbox-egress-network": {},
+        OMNIGENT_EGRESS_NETWORK_REF: {},
+        CONTROL_PLANE_NETWORK_REF: {},
+    }
+    applied = {
+        "profileDigest": DEFAULT_EGRESS_PROFILE.digest,
+        "configDigest": EGRESS_CONFIG_DIGEST,
+        "gatewayImageDigest": "sha256:gateway-image",
+        "internal": True,
+        "ipv6": False,
+        "idleSeconds": DEFAULT_EGRESS_PROFILE.idle_seconds,
+        "gatewayNetworks": sorted(gateway_networks),
+        "enforcer": ENFORCER_IMPLEMENTATION,
+    }
+    applied_rule_digest = "sha256:" + hashlib.sha256(
+        json.dumps(applied, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    if subcommand == "network":
+        return _Process(
+            stdout=json.dumps({"Internal": True, "EnableIPv6": False}).encode()
+        )
+    if subcommand == "inspect":
+        if "health" not in args[3]:
+            image_ref = (
+                "redis:7.2-alpine"
+                if "helper" in str(args[-1])
+                else "python:3.12-slim"
+            )
+            return _Process(
+                stdout=json.dumps(
+                    {
+                        "labels": {
+                            "moonmind.egress.profile": DEFAULT_EGRESS_PROFILE.ref,
+                            "moonmind.egress.profile_digest": (
+                                DEFAULT_EGRESS_PROFILE.digest
+                            ),
+                            "moonmind.egress.applied_rule_digest": (
+                                applied_rule_digest
+                            ),
+                        },
+                        "networks": {
+                            EGRESS_NETWORK_REF: {
+                                "NetworkID": "restricted-network-id",
+                                "EndpointID": "workload-endpoint-id",
+                                "IPAddress": "172.31.0.7",
+                            }
+                        },
+                        "imageRef": image_ref,
+                        "image": "sha256:" + "c" * 64,
+                    }
+                ).encode()
+            )
+        return _Process(
+            stdout=json.dumps(
+                {
+                    "labels": {
+                        "moonmind.egress.profile-set-digest": EGRESS_PROFILE_SET_DIGEST,
+                        "moonmind.egress.enforcer": ENFORCER_IMPLEMENTATION,
+                        "moonmind.egress.config-digest": EGRESS_CONFIG_DIGEST,
+                    },
+                    "networks": gateway_networks,
+                    "image": "sha256:gateway-image",
+                    "health": "healthy",
+                }
+            ).encode()
+        )
+    if subcommand == "exec":
+        if args[3] == "cat":
+            return _Process(stdout=b"")
+        if args[2] != DEFAULT_EGRESS_PROFILE.gateway_ref:
+            return _Process(stdout=b"PONG\n")
+        return _Process(
+            stdout=(
+                f"{EGRESS_CONFIG_DIGEST.removeprefix('sha256:')}  "
+                "/etc/squid/squid.conf\n"
+            ).encode()
+        )
+    if subcommand == "run":
+        return _Process(returncode=0, stdout=b"restricted workload ok\n")
+    if subcommand == "image":
+        return _Process(stdout=b'"amd64"')
+    if subcommand == "logs":
+        return _Process(stdout=b"helper stdout\n")
+    if subcommand == "ps":
+        return _Process(stdout=b"")
+    return _Process(returncode=0)
+
+
+@pytest.mark.asyncio
+async def test_restricted_launch_publishes_egress_attestation_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    artifact_dir = workspace_root / "task-egress" / "artifacts" / "step-test"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        return _healthy_egress_run_process(list(args))
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    result = await DockerWorkloadLauncher().run(
+        _validated_request(
+            tmp_path,
+            workspace_root=workspace_root,
+            agentRunId="task-egress",
+            repoDir=str(workspace_root / "task-egress" / "repo"),
+            artifactsDir=str(artifact_dir),
+            profiles=[
+                _profile_payload(
+                    workspace_root=workspace_root,
+                    network_policy="restricted_egress",
+                )
+            ],
+        )
+    )
+
+    assert result.status == "succeeded"
+    attestation = result.metadata["workload"]["egressAttestation"]
+    assert attestation is not None
+    assert attestation["profileRef"] == DEFAULT_EGRESS_PROFILE.ref
+    assert attestation["profileDigest"] == DEFAULT_EGRESS_PROFILE.digest
+    assert attestation["appliedRuleDigest"].startswith("sha256:")
+    assert attestation["validationResult"] == "passed"
+    assert "validatedAt" in attestation
+    workload_evidence = result.metadata["workload"]["egressWorkloadEvidence"]
+    assert workload_evidence["networkIdentity"] == "restricted-network-id"
+    assert workload_evidence["endpointIdentity"] == "workload-endpoint-id"
+    assert workload_evidence["workloadImageDigest"] == "sha256:" + "c" * 64
+    assert workload_evidence["architecture"] == "amd64"
+    assert workload_evidence["cleanupResult"] == "succeeded"
+
+    diagnostics = json.loads(Path(result.diagnostics_ref or "").read_text("utf-8"))
+    assert diagnostics["egressAttestation"] == attestation
+    evidence_ref = result.output_refs["security.egress"]
+    resolved = parse_and_verify_conformance_evidence(
+        Path(evidence_ref).read_bytes(), location="restricted-workload-test"
+    )
+    assert resolved["conformanceRow"] == "generic_workload"
+    assert resolved["runnerProfileDigest"].startswith("sha256:")
+    assert resolved["cleanupResult"] == "succeeded"
+
+
+@pytest.mark.asyncio
+async def test_restricted_helper_crosses_start_stop_and_publishes_lifecycle_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    artifact_dir = workspace_root / "task-helper" / "artifacts" / "step-service"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        return _healthy_egress_run_process(list(args))
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    validated = _validated_helper_request(
+        tmp_path,
+        workspace_root=workspace_root,
+        agentRunId="task-helper",
+        repoDir=str(workspace_root / "task-helper" / "repo"),
+        artifactsDir=str(artifact_dir),
+        profiles=[
+            _helper_profile_payload(
+                workspace_root=workspace_root,
+                network_policy="restricted_egress",
+            )
+        ],
+    )
+    launcher = DockerWorkloadLauncher()
+
+    started = await launcher.start_helper(validated)
+    stopped = await launcher.stop_helper(validated)
+
+    assert started.status == "ready"
+    attached_ref = started.output_refs["security.egress.authority"]
+    attached = parse_and_verify_conformance_evidence(
+        Path(attached_ref).read_bytes(),
+        location="restricted-helper-attached-test",
+    )
+    assert attached["state"] == "attached"
+    assert attached["leaseAuthority"] == {
+        "owner": validated.container_name,
+        "releaseResult": "held",
+        "state": "held",
+    }
+    start_evidence = started.metadata["helper"]["egressWorkloadEvidence"]
+    assert start_evidence["networkIdentity"] == "restricted-network-id"
+    assert stopped.status == "stopped"
+    stop_evidence = stopped.metadata["helper"]["egressWorkloadEvidence"]
+    assert stop_evidence["cleanupResult"] == "succeeded"
+    assert stop_evidence["reconciliationResult"] == "succeeded"
+    verified = parse_and_verify_conformance_evidence(
+        Path(stopped.output_refs["security.egress"]).read_bytes(),
+        location="restricted-helper-test",
+    )
+    assert verified["conformanceRow"] == "managed_helper"
+    assert verified["runnerProfileDigest"].startswith("sha256:")
+    assert verified["workloadStatus"] == "stopped"
+    terminal_authority = parse_and_verify_conformance_evidence(
+        Path(stopped.output_refs["security.egress.authority"]).read_bytes(),
+        location="restricted-helper-stopped-test",
+    )
+    assert terminal_authority["state"] == "stopped"
+    assert terminal_authority["leaseAuthority"]["releaseResult"] == "released"
+
+
+@pytest.mark.asyncio
+async def test_restricted_helper_cancellation_after_attachment_cleans_and_releases(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    artifact_dir = workspace_root / "task-helper" / "artifacts" / "step-service"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    commands: list[list[str]] = []
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        commands.append(list(args))
+        return _healthy_egress_run_process(list(args))
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    validated = _validated_helper_request(
+        tmp_path,
+        workspace_root=workspace_root,
+        agentRunId="task-helper",
+        repoDir=str(workspace_root / "task-helper" / "repo"),
+        artifactsDir=str(artifact_dir),
+        profiles=[
+            _helper_profile_payload(
+                workspace_root=workspace_root,
+                network_policy="restricted_egress",
+            )
+        ],
+    )
+    limiter = DockerWorkloadConcurrencyLimiter(fleet_limit=1)
+    launcher = DockerWorkloadLauncher(concurrency_limiter=limiter)
+    monkeypatch.setattr(
+        launcher,
+        "_wait_for_helper_readiness",
+        AsyncMock(side_effect=asyncio.CancelledError()),
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await launcher.start_helper(validated)
+
+    terminal_ref = (
+        artifact_dir
+        / "workload"
+        / validated.container_name
+        / "egress-helper-authority-cancelled.json"
+    )
+    terminal = parse_and_verify_conformance_evidence(
+        terminal_ref.read_bytes(), location="restricted-helper-cancelled-test"
+    )
+    assert terminal["cleanupResult"] == "succeeded"
+    assert terminal["reconciliationResult"] == "succeeded"
+    assert terminal["leaseAuthority"]["releaseResult"] == (
+        "released_after_interrupted_start"
+    )
+    assert limiter._active_total == 0
+    assert any(command[1:3] == ["rm", "-f"] for command in commands)
+
+
+@pytest.mark.asyncio
+async def test_restricted_helper_interrupted_start_cleanup_failure_retains_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    artifact_dir = workspace_root / "task-helper" / "artifacts" / "step-service"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    cleanup_started = False
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        nonlocal cleanup_started
+        if args[1] == "rm":
+            cleanup_started = True
+        if cleanup_started and args[1] == "ps":
+            return _Process(stdout=f"{validated.container_name}\n".encode())
+        return _healthy_egress_run_process(list(args))
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    validated = _validated_helper_request(
+        tmp_path,
+        workspace_root=workspace_root,
+        agentRunId="task-helper",
+        repoDir=str(workspace_root / "task-helper" / "repo"),
+        artifactsDir=str(artifact_dir),
+        profiles=[
+            _helper_profile_payload(
+                workspace_root=workspace_root,
+                network_policy="restricted_egress",
+            )
+        ],
+    )
+    limiter = DockerWorkloadConcurrencyLimiter(fleet_limit=1)
+    launcher = DockerWorkloadLauncher(concurrency_limiter=limiter)
+    monkeypatch.setattr(
+        launcher,
+        "_wait_for_helper_readiness",
+        AsyncMock(side_effect=RuntimeError("readiness interrupted")),
+    )
+
+    with pytest.raises(RuntimeError, match="readiness interrupted"):
+        await launcher.start_helper(validated)
+
+    failure_path = (
+        artifact_dir
+        / "workload"
+        / validated.container_name
+        / "egress-helper-authority-cleanup_failed.json"
+    )
+    failure = parse_and_verify_conformance_evidence(
+        failure_path.read_bytes(),
+        location="restricted-helper-interrupted-cleanup-failure-test",
+    )
+    assert failure["state"] == "cleanup_failed"
+    assert failure["leaseAuthority"]["state"] == "held"
+    assert failure["reconciliationOwner"]["toolName"] == "container.stop_helper"
+    assert limiter._active_total == 1
+
+
+@pytest.mark.asyncio
+async def test_restricted_helper_cancellation_before_attachment_releases_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    artifact_dir = workspace_root / "task-helper" / "artifacts" / "step-service"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    validated = _validated_helper_request(
+        tmp_path,
+        workspace_root=workspace_root,
+        agentRunId="task-helper",
+        repoDir=str(workspace_root / "task-helper" / "repo"),
+        artifactsDir=str(artifact_dir),
+        profiles=[
+            _helper_profile_payload(
+                workspace_root=workspace_root,
+                network_policy="restricted_egress",
+            )
+        ],
+    )
+    limiter = DockerWorkloadConcurrencyLimiter(fleet_limit=1)
+    launcher = DockerWorkloadLauncher(concurrency_limiter=limiter)
+    entered = asyncio.Event()
+
+    async def _blocked_attestation(_request):
+        entered.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(launcher, "_attest_egress_before_launch", _blocked_attestation)
+    task = asyncio.create_task(launcher.start_helper(validated))
+    await entered.wait()
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert limiter._active_total == 0
+    authority_root = artifact_dir / "workload" / validated.container_name
+    assert not authority_root.exists()
+
+
+@pytest.mark.asyncio
+async def test_restricted_helper_stop_recovers_durable_authority_after_worker_restart(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    artifact_dir = workspace_root / "task-helper" / "artifacts" / "step-service"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        return _healthy_egress_run_process(list(args))
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    validated = _validated_helper_request(
+        tmp_path,
+        workspace_root=workspace_root,
+        agentRunId="task-helper",
+        repoDir=str(workspace_root / "task-helper" / "repo"),
+        artifactsDir=str(artifact_dir),
+        profiles=[
+            _helper_profile_payload(
+                workspace_root=workspace_root,
+                network_policy="restricted_egress",
+            )
+        ],
+    )
+    original_worker = DockerWorkloadLauncher()
+    await original_worker.start_helper(validated)
+
+    replacement_worker = DockerWorkloadLauncher()
+    stopped = await replacement_worker.stop_helper(
+        validated, reason="worker_restart_reconciliation"
+    )
+
+    assert stopped.status == "stopped"
+    terminal = parse_and_verify_conformance_evidence(
+        Path(stopped.output_refs["security.egress.authority"]).read_bytes(),
+        location="restricted-helper-worker-restart-test",
+    )
+    assert terminal["cleanupResult"] == "succeeded"
+    assert terminal["leaseAuthority"]["releaseResult"] == (
+        "released_after_reconciliation"
+    )
+    assert terminal["runtimeProvenance"] == (
+        "docker_workload_launcher/docker-engine"
+    )
+    assert terminal["hostMode"] == "managed_helper"
+    assert terminal["workloadClass"] == "managed_helper"
+
+
+@pytest.mark.asyncio
+async def test_restricted_helper_stale_terminal_rules_cleanup_then_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    artifact_dir = workspace_root / "task-helper" / "artifacts" / "step-service"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    stale = False
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        process = _healthy_egress_run_process(list(args))
+        if stale and args[1] == "inspect" and "health" not in args[3]:
+            payload = json.loads(process._stdout)
+            payload["labels"]["moonmind.egress.applied_rule_digest"] = (
+                "sha256:" + "0" * 64
+            )
+            return _Process(stdout=json.dumps(payload).encode())
+        return process
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    validated = _validated_helper_request(
+        tmp_path,
+        workspace_root=workspace_root,
+        agentRunId="task-helper",
+        repoDir=str(workspace_root / "task-helper" / "repo"),
+        artifactsDir=str(artifact_dir),
+        profiles=[
+            _helper_profile_payload(
+                workspace_root=workspace_root,
+                network_policy="restricted_egress",
+            )
+        ],
+    )
+    launcher = DockerWorkloadLauncher()
+    await launcher.start_helper(validated)
+    stale = True
+
+    with pytest.raises(
+        DockerWorkloadLauncherError, match="terminal attestation failed"
+    ):
+        await launcher.stop_helper(validated)
+
+    terminal_path = (
+        artifact_dir
+        / "workload"
+        / validated.container_name
+        / "egress-helper-authority-stopped.json"
+    )
+    terminal = parse_and_verify_conformance_evidence(
+        terminal_path.read_bytes(), location="restricted-helper-stale-rules-test"
+    )
+    assert terminal["terminalValidationResult"] == "failed"
+    assert terminal["cleanupResult"] == "succeeded"
+    assert terminal["leaseAuthority"]["state"] == "released"
+
+
+@pytest.mark.asyncio
+async def test_restricted_helper_failed_cleanup_persists_reconciliation_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    artifact_dir = workspace_root / "task-helper" / "artifacts" / "step-service"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    cleanup_started = False
+    cleanup_blocked = True
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        nonlocal cleanup_started
+        if args[1] == "logs":
+            cleanup_started = True
+        if cleanup_started and cleanup_blocked and args[1] == "ps":
+            return _Process(stdout=f"{validated.container_name}\n".encode())
+        return _healthy_egress_run_process(list(args))
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    validated = _validated_helper_request(
+        tmp_path,
+        workspace_root=workspace_root,
+        agentRunId="task-helper",
+        repoDir=str(workspace_root / "task-helper" / "repo"),
+        artifactsDir=str(artifact_dir),
+        profiles=[
+            _helper_profile_payload(
+                workspace_root=workspace_root,
+                network_policy="restricted_egress",
+            )
+        ],
+    )
+    launcher = DockerWorkloadLauncher()
+    await launcher.start_helper(validated)
+
+    with pytest.raises(DockerWorkloadLauncherError, match="requires reconciliation"):
+        await launcher.stop_helper(validated)
+
+    failure_path = (
+        artifact_dir
+        / "workload"
+        / validated.container_name
+        / "egress-helper-authority-cleanup_failed.json"
+    )
+    failure = parse_and_verify_conformance_evidence(
+        failure_path.read_bytes(), location="restricted-helper-cleanup-failure-test"
+    )
+    assert failure["cleanupResult"] == "failed"
+    assert failure["reconciliationResult"] == "required"
+    assert failure["leaseAuthority"] == {
+        "owner": validated.container_name,
+        "state": "held",
+        "releaseResult": "held_for_reconciliation",
+    }
+    assert failure["reconciliationOwner"] == {
+        "toolName": "container.stop_helper",
+        "containerName": validated.container_name,
+        "agentRunId": "task-helper",
+        "stepId": "step-service",
+        "attempt": 1,
+    }
+    assert launcher._concurrency_limiter._active_total == 1
+
+    cleanup_blocked = False
+    stopped = await launcher.stop_helper(
+        validated, reason="janitor_reconciliation"
+    )
+    terminal = parse_and_verify_conformance_evidence(
+        Path(stopped.output_refs["security.egress.authority"]).read_bytes(),
+        location="restricted-helper-cleanup-reconciled-test",
+    )
+    assert terminal["cleanupResult"] == "succeeded"
+    assert terminal["leaseAuthority"]["state"] == "released"
+    assert terminal["leaseAuthority"]["releaseResult"] == (
+        "released_after_reconciliation"
+    )
+    assert launcher._concurrency_limiter._active_total == 0
+
+
+@pytest.mark.asyncio
+async def test_none_network_launch_records_no_egress_attestation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    artifact_dir = workspace_root / "task-none-egress" / "artifacts" / "step-test"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        if args[1] == "run":
+            return _Process(returncode=0, stdout=b"ok\n")
+        return _Process(returncode=0)
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    result = await DockerWorkloadLauncher().run(
+        _validated_request(
+            tmp_path,
+            workspace_root=workspace_root,
+            agentRunId="task-none-egress",
+            repoDir=str(workspace_root / "task-none-egress" / "repo"),
+            artifactsDir=str(artifact_dir),
+        )
+    )
+
+    assert result.metadata["workload"]["egressAttestation"] is None
+    diagnostics = json.loads(Path(result.diagnostics_ref or "").read_text("utf-8"))
+    assert diagnostics["egressAttestation"] is None

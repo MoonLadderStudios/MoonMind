@@ -1,0 +1,15 @@
+{
+  "invariant": "the complete contained run workspace is owned by the effective launch UID and GID without following repository symlinks, and host preflight checks Git before a session starts",
+  "runtimeUid": 1000,
+  "runtimeGid": 1000,
+  "gitPreflight": [
+    "docker",
+    "exec",
+    "mm-omnigent-host-replay",
+    "git",
+    "-C",
+    "/workspaces/run",
+    "status",
+    "--porcelain"
+  ]
+}

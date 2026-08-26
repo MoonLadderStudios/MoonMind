@@ -26,6 +26,13 @@ proposal_delivery_provider_default = "github"
 [feature_flags]
 # Enable /api/sessions compatibility facades over canonical AgentRun session APIs.
 session_api_compat_enabled = false
+# New profile-bound Omnigent sessions use the durable supervisor by default.
+# Set to "canary" with an exact owner allowlist, or "disabled" to keep only new
+# selections on the legacy path. Already-admitted histories are unaffected.
+omnigent_session_supervisor_admission_mode = "enabled"
+omnigent_session_supervisor_canary_owner_ids = ""
+omnigent_session_supervisor_allowed_execution_profile_refs = ""
+omnigent_session_supervisor_generation = "omnigent-session-v1"
 # Disable the Preset Catalog (UI + API) when required.
 disable_preset_catalog = false
 # Rollout scope for the session-aware Live Logs timeline contract:

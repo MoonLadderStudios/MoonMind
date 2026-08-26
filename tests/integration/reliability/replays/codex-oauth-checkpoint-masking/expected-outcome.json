@@ -1,0 +1,19 @@
+{
+  "failureClass": "user_error",
+  "providerErrorCode": "401",
+  "retryRecommendation": "reauthenticate",
+  "workspaceLocator": {
+    "kind": "managed_runtime",
+    "runtimeId": "codex_cli",
+    "agentRunId": "mm:28dae38e-0488-4e0f-8add-b2249441a28c",
+    "relativePath": "repo"
+  },
+  "checkpointOutcome": {
+    "status": "unsupported",
+    "failureCode": "CHECKPOINT_CAPABILITY_UNSUPPORTED",
+    "boundary": "after_execution",
+    "captureAuthority": "managed_runtime",
+    "captureActivity": null,
+    "capabilityCriticality": "recoverability_only"
+  }
+}

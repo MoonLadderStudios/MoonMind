@@ -1,0 +1,5 @@
+{
+  "invariant": "every checkpoint Git command explicitly trusts only the already-resolved sandbox workspace",
+  "checkpointStatus": "captured",
+  "gitCommandCount": 2
+}

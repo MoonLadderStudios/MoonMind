@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -19,7 +20,6 @@ from sqlalchemy.orm import sessionmaker
 from api_service.api.routers.executions import (
     _checkpoint_branch_git_context,
     _get_service,
-    _scoped_operation_digest,
     router,
 )
 from api_service.auth_providers import get_current_user
@@ -37,9 +37,13 @@ from api_service.db.models import (
     WorkflowCheckpointBranchTurn,
 )
 from api_service.services.checkpoint_branch_service import (
+    CheckpointBranchService,
     build_branch_turn_launch_idempotency_key,
 )
-from moonmind.schemas.checkpoint_branch_models import CheckpointBranchTurnLaunchRequest
+from api_service.services.checkpoint_branch_turn_execution import (
+    CheckpointBranchTurnExecutionOwner,
+    build_branch_turn_execution_identity,
+)
 
 
 def _record_like(user: SimpleNamespace) -> SimpleNamespace:
@@ -58,9 +62,13 @@ def _record_like(user: SimpleNamespace) -> SimpleNamespace:
             "repository": "MoonLadderStudios/MoonMind",
         },
         parameters={
+            "repository": {
+                "provider": "git",
+                "connectionRef": "repository-connection:git-default",
+                "repository": {"name": "MoonLadderStudios/MoonMind"},
+                "branch": {"name": "feature/mm-1101-source"},
+            },
             "git": {
-                "repository": "MoonLadderStudios/MoonMind",
-                "startingBranch": "feature/mm-1101-source",
                 "baseCommit": "abc1234",
                 "knownRefs": ["feature/mm-1101-source"],
                 "currentRef": "feature/mm-1101-source",
@@ -103,7 +111,7 @@ def _override_user_dependencies(app: FastAPI, user: SimpleNamespace) -> None:
 
 
 @pytest_asyncio.fixture
-async def checkpoint_branch_client(tmp_path):
+async def checkpoint_branch_client(tmp_path, monkeypatch: pytest.MonkeyPatch):
     engine = create_async_engine(
         f"sqlite+aiosqlite:///{tmp_path}/checkpoint-branches.db"
     )
@@ -131,9 +139,13 @@ async def checkpoint_branch_client(tmp_path):
             "repository": "MoonLadderStudios/MoonMind",
         },
         parameters={
+            "repository": {
+                "provider": "git",
+                "connectionRef": "repository-connection:git-default",
+                "repository": {"name": "MoonLadderStudios/MoonMind"},
+                "branch": {"name": "feature/mm-1101-source"},
+            },
             "git": {
-                "repository": "MoonLadderStudios/MoonMind",
-                "startingBranch": "feature/mm-1101-source",
                 "baseCommit": "abc1234",
                 "knownRefs": ["feature/mm-1101-source"],
                 "currentRef": "feature/mm-1101-source",
@@ -176,6 +188,59 @@ async def checkpoint_branch_client(tmp_path):
 
     app.dependency_overrides[get_async_session] = _session_override
     _override_user_dependencies(app, user)
+
+    async def _claim_without_temporal(
+        owner: CheckpointBranchTurnExecutionOwner,
+        *,
+        workflow_id: str,
+        branch_id: str,
+        branch_turn_id: str,
+        intent,
+    ) -> WorkflowCheckpointBranchTurn:
+        """Keep router tests focused on HTTP/persistence, not Temporal dispatch."""
+
+        operator_key = (
+            intent.idempotency_key
+            if hasattr(intent, "idempotency_key")
+            else str(intent["idempotencyKey"])
+        )
+        turn = await owner._session.get(WorkflowCheckpointBranchTurn, branch_turn_id)
+        assert turn is not None
+        if turn.created_step_execution_id:
+            return turn
+        branch = await owner._session.get(WorkflowCheckpointBranch, branch_id)
+        assert branch is not None
+        identity = build_branch_turn_execution_identity(
+            branch_id=branch_id,
+            branch_turn_id=branch_turn_id,
+            logical_step_id=branch.logical_step_id or "checkpoint-branch",
+            ordinal=1,
+        )
+        turn.diagnostics = {
+            **(turn.diagnostics or {}),
+            "operatorLaunchIdempotencyKey": operator_key,
+        }
+        claimed = await CheckpointBranchService(owner._session).claim_turn_execution(
+            workflow_id=workflow_id,
+            branch_id=branch_id,
+            branch_turn_id=branch_turn_id,
+            launch_idempotency_key=build_branch_turn_launch_idempotency_key(
+                workflow_id=workflow_id,
+                branch_id=branch_id,
+                branch_turn_id=branch_turn_id,
+            ),
+            context_bundle_ref=f"artifact://context/{branch_turn_id}",
+            step_execution_manifest_ref=f"artifact://manifest/{branch_turn_id}",
+            created_step_execution_id=identity.step_execution_id,
+            runtime_agent_run_id=identity.agent_run_workflow_id,
+            diagnostics_ref=f"artifact://diagnostics/{branch_turn_id}",
+            agent_request_ref=f"artifact://request/{branch_turn_id}",
+            execution_workflow_id=identity.workflow_id,
+        )
+        await owner._session.commit()
+        return claimed
+
+    monkeypatch.setattr(CheckpointBranchTurnExecutionOwner, "launch", _claim_without_temporal)
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
@@ -266,6 +331,41 @@ async def _set_branch_head(
         await session.commit()
 
 
+async def _accept_server_owned_branch_head(
+    client: AsyncClient, branch_id: str
+) -> None:
+    """Model the durable owner reaching terminal verification handoff."""
+
+    async for session in client.app.dependency_overrides[  # type: ignore[attr-defined]
+        get_async_session
+    ]():
+        branch = await session.get(WorkflowCheckpointBranch, branch_id)
+        assert branch is not None
+        turn = (
+            await session.execute(
+                select(WorkflowCheckpointBranchTurn).where(
+                    WorkflowCheckpointBranchTurn.branch_id == branch_id,
+                    WorkflowCheckpointBranchTurn.created_step_execution_id
+                    == branch.current_head_step_execution_id,
+                )
+            )
+        ).scalar_one()
+        checkpoint_ref = f"artifact://accepted/{turn.branch_turn_id}"
+        turn.status = "checking"
+        branch.state = "active"
+        branch.current_head_checkpoint_ref = checkpoint_ref
+        branch.current_head_checkpoint_digest = "sha256:" + "a" * 64
+        session.add(
+            WorkflowCheckpointBranchArtifact(
+                branch_id=branch_id,
+                branch_turn_id=turn.branch_turn_id,
+                artifact_kind="output.branch_turn.checkpoint.json",
+                artifact_ref=checkpoint_ref,
+            )
+        )
+        await session.commit()
+
+
 def test_checkpoint_branch_git_context_reads_workflow_shaped_payload() -> None:
     record = SimpleNamespace(
         parameters={
@@ -293,6 +393,27 @@ def test_checkpoint_branch_git_context_reads_workflow_shaped_payload() -> None:
     assert context["resolvedBaseCommit"] == "abc1234def5678"
     assert context["currentRef"] == "feature/from-workflow"
     assert context["knownRefs"] == {"feature/from-workflow"}
+
+
+def test_checkpoint_branch_git_context_reads_provider_repository_target() -> None:
+    record = SimpleNamespace(
+        parameters={
+            "repository": {
+                "provider": "git",
+                "connectionRef": "repository-connection:git-default",
+                "repository": {"name": "MoonLadderStudios/MoonMind"},
+                "branch": {"name": "feature/provider-target"},
+            }
+        },
+        memo={},
+        search_attributes={},
+    )
+
+    context = _checkpoint_branch_git_context(record)
+
+    assert context["repository"] == "MoonLadderStudios/MoonMind"
+    assert context["baseBranch"] == "feature/provider-target"
+    assert context["currentRef"] == "feature/provider-target"
 
 
 def test_checkpoint_branch_git_context_does_not_synthesize_known_refs() -> None:
@@ -377,6 +498,66 @@ async def test_checkpoint_branch_create_prepares_git_binding_before_launch(
 
 
 @pytest.mark.asyncio
+async def test_checkpoint_branch_create_persists_exact_agent_profile_snapshot(
+    checkpoint_branch_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = {
+        "profileId": "agent-profile-1",
+        "version": 3,
+        "digest": "sha256:profile-v3",
+        "providerProfileRef": "provider-profile-1",
+        "model": "gpt-5.4",
+    }
+    resolver = AsyncMock(return_value=snapshot)
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.resolve_agent_profile_snapshot",
+        resolver,
+    )
+    payload = _create_payload("mm-3517:create-profile")
+    payload["providerProfileRef"] = "provider-profile-1"
+    payload["agentProfile"] = {"profileId": "agent-profile-1", "version": 3}
+
+    response = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches", json=payload
+    )
+
+    assert response.status_code == 201
+    branch_id = response.json()["branchId"]
+    resolver.assert_awaited_once()
+    assert resolver.await_args.kwargs["selection"] == {
+        "profileId": "agent-profile-1",
+        "version": 3,
+        "providerProfileRef": "provider-profile-1",
+    }
+    assert resolver.await_args.kwargs["consumer_id"] == branch_id
+    async for session in checkpoint_branch_client.app.dependency_overrides[  # type: ignore[attr-defined]
+        get_async_session
+    ]():
+        branch = await session.get(WorkflowCheckpointBranch, branch_id)
+    assert branch is not None
+    assert branch.diagnostics["runtimeSelection"]["agentProfileSnapshot"] == snapshot
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_create_rejects_profile_provider_conflict(
+    checkpoint_branch_client: AsyncClient,
+) -> None:
+    payload = _create_payload("mm-3517:profile-conflict")
+    payload["providerProfileRef"] = "provider-profile-1"
+    payload["agentProfile"] = {
+        "profileId": "agent-profile-1",
+        "providerProfileRef": "provider-profile-2",
+    }
+
+    response = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches", json=payload
+    )
+
+    assert response.status_code == 409
+
+
+@pytest.mark.asyncio
 async def test_checkpoint_branch_api_lists_creates_details_turns_and_is_idempotent(
     checkpoint_branch_client: AsyncClient,
 ) -> None:
@@ -420,10 +601,14 @@ async def test_checkpoint_branch_api_lists_creates_details_turns_and_is_idempote
 
 
 @pytest.mark.asyncio
-async def test_checkpoint_branch_api_launches_turn_with_context_bundle_evidence_and_replays(
+async def test_checkpoint_branch_api_create_dispatches_server_owned_turn_idempotently(
     checkpoint_branch_client: AsyncClient,
 ) -> None:
     created = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches",
+        json=_create_payload("mm-1100:create-launch"),
+    )
+    replayed = await checkpoint_branch_client.post(
         "/api/executions/mm:wf-branch/checkpoint-branches",
         json=_create_payload("mm-1100:create-launch"),
     )
@@ -431,53 +616,20 @@ async def test_checkpoint_branch_api_launches_turn_with_context_bundle_evidence_
     turns = await checkpoint_branch_client.get(
         f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns"
     )
-    branch_turn_id = turns.json()["items"][0]["branchTurnId"]
-    payload = {
-        "createdStepExecutionId": "mm:wf-branch:run-branch:implement:execution:3",
-        "workspaceBaseline": {
-            "kind": "git_patch",
-            "baseCommit": "abc123",
-            "patchRef": "artifact://patches/mm-1100",
-        },
-        "priorEvidenceRefs": ["artifact://manifest/previous"],
-        "boundedSummaries": [
-            {"label": "prior attempt", "summary": "Gate failed before launch."}
-        ],
-        "builderMetadata": {"version": "api-test-v1", "digest": "sha256:builder"},
-        "runtimeRequestRef": "artifact://runtime/request/mm-1100",
-        "runtimeResultRef": "artifact://runtime/result/mm-1100",
-        "diagnosticsRef": "artifact://diagnostics/mm-1100",
-    }
+    body = turns.json()["items"][0]
+    branch_turn_id = body["branchTurnId"]
 
-    first = await checkpoint_branch_client.post(
-        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns/"
-        f"{branch_turn_id}/launch",
-        json=payload,
-    )
-    second = await checkpoint_branch_client.post(
-        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns/"
-        f"{branch_turn_id}/launch",
-        json=payload,
-    )
-
-    assert first.status_code == 200
-    assert second.status_code == 200
-    body = first.json()
+    assert created.status_code == 201
+    assert replayed.status_code == 201
+    assert replayed.json()["branchId"] == branch_id
     assert body["branchTurnId"] == branch_turn_id
-    assert body["status"] == "running"
-    assert body["createdStepExecutionId"] == (
-        "mm:wf-branch:run-branch:implement:execution:3"
-    )
+    assert body["status"] == "preparing"
+    assert body["createdStepExecutionId"].startswith("checkpoint-branch-turn:")
+    assert body["runtimeAgentRunId"].startswith("checkpoint-branch-agent:")
     assert "checkpointRef" not in body
-    assert body["contextBundleRef"].startswith(
-        f"artifact://checkpoint-branch-turns/{branch_turn_id}/context-bundle/"
-    )
-    assert body["stepExecutionManifestRef"].startswith(
-        f"artifact://checkpoint-branch-turns/{branch_turn_id}/step-execution-manifest/"
-    )
-    assert second.json()["contextBundleRef"] == body["contextBundleRef"]
-    assert second.json()["stepExecutionManifestRef"] == body["stepExecutionManifestRef"]
-    assert second.json()["diagnostics"]["launchIdempotencyKey"] == (
+    assert body["contextBundleRef"] == f"artifact://context/{branch_turn_id}"
+    assert body["stepExecutionManifestRef"] == f"artifact://manifest/{branch_turn_id}"
+    assert body["diagnostics"]["launchIdempotencyKey"] == (
         f"mm:wf-branch:{branch_id}:{branch_turn_id}:launch"
     )
 
@@ -491,15 +643,6 @@ async def test_checkpoint_branch_api_launches_turn_with_context_bundle_evidence_
                 )
             )
         ).scalars().all()
-        operation_rows = (
-            await session.execute(
-                select(WorkflowCheckpointBranchOperation).where(
-                    WorkflowCheckpointBranchOperation.operation
-                    == "checkpoint_branch.turn.launch"
-                )
-            )
-        ).scalars().all()
-
     assert len(artifact_rows) == 7
     assert {
         artifact.artifact_kind for artifact in artifact_rows
@@ -508,16 +651,10 @@ async def test_checkpoint_branch_api_launches_turn_with_context_bundle_evidence_
         "runtime.branch.git_binding.json",
         "runtime.branch_turn.context_bundle.json",
         "runtime.branch_turn.agent_request.json",
-        "runtime.branch_turn.agent_result.json",
+        "input.branch_turn.instructions.md",
         "output.branch_turn.step_execution_manifest.json",
-        "output.branch_turn.diagnostics.json",
+        "output.branch_turn.launch_diagnostics.json",
     }
-    assert len(operation_rows) == 1
-    assert "checkpointRef" not in operation_rows[0].response_payload
-    assert operation_rows[0].response_payload["contextBundle"]["branch"][
-        "sourceCheckpointRef"
-    ] == "artifact://checkpoints/after-implement"
-    assert "rawLogs" not in operation_rows[0].response_payload["contextBundle"]
 
 
 @pytest.mark.asyncio
@@ -576,21 +713,49 @@ async def test_remediation_checkpoint_branch_repair_creates_fresh_branch_from_co
         "api_service.api.routers.executions.get_temporal_artifact_service",
         lambda session: _ArtifactService(),
     )
+    snapshot = {
+        "profileId": "agent-profile-remediation",
+        "version": 2,
+        "digest": "sha256:remediation-profile-v2",
+        "providerProfileRef": "provider-profile-remediation",
+    }
+    resolver = AsyncMock(return_value=snapshot)
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.resolve_agent_profile_snapshot",
+        resolver,
+    )
 
+    repair_payload = {
+        "checkpointRef": "artifact://checkpoints/after-implement",
+        "instructions": {"text": "Repair with corrected instructions."},
+        "idempotencyKey": "MM-1119:remediation-branch",
+        "maxBudgetUsd": 2.0,
+        "providerProfileRef": "provider-profile-remediation",
+        "agentProfile": {"profileId": "agent-profile-remediation", "version": 2},
+    }
     first = await checkpoint_branch_client.post(
         "/api/executions/mm:remediation-1/remediation/checkpoint-branches",
-        json={
-            "checkpointRef": "artifact://checkpoints/after-implement",
-            "instructions": {"text": "Repair with corrected instructions."},
-            "idempotencyKey": "MM-1119:remediation-branch",
-        },
+        json=repair_payload,
     )
     second = await checkpoint_branch_client.post(
         "/api/executions/mm:remediation-1/remediation/checkpoint-branches",
+        json=repair_payload,
+    )
+    changed_agent_profile = await checkpoint_branch_client.post(
+        "/api/executions/mm:remediation-1/remediation/checkpoint-branches",
         json={
-            "checkpointRef": "artifact://checkpoints/after-implement",
-            "instructions": {"text": "Repair with corrected instructions."},
-            "idempotencyKey": "MM-1119:remediation-branch",
+            **repair_payload,
+            "agentProfile": {
+                "profileId": "agent-profile-remediation",
+                "version": 3,
+            },
+        },
+    )
+    changed_provider_profile = await checkpoint_branch_client.post(
+        "/api/executions/mm:remediation-1/remediation/checkpoint-branches",
+        json={
+            **repair_payload,
+            "providerProfileRef": "provider-profile-other",
         },
     )
 
@@ -598,6 +763,14 @@ async def test_remediation_checkpoint_branch_repair_creates_fresh_branch_from_co
     assert second.status_code == 201
     assert second.json()["branchId"] == first.json()["branchId"]
     assert first.json()["runtimeContextPolicy"] == "fresh_agent_run"
+    assert changed_agent_profile.status_code == 409
+    assert changed_agent_profile.json()["detail"]["code"] == (
+        "idempotency_key_conflict"
+    )
+    assert changed_provider_profile.status_code == 409
+    assert changed_provider_profile.json()["detail"]["code"] == (
+        "idempotency_key_conflict"
+    )
 
     async for session in checkpoint_branch_client.app.dependency_overrides[  # type: ignore[attr-defined]
         get_async_session
@@ -611,12 +784,35 @@ async def test_remediation_checkpoint_branch_repair_creates_fresh_branch_from_co
             )
         ).scalar_one()
         branch = await session.get(WorkflowCheckpointBranch, first.json()["branchId"])
+        turn = await session.get(
+            WorkflowCheckpointBranchTurn,
+            operation.branch_turn_id,
+        )
+        remediation_input = (
+            await session.execute(
+                select(WorkflowCheckpointBranchArtifact).where(
+                    WorkflowCheckpointBranchArtifact.branch_id == branch.branch_id,
+                    WorkflowCheckpointBranchArtifact.branch_turn_id
+                    == operation.branch_turn_id,
+                    WorkflowCheckpointBranchArtifact.artifact_kind
+                    == "input.branch_turn.remediation_context.json",
+                )
+            )
+        ).scalar_one()
 
     assert branch is not None
+    assert turn is not None
     assert branch.workflow_id == "mm:wf-branch"
     assert branch.diagnostics["repairActionKind"] == (
         "checkpoint_branch.create_from_remediation_context"
     )
+    assert branch.diagnostics["runtimeSelection"]["agentProfileSnapshot"] == snapshot
+    assert branch.diagnostics["runtimeSelection"]["maxBudgetUsd"] == 2.0
+    assert turn.diagnostics["remediationContextRef"] == "ctx-remediation-1"
+    assert turn.diagnostics["maxBudgetUsd"] == 2.0
+    assert remediation_input.artifact_ref == "ctx-remediation-1"
+    assert operation.response_payload["runtimeSelection"]["agentProfileSnapshot"] == snapshot
+    resolver.assert_awaited_once()
     assert operation.response_payload["remediation"] == {
         "workflowId": "mm:remediation-1",
         "runId": "run-remediation-1",
@@ -836,7 +1032,7 @@ async def test_remediation_checkpoint_branch_repair_fails_closed_for_unselected_
 
 
 @pytest.mark.asyncio
-async def test_checkpoint_branch_api_launch_requires_step_execution_id(
+async def test_checkpoint_branch_api_launch_rejects_caller_runtime_authority(
     checkpoint_branch_client: AsyncClient,
 ) -> None:
     created = await checkpoint_branch_client.post(
@@ -849,258 +1045,130 @@ async def test_checkpoint_branch_api_launch_requires_step_execution_id(
     )
     branch_turn_id = turns.json()["items"][0]["branchTurnId"]
 
-    launched = await checkpoint_branch_client.post(
+    endpoint = (
         f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns/"
-        f"{branch_turn_id}/launch",
-        json={"runtimeAgentRunId": "agent-run-1"},
+        f"{branch_turn_id}/launch"
     )
-
-    assert launched.status_code == 422
-
-
-@pytest.mark.asyncio
-async def test_checkpoint_branch_api_launch_rejects_unsupported_provider_continuation(
-    checkpoint_branch_client: AsyncClient,
-) -> None:
-    created = await checkpoint_branch_client.post(
-        "/api/executions/mm:wf-branch/checkpoint-branches",
-        json=_create_payload("mm-1104:create-provider-launch"),
-    )
-    branch_id = created.json()["branchId"]
-    turns = await checkpoint_branch_client.get(
-        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns"
-    )
-    branch_turn_id = turns.json()["items"][0]["branchTurnId"]
-    async for session in checkpoint_branch_client.app.dependency_overrides[  # type: ignore[attr-defined]
-        get_async_session
-    ]():
-        turn = await session.get(WorkflowCheckpointBranchTurn, branch_turn_id)
-        assert turn is not None
-        turn.runtime_context_policy = "external_provider_continuation"
-        await session.commit()
-
-    launched = await checkpoint_branch_client.post(
-        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns/"
-        f"{branch_turn_id}/launch",
-        json={
-            "createdStepExecutionId": "mm:wf-branch:run-branch:implement:execution:4",
-            "providerSessionId": "omnigent-session-1",
-            "diagnosticsRef": "artifact://diagnostics/mm-1104",
-        },
-    )
-
-    assert launched.status_code == 409
-    assert launched.json()["detail"]["code"] == "provider_continuation_unsupported"
-
-
-@pytest.mark.asyncio
-async def test_checkpoint_branch_api_launch_rejects_branch_provider_continuation(
-    checkpoint_branch_client: AsyncClient,
-) -> None:
-    created = await checkpoint_branch_client.post(
-        "/api/executions/mm:wf-branch/checkpoint-branches",
-        json=_create_payload("mm-1104:create-provider-branch-launch"),
-    )
-    branch_id = created.json()["branchId"]
-    turns = await checkpoint_branch_client.get(
-        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns"
-    )
-    branch_turn_id = turns.json()["items"][0]["branchTurnId"]
-    async for session in checkpoint_branch_client.app.dependency_overrides[  # type: ignore[attr-defined]
-        get_async_session
-    ]():
-        branch = await session.get(WorkflowCheckpointBranch, branch_id)
-        turn = await session.get(WorkflowCheckpointBranchTurn, branch_turn_id)
-        assert branch is not None
-        assert turn is not None
-        branch.runtime_context_policy = "external_provider_continuation"
-        turn.runtime_context_policy = None
-        await session.commit()
-
-    launched = await checkpoint_branch_client.post(
-        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns/"
-        f"{branch_turn_id}/launch",
-        json={
-            "createdStepExecutionId": "mm:wf-branch:run-branch:implement:execution:5",
-            "providerSessionId": "omnigent-session-branch",
-            "diagnosticsRef": "artifact://diagnostics/mm-1104-branch",
-        },
-    )
-
-    assert launched.status_code == 409
-    assert launched.json()["detail"]["code"] == "provider_continuation_unsupported"
-
-
-@pytest.mark.asyncio
-async def test_checkpoint_branch_api_launch_replays_before_provider_continuation_check(
-    checkpoint_branch_client: AsyncClient,
-) -> None:
-    created = await checkpoint_branch_client.post(
-        "/api/executions/mm:wf-branch/checkpoint-branches",
-        json=_create_payload("mm-1104:create-provider-replay"),
-    )
-    branch_id = created.json()["branchId"]
-    turns = await checkpoint_branch_client.get(
-        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns"
-    )
-    branch_turn_id = turns.json()["items"][0]["branchTurnId"]
-    payload = {
-        "createdStepExecutionId": "mm:wf-branch:run-branch:implement:execution:6",
-        "providerSessionId": "omnigent-session-replay",
-        "diagnosticsRef": "artifact://diagnostics/mm-1104-replay",
-    }
-    async for session in checkpoint_branch_client.app.dependency_overrides[  # type: ignore[attr-defined]
-        get_async_session
-    ]():
-        branch = await session.get(WorkflowCheckpointBranch, branch_id)
-        turn = await session.get(WorkflowCheckpointBranchTurn, branch_turn_id)
-        assert branch is not None
-        assert turn is not None
-        branch.runtime_context_policy = "external_provider_continuation"
-        turn.runtime_context_policy = "external_provider_continuation"
-        turn.status = "running"
-        turn.created_step_execution_id = str(payload["createdStepExecutionId"])
-        turn.provider_session_id = str(payload["providerSessionId"])
-        turn.diagnostics_ref = str(payload["diagnosticsRef"])
-        launch_request = CheckpointBranchTurnLaunchRequest.model_validate(payload)
-        launch_key = build_branch_turn_launch_idempotency_key(
-            workflow_id="mm:wf-branch",
-            branch_id=branch_id,
-            branch_turn_id=branch_turn_id,
-        )
-        session.add(
-            WorkflowCheckpointBranchOperation(
-                workflow_id="mm:wf-branch",
-                branch_id=branch_id,
-                branch_turn_id=branch_turn_id,
-                operation="checkpoint_branch.turn.launch",
-                idempotency_key=launch_key,
-                request_digest=_scoped_operation_digest(
-                    launch_request,
-                    scope={
-                        "branchId": branch_id,
-                        "branchTurnId": branch_turn_id,
-                        "operation": "checkpoint_branch.turn.launch",
-                    },
-                ),
-                response_payload={
-                    "immutableLaunchFields": {
-                        "instructionRef": turn.instruction_ref,
-                        "instructionDigest": turn.instruction_digest,
-                        "sourceCheckpointRef": turn.source_checkpoint_ref,
-                        "sourceCheckpointDigest": turn.source_checkpoint_digest,
-                        "sourceStateKind": turn.source_state_kind,
-                        "sourceStateRef": turn.source_state_ref,
-                        "sourceStateDigest": turn.source_state_digest,
-                        "workspacePolicy": turn.workspace_policy,
-                        "runtimeContextPolicy": turn.runtime_context_policy,
-                    }
-                },
-            )
-        )
-        await session.commit()
-
-    replayed = await checkpoint_branch_client.post(
-        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns/"
-        f"{branch_turn_id}/launch",
-        json=payload,
-    )
-
-    assert replayed.status_code == 200
-    assert replayed.json()["createdStepExecutionId"] == payload["createdStepExecutionId"]
-
-
-@pytest.mark.asyncio
-async def test_checkpoint_branch_api_launch_rejects_archived_branch(
-    checkpoint_branch_client: AsyncClient,
-) -> None:
-    created = await checkpoint_branch_client.post(
-        "/api/executions/mm:wf-branch/checkpoint-branches",
-        json=_create_payload("mm-1100:create-launch-archived"),
-    )
-    branch_id = created.json()["branchId"]
-    turns = await checkpoint_branch_client.get(
-        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns"
-    )
-    branch_turn_id = turns.json()["items"][0]["branchTurnId"]
-    archived = await checkpoint_branch_client.post(
-        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/archive",
-        json={"idempotencyKey": "mm-1100:archive-before-launch"},
-    )
-
-    launched = await checkpoint_branch_client.post(
-        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns/"
-        f"{branch_turn_id}/launch",
-        json={
-            "createdStepExecutionId": "mm:wf-branch:run-branch:implement:execution:9",
-            "diagnosticsRef": "artifact://diagnostics/archived",
-        },
-    )
-
-    assert archived.status_code == 200
-    assert launched.status_code == 409
-    assert launched.json()["detail"]["code"] == "branch_turn_launch_rejected"
-
-
-@pytest.mark.asyncio
-async def test_checkpoint_branch_api_rejects_launch_raw_context_and_immutable_mutation(
-    checkpoint_branch_client: AsyncClient,
-) -> None:
-    created = await checkpoint_branch_client.post(
-        "/api/executions/mm:wf-branch/checkpoint-branches",
-        json=_create_payload("mm-1100:create-immutable"),
-    )
-    branch_id = created.json()["branchId"]
-    turns = await checkpoint_branch_client.get(
-        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns"
-    )
-    branch_turn_id = turns.json()["items"][0]["branchTurnId"]
-
-    raw_context = await checkpoint_branch_client.post(
-        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns/"
-        f"{branch_turn_id}/launch",
-        json={
-            "createdStepExecutionId": "mm:wf-branch:run-branch:implement:execution:4",
-            "workspaceBaseline": {"kind": "git_ref", "ref": "main"},
-            "boundedSummaries": [{"label": "raw", "rawLogs": "do not persist"}],
-            "diagnosticsRef": "artifact://diagnostics/raw",
-        },
-    )
-    assert raw_context.status_code == 422
-
-    launch_payload = {
-        "createdStepExecutionId": "mm:wf-branch:run-branch:implement:execution:4",
+    for field, value in {
+        "createdStepExecutionId": "caller-step",
+        "runtimeAgentRunId": "caller-run",
+        "providerSessionId": "caller-session",
         "workspaceBaseline": {"kind": "git_ref", "ref": "main"},
-        "diagnosticsRef": "artifact://diagnostics/immutable",
-    }
-    launched = await checkpoint_branch_client.post(
-        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns/"
-        f"{branch_turn_id}/launch",
-        json=launch_payload,
-    )
-    assert launched.status_code == 200
+        "runtimeRequestRef": "artifact://caller/request",
+        "runtimeResultRef": "artifact://caller/result",
+        "diagnosticsRef": "artifact://caller/diagnostics",
+        "checkpointRef": "artifact://caller/checkpoint",
+        "hostRef": "host://caller",
+        "leaseRef": "lease://caller",
+    }.items():
+        response = await checkpoint_branch_client.post(
+            endpoint,
+            json={"idempotencyKey": f"old-field-{field}", field: value},
+        )
+        assert response.status_code == 422
+        assert response.json()["detail"][0]["type"] == "extra_forbidden"
 
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_api_serializes_concurrent_launch_and_recovers_preclaim(
+    checkpoint_branch_client: AsyncClient,
+) -> None:
+    created = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches",
+        json=_create_payload("mm-1100:create-concurrent-launch"),
+    )
+    branch_id = created.json()["branchId"]
+    turns = await checkpoint_branch_client.get(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns"
+    )
+    branch_turn_id = turns.json()["items"][0]["branchTurnId"]
+    endpoint = (
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns/"
+        f"{branch_turn_id}/launch"
+    )
+    launch_body = {"idempotencyKey": "mm-1100:explicit-launch"}
+
+    first, raced = await asyncio.gather(
+        checkpoint_branch_client.post(endpoint, json=launch_body),
+        checkpoint_branch_client.post(endpoint, json=launch_body),
+    )
+
+    assert first.status_code == raced.status_code == 200
+    assert first.json()["createdStepExecutionId"] == raced.json()[
+        "createdStepExecutionId"
+    ]
     async for session in checkpoint_branch_client.app.dependency_overrides[  # type: ignore[attr-defined]
         get_async_session
     ]():
-        turn = (
+        operation = (
             await session.execute(
-                select(WorkflowCheckpointBranchTurn).where(
-                    WorkflowCheckpointBranchTurn.branch_turn_id == branch_turn_id
+                select(WorkflowCheckpointBranchOperation).where(
+                    WorkflowCheckpointBranchOperation.operation
+                    == "checkpoint_branch.turn.launch",
+                    WorkflowCheckpointBranchOperation.idempotency_key
+                    == launch_body["idempotencyKey"],
                 )
             )
         ).scalar_one()
-        turn.instruction_ref = "artifact://instructions/changed"
+        operation.response_payload = {
+            "branchId": branch_id,
+            "branchTurnId": branch_turn_id,
+            "immutableLaunchFields": {},
+            "claimState": "claimed",
+        }
         await session.commit()
 
-    replay_after_mutation = await checkpoint_branch_client.post(
-        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns/"
-        f"{branch_turn_id}/launch",
-        json=launch_payload,
+    recovered = await checkpoint_branch_client.post(endpoint, json=launch_body)
+    assert recovered.status_code == 200
+    assert recovered.json()["createdStepExecutionId"] == first.json()[
+        "createdStepExecutionId"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_api_rejects_nonfresh_runtime_policy_on_new_writes(
+    checkpoint_branch_client: AsyncClient,
+) -> None:
+    payload = _create_payload("mm-1104:create-provider-launch")
+    payload["runtimeContextPolicy"] = "external_provider_continuation"
+
+    response = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches", json=payload
     )
 
-    assert replay_after_mutation.status_code == 409
-    assert replay_after_mutation.json()["detail"]["code"] == "immutable_launch_field"
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_api_retains_historical_runtime_identity_reads(
+    checkpoint_branch_client: AsyncClient,
+) -> None:
+    created = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches",
+        json=_create_payload("mm-1104:historical-read"),
+    )
+    branch_id = created.json()["branchId"]
+    turns = await checkpoint_branch_client.get(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns"
+    )
+    branch_turn_id = turns.json()["items"][0]["branchTurnId"]
+    async for session in checkpoint_branch_client.app.dependency_overrides[  # type: ignore[attr-defined]
+        get_async_session
+    ]():
+        turn = await session.get(WorkflowCheckpointBranchTurn, branch_turn_id)
+        assert turn is not None
+        turn.runtime_context_policy = "external_provider_continuation"
+        turn.provider_session_id = "historical-provider-session"
+        await session.commit()
+
+    response = await checkpoint_branch_client.get(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["providerSessionId"] == (
+        "historical-provider-session"
+    )
 
 
 @pytest.mark.asyncio
@@ -1126,7 +1194,7 @@ async def test_checkpoint_branch_publish_does_not_promote_and_archive_hides_acti
     )
     assert published.status_code == 200
     assert published.json()["publishStatus"] == "published"
-    assert published.json()["state"] == "created"
+    assert published.json()["state"] == "preparing"
     assert published.json()["promotedAt"] is None
 
     archived = await checkpoint_branch_client.post(
@@ -1163,17 +1231,25 @@ async def test_checkpoint_branch_publish_does_not_promote_and_archive_hides_acti
 async def test_checkpoint_branch_continue_fork_and_compare_are_typed_and_idempotent(
     checkpoint_branch_client: AsyncClient,
 ) -> None:
+    create_payload = _create_payload("mm-1091:create-branching")
+    create_payload["maxBudgetUsd"] = 5.0
     created = await checkpoint_branch_client.post(
         "/api/executions/mm:wf-branch/checkpoint-branches",
-        json=_create_payload("mm-1091:create-branching"),
+        json=create_payload,
     )
     branch_id = created.json()["branchId"]
+    root_turns = await checkpoint_branch_client.get(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns"
+    )
+    root_turn_id = root_turns.json()["items"][0]["branchTurnId"]
+    await _accept_server_owned_branch_head(checkpoint_branch_client, branch_id)
 
     continue_payload = {
         "label": "Continued branch",
         "instructions": {"text": "Continue this branch."},
         "workspacePolicy": "continue_from_previous_execution",
-        "runtimeContextPolicy": "reuse_session_new_epoch",
+        "runtimeContextPolicy": "fresh_agent_run",
+        "maxBudgetUsd": 4.0,
         "idempotencyKey": "mm-1091:continue",
     }
     first_continue = await checkpoint_branch_client.post(
@@ -1199,6 +1275,9 @@ async def test_checkpoint_branch_continue_fork_and_compare_are_typed_and_idempot
 
     assert branch is not None
     assert continued_turn is not None
+    assert continued_turn.parent_turn_id == root_turn_id
+    assert continued_turn.diagnostics["maxBudgetUsd"] == 4.0
+    assert branch.diagnostics["runtimeSelection"]["maxBudgetUsd"] == 5.0
     assert branch.git_work_branch == created.json()["gitWorkBranch"]
     assert continued_turn.git_work_branch == created.json()["gitWorkBranch"]
     unsupported_continue = await checkpoint_branch_client.post(
@@ -1209,17 +1288,15 @@ async def test_checkpoint_branch_continue_fork_and_compare_are_typed_and_idempot
             "idempotencyKey": "mm-1104:continue-provider",
         },
     )
-    assert unsupported_continue.status_code == 409
-    assert (
-        unsupported_continue.json()["detail"]["code"]
-        == "provider_continuation_unsupported"
-    )
+    assert unsupported_continue.status_code == 422
+    await _accept_server_owned_branch_head(checkpoint_branch_client, branch_id)
 
     fork_payload = {
         "label": "Forked branch",
         "instructions": {"text": "Fork this branch."},
         "workspacePolicy": "apply_previous_execution_diff_to_clean_baseline",
         "runtimeContextPolicy": "fresh_agent_run",
+        "maxBudgetUsd": 3.0,
         "idempotencyKey": "mm-1091:fork",
     }
     first_fork = await checkpoint_branch_client.post(
@@ -1233,8 +1310,15 @@ async def test_checkpoint_branch_continue_fork_and_compare_are_typed_and_idempot
     assert first_fork.status_code == 201
     assert second_fork.status_code == 201
     fork_id = first_fork.json()["branchId"]
+    async for session in checkpoint_branch_client.app.dependency_overrides[  # type: ignore[attr-defined]
+        get_async_session
+    ]():
+        forked_branch = await session.get(WorkflowCheckpointBranch, fork_id)
+    assert forked_branch is not None
+    assert forked_branch.diagnostics["runtimeSelection"]["maxBudgetUsd"] == 3.0
     assert fork_id == second_fork.json()["branchId"]
     assert first_fork.json()["parentBranchId"] == branch_id
+    assert first_fork.json()["parentTurnId"] == first_continue.json()["branchTurnId"]
     unsupported_fork = await checkpoint_branch_client.post(
         f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/fork",
         json={
@@ -1243,11 +1327,7 @@ async def test_checkpoint_branch_continue_fork_and_compare_are_typed_and_idempot
             "idempotencyKey": "mm-1104:fork-provider",
         },
     )
-    assert unsupported_fork.status_code == 409
-    assert (
-        unsupported_fork.json()["detail"]["code"]
-        == "provider_continuation_unsupported"
-    )
+    assert unsupported_fork.status_code == 422
     await _set_branch_head(checkpoint_branch_client, branch_id)
 
     first_compare = await checkpoint_branch_client.get(
@@ -1271,9 +1351,12 @@ async def test_checkpoint_branch_continue_fork_and_compare_are_typed_and_idempot
         "againstGateVerdict": "unknown",
     }
     assert comparison["comparisonRecord"]["branchIds"] == [branch_id, fork_id]
-    assert comparison["comparisonRecord"]["baseCheckpointRef"] == (
-        "artifact://checkpoints/after-implement"
-    )
+    assert comparison["comparisonRecord"]["baseCheckpointRef"] == {
+        "branch": "artifact://checkpoints/after-implement",
+        "against": comparison["comparisonRecord"]["evidenceRefs"][
+            "againstCheckpointRef"
+        ],
+    }
     assert comparison["comparisonRecord"]["gateVerdictSummaries"] == {
         branch_id: "unknown",
         fork_id: "unknown",
@@ -1290,7 +1373,7 @@ async def test_checkpoint_branch_continue_fork_and_compare_are_typed_and_idempot
         "output.branch_comparison.metadata.json"
     ].startswith("artifact://checkpoint-branch-comparisons/")
     assert comparison["comparisonRecord"]["evidenceRefs"]["branchCheckpointRef"] == (
-        "artifact://checkpoints/after-implement"
+        f"artifact://accepted/{first_continue.json()['branchTurnId']}"
     )
 
     promoted = await checkpoint_branch_client.post(
@@ -1694,11 +1777,7 @@ async def test_checkpoint_branch_api_fails_closed_for_invalid_source_provider_bu
             "runtimeContextPolicy": "external_provider_continuation",
         },
     )
-    assert provider_response.status_code == 409
-    assert (
-        provider_response.json()["detail"]["code"]
-        == "provider_continuation_unsupported"
-    )
+    assert provider_response.status_code == 422
 
     budget_response = await checkpoint_branch_client.post(
         "/api/executions/mm:wf-branch/checkpoint-branches",
@@ -1856,6 +1935,9 @@ async def test_checkpoint_branch_compare_records_operation_payload(
         "/api/executions/mm:wf-branch/checkpoint-branches",
         json=_create_payload("mm-1091:create-compare-ledger"),
     )
+    await _accept_server_owned_branch_head(
+        checkpoint_branch_client, created.json()["branchId"]
+    )
     forked = await checkpoint_branch_client.post(
         f"/api/executions/mm:wf-branch/checkpoint-branches/{created.json()['branchId']}/fork",
         json={
@@ -1902,6 +1984,9 @@ async def test_checkpoint_branch_compare_returns_only_bounded_artifact_refs(
         "/api/executions/mm:wf-branch/checkpoint-branches",
         json=_create_payload("mm-1103:create-bounded-compare"),
     )
+    await _accept_server_owned_branch_head(
+        checkpoint_branch_client, created.json()["branchId"]
+    )
     forked = await checkpoint_branch_client.post(
         f"/api/executions/mm:wf-branch/checkpoint-branches/{created.json()['branchId']}/fork",
         json={
@@ -1920,9 +2005,10 @@ async def test_checkpoint_branch_compare_returns_only_bounded_artifact_refs(
     body = compared.json()
     record = body["comparisonRecord"]
     artifact_refs = record["artifactRefs"]
-    assert record["evidenceRefs"]["baseCheckpointRef"] == (
-        "artifact://checkpoints/after-implement"
-    )
+    assert record["evidenceRefs"]["baseCheckpointRef"] == {
+        "branch": "artifact://checkpoints/after-implement",
+        "against": record["evidenceRefs"]["againstCheckpointRef"],
+    }
     assert set(artifact_refs) >= {
         "output.branch_comparison.summary.json",
         "output.branch_comparison.metadata.json",
@@ -1948,6 +2034,9 @@ async def test_checkpoint_branch_compare_fails_closed_for_incompatible_checkpoin
     created = await checkpoint_branch_client.post(
         "/api/executions/mm:wf-branch/checkpoint-branches",
         json=_create_payload("mm-1103:create-incompatible-lineage-left"),
+    )
+    await _accept_server_owned_branch_head(
+        checkpoint_branch_client, created.json()["branchId"]
     )
     forked = await checkpoint_branch_client.post(
         f"/api/executions/mm:wf-branch/checkpoint-branches/{created.json()['branchId']}/fork",
@@ -1988,6 +2077,9 @@ async def test_checkpoint_branch_compare_fails_closed_for_source_digest_mismatch
     created = await checkpoint_branch_client.post(
         "/api/executions/mm:wf-branch/checkpoint-branches",
         json=_create_payload("mm-1103:create-digest-lineage-left"),
+    )
+    await _accept_server_owned_branch_head(
+        checkpoint_branch_client, created.json()["branchId"]
     )
     forked = await checkpoint_branch_client.post(
         f"/api/executions/mm:wf-branch/checkpoint-branches/{created.json()['branchId']}/fork",
@@ -2033,6 +2125,7 @@ async def test_checkpoint_branch_compare_allows_fork_from_current_head(
         json=_create_payload("mm-1103:create-current-head-parent"),
     )
     branch_id = created.json()["branchId"]
+    await _accept_server_owned_branch_head(checkpoint_branch_client, branch_id)
 
     async for session in checkpoint_branch_client.app.dependency_overrides[  # type: ignore[attr-defined]
         get_async_session
@@ -2045,6 +2138,16 @@ async def test_checkpoint_branch_compare_allows_fork_from_current_head(
             )
         ).scalar_one()
         branch.current_head_checkpoint_ref = "artifact://checkpoints/parent-head"
+        checkpoint = (
+            await session.execute(
+                select(WorkflowCheckpointBranchArtifact).where(
+                    WorkflowCheckpointBranchArtifact.branch_id == branch_id,
+                    WorkflowCheckpointBranchArtifact.artifact_kind
+                    == "output.branch_turn.checkpoint.json",
+                )
+            )
+        ).scalar_one()
+        checkpoint.artifact_ref = "artifact://checkpoints/parent-head"
         await session.commit()
 
     forked = await checkpoint_branch_client.post(
@@ -2076,6 +2179,9 @@ async def test_checkpoint_branch_compare_refreshes_when_branch_head_changes(
         "/api/executions/mm:wf-branch/checkpoint-branches",
         json=_create_payload("mm-1091:create-compare-refresh"),
     )
+    await _accept_server_owned_branch_head(
+        checkpoint_branch_client, created.json()["branchId"]
+    )
     forked = await checkpoint_branch_client.post(
         f"/api/executions/mm:wf-branch/checkpoint-branches/{created.json()['branchId']}/fork",
         json={
@@ -2102,7 +2208,6 @@ async def test_checkpoint_branch_compare_refreshes_when_branch_head_changes(
             )
         )
         branch = result.scalar_one()
-        branch.current_head_checkpoint_ref = "artifact://checkpoints/after-review"
         branch.current_head_commit = "review-head"
         await session.commit()
 
@@ -2117,7 +2222,7 @@ async def test_checkpoint_branch_compare_refreshes_when_branch_head_changes(
     )
     assert second_compare.json()["comparisonRecord"]["evidenceRefs"][
         "branchCheckpointRef"
-    ] == "artifact://checkpoints/after-review"
+    ].startswith("artifact://accepted/")
 
     async for session in checkpoint_branch_client.app.dependency_overrides[  # type: ignore[attr-defined]
         get_async_session

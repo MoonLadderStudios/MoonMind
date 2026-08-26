@@ -6,14 +6,17 @@ export function WorkflowColumnFilterButton({
   expanded,
   ariaLabel,
   onClick,
+  buttonRef,
 }: {
   active: boolean;
   expanded: boolean;
   ariaLabel: string;
   onClick: () => void;
+  buttonRef?: Ref<HTMLButtonElement>;
 }) {
   return (
     <button
+      ref={buttonRef}
       type="button"
       className={`workflow-list-column-filter-button${active ? ' is-active' : ''}`}
       aria-label={ariaLabel}

@@ -17,6 +17,7 @@ from pydantic import (
 )
 
 from moonmind.schemas._validation import NonBlankStr, require_non_blank
+from moonmind.schemas.container_job_models import OwnerIdentity
 from moonmind.schemas.temporal_payload_policy import (
     MAX_TEMPORAL_METADATA_REF_CHARS,
     MAX_TEMPORAL_METADATA_STRING_CHARS,
@@ -40,6 +41,27 @@ def _validate_absolute_posix_path(value: str, *, field_name: str) -> str:
     return normalized
 
 _RESERVED_SESSION_ENV_PREFIX = "MOONMIND_SESSION_"
+CODEX_TURN_RUNTIME_SELECTION_CONTRACT = "codex.turn_runtime_selection.v1"
+_PER_TURN_SESSION_ENV_KEYS = frozenset(
+    {
+        "MOONMIND_ACTIVE_SKILLS_DIR",
+        "MOONMIND_STEP_EXECUTION_ID",
+    }
+)
+
+def build_codex_managed_session_turn_environment(
+    *,
+    active_skills_dir: str | None,
+    step_execution_id: str | None,
+) -> dict[str, str]:
+    """Build the bounded environment refreshed for each managed Codex turn."""
+
+    environment: dict[str, str] = {}
+    if active_skills_dir and active_skills_dir.strip():
+        environment["MOONMIND_ACTIVE_SKILLS_DIR"] = active_skills_dir.strip()
+    if step_execution_id and step_execution_id.strip():
+        environment["MOONMIND_STEP_EXECUTION_ID"] = step_execution_id.strip()
+    return environment
 
 ManagedSessionControlAction = Literal[
     "start_session",
@@ -51,12 +73,20 @@ ManagedSessionControlAction = Literal[
     "cancel_session",
     "terminate_session",
 ]
+ManagedSessionRequestTrackingAction = ManagedSessionControlAction | Literal[
+    "reconcile_session"
+]
 
 ManagedSessionControlMode = Literal["remote_container"]
 ManagedSessionRuntimeFamily = Literal["codex"]
 ManagedSessionRuntimeId = Literal["codex_cli"]
 ManagedSessionProtocol = Literal["codex_app_server"]
 ManagedSessionContainerBackend = Literal["docker"]
+ManagedSessionWorkloadMode = Literal[
+    "container-jobs",
+    "no-docker",
+    "kubernetes-job",
+]
 ManagedGitHubCredentialSource = Literal["secret_ref", "managed_secret", "environment"]
 ManagedSessionHandleStatus = Literal[
     "launching",
@@ -1076,14 +1106,10 @@ class ManagedGitHubCredentialDescriptor(BaseModel):
             )
         return self
 
+
 ManagedSessionDockerCapabilityMode = Literal[
     "sidecar-dind",
     "sidecar-dind-rootless",
-]
-ManagedSessionDockerActivation = Literal[
-    "denied",
-    "on_demand",
-    "on_launch",
 ]
 ManagedSessionDockerState = Literal[
     "not_allowed",
@@ -1093,64 +1119,9 @@ ManagedSessionDockerState = Literal[
     "failed",
 ]
 
-class ManagedSessionDockerCapabilityRequest(BaseModel):
-    """Requested Docker authorization/materialization contract for launch."""
-
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    allowed: bool = Field(True, alias="allowed")
-    mode: ManagedSessionDockerCapabilityMode = Field("sidecar-dind", alias="mode")
-    activation: ManagedSessionDockerActivation = Field("on_demand", alias="activation")
-    state: ManagedSessionDockerState = Field("not_started", alias="state")
-    docker_host: str | None = Field(
-        "unix:///var/run/moonmind-docker/docker.sock",
-        alias="dockerHost",
-    )
-    compose_support: bool = Field(True, alias="composeSupport")
-    manifest_image_ref: str | None = Field(None, alias="manifestImageRef")
-    timeout_seconds: float = Field(60.0, alias="timeoutSeconds", ge=0)
-    interval_seconds: float = Field(2.0, alias="intervalSeconds", ge=0)
-
-    @model_validator(mode="before")
-    @classmethod
-    def _migrate_legacy_required_payload(cls, value: object) -> object:
-        if not isinstance(value, dict) or "required" not in value:
-            return value
-        migrated = dict(value)
-        required = bool(migrated.pop("required"))
-        migrated.setdefault("allowed", True)
-        migrated.setdefault("activation", "on_launch" if required else "on_demand")
-        migrated.setdefault("state", "not_started")
-        return migrated
-
-    @model_validator(mode="after")
-    def _normalize(self) -> "ManagedSessionDockerCapabilityRequest":
-        if not self.allowed:
-            self.activation = "denied"
-            self.state = "not_allowed"
-            self.docker_host = None
-        elif self.activation == "denied":
-            raise ValueError(
-                "dockerCapability.activation=denied requires allowed=false"
-            )
-        elif self.state == "not_allowed":
-            raise ValueError(
-                "dockerCapability.state=not_allowed requires allowed=false"
-            )
-        if self.docker_host is not None:
-            self.docker_host = require_non_blank(
-                self.docker_host,
-                field_name="dockerCapability.dockerHost",
-            )
-        if self.manifest_image_ref is not None:
-            self.manifest_image_ref = require_non_blank(
-                self.manifest_image_ref,
-                field_name="dockerCapability.manifestImageRef",
-            )
-        return self
 
 class ManagedSessionEnsureDockerSidecarRequest(BaseModel):
-    """Explicit request to materialize a managed session's Docker sidecar."""
+    """Replay-compatible request retained for pre-cutover workflow histories."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -1161,16 +1132,18 @@ class ManagedSessionEnsureDockerSidecarRequest(BaseModel):
     reason: NonBlankStr | None = Field(None, alias="reason")
     compose_required: bool = Field(False, alias="composeRequired")
 
+
 class ManagedSessionDockerDaemonStatus(BaseModel):
-    """Observed daemon readiness for a managed session Docker sidecar."""
+    """Observed readiness for a replay-compatible Docker sidecar."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     ready: bool = Field(False, alias="ready")
     version: str = Field("", alias="version")
 
+
 class ManagedSessionEnsureDockerSidecarResponse(BaseModel):
-    """Result of idempotent managed-session Docker sidecar activation."""
+    """Replay-compatible result for already-scheduled sidecar Activities."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -1192,6 +1165,7 @@ class LaunchCodexManagedSessionRequest(_CodexManagedSessionRemoteContract):
     session_id: NonBlankStr = Field(..., alias="sessionId")
     session_epoch: int = Field(1, alias="sessionEpoch", ge=1)
     thread_id: NonBlankStr = Field(..., alias="threadId")
+    replace_existing: bool = Field(False, alias="replaceExisting")
     workspace_path: NonBlankStr = Field(..., alias="workspacePath")
     session_workspace_path: NonBlankStr = Field(
         ..., alias="sessionWorkspacePath"
@@ -1199,6 +1173,20 @@ class LaunchCodexManagedSessionRequest(_CodexManagedSessionRemoteContract):
     artifact_spool_path: NonBlankStr = Field(..., alias="artifactSpoolPath")
     codex_home_path: NonBlankStr = Field(..., alias="codexHomePath")
     image_ref: NonBlankStr = Field(..., alias="imageRef")
+    workload_mode: ManagedSessionWorkloadMode = Field(
+        "container-jobs", alias="workloadMode"
+    )
+    required_capabilities: tuple[NonBlankStr, ...] | None = Field(
+        None,
+        alias="requiredCapabilities",
+    )
+    execution_fanout_authorization: dict[str, Any] | None = Field(
+        None,
+        alias="executionFanoutAuthorization",
+    )
+    container_job_owner: OwnerIdentity | None = Field(
+        None, alias="containerJobOwner"
+    )
     turn_completion_timeout_seconds: int = Field(
         3600,
         alias="turnCompletionTimeoutSeconds",
@@ -1206,10 +1194,6 @@ class LaunchCodexManagedSessionRequest(_CodexManagedSessionRemoteContract):
     )
     environment: dict[str, str] = Field(default_factory=dict, alias="environment")
     metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata")
-    docker_capability: ManagedSessionDockerCapabilityRequest | None = Field(
-        None,
-        alias="dockerCapability",
-    )
     github_credential: ManagedGitHubCredentialDescriptor | None = Field(
         None,
         alias="githubCredential",
@@ -1264,9 +1248,48 @@ class LaunchCodexManagedSessionRequest(_CodexManagedSessionRemoteContract):
 class SendCodexManagedSessionTurnRequest(CodexManagedSessionLocator):
     """Send a new turn to the remote session container."""
 
+    # Session snapshots may report the valid initial epoch before the first
+    # persisted transition.
+    session_epoch: int = Field(..., alias="sessionEpoch", ge=0)
     instructions: NonBlankStr = Field(..., alias="instructions")
     reason: NonBlankStr | None = Field(None, alias="reason")
     request_id: NonBlankStr | None = Field(None, alias="requestId")
+    model: str | None = Field(None, alias="model")
+    effort: str | None = Field(None, alias="effort")
+    bridge_publication: dict[str, Any] | None = Field(
+        None, alias="bridgePublication"
+    )
+    environment: dict[str, str] = Field(default_factory=dict, alias="environment")
+
+    @field_validator("model", "effort")
+    @classmethod
+    def _validate_runtime_selection(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("runtime selection value must not be blank")
+        return value
+
+    @field_validator("environment")
+    @classmethod
+    def _normalize_per_turn_environment(
+        cls,
+        value: dict[str, str],
+    ) -> dict[str, str]:
+        normalized: dict[str, str] = {}
+        for raw_key, raw_value in value.items():
+            key = require_non_blank(str(raw_key), field_name="environment key")
+            if key not in _PER_TURN_SESSION_ENV_KEYS:
+                raise ValueError(f"environment key is not allowed: {key}")
+            normalized_value = require_non_blank(
+                str(raw_value),
+                field_name=f"environment.{key}",
+            )
+            if key == "MOONMIND_ACTIVE_SKILLS_DIR":
+                normalized_value = _validate_absolute_posix_path(
+                    normalized_value,
+                    field_name=f"environment.{key}",
+                )
+            normalized[key] = normalized_value
+        return normalized
 
 class SteerCodexManagedSessionTurnRequest(CodexManagedSessionLocator):
     """Provide follow-up steering to an in-flight turn."""
@@ -1644,7 +1667,7 @@ class CodexManagedSessionRequestTrackingEntry(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     request_id: NonBlankStr = Field(..., alias="requestId")
-    action: ManagedSessionControlAction = Field(..., alias="action")
+    action: ManagedSessionRequestTrackingAction = Field(..., alias="action")
     session_epoch: int = Field(..., alias="sessionEpoch", ge=1)
     status: ManagedSessionRequestTrackingStatus = Field(..., alias="status")
     result_ref: str | None = Field(None, alias="resultRef")
@@ -1707,6 +1730,28 @@ class CodexManagedSessionSteerRequest(BaseModel):
         if self.request_id is not None:
             self.request_id = require_non_blank(self.request_id, field_name="requestId")
         return self
+
+
+class CodexManagedSessionReconcileRequest(BaseModel):
+    """Typed, fenced request from the Omnigent stuck-state detector."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    session_id: NonBlankStr = Field(..., alias="sessionId")
+    request_id: NonBlankStr = Field(..., alias="requestId")
+    reason_code: NonBlankStr = Field(..., alias="reasonCode")
+    expected_revision: int = Field(..., alias="expectedRevision", ge=1)
+    expected_fencing_generation: int = Field(
+        ..., alias="expectedFencingGeneration", ge=0
+    )
+
+    @model_validator(mode="after")
+    def _normalize(self) -> "CodexManagedSessionReconcileRequest":
+        self.session_id = require_non_blank(self.session_id, field_name="sessionId")
+        self.request_id = require_non_blank(self.request_id, field_name="requestId")
+        self.reason_code = require_non_blank(self.reason_code, field_name="reasonCode")
+        return self
+
 
 class CodexManagedSessionWorkflowControlRequest(BaseModel):
     """Typed workflow update request for clear/cancel/terminate operations."""
@@ -4804,6 +4849,7 @@ __all__ = [
     "CodexManagedSessionPlaneContract",
     "CodexManagedSessionRecord",
     "CodexManagedSessionRequestTrackingEntry",
+    "CodexManagedSessionReconcileRequest",
     "CodexManagedSessionSendFollowUpRequest",
     "CodexManagedSessionSnapshot",
     "CodexManagedSessionState",
@@ -4832,6 +4878,7 @@ __all__ = [
     "ManagedSessionPlaneContract",
     "ManagedSessionRecord",
     "ManagedSessionRequestTrackingEntry",
+    "ManagedSessionRequestTrackingAction",
     "ManagedSessionSendFollowUpRequest",
     "ManagedSessionSnapshot",
     "ManagedSessionState",
@@ -4846,14 +4893,13 @@ __all__ = [
     "ManagedSessionRuntimeId",
     "ManagedGitHubCredentialDescriptor",
     "ManagedGitHubCredentialSource",
-    "ManagedSessionDockerActivation",
     "ManagedSessionDockerCapabilityMode",
-    "ManagedSessionDockerCapabilityRequest",
     "ManagedSessionDockerDaemonStatus",
     "ManagedSessionDockerState",
     "ManagedSessionEnsureDockerSidecarRequest",
     "ManagedSessionEnsureDockerSidecarResponse",
     "ManagedSessionContainerBackend",
+    "ManagedSessionWorkloadMode",
     "MANAGED_SESSION_CONTROL_ACTIONS",
     "ManagedSessionControlAction",
     "ManagedSessionControlMode",
@@ -4865,6 +4911,7 @@ __all__ = [
     "PublishCodexManagedSessionArtifactsRequest",
     "PublishManagedSessionArtifactsRequest",
     "build_claude_child_work_fixture_flow",
+    "build_codex_managed_session_turn_environment",
     "build_claude_governance_telemetry_fixture_flow",
     "build_claude_surface_handoff_fixture_flow",
     "claude_checkpoint_capture_decision",

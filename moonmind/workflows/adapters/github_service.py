@@ -11,10 +11,16 @@ import logging
 import os
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Mapping, Optional
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
+
+from pr_resolver_core.review_providers import (
+    automated_review_provider_or_raise,
+    normalize_reviewer_login,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +55,7 @@ class PullRequestReadinessResult(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     head_sha: str = Field(..., alias="headSha")
+    base_sha: str | None = Field(None, alias="baseSha")
     ready: bool = Field(False, alias="ready")
     pull_request_open: bool | None = Field(None, alias="pullRequestOpen")
     pull_request_merged: bool | None = Field(None, alias="pullRequestMerged")
@@ -57,8 +64,52 @@ class PullRequestReadinessResult(BaseModel):
     automated_review_complete: bool | None = Field(
         None, alias="automatedReviewComplete"
     )
+    automated_review_completion_kind: str | None = Field(
+        None, alias="automatedReviewCompletionKind"
+    )
+    automated_review_completion_id: int | None = Field(
+        None, alias="automatedReviewCompletionId"
+    )
+    automated_review_completed_at: str | None = Field(
+        None, alias="automatedReviewCompletedAt"
+    )
+    automated_review_request_stale: bool | None = Field(
+        None, alias="automatedReviewRequestStale"
+    )
     policy_allowed: bool | None = Field(True, alias="policyAllowed")
     blockers: list[dict[str, Any]] = Field(default_factory=list, alias="blockers")
+
+
+class AutomatedReviewRequestResult(BaseModel):
+    """Result of posting (or adopting) one automated review request comment."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    status: str = Field(..., alias="status")
+    provider: str = Field(..., alias="provider")
+    command: str = Field(..., alias="command")
+    head_sha: str = Field("", alias="headSha")
+    observed_head_sha: str | None = Field(None, alias="observedHeadSha")
+    request_comment_id: int | None = Field(None, alias="requestCommentId")
+    request_comment_url: str | None = Field(None, alias="requestCommentUrl")
+    requested_at: str | None = Field(None, alias="requestedAt")
+    actor: str | None = Field(None, alias="actor")
+    reconciled: bool = Field(False, alias="reconciled")
+    retryable: bool = Field(False, alias="retryable")
+    summary: str = Field("", alias="summary")
+
+
+class PullRequestSelectorResult(BaseModel):
+    """Canonical result of resolving one PR number, URL, or head branch."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    resolved: bool = False
+    pr_number: int | None = Field(None, alias="prNumber")
+    pr_url: str | None = Field(None, alias="prUrl")
+    selector_type: str = Field(..., alias="selectorType")
+    reason_code: str = Field(..., alias="reasonCode")
+    summary: str
 
 
 class GitHubIssueResult(BaseModel):
@@ -89,6 +140,25 @@ _GITHUB_PR_URL_RE = re.compile(
 _CONFLICTING_MERGEABLE_STATES = {"dirty"}
 _CONFLICTING_MERGE_STATE_STATUSES = {"CONFLICTING", "DIRTY"}
 _CONFLICTING_MERGEABLE_VALUES = {"CONFLICTING", "DIRTY"}
+
+
+def _parse_github_timestamp(value: Any) -> datetime | None:
+    candidate = str(value or "").strip()
+    if not candidate:
+        return None
+    if candidate.endswith("Z"):
+        candidate = candidate[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(candidate)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _normalized_comment_body(value: Any) -> str:
+    return " ".join(str(value or "").strip().split()).rstrip(".").strip().lower()
 
 
 def _pull_request_has_merge_conflicts(pr_data: Mapping[str, Any]) -> bool:
@@ -1013,11 +1083,153 @@ class GitHubService:
                     ),
                 )
 
+    async def resolve_pull_request_selector(
+        self,
+        *,
+        repo: str,
+        selector: str,
+        github_token: str | None = None,
+    ) -> PullRequestSelectorResult:
+        """Resolve a PR number, GitHub PR URL, or exact open head branch."""
+
+        repository = str(repo or "").strip()
+        candidate = str(selector or "").strip()
+        if not repository or not candidate:
+            return PullRequestSelectorResult(
+                selectorType="invalid",
+                reasonCode="selector_invalid",
+                summary="PR resolution requires a repository and selector.",
+            )
+
+        try:
+            pr_number = int(candidate)
+        except ValueError:
+            pr_number = 0
+        if pr_number > 0:
+            return PullRequestSelectorResult(
+                resolved=True,
+                prNumber=pr_number,
+                prUrl=f"https://github.com/{repository}/pull/{pr_number}",
+                selectorType="number",
+                reasonCode="resolved",
+                summary=f"Resolved PR #{pr_number} from its numeric selector.",
+            )
+
+        parsed_url = self.parse_github_pr_url(candidate.rstrip("/"))
+        if parsed_url is not None:
+            owner, repo_name, number_text = parsed_url
+            url_repository = f"{owner}/{repo_name}"
+            if url_repository.lower() != repository.lower():
+                return PullRequestSelectorResult(
+                    selectorType="url",
+                    reasonCode="repository_mismatch",
+                    summary=(
+                        f"PR URL repository {url_repository} does not match "
+                        f"requested repository {repository}."
+                    ),
+                )
+            pr_number = int(number_text)
+            return PullRequestSelectorResult(
+                resolved=True,
+                prNumber=pr_number,
+                prUrl=f"https://github.com/{repository}/pull/{pr_number}",
+                selectorType="url",
+                reasonCode="resolved",
+                summary=f"Resolved PR #{pr_number} from its GitHub URL.",
+            )
+
+        token, resolution_error = await self.resolve_github_token(
+            github_token,
+            repo=repository,
+        )
+        if not token:
+            return PullRequestSelectorResult(
+                selectorType="branch",
+                reasonCode="auth_unavailable",
+                summary=resolution_error or self._missing_auth_summary("resolve a PR branch"),
+            )
+
+        headers = self._github_headers(token)
+        owner = repository.split("/", 1)[0]
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            try:
+                response = await client.get(
+                    f"https://api.github.com/repos/{repository}/pulls",
+                    headers=headers,
+                    params={
+                        "state": "open",
+                        "head": f"{owner}:{candidate}",
+                        "per_page": 20,
+                    },
+                )
+                response.raise_for_status()
+            except (httpx.HTTPStatusError, httpx.TransportError, httpx.TimeoutException) as exc:
+                return PullRequestSelectorResult(
+                    selectorType="branch",
+                    reasonCode="github_lookup_failed",
+                    summary=(
+                        f"GitHub PR lookup failed for branch {candidate}: "
+                        f"{exc.__class__.__name__}."
+                    ),
+                )
+
+        data = response.json()
+        matches = []
+        if isinstance(data, list):
+            for item in data:
+                if not isinstance(item, Mapping):
+                    continue
+                head = item.get("head")
+                head = head if isinstance(head, Mapping) else {}
+                head_repo = head.get("repo")
+                head_repo = head_repo if isinstance(head_repo, Mapping) else {}
+                if (
+                    str(head.get("ref") or "") == candidate
+                    and str(head_repo.get("full_name") or "").lower()
+                    == repository.lower()
+                ):
+                    matches.append(item)
+
+        if not matches:
+            return PullRequestSelectorResult(
+                selectorType="branch",
+                reasonCode="pull_request_not_found",
+                summary=f"No open pull request found for branch {candidate} in {repository}.",
+            )
+        if len(matches) > 1:
+            return PullRequestSelectorResult(
+                selectorType="branch",
+                reasonCode="pull_request_ambiguous",
+                summary=(
+                    f"Multiple open pull requests found for branch {candidate} in "
+                    f"{repository}; submit a PR number or URL."
+                ),
+            )
+
+        match = matches[0]
+        pr_number = int(match.get("number") or 0)
+        pr_url = str(match.get("html_url") or "").strip()
+        if pr_number <= 0 or not pr_url:
+            return PullRequestSelectorResult(
+                selectorType="branch",
+                reasonCode="github_response_invalid",
+                summary="GitHub returned incomplete pull-request identity metadata.",
+            )
+        return PullRequestSelectorResult(
+            resolved=True,
+            prNumber=pr_number,
+            prUrl=pr_url,
+            selectorType="branch",
+            reasonCode="resolved",
+            summary=f"Resolved branch {candidate} to PR #{pr_number}.",
+        )
+
     async def merge_pull_request(
         self,
         *,
         pr_url: str,
         merge_method: str = "merge",
+        expected_head_sha: str | None = None,
         github_token: str | None = None,
     ) -> MergePRResult:
         """Merge a GitHub pull request by URL."""
@@ -1048,6 +1260,8 @@ class GitHubService:
         )
         headers = self._github_headers(token)
         payload = {"merge_method": merge_method}
+        if expected_head_sha:
+            payload["sha"] = expected_head_sha
 
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             try:
@@ -1169,6 +1383,260 @@ class GitHubService:
                     f" {exc.__class__.__name__}"
                 )
 
+    async def request_automated_review(
+        self,
+        *,
+        repo: str,
+        pr_number: int,
+        expected_head_sha: str,
+        provider: str,
+        attempt_started_at: str,
+        recorded_comment_id: int | None = None,
+        github_token: str | None = None,
+    ) -> AutomatedReviewRequestResult:
+        """Post exactly one automated review request for one exact head SHA.
+
+        The request text is never supplied by a caller: it is the trusted
+        command registered for *provider*.  When a previous attempt may have
+        posted the comment without returning a response, the already recorded
+        comment (or a comment created by this identity after
+        ``attempt_started_at``) is adopted instead of posting again.
+        """
+
+        record = automated_review_provider_or_raise(provider)
+        command = record.command
+        expected_head_sha = str(expected_head_sha or "").strip()
+
+        def _result(**kwargs: Any) -> AutomatedReviewRequestResult:
+            payload: dict[str, Any] = {
+                "provider": record.provider,
+                "command": command,
+                "headSha": expected_head_sha,
+            }
+            payload.update(kwargs)
+            return AutomatedReviewRequestResult.model_validate(payload)
+
+        token, resolution_error = await self.resolve_github_token(
+            github_token,
+            repo=repo,
+        )
+        if not token:
+            return _result(
+                status="unavailable",
+                retryable=True,
+                summary=resolution_error
+                or self._missing_auth_summary("request an automated review"),
+            )
+        headers = self._github_headers(token)
+        started_at = _parse_github_timestamp(attempt_started_at)
+
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            try:
+                pr_response = await client.get(
+                    f"https://api.github.com/repos/{repo}/pulls/{pr_number}",
+                    headers=headers,
+                )
+                pr_response.raise_for_status()
+                pr_data = pr_response.json()
+            except httpx.HTTPStatusError as exc:
+                return _result(
+                    status="unavailable",
+                    retryable=exc.response.status_code >= 500,
+                    summary=(
+                        "GitHub pull request state could not be fetched "
+                        f"(HTTP {exc.response.status_code})."
+                    ),
+                )
+            except (httpx.TransportError, httpx.TimeoutException) as exc:
+                return _result(
+                    status="unavailable",
+                    retryable=True,
+                    summary=(
+                        "GitHub pull request state request failed: "
+                        f"{exc.__class__.__name__}."
+                    ),
+                )
+
+            head = pr_data.get("head") if isinstance(pr_data, dict) else {}
+            observed_head_sha = (
+                str(head.get("sha") or "").strip() if isinstance(head, dict) else ""
+            )
+            if pr_data.get("merged") is True or pr_data.get("state") != "open":
+                return _result(
+                    status="pull_request_closed",
+                    observedHeadSha=observed_head_sha or None,
+                    summary="Pull request is not open; no review was requested.",
+                )
+            if expected_head_sha and observed_head_sha != expected_head_sha:
+                return _result(
+                    status="stale_head",
+                    observedHeadSha=observed_head_sha or None,
+                    summary=(
+                        "Pull request head advanced before the review request "
+                        "was posted."
+                    ),
+                )
+
+            if recorded_comment_id:
+                adopted = await self._read_issue_comment(
+                    client=client,
+                    repo=repo,
+                    comment_id=recorded_comment_id,
+                    headers=headers,
+                )
+                if adopted is not None:
+                    return _result(
+                        status="recorded",
+                        observedHeadSha=observed_head_sha or None,
+                        requestCommentId=adopted.get("id"),
+                        requestCommentUrl=adopted.get("html_url"),
+                        requestedAt=str(adopted.get("created_at") or "") or None,
+                        actor=str(
+                            (adopted.get("user") or {}).get("login") or ""
+                        )
+                        or None,
+                        reconciled=True,
+                        summary="Automated review request already recorded.",
+                    )
+
+            reconciled = await self._find_recent_request_comment(
+                client=client,
+                repo=repo,
+                pr_number=pr_number,
+                headers=headers,
+                command=command,
+                not_before=started_at,
+            )
+            if reconciled is not None:
+                return _result(
+                    status="reconciled",
+                    observedHeadSha=observed_head_sha or None,
+                    requestCommentId=reconciled.get("id"),
+                    requestCommentUrl=reconciled.get("html_url"),
+                    requestedAt=str(reconciled.get("created_at") or "") or None,
+                    actor=str((reconciled.get("user") or {}).get("login") or "")
+                    or None,
+                    reconciled=True,
+                    summary=(
+                        "Adopted an automated review request created by this "
+                        "identity after the attempt started."
+                    ),
+                )
+
+            try:
+                response = await client.post(
+                    f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments",
+                    headers=headers,
+                    json={"body": command},
+                )
+                response.raise_for_status()
+                created = response.json()
+            except httpx.HTTPStatusError as exc:
+                return _result(
+                    status="failed",
+                    observedHeadSha=observed_head_sha or None,
+                    retryable=exc.response.status_code >= 500,
+                    summary=(
+                        "Automated review request comment failed with HTTP "
+                        f"{exc.response.status_code}."
+                    ),
+                )
+            except (httpx.TransportError, httpx.TimeoutException) as exc:
+                # Delivery is ambiguous: the next attempt reconciles against
+                # comments created after ``attempt_started_at`` rather than
+                # posting a second request.
+                return _result(
+                    status="unavailable",
+                    observedHeadSha=observed_head_sha or None,
+                    retryable=True,
+                    summary=(
+                        "Automated review request delivery was ambiguous: "
+                        f"{exc.__class__.__name__}."
+                    ),
+                )
+
+        return _result(
+            status="requested",
+            observedHeadSha=observed_head_sha or None,
+            requestCommentId=created.get("id") if isinstance(created, dict) else None,
+            requestCommentUrl=(
+                created.get("html_url") if isinstance(created, dict) else None
+            ),
+            requestedAt=(
+                str(created.get("created_at") or "") or None
+                if isinstance(created, dict)
+                else None
+            ),
+            actor=(
+                str((created.get("user") or {}).get("login") or "") or None
+                if isinstance(created, dict)
+                else None
+            ),
+            summary=f"Requested an automated {record.provider} review.",
+        )
+
+    async def _read_issue_comment(
+        self,
+        *,
+        client: httpx.AsyncClient,
+        repo: str,
+        comment_id: int,
+        headers: dict[str, str],
+    ) -> dict[str, Any] | None:
+        try:
+            response = await client.get(
+                f"https://api.github.com/repos/{repo}/issues/comments/{comment_id}",
+                headers=headers,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except (
+            httpx.HTTPStatusError,
+            httpx.TransportError,
+            httpx.TimeoutException,
+        ):
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    async def _find_recent_request_comment(
+        self,
+        *,
+        client: httpx.AsyncClient,
+        repo: str,
+        pr_number: int,
+        headers: dict[str, str],
+        command: str,
+        not_before: datetime | None,
+    ) -> dict[str, Any] | None:
+        url = (
+            f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments"
+            "?per_page=100&sort=created&direction=desc"
+        )
+        try:
+            response = await client.get(url, headers=headers)
+            response.raise_for_status()
+            comments = response.json()
+        except (
+            httpx.HTTPStatusError,
+            httpx.TransportError,
+            httpx.TimeoutException,
+        ):
+            return None
+        if not isinstance(comments, list):
+            return None
+        for comment in comments:
+            if not isinstance(comment, dict):
+                continue
+            if _normalized_comment_body(comment.get("body")) != command.strip().lower():
+                continue
+            created_at = _parse_github_timestamp(comment.get("created_at"))
+            if not_before is not None and (
+                created_at is None or created_at < not_before
+            ):
+                continue
+            return comment
+        return None
+
     async def evaluate_pull_request_readiness(
         self,
         *,
@@ -1177,6 +1645,8 @@ class GitHubService:
         head_sha: str,
         policy: dict[str, Any] | None = None,
         github_token: str | None = None,
+        review_loop_enabled: bool = False,
+        review_request: Mapping[str, Any] | None = None,
     ) -> PullRequestReadinessResult:
         """Evaluate GitHub readiness for a tracked pull request revision."""
 
@@ -1210,11 +1680,16 @@ class GitHubService:
         headers = self._github_headers(token)
         blockers: list[dict[str, Any]] = []
         observed_head_sha = head_sha
+        observed_base_sha: str | None = None
         pr_open: bool | None = None
         pr_merged: bool | None = None
         checks_complete: bool | None = None
         checks_passing: bool | None = None
         automated_review_complete: bool | None = None
+        automated_review_completion_kind: str | None = None
+        automated_review_completion_id: int | None = None
+        automated_review_completed_at: str | None = None
+        automated_review_request_stale: bool | None = None
         merge_conflicted = False
 
         async with httpx.AsyncClient(timeout=self._timeout) as client:
@@ -1230,6 +1705,9 @@ class GitHubService:
                 head = pr_data.get("head") if isinstance(pr_data, dict) else {}
                 if isinstance(head, dict):
                     observed_head_sha = str(head.get("sha") or head_sha)
+                base = pr_data.get("base") if isinstance(pr_data, dict) else {}
+                if isinstance(base, dict):
+                    observed_base_sha = str(base.get("sha") or "").strip() or None
                 merge_conflicted = _pull_request_has_merge_conflicts(pr_data)
             except httpx.HTTPStatusError as exc:
                 blockers.append(
@@ -1269,6 +1747,7 @@ class GitHubService:
             if pr_open is True and pr_merged is not True and merge_conflicted:
                 return PullRequestReadinessResult(
                     headSha=observed_head_sha,
+                    baseSha=observed_base_sha,
                     ready=True,
                     pullRequestOpen=pr_open,
                     pullRequestMerged=pr_merged,
@@ -1298,23 +1777,57 @@ class GitHubService:
                 blockers.extend(check_evidence["blockers"])
 
             if review_required and pr_merged is not True and not blockers:
-                review_evidence = await self._evaluate_automated_review(
-                    client=client,
-                    repo=repo,
-                    pr_number=pr_number,
-                    headers=headers,
-                )
-                automated_review_complete = review_evidence["complete"]
-                blockers.extend(review_evidence["blockers"])
+                if review_loop_enabled:
+                    # The review loop makes every review request explicit and
+                    # head-bound: with no active request the gate must open so
+                    # the resolver can decide whether one is needed. With an
+                    # active request only that request's own result counts.
+                    if review_request:
+                        review_evidence = await self._evaluate_requested_review(
+                            client=client,
+                            repo=repo,
+                            pr_number=pr_number,
+                            headers=headers,
+                            review_request=review_request,
+                            observed_head_sha=observed_head_sha,
+                        )
+                        automated_review_complete = review_evidence["complete"]
+                        automated_review_completion_kind = review_evidence.get(
+                            "completionKind"
+                        )
+                        automated_review_completion_id = review_evidence.get(
+                            "completionId"
+                        )
+                        automated_review_completed_at = review_evidence.get(
+                            "completedAt"
+                        )
+                        automated_review_request_stale = bool(
+                            review_evidence.get("stale")
+                        )
+                        blockers.extend(review_evidence["blockers"])
+                else:
+                    review_evidence = await self._evaluate_automated_review(
+                        client=client,
+                        repo=repo,
+                        pr_number=pr_number,
+                        headers=headers,
+                    )
+                    automated_review_complete = review_evidence["complete"]
+                    blockers.extend(review_evidence["blockers"])
 
         return PullRequestReadinessResult(
             headSha=observed_head_sha,
+            baseSha=observed_base_sha,
             ready=not blockers and pr_merged is not True,
             pullRequestOpen=pr_open,
             pullRequestMerged=pr_merged,
             checksComplete=checks_complete,
             checksPassing=checks_passing,
             automatedReviewComplete=automated_review_complete,
+            automatedReviewCompletionKind=automated_review_completion_kind,
+            automatedReviewCompletionId=automated_review_completion_id,
+            automatedReviewCompletedAt=automated_review_completed_at,
+            automatedReviewRequestStale=automated_review_request_stale,
             policyAllowed=True,
             blockers=blockers,
         )
@@ -1446,12 +1959,252 @@ class GitHubService:
                     "source": "github",
                 }
             )
+        if has_failed_checks:
+            blockers.append(
+                {
+                    "kind": "checks_failed",
+                    "summary": "One or more required checks failed.",
+                    "retryable": False,
+                    "source": "github",
+                }
+            )
 
         return {
             "complete": not has_running_checks,
             "passing": not has_running_checks and not has_failed_checks,
             "blockers": blockers,
         }
+
+    async def _evaluate_requested_review(
+        self,
+        *,
+        client: httpx.AsyncClient,
+        repo: str,
+        pr_number: int,
+        headers: dict[str, str],
+        review_request: Mapping[str, Any],
+        observed_head_sha: str,
+    ) -> dict[str, Any]:
+        """Decide whether *this* request's result has arrived.
+
+        A result counts only when the head is still the requested SHA, the
+        author is the configured provider identity, the result happened after
+        the request, and a submitted review names the requested commit whenever
+        GitHub supplies a commit id.  No older review or reaction is a fallback.
+        """
+
+        pending: dict[str, Any] = {
+            "complete": False,
+            "completionKind": None,
+            "completionId": None,
+            "completedAt": None,
+            "stale": False,
+            "blockers": [
+                {
+                    "kind": "automated_review_pending",
+                    "summary": "Requested automated review has not completed.",
+                    "retryable": True,
+                    "source": "github",
+                }
+            ],
+        }
+        try:
+            record = automated_review_provider_or_raise(
+                review_request.get("provider")
+            )
+        except ValueError:
+            return {
+                **pending,
+                "blockers": [
+                    {
+                        "kind": "external_state_unavailable",
+                        "summary": (
+                            "Automated review request names an unsupported "
+                            "provider."
+                        ),
+                        "retryable": False,
+                        "source": "policy",
+                    }
+                ],
+            }
+
+        requested_head_sha = str(review_request.get("headSha") or "").strip()
+        if (
+            requested_head_sha
+            and observed_head_sha
+            and requested_head_sha != observed_head_sha
+        ):
+            return {
+                **pending,
+                "stale": True,
+                "blockers": [
+                    {
+                        "kind": "automated_review_pending",
+                        "summary": (
+                            "Pull request head changed while waiting for the "
+                            "requested automated review."
+                        ),
+                        "retryable": True,
+                        "source": "github",
+                    }
+                ],
+            }
+
+        requested_at = _parse_github_timestamp(review_request.get("requestedAt"))
+        try:
+            response = await client.get(
+                f"https://api.github.com/repos/{repo}/pulls/{pr_number}/reviews"
+                "?per_page=100",
+                headers=headers,
+            )
+            response.raise_for_status()
+            reviews = response.json()
+        except httpx.HTTPStatusError as exc:
+            return {
+                **pending,
+                "blockers": [
+                    {
+                        "kind": "external_state_unavailable",
+                        "summary": (
+                            "GitHub review state could not be fetched "
+                            f"(HTTP {exc.response.status_code})."
+                        ),
+                        "retryable": exc.response.status_code >= 500,
+                        "source": "github",
+                    }
+                ],
+            }
+        except (httpx.TransportError, httpx.TimeoutException) as exc:
+            return {
+                **pending,
+                "blockers": [
+                    {
+                        "kind": "external_state_unavailable",
+                        "summary": (
+                            "GitHub review state request failed: "
+                            f"{exc.__class__.__name__}."
+                        ),
+                        "retryable": True,
+                        "source": "github",
+                    }
+                ],
+            }
+
+        if isinstance(reviews, list):
+            for review in reviews:
+                if not isinstance(review, dict):
+                    continue
+                user = review.get("user") if isinstance(review.get("user"), dict) else {}
+                if (
+                    normalize_reviewer_login(user.get("login"))
+                    not in record.reviewer_logins
+                ):
+                    continue
+                submitted_at = _parse_github_timestamp(review.get("submitted_at"))
+                if requested_at is not None and (
+                    submitted_at is None or submitted_at <= requested_at
+                ):
+                    continue
+                commit_id = str(review.get("commit_id") or "").strip()
+                if (
+                    commit_id
+                    and requested_head_sha
+                    and commit_id != requested_head_sha
+                ):
+                    continue
+                return {
+                    "complete": True,
+                    "completionKind": "review",
+                    "completionId": review.get("id"),
+                    "completedAt": str(review.get("submitted_at") or "") or None,
+                    "stale": False,
+                    "blockers": [],
+                }
+
+        reaction = await self._find_request_clean_review_reaction(
+            client=client,
+            repo=repo,
+            pr_number=pr_number,
+            headers=headers,
+            provider=record,
+            request_comment_id=review_request.get("requestCommentId"),
+            requested_at=requested_at,
+        )
+        if reaction is not None:
+            return {
+                "complete": True,
+                "completionKind": "reaction",
+                "completionId": reaction.get("id"),
+                "completedAt": str(reaction.get("created_at") or "") or None,
+                "stale": False,
+                "blockers": [],
+            }
+        return pending
+
+    async def _find_request_clean_review_reaction(
+        self,
+        *,
+        client: httpx.AsyncClient,
+        repo: str,
+        pr_number: int,
+        headers: dict[str, str],
+        provider: Any,
+        request_comment_id: Any,
+        requested_at: datetime | None,
+    ) -> dict[str, Any] | None:
+        def _matches(reaction: Any, *, enforce_not_before: bool) -> bool:
+            if not isinstance(reaction, dict):
+                return False
+            user = reaction.get("user") if isinstance(reaction.get("user"), dict) else {}
+            if (
+                normalize_reviewer_login(user.get("login"))
+                not in provider.reviewer_logins
+            ):
+                return False
+            if str(reaction.get("content") or "") not in provider.clean_review_reactions:
+                return False
+            if not enforce_not_before or requested_at is None:
+                return True
+            created_at = _parse_github_timestamp(reaction.get("created_at"))
+            return created_at is not None and created_at > requested_at
+
+        urls: list[tuple[str, bool]] = []
+        comment_id = str(request_comment_id or "").strip()
+        if comment_id:
+            # Preferred: the reaction is attached to the exact request comment.
+            urls.append(
+                (
+                    "https://api.github.com/repos/"
+                    f"{repo}/issues/comments/{comment_id}/reactions?per_page=100",
+                    False,
+                )
+            )
+        # Fallback: a PR-level reaction created after the request while the head
+        # is unchanged (the caller already rejected stale heads).
+        urls.append(
+            (
+                f"https://api.github.com/repos/{repo}/issues/{pr_number}/reactions"
+                "?per_page=100",
+                True,
+            )
+        )
+        for url, enforce_not_before in urls:
+            try:
+                response = await client.get(url, headers=headers)
+                response.raise_for_status()
+                reactions = response.json()
+            except (
+                httpx.HTTPStatusError,
+                httpx.TransportError,
+                httpx.TimeoutException,
+            ):
+                continue
+            if not isinstance(reactions, list):
+                continue
+            for reaction in reactions:
+                if _matches(reaction, enforce_not_before=enforce_not_before):
+                    return reaction
+        return None
 
     async def _evaluate_automated_review(
         self,
@@ -1683,6 +2436,7 @@ class GitHubService:
         )
 
 __all__ = [
+    "AutomatedReviewRequestResult",
     "CreatePRResult",
     "GitHubService",
     "MergePRResult",

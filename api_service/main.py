@@ -1,15 +1,19 @@
 # main.py
 # Configure logging at the very beginning
+import asyncio
 import logging
 
 from moonmind.config.logging import configure_logging
+from moonmind.observability import TelemetrySettings, initialize_telemetry, instrument_fastapi
 
 configure_logging()
+initialize_telemetry(TelemetrySettings.from_env(service_name="moonmind-api"))
 logger = logging.getLogger(__name__)  # Get logger after configuration
 
 import os  # For path operations
 import time
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -23,29 +27,23 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import text
-from sqlalchemy.exc import OperationalError, ProgrammingError
+from sqlalchemy.exc import OperationalError, ProgrammingError, SQLAlchemyError
 
 from api_service.api.routers import retrieval_gateway as retrieval_router
-from api_service.api.routers import (
-    summarization as summarization_router,  # Added import for summarization router
-)
 from api_service.api.routers.provider_profiles import router as provider_profiles_router
-from api_service.api.routers.chat import responses_router, router as chat_router
-from api_service.api.routers.context_protocol import router as context_protocol_router
+from api_service.api.routers.omnigent_agent_profiles import router as omnigent_agent_profiles_router
 from api_service.api.routers.deployment_operations import (
     router as deployment_operations_router,
 )
-from api_service.api.routers.documents import router as documents_router
 from api_service.api.routers.execution_integrations import (
     router as execution_integrations_router,
 )
 from api_service.api.routers.executions import router as executions_router
 from api_service.api.routers.manifests import router as manifests_router
+from api_service.api.routers.container_jobs import router as container_jobs_router
 from api_service.api.routers.mcp_tools import router as mcp_tools_router
 from api_service.api.routers.jira_browser import router as jira_browser_router
-from api_service.api.routers.models import router as models_router
 from api_service.api.routers.oauth_sessions import router as oauth_sessions_router
-from api_service.api.routers.planning import router as planning_router
 from api_service.api.routers.profile import router as profile_router
 from api_service.api.routers.recurring_workflows import router as recurring_workflows_router
 from api_service.api.routers.automation import router as automation_router
@@ -60,8 +58,20 @@ from api_service.api.routers.agent_runs import sessions_router as session_resour
 from api_service.api.routers.sessions import router as sessions_router
 from api_service.api.routers.omnigent_bridge import (
     OMNIGENT_BRIDGE_MOUNT_PATH,
+    WORKFLOW_CHAT_BINDINGS_MOUNT_PATH,
     router as omnigent_bridge_router,
+    workflow_chat_router as omnigent_workflow_chat_router,
 )
+from api_service.api.routers.omnigent_native_ui import (
+    NATIVE_UI_MOUNT_PATH,
+    native_ui_router,
+)
+from api_service.api.routers.omnigent_catalog import router as omnigent_catalog_router
+from api_service.api.routers.omnigent_policies import router as omnigent_policies_router
+from api_service.api.routers.omnigent_session_timeline import (
+    router as omnigent_session_timeline_router,
+)
+from api_service.api.routers.omnigent_bootstrap import router as omnigent_bootstrap_router
 from api_service.api.routers.workflow_proposals import router as workflow_proposals_router
 from api_service.api.routers.presets import (
     router as presets_router,
@@ -91,6 +101,7 @@ from api_service.auth import (
     fastapi_users,
 )
 from moonmind.config.settings import settings
+from moonmind.provider_profiles.oauth_policy import is_codex_oauth_profile
 from moonmind.utils.logging import SecretRedactor
 
 logger.info("Starting FastAPI...")
@@ -101,95 +112,10 @@ _PRESET_SEED_DIR = (
 # One-time pre-release seed cleanup for databases that were created before
 # MoonSpec became the canonical bundle identity. Remove after the submodule
 # cutover has run through existing development installations.
-_LEGACY_PRESET_SLUGS_TO_DEACTIVATE = ("speckit-orchestrate",)
-
-def _initialize_embedding_model(app_state, app_settings):
-    """Initializes the embedding model and records its dimensionality on app_state."""
-    logger.info("Initializing embedding model...")
-
-    # Build the model and get any dimension configured in settings
-    try:
-        from moonmind.factories.embed_model_factory import build_embed_model
-
-        app_state.embed_model, configured_dims = build_embed_model(app_settings)
-    except Exception as e:
-        logger.error("Embedding model initialization failed: %s", e)
-        app_state.embed_model = None
-        app_state.embed_dimensions = None
-        return
-
-    # -------------------------------------------------------
-    # Detect the true dimensionality produced by the model
-    # -------------------------------------------------------
-    detected_dims = None
-    try:
-        if hasattr(app_state.embed_model, "embed_query"):
-            test_vec = app_state.embed_model.embed_query("dim_check")
-        elif hasattr(app_state.embed_model, "get_query_embedding"):
-            test_vec = app_state.embed_model.get_query_embedding("dim_check")
-        else:
-            raise AttributeError(
-                "Embedding model lacks 'embed_query' and 'get_query_embedding'."
-            )
-        detected_dims = len(test_vec)
-    except Exception as e:  # pragma: no cover – best-effort probe
-        logger.error("Failed to detect embedding dimensions: %s", e)
-
-    # -------------------------------------------------------
-    # Decide which dimension to keep
-    # -------------------------------------------------------
-    if configured_dims and configured_dims > 0:
-        # Settings override, but warn if they disagree with what we probed
-        if detected_dims and detected_dims != configured_dims:
-            logger.warning(
-                "Configured embedding dimension %s ≠ detected %s. "
-                "Using detected dimension.",
-                configured_dims,
-                detected_dims,
-            )
-            final_dims = detected_dims
-        else:
-            final_dims = configured_dims
-    else:
-        # No valid configured dimension → rely on detection
-        final_dims = detected_dims
-
-    if not final_dims or final_dims <= 0:
-        raise RuntimeError(
-            "Embedding dimension could not be determined. "
-            "Please provide a valid value in configuration."
-        )
-
-    app_state.embed_dimensions = final_dims
-    logger.info("Embedding model initialized with dimensions: %s", final_dims)
-
-def _initialize_vector_store(app_state, app_settings):
-    """Initializes and sets the vector store on app_state."""
-    logger.info("Initializing vector store...")
-    try:
-        from moonmind.factories.vector_store_factory import build_vector_store
-
-        app_state.vector_store = build_vector_store(
-            app_settings, app_state.embed_model, app_state.embed_dimensions
-        )
-        logger.info("Vector store initialized successfully.")
-    except ValueError as e:
-        logger.error(f"Failed to build vector store: {e}. This is a critical error.")
-        raise
-
-def _initialize_contexts(app_state, app_settings):
-    """Initializes and sets storage and service contexts on app_state."""
-    logger.info("Initializing storage and service contexts...")
-    from moonmind.factories.service_context_factory import build_service_context
-    from moonmind.factories.storage_context_factory import build_storage_context
-
-    app_state.storage_context = build_storage_context(
-        app_settings, app_state.vector_store
-    )
-    app_state.settings = build_service_context(
-        app_settings, app_state.embed_model
-    )  # settings is used as service_context
-    logger.info("Storage and service contexts initialized successfully.")
+_LEGACY_PRESET_SLUGS_TO_DEACTIVATE = (
+    "pentest-recon",
+    "speckit-orchestrate",
+)
 
 async def _sync_env_managed_secrets() -> int:
     """Seed or refresh managed secrets from environment values."""
@@ -292,6 +218,374 @@ async def _sync_env_managed_secrets() -> int:
         )
         return 0
 
+
+async def _sync_omnigent_bootstrap_agent_profile() -> bool:
+    """Synchronize observed inventory before activating the bootstrap profile."""
+
+    try:
+        from api_service.services.omnigent_agent_bootstrap_service import (
+            reconcile_bootstrap_agent_profile,
+        )
+        from moonmind.omnigent.bridge_config import (
+            HOST_PROTOCOL_MODE_PROXY,
+            resolve_bridge_config,
+        )
+        from moonmind.omnigent.settings import (
+            build_omnigent_gate,
+            resolved_api_token,
+            resolved_server_url,
+        )
+        from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
+
+        if not build_omnigent_gate().enabled:
+            return True
+        config = resolve_bridge_config()
+        if config.host_protocol_mode != HOST_PROTOCOL_MODE_PROXY:
+            # Embedded deployments own their inventory through the authenticated
+            # host protocol; the stock local bootstrap applies only to proxy mode.
+            return True
+        inventory = await OmnigentHttpClient(
+            base_url=resolved_server_url(),
+            api_token=resolved_api_token(),
+            timeout_seconds=5,
+        ).list_agents()
+
+        async with get_async_session_context() as session:
+            return await reconcile_bootstrap_agent_profile(
+                session,
+                inventory=inventory,
+            )
+    except (OperationalError, ProgrammingError, SQLAlchemyError, OSError) as exc:
+        logger.warning(
+            "Omnigent bootstrap agent synchronization deferred: %s",
+            exc,
+        )
+        return False
+    except Exception as exc:  # pragma: no cover - bounded startup reconciliation
+        logger.warning(
+            "Omnigent bootstrap agent synchronization deferred: %s",
+            exc,
+        )
+        return False
+
+
+async def _sync_omnigent_bootstrap_policies(
+    *,
+    refresh_images: bool,
+) -> bool:
+    """Acquire immutable stock images and reconcile the built-in policies."""
+
+    try:
+        from api_service.services.omnigent_policies import (
+            bootstrap_policies_ready,
+            resolve_local_bootstrap_image_ref,
+            seed_bootstrap_policies,
+        )
+        from moonmind.omnigent.bootstrap.image_resolution import (
+            operator_image_configuration,
+        )
+
+        # This is the only leg allowed to acquire images from the registry, and
+        # it keys on the configured refs. Reading the live environment would
+        # hand it a digest the image leg published, which is indistinguishable
+        # from an operator pin and would silently disable tag refresh.
+        configuration = operator_image_configuration()
+        async with get_async_session_context() as session:
+            if refresh_images:
+                await seed_bootstrap_policies(session, env=configuration)
+            else:
+                await seed_bootstrap_policies(
+                    session,
+                    env=configuration,
+                    image_resolver=resolve_local_bootstrap_image_ref,
+                )
+            return await bootstrap_policies_ready(session)
+    except (OperationalError, ProgrammingError, SQLAlchemyError, OSError) as exc:
+        logger.warning("Omnigent policy bootstrap deferred: %s", exc)
+        return False
+    except Exception as exc:  # pragma: no cover - bounded startup reconciliation
+        logger.warning("Omnigent policy bootstrap deferred: %s", exc)
+        return False
+
+
+async def _sync_managed_bootstrap_recurring_schedules() -> bool:
+    """Advance recurring actions to the active managed bootstrap snapshot."""
+
+    try:
+        from api_service.services.recurring_workflows_service import (
+            RecurringWorkflowsService,
+        )
+
+        async with get_async_session_context() as session:
+            refreshed = await RecurringWorkflowsService(
+                session,
+            ).refresh_managed_bootstrap_schedules(limit=500)
+        if refreshed:
+            logger.info(
+                "Refreshed managed bootstrap recurring schedules: count=%s",
+                refreshed,
+            )
+        return True
+    except Exception:
+        logger.warning(
+            "Managed bootstrap recurring schedule refresh deferred",
+            exc_info=True,
+        )
+        return False
+
+
+async def _sync_omnigent_harness_catalog() -> bool:
+    """Keep the authenticated harness catalog synchronized automatically.
+
+    The execution-readiness gate fails closed when the Omnigent endpoint
+    inventory has never been synchronized or no longer attests to the current
+    build, so this boundary refreshes the catalog on the same bounded startup
+    and maintenance cadence as the rest of the bootstrap reconciliation.
+    """
+
+    try:
+        from api_service.services.omnigent_agent_profile_service import (
+            synchronize_omnigent_harness_catalog,
+        )
+        from moonmind.omnigent.settings import (
+            build_omnigent_gate,
+            generic_host_enabled,
+        )
+
+        if not build_omnigent_gate().enabled or not generic_host_enabled():
+            # Without the runtime gate there is no endpoint to authenticate
+            # against; without the generic host plane there is nothing that
+            # consumes the catalog. Neither state should block readiness.
+            return True
+
+        async with get_async_session_context() as session:
+            result = await synchronize_omnigent_harness_catalog(session)
+        logger.info(
+            "Synchronized Omnigent harness catalog: catalogRef=%s "
+            "harnessCount=%s pluginLoadErrors=%s",
+            result.get("catalogRef"),
+            result.get("harnessCount"),
+            len(result.get("pluginLoadErrors") or []),
+        )
+        return True
+    except (OperationalError, ProgrammingError, SQLAlchemyError, OSError) as exc:
+        logger.warning(
+            "Omnigent harness catalog synchronization deferred: %s",
+            exc,
+        )
+        return False
+    except Exception as exc:  # pragma: no cover - bounded startup reconciliation
+        logger.warning(
+            "Omnigent harness catalog synchronization deferred: %s",
+            exc,
+        )
+        return False
+
+
+async def _sync_omnigent_deployment_images() -> bool:
+    """Resolve and export the deployment's digest-pinned Omnigent images.
+
+    Host Class selection, launch policy compilation, and Provider Profile
+    runtime validation all read digest-pinned refs from the process environment,
+    and the canonical Compose path deliberately leaves
+    ``OMNIGENT_OPENCODE_HOST_IMAGE_REF`` unset so the deployment resolves its own
+    digests from the configured image and tag. Without this leg those digests
+    only ever existed inside a console bootstrap request, so a restart left Host
+    Class selection with nothing to select.
+    """
+
+    try:
+        from moonmind.omnigent.bootstrap.image_resolution import (
+            publish_resolved_omnigent_images,
+        )
+        from moonmind.omnigent.settings import (
+            build_omnigent_gate,
+            generic_host_enabled,
+            opencode_support_enabled,
+        )
+
+        if not build_omnigent_gate().enabled or not generic_host_enabled():
+            return True
+
+        state = await publish_resolved_omnigent_images()
+        if not state.opencode_host_image_ref and opencode_support_enabled():
+            # Only a deployment that actually runs OpenCode depends on this
+            # digest. An operator who turned the harness off must not inherit
+            # its registry dependency, or the kill switch would leave bootstrap
+            # readiness retrying forever on an image nothing will launch.
+            logger.warning(
+                "Omnigent image resolution incomplete: no digest-pinned OpenCode "
+                "host image is available for the configured image and tag",
+            )
+            return False
+        logger.info(
+            "Resolved Omnigent deployment images: serverImageRef=%s "
+            "opencodeHostImageRef=%s",
+            state.server_image_ref,
+            state.opencode_host_image_ref,
+        )
+        return True
+    except (OperationalError, ProgrammingError, SQLAlchemyError, OSError) as exc:
+        logger.warning("Omnigent image resolution deferred: %s", exc)
+        return False
+    except Exception as exc:  # pragma: no cover - bounded startup reconciliation
+        logger.warning("Omnigent image resolution deferred: %s", exc)
+        return False
+
+
+async def _sync_omnigent_provider_readiness(*, allow_enrollment: bool) -> bool:
+    """Keep the deployment-configured OpenCode credential launchable.
+
+    Two failures used to require a console action. A configured
+    ``OPENCODE_API_KEY`` was never enrolled, and evidence recorded against an
+    earlier host image was never refreshed after the deployment re-resolved that
+    image. Either one strands the operator behind a "connect and validate a
+    compatible Provider Profile" gate for a deployment that already has
+    everything it needs.
+    """
+
+    try:
+        from api_service.db.base import async_session_maker
+        from moonmind.omnigent.bootstrap.provider_revalidation import (
+            reconcile_opencode_provider_readiness,
+        )
+        from moonmind.omnigent.settings import (
+            build_omnigent_gate,
+            generic_host_enabled,
+            opencode_support_enabled,
+        )
+
+        if (
+            not build_omnigent_gate().enabled
+            or not generic_host_enabled()
+            or not opencode_support_enabled()
+        ):
+            # No OpenCode execution plane means no credential to keep current.
+            return True
+
+        outcome = await reconcile_opencode_provider_readiness(
+            session_factory=async_session_maker,
+            allow_enrollment=allow_enrollment,
+        )
+        if outcome.enrolled:
+            logger.info(
+                "Enrolled the deployment-configured OpenCode Provider Profile",
+            )
+        if outcome.refreshed:
+            logger.info(
+                "Refreshed OpenCode Provider Profile model evidence: profiles=%s",
+                ",".join(outcome.refreshed),
+            )
+        if not outcome.ready and outcome.reason:
+            logger.warning(
+                "OpenCode Provider Profile readiness deferred: %s",
+                outcome.reason,
+            )
+        return outcome.ready
+    except (OperationalError, ProgrammingError, SQLAlchemyError, OSError) as exc:
+        logger.warning(
+            "OpenCode Provider Profile readiness deferred: %s",
+            exc,
+        )
+        return False
+    except Exception as exc:  # pragma: no cover - bounded startup reconciliation
+        logger.warning(
+            "OpenCode Provider Profile readiness deferred: %s",
+            exc,
+        )
+        return False
+
+
+@dataclass(frozen=True)
+class OmnigentBootstrapReadiness:
+    """Per-leg outcome of one bootstrap reconciliation pass.
+
+    Retry policy differs per leg: only the image-policy leg may re-acquire
+    images from the registry, so its readiness is tracked separately from the
+    aggregate readiness that drives the backoff schedule.
+    """
+
+    images_ready: bool
+    policies_ready: bool
+    agent_ready: bool
+    catalog_ready: bool
+    schedules_ready: bool
+    provider_ready: bool
+
+    @property
+    def ready(self) -> bool:
+        return (
+            self.images_ready
+            and self.policies_ready
+            and self.agent_ready
+            and self.catalog_ready
+            and self.schedules_ready
+            and self.provider_ready
+        )
+
+
+async def _reconcile_omnigent_bootstrap_once(
+    *,
+    refresh_images: bool,
+) -> OmnigentBootstrapReadiness:
+    # Image identities come first: every downstream leg selects Host Classes and
+    # validates credentials against the digests this leg exports.
+    images_ready = await _sync_omnigent_deployment_images()
+    policies_ready = await _sync_omnigent_bootstrap_policies(
+        refresh_images=refresh_images
+    )
+    agent_ready = await _sync_omnigent_bootstrap_agent_profile()
+    catalog_ready = await _sync_omnigent_harness_catalog()
+    schedules_ready = (
+        await _sync_managed_bootstrap_recurring_schedules()
+        if policies_ready and agent_ready
+        else False
+    )
+    # First-time enrollment runs the full bootstrap and gets one attempt per
+    # configuration, so it waits for the image and catalog authorities it depends
+    # on. Re-validating an already-enrolled credential only needs the pinned
+    # image.
+    provider_ready = (
+        await _sync_omnigent_provider_readiness(
+            allow_enrollment=images_ready and catalog_ready
+        )
+        if images_ready
+        else False
+    )
+    return OmnigentBootstrapReadiness(
+        images_ready=images_ready,
+        policies_ready=policies_ready,
+        agent_ready=agent_ready,
+        catalog_ready=catalog_ready,
+        schedules_ready=schedules_ready,
+        provider_ready=provider_ready,
+    )
+
+
+async def _maintain_omnigent_bootstrap_reconciliation(
+    *, initial_ready: bool
+) -> None:
+    """Retry with capped backoff and keep observed agent inventory fresh."""
+
+    ready = initial_ready
+    retry_delay_seconds = 5
+    # Registry-acquiring image refresh is bound to image-policy readiness
+    # alone. An unrelated catalog or schedule outage must not re-pull images
+    # on every bounded retry just because aggregate readiness is false.
+    refresh_images = True
+    while True:
+        await asyncio.sleep(120 if ready else retry_delay_seconds)
+        outcome = await _reconcile_omnigent_bootstrap_once(
+            refresh_images=refresh_images
+        )
+        ready = outcome.ready
+        refresh_images = not outcome.policies_ready
+        if ready:
+            retry_delay_seconds = 5
+        else:
+            retry_delay_seconds = min(retry_delay_seconds * 2, 120)
+
+
 async def _initialize_oidc_provider(app: FastAPI):
     """Initializes the OIDC provider by fetching discovery documents if needed."""
     provider = settings.oidc.AUTH_PROVIDER
@@ -331,48 +625,38 @@ async def _initialize_oidc_provider(app: FastAPI):
             logger.error(f"Error processing Google OIDC discovery document: {e}")
             raise RuntimeError(f"Error processing Google OIDC discovery document: {e}")
 
-def _load_or_create_vector_index(app_state):
-    """Loads an existing vector index or creates a new one if loading fails."""
-    from llama_index.core import VectorStoreIndex, load_index_from_storage
-
-    logger.info("Attempting to load VectorStoreIndex from storage_context...")
-    try:
-        app_state.vector_index = load_index_from_storage(
-            storage_context=app_state.storage_context,
-        )
-        if not app_state.vector_index.docstore.docs:
-            logger.warning(
-                "Loaded index appears to be empty (no documents in docstore)."
-            )
-        else:
-            logger.info("Successfully loaded VectorStoreIndex from storage.")
-    except ValueError as e_load_idx:
-        logger.warning(
-            f"Could not load VectorStoreIndex from storage (it might be new or empty): {e_load_idx}. "
-            "Creating a new empty VectorStoreIndex."
-        )
-        if app_state.storage_context and app_state.settings:
-            app_state.vector_index = VectorStoreIndex.from_documents(
-                [],
-                storage_context=app_state.storage_context,
-                service_context=app_state.settings,
-            )
-            logger.info("Created a new empty VectorStoreIndex.")
-        else:
-            logger.error(
-                "Cannot create new VectorStoreIndex because storage_context or service_context is not available."
-            )
-            raise RuntimeError(
-                "Failed to initialize critical components (storage_context or service_context) for VectorStoreIndex."
-            )
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup logic
     await startup_event()
-    yield
-    # Shutdown logic
-    teardown_providers()
+    from moonmind.omnigent.settings import build_omnigent_gate
+
+    if build_omnigent_gate().enabled:
+        app.state.omnigent_bootstrap_reconciliation_task = asyncio.create_task(
+            _maintain_omnigent_bootstrap_reconciliation(
+                initial_ready=bool(
+                    getattr(app.state, "omnigent_bootstrap_initial_ready", False)
+                ),
+            ),
+            name="omnigent-bootstrap-reconciliation",
+        )
+    try:
+        yield
+    finally:
+        retry_task = getattr(
+            app.state,
+            "omnigent_bootstrap_reconciliation_task",
+            None,
+        )
+        if retry_task is not None and not retry_task.done():
+            retry_task.cancel()
+            try:
+                await retry_task
+            except asyncio.CancelledError:
+                # Shutdown owns this task, so cancellation is the expected outcome.
+                pass
+        # Shutdown logic
+        teardown_providers()
 
 app = FastAPI(
     title="MoonMind API",
@@ -382,6 +666,7 @@ app = FastAPI(
     openapi_url="/openapi.json",
     lifespan=lifespan,
 )
+instrument_fastapi(app)
 
 # Setup templates
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -432,22 +717,10 @@ async def docs_redirect() -> RedirectResponse:
 
 app.include_router(health_router, tags=["health"])
 
-# Include all routers
-app.include_router(chat_router, prefix="/v1/chat", tags=["Chat"])
-app.include_router(responses_router, prefix="/v1", tags=["Responses"])
-app.include_router(models_router, prefix="/v1/models", tags=["Models"])
-app.include_router(documents_router, prefix="/v1/documents", tags=["Documents"])
-app.include_router(
-    summarization_router.router,
-    prefix="/summarization",
-    tags=["Summarization"],
-)  # Added summarization router
-app.include_router(planning_router, prefix="/v1/planning", tags=["Planning"])
-app.include_router(
-    context_protocol_router, tags=["Context Protocol"]
-)  # Removed prefix="/context"
+# Include workflow-oriented and operational routers.
 app.include_router(retrieval_router.router)
 app.include_router(mcp_tools_router)
+app.include_router(container_jobs_router)
 app.include_router(jira_browser_router)
 app.include_router(manifests_router)
 app.include_router(
@@ -455,6 +728,7 @@ app.include_router(
 )  # Include profile router
 app.include_router(workflows_router)
 app.include_router(provider_profiles_router, prefix="/api/v1")
+app.include_router(omnigent_agent_profiles_router)
 app.include_router(oauth_sessions_router, prefix="/api/v1")
 app.include_router(secrets_router, prefix="/api/v1/secrets")
 app.include_router(settings_router, prefix="/api/v1")
@@ -471,6 +745,17 @@ app.include_router(agent_runs_router, prefix="/api")
 app.include_router(sessions_router, prefix="/api")
 app.include_router(session_resources_router, prefix="/api")
 app.include_router(omnigent_bridge_router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
+app.include_router(
+    omnigent_workflow_chat_router, prefix=WORKFLOW_CHAT_BINDINGS_MOUNT_PATH
+)
+# Serve the native Omnigent web app through MoonMind-scoped routes
+# (MoonLadderStudios/MoonMind#3638). The browser loads native UI assets and all
+# application traffic exclusively through this binding-scoped mount.
+app.include_router(native_ui_router, prefix=NATIVE_UI_MOUNT_PATH)
+app.include_router(omnigent_catalog_router)
+app.include_router(omnigent_policies_router)
+app.include_router(omnigent_session_timeline_router)
+app.include_router(omnigent_bootstrap_router)
 app.include_router(workflow_console_router)
 app.include_router(presets_router)
 app.include_router(temporal_artifacts_router)
@@ -650,6 +935,73 @@ def _should_reconcile_openrouter_codex_file_templates(
         deprecated_seed_templates,
         _legacy_codex_openrouter_qwen36_plus_file_templates(),
     )
+
+_LEGACY_SETUP_PROFILE_SPECS = {
+    "claude_anthropic_default": (
+        "claude_code",
+        "anthropic",
+        "Claude Code (setup required)",
+    ),
+    "claude_anthropic": (
+        "claude_code",
+        "anthropic",
+        "Claude Code (setup required)",
+    ),
+    "codex_openai_default": ("codex_cli", "openai", "Codex CLI (setup required)"),
+    "codex_default": ("codex_cli", "openai", "Codex CLI (setup required)"),
+    "gemini_google_default": (
+        "gemini_cli",
+        "google",
+        "Gemini CLI (setup required)",
+    ),
+    "gemini_default": ("gemini_cli", "google", "Gemini CLI (setup required)"),
+}
+
+
+def _is_untouched_legacy_setup_profile(profile_id: str, row: dict[str, Any]) -> bool:
+    spec = _LEGACY_SETUP_PROFILE_SPECS.get(profile_id)
+    if spec is None:
+        return False
+    runtime_id, provider_id, account_label = spec
+
+    def enum_value(key: str) -> Any:
+        value = row.get(key)
+        return getattr(value, "value", value)
+
+    return (
+        row.get("runtime_id") == runtime_id
+        and row.get("provider_id") == provider_id
+        and row.get("account_label") == account_label
+        and row.get("provider_label")
+        == {"anthropic": "Anthropic", "openai": "OpenAI", "google": "Google"}[
+            provider_id
+        ]
+        and row.get("default_model") is None
+        and row.get("default_effort") is None
+        and row.get("model_overrides") is None
+        and row.get("enabled") is False
+        and row.get("is_default") is False
+        and enum_value("credential_source") == "none"
+        and enum_value("runtime_materialization_mode") == "api_key_env"
+        and enum_value("auth_state") == "not_configured"
+        and enum_value("disabled_reason") == "missing_credentials"
+        and not row.get("secret_refs")
+        and row.get("tags") is None
+        and row.get("priority") == 100
+        and row.get("clear_env_keys") is None
+        and row.get("env_template") is None
+        and row.get("file_templates") is None
+        and row.get("home_path_overrides") is None
+        and row.get("command_behavior") is None
+        and row.get("max_parallel_runs") == 1
+        and row.get("cooldown_after_429_seconds") == 900
+        and enum_value("rate_limit_policy") == "backoff"
+        and row.get("max_lease_duration_seconds") == 7200
+        and row.get("volume_ref") is None
+        and row.get("volume_mount_path") is None
+        and row.get("last_auth_method") is None
+    )
+
 
 async def _auto_seed_provider_profiles() -> list[str]:
     """Seed well-known provider profiles that are missing from the DB.
@@ -985,68 +1337,107 @@ async def _auto_seed_provider_profiles() -> list[str]:
             existing_result = await session.execute(
                 select(
                     ManagedAgentProviderProfile.profile_id,
+                    ManagedAgentProviderProfile.runtime_id,
                     ManagedAgentProviderProfile.provider_id,
                     ManagedAgentProviderProfile.provider_label,
+                    ManagedAgentProviderProfile.account_label,
                     ManagedAgentProviderProfile.default_model,
+                    ManagedAgentProviderProfile.default_effort,
+                    ManagedAgentProviderProfile.model_overrides,
+                    ManagedAgentProviderProfile.tags,
+                    ManagedAgentProviderProfile.priority,
                     ManagedAgentProviderProfile.clear_env_keys,
                     ManagedAgentProviderProfile.file_templates,
+                    ManagedAgentProviderProfile.home_path_overrides,
                     ManagedAgentProviderProfile.credential_source,
                     ManagedAgentProviderProfile.runtime_materialization_mode,
                     ManagedAgentProviderProfile.secret_refs,
                     ManagedAgentProviderProfile.env_template,
                     ManagedAgentProviderProfile.enabled,
+                    ManagedAgentProviderProfile.is_default,
                     ManagedAgentProviderProfile.auth_state,
                     ManagedAgentProviderProfile.disabled_reason,
                     ManagedAgentProviderProfile.command_behavior,
                     ManagedAgentProviderProfile.last_auth_method,
+                    ManagedAgentProviderProfile.volume_ref,
+                    ManagedAgentProviderProfile.volume_mount_path,
+                    ManagedAgentProviderProfile.max_parallel_runs,
+                    ManagedAgentProviderProfile.cooldown_after_429_seconds,
+                    ManagedAgentProviderProfile.rate_limit_policy,
+                    ManagedAgentProviderProfile.max_lease_duration_seconds,
                 )
             )
             existing_rows = existing_result.all()
             existing_by_id = {
                 row.profile_id: {
+                    "runtime_id": row.runtime_id,
                     "provider_id": row.provider_id,
                     "provider_label": row.provider_label,
+                    "account_label": row.account_label,
                     "default_model": row.default_model,
+                    "default_effort": row.default_effort,
+                    "model_overrides": row.model_overrides,
+                    "tags": row.tags,
+                    "priority": row.priority,
                     "clear_env_keys": row.clear_env_keys,
                     "file_templates": row.file_templates,
+                    "home_path_overrides": row.home_path_overrides,
                     "credential_source": row.credential_source,
                     "runtime_materialization_mode": row.runtime_materialization_mode,
                     "secret_refs": row.secret_refs,
                     "env_template": row.env_template,
                     "enabled": row.enabled,
+                    "is_default": row.is_default,
                     "auth_state": row.auth_state,
                     "disabled_reason": row.disabled_reason,
                     "command_behavior": row.command_behavior,
                     "last_auth_method": row.last_auth_method,
+                    "volume_ref": row.volume_ref,
+                    "volume_mount_path": row.volume_mount_path,
+                    "max_parallel_runs": row.max_parallel_runs,
+                    "cooldown_after_429_seconds": row.cooldown_after_429_seconds,
+                    "rate_limit_policy": row.rate_limit_policy,
+                    "max_lease_duration_seconds": row.max_lease_duration_seconds,
                 }
                 for row in existing_rows
             }
             existing_ids: set[str] = set(existing_by_id)
 
-            deprecated_gemini_profile_ids = {
-                "gemini_google_default",
-                "gemini_default",
+            legacy_profile_ids_to_delete = {
+                profile_id
+                for profile_id, row in existing_by_id.items()
+                if _is_untouched_legacy_setup_profile(profile_id, row)
             }
-            deprecated_gemini_profile_ids_to_delete = (
-                deprecated_gemini_profile_ids.intersection(existing_ids)
-            )
             needs_commit = False
-            if deprecated_gemini_profile_ids_to_delete:
+            if legacy_profile_ids_to_delete:
                 await session.execute(
                     delete(ManagedAgentProviderProfile).where(
                         ManagedAgentProviderProfile.profile_id.in_(
-                            deprecated_gemini_profile_ids_to_delete
+                            legacy_profile_ids_to_delete
                         ),
-                        ManagedAgentProviderProfile.runtime_id == "gemini_cli",
                     )
                 )
                 needs_commit = True
                 existing_by_id = {
                     profile_id: row
                     for profile_id, row in existing_by_id.items()
-                    if profile_id not in deprecated_gemini_profile_ids_to_delete
+                    if profile_id not in legacy_profile_ids_to_delete
                 }
                 existing_ids = set(existing_by_id)
+                logger.info(
+                    "Removed %s untouched legacy provider setup stubs: %s",
+                    len(legacy_profile_ids_to_delete),
+                    ", ".join(sorted(legacy_profile_ids_to_delete)),
+                )
+
+            edited_legacy_profile_ids = sorted(
+                set(_LEGACY_SETUP_PROFILE_SPECS).intersection(existing_ids)
+            )
+            if edited_legacy_profile_ids:
+                logger.warning(
+                    "Preserved configured legacy provider profiles for manual review: %s",
+                    ", ".join(edited_legacy_profile_ids),
+                )
 
             first_party_env_api_profiles = {
                 "codex_openai_api": "OPENAI_API_KEY",
@@ -1056,6 +1447,33 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 profile_def["profile_id"]: profile_def
                 for profile_def in _DEFAULT_PROFILES
             }
+
+            # Codex owns and mutates its OAuth home (including refresh-token
+            # state), so every existing OAuth-backed Codex profile must remain
+            # on the single shared capacity lane.  Reconcile legacy rows at
+            # startup as well as validating new API writes; otherwise an old
+            # max_parallel_runs value can bypass the invariant indefinitely.
+            for profile_id, current in existing_by_id.items():
+                if (
+                    is_codex_oauth_profile(
+                        runtime_id=current.get("runtime_id"),
+                        credential_source=current.get("credential_source"),
+                        materialization_mode=current.get(
+                            "runtime_materialization_mode"
+                        ),
+                    )
+                    and current.get("max_parallel_runs") != 1
+                ):
+                    await session.execute(
+                        update(ManagedAgentProviderProfile)
+                        .where(
+                            ManagedAgentProviderProfile.profile_id == profile_id
+                        )
+                        .values(max_parallel_runs=1)
+                    )
+                    current["max_parallel_runs"] = 1
+                    needs_commit = True
+
             for profile_id, env_key in first_party_env_api_profiles.items():
                 current = existing_by_id.get(profile_id)
                 if current is None:
@@ -1339,23 +1757,59 @@ async def ensure_managed_session_reconcile_schedule_started() -> None:
 async def ensure_managed_runtime_workspace_cleanup_schedule_started() -> None:
     """Best-effort startup install for the retained-state janitor schedule."""
     from moonmind.workflows.temporal.client import TemporalClientAdapter
+    from moonmind.workflows.temporal.runtime.cleanup import ManagedRuntimeCleanupConfig
+
+    config = ManagedRuntimeCleanupConfig.from_env()
 
     try:
         schedule_id = (
             await TemporalClientAdapter().ensure_managed_runtime_workspace_cleanup_schedule(
-                enabled=None
+                enabled=config.enabled
             )
         )
     except Exception:
         logger.warning(
-            "Failed to ensure managed runtime workspace cleanup schedule during API startup",
+            "Failed to ensure managed runtime workspace cleanup schedule during API "
+            "startup: janitor_enabled=%s schedule_enabled=%s dry_run=%s",
+            config.enabled,
+            config.enabled,
+            config.dry_run,
             exc_info=True,
         )
         return
     logger.info(
-        "Ensured managed runtime workspace cleanup schedule during API startup: %s",
+        "Managed runtime cleanup startup reconciliation: schedule_id=%s "
+        "janitor_enabled=%s schedule_enabled=%s dry_run=%s "
+        "workspace_retention_days=%s artifact_retention_days=%s "
+        "record_retention_days=%s grace_seconds=%s max_delete_paths=%s "
+        "max_delete_bytes=%s",
         schedule_id,
+        config.enabled,
+        config.enabled,
+        config.dry_run,
+        config.workspace_retention.days,
+        config.artifact_retention.days,
+        config.record_retention.days if config.record_retention else None,
+        int(config.grace.total_seconds()),
+        config.max_delete_paths,
+        config.max_delete_bytes,
     )
+
+
+async def ensure_omnigent_oauth_host_janitor_schedule_started() -> None:
+    """Best-effort startup install for profile-bound OAuth host cleanup."""
+
+    from moonmind.workflows.temporal.client import TemporalClientAdapter
+
+    try:
+        await TemporalClientAdapter().ensure_omnigent_oauth_host_janitor_schedule(
+            enabled=True
+        )
+    except Exception:
+        # This boundary can surface credential-derived provider errors. Keep
+        # startup best-effort without sending the exception through a log sink.
+        return
+    logger.info("Ensured Omnigent OAuth host janitor schedule")
 
 async def ensure_recurring_workflow_schedules_reconciled() -> None:
     """Best-effort repair for persisted recurring workflow Temporal schedules."""
@@ -1447,10 +1901,6 @@ async def startup_event():
 
         app.state = State()
 
-    _initialize_embedding_model(app.state, settings)
-    _initialize_vector_store(app.state, settings)
-    _initialize_contexts(app.state, settings)
-    _load_or_create_vector_index(app.state)
     await _initialize_oidc_provider(app)  # OIDC provider init like Keycloak discovery
     _register_settings_change_subscribers()
     try:
@@ -1466,7 +1916,21 @@ async def startup_event():
             exc,
         )
     await _sync_preset_seed_catalog()
+    # Readiness uses only bounded local image inspection. Registry refresh runs
+    # in the lifespan-owned reconciler after the API can serve health checks.
+    omnigent_bootstrap_ready = (
+        await _reconcile_omnigent_bootstrap_once(refresh_images=False)
+    ).ready
+    app.state.omnigent_bootstrap_initial_ready = omnigent_bootstrap_ready
     await _sync_env_managed_secrets()
+    # Embedded mode is an authority-sensitive enablement boundary. Evidence
+    # refs cannot make it ready when its pinned verifier or SecretRef fails.
+    from api_service.api.routers.omnigent_bridge import embedded_host_auth_preflight
+    embedded_auth = await embedded_host_auth_preflight()
+    if not embedded_auth["ready"]:
+        raise RuntimeError(
+            f"Embedded Omnigent host authentication preflight failed: {embedded_auth['code']}"
+        )
 
     # Ensure default user and profile exist if auth is disabled
     if settings.oidc.AUTH_PROVIDER == "disabled":
@@ -1478,7 +1942,6 @@ async def startup_event():
             get_or_create_default_user,
             get_user_manager_context,
         )
-        from api_service.db.base import get_async_session_context
         from api_service.services.profile_service import ProfileService
 
         async with get_async_session_context() as db_session:
@@ -1525,9 +1988,6 @@ async def startup_event():
                             logger.info(
                                 f"Created profile for default user {default_user.email} (Profile ID: {profile.id}) from env keys."
                             )
-                        from moonmind.models_cache import refresh_model_cache_for_user
-
-                        await refresh_model_cache_for_user(default_user, db_session)
                     else:
                         logger.error("Failed to get or create default user on startup.")
                 except ValueError as ve:
@@ -1549,6 +2009,7 @@ async def startup_event():
     await ensure_provider_profile_managers_started()
     await ensure_managed_session_reconcile_schedule_started()
     await ensure_managed_runtime_workspace_cleanup_schedule_started()
+    await ensure_omnigent_oauth_host_janitor_schedule_started()
     await ensure_recurring_workflow_schedules_reconciled()
     logger.info("Application startup events completed.")
 

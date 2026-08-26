@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -24,9 +25,11 @@ from api_service.services.presets.catalog import (
     PresetCatalogService,
     PresetNotFoundError,
     PresetValidationError,
+    _validate_moonspec_remediation_topology,
 )
 from api_service.services.presets.save import PresetSaveService
 from moonmind.config.settings import settings
+from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 from tests.helpers.step_type_payloads import preset_step, skill_step, tool_step
 
 pytestmark = [pytest.mark.asyncio]
@@ -263,7 +266,6 @@ async def test_checkpoint_branching_policy_expands_only_when_enabled(tmp_path):
                 inputs={},
                 context={},
             )
-
     assert expanded["checkpointBranching"] == {
         "enabled": True,
         "triggers": ["failed_step", "operator_requested"],
@@ -506,7 +508,6 @@ async def test_expand_template_normalizes_legacy_orchestrate_mode_to_runtime(
                 },
                 context={},
             )
-
     assert expanded["appliedTemplate"]["inputs"]["orchestration_mode"] == "runtime"
     assert "Selected mode: runtime." in expanded["steps"][0]["instructions"]
 
@@ -694,6 +695,84 @@ async def test_template_rejects_secret_like_schema_defaults(tmp_path):
                     required_capabilities=["jira"],
                     created_by=user_id,
                 )
+
+async def test_object_input_allows_bearer_prose_but_rejects_bearer_credentials(
+    tmp_path,
+):
+    user_id = uuid4()
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = PresetCatalogService(session)
+            await service.create_template(
+                slug="github-issue-input",
+                title="GitHub issue input",
+                description="Schema-driven issue input",
+                scope="global",
+                scope_ref=None,
+                tags=["schema"],
+                inputs_schema=[
+                    {
+                        "name": "github_issue",
+                        "label": "GitHub issue",
+                        "type": "text",
+                        "required": True,
+                        "schema": {
+                            "type": "object",
+                            "required": ["number"],
+                            "properties": {
+                                "number": {"type": "integer"},
+                                "body": {"type": "string"},
+                            },
+                        },
+                    }
+                ],
+                steps=[
+                    {
+                        "title": "Use issue",
+                        "instructions": "Issue {{ inputs.github_issue.number }}",
+                    }
+                ],
+                annotations={},
+                required_capabilities=["github"],
+                created_by=user_id,
+            )
+
+            expanded = await service.expand_template(
+                slug="github-issue-input",
+                scope="global",
+                scope_ref=None,
+                inputs={
+                    "github_issue": {
+                        "number": 3514,
+                        "body": "Document the long-lived bearer credential policy.",
+                    }
+                },
+                context={},
+            )
+
+            assert expanded["appliedTemplate"]["inputs"]["github_issue"][
+                "number"
+            ] == 3514
+
+            for unsafe_body in (
+                "Authorization: Bearer abcdefghijklmnopqrstuvwxyz",
+                "Authorization: Bearer short",
+                "Bearer short",
+                "Notes before the credential.\nBearer short\nNotes after it.",
+            ):
+                with pytest.raises(PresetValidationError, match="secret-like"):
+                    await service.expand_template(
+                        slug="github-issue-input",
+                        scope="global",
+                        scope_ref=None,
+                        inputs={
+                            "github_issue": {
+                                "number": 3514,
+                                "body": unsafe_body,
+                            }
+                        },
+                        context={},
+                    )
 
 async def test_expand_schema_capability_reports_field_addressable_errors(tmp_path):
     user_id = uuid4()
@@ -3349,18 +3428,7 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
         "Mark GitHub issue In Progress",
         "Implement the issue",
         "Verify implementation",
-        "Remediate verification gaps — attempt 1 of 6",
-        "Verify remediation attempt 1 of 6",
-        "Remediate remaining gaps — attempt 2 of 6",
-        "Verify remediation attempt 2 of 6",
-        "Remediate remaining gaps — attempt 3 of 6",
-        "Verify remediation attempt 3 of 6",
-        "Remediate remaining gaps — attempt 4 of 6",
-        "Verify remediation attempt 4 of 6",
-        "Remediate remaining gaps — attempt 5 of 6",
-        "Verify remediation attempt 5 of 6",
-        "Remediate remaining gaps — attempt 6 of 6",
-        "Verify remediation attempt 6 of 6",
+        "Remediation loop controller",
         "Create pull request",
         "Finalize GitHub issue status",
     ]
@@ -3372,9 +3440,17 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
         "artifacts/github-issue-implement-brief.json"
         in expanded["steps"][1]["instructions"]
     )
+    assert expanded["steps"][1]["repositoryOperation"] == "read"
+    assert expanded["steps"][1]["skill"]["args"] == {
+        "brief_artifact_path": "artifacts/github-issue-implement-brief.json",
+        "assessment_artifact_path": (
+            "artifacts/github-issue-implement-assessment.json"
+        ),
+    }
     assert expanded["steps"][2]["tool"]["id"] == "github.check_issue_blockers"
     assert expanded["steps"][3]["tool"]["id"] == "github.update_issue_status"
     assert expanded["steps"][5]["skill"]["id"] == "moonspec-verify"
+    assert expanded["steps"][5]["repositoryOperation"] == "read"
     assert expanded["steps"][5]["skill"]["args"] == {
         "verification_target": "issue_brief",
         "issue_provider": "github",
@@ -3387,37 +3463,48 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
     assert "artifacts/github-issue-implement-verify.json" in expanded["steps"][5][
         "instructions"
     ]
-    assert expanded["steps"][6]["skill"]["id"] == "auto"
-    assert "ADDITIONAL_WORK_NEEDED" in expanded["steps"][6]["instructions"]
-    assert expanded["steps"][6]["annotations"] == {
-        "issueImplementRole": "moonspec-remediation",
-        "moonSpecRemediationAttempt": 1,
-        "moonSpecRemediationMaxAttempts": 6,
-    }
-    assert expanded["steps"][7]["skill"]["id"] == "moonspec-verify"
-    assert expanded["steps"][7]["skill"]["args"]["verify_artifact_path"] == (
-        "artifacts/github-issue-implement-verify.json"
+    loop_step = expanded["steps"][6]
+    assert loop_step["skill"]["id"] == "auto"
+    assert loop_step["annotations"]["issueImplementRole"] == (
+        "moonspec-remediation-loop"
     )
-    assert expanded["steps"][7]["annotations"] == {
-        "issueImplementRole": "moonspec-verification-gate",
-        "moonSpecRemediationAttempt": 1,
-        "moonSpecRemediationMaxAttempts": 6,
-    }
-    assert "remediation verification attempt 1 of 6" in expanded["steps"][7][
-        "instructions"
-    ]
-    assert expanded["steps"][17]["annotations"] == {
-        "issueImplementRole": "moonspec-verification-gate",
-        "moonSpecRemediationAttempt": 6,
-        "moonSpecRemediationMaxAttempts": 6,
-        "moonSpecFinalRemediationGate": True,
-    }
-    assert "artifacts/github-issue-implement-verify.json" in expanded["steps"][18][
+    loop = loop_step["annotations"]["remediationLoop"]
+    assert loop["kind"] == "remediation_loop"
+    assert loop["budgets"]["hardMaxAttempts"] == "6"
+    assert loop["remediationTool"]["name"] == "auto"
+    assert loop["remediationTool"]["inputs"]["selectedSkill"] == (
+        "remediate-issue"
+    )
+    assert "authoritative verifier evidence materialized by MoonMind" in (
+        loop["remediationTool"]["inputs"]["instructions"]
+    )
+    assert "gateResultPath and remainingWorkPath" in (
+        loop["remediationTool"]["inputs"]["instructions"]
+    )
+    assert "do not substitute test-only models" in (
+        loop["remediationTool"]["inputs"]["instructions"]
+    )
+    assert loop["verificationTool"]["name"] == "auto"
+    assert loop["verificationTool"]["inputs"]["selectedSkill"] == "moonspec-verify"
+    assert "Run the selected moonspec-verify Skill" in (
+        loop["verificationTool"]["inputs"]["instructions"]
+    )
+    assert "artifacts/github-issue-implement-verify.json" in (
+        loop["verificationTool"]["inputs"]["instructions"]
+    )
+    assert not any(
+        step.get("annotations", {}).get("moonSpecRemediationAttempt")
+        for step in expanded["steps"]
+    )
+    assert "artifacts/github-issue-implement-verify.json" in expanded["steps"][7][
         "instructions"
     ]
     assert "controlling post-remediation moonspec-verify verdict is FULLY_IMPLEMENTED" in (
-        expanded["steps"][18]["instructions"]
+        expanded["steps"][7]["instructions"]
     )
+    assert "Closes MoonLadderStudios/MoonMind#123" in expanded["steps"][7][
+        "instructions"
+    ]
     assert (
         "recover that field's full content through the trusted MoonMind tool surface"
         in expanded["steps"][1]["instructions"]
@@ -3428,17 +3515,10 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
     ]
     assert "Verification scope rules" in expanded["steps"][5]["instructions"]
     assert "embedding_provider_not_configured" in expanded["steps"][5]["instructions"]
-    assert "recovering a truncated issue brief" in expanded["steps"][6]["instructions"]
-    assert (
-        "update artifacts/github-issue-implement-brief.json with the recovered content"
-        in expanded["steps"][6]["instructions"]
-    )
-    assert "Verification scope rules" in expanded["steps"][7]["instructions"]
-    assert "Verification scope rules" in expanded["steps"][17]["instructions"]
-    assert expanded["steps"][19]["tool"]["inputs"]["verificationArtifactPath"] == (
+    assert expanded["steps"][8]["tool"]["inputs"]["verificationArtifactPath"] == (
         "artifacts/github-issue-implement-verify.json"
     )
-    assert expanded["steps"][19]["tool"]["inputs"]["requireVerification"] is True
+    assert expanded["steps"][8]["tool"]["inputs"]["requireVerification"] is True
     no_verify_titles = [step["title"] for step in no_verify["steps"]]
     assert no_verify_titles == [
         "Load GitHub issue brief",
@@ -3492,25 +3572,92 @@ async def test_seed_catalog_issue_implement_work_pr_renders_remediation_budget(t
                 },
                 context={},
             )
+            expanded_six = await service.expand_template(
+                slug="issue-implement-work-pr",
+                scope="global",
+                scope_ref=None,
+                inputs={
+                    "issue_provider": "github",
+                    "issue_ref": "MoonLadderStudios/MoonMind#123",
+                    "brief_artifact_path": "artifacts/brief.json",
+                    "assessment_artifact_path": "artifacts/assessment.json",
+                    "pr_artifact_path": "artifacts/pr.json",
+                    "verify_artifact_path": "artifacts/verify.json",
+                    "verification_target": "issue_brief",
+                    "remediation_max_attempts": "6",
+                    "constraints": "",
+                },
+                context={},
+            )
 
-    assert expanded["steps"][2]["title"] == "Remediate verification gaps — attempt 1 of 2"
-    assert expanded["steps"][2]["annotations"] == {
-        "issueImplementRole": "moonspec-remediation",
-        "moonSpecRemediationAttempt": 1,
-        "moonSpecRemediationMaxAttempts": 2,
-    }
-    assert expanded["steps"][5]["title"] == "Verify remediation attempt 2 of 2"
-    assert expanded["steps"][5]["annotations"] == {
-        "issueImplementRole": "moonspec-verification-gate",
-        "moonSpecRemediationAttempt": 2,
-        "moonSpecRemediationMaxAttempts": 2,
-    }
-    assert expanded["steps"][6]["title"] == "Remediate remaining gaps — attempt 3 of 2"
-    assert expanded["steps"][6]["annotations"] == {
-        "issueImplementRole": "moonspec-remediation",
-        "moonSpecRemediationAttempt": 3,
-        "moonSpecRemediationMaxAttempts": 2,
-    }
+    loop_nodes = [
+        step
+        for step in expanded["steps"]
+        if step.get("annotations", {}).get("issueImplementRole")
+        == "moonspec-remediation-loop"
+    ]
+    assert len(loop_nodes) == 1
+    assert loop_nodes[0]["annotations"]["remediationLoop"]["budgets"][
+        "hardMaxAttempts"
+    ] == "2"
+    six_loop_nodes = [
+        step
+        for step in expanded_six["steps"]
+        if step.get("annotations", {}).get("issueImplementRole")
+        == "moonspec-remediation-loop"
+    ]
+    assert len(six_loop_nodes) == 1
+    assert six_loop_nodes[0]["annotations"]["remediationLoop"]["budgets"][
+        "hardMaxAttempts"
+    ] == "6"
+    assert len(expanded["steps"]) == len(expanded_six["steps"])
+
+
+async def test_remediation_topology_rejects_partial_active_pair() -> None:
+    steps = [
+        {
+            "annotations": {
+                "issueImplementRole": role,
+                "moonSpecRemediationAttempt": attempt,
+                "moonSpecRemediationMaxAttempts": 2,
+                "moonSpecFinalRemediationGate": role
+                == "moonspec-verification-gate"
+                and attempt == 2,
+            }
+        }
+        for attempt in range(1, 3)
+        for role in ("moonspec-remediation", "moonspec-verification-gate")
+    ]
+    steps.pop(2)
+
+    with pytest.raises(
+        PresetValidationError,
+        match="complete, unambiguous remediation and verification topology",
+    ):
+        _validate_moonspec_remediation_topology(steps)
+
+
+async def test_remediation_topology_rejects_string_final_gate_flag() -> None:
+    steps = [
+        {
+            "annotations": {
+                "issueImplementRole": "moonspec-remediation",
+                "moonSpecRemediationAttempt": 1,
+                "moonSpecRemediationMaxAttempts": 1,
+            }
+        },
+        {
+            "annotations": {
+                "issueImplementRole": "moonspec-verification-gate",
+                "moonSpecRemediationAttempt": 1,
+                "moonSpecRemediationMaxAttempts": 1,
+                "moonSpecFinalRemediationGate": "true",
+            }
+        },
+    ]
+
+    with pytest.raises(PresetValidationError, match="active final MoonSpec verifier"):
+        _validate_moonspec_remediation_topology(steps)
 
 
 async def test_seed_catalog_github_issue_orchestrate_expands_gated_workflow(tmp_path):

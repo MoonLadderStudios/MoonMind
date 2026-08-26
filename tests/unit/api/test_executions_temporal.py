@@ -463,7 +463,7 @@ def test_normalize_temporal_list_scope_logs_retired_scope_safely(caplog) -> None
     assert "system\ninjected" not in message
 
 
-def test_execution_router_exposes_recover_route_without_recovery_alias() -> None:
+def test_execution_router_exposes_typed_and_legacy_recover_routes() -> None:
     app = FastAPI()
     app.include_router(executions_module.router)
 
@@ -472,6 +472,10 @@ def test_execution_router_exposes_recover_route_without_recovery_alias() -> None
     assert (
         app.url_path_for("recover_execution_from_failed_step", workflow_id="wf-1")
         == "/api/executions/wf-1/recover-from-failed-step"
+    )
+    assert (
+        app.url_path_for("recover_execution", workflow_id="wf-1")
+        == "/api/executions/wf-1/recover"
     )
     assert "/api/executions/{workflow_id}/resume-from-failed-step" not in route_paths
     assert "/api/workflows" not in route_paths

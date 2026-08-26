@@ -1,0 +1,11 @@
+{
+  "activityCalls": [],
+  "captureOutcome": {
+    "status": "deferred",
+    "failureCode": "CHECKPOINT_WORKSPACE_MATERIALIZATION_PENDING",
+    "boundary": "after_prepare",
+    "captureAuthority": "moonmind_sandbox",
+    "captureActivity": "workspace.capture_checkpoint",
+    "capabilityCriticality": "required"
+  }
+}

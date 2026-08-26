@@ -30,6 +30,15 @@ def test_gate_runs_for_merge_candidates_and_merge_queue() -> None:
     assert "ref" not in checkout.get("with", {})
 
 
+def test_gate_uses_submodule_free_checkout() -> None:
+    workflow = _load_workflow()
+    checkout = workflow["jobs"]["migration-gate"]["steps"][0]
+
+    # MoonLadderStudios/MoonMind#3326: the migration gate needs no submodules.
+    assert "submodules" not in checkout.get("with", {})
+    assert "submodules: recursive" not in WORKFLOW_PATH.read_text(encoding="utf-8")
+
+
 def test_gate_checks_graph_and_upgrades_clean_postgres() -> None:
     job = _load_workflow()["jobs"]["migration-gate"]
     assert job["services"]["postgres"]["image"] == "postgres:17"

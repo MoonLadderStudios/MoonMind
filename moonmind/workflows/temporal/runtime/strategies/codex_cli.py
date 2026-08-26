@@ -31,6 +31,22 @@ _CODEX_PROGRESS_TIMEOUT_SECONDS = 300
 _CODEX_PROGRESS_MTIME_PADDING_SECONDS = 5.0
 _CODEX_MANAGED_RETRIEVAL_NOTE_HEADER = "MoonMind retrieval capability:\n"
 
+_CODEX_MANAGED_CONTAINER_NOTE = (
+    "\n\nManaged container execution boundary:\n"
+    "- Managed sessions never receive a Docker endpoint, socket, or daemon. Do "
+    "not run `docker`, probe `docker info`, or invoke a repository script or Skill "
+    "along a direct-Docker execution path.\n"
+    "- When `MOONMIND_CONTAINER_JOBS_MCP_URL` is nonempty, route containerized "
+    "repository work through `moonmind container run --spec <job.json> "
+    "--request-id <stable-id>` or a repository wrapper that explicitly uses that "
+    "command. Preserve the repository command, test filter, and other workload "
+    "semantics in the typed job spec.\n"
+    "- When the scoped container-job capability or an approved image/cache source "
+    "is unavailable, report that exact capability or provisioning blocker. Do not "
+    "retry direct Docker. A direct-Docker daemon failure identifies the wrong "
+    "execution route; it is not a repository test result.\n"
+)
+
 _CODEX_MANAGED_RUNTIME_NOTE = (
     "\n\nManaged Codex CLI note:\n"
     "- This managed runtime does not expose Codex API developer tools such as "
@@ -53,6 +69,11 @@ _CODEX_MANAGED_RUNTIME_NOTE = (
     "content pattern with `rg --files`.\n"
     "- Prefer targeted reads like `rg` and `sed -n` over dumping whole files "
     "with `cat`, especially for large frontend files.\n"
+    "- In the MoonMind repository, run Python tests through the durable Docker "
+    "backend with `moonmind container python-tests [pytest targets...]`. Do not "
+    "invoke nested Docker or treat missing pytest in this agent container as a "
+    "test failure. The command exits non-zero when the authoritative container "
+    "job fails and prints its logs/artifact references.\n"
 )
 _CODEX_MANAGED_RUNTIME_NOTE_HEADER = "Managed Codex CLI note:\n"
 
@@ -98,6 +119,21 @@ def append_managed_codex_runtime_note(
     if _CODEX_MANAGED_RUNTIME_NOTE_HEADER not in normalized:
         normalized += _CODEX_MANAGED_RUNTIME_NOTE
     return normalized
+
+
+def append_managed_container_execution_note(instruction: str | None) -> str:
+    """Install the authoritative container-job policy as an exact turn suffix.
+
+    Callers must first prove that the managed session owns an admitted
+    container-job capability. Checking the complete generated suffix keeps
+    user-controlled prompt text from spoofing policy installation with only the
+    policy header.
+    """
+
+    normalized = instruction or ""
+    if not normalized or normalized.endswith(_CODEX_MANAGED_CONTAINER_NOTE):
+        return normalized
+    return normalized + _CODEX_MANAGED_CONTAINER_NOTE
 
 class CodexCliStrategy(ManagedRuntimeStrategy):
     """Strategy for launching ``codex`` CLI runs."""

@@ -202,6 +202,10 @@ def test_sandbox_worker_uses_internal_egress_network_for_mm_785():
     services = compose_data.get("services", {})
     networks = compose_data.get("networks", {})
 
+    assert networks.get("control-plane-network") == {
+        "name": "${MOONMIND_CONTROL_PLANE_NETWORK:-moonmind_control-plane-network}"
+    }, "the control-plane network must be Compose-managed with a stable name"
+
     sandbox_network = networks.get("sandbox-egress-network")
     assert isinstance(
         sandbox_network, dict
@@ -210,6 +214,12 @@ def test_sandbox_worker_uses_internal_egress_network_for_mm_785():
         "sandbox-egress-network must be an internal Docker network so sandbox "
         "workers do not have default outbound internet egress"
     )
+    restricted_network = networks.get("restricted-egress-network")
+    assert isinstance(restricted_network, dict)
+    assert restricted_network.get("internal") is True
+    omnigent_network = networks.get("omnigent-egress-network")
+    assert isinstance(omnigent_network, dict)
+    assert omnigent_network.get("internal") is True
 
     sandbox_worker = services.get("temporal-worker-sandbox")
     assert isinstance(
@@ -241,10 +251,19 @@ def test_sandbox_worker_uses_internal_egress_network_for_mm_785():
         "sandbox-egress-network",
     )
     assert _network_names(proxy_service) == {
-        "local-network",
+        "control-plane-network",
         "sandbox-egress-network",
+        "restricted-egress-network",
+        "omnigent-egress-network",
     }
-    assert proxy_service.get("expose") == ["3128"]
+    assert proxy_service.get("expose") == ["3128", "3129"]
+    assert proxy_service["container_name"] == "moonmind-sandbox-egress-proxy"
+    assert proxy_service["labels"][
+        "moonmind.egress.profile-set-digest"
+    ].startswith("sha256:")
+    assert proxy_service["labels"]["moonmind.egress.enforcer"] == (
+        "docker-internal-proxy/v1"
+    )
 
     sandbox_env = _env_map(sandbox_worker.get("environment"))
     assert sandbox_env["HTTPS_PROXY"] == (
@@ -266,7 +285,51 @@ def test_sandbox_worker_uses_internal_egress_network_for_mm_785():
         ]
     }
     assert "http_access deny all" in squid_config
+    assert "^/mcp/container/tools/call$" in squid_config
+    assert (
+        "http_access allow omnigent_listener moonmind_api moonmind_api_port "
+        "moonmind_container_tool POST"
+    ) in squid_config
+    assert (
+        "acl moonmind_execution_create urlpath_regex ^/api/executions$"
+        in squid_config
+    )
+    assert (
+        "acl moonmind_execution_describe urlpath_regex "
+        "-i ^/api/executions/([a-z0-9._~:-]|%3a)+$"
+    ) in squid_config
+    assert (
+        "acl moonmind_execution_fanout req_header "
+        "X-MoonMind-Execution-Fanout ^v1$"
+    ) in squid_config
+    assert (
+        "acl moonmind_execution_bearer req_header Authorization -i "
+        "^Bearer[[:space:]]+[^[:space:]]+$"
+    ) in squid_config
+    assert (
+        "http_access allow omnigent_listener moonmind_api moonmind_api_port "
+        "moonmind_execution_create moonmind_execution_fanout "
+        "moonmind_execution_bearer POST"
+    ) in squid_config
+    assert (
+        "http_access allow omnigent_listener moonmind_api moonmind_api_port "
+        "moonmind_execution_describe moonmind_execution_fanout "
+        "moonmind_execution_bearer GET"
+    ) in squid_config
+    assert "169.254.0.0/16" in squid_config
+    assert "http_access deny forbidden_destination" in squid_config
+    assert "dns_nameservers 127.0.0.11" in squid_config
+    assert "read_timeout 300 seconds" in squid_config
+    assert "::/0" in squid_config
     assert expected_proxy_domains <= set(squid_config.split())
+
+    codex_host = services["omnigent-host-codex"]
+    assert _network_names(codex_host) == {"omnigent-egress-network"}
+    assert codex_host["cap_drop"] == ["ALL"]
+    assert codex_host["security_opt"] == ["no-new-privileges:true"]
+    codex_env = _env_map(codex_host["environment"])
+    assert codex_env["HTTPS_PROXY"] == "http://omnigent-egress-proxy:3129"
+    assert codex_env["NO_PROXY"] == "localhost,127.0.0.1"
 
 
 def test_api_service_runs_with_container_init():
@@ -286,6 +349,40 @@ def test_api_service_runs_with_container_init():
         "api service must run with an init process so child subprocesses "
         "are reaped and shutdown signals are forwarded"
     )
+    assert api_service.get("restart") == "unless-stopped", (
+        "api service must recover after an external OOM or daemon restart"
+    )
+
+
+def test_api_service_enables_omnigent_with_stock_images_by_default():
+    compose_data = _load_compose()
+    api_env = _env_map(compose_data["services"]["api"]["environment"])
+
+    assert api_env["OMNIGENT_ENABLED"] == "${OMNIGENT_ENABLED:-true}"
+    assert api_env["OMNIGENT_SERVER_URL"] == (
+        "${OMNIGENT_SERVER_URL:-http://omnigent:8000}"
+    )
+    assert api_env["OMNIGENT_IMAGE"] == (
+        "${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}"
+    )
+    assert api_env["OMNIGENT_IMAGE_TAG"] == "${OMNIGENT_IMAGE_TAG:-latest}"
+    assert api_env["OMNIGENT_HOST_IMAGE"] == (
+        "${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}"
+    )
+    assert api_env["OMNIGENT_HOST_IMAGE_TAG"] == (
+        "${OMNIGENT_HOST_IMAGE_TAG:-latest}"
+    )
+    for worker_name in (
+        "temporal-worker-agent-runtime",
+        "temporal-worker-integrations",
+    ):
+        worker_env = _env_map(
+            compose_data["services"][worker_name]["environment"]
+        )
+        assert worker_env["OMNIGENT_ENABLED"] == "${OMNIGENT_ENABLED:-true}"
+        assert worker_env["OMNIGENT_SERVER_URL"] == (
+            "${OMNIGENT_SERVER_URL:-http://omnigent:8000}"
+        )
 
 
 def test_api_service_mounts_agent_runtime_workspace_volume():
@@ -427,7 +524,7 @@ def test_omnigent_compose_uses_shared_postgres_for_mm_970():
     ), "omnigent-db-init service is missing from docker-compose.yaml"
     assert init_service.get("restart") == "no"
     assert init_service["depends_on"]["postgres"]["condition"] == "service_healthy"
-    assert _network_names(init_service) == {"local-network"}
+    assert _network_names(init_service) == {"control-plane-network"}
 
     init_env = _env_map(init_service.get("environment"))
     assert init_env["OMNIGENT_POSTGRES_USER"] == (
@@ -459,15 +556,18 @@ def test_omnigent_compose_uses_shared_postgres_for_mm_970():
         omnigent_service["depends_on"]["omnigent-db-init"]["condition"]
         == "service_completed_successfully"
     )
-    assert _network_names(omnigent_service) == {"local-network"}
+    assert _network_names(omnigent_service) == {
+        "control-plane-network",
+        "omnigent-egress-network",
+    }
     assert omnigent_service["ports"] == ["${OMNIGENT_PORT:-8000}:8000"]
     assert _has_volume_mount(omnigent_service, "omnigent-data", "/data")
     assert "omnigent-data" in compose_data.get("volumes", {})
 
     omnigent_env = _env_map(omnigent_service.get("environment"))
     assert omnigent_service["image"] == (
-        "${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}:"
-        "${OMNIGENT_IMAGE_TAG:-latest}"
+        "${OMNIGENT_IMAGE_REF:-${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}:"
+        "${OMNIGENT_IMAGE_TAG:-latest}}"
     )
     assert omnigent_env["DATABASE_URL"] == (
         "postgresql://${OMNIGENT_POSTGRES_USER:-omnigent}:"
@@ -501,6 +601,9 @@ def test_omnigent_compose_uses_shared_postgres_for_mm_970():
 def test_omnigent_env_template_and_optional_config_for_mm_970():
     env_template = Path(".env-template").read_text(encoding="utf-8")
     for expected_name in (
+        "OMNIGENT_ENABLED",
+        "OMNIGENT_SERVER_URL",
+        "OMNIGENT_IMAGE_REF",
         "OMNIGENT_IMAGE",
         "OMNIGENT_IMAGE_TAG",
         "OMNIGENT_PORT",
@@ -529,6 +632,7 @@ def test_omnigent_env_template_and_optional_config_for_mm_970():
         "OMNIGENT_OIDC_ALLOW_INVITES",
         "OMNIGENT_DOMAIN",
         "OMNIGENT_CONFIG",
+        "OMNIGENT_HOST_IMAGE_REF",
         "OMNIGENT_HOST_IMAGE",
         "OMNIGENT_HOST_IMAGE_TAG",
     ):

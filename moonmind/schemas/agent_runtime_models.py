@@ -27,6 +27,255 @@ from moonmind.schemas.workload_models import parse_cpu_units, parse_size_bytes
 
 AgentKind = Literal["external", "managed"]
 ExternalExecutionStyle = Literal["polling", "streaming_gateway"]
+# ``auto`` selects the run's runtime (and skill) at planning time. It is never a
+# runtime identity: an execution request must always name the resolved runtime.
+AUTO_RUNTIME_SENTINEL = "auto"
+MANAGED_PROCESS_LOST_DURING_RECONCILIATION = (
+    "MANAGED_PROCESS_LOST_DURING_RECONCILIATION"
+)
+
+# --- Execution budget authority ----------------------------------------------
+# One shared timeout authority for an agent run (MoonLadderStudios/MoonMind#3685
+# review): the AgentRun workflow's execution budget and the managed process
+# supervisor's kill deadline are the same boundary and must derive from the same
+# value. Previously the workflow defaulted managed runs one way while
+# ``agent_runtime.launch`` independently defaulted the supervisor to 3600s, so an
+# explicitly requested larger budget could not take effect — the process was
+# still killed at one hour.
+#
+# The budget is progress-aware. ``timeout_seconds`` is the *base* budget: the
+# point at which a run that cannot demonstrate progress is terminated. A run that
+# is still making observable progress when the base budget expires keeps running
+# until either progress goes stale for ``progress_stall_seconds`` or the hard
+# ceiling ``max_timeout_seconds`` is reached. Wall-clock alone is not evidence of
+# a stuck run: a one-shot runtime such as ``claude -p`` emits nothing until it
+# finishes, so terminating on elapsed time alone destroys healthy long runs
+# (MoonLadderStudios/MoonMind#3771 — an hour of uncommitted work discarded from a
+# run that was writing files three seconds before the kill).
+DEFAULT_MANAGED_TIMEOUT_SECONDS = 3600  # 1 hour
+DEFAULT_EXTERNAL_TIMEOUT_SECONDS = 21600  # 6 hours
+# How far progress may carry a run past its base budget, as a multiple of that
+# budget. Deriving the ceiling from the base rather than fixing it absolutely
+# keeps an explicit budget meaningful: asking for a tight 60s budget yields a
+# tight ceiling, not a six-hour one. An operator who wants a specific ceiling
+# sets ``max_timeout_seconds`` directly.
+DEFAULT_PROGRESS_EXTENSION_FACTOR = 6
+# Absolute safety cap. No budget, however configured, lets one agent run hold a
+# provider slot longer than this.
+MAX_EXECUTION_BUDGET_SECONDS = 86400  # 24 hours
+# How long observable progress may go stale before an over-base run is treated as
+# stuck. Wide enough to cover a long provider call or a quiet compile/test
+# stretch, short enough that a genuinely wedged process is not carried to the
+# ceiling. Never longer than the base budget itself — a run is not given more
+# time to prove it is alive than it was originally given to finish.
+DEFAULT_PROGRESS_STALL_SECONDS = 900  # 15 minutes
+
+# Outcome of one execution-budget evaluation.
+#   ``continue``            -- the run may keep executing
+#   ``expired_no_progress`` -- base budget elapsed and progress is stale/absent
+#   ``expired_max_budget``  -- the hard ceiling was reached
+ExecutionBudgetVerdict = Literal[
+    "continue",
+    "expired_no_progress",
+    "expired_max_budget",
+]
+
+# Which budget decision a run is executing under. This travels in the launch
+# request's timeout policy so the supervisor enforces the *same* decision the
+# workflow enforces, rather than independently re-deriving a progress-aware
+# ceiling. An AgentRun history that predates the progress-aware patch keeps its
+# flat deadline; without this the workflow would time out at the base window and
+# release the provider slot while the supervisor kept the process alive to a
+# derived ceiling it was never granted.
+#   ``progress_aware`` -- observed progress extends the run past the base window
+#   ``flat``           -- the base window is the only deadline
+ExecutionBudgetMode = Literal["progress_aware", "flat"]
+# Timeout-policy key carrying :data:`ExecutionBudgetMode` across the boundary.
+EXECUTION_BUDGET_MODE_KEY = "execution_budget_mode"
+
+
+class ExecutionBudget(BaseModel):
+    """The resolved, progress-aware execution budget for one agent run.
+
+    Every boundary that can end a run for exceeding its time — the AgentRun
+    workflow loop and the managed process supervisor — resolves this from the
+    same ``timeout_policy`` and applies :func:`evaluate_execution_budget` to the
+    same progress evidence, so the two deadlines cannot diverge.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, frozen=True)
+
+    base_seconds: int = Field(alias="baseSeconds")
+    max_seconds: int = Field(alias="maxSeconds")
+    progress_stall_seconds: int = Field(alias="progressStallSeconds")
+    mode: ExecutionBudgetMode = Field(default="progress_aware", alias="mode")
+
+    def as_timeout_policy(self) -> dict[str, Any]:
+        """Return the policy mapping that republishes this budget to callees.
+
+        The workflow publishes this into the launch request so the supervisor
+        enforces the identical budget. Keys match the snake_case names read by
+        :func:`resolve_execution_budget`. The mode travels with the numbers: a
+        callee that re-resolves the budget must reach the same decision, not a
+        progress-aware one derived from a flat run's base window.
+        """
+
+        return {
+            "timeout_seconds": self.base_seconds,
+            "max_timeout_seconds": self.max_seconds,
+            "progress_stall_seconds": self.progress_stall_seconds,
+            EXECUTION_BUDGET_MODE_KEY: self.mode,
+        }
+
+    def as_flat(self) -> "ExecutionBudget":
+        """This budget with the base window as its only deadline.
+
+        Used to publish the deadline a pre-progress-aware AgentRun history is
+        actually enforcing, so the supervisor cannot outlive the workflow that
+        owns the run's provider slot.
+        """
+
+        return ExecutionBudget(
+            base_seconds=self.base_seconds,
+            max_seconds=self.base_seconds,
+            progress_stall_seconds=self.base_seconds,
+            mode="flat",
+        )
+
+
+def _read_timeout_policy_value(
+    timeout_policy: Mapping[str, Any] | Any | None,
+    key: str,
+) -> int | None:
+    """Read one positive integer from a mapping-or-object timeout policy."""
+
+    if timeout_policy is None:
+        return None
+    if isinstance(timeout_policy, Mapping):
+        requested = timeout_policy.get(key)
+    else:
+        requested = getattr(timeout_policy, key, None)
+    if requested is None:
+        return None
+    try:
+        seconds = int(requested)
+    except (TypeError, ValueError):
+        return None
+    return seconds if seconds > 0 else None
+
+
+def _read_execution_budget_mode(
+    timeout_policy: Mapping[str, Any] | Any | None,
+) -> ExecutionBudgetMode:
+    """Read the published budget mode, defaulting to progress-aware.
+
+    A policy with no mode is either a direct launch or a caller that predates the
+    key; both get the current decision, which is what they would have resolved
+    before the key existed.
+    """
+
+    if timeout_policy is None:
+        return "progress_aware"
+    if isinstance(timeout_policy, Mapping):
+        requested = timeout_policy.get(EXECUTION_BUDGET_MODE_KEY)
+    else:
+        requested = getattr(timeout_policy, EXECUTION_BUDGET_MODE_KEY, None)
+    return "flat" if str(requested or "").strip() == "flat" else "progress_aware"
+
+
+def resolve_execution_budget(
+    *,
+    agent_kind: str = "managed",
+    timeout_policy: Mapping[str, Any] | Any | None = None,
+) -> ExecutionBudget:
+    """Return the effective progress-aware execution budget for one agent run.
+
+    Explicit ``timeout_seconds`` / ``max_timeout_seconds`` /
+    ``progress_stall_seconds`` values in the request's timeout policy win;
+    otherwise the kind-specific defaults apply. A degraded or partially populated
+    policy falls back per-field rather than failing, so an in-flight run whose
+    payload predates the progress-aware fields still resolves a valid budget.
+
+    The ceiling is never below the base budget: an explicit ``timeout_seconds``
+    larger than the default ceiling raises the ceiling with it, so asking for a
+    bigger budget never silently shortens the run.
+
+    ``execution_budget_mode`` selects the decision this budget encodes. A policy
+    published by an AgentRun history that predates progress-awareness carries
+    ``flat``, and the resolved budget then has the base window as its only
+    deadline, so the supervisor cannot outlive the workflow enforcing it.
+    """
+
+    is_external = agent_kind == "external"
+    base_seconds = _read_timeout_policy_value(timeout_policy, "timeout_seconds") or (
+        DEFAULT_EXTERNAL_TIMEOUT_SECONDS
+        if is_external
+        else DEFAULT_MANAGED_TIMEOUT_SECONDS
+    )
+    # The absolute cap binds the base window too. Accepting a larger base while
+    # capping the ceiling below it produces a self-contradictory budget that
+    # terminates at the cap for "reaching the maximum" before the base window it
+    # claims to honor has even elapsed.
+    base_seconds = min(base_seconds, MAX_EXECUTION_BUDGET_SECONDS)
+    if _read_execution_budget_mode(timeout_policy) == "flat":
+        return ExecutionBudget(
+            base_seconds=base_seconds,
+            max_seconds=base_seconds,
+            progress_stall_seconds=base_seconds,
+            mode="flat",
+        )
+    max_seconds = _read_timeout_policy_value(
+        timeout_policy, "max_timeout_seconds"
+    ) or (base_seconds * DEFAULT_PROGRESS_EXTENSION_FACTOR)
+    progress_stall_seconds = _read_timeout_policy_value(
+        timeout_policy, "progress_stall_seconds"
+    ) or DEFAULT_PROGRESS_STALL_SECONDS
+    return ExecutionBudget(
+        base_seconds=base_seconds,
+        # The ceiling is never below the base (asking for a bigger budget must
+        # not shorten the run) and never above the absolute cap.
+        max_seconds=min(
+            MAX_EXECUTION_BUDGET_SECONDS,
+            max(max_seconds, base_seconds),
+        ),
+        # The stall window is never longer than the base budget, explicit or
+        # defaulted: a run is not given more time to prove it is alive than it
+        # was originally given to finish. Without this clamp an explicit stall
+        # window larger than the base silently extends every quiet run past the
+        # base deadline it asked for, because the run's own start counts as an
+        # observation and idle progress is therefore never ``None``.
+        progress_stall_seconds=min(progress_stall_seconds, base_seconds),
+    )
+
+
+def evaluate_execution_budget(
+    *,
+    budget: ExecutionBudget,
+    elapsed_seconds: float,
+    idle_progress_seconds: float | None,
+) -> ExecutionBudgetVerdict:
+    """Decide whether a run may continue under its progress-aware budget.
+
+    ``idle_progress_seconds`` is how long ago the last *observable progress* was
+    seen — file mutation in the workspace, runtime output, or process-tree CPU
+    activity. ``None`` means no progress has ever been observed for this run, which
+    is not evidence of health: such a run is terminated at the base budget exactly
+    as before.
+
+    The hard ceiling is checked first so a runtime that livelocks while still
+    emitting progress signals cannot extend itself indefinitely.
+    """
+
+    if elapsed_seconds >= budget.max_seconds:
+        return "expired_max_budget"
+    if elapsed_seconds < budget.base_seconds:
+        return "continue"
+    if idle_progress_seconds is None:
+        return "expired_no_progress"
+    if idle_progress_seconds < budget.progress_stall_seconds:
+        return "continue"
+    return "expired_no_progress"
+
 AgentRunState = Literal[
     "queued",
     "awaiting_slot",
@@ -43,6 +292,7 @@ AgentRunState = Literal[
     "timed_out",
 ]
 FailureClass = Literal[
+    "configuration_error",
     "user_error",
     "integration_error",
     "execution_error",
@@ -82,6 +332,40 @@ ProviderProfileDisabledReason = Literal[
 ProviderProfileAuthMethod = Literal["oauth_volume", "secret_ref", "manual"]
 
 
+class OmnigentExecutionPlanBinding(BaseModel):
+    """Compact immutable identity for a persisted Omnigent execution plan."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
+
+    plan_ref: str = Field(alias="planRef")
+    plan_digest: str = Field(alias="planDigest")
+    plan_artifact_ref: str = Field(alias="planArtifactRef")
+    task_input_snapshot_ref: str = Field(alias="taskInputSnapshotRef")
+    task_input_snapshot_digest: str = Field(alias="taskInputSnapshotDigest")
+
+    @model_validator(mode="after")
+    def _validate_plan_identity(self) -> "OmnigentExecutionPlanBinding":
+        prefix = "omnigent-execution-plan:sha256:"
+        if not self.plan_ref.startswith(prefix):
+            raise ValueError("planRef must be an Omnigent execution-plan ref")
+        suffix = self.plan_ref.removeprefix(prefix)
+        if not re.fullmatch(r"[0-9a-f]{64}", suffix):
+            raise ValueError("planRef must contain a sha256 digest")
+        expected = f"sha256:{suffix}"
+        if self.plan_digest != expected:
+            raise ValueError("planDigest must match planRef")
+        for name, value in (
+            ("planArtifactRef", self.plan_artifact_ref),
+            ("taskInputSnapshotRef", self.task_input_snapshot_ref),
+        ):
+            normalized = require_non_blank(value, field_name=name)
+            if normalized.startswith(("/", "./", "../", "~")):
+                raise ValueError(f"{name} must be an opaque artifact reference")
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", self.task_input_snapshot_digest):
+            raise ValueError("taskInputSnapshotDigest must be a sha256 digest")
+        return self
+
+
 class AgentRuntimeStepExecutionLaunch(BaseModel):
     """Compact adapter-visible launch envelope for one Step Execution."""
 
@@ -106,6 +390,9 @@ class AgentRuntimeStepExecutionLaunch(BaseModel):
         default_factory=list, alias="preparedInputRefs"
     )
     resolved_skillset_ref: str | None = Field(None, alias="resolvedSkillsetRef")
+    omnigent_execution_plan: OmnigentExecutionPlanBinding | None = Field(
+        None, alias="omnigentExecutionPlan"
+    )
     runtime_selection: dict[str, Any] = Field(
         default_factory=dict, alias="runtimeSelection"
     )
@@ -318,6 +605,18 @@ _DURABLE_RETRIEVAL_METADATA_KEYS: tuple[str, ...] = (
     "retrievalDisabledReason",
     "retrievalInitiationMode",
     "retrievalContextTruncated",
+    "retrievedContextDigest",
+    "retrievalQueryDigest",
+    "retrievalQueryPreview",
+    "retrievedContextSources",
+    "retrievalCollections",
+    "retrievalScope",
+    "retrievalBudgets",
+    "retrievalUsage",
+    "retrievalOverlay",
+    "retrievalEmbeddingConfigRef",
+    "retrievalDurationMs",
+    "retrievalFailureClass",
     "sessionContinuityCacheStatus",
 )
 _BOOLEAN_DURABLE_RETRIEVAL_METADATA_KEYS: frozenset[str] = frozenset({
@@ -388,6 +687,24 @@ def extract_durable_retrieval_metadata(
             continue
         if isinstance(value, int):
             compact[key] = value
+            continue
+        if isinstance(value, float) and key == "retrievalDurationMs":
+            compact[key] = max(0.0, value)
+            continue
+        if isinstance(value, list) and key in {"retrievedContextSources", "retrievalCollections"}:
+            compact[key] = [str(item)[:256] for item in value[:20]]
+            continue
+        if isinstance(value, Mapping) and key in {
+            "retrievalScope",
+            "retrievalBudgets",
+            "retrievalUsage",
+            "retrievalOverlay",
+        }:
+            compact[key] = {
+                str(nested_key)[:40]: nested_value
+                for nested_key, nested_value in list(value.items())[:12]
+                if isinstance(nested_value, (str, int, float, bool)) or nested_value is None
+            }
     return compact
 
 def validate_codex_oauth_profile_refs(
@@ -397,14 +714,25 @@ def validate_codex_oauth_profile_refs(
     runtime_materialization_mode: str | None,
     volume_ref: str | None,
     volume_mount_path: str | None,
+    max_parallel_runs: int | None = None,
     volume_ref_field_name: str = "volumeRef",
     volume_mount_path_field_name: str = "volumeMountPath",
 ) -> None:
-    if (
-        str(runtime_id or "").strip() != "codex_cli"
-        or str(credential_source or "").strip() != "oauth_volume"
-        or str(runtime_materialization_mode or "").strip() != "oauth_home"
-    ):
+    from moonmind.provider_profiles.oauth_policy import (
+        is_claude_oauth_profile,
+        is_codex_oauth_profile,
+        validate_claude_oauth_capacity,
+        validate_codex_oauth_capacity,
+    )
+
+    identity = dict(
+        runtime_id=runtime_id,
+        credential_source=credential_source,
+        materialization_mode=runtime_materialization_mode,
+    )
+    is_codex = is_codex_oauth_profile(**identity)
+    is_claude = is_claude_oauth_profile(**identity)
+    if not (is_codex or is_claude):
         return
 
     missing: list[str] = []
@@ -414,6 +742,18 @@ def validate_codex_oauth_profile_refs(
         missing.append(f"{volume_mount_path_field_name} is required")
     if missing:
         raise ValueError("; ".join(missing))
+    expected_mount_path = "/home/app/.codex" if is_codex else "/home/app/.claude"
+    if str(volume_mount_path or "").strip() != expected_mount_path:
+        raise ValueError(
+            f"{volume_mount_path_field_name} must be {expected_mount_path}"
+        )
+    if max_parallel_runs is not None:
+        validator = (
+            validate_codex_oauth_capacity
+            if is_codex
+            else validate_claude_oauth_capacity
+        )
+        validator(**identity, max_parallel_runs=max_parallel_runs)
 
 def is_terminal_agent_run_state(status: AgentRunState) -> bool:
     """Return whether one canonical run status is terminal."""
@@ -507,6 +847,103 @@ class ProfileSelector(BaseModel):
         None, alias="runtimeMaterializationMode"
     )
 
+class AgentTerminalContract(BaseModel):
+    """Compiled, execution-bound terminal evidence handed to a runtime."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    contract_id: str = Field(..., alias="contractId", min_length=1)
+    owner: Literal["agent"] = "agent"
+    evidence_kind: Literal["workspace_json"] = Field(
+        "workspace_json", alias="evidenceKind"
+    )
+    relative_path: str = Field(..., alias="relativePath", min_length=1)
+    expected_schema_version: str = Field(
+        ..., alias="expectedSchemaVersion", min_length=1
+    )
+    execution_ref: str = Field(..., alias="executionRef", min_length=1)
+
+    @field_validator("relative_path")
+    @classmethod
+    def _confine_workspace_path(cls, value: str) -> str:
+        normalized = value.strip().replace("\\", "/")
+        if normalized.startswith("/") or ".." in normalized.split("/"):
+            raise ValueError("terminal evidence path must be relative and traversal-free")
+        return normalized
+
+class AgentTerminalContinuationAuthority(BaseModel):
+    """Internal proof that a durable Temporal parent owns continuation."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    schema_version: Literal["terminal-continuation-authority/v1"] = Field(
+        "terminal-continuation-authority/v1", alias="schemaVersion"
+    )
+    gate_type: Literal["merge_automation"] = Field(alias="gateType")
+    owner_workflow_id: str = Field(alias="ownerWorkflowId", min_length=1)
+    owner_run_id: str = Field(alias="ownerRunId", min_length=1)
+    owner_workflow_type: Literal["MoonMind.MergeAutomation"] = Field(
+        "MoonMind.MergeAutomation", alias="ownerWorkflowType"
+    )
+    allowed_actions: list[Literal["reenter_gate", "request_review"]] = Field(
+        alias="allowedActions"
+    )
+    source: Literal["validated_temporal_parent"]
+
+    def allows(
+        self,
+        *,
+        gate_type: str,
+        action: str,
+        owner_workflow_id: str | None = None,
+        owner_run_id: str | None = None,
+        owner_workflow_type: str = "MoonMind.MergeAutomation",
+    ) -> bool:
+        return (
+            self.gate_type == gate_type
+            and action in self.allowed_actions
+            and self.owner_workflow_type == owner_workflow_type
+            and (owner_workflow_id is None or self.owner_workflow_id == owner_workflow_id)
+            and (owner_run_id is None or self.owner_run_id == owner_run_id)
+        )
+
+
+class RepositoryOutcomePolicy(BaseModel):
+    """Workflow-owned authority for accepting an unchanged repository result."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    schema_version: Literal["repository-outcome-policy/v2"] = Field(
+        "repository-outcome-policy/v2", alias="schemaVersion"
+    )
+    allow_no_commit: Literal[True] = Field(alias="allowNoCommit")
+    authority: Literal["trusted_assessment"]
+    assessment_verdict: Literal["FULLY_IMPLEMENTED"] = Field(
+        alias="assessmentVerdict"
+    )
+    assessment_artifact_ref: str = Field(
+        alias="assessmentArtifactRef", min_length=1
+    )
+    assessed_repository: str = Field(alias="assessedRepository", min_length=1)
+    assessed_branch: str = Field(alias="assessedBranch", min_length=1)
+
+    @field_validator("assessment_artifact_ref")
+    @classmethod
+    def _normalize_assessment_artifact_ref(cls, value: str) -> str:
+        return require_non_blank(
+            value,
+            field_name="repositoryOutcomePolicy.assessmentArtifactRef",
+        )
+
+    @field_validator("assessed_repository", "assessed_branch")
+    @classmethod
+    def _normalize_assessed_identity(cls, value: str, info: Any) -> str:
+        return require_non_blank(
+            value,
+            field_name=f"repositoryOutcomePolicy.{info.field_name}",
+        )
+
+
 class AgentExecutionRequest(BaseModel):
     """Canonical request payload for true agent runtime execution."""
 
@@ -515,6 +952,9 @@ class AgentExecutionRequest(BaseModel):
     agent_kind: AgentKind = Field(..., alias="agentKind")
     agent_id: str = Field(..., alias="agentId", min_length=1)
     execution_profile_ref: str | None = Field(None, alias="executionProfileRef", min_length=1)
+    omnigent_execution_plan: OmnigentExecutionPlanBinding | None = Field(
+        None, alias="omnigentExecutionPlan"
+    )
     correlation_id: str = Field(..., alias="correlationId", min_length=1)
     idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
     instruction_ref: str | None = Field(None, alias="instructionRef")
@@ -525,6 +965,18 @@ class AgentExecutionRequest(BaseModel):
         None, alias="stepExecution"
     )
     resolved_skillset_ref: str | None = Field(None, alias="resolvedSkillsetRef")
+    remediation_workspace: dict[str, Any] | None = Field(
+        None, alias="remediationWorkspace"
+    )
+    checkpoint_recovery: dict[str, Any] | None = Field(
+        None, alias="checkpointRecovery"
+    )
+    terminal_contract: AgentTerminalContract | None = Field(
+        None, alias="terminalContract"
+    )
+    terminal_continuation_authority: AgentTerminalContinuationAuthority | None = Field(
+        None, alias="terminalContinuationAuthority"
+    )
     managed_session: CodexManagedSessionBinding | None = Field(
         None, alias="managedSession"
     )
@@ -555,12 +1007,27 @@ class AgentExecutionRequest(BaseModel):
     def _validate_contract(self) -> "AgentExecutionRequest":
         self.agent_id = require_non_blank(self.agent_id, field_name="agentId")
         if self.execution_profile_ref is not None:
-            if self.execution_profile_ref.strip().lower() == "auto":
+            if self.execution_profile_ref.strip().lower() == AUTO_RUNTIME_SENTINEL:
                 self.execution_profile_ref = None
             else:
                 self.execution_profile_ref = require_non_blank(
                     self.execution_profile_ref, field_name="executionProfileRef"
                 )
+        if self.omnigent_execution_plan is not None and not (
+            self.agent_kind == "external" and self.agent_id.strip().lower() == "omnigent"
+        ):
+            raise ValueError(
+                "omnigentExecutionPlan is supported only for external/omnigent requests"
+            )
+        if (
+            self.step_execution is not None
+            and self.step_execution.omnigent_execution_plan is not None
+            and self.step_execution.omnigent_execution_plan
+            != self.omnigent_execution_plan
+        ):
+            raise ValueError(
+                "stepExecution.omnigentExecutionPlan must match request authority"
+            )
         self.correlation_id = require_non_blank(
             self.correlation_id, field_name="correlationId"
         )
@@ -595,12 +1062,46 @@ class AgentExecutionRequest(BaseModel):
                 raise ValueError(
                     "managedSession.runtimeId must match the managed-session runtime"
                 )
+        if self.remediation_workspace is not None:
+            from moonmind.omnigent.remediation_workspace import (
+                RemediationWorkspaceBinding,
+            )
+
+            binding = RemediationWorkspaceBinding.model_validate(
+                self.remediation_workspace
+            )
+            self.remediation_workspace = binding.model_dump(
+                by_alias=True, mode="json", exclude_none=True
+            )
+        if self.checkpoint_recovery is not None:
+            self.checkpoint_recovery = validate_compact_temporal_mapping(
+                self.checkpoint_recovery,
+                field_name="checkpointRecovery",
+            )
         self.input_refs = [
             require_non_blank(item, field_name="inputRefs[]")
             for item in self.input_refs
         ]
 
-        if _contains_sensitive_key(self.parameters):
+        parameters_for_secret_scan = dict(self.parameters)
+        follow_up_retrieval = parameters_for_secret_scan.get("followUpRetrieval")
+        if isinstance(follow_up_retrieval, dict):
+            follow_up_for_secret_scan = dict(follow_up_retrieval)
+            max_context_tokens = follow_up_for_secret_scan.pop(
+                "maxContextTokens", None
+            )
+            if max_context_tokens is not None and (
+                not isinstance(max_context_tokens, int)
+                or isinstance(max_context_tokens, bool)
+                or max_context_tokens <= 0
+            ):
+                raise ValueError(
+                    "parameters.followUpRetrieval.maxContextTokens must be a positive integer"
+                )
+            parameters_for_secret_scan["followUpRetrieval"] = (
+                follow_up_for_secret_scan
+            )
+        if _contains_sensitive_key(parameters_for_secret_scan):
             raise ValueError("parameters must not contain raw credential keys")
         if _contains_sensitive_key(self.workspace_spec):
             raise ValueError("workspaceSpec must not contain raw credential keys")
@@ -875,14 +1376,127 @@ class ManagedAgentProviderProfile(BaseModel):
             runtime_materialization_mode=self.runtime_materialization_mode,
             volume_ref=self.volume_ref,
             volume_mount_path=self.volume_mount_path,
+            max_parallel_runs=self.max_parallel_runs,
         )
 
         return self
 
+
+class AuthVolumeRef(BaseModel):
+    """Secret-free durable identity for a profile-owned OAuth home volume."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    provider_profile_id: str = Field(..., alias="providerProfileId", min_length=1)
+    runtime_id: str = Field(..., alias="runtimeId", min_length=1)
+    provider_id: str = Field(..., alias="providerId", min_length=1)
+    volume_ref: str = Field(..., alias="volumeRef", min_length=1)
+    credential_generation: int = Field(..., alias="credentialGeneration", ge=1)
+    owner_user_id: str = Field(..., alias="ownerUserId", min_length=1)
+
+
+class CredentialMountRef(BaseModel):
+    """Secret-free instructions for mounting one OAuth home into a leased host."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    auth_volume_ref: AuthVolumeRef = Field(..., alias="authVolumeRef")
+    target_path: str = Field(..., alias="targetPath", min_length=1)
+    access_mode: Literal["read_write"] = Field("read_write", alias="accessMode")
+    runtime_uid: int = Field(1000, alias="runtimeUid", ge=1)
+    runtime_gid: int = Field(1000, alias="runtimeGid", ge=1)
+
+    @field_validator("target_path")
+    @classmethod
+    def _require_absolute_target_path(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized.startswith("/"):
+            raise ValueError("targetPath must be absolute")
+        return normalized
+
+    @model_validator(mode="after")
+    def _require_first_party_codex_topology(self) -> "CredentialMountRef":
+        if self.auth_volume_ref.runtime_id == "codex_cli":
+            if self.target_path != "/home/app/.codex":
+                raise ValueError("Codex OAuth homes must mount at /home/app/.codex")
+            if self.runtime_uid != 1000 or self.runtime_gid != 1000:
+                raise ValueError("Codex OAuth hosts must run with UID/GID 1000")
+        elif self.auth_volume_ref.runtime_id == "claude_code":
+            if self.target_path != "/home/app/.claude":
+                raise ValueError("Claude OAuth homes must mount at /home/app/.claude")
+            if self.runtime_uid != 1000 or self.runtime_gid != 1000:
+                raise ValueError("Claude OAuth hosts must run with UID/GID 1000")
+        return self
+
+
+class OmnigentOAuthHostBinding(BaseModel):
+    """Profile-owned authorization binding for a compatible Omnigent host."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    binding_ref: str = Field(..., alias="bindingRef", min_length=1)
+    provider_profile_id: str = Field(..., alias="providerProfileId", min_length=1)
+    endpoint_ref: str = Field(..., alias="endpointRef", min_length=1)
+    harness: Literal["codex-native", "claude-native"]
+    credential_mount_ref: CredentialMountRef = Field(..., alias="credentialMountRef")
+    max_hosts: Literal[1] = Field(1, alias="maxHosts")
+    max_sessions_per_host: Literal[1] = Field(1, alias="maxSessionsPerHost")
+    static_host_id: str | None = Field(None, alias="staticHostId")
+    host_launch_profile_ref: str | None = Field(None, alias="hostLaunchProfileRef")
+    execution_profile_ref: str | None = Field(None, alias="executionProfileRef")
+    launch_policy_ref: str | None = Field(None, alias="launchPolicyRef")
+    effective_launch_snapshot: dict[str, Any] | None = Field(
+        None, alias="effectiveLaunchSnapshot"
+    )
+
+    @model_validator(mode="after")
+    def _validate_profile_ownership(self) -> "OmnigentOAuthHostBinding":
+        mounted_profile_id = (
+            self.credential_mount_ref.auth_volume_ref.provider_profile_id
+        )
+        if mounted_profile_id != self.provider_profile_id:
+            raise ValueError(
+                "credentialMountRef must belong to providerProfileId"
+            )
+        return self
+
+
+class OmnigentHostLease(BaseModel):
+    """Durable, secret-free lifecycle state for one profile-bound host."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    lease_id: str = Field(..., alias="leaseId", min_length=1)
+    provider_profile_id: str = Field(..., alias="providerProfileId", min_length=1)
+    provider_lease_id: str = Field(..., alias="providerLeaseId", min_length=1)
+    binding_ref: str = Field(..., alias="bindingRef", min_length=1)
+    credential_generation: int = Field(..., alias="credentialGeneration", ge=1)
+    container_id: str | None = Field(None, alias="containerId")
+    container_name: str | None = Field(None, alias="containerName")
+    omnigent_host_id: str | None = Field(None, alias="omnigentHostId")
+    omnigent_session_id: str | None = Field(None, alias="omnigentSessionId")
+    bridge_session_id: str | None = Field(None, alias="bridgeSessionId")
+    effective_launch_snapshot: dict[str, Any] | None = Field(
+        None, alias="effectiveLaunchSnapshot"
+    )
+    status: Literal[
+        "allocating", "starting", "ready", "assigned", "draining", "stopped", "failed"
+    ]
+    acquired_at: datetime = Field(..., alias="acquiredAt")
+    last_heartbeat_at: datetime = Field(..., alias="lastHeartbeatAt")
+    expires_at: datetime = Field(..., alias="expiresAt")
+
+    @model_validator(mode="after")
+    def _validate_lifecycle_times(self) -> "OmnigentHostLease":
+        if self.last_heartbeat_at < self.acquired_at:
+            raise ValueError("lastHeartbeatAt must not precede acquiredAt")
+        if self.expires_at <= self.acquired_at:
+            raise ValueError("expiresAt must be after acquiredAt")
+        return self
+
 WorkspaceMode = Literal["tempdir", "shared", "none"]
 ManagedRuntimeWorkloadMode = Literal[
-    "docker-sidecar",
-    "docker-sidecar-rootless",
+    "container-jobs",
     "no-docker",
     "kubernetes-job",
 ]
@@ -907,41 +1521,8 @@ class RuntimeProfileMount(BaseModel):
     host_path: str | None = Field(None, alias="hostPath")
 
 
-class RuntimeProfileOptionalCacheMount(BaseModel):
-    """Deployment-approved named cache shared with the agent sidecar pair."""
-
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    name: str = Field(..., min_length=1)
-    volume_name: str = Field(..., alias="volumeName", min_length=1)
-    mount_path: str = Field(..., alias="mountPath", min_length=1)
-    approval_ref: str = Field(..., alias="approvalRef", min_length=1)
-    read_only: bool = Field(False, alias="readOnly")
-
-    @model_validator(mode="after")
-    def _validate_cache(self) -> "RuntimeProfileOptionalCacheMount":
-        self.name = require_non_blank(self.name, field_name="optionalCaches[].name")
-        self.volume_name = require_non_blank(
-            self.volume_name,
-            field_name="optionalCaches[].volumeName",
-        )
-        if "/" in self.volume_name or "\\" in self.volume_name:
-            raise ValueError("optionalCaches[].volumeName must be a named volume")
-        self.mount_path = require_non_blank(
-            self.mount_path,
-            field_name="optionalCaches[].mountPath",
-        )
-        self.approval_ref = require_non_blank(
-            self.approval_ref,
-            field_name="optionalCaches[].approvalRef",
-        )
-        if self.mount_path.startswith("/") is False:
-            raise ValueError("optionalCaches[].mountPath must be absolute")
-        return self
-
-
 class RuntimeProfileWorkspace(BaseModel):
-    """Workspace declaration shared by agent and sidecar containers."""
+    """Workspace declaration for a managed agent runtime."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -976,62 +1557,6 @@ class RuntimeProfileAgent(BaseModel):
     mounts: list[RuntimeProfileMount] = Field(default_factory=list)
 
 
-class RuntimeProfileSidecarSocket(BaseModel):
-    """Docker sidecar Unix socket declaration."""
-
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    path: str = Field(..., min_length=1)
-    volume_name: str = Field(..., alias="volumeName", min_length=1)
-
-
-class RuntimeProfileSidecarStorage(BaseModel):
-    """Docker sidecar graph storage declaration."""
-
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    volume_name: str = Field(..., alias="volumeName", min_length=1)
-    mount_path: str = Field(..., alias="mountPath", min_length=1)
-    lifecycle: Literal["session"] = "session"
-    daemon_scope: Literal["session", "shared"] = Field("session", alias="daemonScope")
-
-
-class RuntimeProfileSidecarSecurity(BaseModel):
-    """Docker sidecar security policy declaration."""
-
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    privileged: bool = False
-    host_docker_socket: Literal["forbidden"] = Field(
-        "forbidden", alias="hostDockerSocket"
-    )
-    moonmind_deployment_secrets: Literal["forbidden"] = Field(
-        "forbidden", alias="moonmindDeploymentSecrets"
-    )
-
-
-class RuntimeProfileDockerSidecar(BaseModel):
-    """Docker sidecar portion of a managed runtime profile."""
-
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    enabled: bool = False
-    mode: Literal["dind", "dind-rootless"] = "dind"
-    image: str | None = None
-    socket: RuntimeProfileSidecarSocket | None = None
-    storage: RuntimeProfileSidecarStorage | None = None
-    workspace: RuntimeProfileWorkspace | None = None
-    security: RuntimeProfileSidecarSecurity = Field(
-        default_factory=RuntimeProfileSidecarSecurity
-    )
-    env: dict[str, str] = Field(default_factory=dict)
-    mounts: list[RuntimeProfileMount] = Field(default_factory=list)
-    optional_caches: list[RuntimeProfileOptionalCacheMount] = Field(
-        default_factory=list,
-        alias="optionalCaches",
-    )
-
-
 class RuntimeProfileSessionResources(BaseModel):
     """Session-wide limits applied by the outer runtime supervisor."""
 
@@ -1057,147 +1582,13 @@ class RuntimeProfileContainerResources(BaseModel):
         return self
 
 
-class RuntimeProfileDockerSidecarResources(RuntimeProfileContainerResources):
-    """Limits for the outer Docker sidecar container."""
-
-    ephemeral_storage: str = Field(..., alias="ephemeralStorage", min_length=1)
-
-    @model_validator(mode="after")
-    def _validate_sidecar_resources(self) -> "RuntimeProfileDockerSidecarResources":
-        super()._validate_container_resources()
-        self.ephemeral_storage = require_non_blank(
-            self.ephemeral_storage,
-            field_name="resources.dockerSidecar.ephemeralStorage",
-        )
-        parse_size_bytes(self.ephemeral_storage)
-        return self
-
-
-class RuntimeProfileNestedContainerResources(BaseModel):
-    """Defaults and caps for containers created through the nested daemon."""
-
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    default_cpu: str = Field(..., alias="defaultCpu", min_length=1)
-    default_memory: str = Field(..., alias="defaultMemory", min_length=1)
-    max_containers: int = Field(..., alias="maxContainers", ge=1)
-
-    @model_validator(mode="after")
-    def _validate_nested_resources(self) -> "RuntimeProfileNestedContainerResources":
-        self.default_cpu = require_non_blank(
-            self.default_cpu,
-            field_name="resources.nestedContainers.defaultCpu",
-        )
-        parse_cpu_units(self.default_cpu)
-        self.default_memory = require_non_blank(
-            self.default_memory,
-            field_name="resources.nestedContainers.defaultMemory",
-        )
-        parse_size_bytes(self.default_memory)
-        return self
-
-
 class RuntimeProfileResources(BaseModel):
-    """Resource envelope for a managed session and its Docker sidecar."""
+    """Resource envelope applied to the managed agent container."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     session: RuntimeProfileSessionResources | None = None
     agent: RuntimeProfileContainerResources | None = None
-    docker_sidecar: RuntimeProfileDockerSidecarResources | None = Field(
-        None,
-        alias="dockerSidecar",
-    )
-    nested_containers: RuntimeProfileNestedContainerResources | None = Field(
-        None,
-        alias="nestedContainers",
-    )
-
-
-WorkspaceRetentionPolicy = Literal["retention_policy", "always", "never"]
-
-
-class RuntimeProfileCleanupOnSessionEnd(BaseModel):
-    """Cleanup actions that run when a managed session ends."""
-
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    stop_sidecar: bool = Field(True, alias="stopSidecar")
-    stop_nested_containers: bool = Field(True, alias="stopNestedContainers")
-    remove_docker_graph: bool = Field(True, alias="removeDockerGraph")
-    remove_docker_socket: bool = Field(True, alias="removeDockerSocket")
-    preserve_workspace: WorkspaceRetentionPolicy = Field(
-        "retention_policy",
-        alias="preserveWorkspace",
-    )
-
-
-class RuntimeProfileCleanupOnSidecarFailure(BaseModel):
-    """Failure behavior when the sidecar daemon/container fails."""
-
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    mark_docker_capability_unavailable: bool = Field(
-        True,
-        alias="markDockerCapabilityUnavailable",
-    )
-    preserve_agent_session: bool = Field(True, alias="preserveAgentSession")
-
-
-class RuntimeProfileCleanupOnAgentFailure(BaseModel):
-    """Failure behavior when the agent exits before normal completion."""
-
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    stop_sidecar: bool = Field(True, alias="stopSidecar")
-    preserve_workspace: WorkspaceRetentionPolicy = Field(
-        "retention_policy",
-        alias="preserveWorkspace",
-    )
-
-
-class RuntimeProfileCleanupPolicy(BaseModel):
-    """Idempotent cleanup policy for the per-session Docker sidecar."""
-
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    idempotent: bool = True
-    on_session_end: RuntimeProfileCleanupOnSessionEnd = Field(
-        default_factory=RuntimeProfileCleanupOnSessionEnd,
-        alias="onSessionEnd",
-    )
-    on_sidecar_failure: RuntimeProfileCleanupOnSidecarFailure = Field(
-        default_factory=RuntimeProfileCleanupOnSidecarFailure,
-        alias="onSidecarFailure",
-    )
-    on_agent_failure: RuntimeProfileCleanupOnAgentFailure = Field(
-        default_factory=RuntimeProfileCleanupOnAgentFailure,
-        alias="onAgentFailure",
-    )
-
-
-class RuntimeProfileDockerSidecarLaunchPlan(BaseModel):
-    """Compact launch contract applied outside the nested Docker daemon."""
-
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    issue_key: str = Field("MM-695", alias="issueKey")
-    apply_limits_outside_nested_daemon: bool = Field(
-        True,
-        alias="applyLimitsOutsideNestedDaemon",
-    )
-    workload_mode: ManagedRuntimeWorkloadMode = Field(..., alias="workloadMode")
-    labels: dict[str, str] = Field(default_factory=dict)
-    socket_volume_name: str = Field(..., alias="socketVolumeName", min_length=1)
-    socket_path: str = Field(..., alias="socketPath", min_length=1)
-    graph_volume_name: str = Field(..., alias="graphVolumeName", min_length=1)
-    graph_mount_path: str = Field(..., alias="graphMountPath", min_length=1)
-    resources: RuntimeProfileResources
-    cleanup: RuntimeProfileCleanupPolicy
-    optional_caches: tuple[RuntimeProfileOptionalCacheMount, ...] = Field(
-        default_factory=tuple,
-        alias="optionalCaches",
-    )
 
 
 class RuntimeProfilePolicy(BaseModel):
@@ -1272,19 +1663,6 @@ def moonmind_ops_runtime_contract() -> MoonMindOpsRuntime:
     return MoonMindOpsRuntime()
 
 
-def _image_is_pinned(image: str | None) -> bool:
-    text = str(image or "").strip()
-    if not text:
-        return False
-    if "@sha256:" in text:
-        return True
-    last_segment = text.rsplit("/", 1)[-1]
-    if ":" not in last_segment:
-        return False
-    tag = last_segment.rsplit(":", 1)[-1].strip().lower()
-    return bool(tag) and tag != "latest"
-
-
 def _normalize_posix_path(value: str) -> str:
     collapsed = re.sub(r"/+", "/", value)
     return posixpath.normpath(collapsed)
@@ -1333,21 +1711,15 @@ def _normalize_profile_labels(labels: Mapping[str, str]) -> dict[str, str]:
 
 
 class ManagedAgentRuntimeProfile(BaseModel):
-    """Validated managed-session runtime profile for Docker sidecar capability."""
+    """Validated managed-session runtime profile."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     workload_mode: ManagedRuntimeWorkloadMode = Field(..., alias="workloadMode")
     workspace: RuntimeProfileWorkspace
     agent: RuntimeProfileAgent
-    docker_sidecar: RuntimeProfileDockerSidecar | None = Field(
-        None, alias="dockerSidecar"
-    )
     resources: RuntimeProfileResources = Field(
         default_factory=RuntimeProfileResources
-    )
-    cleanup: RuntimeProfileCleanupPolicy = Field(
-        default_factory=RuntimeProfileCleanupPolicy
     )
     readiness: dict[str, Any] = Field(default_factory=dict)
     labels: dict[str, str] = Field(default_factory=dict)
@@ -1368,219 +1740,47 @@ class ManagedAgentRuntimeProfile(BaseModel):
                 "session tokens; credential exposure would leak MoonMind or "
                 "cross-session authority into the workload"
             )
-        sidecar = self.docker_sidecar
-        if sidecar is not None and _contains_sensitive_key(sidecar.env):
-            raise ValueError(
-                "dockerSidecar.env must not receive deployment credentials or "
-                "unrelated session tokens; credential exposure would leak MoonMind "
-                "or cross-session authority into the workload"
-            )
-        if _mounts_host_docker_socket(self.agent.mounts) or (
-            sidecar is not None and _mounts_host_docker_socket(sidecar.mounts)
-        ):
+        if _mounts_host_docker_socket(self.agent.mounts):
             raise ValueError(
                 "host Docker socket must not be mounted; exposing "
                 "/var/run/docker.sock would grant host-level Docker control"
             )
-        if _mounts_arbitrary_host_path(self.agent.mounts) or (
-            sidecar is not None and _mounts_arbitrary_host_path(sidecar.mounts)
-        ):
+        if _mounts_arbitrary_host_path(self.agent.mounts):
             raise ValueError(
                 "runtime profile mounts must use declared session volumes or "
-                "deployment-approved optionalCaches; arbitrary host path mounts "
+                "deployment-approved workspace mounts; arbitrary host path mounts "
                 "are not allowed"
             )
         if self.policy.api_container_workload_docker_socket_access:
             raise ValueError(
                 "API container must not have normal workload Docker socket access; "
-                "workload Docker control belongs to the isolated session sidecar"
+                "workload Docker control belongs to the trusted worker backend"
             )
-
-        if self.workload_mode == "kubernetes-job":
-            self._validate_kubernetes_job_profile(sidecar)
-            return self
-
-        if self.workload_mode == "no-docker":
-            if self.agent.docker_client.enabled:
-                raise ValueError(
-                    "agent.dockerClient.enabled must be false for no-docker profiles; "
-                    "workflow instructions cannot raise Docker capability"
-                )
-            if sidecar is not None and sidecar.enabled:
-                raise ValueError(
-                    "dockerSidecar.enabled must be false for no-docker profiles; "
-                    "workflow instructions cannot raise Docker capability"
-                )
-            if "DOCKER_HOST" in self.agent.env:
-                raise ValueError(
-                    "agent.env.DOCKER_HOST must not be set for no-docker profiles; "
-                    "workflow instructions cannot raise Docker capability"
-                )
-            return self
-
-        if sidecar is None or not sidecar.enabled:
+        if self.agent.docker_client.enabled:
             raise ValueError(
-                "dockerSidecar.enabled must be true for Docker-capable profiles; "
-                "otherwise agent Docker commands would have no per-session daemon"
-            )
-        if not self.agent.docker_client.enabled:
-            raise ValueError(
-                "agent.dockerClient.enabled must be true when dockerSidecar.enabled "
-                "is true; otherwise Docker commands cannot reach the sidecar daemon"
+                "agent.dockerClient.enabled must be false; managed sessions submit "
+                "typed container jobs instead of receiving a Docker endpoint"
             )
         if self.agent.docker_client.daemon_in_agent:
             raise ValueError(
-                "agent.dockerClient.daemonInAgent must be false; running the daemon "
-                "inside the agent breaks sidecar isolation"
+                "agent.dockerClient.daemonInAgent must be false; managed sessions "
+                "must not run a Docker daemon"
             )
-        if sidecar.socket is None:
+        if "DOCKER_HOST" in self.agent.env:
             raise ValueError(
-                "dockerSidecar.socket.path is required; DOCKER_HOST cannot be "
-                "validated without the declared sidecar socket"
+                "agent.env.DOCKER_HOST must not be set; managed sessions submit "
+                "typed container jobs instead of receiving a Docker endpoint"
             )
-        expected_docker_host = f"unix://{sidecar.socket.path}"
-        actual_docker_host = str(self.agent.env.get("DOCKER_HOST") or "").strip()
-        if actual_docker_host != expected_docker_host:
-            raise ValueError(
-                "agent.env.DOCKER_HOST must point at dockerSidecar.socket.path; "
-                "otherwise Docker commands may reach the wrong daemon or fail"
-            )
-        sidecar_workspace_path = (
-            sidecar.workspace.mount_path
-            if sidecar.workspace
-            else self.workspace.mount_path
-        )
-        if self.agent.workspace.mount_path != sidecar_workspace_path:
-            raise ValueError(
-                "agent and dockerSidecar workspace mount paths must match; "
-                "otherwise docker run bind mounts resolve against a different "
-                "filesystem path"
-            )
-        if not _image_is_pinned(sidecar.image):
-            raise ValueError(
-                "dockerSidecar.image sidecar image must be pinned to a non-latest "
-                "tag or digest; floating images make launches non-reproducible"
-            )
-        if sidecar.storage is None:
-            raise ValueError(
-                "dockerSidecar.storage is required; the Docker graph volume must be "
-                "declared per session"
-            )
-        if sidecar.storage.daemon_scope != "session":
-            raise ValueError(
-                "Docker daemon scope must be per session; shared daemons can expose "
-                "containers, images, and credentials across sessions or users"
-            )
-        self._validate_sidecar_resources()
-        self._validate_sidecar_cleanup()
+        if self.workload_mode == "kubernetes-job":
+            self._validate_kubernetes_job_profile()
         return self
 
-    def _validate_kubernetes_job_profile(
-        self, sidecar: RuntimeProfileDockerSidecar | None
-    ) -> None:
+    def _validate_kubernetes_job_profile(self) -> None:
         if not self.policy.kubernetes_job_runtime_supported:
             raise ValueError(
                 "workloadMode kubernetes-job requires explicit deployment support "
                 "via policy.kubernetesJobRuntimeSupported"
             )
-        if self.agent.docker_client.enabled:
-            raise ValueError(
-                "agent.dockerClient.enabled must be false for kubernetes-job profiles; "
-                "Kubernetes Job workloads do not expose a Docker daemon to the agent"
-            )
-        if "DOCKER_HOST" in self.agent.env:
-            raise ValueError(
-                "agent.env.DOCKER_HOST must not be set for kubernetes-job profiles; "
-                "Kubernetes Job workloads are requested through MoonMind capability"
-            )
-        if sidecar is not None and sidecar.enabled:
-            raise ValueError(
-                "dockerSidecar.enabled must be false for kubernetes-job profiles; "
-                "Kubernetes Job workloads are not Docker sidecar materializations"
-            )
-        if self.resources.docker_sidecar is not None:
-            raise ValueError(
-                "resources.dockerSidecar must be omitted for kubernetes-job profiles; "
-                "backend-specific rendering owns Kubernetes Job resource mapping"
-            )
-        if self.resources.nested_containers is not None:
-            raise ValueError(
-                "resources.nestedContainers must be omitted for kubernetes-job "
-                "profiles; Kubernetes Job mode does not use nested Docker containers"
-            )
-
-    def _validate_sidecar_resources(self) -> None:
-        required_resources = (
-            ("session", "resources.session.maxRuntimeSeconds"),
-            ("agent", "resources.agent"),
-            ("docker_sidecar", "resources.dockerSidecar"),
-            ("nested_containers", "resources.nestedContainers"),
-        )
-        missing = [
-            label
-            for field_name, label in required_resources
-            if getattr(self.resources, field_name) is None
-        ]
-        if missing:
-            raise ValueError(
-                "Docker sidecar profiles must declare outer resource limits: "
-                + ", ".join(missing)
-            )
-        assert self.resources.docker_sidecar is not None
-        assert self.resources.nested_containers is not None
-        nested_cpu = parse_cpu_units(self.resources.nested_containers.default_cpu)
-        sidecar_cpu = parse_cpu_units(self.resources.docker_sidecar.cpu)
-        if nested_cpu > sidecar_cpu:
-            raise ValueError(
-                "resources.nestedContainers.defaultCpu must not exceed "
-                "resources.dockerSidecar.cpu"
-            )
-        if parse_size_bytes(
-            self.resources.nested_containers.default_memory
-        ) > parse_size_bytes(self.resources.docker_sidecar.memory):
-            raise ValueError(
-                "resources.nestedContainers.defaultMemory must not exceed "
-                "resources.dockerSidecar.memory"
-            )
-
-    def _validate_sidecar_cleanup(self) -> None:
-        cleanup_checks = (
-            (
-                self.cleanup.idempotent,
-                "cleanup.idempotent must be true for Docker sidecar profiles",
-            ),
-            (
-                self.cleanup.on_session_end.stop_sidecar,
-                "cleanup.onSessionEnd.stopSidecar must be true",
-            ),
-            (
-                self.cleanup.on_session_end.stop_nested_containers,
-                "cleanup.onSessionEnd.stopNestedContainers must be true",
-            ),
-            (
-                self.cleanup.on_session_end.remove_docker_graph,
-                "cleanup.onSessionEnd.removeDockerGraph must be true",
-            ),
-            (
-                self.cleanup.on_session_end.remove_docker_socket,
-                "cleanup.onSessionEnd.removeDockerSocket must be true",
-            ),
-            (
-                self.cleanup.on_sidecar_failure.mark_docker_capability_unavailable,
-                "cleanup.onSidecarFailure.markDockerCapabilityUnavailable must be true",
-            ),
-            (
-                self.cleanup.on_sidecar_failure.preserve_agent_session,
-                "cleanup.onSidecarFailure.preserveAgentSession must be true",
-            ),
-            (
-                self.cleanup.on_agent_failure.stop_sidecar,
-                "cleanup.onAgentFailure.stopSidecar must be true",
-            ),
-        )
-        for valid, message in cleanup_checks:
-            if not valid:
-                raise ValueError(message)
 
 
 def resolve_managed_runtime_workload_mode(
@@ -1593,38 +1793,10 @@ def resolve_managed_runtime_workload_mode(
     requested = str(workflow_requested_workload_mode or "").strip()
     if requested and requested != profile.workload_mode:
         raise ValueError(
-            "workflow instructions cannot raise Docker capability; workloadMode is "
+            "workflow instructions cannot change workload capability; workloadMode is "
             "read from deployment/profile configuration"
         )
     return profile.workload_mode
-
-
-def build_docker_sidecar_launch_plan(
-    profile: ManagedAgentRuntimeProfile,
-) -> RuntimeProfileDockerSidecarLaunchPlan | None:
-    """Return the compact MM-695 launch contract for Docker sidecar profiles."""
-
-    if profile.workload_mode == "kubernetes-job":
-        raise ValueError(
-            "workloadMode kubernetes-job is validated but cannot be launched until "
-            "the Kubernetes Job runtime renderer is wired into managed sessions"
-        )
-    if profile.workload_mode == "no-docker":
-        return None
-    sidecar = profile.docker_sidecar
-    if sidecar is None or sidecar.socket is None or sidecar.storage is None:
-        raise ValueError("validated Docker sidecar profile is missing sidecar shape")
-    return RuntimeProfileDockerSidecarLaunchPlan(
-        workloadMode=profile.workload_mode,
-        labels=profile.labels,
-        socketVolumeName=sidecar.socket.volume_name,
-        socketPath=sidecar.socket.path,
-        graphVolumeName=sidecar.storage.volume_name,
-        graphMountPath=sidecar.storage.mount_path,
-        resources=profile.resources,
-        cleanup=profile.cleanup,
-        optionalCaches=tuple(sidecar.optional_caches),
-    )
 
 class RuntimeFileTemplate(BaseModel):
     """Path-aware file materialization contract for managed runtime launch."""
@@ -1774,6 +1946,9 @@ class ManagedRunRecord(BaseModel):
 
     run_id: str = Field(..., alias="runId", min_length=1)
     workflow_id: str | None = Field(None, alias="workflowId")
+    owner_run_id: str | None = Field(None, alias="ownerRunId")
+    logical_step_id: str | None = Field(None, alias="logicalStepId")
+    execution_ordinal: int | None = Field(None, alias="executionOrdinal", ge=1)
     agent_id: str = Field(..., alias="agentId", min_length=1)
     runtime_id: str = Field(..., alias="runtimeId", min_length=1)
     status: AgentRunState = Field(..., alias="status")
@@ -1783,6 +1958,9 @@ class ManagedRunRecord(BaseModel):
     finished_at: datetime | None = Field(None, alias="finishedAt")
     last_heartbeat_at: datetime | None = Field(None, alias="lastHeartbeatAt")
     workspace_path: str | None = Field(None, alias="workspacePath")
+    resolved_repository_target: dict[str, Any] | None = Field(
+        None, alias="resolvedRepositoryTarget"
+    )
     # deprecated: use stdout_artifact_ref and stderr_artifact_ref instead
     log_artifact_ref: str | None = Field(None, alias="logArtifactRef")
     stdout_artifact_ref: str | None = Field(None, alias="stdoutArtifactRef")
@@ -1810,6 +1988,14 @@ class ManagedRunRecord(BaseModel):
             self.workflow_id = require_non_blank(
                 self.workflow_id, field_name="workflowId"
             )
+        for field_name in ("owner_run_id", "logical_step_id"):
+            value = getattr(self, field_name)
+            if value is not None:
+                setattr(
+                    self,
+                    field_name,
+                    require_non_blank(value, field_name=field_name),
+                )
         if self.observability_events_ref is not None:
             self.observability_events_ref = require_non_blank(
                 self.observability_events_ref,
@@ -2072,7 +2258,17 @@ def build_canonical_result(payload: dict[str, Any]) -> AgentRunResult:
     return AgentRunResult(**data)
 
 __all__ = [
+    "DEFAULT_EXTERNAL_TIMEOUT_SECONDS",
+    "DEFAULT_MANAGED_TIMEOUT_SECONDS",
+    "DEFAULT_PROGRESS_EXTENSION_FACTOR",
+    "DEFAULT_PROGRESS_STALL_SECONDS",
+    "MAX_EXECUTION_BUDGET_SECONDS",
+    "ExecutionBudget",
+    "ExecutionBudgetVerdict",
+    "evaluate_execution_budget",
+    "resolve_execution_budget",
     "AgentExecutionRequest",
+    "OmnigentExecutionPlanBinding",
     "AgentKind",
     "ExternalExecutionStyle",
     "AgentRunHandle",
@@ -2086,13 +2282,18 @@ __all__ = [
     "RuntimeCommandRenderMode",
     "RuntimeCommandRenderResult",
     "RuntimeCommandRenderStatus",
+    "AuthVolumeRef",
+    "CredentialMountRef",
     "ManagedAgentProviderProfile",
     "ManagedAgentRuntimeProfile",
     "ManagedRunRecord",
     "ManagedRuntimeProfile",
     "ManagedRuntimeWorkloadMode",
+    "MANAGED_PROCESS_LOST_DURING_RECONCILIATION",
     "MoonMindOpsRuntime",
     "MoonMindOpsRuntimeOperation",
+    "OmnigentHostLease",
+    "OmnigentOAuthHostBinding",
     "ProfileSelector",
     "ProviderModelEffortTier",
     "ProviderCapabilityDescriptor",

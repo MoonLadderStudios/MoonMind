@@ -1,9 +1,8 @@
 slug: batch-workflows
-title: Batch Workflows
-description: Resolve Jira issues by project and status, then queue one child
-  MoonMind workflow per issue using a selected run capability, inherited runtime
-  settings, and a shared advanced publish policy. The parent records a summary
-  artifact that links every queued child workflow.
+title: Batch Jira Workflows
+description: Resolve Jira issues by project, status, and optional JQL, then queue
+  one supported Jira workflow per issue with inherited runtime settings and a
+  shared advanced publish policy.
 scope: global
 tags:
 - batch
@@ -11,6 +10,7 @@ tags:
 - jira
 requiredCapabilities:
 - git
+- jira
 - gh
 annotations:
   sourceSkill: batch-workflows
@@ -35,9 +35,9 @@ annotations:
       jira_issue_key: '{{ target.jiraIssue.key }}'
       constraints: '{{ shared.constraints }}'
       run_verify: '{{ shared.run_verify }}'
-    preset:github-issue-implement:
-      github_issue: '{{ target.githubIssue }}'
-      github_issue_ref: '{{ target.githubIssue.repository }}#{{ target.githubIssue.number }}'
+    preset:jira-orchestrate:
+      jira_issue: '{{ target.jiraIssue }}'
+      jira_issue_key: '{{ target.jiraIssue.key }}'
       constraints: '{{ shared.constraints }}'
       run_verify: '{{ shared.run_verify }}'
   inputSchema:
@@ -62,6 +62,7 @@ annotations:
         enum:
         - skill:jira-verify
         - preset:jira-implement
+        - preset:jira-orchestrate
       max_workflows:
         type: string
         title: Max workflows
@@ -102,6 +103,11 @@ annotations:
       advanced: true
     run_verify:
       widget: checkbox
+      visibleWhen:
+        field: run_ref
+        oneOf:
+        - preset:jira-implement
+        - preset:jira-orchestrate
     update_status:
       widget: checkbox
       visibleWhen:
@@ -140,6 +146,7 @@ inputs:
   options:
   - skill:jira-verify
   - preset:jira-implement
+  - preset:jira-orchestrate
 - name: max_workflows
   label: Max Workflows
   type: text
@@ -209,7 +216,7 @@ steps:
     capability's issue input and copy the shared constraints into every child.
     Apply publish override "{{ inputs.publish_mode }}" once to every child. Run the
     helper as a single command:
-    python3 .agents/skills/batch-workflows/bin/batch_workflows.py \
+    python3 "$MOONMIND_ACTIVE_SKILLS_DIR/batch-workflows/bin/batch_workflows.py" \
     --targets artifacts/batch-workflows-targets.json \
     --run-ref "{{ inputs.run_ref }}" \
     --publish-mode "{{ inputs.publish_mode }}" \
@@ -250,5 +257,6 @@ steps:
     id: batch-workflows
     requiredCapabilities:
     - git
+    - jira
     - gh
     args: {}

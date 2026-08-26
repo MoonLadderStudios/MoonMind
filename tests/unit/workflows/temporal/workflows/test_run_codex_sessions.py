@@ -10,6 +10,7 @@ from moonmind.schemas.managed_session_models import CodexManagedSessionBinding
 from moonmind.workflows.temporal.workflows import run as run_module
 from moonmind.workflows.temporal.workflows.run import (
     RUN_DEFER_WORKFLOW_SCOPED_SESSION_UNTIL_SLOT_PATCH,
+    RUN_WORKFLOW_SCOPED_SESSION_ABANDON_ON_PARENT_CLOSE_PATCH,
     RUN_WORKFLOW_SCOPED_SESSION_CLEAR_ACTIVITY_SIGNAL_PATCH,
     RUN_WORKFLOW_SCOPED_SESSION_CLEAR_BETWEEN_STEPS_PATCH,
     RUN_WORKFLOW_SCOPED_SESSION_CLEAR_PER_EXECUTION_PATCH,
@@ -182,6 +183,59 @@ async def test_run_reuses_existing_workflow_scoped_codex_session_binding(
     assert first.managed_session == second.managed_session
     assert first.managed_session.session_id == "sess:wf-run-1:codex_cli"
     assert first.managed_session.session_epoch == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("patch_enabled", [False, True])
+async def test_run_versions_workflow_scoped_session_parent_close_policy(
+    monkeypatch: pytest.MonkeyPatch,
+    patch_enabled: bool,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: (
+            patch_enabled
+            and patch_id
+            == RUN_WORKFLOW_SCOPED_SESSION_ABANDON_ON_PARENT_CLOSE_PATCH
+        ),
+    )
+    start_calls: list[tuple[str, Any, dict[str, Any]]] = []
+
+    class _FakeHandle:
+        pass
+
+    async def fake_start_child_workflow(
+        workflow_name: str,
+        payload: Any,
+        **kwargs: Any,
+    ) -> _FakeHandle:
+        start_calls.append((workflow_name, payload, kwargs))
+        return _FakeHandle()
+
+    monkeypatch.setattr(
+        run_module.workflow,
+        "start_child_workflow",
+        fake_start_child_workflow,
+    )
+
+    request = await workflow._maybe_bind_workflow_scoped_session(
+        _managed_request("codex")
+    )
+
+    assert request.managed_session is not None
+    assert len(start_calls) == 1
+    workflow_name, _payload, kwargs = start_calls[0]
+    assert workflow_name == "MoonMind.AgentSession"
+    if patch_enabled:
+        assert (
+            kwargs["parent_close_policy"]
+            == run_module.workflow.ParentClosePolicy.ABANDON
+        )
+    else:
+        assert "parent_close_policy" not in kwargs
 
 @pytest.mark.asyncio
 async def test_run_skips_workflow_scoped_claude_code_session_until_runtime_is_wired(

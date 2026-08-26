@@ -1,11 +1,8 @@
-name: Build and Publish Docker Image to GHCR
+name: Release / Build App Image
 
 on:
   push:
     branches: [ main ]
-    paths-ignore:
-      - "docker/pentestgpt-runner/**"
-      - ".github/workflows/pentestgpt-runner.yml"
   workflow_dispatch:
 
 env:
@@ -45,9 +42,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      - name: Initialize pinned Omnigent verifier source
+        run: git submodule update --init --depth 1 -- omnigent
+
       - name: Set up Python
         if: matrix.platform == 'linux/amd64'
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
@@ -74,7 +74,7 @@ jobs:
 
       - name: Setup Node.js
         if: matrix.platform == 'linux/amd64'
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: '20'
 
@@ -199,9 +199,8 @@ jobs:
             exit 1
           fi
 
-          # Mirror the PentestGPT runner summary so promotion is copy/paste low
-          # friction: `latest` is the current build channel, `stable` is moved
-          # later by the Promote GHCR image to stable workflow.
+          # `latest` is the current build channel; `stable` is moved later by
+          # the Release / Promote Stable workflow.
           {
             echo "### App image published"
             echo ""
@@ -210,5 +209,5 @@ jobs:
             echo "- Digest: \`${DIGEST}\`"
             echo "- Digest-pinned reference: \`${IMAGE_NAME}:${VERSION}@${DIGEST}\`"
             echo ""
-            echo "To promote this build, run **Actions → Promote GHCR image to stable** with image \`app\` and source tag \`${VERSION}\`."
+            echo "To promote this build, run **Actions → Release / Promote Stable** with image \`app\` and source tag \`${VERSION}\`."
           } >> "${GITHUB_STEP_SUMMARY}"

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Remediate Issue"
+  short_description: "Fix verifier gaps from an issue brief"
+  default_prompt: "Use $remediate-issue to implement the remaining verifier gaps for this issue."

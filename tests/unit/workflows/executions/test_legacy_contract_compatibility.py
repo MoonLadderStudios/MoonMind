@@ -83,6 +83,12 @@ def test_workflow_scoped_session_patch_ids_keep_legacy_values() -> None:
     """Replay-stable workflow.patched ids must not change for MoonMind.UserWorkflow."""
 
     from moonmind.workflows.temporal.workflows import run as run_module
+    from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
+
+    assert (
+        agent_run_module.TERMINAL_CHECKPOINT_PUBLICATION_PATCH_ID
+        == "agent-run-terminal-checkpoint-publication-v1"
+    )
 
     assert (
         run_module.RUN_WORKFLOW_SCOPED_SESSION_TERMINATION_PATCH

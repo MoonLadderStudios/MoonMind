@@ -5,6 +5,7 @@ Implements MM-949 from source issue MM-940.
 
 from __future__ import annotations
 
+import json
 import os
 import uuid
 from collections import defaultdict
@@ -36,6 +37,7 @@ ManagedRuntimeCleanupClassification = Literal[
     "protected_active",
     "protected_recent",
     "protected_shared",
+    "protected_unreadable_owner",
     "eligible",
     "deleted",
     "budget_exhausted",
@@ -44,18 +46,55 @@ ManagedRuntimeCleanupClassification = Literal[
     "error",
 ]
 
+# Raw path keys read from an unreadable owner record. Ownership must be honored
+# even when the record body no longer satisfies the current model.
+_RAW_OWNED_PATH_KEYS = (
+    "workspacePath",
+    "workspace_path",
+    "sessionWorkspacePath",
+    "session_workspace_path",
+    "artifactSpoolPath",
+    "artifact_spool_path",
+)
+_RAW_ARTIFACT_REF_KEYS = (
+    "logArtifactRef",
+    "log_artifact_ref",
+    "stdoutArtifactRef",
+    "stdout_artifact_ref",
+    "stderrArtifactRef",
+    "stderr_artifact_ref",
+    "mergedLogArtifactRef",
+    "merged_log_artifact_ref",
+    "diagnosticsRef",
+    "diagnostics_ref",
+    "observabilityEventsRef",
+    "observability_events_ref",
+    "latestCheckpointRef",
+    "latest_checkpoint_ref",
+)
+_MAX_REPORTED_UNREADABLE_RECORDS = 20
+_MAX_REPORTED_CLEANUP_ERRORS = 20
+
 _FALSEY = frozenset({"", "0", "false", "no", "off"})
+
+
+def _bounded_cleanup_errors(errors: Sequence[str]) -> tuple[str, ...]:
+    bounded = tuple(errors[:_MAX_REPORTED_CLEANUP_ERRORS])
+    omitted = len(errors) - len(bounded)
+    if omitted <= 0:
+        return bounded
+    return (*bounded, f"{omitted} additional cleanup errors")
 
 
 @dataclass(frozen=True)
 class ManagedRuntimeCleanupConfig:
-    enabled: bool = False
-    dry_run: bool = True
-    workspace_retention: timedelta = timedelta(days=30)
+    enabled: bool = True
+    dry_run: bool = False
+    workspace_retention: timedelta = timedelta(days=10)
     artifact_retention: timedelta = timedelta(days=90)
     record_retention: timedelta | None = None
     grace: timedelta = timedelta(hours=1)
-    max_delete_paths: int = 25
+    max_delete_paths: int = 100
     max_delete_bytes: int | None = None
     lock_path: Path = Path("/work/agent_jobs/.janitor.lock")
     runtime_store_root: Path = Path("/work/agent_jobs")
@@ -65,12 +104,16 @@ class ManagedRuntimeCleanupConfig:
     def from_env(
         cls, env: Mapping[str, str] | None = None
     ) -> "ManagedRuntimeCleanupConfig":
-        source = env or os.environ
+        source = os.environ if env is None else env
         runtime_store_root = Path(
             source.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs")
             or "/work/agent_jobs"
         )
-        artifact_root = managed_runtime_artifact_root()
+        artifact_root = (
+            managed_runtime_artifact_root()
+            if env is None
+            else runtime_store_root / "artifacts"
+        )
         if env is not None:
             raw_artifact_root = source.get("MOONMIND_AGENT_RUNTIME_ARTIFACTS")
             if raw_artifact_root is not None:
@@ -79,14 +122,14 @@ class ManagedRuntimeCleanupConfig:
                     artifact_root = artifact_root / "artifacts"
         return cls(
             enabled=_env_bool(
-                source, "MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED", False
+                source, "MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED", True
             ),
             dry_run=_env_bool(
-                source, "MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN", True
+                source, "MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN", False
             ),
             workspace_retention=timedelta(
                 days=_env_int(
-                    source, "MOONMIND_MANAGED_RUNTIME_WORKSPACE_RETENTION_DAYS", 30
+                    source, "MOONMIND_MANAGED_RUNTIME_WORKSPACE_RETENTION_DAYS", 10
                 )
             ),
             artifact_retention=timedelta(
@@ -105,7 +148,7 @@ class ManagedRuntimeCleanupConfig:
             max_delete_paths=max(
                 0,
                 _env_int(
-                    source, "MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_PATHS", 25
+                    source, "MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_PATHS", 100
                 ),
             ),
             max_delete_bytes=_env_optional_int(
@@ -179,6 +222,8 @@ class ManagedRuntimeCleanupResult:
     skipped_recent: int
     skipped_unsafe_path: int
     skipped_ambiguous_owner: int
+    skipped_unreadable_owner: int
+    unreadable_owner_records: int
     delete_budget_exhausted: int
     errors: tuple[str, ...]
     metrics: dict[str, int] = field(default_factory=dict)
@@ -205,30 +250,31 @@ class ManagedRuntimeCleanupResult:
             "skippedRecent": self.skipped_recent,
             "skippedUnsafePath": self.skipped_unsafe_path,
             "skippedAmbiguousOwner": self.skipped_ambiguous_owner,
+            "skippedUnreadableOwner": self.skipped_unreadable_owner,
+            "unreadableOwnerRecords": self.unreadable_owner_records,
             "deleteBudgetExhausted": self.delete_budget_exhausted,
-            "errors": list(self.errors),
+            "errors": list(_bounded_cleanup_errors(self.errors)),
             "metrics": dict(self.metrics),
             "candidateSamples": [
                 sample.to_dict() for sample in self.candidate_samples
             ],
             "deletedSamples": [sample.to_dict() for sample in self.deleted_samples],
-            "decisions": [
-                {
-                    "kind": decision.kind,
-                    "path": decision.path,
-                    "ownershipRoot": decision.ownership_root,
-                    "classification": decision.classification,
-                    "reason": decision.reason,
-                    "newestActivityAt": (
-                        decision.newest_activity_at.isoformat()
-                        if decision.newest_activity_at
-                        else None
-                    ),
-                    "estimatedBytes": decision.estimated_bytes,
-                }
-                for decision in self.decisions
-            ],
         }
+
+
+@dataclass(frozen=True)
+class UnreadableOwnerRecord:
+    """One durable owner record that no longer satisfies its current model.
+
+    The janitor cannot verify what such a record owns, so every path it names
+    stays protected. The record file itself is reclaimable only once all of
+    those paths are gone, which makes it a provable orphan.
+    """
+
+    path: Path
+    kind: ManagedRuntimeCandidateKind
+    error: str
+    owned_paths: tuple[Path, ...] = ()
 
 
 @dataclass
@@ -268,15 +314,19 @@ class ManagedRuntimeWorkspaceJanitor:
         self._docker_reference_provider = docker_reference_provider
         self._progress_callback = progress_callback
         self._now = now or (lambda: datetime.now(tz=UTC))
+        self._unreadable_protected_paths: frozenset[Path] = frozenset()
 
     def run(self) -> ManagedRuntimeCleanupResult:
         config = self._config
         if not config.enabled:
+            unreadable_count = 0
             try:
-                scanned_run_records = len(tuple(self._run_store.iter_all()))
-                scanned_session_records = len(tuple(self._session_store.iter_all()))
-                errors: tuple[str, ...] = ()
-            except (OSError, ValueError) as exc:
+                run_records, session_records, unreadable = self._load_owner_records()
+                scanned_run_records = len(run_records)
+                scanned_session_records = len(session_records)
+                unreadable_count = len(unreadable)
+                errors: tuple[str, ...] = _unreadable_record_errors(unreadable)
+            except OSError as exc:
                 scanned_run_records = 0
                 scanned_session_records = 0
                 errors = (f"unreadable_store: {exc}",)
@@ -297,24 +347,28 @@ class ManagedRuntimeWorkspaceJanitor:
                 skipped_recent=0,
                 skipped_unsafe_path=0,
                 skipped_ambiguous_owner=0,
+                skipped_unreadable_owner=0,
+                unreadable_owner_records=unreadable_count,
                 scanned_record_files=0,
                 delete_budget_exhausted=0,
                 errors=errors,
             )
-        with _JanitorLock(config.lock_path):
+        with _JanitorLock(config.lock_path, stale_after=config.grace):
             return self._run_enabled_pass()
 
     def _run_enabled_pass(self) -> ManagedRuntimeCleanupResult:
         errors: list[str] = []
         try:
-            run_records = tuple(self._run_store.iter_all())
-            session_records = tuple(self._session_store.iter_all())
-        except (OSError, ValueError) as exc:
+            run_records, session_records, unreadable = self._load_owner_records()
+        except OSError as exc:
             return self._empty_enabled_error(f"unreadable_store: {exc}")
+        errors.extend(_unreadable_record_errors(unreadable))
         docker_state = self._docker_reference_state()
         if docker_state.failed:
             errors.append(docker_state.reason or "docker_reference_scan_failed")
-        candidates = self._build_candidates(run_records, session_records)
+        candidates = self._build_candidates(
+            run_records, session_records, unreadable=unreadable
+        )
         budget = _CleanupBudget()
         decisions: list[ManagedRuntimeCleanupDecision] = []
         for index, candidate in enumerate(candidates):
@@ -326,12 +380,158 @@ class ManagedRuntimeWorkspaceJanitor:
                     budget=budget,
                 )
             )
+        decisions.extend(
+            self._classify_unreadable_records(
+                unreadable,
+                docker_state=docker_state,
+                budget=budget,
+            )
+        )
         return self._summarize(
             tuple(decisions),
             scanned_run_records=len(run_records),
             scanned_session_records=len(session_records),
+            unreadable_owner_records=len(unreadable),
             errors=tuple(errors),
         )
+
+    def _load_owner_records(
+        self,
+    ) -> tuple[
+        tuple[ManagedRunRecord, ...],
+        tuple[CodexManagedSessionRecord, ...],
+        tuple[UnreadableOwnerRecord, ...],
+    ]:
+        """Read every durable owner record, isolating unreadable ones.
+
+        A record that no longer satisfies its model (for example a payload
+        written before a field rename) must not hide every other candidate from
+        reclamation. Such a record is returned separately so the janitor can
+        fail closed for the paths it names and report it.
+        """
+
+        run_records: list[ManagedRunRecord] = []
+        session_records: list[CodexManagedSessionRecord] = []
+        unreadable: list[UnreadableOwnerRecord] = []
+        for kind, store in (
+            ("run_record", self._run_store),
+            ("session_record", self._session_store),
+        ):
+            for path, record, error in store.iter_all_entries():
+                if error is not None:
+                    unreadable.append(
+                        UnreadableOwnerRecord(
+                            path=path,
+                            kind=kind,  # type: ignore[arg-type]
+                            error=error,
+                            owned_paths=_raw_owned_paths(
+                                path, artifact_root=self._config.artifact_root
+                            ),
+                        )
+                    )
+                    continue
+                if kind == "run_record":
+                    run_records.append(record)  # type: ignore[arg-type]
+                else:
+                    session_records.append(record)  # type: ignore[arg-type]
+        return tuple(run_records), tuple(session_records), tuple(unreadable)
+
+    def _classify_unreadable_records(
+        self,
+        unreadable: Sequence[UnreadableOwnerRecord],
+        *,
+        docker_state: DockerReferenceState,
+        budget: _CleanupBudget,
+    ) -> list[ManagedRuntimeCleanupDecision]:
+        """Reclaim only unreadable owner records proven to own nothing."""
+
+        decisions: list[ManagedRuntimeCleanupDecision] = []
+        for entry in unreadable:
+            candidate = ManagedRuntimeCleanupCandidate(kind=entry.kind, path=entry.path)
+            if not entry.owned_paths:
+                decisions.append(
+                    self._decision(
+                        candidate,
+                        "skipped_ambiguous_owner",
+                        "unreadable owner record without inferable paths",
+                    )
+                )
+                continue
+            retention = self._config.record_retention
+            if retention is None:
+                decisions.append(
+                    self._decision(
+                        candidate,
+                        "protected_recent",
+                        "record retention disabled",
+                    )
+                )
+                continue
+            if any(path.exists() for path in entry.owned_paths):
+                decisions.append(
+                    self._decision(
+                        candidate,
+                        "protected_unreadable_owner",
+                        "unreadable owner record still names existing paths",
+                    )
+                )
+                continue
+            if docker_state.failed:
+                decisions.append(
+                    self._decision(
+                        candidate,
+                        "protected_active",
+                        docker_state.reason or "docker reference scan failed",
+                    )
+                )
+                continue
+            try:
+                newest = _path_mtime(entry.path)
+            except OSError as exc:
+                decisions.append(
+                    self._decision(candidate, "error", f"filesystem error: {exc}")
+                )
+                continue
+            if newest is None or self._now() - newest < retention:
+                decisions.append(
+                    self._decision(
+                        candidate,
+                        "protected_recent",
+                        "record retention window has not elapsed",
+                        newest,
+                    )
+                )
+                continue
+            if budget.deleted_paths >= self._config.max_delete_paths:
+                decisions.append(
+                    self._decision(
+                        candidate, "budget_exhausted", "delete path cap reached", newest
+                    )
+                )
+                continue
+            if self._config.dry_run:
+                decisions.append(
+                    self._decision(
+                        candidate, "eligible", "dry-run would delete orphan record", newest
+                    )
+                )
+                continue
+            try:
+                entry.path.unlink()
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                decisions.append(
+                    self._decision(candidate, "error", f"filesystem error: {exc}")
+                )
+                continue
+            budget.deleted_paths += 1
+            decisions.append(
+                self._decision(
+                    candidate, "deleted", "deleted orphan unreadable record", newest
+                )
+            )
+        return decisions
 
     def _empty_enabled_error(self, error: str) -> ManagedRuntimeCleanupResult:
         return ManagedRuntimeCleanupResult(
@@ -351,6 +551,8 @@ class ManagedRuntimeWorkspaceJanitor:
             skipped_recent=0,
             skipped_unsafe_path=0,
             skipped_ambiguous_owner=0,
+            skipped_unreadable_owner=0,
+            unreadable_owner_records=0,
             scanned_record_files=0,
             delete_budget_exhausted=0,
             errors=(error,),
@@ -360,7 +562,12 @@ class ManagedRuntimeWorkspaceJanitor:
         self,
         run_records: Sequence[ManagedRunRecord],
         session_records: Sequence[CodexManagedSessionRecord],
+        *,
+        unreadable: Sequence[UnreadableOwnerRecord] = (),
     ) -> tuple[ManagedRuntimeCleanupCandidate, ...]:
+        self._unreadable_protected_paths = self._protected_paths_for_unreadable(
+            unreadable
+        )
         groups: dict[Path, dict[str, list[object]]] = defaultdict(
             lambda: {"runs": [], "sessions": []}
         )
@@ -506,6 +713,21 @@ class ManagedRuntimeWorkspaceJanitor:
             ),
         ]
 
+    def _protected_paths_for_unreadable(
+        self,
+        unreadable: Sequence[UnreadableOwnerRecord],
+    ) -> frozenset[Path]:
+        """Return every path an unreadable owner record may still own."""
+
+        protected: set[Path] = set()
+        for entry in unreadable:
+            for owned in entry.owned_paths:
+                protected.add(owned)
+                root = self._ownership_root_for_path(str(owned))
+                if root is not None:
+                    protected.add(root)
+        return frozenset(protected)
+
     def _ownership_root_for_path(self, raw_path: str | None) -> Path | None:
         if not raw_path:
             return None
@@ -548,6 +770,12 @@ class ManagedRuntimeWorkspaceJanitor:
             if path.is_symlink():
                 return self._decision(
                     candidate, "skipped_unsafe_path", "candidate path is a symlink"
+                )
+            if self._unreadable_owner_protects(candidate):
+                return self._decision(
+                    candidate,
+                    "protected_unreadable_owner",
+                    "owner record is unreadable",
                 )
             if kind == "workspace" and candidate.ownership_root is None:
                 return self._decision(
@@ -609,16 +837,15 @@ class ManagedRuntimeWorkspaceJanitor:
                 return self._decision(
                     candidate, "protected_recent", "grace window has not elapsed", newest
                 )
-            self._emit_progress("size", candidate)
-            estimated_bytes = _path_size(path, progress_callback=self._progress_callback)
             if budget.deleted_paths >= self._config.max_delete_paths:
                 return self._decision(
                     candidate,
                     "budget_exhausted",
                     "delete path cap reached",
                     newest,
-                    estimated_bytes,
                 )
+            self._emit_progress("size", candidate)
+            estimated_bytes = _path_size(path, progress_callback=self._progress_callback)
             max_bytes = self._config.max_delete_bytes
             if max_bytes is not None and budget.deleted_bytes + estimated_bytes > max_bytes:
                 return self._decision(
@@ -647,6 +874,19 @@ class ManagedRuntimeWorkspaceJanitor:
             return self._decision(candidate, "deleted", "deleted", newest, estimated_bytes)
         except OSError as exc:
             return self._decision(candidate, "error", f"filesystem error: {exc}")
+
+    def _unreadable_owner_protects(
+        self, candidate: ManagedRuntimeCleanupCandidate
+    ) -> bool:
+        """Return whether an unreadable owner record may own this candidate."""
+
+        protected = self._unreadable_protected_paths
+        if not protected:
+            return False
+        return candidate.path in protected or (
+            candidate.ownership_root is not None
+            and candidate.ownership_root in protected
+        )
 
     def _decision(
         self,
@@ -704,7 +944,13 @@ class ManagedRuntimeWorkspaceJanitor:
         for record in candidate.run_records:
             ids.update(
                 value
-                for value in (record.run_id, record.session_id, record.container_id)
+                for value in (
+                    record.run_id,
+                    record.workflow_id,
+                    record.owner_run_id,
+                    record.session_id,
+                    record.container_id,
+                )
                 if value
             )
             if record.workspace_path:
@@ -725,7 +971,8 @@ class ManagedRuntimeWorkspaceJanitor:
         if ids.intersection(docker_state.active_container_refs):
             return True
         return any(
-            mount == path or mount.startswith(f"{path.rstrip('/')}/")
+            mount == path
+            or mount.startswith(f"{path.rstrip('/')}/")
             for mount in docker_state.active_mount_paths
             for path in paths
         )
@@ -792,22 +1039,40 @@ class ManagedRuntimeWorkspaceJanitor:
         )
 
     def _rescan_blocks_delete(self, candidate: ManagedRuntimeCleanupCandidate) -> bool:
+        protected_before = self._unreadable_protected_paths
         try:
+            run_records, session_records, unreadable = self._load_owner_records()
             current = self._build_candidates(
-                tuple(self._run_store.iter_all()),
-                tuple(self._session_store.iter_all()),
+                run_records,
+                session_records,
+                unreadable=unreadable,
             )
-        except (OSError, ValueError):
+        except OSError:
+            self._unreadable_protected_paths = protected_before
             return True
-        docker_state = self._docker_reference_state()
-        if docker_state.failed:
-            return True
-        for fresh in current:
-            if fresh.kind == candidate.kind and fresh.path == candidate.path:
-                return self._has_active_owner(fresh) or self._has_live_docker_reference(
-                    fresh, docker_state
-                )
-        return self._has_live_docker_reference(candidate, docker_state)
+        try:
+            if self._unreadable_owner_protects(candidate):
+                return True
+            docker_state = self._docker_reference_state()
+            if docker_state.failed:
+                return True
+            for fresh in current:
+                if fresh.kind == candidate.kind and fresh.path == candidate.path:
+                    if self._has_active_owner(fresh) or self._has_live_docker_reference(
+                        fresh, docker_state
+                    ):
+                        return True
+                    newest = self._newest_activity(fresh)
+                    retention = self._retention_for(fresh.kind)
+                    if newest is None or retention is None:
+                        return True
+                    age = self._now() - newest
+                    return age < retention or age < self._config.grace
+            return self._has_live_docker_reference(candidate, docker_state)
+        finally:
+            # The rescan's fresher view decides this delete only; the pass keeps
+            # reporting against the ownership view it classified with.
+            self._unreadable_protected_paths = protected_before
 
     def _delete_candidate(self, candidate: ManagedRuntimeCleanupCandidate) -> None:
         if candidate.kind == "run_record":
@@ -854,6 +1119,7 @@ class ManagedRuntimeWorkspaceJanitor:
         scanned_run_records: int,
         scanned_session_records: int,
         errors: tuple[str, ...],
+        unreadable_owner_records: int = 0,
     ) -> ManagedRuntimeCleanupResult:
         all_errors = list(errors)
         all_errors.extend(
@@ -901,7 +1167,12 @@ class ManagedRuntimeWorkspaceJanitor:
                 for d in decisions
                 if d.kind == "workspace"
                 and d.classification
-                in {"protected_active", "protected_recent", "protected_shared"}
+                in {
+                    "protected_active",
+                    "protected_recent",
+                    "protected_shared",
+                    "protected_unreadable_owner",
+                }
             ),
             eligible_roots=sum(1 for d in decisions if d.classification == "eligible"),
             deleted_roots=sum(
@@ -937,6 +1208,12 @@ class ManagedRuntimeWorkspaceJanitor:
             skipped_ambiguous_owner=sum(
                 1 for d in decisions if d.classification == "skipped_ambiguous_owner"
             ),
+            skipped_unreadable_owner=sum(
+                1
+                for d in decisions
+                if d.classification == "protected_unreadable_owner"
+            ),
+            unreadable_owner_records=unreadable_owner_records,
             delete_budget_exhausted=sum(
                 1 for d in decisions if d.classification == "budget_exhausted"
             ),
@@ -949,13 +1226,23 @@ class ManagedRuntimeWorkspaceJanitor:
 
 
 class _JanitorLock:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, stale_after: timedelta) -> None:
         self._path = path
+        self._stale_after = stale_after
         self._fd: int | None = None
 
     def __enter__(self) -> "_JanitorLock":
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._fd = os.open(self._path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        try:
+            self._fd = os.open(self._path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            age = datetime.now(tz=UTC) - datetime.fromtimestamp(
+                self._path.stat().st_mtime, tz=UTC
+            )
+            if age < self._stale_after:
+                raise
+            self._path.unlink()
+            self._fd = os.open(self._path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         os.write(self._fd, str(os.getpid()).encode("ascii"))
         return self
 
@@ -1048,6 +1335,63 @@ def _artifact_job_id(ref: str) -> str | None:
     if not cleaned:
         return None
     return cleaned.split("/", 1)[0]
+
+
+def _raw_owned_paths(record_path: Path, *, artifact_root: Path) -> tuple[Path, ...]:
+    """Return filesystem paths named by an unreadable owner record.
+
+    The record body is read as raw JSON: ownership must be honored even when the
+    payload no longer validates against the current model.
+    """
+
+    try:
+        data = json.loads(record_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ()
+    if not isinstance(data, Mapping):
+        return ()
+    paths: list[Path] = []
+    for key in _RAW_OWNED_PATH_KEYS:
+        raw = data.get(key)
+        if isinstance(raw, str) and raw.strip():
+            candidate = Path(raw.strip())
+            if candidate not in paths:
+                paths.append(candidate)
+    for key in _RAW_ARTIFACT_REF_KEYS:
+        raw = data.get(key)
+        if isinstance(raw, str):
+            job_id = _artifact_job_id(raw)
+            if job_id:
+                candidate = artifact_root / job_id
+                if candidate not in paths:
+                    paths.append(candidate)
+    return tuple(paths)
+
+
+def _unreadable_record_errors(
+    unreadable: Sequence[UnreadableOwnerRecord],
+) -> tuple[str, ...]:
+    """Return bounded, actionable text for unreadable owner records."""
+
+    if not unreadable:
+        return ()
+    reported = [
+        f"unreadable_owner_record: {entry.path.name}: {entry.error}"
+        for entry in unreadable[:_MAX_REPORTED_UNREADABLE_RECORDS]
+    ]
+    remaining = len(unreadable) - len(reported)
+    if remaining > 0:
+        reported.append(
+            f"unreadable_owner_record: {remaining} additional unreadable records"
+        )
+    return tuple(reported)
+
+
+def _path_mtime(path: Path) -> datetime | None:
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
+    except FileNotFoundError:
+        return None
 
 
 def _path_size(

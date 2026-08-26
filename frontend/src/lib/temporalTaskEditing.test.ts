@@ -2,6 +2,96 @@ import { describe, expect, it } from "vitest";
 
 import { buildTemporalSubmissionDraftFromExecution } from "./temporalTaskEditing";
 
+describe("MoonLadderStudios/MoonMind#3452 Omnigent draft round-trip", () => {
+  it("preserves canonical execution target and launch policy refs", () => {
+    const draft = buildTemporalSubmissionDraftFromExecution({
+      workflowId: "mm:omnigent-edit",
+      workflowType: "MoonMind.UserWorkflow",
+      targetRuntime: "omnigent",
+      inputParameters: {
+        targetRuntime: "omnigent",
+        profileId: "codex-oauth-team",
+        agentProfile: {
+          profileId: "team-codex",
+          version: 3,
+        },
+        omnigent: {
+          executionTargetRef: "omnigent-codex-default",
+          launchPolicyRef: "omnigent-codex-on-demand-v1",
+        },
+        workflow: {
+          instructions: "Implement the requested change.",
+          runtime: { mode: "omnigent", profileId: "codex-oauth-team" },
+        },
+      },
+    });
+
+    expect(draft).toMatchObject({
+      runtime: "omnigent",
+      providerProfile: "codex-oauth-team",
+      agentProfile: {
+        profileId: "team-codex",
+        version: 3,
+      },
+      omnigentExecutionTargetRef: "omnigent-codex-default",
+      omnigentLaunchPolicyRef: "omnigent-codex-on-demand-v1",
+    });
+  });
+
+  it("reconstructs immutable agent-profile identity from the trusted snapshot", () => {
+    const draft = buildTemporalSubmissionDraftFromExecution({
+      workflowId: "mm:omnigent-rerun",
+      workflowType: "MoonMind.UserWorkflow",
+      targetRuntime: "omnigent",
+      inputParameters: {
+        agentProfileSnapshot: {
+          profileId: "managed-bootstrap",
+          version: 4,
+        },
+        omnigent: {
+          executionTargetRef: "omnigent-codex-default",
+          launchPolicyRef: "on-demand-v4",
+        },
+        workflow: {
+          instructions: "Rerun the historical selection.",
+          runtime: { mode: "omnigent" },
+        },
+      },
+    });
+
+    expect(draft.agentProfile).toEqual({
+      profileId: "managed-bootstrap",
+      version: 4,
+    });
+  });
+
+  it.each([
+    ["edit", { draft: { runtime: "omnigent", providerProfile: "oauth-history", omnigentExecutionTargetRef: "target-history", omnigentLaunchPolicyRef: "policy-history", model: "gpt-history", effort: "high" } }],
+    ["edit-for-rerun", { workflow: { runtime: { mode: "omnigent", profileId: "oauth-history", model: "gpt-history", effort: "high" } }, omnigent: { executionTargetRef: "target-history", launchPolicyRef: "policy-history" } }],
+    ["rerun", { draft: { runtime: "omnigent", providerProfile: "oauth-history", omnigentExecutionTargetRef: "target-history", omnigentLaunchPolicyRef: "policy-history", model: "gpt-history", effort: "high" } }],
+    ["comparison", { workflow: { runtime: { mode: "omnigent", profileId: "oauth-history", model: "gpt-history", effort: "high" } }, omnigent: { executionTargetRef: "target-history", launchPolicyRef: "policy-history" } }],
+  ])("preserves the unavailable historical selection for %s reconstruction", (_mode, artifactInput) => {
+    const draft = buildTemporalSubmissionDraftFromExecution(
+      {
+        workflowId: "mm:omnigent-history",
+        workflowType: "MoonMind.UserWorkflow",
+        targetRuntime: "omnigent",
+        inputParameters: { workflow: { instructions: "Inspect historical selection." } },
+      },
+      artifactInput,
+    );
+
+    expect(draft).toMatchObject({
+      runtime: "omnigent",
+      providerProfile: "oauth-history",
+      omnigentExecutionTargetRef: "target-history",
+      omnigentLaunchPolicyRef: "policy-history",
+      model: "gpt-history",
+      effort: "high",
+    });
+  });
+});
+
 describe("buildTemporalSubmissionDraftFromExecution runtime command metadata", () => {
   const objectiveRuntimeCommand = {
     kind: "slash_command",
@@ -232,6 +322,7 @@ describe("buildTemporalSubmissionDraftFromExecution runtime command metadata", (
               id: "tpl:jira-implement:1.0.0:01",
               title: "Load Jira preset brief",
               type: "tool",
+              repositoryOperation: "read",
               instructions: "Load MM-901.",
               tool: { id: "jira.load_preset_brief", inputs: { issueKey: "MM-901" } },
             },
@@ -239,7 +330,12 @@ describe("buildTemporalSubmissionDraftFromExecution runtime command metadata", (
               id: "tpl:jira-implement:1.0.0:02",
               title: "Assess existing implementation state",
               type: "skill",
+              repositoryOperation: "write",
               instructions: "Assess MM-901.",
+              annotations: {
+                issueImplementRole: "moonspec-remediation-loop",
+                remediationLoop: { hardMaxAttempts: 6 },
+              },
               skill: { id: "auto", args: {} },
             },
           ],
@@ -254,6 +350,14 @@ describe("buildTemporalSubmissionDraftFromExecution runtime command metadata", (
       "Load Jira preset brief",
       "Assess existing implementation state",
     ]);
+    expect(draft.steps.map((step) => step.repositoryOperation)).toEqual([
+      "read",
+      "write",
+    ]);
+    expect(draft.steps[1]?.annotations).toEqual({
+      issueImplementRole: "moonspec-remediation-loop",
+      remediationLoop: { hardMaxAttempts: 6 },
+    });
     expect(draft.appliedTemplates).toEqual([
       {
         slug: "jira-implement",

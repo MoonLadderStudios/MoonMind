@@ -11,11 +11,13 @@ import asyncio
 import hashlib
 import json
 import os
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pydantic import BaseModel
@@ -54,6 +56,11 @@ from moonmind.workflows.temporal import activity_runtime as activity_runtime_mod
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalActivityRuntimeError,
     TemporalAgentRuntimeActivities,
+    TemporalIntegrationActivities,
+)
+from moonmind.workflows.temporal.runtime.workspace_locators import (
+    SandboxWorkspaceRecord,
+    SandboxWorkspaceRecordStore,
 )
 from moonmind.workflows.temporal.runtime.managed_session_controller import (
     ManagedSessionReapResult,
@@ -1518,6 +1525,83 @@ async def test_publish_artifacts_stamps_step_metadata_when_context_exists(
     assert captured_metadata[0]["scope"] == "step"
     assert captured_metadata[1]["step_id"] == "delegate-agent"
 
+
+async def test_failed_agent_result_does_not_promote_stale_moonspec_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "failed-verifier" / "repo"
+    verify_path = workspace / "artifacts" / "github-issue-implement-verify.json"
+    verify_path.parent.mkdir(parents=True)
+    verify_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "verdict": "ADDITIONAL_WORK_NEEDED",
+                "confidence": "HIGH",
+                "recommendedNextAction": "reattempt_current_step",
+                "recoverableInCurrentRuntime": True,
+                "remainingWork": ["stale gap"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    store = _make_store(tmp_path)
+    _save_record(
+        store,
+        run_id="failed-verifier",
+        status="failed",
+        failure_class="execution_error",
+        workspace_path=str(workspace),
+    )
+    written_payloads: list[object] = []
+
+    async def fake_write_json_artifact(
+        _service: object,
+        *,
+        principal: str,
+        payload: object,
+        execution_ref: object = None,
+        metadata_json: dict[str, object] | None = None,
+    ) -> SimpleNamespace:
+        del principal, execution_ref, metadata_json
+        written_payloads.append(payload)
+        return SimpleNamespace(artifact_id=f"art_{len(written_payloads)}")
+
+    monkeypatch.setattr(
+        activity_runtime_module,
+        "_write_json_artifact",
+        fake_write_json_artifact,
+    )
+    activities = TemporalAgentRuntimeActivities(
+        artifact_service=object(),
+        run_store=store,
+    )
+
+    result = await activities.agent_runtime_publish_artifacts(
+        AgentRunResult(
+            summary="Activity task failed",
+            failureClass="execution_error",
+            metadata={
+                "agentRunId": "failed-verifier",
+                "verify_artifact_path": (
+                    "artifacts/github-issue-implement-verify.json"
+                ),
+                "moonmind": {"selectedSkill": "moonspec-verify"},
+            },
+        )
+    )
+
+    assert isinstance(result, AgentRunResult)
+    assert "moonSpecVerify" not in result.metadata
+    assert "moonSpecVerifyArtifactRef" not in result.metadata
+    assert "gateResultRef" not in result.metadata
+    assert len(written_payloads) == 2
+    assert not any(
+        isinstance(payload, dict) and payload.get("verdict")
+        for payload in written_payloads
+    )
+
 async def test_fetch_result_exposes_task_run_and_runtime_artifact_metadata(
     tmp_path: Path,
 ) -> None:
@@ -1605,34 +1689,6 @@ async def test_launch_session_delegates_to_remote_session_controller() -> None:
     assert isinstance(result, CodexManagedSessionHandle)
     assert result.session_state.container_id == "ctr-1"
     controller.launch_session.assert_awaited_once()
-
-async def test_mm866_ensure_docker_sidecar_delegates_to_remote_controller() -> None:
-    controller = AsyncMock()
-    controller.ensure_docker_sidecar = AsyncMock(
-        return_value=ManagedSessionEnsureDockerSidecarResponse(
-            state="ready",
-            dockerHost="unix:///var/run/moonmind-docker/docker.sock",
-            mode="sidecar-dind",
-            composeAvailable=True,
-            daemon={"ready": True, "version": "27.0.0"},
-        )
-    )
-    activities = TemporalAgentRuntimeActivities(session_controller=controller)
-
-    result = await activities.agent_runtime_ensure_docker_sidecar(
-        {
-            "sessionId": "sess-1",
-            "sessionEpoch": 1,
-            "containerId": "ctr-1",
-            "threadId": "thread-1",
-            "reason": "repo uses docker compose for tests",
-            "composeRequired": True,
-        }
-    )
-
-    assert result.state == "ready"
-    assert result.compose_available is True
-    controller.ensure_docker_sidecar.assert_awaited_once()
 
 async def test_launch_session_heartbeats_while_waiting_for_remote_session_controller(
     monkeypatch: pytest.MonkeyPatch,
@@ -1818,7 +1874,6 @@ async def test_launch_session_injects_unreal_image_refs_from_activity_environmen
 ) -> None:
     pinned = "ghcr.io/moonladderstudios/tactics-ue-base@sha256:abc123"
     monkeypatch.setenv("MOONMIND_UNREAL_ENGINE_IMAGE", pinned)
-    monkeypatch.setenv("MOONMIND_DOCKER_PREFLIGHT_IMAGE_REF", pinned)
     controller = AsyncMock()
     controller.launch_session = AsyncMock(
         return_value=CodexManagedSessionHandle(
@@ -1850,7 +1905,33 @@ async def test_launch_session_injects_unreal_image_refs_from_activity_environmen
 
     launched_request = controller.launch_session.await_args.args[0]
     assert launched_request.environment["MOONMIND_UNREAL_ENGINE_IMAGE"] == pinned
-    assert launched_request.environment["MOONMIND_DOCKER_PREFLIGHT_IMAGE_REF"] == pinned
+
+
+async def test_pre_cutover_ensure_sidecar_activity_remains_executable() -> None:
+    controller = AsyncMock()
+    controller.ensure_docker_sidecar = AsyncMock(
+        return_value=ManagedSessionEnsureDockerSidecarResponse(
+            state="ready",
+            dockerHost="unix:///var/run/moonmind-docker/docker.sock",
+            composeAvailable=True,
+            daemon={"ready": True, "version": "27.0.0"},
+        )
+    )
+    activities = TemporalAgentRuntimeActivities(session_controller=controller)
+
+    result = await activities.agent_runtime_ensure_docker_sidecar(
+        {
+            "sessionId": "sess-old",
+            "sessionEpoch": 1,
+            "containerId": "container-old",
+            "composeRequired": True,
+        }
+    )
+
+    assert result.state == "ready"
+    assert result.compose_available is True
+    validated = controller.ensure_docker_sidecar.await_args.args[0]
+    assert validated.session_id == "sess-old"
 
 async def test_launch_session_uses_github_descriptor_for_managed_secret_store(
     monkeypatch: pytest.MonkeyPatch,
@@ -2448,11 +2529,22 @@ async def test_send_turn_delegates_to_remote_session_controller() -> None:
             "containerId": "ctr-1",
             "threadId": "thread-1",
             "instructions": "Inspect the workspace",
+            "environment": {
+                "MOONMIND_ACTIVE_SKILLS_DIR": (
+                    "/work/runtime/skills_active/snapshot-retry"
+                ),
+                "MOONMIND_STEP_EXECUTION_ID": "workflow:step:execution:2",
+            },
         }
     )
 
     assert isinstance(result, CodexManagedSessionTurnResponse)
     assert result.turn_id == "turn-1"
+    validated_request = controller.send_turn.await_args.args[0]
+    assert validated_request.environment == {
+        "MOONMIND_ACTIVE_SKILLS_DIR": "/work/runtime/skills_active/snapshot-retry",
+        "MOONMIND_STEP_EXECUTION_ID": "workflow:step:execution:2",
+    }
 
 async def test_send_turn_transient_failure_preserves_diagnostic_metadata() -> None:
     failure_metadata = {
@@ -3574,6 +3666,22 @@ async def test_agent_runtime_build_launch_context_temporal_boundary(
                         "credential_source": "secret_ref",
                         "tags": ["proxy-first"],
                         "provider_id": "anthropic",
+                        "owner_user_id": "user-boundary",
+                        "runtime_profile": {
+                            "workloadMode": "no-docker",
+                            "workspace": {
+                                "mountPath": "/work/agent_jobs",
+                                "lifecycle": "session",
+                            },
+                            "agent": {
+                                "workspace": {"mountPath": "/work/agent_jobs"},
+                                "dockerClient": {
+                                    "enabled": False,
+                                    "composePlugin": False,
+                                    "daemonInAgent": False,
+                                },
+                            },
+                        },
                         "secret_refs": {"anthropic_api_key": "db://123"},
                     },
                     "runtime_for_profile": "claude_code",
@@ -3587,6 +3695,8 @@ async def test_agent_runtime_build_launch_context_temporal_boundary(
             assert result["profile_id"] == "proxy-prof"
             assert "MOONMIND_PROXY_TOKEN" in result["delta_env_overrides"]
             assert "GITHUB_TOKEN" in result["passthrough_env_keys"]
+            assert result["workload_mode"] == "no-docker"
+            assert result["owner_user_id"] == "user-boundary"
 
 @pytest.mark.asyncio
 async def test_agent_runtime_build_launch_context_prefers_proxy_for_supported_secret_ref(
@@ -3899,6 +4009,14 @@ async def test_agent_runtime_send_turn_temporal_boundary() -> None:
                     "containerId": "ctr-boundary",
                     "threadId": "thread-1",
                     "instructions": "Inspect the repo state",
+                    "environment": {
+                        "MOONMIND_ACTIVE_SKILLS_DIR": (
+                            "/work/runtime/skills_active/snapshot-retry"
+                        ),
+                        "MOONMIND_STEP_EXECUTION_ID": (
+                            "workflow:step:execution:2"
+                        ),
+                    },
                 },
                 id="boundary-test-send-turn",
                 task_queue="boundary-test-queue-send-turn",
@@ -3906,6 +4024,13 @@ async def test_agent_runtime_send_turn_temporal_boundary() -> None:
 
             assert isinstance(result, CodexManagedSessionTurnResponse)
             assert result.turn_id == "turn-1"
+            validated_request = controller.send_turn.await_args.args[0]
+            assert validated_request.environment == {
+                "MOONMIND_ACTIVE_SKILLS_DIR": (
+                    "/work/runtime/skills_active/snapshot-retry"
+                ),
+                "MOONMIND_STEP_EXECUTION_ID": "workflow:step:execution:2",
+            }
 
 @pytest.mark.asyncio
 async def test_agent_runtime_prepare_turn_instructions_injects_context(
@@ -3959,6 +4084,71 @@ async def test_agent_runtime_prepare_turn_instructions_injects_context(
     assert "Managed Codex CLI note:" in result
     assert session_controller.repaired_workspace_paths == [str(tmp_path)]
 
+
+@pytest.mark.asyncio
+async def test_agent_runtime_prepare_turn_instructions_materializes_verifier_evidence_before_launch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    managed_root = tmp_path / "agent_jobs"
+    workspace = managed_root / "run-remediation" / "repo"
+    workspace.mkdir(parents=True)
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(managed_root))
+    gate_payload = b'{"verdict":"ADDITIONAL_WORK_NEEDED","gap":"production activity"}\n'
+    remaining_payload = b'{"remainingWork":["exercise the real activity boundary"]}\n'
+    activities = TemporalAgentRuntimeActivities(
+        artifact_service=_StaticArtifactService(
+            {
+                "art-gate": gate_payload,
+                "art-remaining": remaining_payload,
+            }
+        )
+    )
+    request = {
+        "agentKind": "managed",
+        "agentId": "codex",
+        "correlationId": "corr-remediation",
+        "idempotencyKey": "idem-remediation",
+        "parameters": {
+            "instructions": "Implement the verifier gaps.",
+            "selectedSkill": "remediate-issue",
+            "gateResultRef": "artifact://art-gate",
+            "remainingWorkRef": "artifact://art-remaining",
+        },
+    }
+
+    metadata = await activities.agent_runtime_prepare_turn_instructions(
+        {
+            "request": request,
+            "workspacePath": str(workspace),
+            "metadataOnly": True,
+            "skipSkillMaterialization": True,
+        }
+    )
+
+    assert metadata["durableRetrievalMetadata"] == {}
+    evidence_root = (
+        managed_root / "run-remediation" / "artifacts" / "remediation-inputs"
+    )
+    gate_path = next(evidence_root.glob("gate-result-*.json"))
+    remaining_path = next(evidence_root.glob("remaining-work-*.json"))
+    assert gate_path.read_bytes() == gate_payload
+    assert remaining_path.read_bytes() == remaining_payload
+
+    prepared = await activities.agent_runtime_prepare_turn_instructions(
+        {
+            "request": request,
+            "workspacePath": str(workspace),
+            "skipSkillMaterialization": True,
+        }
+    )
+
+    assert "MoonMind materialized authoritative verifier evidence:" in prepared
+    assert f"gateResultPath: `{gate_path}`" in prepared
+    assert f"remainingWorkPath: `{remaining_path}`" in prepared
+    assert "exercise the real activity boundary" not in prepared
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "skill_parameters",
@@ -4004,6 +4194,52 @@ async def test_agent_runtime_prepare_turn_instructions_adds_jira_tool_hint(
     assert "jira.create_issue" in result
     assert "Managed Codex CLI note:" in result
 
+
+@pytest.mark.asyncio
+async def test_agent_runtime_prepare_turn_instructions_adds_batch_jira_search_hint() -> None:
+    activities = TemporalAgentRuntimeActivities()
+
+    result = await activities.agent_runtime_prepare_turn_instructions(
+        {
+            "request": {
+                "agentKind": "managed",
+                "agentId": "codex",
+                "correlationId": "corr-batch",
+                "idempotencyKey": "idem-batch",
+                "parameters": {
+                    "instructions": (
+                        "Resolve project THOR issues in Selected for Development "
+                        "and queue child workflows."
+                    ),
+                    "publishMode": "none",
+                    "metadata": {
+                        "moonmind": {
+                            "selectedSkill": "batch-workflows",
+                        },
+                    },
+                },
+            },
+        }
+    )
+
+    assert "MoonMind trusted Jira tools:" in result
+    assert "GET $MOONMIND_URL/mcp/tools" in result
+    assert "POST $MOONMIND_URL/mcp/tools/call" in result
+    assert "jira.search_issues" in result
+    example_line = next(
+        line
+        for line in result.splitlines()
+        if line.startswith("- Example batch search call: ")
+    )
+    example_payload = json.loads(example_line.split("`", 2)[1])
+    assert example_payload["arguments"]["jql"] == (
+        'project = <PROJECT_KEY> AND status = "<STATUS>"'
+    )
+    assert "do not request an external Jira/Atlassian connector" in result
+    assert "do not wait for connector discovery" in result
+    assert "Managed Codex CLI note:" in result
+
+
 async def test_agent_runtime_prepare_turn_instructions_adds_pr_resolver_blocker_hint() -> None:
     activities = TemporalAgentRuntimeActivities()
 
@@ -4047,6 +4283,43 @@ async def test_agent_runtime_prepare_turn_instructions_adds_pr_resolver_blocker_
     assert "mergeStateStatus=DIRTY" in result
     assert "Initial blocker hint: merge_conflicts, ci_unavailable" in result
     assert "Managed Codex CLI note:" in result
+
+
+@pytest.mark.asyncio
+async def test_pr_resolver_resolve_selector_activity_preserves_canonical_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.workflows.adapters.github_service import PullRequestSelectorResult
+
+    async def resolve_selector(self, *, repo: str, selector: str, github_token=None):
+        assert repo == "MoonLadderStudios/MoonMind"
+        assert selector == "feature/mm-1200"
+        return PullRequestSelectorResult(
+            resolved=True,
+            prNumber=3192,
+            prUrl="https://github.com/MoonLadderStudios/MoonMind/pull/3192",
+            selectorType="branch",
+            reasonCode="resolved",
+            summary="resolved",
+        )
+
+    monkeypatch.setattr(
+        "moonmind.workflows.adapters.github_service.GitHubService.resolve_pull_request_selector",
+        resolve_selector,
+    )
+    activities = TemporalIntegrationActivities()
+
+    result = await activities.pr_resolver_resolve_selector(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "selector": "feature/mm-1200",
+        }
+    )
+
+    assert result["resolved"] is True
+    assert result["prNumber"] == 3192
+    assert result["prUrl"].endswith("/pull/3192")
+
 
 @pytest.mark.asyncio
 async def test_agent_runtime_prepare_turn_instructions_adds_jira_pr_verify_tool_hint() -> None:
@@ -5276,9 +5549,11 @@ async def test_agent_runtime_prepare_turn_instructions_includes_context_artifact
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("metadata_only", [False, True])
 async def test_agent_runtime_prepare_turn_instructions_returns_durable_retrieval_metadata_when_requested(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    metadata_only: bool,
 ) -> None:
     async def _fake_to_thread(func, *args, **kwargs):
         return func(*args, **kwargs)
@@ -5318,11 +5593,15 @@ async def test_agent_runtime_prepare_turn_instructions_returns_durable_retrieval
             },
             "workspacePath": str(tmp_path),
             "includePreparedRequestMetadata": True,
+            "metadataOnly": metadata_only,
         }
     )
 
     assert isinstance(result, dict)
-    assert "BEGIN_RETRIEVED_CONTEXT" in result["instructions"]
+    if metadata_only:
+        assert "instructions" not in result
+    else:
+        assert "BEGIN_RETRIEVED_CONTEXT" in result["instructions"]
     assert result["durableRetrievalMetadata"]["latestContextPackRef"].startswith(
         "artifacts/context/"
     )
@@ -5457,6 +5736,99 @@ async def test_agent_runtime_reconcile_managed_sessions_returns_bounded_summary(
     }
 
 
+async def test_agent_runtime_reconcile_runs_omnigent_stuck_state_sweep() -> None:
+    """The durable operational activity owns the automated #3708 sweep."""
+
+    class _Controller:
+        async def reconcile(self) -> list[dict[str, Any]]:
+            return []
+
+        async def reap_orphan_session_containers(self) -> ManagedSessionReapResult:
+            return ManagedSessionReapResult()
+
+    class _SweepResult:
+        def to_dict(self) -> dict[str, int]:
+            return {
+                "scanned": 2,
+                "findingsRecorded": 1,
+                "reconcileRequests": 1,
+                "deliveryUnknown": 0,
+                "quarantined": 0,
+                "observationOnly": 0,
+                "conflicts": 0,
+                "failures": 0,
+            }
+
+    class _StuckStateService:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def sweep(self) -> _SweepResult:
+            self.calls += 1
+            return _SweepResult()
+
+    stuck_state = _StuckStateService()
+    activities = TemporalAgentRuntimeActivities(
+        session_controller=_Controller(),
+        omnigent_stuck_state_service=stuck_state,
+    )
+
+    result = await activities.agent_runtime_reconcile_managed_sessions({})
+
+    assert stuck_state.calls == 1
+    assert result["omnigentStuckState"] == _SweepResult().to_dict()
+
+
+async def test_targeted_omnigent_reconcile_validates_authority_before_observation() -> None:
+    events: list[str] = []
+
+    class _Controller:
+        async def reconcile(self) -> list[dict[str, Any]]:
+            assert events == ["validate"]
+            events.append("reconcile")
+            return []
+
+        async def reap_orphan_session_containers(self) -> ManagedSessionReapResult:
+            events.append("reap")
+            return ManagedSessionReapResult()
+
+    class _StuckStateService:
+        async def validate_reconcile_request(self, **payload: object):
+            assert payload == {
+                "session_id": "canonical-session",
+                "workflow_id": "wf-1",
+                "request_id": "ocm-1",
+                "reason_code": "provider_terminal_moonmind_nonterminal",
+                "expected_revision": 7,
+                "expected_fencing_generation": 3,
+            }
+            events.append("validate")
+            return {"accepted": True}
+
+        async def sweep(self):
+            raise AssertionError("targeted reconcile must not launch another sweep")
+
+    activities = TemporalAgentRuntimeActivities(
+        session_controller=_Controller(),
+        omnigent_stuck_state_service=_StuckStateService(),
+    )
+    result = await activities.agent_runtime_reconcile_managed_sessions(
+        {
+            "omnigentWorkflowId": "wf-1",
+            "omnigentReconcileRequest": {
+                "sessionId": "canonical-session",
+                "requestId": "ocm-1",
+                "reasonCode": "provider_terminal_moonmind_nonterminal",
+                "expectedRevision": 7,
+                "expectedFencingGeneration": 3,
+            },
+        }
+    )
+
+    assert events == ["validate", "reconcile", "reap"]
+    assert result["omnigentReconcileRequest"] == {"accepted": True}
+
+
 async def test_agent_runtime_reconcile_orphan_reap_failure_is_best_effort() -> None:
     class _Controller:
         async def reconcile(self) -> list[dict[str, Any]]:
@@ -5477,6 +5849,122 @@ async def test_agent_runtime_reconcile_orphan_reap_failure_is_best_effort() -> N
     assert result["orphanReapForcedStale"] == 0
     assert result["orphanVolumesScanned"] == 0
     assert result["orphanVolumesReaped"] == 0
+
+async def test_cleanup_filesystem_pass_does_not_block_shared_activity_loop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A long janitor pass must not starve status Activities on this worker."""
+
+    from moonmind.workflows.temporal.runtime import cleanup as cleanup_module
+
+    cleanup_started = Event()
+    event_loop_advanced = Event()
+
+    class _CleanupResult:
+        def __init__(self, responsive: bool) -> None:
+            self._responsive = responsive
+
+        def to_dict(self) -> dict[str, object]:
+            return {"eventLoopRemainedResponsive": self._responsive, "errors": []}
+
+    def _blocking_cleanup(**_kwargs: object) -> _CleanupResult:
+        cleanup_started.set()
+        return _CleanupResult(event_loop_advanced.wait(timeout=1.0))
+
+    async def _advance_event_loop() -> None:
+        while not cleanup_started.is_set():
+            await asyncio.sleep(0)
+        event_loop_advanced.set()
+
+    monkeypatch.setattr(
+        cleanup_module,
+        "cleanup_managed_runtime_files",
+        _blocking_cleanup,
+    )
+    run_store = ManagedRunStore(tmp_path / "managed_runs")
+    activities = TemporalAgentRuntimeActivities(run_store=run_store)
+    loop_task = asyncio.create_task(_advance_event_loop())
+
+    result = await activities.agent_runtime_cleanup_managed_runtime_files(
+        {
+            "config": {
+                "dryRun": True,
+                "runtimeStoreRoot": str(tmp_path),
+                "artifactRoot": str(tmp_path / "artifacts"),
+                "lockPath": str(tmp_path / ".janitor.lock"),
+            }
+        }
+    )
+    await asyncio.wait_for(loop_task, timeout=1.0)
+
+    assert result["eventLoopRemainedResponsive"] is True
+
+
+async def test_cleanup_cancellation_waits_for_janitor_thread_to_stop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cancellation must retain Activity ownership until the janitor exits."""
+
+    from moonmind.workflows.temporal.runtime import cleanup as cleanup_module
+
+    cleanup_started = Event()
+    cancellation_seen = Event()
+    release_cleanup = Event()
+    cleanup_finished = Event()
+
+    class _CleanupResult:
+        def to_dict(self) -> dict[str, object]:
+            return {"errors": []}
+
+    def _blocking_cleanup(*, progress_callback: Any, **_kwargs: object) -> _CleanupResult:
+        cleanup_started.set()
+        try:
+            while True:
+                try:
+                    progress_callback({"phase": "size_walk"})
+                except asyncio.CancelledError:
+                    cancellation_seen.set()
+                    release_cleanup.wait(timeout=1.0)
+                    raise
+                if release_cleanup.wait(timeout=0.01):
+                    return _CleanupResult()
+        finally:
+            cleanup_finished.set()
+
+    monkeypatch.setattr(
+        cleanup_module,
+        "cleanup_managed_runtime_files",
+        _blocking_cleanup,
+    )
+    activities = TemporalAgentRuntimeActivities(
+        run_store=ManagedRunStore(tmp_path / "managed_runs")
+    )
+    cleanup_task = asyncio.create_task(
+        activities.agent_runtime_cleanup_managed_runtime_files(
+            {
+                "config": {
+                    "dryRun": True,
+                    "runtimeStoreRoot": str(tmp_path),
+                    "artifactRoot": str(tmp_path / "artifacts"),
+                    "lockPath": str(tmp_path / ".janitor.lock"),
+                }
+            }
+        )
+    )
+
+    assert await asyncio.to_thread(cleanup_started.wait, 1.0)
+    cleanup_task.cancel()
+    assert await asyncio.to_thread(cancellation_seen.wait, 1.0)
+    await asyncio.sleep(0.05)
+    assert cleanup_task.done() is False
+
+    release_cleanup.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(cleanup_task, timeout=1.0)
+    assert cleanup_finished.is_set()
+
 
 async def test_agent_runtime_cleanup_managed_runtime_files_activity_boundary(
     tmp_path: Path,
@@ -5528,8 +6016,8 @@ async def test_agent_runtime_cleanup_managed_runtime_files_activity_boundary(
     assert result["disabled"] is False
     assert result["dryRun"] is True
     assert result["scannedRunRecords"] == 1
-    assert result["decisions"][0]["classification"] == "eligible"
-    assert result["decisions"][0]["reason"] == "dry-run would delete"
+    assert result["candidateSamples"][0]["classification"] == "eligible"
+    assert result["candidateSamples"][0]["reason"] == "dry-run would delete"
 
 
 async def test_agent_runtime_cleanup_managed_runtime_files_uses_docker_references(
@@ -5585,8 +6073,8 @@ async def test_agent_runtime_cleanup_managed_runtime_files_uses_docker_reference
         }
     )
 
-    assert result["decisions"][0]["classification"] == "protected_active"
-    assert result["decisions"][0]["reason"] == "live Docker reference"
+    assert result["candidateSamples"][0]["classification"] == "protected_active"
+    assert result["candidateSamples"][0]["reason"] == "live Docker reference"
     assert run_root.exists()
 
 
@@ -5633,8 +6121,11 @@ async def test_agent_runtime_cleanup_managed_runtime_files_fails_closed_without_
         }
     )
 
-    assert result["decisions"][0]["classification"] == "protected_active"
-    assert result["decisions"][0]["reason"] == "docker reference scan unavailable"
+    assert result["candidateSamples"][0]["classification"] == "protected_active"
+    assert (
+        result["candidateSamples"][0]["reason"]
+        == "docker reference scan unavailable"
+    )
     assert result["errors"] == ["docker reference scan unavailable"]
     assert run_root.exists()
 
@@ -5694,6 +6185,7 @@ async def test_agent_runtime_cleanup_managed_runtime_files_returns_observability
 
     run_store = ManagedRunStore(tmp_path / "managed_runs")
     cleanup_calls: list[dict[str, object]] = []
+    heartbeat_payloads: list[dict[str, object]] = []
 
     class _CleanupResult:
         def to_dict(self) -> dict[str, Any]:
@@ -5727,15 +6219,30 @@ async def test_agent_runtime_cleanup_managed_runtime_files_returns_observability
                 "session_store_root": session_store.store_root,
                 "runtime_store_root": config.runtime_store_root,
                 "docker_reference_provider": docker_reference_provider,
-                "progress_callback": callable(progress_callback),
+                "progress_callback": progress_callback,
             }
         )
         return _CleanupResult()
+
+    async def _fake_await_with_activity_heartbeats(
+        awaitable: Any,
+        *,
+        heartbeat_payload: Mapping[str, object],
+        interval_seconds: float | None = None,
+    ) -> Any:
+        del interval_seconds
+        heartbeat_payloads.append(dict(heartbeat_payload))
+        return await awaitable
 
     monkeypatch.setattr(
         cleanup_module,
         "cleanup_managed_runtime_files",
         _fake_cleanup_managed_runtime_files,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module,
+        "_await_with_activity_heartbeats",
+        _fake_await_with_activity_heartbeats,
     )
 
     activities = TemporalAgentRuntimeActivities(
@@ -5754,18 +6261,79 @@ async def test_agent_runtime_cleanup_managed_runtime_files_returns_observability
         }
     )
 
-    assert cleanup_calls == [
+    assert len(cleanup_calls) == 1
+    cleanup_call = cleanup_calls[0]
+    assert cleanup_call["run_store"] is run_store
+    assert cleanup_call["session_store_root"] == tmp_path / "managed_sessions"
+    assert cleanup_call["runtime_store_root"] == tmp_path
+    assert cleanup_call["docker_reference_provider"] is None
+    assert callable(cleanup_call["progress_callback"])
+    assert heartbeat_payloads == [
         {
-            "run_store": run_store,
-            "session_store_root": tmp_path / "managed_sessions",
-            "runtime_store_root": tmp_path,
-            "docker_reference_provider": None,
-            "progress_callback": True,
+            "activityType": "agent_runtime.cleanup_managed_runtime_files",
+            "phase": "filesystem_cleanup",
         }
     ]
     assert result["eligibleRoots"] == 1
     assert result["candidateSamples"][0]["safe_path"] == "store:workspaces/mm-workflow"
     assert result["metrics"] == {"resource.workspace_root.eligible": 1}
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_reclaims_docker_storage_through_controller_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_configs: list[Any] = []
+
+    class _Result:
+        def to_dict(self) -> dict[str, Any]:
+            return {
+                "enabled": True,
+                "pressureDetected": True,
+                "reclaimedBytes": 42,
+                "errors": [],
+            }
+
+    class _Controller:
+        async def reclaim_docker_storage_pressure(self, *, config: Any) -> _Result:
+            observed_configs.append(config)
+            return _Result()
+
+    heartbeat_payloads: list[dict[str, Any]] = []
+
+    async def _fake_await_with_activity_heartbeats(
+        awaitable: Any,
+        *,
+        heartbeat_payload: dict[str, Any],
+        interval_seconds: float | None = None,
+    ) -> Any:
+        del interval_seconds
+        heartbeat_payloads.append(dict(heartbeat_payload))
+        return await awaitable
+
+    monkeypatch.setattr(
+        activity_runtime_module,
+        "_await_with_activity_heartbeats",
+        _fake_await_with_activity_heartbeats,
+    )
+    activities = TemporalAgentRuntimeActivities(session_controller=_Controller())
+
+    result = await activities.agent_runtime_reclaim_docker_storage({})
+
+    assert len(observed_configs) == 1
+    assert heartbeat_payloads == [
+        {"activityType": "agent_runtime.reclaim_docker_storage"}
+    ]
+    assert result["reclaimedBytes"] == 42
+
+    with pytest.raises(
+        TemporalActivityRuntimeError,
+        match="does not accept overrides",
+    ):
+        await activities.agent_runtime_reclaim_docker_storage(
+            {"criticalWatermarkPercent": 1}
+        )
+
 
 async def test_agent_runtime_session_request_logs_bounded_telemetry_context(
     monkeypatch: pytest.MonkeyPatch,
@@ -6055,3 +6623,502 @@ async def test_agent_runtime_prepare_turn_instructions_reports_disabled_retrieva
     assert "MoonMind retrieval capability:" in result
     assert "currently unavailable" in result
     assert "rag_disabled" in result
+
+
+@pytest.mark.asyncio
+async def test_terminal_evidence_activity_fails_completed_prose_without_artifact(
+    tmp_path: Path,
+) -> None:
+    activities = TemporalAgentRuntimeActivities()
+    result = await activities.agent_runtime_evaluate_terminal_evidence(
+        {
+            "workspacePath": str(tmp_path),
+            "terminalContract": {
+                "contractId": "batch_workflows_fanout.v1",
+                "relativePath": "artifacts/batch-workflows-result.json",
+                "expectedSchemaVersion": "moonmind.batch-workflows-result.v1",
+                "executionRef": "step-1",
+            },
+            "result": {"summary": "Everything completed successfully."},
+        }
+    )
+    assert result.failure_class == "execution_error"
+    assert result.metadata["terminalContractAuthority"] == "MoonMind.AgentRun"
+    assert result.metadata["failureCode"] == "INCOMPLETE_TERMINAL_CONTRACT"
+
+
+@pytest.mark.asyncio
+async def test_terminal_evidence_activity_resolves_authoritative_sandbox_locator(
+    tmp_path: Path,
+) -> None:
+    workflow_id = "mm:e09594b0-e1a0-4205-a54e-89e5b8734e6c"
+    step_execution_id = (
+        f"{workflow_id}:019fd504-5cb2-7927-9e03-f3c34efce2c5:"
+        "node-1:execution:2"
+    )
+    workspace_id = hashlib.sha256(
+        f"{workflow_id}:{step_execution_id}".encode("utf-8")
+    ).hexdigest()[:24]
+    workspace = tmp_path / "temporal_sandbox" / workspace_id / "repo"
+    result_path = workspace / "var" / "pr_resolver" / "result.json"
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "pr-resolver-result.v1",
+                "executionRef": step_execution_id,
+                "mergeAutomationDisposition": "already_merged",
+                "status": "completed",
+            }
+        ),
+        encoding="utf-8",
+    )
+    publish_path = workspace / "artifacts" / "publish_result.json"
+    publish_path.parent.mkdir(parents=True)
+    publish_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": "moonmind.publish.auto.v1",
+                "mode": "auto",
+                "owner": "agent",
+                "skillId": "pr-resolver",
+                "executionRef": step_execution_id,
+                "status": "verified",
+                "action": "merge",
+                "repository": "MoonLadderStudios/MoonMind",
+                "branch": "feature",
+                "localHead": "abc123",
+                "remoteBranchHead": None,
+                "remoteVerified": True,
+                "pushed": False,
+                "merged": True,
+                "prUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/1",
+                "blockedReason": None,
+                "verificationCommands": ["gh pr view 1"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    SandboxWorkspaceRecordStore(tmp_path).ensure(
+        SandboxWorkspaceRecord(
+            workspace_id=workspace_id,
+            workflow_id=workflow_id,
+            step_execution_id=step_execution_id,
+            relative_path="repo",
+        )
+    )
+
+    activities = TemporalAgentRuntimeActivities(workspace_root=tmp_path)
+    result = await activities.agent_runtime_evaluate_terminal_evidence(
+        {
+            # Reproduce the escaped boundary: this alias exists only in the
+            # on-demand host and must not win over the canonical locator.
+            "workspacePath": "/workspaces/run",
+            "workspaceLocator": {
+                "kind": "sandbox",
+                "workspaceId": workspace_id,
+                "relativePath": "repo",
+            },
+            "workspaceOwnerWorkflowId": workflow_id,
+            "workspaceOwnerStepExecutionId": step_execution_id,
+            "terminalContract": {
+                "contractId": "pr_resolver_terminal.v1",
+                "relativePath": "var/pr_resolver/result.json",
+                "expectedSchemaVersion": "pr-resolver-result.v1",
+                "executionRef": step_execution_id,
+            },
+            "result": {"summary": "PR was already merged."},
+        }
+    )
+
+    assert result.failure_class is None
+    assert result.metadata["terminalContractSatisfied"] is True
+    assert result.metadata["terminalContractOutcome"] == "terminal_success"
+    assert result.metadata["terminalContractEvidencePath"] == (
+        "var/pr_resolver/result.json"
+    )
+
+
+@pytest.mark.asyncio
+async def test_terminal_evidence_activity_resolves_managed_workspace_locator(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "repo"
+    publish_path = workspace / "artifacts/publish_result.json"
+    publish_path.parent.mkdir(parents=True)
+    publish_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": "moonmind.publish.auto.v1",
+                "mode": "auto",
+                "owner": "agent",
+                "skillId": "fix-comments",
+                "executionRef": "step-1",
+                "status": "verified",
+                "action": "push",
+                "repository": "MoonLadderStudios/Tactics",
+                "branch": "feature",
+                "localHead": "abc123",
+                "remoteBranchHead": "abc123",
+                "remoteVerified": True,
+                "pushed": True,
+                "merged": False,
+                "prUrl": None,
+                "blockedReason": None,
+                "verificationCommands": ["git ls-remote origin refs/heads/feature"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    record = SimpleNamespace(
+        workspace_path=str(workspace),
+        runtime_id="claude_code",
+    )
+    store = MagicMock()
+    store.load.return_value = record
+    activities = TemporalAgentRuntimeActivities(run_store=store)
+
+    result = await activities.agent_runtime_evaluate_terminal_evidence(
+        {
+            "runId": "agent-run-1",
+            "workspacePath": "/untrusted/alias",
+            "workspaceLocator": {
+                "kind": "managed_runtime",
+                "runtimeId": "claude_code",
+                "agentRunId": "agent-run-1",
+                "relativePath": "repo",
+            },
+            "terminalContract": {
+                "contractId": "auto_publish_terminal.v1",
+                "relativePath": "artifacts/publish_result.json",
+                "expectedSchemaVersion": "moonmind.publish.auto.v1",
+                "executionRef": "step-1",
+            },
+            "selectedSkill": "fix-comments",
+            "result": {"summary": "done"},
+        }
+    )
+
+    assert result.failure_class is None
+    assert result.metadata["terminalContractSatisfied"] is True
+    store.load.assert_called_once_with("agent-run-1")
+
+
+@pytest.mark.asyncio
+async def test_terminal_evidence_activity_publishes_pr_resolver_companion(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "repo"
+    execution_ref = "workflow:run:node-1:execution:1"
+    result_path = workspace / "var" / "pr_resolver" / "result.json"
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "executionRef": execution_ref,
+                "mergeAutomationDisposition": "already_merged",
+                "status": "merged",
+            }
+        ),
+        encoding="utf-8",
+    )
+    publish_payload = {
+        "schemaVersion": "moonmind.publish.auto.v1",
+        "mode": "auto",
+        "owner": "agent",
+        "skillId": "pr-resolver",
+        "executionRef": execution_ref,
+        "status": "verified",
+        "action": "merge",
+        "repository": "MoonLadderStudios/MoonMind",
+        "branch": "feature",
+        "localHead": "abc1234",
+        "remoteBranchHead": None,
+        "remoteVerified": True,
+        "pushed": False,
+        "merged": True,
+        "prUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/1",
+        "blockedReason": None,
+        "verificationCommands": ["gh pr view 1"],
+    }
+    publish_path = workspace / "artifacts" / "publish_result.json"
+    publish_path.parent.mkdir(parents=True)
+    publish_path.write_text(json.dumps(publish_payload), encoding="utf-8")
+    artifact_service = MagicMock()
+    artifact_service.create = AsyncMock(
+        side_effect=[
+            (SimpleNamespace(artifact_id="art-terminal-evidence"), None),
+            (SimpleNamespace(artifact_id="art-publish-evidence"), None),
+        ]
+    )
+    artifact_service.write_complete = AsyncMock(
+        side_effect=[
+            SimpleNamespace(artifact_id="art-terminal-evidence"),
+            SimpleNamespace(artifact_id="art-publish-evidence"),
+        ]
+    )
+    activities = TemporalAgentRuntimeActivities(artifact_service=artifact_service)
+
+    result = await activities.agent_runtime_evaluate_terminal_evidence(
+        {
+            "workspacePath": str(workspace),
+            "terminalContract": {
+                "contractId": "pr_resolver_terminal.v1",
+                "relativePath": "var/pr_resolver/result.json",
+                "expectedSchemaVersion": "pr-resolver-result.v1",
+                "executionRef": execution_ref,
+            },
+            "result": {"summary": "PR was already merged."},
+        }
+    )
+
+    assert result.failure_class is None
+    assert result.metadata["terminalContractEvidenceRef"] == (
+        "art-terminal-evidence"
+    )
+    assert result.metadata["publishEvidence"] == "art-publish-evidence"
+    create_calls = artifact_service.create.await_args_list
+    assert create_calls[0].kwargs["metadata_json"]["path"] == (
+        "var/pr_resolver/result.json"
+    )
+    assert create_calls[1].kwargs["metadata_json"]["path"] == (
+        "artifacts/publish_result.json"
+    )
+    published = json.loads(
+        artifact_service.write_complete.await_args_list[1]
+        .kwargs["payload"]
+        .decode("utf-8")
+    )
+    assert published == publish_payload
+
+
+@pytest.mark.asyncio
+async def test_terminal_evidence_activity_enriches_existing_helper_failure(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "repo"
+    spool = tmp_path / "spool"
+    targets = workspace / "artifacts/batch-workflows-targets.json"
+    targets.parent.mkdir(parents=True)
+    targets.write_text("[]", encoding="utf-8")
+    spool.mkdir()
+    (spool / "batch-workflows-result.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": "moonmind.batch-workflows-result.v1",
+                "contractId": "batch_workflows_fanout.v1",
+                "executionRef": "step-1",
+                "targetsSha256": hashlib.sha256(b"[]").hexdigest(),
+                "status": "partial_failure",
+                "requested": 2,
+                "created": 1,
+                "queued": [{"executionId": "child-1"}],
+                "skipped": [],
+                "errors": [{"ref": "MM-2", "error": "unavailable"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    activities = TemporalAgentRuntimeActivities()
+    result = await activities.agent_runtime_evaluate_terminal_evidence(
+        {
+            "workspacePath": str(workspace),
+            "artifactSpoolPath": str(spool),
+            "terminalContract": {
+                "contractId": "batch_workflows_fanout.v1",
+                "relativePath": "artifacts/batch-workflows-result.json",
+                "expectedSchemaVersion": "moonmind.batch-workflows-result.v1",
+                "executionRef": "step-1",
+            },
+            "result": {
+                "summary": "helper exited 1",
+                "failureClass": "execution_error",
+                "providerErrorCode": "process_exit_1",
+            },
+        }
+    )
+    assert result.summary == "helper exited 1"
+    assert result.provider_error_code == "process_exit_1"
+    assert result.metadata["failureCode"] == "BATCH_FANOUT_PARTIAL_FAILURE"
+    assert result.metadata["queuedChildren"] == [{"executionId": "child-1"}]
+
+
+@pytest.mark.asyncio
+async def test_terminal_evidence_activity_publishes_full_fanout_manifest(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "repo"
+    spool = tmp_path / "spool"
+    targets = workspace / "artifacts/batch-workflows-targets.json"
+    targets.parent.mkdir(parents=True)
+    targets.write_text('[{"ref":"MoonMind#1"}]', encoding="utf-8")
+    spool.mkdir()
+    queued_child = {
+        "provider": "github",
+        "ref": "MoonMind#1",
+        "workflowId": "mm:child-1",
+        "executionId": "mm:child-1",
+        "idempotencyKey": "batch-workflows:github:MoonMind#1:sha256:abc",
+    }
+    manifest = {
+        "schemaVersion": "moonmind.batch-workflows-result.v1",
+        "contractId": "batch_workflows_fanout.v1",
+        "executionRef": "step-1",
+        "targetsSha256": hashlib.sha256(targets.read_bytes()).hexdigest(),
+        "status": "queued",
+        "requested": 1,
+        "created": 1,
+        "queued": [queued_child],
+        "skipped": [],
+        "errors": [],
+    }
+    evidence_path = spool / "batch-workflows-result.json"
+    evidence_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    artifact_service = MagicMock()
+    artifact_service.create = AsyncMock(
+        return_value=(SimpleNamespace(artifact_id="art-terminal-evidence"), None)
+    )
+    artifact_service.write_complete = AsyncMock(
+        return_value=SimpleNamespace(artifact_id="art-terminal-evidence")
+    )
+    activities = TemporalAgentRuntimeActivities(artifact_service=artifact_service)
+
+    result = await activities.agent_runtime_evaluate_terminal_evidence(
+        {
+            "workspacePath": str(workspace),
+            "artifactSpoolPath": str(spool),
+            "terminalContract": {
+                "contractId": "batch_workflows_fanout.v1",
+                "relativePath": "artifacts/batch-workflows-result.json",
+                "expectedSchemaVersion": "moonmind.batch-workflows-result.v1",
+                "executionRef": "step-1",
+            },
+            "result": {"summary": "Queued one child."},
+        }
+    )
+
+    assert result.metadata["terminalContractSatisfied"] is True
+    assert result.metadata["terminalContractEvidenceRef"] == "art-terminal-evidence"
+    assert result.metadata["queuedChildren"] == [queued_child]
+    published = json.loads(
+        artifact_service.write_complete.await_args.kwargs["payload"].decode("utf-8")
+    )
+    assert published["queued"][0]["provider"] == "github"
+    assert published["queued"][0]["idempotencyKey"] == queued_child["idempotencyKey"]
+    assert artifact_service.create.await_args.kwargs["metadata_json"]["path"] == (
+        "artifacts/batch-workflows-result.json"
+    )
+
+
+@pytest.mark.asyncio
+async def test_terminal_evidence_activity_classifies_batch_input_failure_as_user_error(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "repo"
+    spool = tmp_path / "spool"
+    workspace.mkdir()
+    spool.mkdir()
+    message = "Range 3370-3425 contains 56 issues; maximum is 25."
+    (spool / "batch-workflows-result.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": "moonmind.batch-workflows-result.v1",
+                "contractId": "batch_workflows_fanout.v1",
+                "executionRef": "step-invalid-range",
+                "targetsSha256": None,
+                "status": "failed",
+                "requested": 56,
+                "created": 0,
+                "queued": [],
+                "skipped": [],
+                "errors": [
+                    {"code": "BATCH_FANOUT_INPUT_INVALID", "error": message}
+                ],
+                "failure": {
+                    "code": "BATCH_FANOUT_INPUT_INVALID",
+                    "message": message,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    activities = TemporalAgentRuntimeActivities()
+    result = await activities.agent_runtime_evaluate_terminal_evidence(
+        {
+            "workspacePath": str(workspace),
+            "artifactSpoolPath": str(spool),
+            "terminalContract": {
+                "contractId": "batch_workflows_fanout.v1",
+                "relativePath": "artifacts/batch-workflows-result.json",
+                "expectedSchemaVersion": "moonmind.batch-workflows-result.v1",
+                "executionRef": "step-invalid-range",
+            },
+            "result": {
+                "summary": "helper exited 2",
+                "failureClass": "execution_error",
+                "providerErrorCode": "process_exit_2",
+            },
+        }
+    )
+
+    assert result.failure_class == "user_error"
+    assert result.provider_error_code == "BATCH_FANOUT_INPUT_INVALID"
+    assert result.summary == message
+    assert result.metadata["terminalContractMissingEvidence"] == []
+
+
+@pytest.mark.asyncio
+async def test_terminal_evidence_activity_does_not_trust_rejected_failure_metadata(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "repo"
+    spool = tmp_path / "spool"
+    workspace.mkdir()
+    spool.mkdir()
+    (spool / "batch-workflows-result.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": "moonmind.batch-workflows-result.v1",
+                "contractId": "batch_workflows_fanout.v1",
+                "executionRef": "step-malformed-input-failure",
+                "targetsSha256": None,
+                "status": "failed",
+                "requested": 1,
+                "created": 1,
+                "queued": [{"executionId": "unexpected-child"}],
+                "skipped": [],
+                "errors": [
+                    {
+                        "code": "BATCH_FANOUT_INPUT_INVALID",
+                        "error": "Invalid range.",
+                    }
+                ],
+                "failure": {
+                    "code": "BATCH_FANOUT_INPUT_INVALID",
+                    "message": "Invalid range.",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = await TemporalAgentRuntimeActivities().agent_runtime_evaluate_terminal_evidence(
+        {
+            "workspacePath": str(workspace),
+            "artifactSpoolPath": str(spool),
+            "terminalContract": {
+                "contractId": "batch_workflows_fanout.v1",
+                "relativePath": "artifacts/batch-workflows-result.json",
+                "expectedSchemaVersion": "moonmind.batch-workflows-result.v1",
+                "executionRef": "step-malformed-input-failure",
+            },
+            "result": {"summary": "Malformed terminal result."},
+        }
+    )
+
+    assert result.failure_class == "execution_error"
+    assert result.provider_error_code == "INVALID_TERMINAL_EVIDENCE"
+    assert result.metadata["failureCode"] == "INVALID_TERMINAL_EVIDENCE"

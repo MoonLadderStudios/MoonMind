@@ -13,6 +13,7 @@ from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.temporal_models import (
+        MergeAutomationReviewLoopModel,
         MergeAutomationStartInput,
         PullRequestRefModel,
         ReadinessBlockerModel,
@@ -50,6 +51,8 @@ DEFAULT_ACTIVITY_RETRY_POLICY = RetryPolicy(
     maximum_interval=timedelta(minutes=1),
     maximum_attempts=5,
 )
+FINISH_MODE_MERGE = "merge"
+FINISH_MODE_FIX_ONLY = "fix_only"
 MERGE_AUTOMATION_RESOLVER_PRIORITY = 10
 DEFAULT_RESOLVER_TIMEOUT_SECONDS = 9000
 _TOKEN_ASSIGNMENT_PATTERN = re.compile(
@@ -291,6 +294,18 @@ def legacy_resolver_idempotency_key(
     # Preserve the exact pre-hash child workflow id for workflow replay.
     return f"resolver:{parent_workflow_id}:pr:{pr_number}:head:{head_sha}"
 
+def _parsed_review_loop(
+    review_loop: Mapping[str, Any] | MergeAutomationReviewLoopModel | None,
+) -> MergeAutomationReviewLoopModel | None:
+    if review_loop is None:
+        return None
+    if isinstance(review_loop, MergeAutomationReviewLoopModel):
+        return review_loop
+    if isinstance(review_loop, Mapping):
+        return MergeAutomationReviewLoopModel.model_validate(dict(review_loop))
+    return None
+
+
 def build_resolver_run_request(
     *,
     parent_workflow_id: str,
@@ -298,6 +313,8 @@ def build_resolver_run_request(
     jira_issue_key: str | None,
     merge_method: str,
     resolver_template: Mapping[str, Any] | None = None,
+    review_loop: Mapping[str, Any] | MergeAutomationReviewLoopModel | None = None,
+    finish_mode: str = FINISH_MODE_MERGE,
 ) -> dict[str, Any]:
     pr = (
         pull_request
@@ -314,15 +331,30 @@ def build_resolver_run_request(
         for item in (template.get("requiredCapabilities") or [])
         if str(item).strip()
     ]
+    normalized_finish_mode = (
+        FINISH_MODE_FIX_ONLY
+        if str(finish_mode or "").strip() == FINISH_MODE_FIX_ONLY
+        else FINISH_MODE_MERGE
+    )
     args = {
         "repo": pr.repo,
         "pr": str(pr.number),
         "mergeMethod": merge_method,
+        "finishMode": normalized_finish_mode,
     }
     if pr.head_branch:
         args["branch"] = pr.head_branch
     if jira_issue_key:
         args["jiraIssueKey"] = jira_issue_key
+    parsed_review_loop = _parsed_review_loop(review_loop)
+    review_loop_enabled = bool(
+        parsed_review_loop is not None
+        and parsed_review_loop.enabled
+        and parsed_review_loop.require_fresh_review_for_every_head
+    )
+    if review_loop_enabled:
+        args["reviewProvider"] = parsed_review_loop.provider
+        args["requireFreshReview"] = True
     title = f"Resolve PR #{pr.number}"
     runtime_payload: dict[str, Any] = {"mode": target_runtime}
     if provider_profile:
@@ -346,8 +378,31 @@ def build_resolver_run_request(
         "targetRuntime": target_runtime,
         "task": {
             "instructions": (
-                f"Resolve and merge pull request {pr.url}. "
-                "Use pr-resolver and do not create another pull request."
+                (
+                    f"Resolve and merge pull request {pr.url}. "
+                    if normalized_finish_mode == FINISH_MODE_MERGE
+                    else (
+                        f"Resolve every actionable item on pull request {pr.url} "
+                        "and stop without merging it: this run has no merge "
+                        "authority, so report review_clean once the merge gate "
+                        "opens with nothing left to address. "
+                    )
+                )
+                + "Use pr-resolver and do not create another pull request."
+                + (
+                    " This run is owned by a merge-automation review loop: pass "
+                    f"--review-provider {parsed_review_loop.provider} and "
+                    "--require-fresh-review to every pr_resolve_finalize.py "
+                    "invocation, and never post the review request yourself."
+                    if review_loop_enabled
+                    else ""
+                )
+                + (
+                    " Pass --finish-mode fix_only to every pr_resolve_finalize.py "
+                    "and pr_resolve_orchestrate.py invocation."
+                    if normalized_finish_mode == FINISH_MODE_FIX_ONLY
+                    else ""
+                )
             ),
             "tool": {"type": "skill", "name": "pr-resolver"},
             "skill": {"id": "pr-resolver", "args": args},
@@ -384,6 +439,8 @@ def build_continue_as_new_input(
     resolver_history: list[Mapping[str, Any]] | list[ResolverRunRefModel],
     latest_head_sha: str,
     expire_at: str | None,
+    review_cycles: list[Mapping[str, Any]] | None = None,
+    active_review_request: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     parsed = (
         start_input
@@ -411,6 +468,10 @@ def build_continue_as_new_input(
         )
         for ref in resolver_history
     ]
+    if review_cycles is not None:
+        payload["reviewCycles"] = [dict(cycle) for cycle in review_cycles]
+    if active_review_request is not None:
+        payload["activeReviewRequest"] = dict(active_review_request)
     payload["expireAt"] = expire_at
     return payload
 

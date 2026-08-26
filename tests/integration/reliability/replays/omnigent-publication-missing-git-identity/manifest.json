@@ -1,0 +1,8 @@
+{
+  "incidentWorkflowId": "mm:bfc017e9-57ef-4eb3-a652-8e0386f464bc",
+  "stepExecutionId": "mm:bfc017e9-57ef-4eb3-a652-8e0386f464bc:agent:node-1",
+  "failureCode": "OMNIGENT_REPOSITORY_PUBLICATION_FAILED",
+  "workspaceState": "staged_changes_without_local_git_identity",
+  "gitUserName": "MoonMind Replay",
+  "gitUserEmail": "moonmind-replay@users.noreply.github.com"
+}

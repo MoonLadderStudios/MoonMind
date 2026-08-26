@@ -1,0 +1,9 @@
+{
+  "incidentWorkflowId": "mm:99f6a4a0-06b8-4b65-901f-e3f1ac0b0f5b",
+  "incidentRunId": "019fd354-a380-7178-aab6-162674384a52",
+  "failedChildWorkflowId": "mm:99f6a4a0-06b8-4b65-901f-e3f1ac0b0f5b:agent:node-1",
+  "failedChildRunId": "019fd354-b35c-7b0c-862d-8e4314e316ae",
+  "failureShape": "MoonMind requested the removed /api/hosts route after the on-demand host registered; stock Omnigent exposes /v1/hosts with host_id and configured_harnesses",
+  "boundary": "stock Omnigent host catalog to exact lease-owned host resolution",
+  "containerName": "mm-omnigent-host-ohl19763d3ada2ce975263416b6e671707e"
+}

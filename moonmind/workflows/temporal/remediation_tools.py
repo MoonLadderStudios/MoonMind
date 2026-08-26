@@ -15,8 +15,13 @@ from datetime import datetime, timezone
 from typing import Any, Literal, Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from api_service.db import models as db_models
+from moonmind.omnigent.policies import (
+    policy_authority_evidence,
+    validate_policy_authority_evidence,
+)
 from moonmind.workflows.temporal.artifacts import TemporalArtifactService
 from moonmind.workflows.temporal.remediation_context import (
     REMEDIATION_CONTEXT_LINK_TYPE,
@@ -26,17 +31,40 @@ from moonmind.workflows.temporal.remediation_context import (
     build_remediation_final_summary,
     build_remediation_target_annotation,
 )
+from moonmind.workflows.temporal.remediation_actions import (
+    REMEDIATION_BRANCH_SENSITIVE_FIELDS,
+    RemediationActionAuthorityService,
+    RemediationMutationGuardPolicy,
+    RemediationMutationGuardService,
+    RemediationPermissionSet,
+    RemediationSecurityProfile,
+    remediation_changes_require_checkpoint_branch,
+    remediation_parameter_digest,
+)
+from moonmind.workflows.temporal.remediation_verification import (
+    CanonicalRecordEvidenceReader,
+    RemediationVerificationPhase,
+    TargetEvidenceSnapshot,
+    VerificationContract,
+    resolve_verification_target,
+    snapshot_from_health,
+    verification_contract_for,
+)
 from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
 
 RemediationLogStream = Literal["stdout", "stderr", "merged", "diagnostics"]
 
 _ALLOWED_ACTION_RESULT_STATUSES = frozenset(
     {
+        "accepted",
         "applied",
         "no_op",
+        "delivery_unknown",
         "rejected",
+        "denied",
         "precondition_failed",
         "approval_required",
+        "verification_required",
         "timed_out",
         "failed",
     }
@@ -91,6 +119,7 @@ class RemediationTargetHealthSnapshot:
     title: str | None
     summary: str | None
     target_run_changed: bool
+    runtime: str | None = None
 
 @dataclass(frozen=True, slots=True)
 class RemediationActionRequestPreparation:
@@ -100,6 +129,28 @@ class RemediationActionRequestPreparation:
     action_kind: str
     target: RemediationTargetHealthSnapshot
     context_target: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class RemediationEvidencePage:
+    """One bounded, redacted page from a typed context evidence class."""
+
+    evidence_class: str
+    status: str
+    items: tuple[dict[str, Any], ...]
+    next_cursor: int | None
+    degraded_reason: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RemediationArtifactReadResult:
+    """Bounded metadata and optional content for one context-linked artifact."""
+
+    artifact_id: str
+    metadata: dict[str, Any]
+    size_bytes: int
+    content: str | None
+    content_truncated: bool
 
 class RemediationLogReader(Protocol):
     """Read bounded historical logs for a target agent run."""
@@ -173,6 +224,83 @@ class _UnavailableActionExecutor:
             "remediation.execute_action is not configured in this runtime."
         )
 
+
+class MoonMindControlPlaneRemediationActionExecutor:
+    """Allowlisted adapter dispatcher for MoonMind-owned control-plane actions."""
+
+    def __init__(
+        self,
+        adapters: Mapping[
+            str,
+            Callable[
+                [Mapping[str, Any], Mapping[str, Any], RemediationTargetHealthSnapshot],
+                Awaitable[Mapping[str, Any]],
+            ],
+        ],
+    ) -> None:
+        self._adapters = dict(adapters)
+
+    async def execute_action(
+        self,
+        *,
+        action_request: Mapping[str, Any],
+        guard_result: Mapping[str, Any],
+        target_health: RemediationTargetHealthSnapshot,
+    ) -> Mapping[str, Any]:
+        action_kind = _required_string(action_request.get("actionKind"), "actionKind")
+        parameters = action_request.get("params")
+        if not isinstance(parameters, Mapping):
+            parameters = action_request.get("parameters")
+        parameters_mapping = parameters if isinstance(parameters, Mapping) else {}
+        original_inputs = guard_result.get("originalInputs")
+        proposed_inputs = guard_result.get("proposedInputs")
+        if isinstance(original_inputs, Mapping) and isinstance(
+            proposed_inputs, Mapping
+        ):
+            branch_sensitive_changes = list(
+                remediation_changes_require_checkpoint_branch(
+                    original=original_inputs,
+                    proposed=proposed_inputs,
+                )
+            )
+        else:
+            input_changes = parameters_mapping.get("inputChanges")
+            changed_fields = (
+                set(input_changes) if isinstance(input_changes, Mapping) else set()
+            )
+            branch_sensitive_changes = sorted(
+                changed_fields & REMEDIATION_BRANCH_SENSITIVE_FIELDS
+            )
+        if (
+            branch_sensitive_changes
+            and action_kind != "checkpoint_branch.create_from_remediation_context"
+        ):
+            return {
+                "status": "denied",
+                "reason": "checkpoint_branch_required_for_corrected_input",
+                "changedFields": branch_sensitive_changes,
+                "beforeEvidenceRefs": [],
+                "afterEvidenceRefs": [],
+            }
+        adapter = self._adapters.get(action_kind)
+        if adapter is None:
+            return {
+                "status": "denied",
+                "reason": "control_plane_adapter_unavailable",
+                "beforeEvidenceRefs": [],
+                "afterEvidenceRefs": [],
+            }
+        result = await adapter(action_request, guard_result, target_health)
+        if not isinstance(result, Mapping):
+            raise RemediationEvidenceToolError(
+                f"Control-plane adapter for {action_kind} returned an invalid result."
+            )
+        normalized = dict(result)
+        _normalize_action_result_status(normalized.get("status"))
+        normalized.setdefault("beforeEvidenceRefs", [])
+        normalized.setdefault("afterEvidenceRefs", [])
+        return normalized
+
 class RemediationEvidenceToolService:
     """Typed evidence access surface for one remediation execution."""
 
@@ -184,6 +312,7 @@ class RemediationEvidenceToolService:
         log_reader: RemediationLogReader | None = None,
         live_follower: RemediationLiveFollower | None = None,
         action_executor: RemediationActionExecutor | None = None,
+        verification_phase: RemediationVerificationPhase | None = None,
         cursor_recorder: Callable[[str, dict[str, Any] | None], Awaitable[None]]
         | None = None,
     ) -> None:
@@ -192,6 +321,13 @@ class RemediationEvidenceToolService:
         self._log_reader = log_reader or _UnavailableLogReader()
         self._live_follower = live_follower or _UnavailableLiveFollower()
         self._action_executor = action_executor or _UnavailableActionExecutor()
+        # The verification phase reads fresh canonical evidence after each
+        # action; it performs no side effects and is safe under Activity retry
+        # and Temporal replay. Tests inject a phase with a deterministic reader,
+        # no-op sleep, and controllable cancellation.
+        self._verification_phase = verification_phase or RemediationVerificationPhase(
+            reader=CanonicalRecordEvidenceReader(session)
+        )
         self._lifecycle_publisher = RemediationLifecyclePublisher(
             session=session,
             artifact_service=artifact_service,
@@ -234,6 +370,187 @@ class RemediationEvidenceToolService:
             principal=principal,
         )
         return payload
+
+    async def read_target_artifact_bounded(
+        self,
+        *,
+        remediation_workflow_id: str,
+        artifact_ref: str | Mapping[str, Any],
+        include_content: bool = False,
+        max_content_bytes: int = 65_536,
+        principal: str = "service:remediation-tools",
+    ) -> RemediationArtifactReadResult:
+        """Read metadata and bounded redacted content for a linked artifact."""
+
+        link = await self._load_link(remediation_workflow_id)
+        context = await self._read_context_payload(link=link, principal=principal)
+        artifact_id = _artifact_id_from_ref(artifact_ref)
+        if not artifact_id:
+            raise RemediationEvidenceToolError("artifactRef must include artifact_id.")
+        if artifact_id not in _collect_context_artifact_ids(context):
+            raise RemediationEvidenceToolError(
+                f"Artifact {artifact_id} is not listed in remediation context."
+            )
+        artifact, payload = await self._artifact_service.read(
+            artifact_id=artifact_id,
+            principal=principal,
+        )
+        bound = max(0, min(int(max_content_bytes), 1_048_576))
+        bounded = payload[:bound] if include_content else b""
+        return RemediationArtifactReadResult(
+            artifact_id=artifact_id,
+            metadata=_redact_payload_value(
+                artifact.metadata_json
+                if isinstance(artifact.metadata_json, Mapping)
+                else {}
+            ),
+            size_bytes=len(payload),
+            content=(
+                _redact_text(bounded.decode("utf-8", errors="replace"))
+                if include_content
+                else None
+            ),
+            content_truncated=include_content and len(payload) > len(bounded),
+        )
+
+    async def read_evidence_page(
+        self,
+        *,
+        remediation_workflow_id: str,
+        evidence_class: str,
+        cursor: int = 0,
+        limit: int = 20,
+        include_content: bool = False,
+        max_content_bytes: int = 65_536,
+        principal: str = "service:remediation-tools",
+    ) -> RemediationEvidencePage:
+        """Read a typed Omnigent evidence class without treating refs as grants.
+
+        The context index is the allowlist, while each referenced artifact is
+        independently authorized by ``TemporalArtifactService``. Missing
+        historical classes return an explicit degraded page.
+        """
+
+        link = await self._load_link(remediation_workflow_id)
+        context = await self._read_context_payload(link=link, principal=principal)
+        normalized_class = _required_string(evidence_class, "evidenceClass")
+        evidence = context.get("evidence")
+        evidence_mapping = evidence if isinstance(evidence, Mapping) else {}
+        index = evidence_mapping.get("omnigentIndex")
+        entries = _safe_sequence(index)
+        selected = next(
+            (
+                item
+                for item in entries
+                if isinstance(item, Mapping)
+                and item.get("class") == normalized_class
+            ),
+            None,
+        )
+        if not isinstance(selected, Mapping):
+            raise RemediationEvidenceToolError(
+                f"Unknown remediation evidence class: {normalized_class}."
+            )
+        refs = [
+            item
+            for item in _safe_sequence(selected.get("refs"))
+            if isinstance(item, Mapping)
+        ]
+        start = max(0, int(cursor))
+        page_limit = max(1, min(int(limit), 100))
+        page_refs = refs[start : start + page_limit]
+        allowed = _collect_context_artifact_ids(context)
+        items: list[dict[str, Any]] = []
+        content_bound = max(0, min(int(max_content_bytes), 1_048_576))
+        for ref in page_refs:
+            artifact_id = _artifact_id_from_ref(ref)
+            item: dict[str, Any] = {"ref": _redact_payload_value(dict(ref))}
+            if not artifact_id or artifact_id not in allowed:
+                item.update(
+                    {
+                        "status": "unavailable",
+                        "degradedReason": "reference is not authorized by remediation context",
+                    }
+                )
+                items.append(item)
+                continue
+            artifact, payload = await self._artifact_service.read(
+                artifact_id=artifact_id,
+                principal=principal,
+            )
+            item.update(
+                {
+                    "status": "available",
+                    "artifactId": artifact_id,
+                    "metadata": _redact_payload_value(
+                        artifact.metadata_json
+                        if isinstance(artifact.metadata_json, Mapping)
+                        else {}
+                    ),
+                    "sizeBytes": len(payload),
+                }
+            )
+            if include_content:
+                bounded = payload[:content_bound]
+                item["content"] = _redact_text(
+                    bounded.decode("utf-8", errors="replace")
+                )
+                item["contentTruncated"] = len(payload) > len(bounded)
+            items.append(item)
+        next_cursor = start + len(page_refs)
+        if next_cursor >= len(refs):
+            next_cursor = None
+        return RemediationEvidencePage(
+            evidence_class=normalized_class,
+            status=str(selected.get("status") or ("available" if refs else "missing")),
+            items=tuple(items),
+            next_cursor=next_cursor,
+            degraded_reason=_string_or_none(selected.get("degradedReason")),
+        )
+
+    async def read_execution_and_step_details(self, **kwargs: Any) -> RemediationEvidencePage:
+        """Read bounded execution/Step Execution evidence."""
+        return await self.read_evidence_page(
+            evidence_class="execution_and_steps", **kwargs
+        )
+
+    async def read_checkpoint_and_recovery_manifests(
+        self, **kwargs: Any
+    ) -> RemediationEvidencePage:
+        """Read bounded checkpoint and recovery manifests."""
+        return await self.read_evidence_page(
+            evidence_class="checkpoint_and_recovery", **kwargs
+        )
+
+    async def read_bridge_event_pages(self, **kwargs: Any) -> RemediationEvidencePage:
+        """Read bounded bridge event pages; live cursors use follow_target_logs."""
+        return await self.read_evidence_page(evidence_class="bridge_events", **kwargs)
+
+    async def read_capture_and_resource_manifests(
+        self, **kwargs: Any
+    ) -> RemediationEvidencePage:
+        """Read bounded capture and resource manifests."""
+        return await self.read_evidence_page(evidence_class="capture", **kwargs)
+
+    async def read_cleanup_and_janitor_evidence(
+        self, **kwargs: Any
+    ) -> RemediationEvidencePage:
+        """Read bounded cleanup, janitor, incident, and publication evidence."""
+        return await self.read_evidence_page(evidence_class="lifecycle", **kwargs)
+
+    async def read_branch_and_publication_evidence(
+        self, **kwargs: Any
+    ) -> RemediationEvidencePage:
+        """Read bounded branch, comparison, promotion, and publication evidence."""
+        return await self.read_evidence_page(
+            evidence_class="checkpoint_branches", **kwargs
+        )
+
+    async def read_policy_and_approval_snapshots(
+        self, **kwargs: Any
+    ) -> RemediationEvidencePage:
+        """Read bounded policy, approval, lock, retention, and redaction snapshots."""
+        return await self.read_evidence_page(evidence_class="policy", **kwargs)
 
     async def read_target_logs(
         self,
@@ -360,24 +677,236 @@ class RemediationEvidenceToolService:
                     else None
                 ),
                 target_run_changed=target.run_id != link.target_run_id,
+                runtime=_string_or_none(
+                    target.search_attributes.get("mm_target_runtime")
+                    if isinstance(target.search_attributes, Mapping)
+                    else None
+                ),
             ),
             context_target=context_target_mapping,
         )
+
+    async def _read_verification_before_snapshot(
+        self,
+        *,
+        contract: VerificationContract,
+        target: RemediationTargetHealthSnapshot,
+    ) -> TargetEvidenceSnapshot:
+        """Capture the pre-action baseline for the verification phase.
+
+        Verifiable actions read fresh evidence through the owning reader so the
+        baseline includes fields like ``paused``. Unverifiable actions (or a
+        transient read error) fall back to the already-resolved target health so
+        the artifact still records the known pre-action target state.
+        """
+
+        if contract.verifier_kind != "unavailable":
+            try:
+                snapshot = await self._verification_phase.read_before_snapshot(
+                    contract=contract,
+                    workflow_id=target.workflow_id,
+                    pinned_run_id=target.pinned_run_id,
+                )
+                if snapshot.available:
+                    return snapshot
+            except Exception:  # noqa: BLE001 - fall back to the known health read
+                pass
+        return snapshot_from_health(
+            stage="before",
+            workflow_id=target.workflow_id,
+            run_id=target.current_run_id,
+            state=target.state,
+            close_status=target.close_status,
+        )
+
+    async def _current_approval_authority(
+        self,
+        *,
+        target: RemediationTargetHealthSnapshot,
+        action_request: Mapping[str, Any],
+        security_profile_ref: str | None,
+    ) -> dict[str, Any]:
+        """Resolve the live bounded authority tuple immediately before dispatch."""
+
+        bridge = (
+            await self._session.execute(
+                select(db_models.OmnigentBridgeSession)
+                .where(
+                    db_models.OmnigentBridgeSession.moonmind_workflow_id
+                    == target.workflow_id,
+                    db_models.OmnigentBridgeSession.moonmind_run_id
+                    == target.current_run_id,
+                )
+                .order_by(db_models.OmnigentBridgeSession.updated_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        launch = (
+            bridge.effective_launch_snapshot_json
+            if bridge is not None
+            and isinstance(bridge.effective_launch_snapshot_json, Mapping)
+            else {}
+        )
+        policy = launch.get("policyAuthority")
+        policy_authority = policy if isinstance(policy, Mapping) else {}
+        raw_params = action_request.get("params")
+        params = raw_params if isinstance(raw_params, Mapping) else {}
+        return {
+            "targetState": target.state,
+            "checkpointRef": params.get("checkpointRef"),
+            "stepExecutionId": getattr(bridge, "step_execution_id", None)
+            or params.get("stepExecutionId"),
+            "bridgeSessionId": getattr(bridge, "bridge_session_id", None),
+            "omnigentSessionId": getattr(bridge, "omnigent_session_id", None),
+            "hostRef": getattr(bridge, "omnigent_host_id", None),
+            "hostLeaseRef": getattr(bridge, "host_lease_ref", None),
+            "providerProfileLeaseRef": getattr(bridge, "provider_lease_id", None),
+            "credentialGeneration": getattr(bridge, "credential_generation", None),
+            "policyRef": policy_authority.get("policyRef"),
+            "policyDigest": policy_authority.get("policyDigest"),
+            "policySnapshotRef": policy_authority.get("snapshotRef"),
+            "securityProfileRef": security_profile_ref,
+        }
+
+    async def _resolve_target_policy_snapshot(
+        self, *, target: RemediationTargetHealthSnapshot
+    ) -> dict[str, Any] | None:
+        # Only Omnigent targets carry immutable Omnigent policy authority. The
+        # control-plane executor is constructed for every runtime, so gate this
+        # resolution on the target's verified runtime and the presence of an
+        # Omnigent bridge session rather than the executor type. Direct Codex,
+        # Claude, and other non-Omnigent targets return ``None`` so their owning
+        # adapters apply their own authority; a target that declares the
+        # Omnigent runtime but has no immutable authority still fails closed.
+        declared_omnigent = (target.runtime or "").strip().casefold() == "omnigent"
+        bridge = (
+            await self._session.execute(
+                select(db_models.OmnigentBridgeSession)
+                .where(
+                    db_models.OmnigentBridgeSession.moonmind_workflow_id
+                    == target.workflow_id,
+                    db_models.OmnigentBridgeSession.moonmind_run_id
+                    == target.current_run_id,
+                )
+                .order_by(db_models.OmnigentBridgeSession.updated_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if bridge is None:
+            if declared_omnigent:
+                raise RemediationEvidenceToolError(
+                    "Target run has no immutable Omnigent policy authority."
+                )
+            return None
+        launch = (
+            bridge.effective_launch_snapshot_json
+            if isinstance(bridge.effective_launch_snapshot_json, Mapping)
+            else None
+        )
+        authority = launch.get("policyAuthority") if launch is not None else None
+        if not isinstance(authority, Mapping):
+            raise RemediationEvidenceToolError(
+                "Target run has no immutable Omnigent policy authority."
+            )
+        policy_ref = str(authority.get("policyRef") or "").strip()
+        if not policy_ref:
+            raise RemediationEvidenceToolError(
+                "Target run policy authority has no policyRef."
+            )
+        # Keep the API service dependency at this side-effecting service
+        # boundary. Importing it while db.models registers workflow model
+        # dependencies creates a db.models -> workflow -> policy-service cycle.
+        from api_service.services.omnigent_policies import (
+            OmnigentPolicyService,
+            PolicyConflict,
+        )
+
+        try:
+            snapshot = await OmnigentPolicyService(
+                self._session
+            ).resolve_runtime_snapshot(policy_ref)
+            validate_policy_authority_evidence(authority, snapshot)
+            policy_authority_evidence(snapshot)
+        except (PolicyConflict, LookupError, ValueError) as exc:
+            raise RemediationEvidenceToolError(
+                f"Target run policy authority is stale or unavailable: {exc}"
+            ) from exc
+        return snapshot
 
     async def execute_action(
         self,
         *,
         remediation_workflow_id: str,
-        authority_result: Mapping[str, Any],
-        guard_result: Mapping[str, Any],
+        action_kind: str | None = None,
+        parameters: Mapping[str, Any] | None = None,
+        idempotency_key: str | None = None,
+        dry_run: bool = False,
+        approval_binding: Mapping[str, Any] | None = None,
+        approval_ref: str | None = None,
+        authority_result: Mapping[str, Any] | None = None,
+        guard_result: Mapping[str, Any] | None = None,
         principal: str = "service:remediation-tools",
     ) -> dict[str, Any]:
         """Execute an authorized action and publish bounded lifecycle artifacts."""
-
-        if not isinstance(authority_result, Mapping):
-            raise RemediationEvidenceToolError("authorityResult must be an object.")
-        if not isinstance(guard_result, Mapping):
-            raise RemediationEvidenceToolError("guardResult must be an object.")
+        link = await self._load_link(remediation_workflow_id)
+        if authority_result is None or guard_result is None:
+            if link.authority_mode != "admin_auto":
+                raise RemediationEvidenceToolError(
+                    "Persisted remediation authority does not permit automatic mutation."
+                )
+            normalized_action_kind = _required_string(action_kind, "actionKind")
+            normalized_idempotency_key = _required_string(
+                idempotency_key, "idempotencyKey"
+            )
+            # SECURITY: an admin_auto remediation agent is the action *requester*
+            # and can never act as its own approver. A caller-supplied approvalRef
+            # or approvalBinding is untrusted tool input, not approval authority:
+            # no reviewer-issued decision in the authoritative approval store backs
+            # it, and _policy_bound only checks that the binding matches the
+            # policy/run, never that a persisted approval exists. Drop both so the
+            # agent cannot self-approve an approval-gated or high-risk mutation at
+            # either the MoonMind authority boundary (below) or the downstream
+            # Omnigent policy boundary. Such actions fail closed to
+            # approval_required and must be routed through the human approval path.
+            approval_ref = None
+            approval_binding = None
+            authority = await RemediationActionAuthorityService(
+                session=self._session,
+                lifecycle_publisher=self._lifecycle_publisher,
+            ).evaluate_action_request(
+            remediation_workflow_id=remediation_workflow_id,
+            action_kind=normalized_action_kind,
+            parameters=parameters,
+            dry_run=dry_run,
+            idempotency_key=normalized_idempotency_key,
+            requesting_principal=principal,
+            permissions=RemediationPermissionSet(
+                can_view_target=True,
+                can_request_admin_profile=True,
+                can_approve_high_risk=False,
+            ),
+            security_profile=RemediationSecurityProfile(
+                profile_ref="persisted:admin_auto",
+                execution_principal=principal,
+                allowed_action_kinds=(normalized_action_kind,),
+            ),
+            approval_ref=None,
+            )
+            authority_result = authority.to_dict()
+            guard = await RemediationMutationGuardService(
+                session=self._session
+            ).evaluate(
+            remediation_workflow_id=remediation_workflow_id,
+            remediation_run_id=link.remediation_run_id,
+            target_workflow_id=link.target_workflow_id,
+            target_run_id=link.target_run_id,
+            action_kind=normalized_action_kind,
+            idempotency_key=normalized_idempotency_key,
+            parameters=parameters,
+            policy=RemediationMutationGuardPolicy(),
+            now=datetime.now(timezone.utc),
+            )
+            guard_result = guard.to_dict()
         if authority_result.get("executable") is not True:
             raise RemediationEvidenceToolError(
                 "authorityResult must be executable before action execution."
@@ -409,6 +938,82 @@ class RemediationEvidenceToolService:
             guard_result=guard_result,
             action_request=action_request,
         )
+        resolved_approval: dict[str, Any] | None = None
+        if approval_ref is not None:
+            state = getattr(link, "approval_state", None)
+            if not isinstance(state, Mapping) or state.get("approvalRef") != approval_ref:
+                raise RemediationEvidenceToolError("approval_not_found")
+            approval_status = str(state.get("status") or "")
+            if approval_status != "approved":
+                raise RemediationEvidenceToolError(f"approval_{approval_status or 'invalid'}")
+            try:
+                expired = datetime.fromisoformat(
+                    str(state.get("expiresAt") or "")
+                ) <= datetime.now(timezone.utc)
+            except ValueError as exc:
+                raise RemediationEvidenceToolError("approval_expiration_invalid") from exc
+            if expired:
+                link.approval_state = {**dict(state), "status": "expired"}
+                await self._session.commit()
+                raise RemediationEvidenceToolError("approval_expired")
+            current_authority = await self._current_approval_authority(
+                target=preparation.target,
+                action_request=action_request,
+                security_profile_ref=_string_or_none(
+                    authority_result.get("securityProfileRef")
+                ),
+            )
+            approval_error = RemediationActionAuthorityService._validate_persisted_approval(
+                link=link,
+                approval_ref=approval_ref,
+                action_kind=action_kind,
+                request_shape_hash=str(state.get("requestDigest") or ""),
+                parameter_digest=remediation_parameter_digest(
+                    action_request.get("params")
+                    if isinstance(action_request.get("params"), Mapping)
+                    else None
+                ),
+                current_authority=current_authority,
+            )
+            if approval_error is not None:
+                link.approval_state = {**dict(state), "status": "stale"}
+                await self._session.commit()
+                raise RemediationEvidenceToolError(approval_error)
+            resolved_approval = dict(state)
+        # Authority comes from the target run's immutable launch evidence, never
+        # from tool arguments. Re-resolve the persisted version immediately
+        # before dispatch so disabled, invalid, or digest-conflicting policy
+        # versions fail before an owning adapter can run.
+        if isinstance(
+            self._action_executor, MoonMindControlPlaneRemediationActionExecutor
+        ):
+            policy_snapshot = await self._resolve_target_policy_snapshot(
+                target=preparation.target
+            )
+            # ``targetRuntime`` is authoritative metadata from the persisted target
+            # execution record, never a caller-supplied tool argument. It tells the
+            # policy-bound dispatcher whether Omnigent policy binding applies.
+            action_request = {
+                **dict(action_request),
+                "targetRuntime": preparation.target.runtime,
+            }
+            if policy_snapshot is not None:
+                action_request["policySnapshot"] = policy_snapshot
+            else:
+                # Non-Omnigent targets must never carry an Omnigent policy
+                # snapshot, including one a caller may have tried to smuggle in.
+                action_request.pop("policySnapshot", None)
+            if resolved_approval is not None:
+                # The adapter binding is derived exclusively from the approval
+                # record that was resolved above. ``approval_binding`` remains
+                # accepted at the portable tool boundary as untrusted request
+                # input, but it can never confer or alter dispatch authority.
+                action_request["approvalBinding"] = _approval_binding_from_state(
+                    resolved_approval
+                )
+                action_request["approvalRef"] = _required_string(
+                    approval_ref, "approvalRef"
+                )
         request_artifact = await self._lifecycle_publisher.publish_json_artifact(
             remediation_workflow_id=link.remediation_workflow_id,
             artifact_type="remediation.action_request",
@@ -418,6 +1023,7 @@ class RemediationEvidenceToolService:
                     **dict(action_request),
                     "authority": dict(authority_result),
                     "guard": dict(guard_result),
+                    "resolvedApproval": resolved_approval,
                 }
             ),
             target_workflow_id=link.target_workflow_id,
@@ -425,6 +1031,27 @@ class RemediationEvidenceToolService:
             principal=principal,
         )
 
+        # Capture fresh "before" target evidence immediately prior to the side
+        # effect so the verification phase can classify against a real baseline
+        # rather than the pre-action context cache.
+        verification_contract = verification_contract_for(action_kind)
+        before_snapshot = await self._read_verification_before_snapshot(
+            contract=verification_contract,
+            target=preparation.target,
+        )
+
+        # Claim single-use authority durably before crossing the adapter
+        # boundary. An Activity crash can therefore never replay the mutation
+        # under the same approval; the action guard/result ledger owns recovery.
+        if resolved_approval is not None:
+            link.approval_state = {
+                **resolved_approval,
+                "status": "consumed",
+                "consumedAt": datetime.now(timezone.utc).isoformat(),
+                "consumedByActionId": action_request["actionId"],
+                "actionRequestArtifactRef": request_artifact.artifact_id,
+            }
+            await self._session.commit()
         raw_result = await self._action_executor.execute_action(
             action_request=action_request,
             guard_result=guard_result,
@@ -469,7 +1096,12 @@ class RemediationEvidenceToolService:
             "beforeStateRef": _redact_text(raw_result.get("beforeStateRef")),
             "afterStateRef": _redact_text(raw_result.get("afterStateRef")),
             "sideEffects": _redact_sequence(raw_result.get("sideEffects")),
+            "approvalRef": approval_ref,
         }
+        if isinstance(raw_result.get("policyAuthority"), Mapping):
+            result_payload["policyAuthority"] = dict(raw_result["policyAuthority"])
+        if isinstance(raw_result.get("approvalBinding"), Mapping):
+            result_payload["approvalBinding"] = dict(raw_result["approvalBinding"])
         result_artifact = await self._lifecycle_publisher.publish_json_artifact(
             remediation_workflow_id=link.remediation_workflow_id,
             artifact_type="remediation.action_result",
@@ -480,14 +1112,40 @@ class RemediationEvidenceToolService:
             principal=principal,
         )
 
-        verification = raw_result.get("verification")
-        verification_payload = (
-            dict(verification)
-            if isinstance(verification, Mapping)
-            else {"status": "not_verified"}
+        # Trusted post-action verification phase (issue #3622): re-read fresh
+        # canonical evidence after the action, perform bounded stabilization, and
+        # classify the actual repair outcome. This replaces the prior behavior of
+        # serializing adapter output or defaulting to "not_verified". Delivery
+        # status (``status`` on the action result) and the repair verification
+        # outcome are now separate fields.
+        # Fresh reruns create a new execution identity (returned in
+        # afterEvidenceRefs); verify against that resulting workflow rather than
+        # the original terminal record, which would always read as still_failed.
+        (
+            verification_target_workflow_id,
+            verification_pinned_run_id,
+        ) = resolve_verification_target(
+            verification_contract,
+            raw_result,
+            default_workflow_id=link.target_workflow_id,
+            default_run_id=link.target_run_id,
         )
-        verification_payload.setdefault("actionKind", action_kind)
-        verification_payload.setdefault("actionId", action_request["actionId"])
+        verification_result = await self._verification_phase.run(
+            contract=verification_contract,
+            action_kind=action_kind,
+            action_id=action_request["actionId"],
+            delivery_status=status,
+            target_workflow_id=verification_target_workflow_id,
+            pinned_run_id=verification_pinned_run_id,
+            before_snapshot=before_snapshot,
+            action_result=raw_result,
+        )
+        verification_payload = _redact_payload_value(
+            {
+                **verification_result.to_payload(),
+                "approvalRef": approval_ref,
+            }
+        )
         verification_artifact = await self._lifecycle_publisher.publish_json_artifact(
             remediation_workflow_id=link.remediation_workflow_id,
             artifact_type="remediation.verification",
@@ -495,7 +1153,37 @@ class RemediationEvidenceToolService:
             payload=verification_payload,
             target_workflow_id=link.target_workflow_id,
             target_run_id=link.target_run_id,
+            extra_metadata=verification_result.to_metadata(),
             principal=principal,
+        )
+
+        # Retry/replay safety: publish_json_artifact deduplicates on the stable
+        # (artifact_type, label) key and returns the pre-existing immutable
+        # artifact when the action is retried after the verification artifact was
+        # published but before the projections committed. That persisted artifact
+        # — and its compact metadata projection — is authoritative. Continuing
+        # with the freshly recomputed, time-sensitive outcome would let the
+        # projections and response disagree with the durable artifact (the exact
+        # "artifact says still_failed while projections say verified_resolved"
+        # bug). Reuse the persisted outcome so every downstream projection matches
+        # the artifact.
+        persisted_metadata = getattr(verification_artifact, "metadata_json", None) or {}
+        persisted_outcome = _string_or_none(
+            persisted_metadata.get("verificationOutcome")
+        )
+        verification_outcome = persisted_outcome or verification_result.outcome
+        verification_reused = bool(
+            persisted_outcome and persisted_outcome != verification_result.outcome
+        )
+        verification_reason = (
+            "Reused the persisted verification outcome from the authoritative "
+            "remediation.verification artifact; the action was retried before the "
+            "projections committed, so the recomputed outcome is discarded."
+            if verification_reused
+            else verification_result.reason
+        )
+        verification_resulting_identity = (
+            {} if verification_reused else dict(verification_result.resulting_identity)
         )
 
         audit_timestamp = datetime.now(timezone.utc)
@@ -517,7 +1205,9 @@ class RemediationEvidenceToolService:
             metadata={
                 "status": status,
                 "idempotencyKey": action_request["actionId"],
+                "approvalRef": approval_ref,
                 "verificationRequired": verification_required,
+                "verificationOutcome": verification_outcome,
             },
         )
         audit_artifact = await self._lifecycle_publisher.publish_json_artifact(
@@ -544,7 +1234,12 @@ class RemediationEvidenceToolService:
             },
             timestamp=audit_timestamp,
             metadata={
+                # Delivery status and repair-verification outcome are recorded
+                # as separate supplemental evidence; the target's original
+                # outcome is never rewritten by this annotation.
                 "status": status,
+                "verificationOutcome": verification_outcome,
+                "approvalRef": approval_ref,
                 "nativeArtifactPolicy": "preserve",
             },
         )
@@ -563,12 +1258,42 @@ class RemediationEvidenceToolService:
         )
 
         link.latest_action_summary = action_kind
+        # ``outcome`` records the action *delivery* status; the repair
+        # verification outcome is tracked separately so a delivered action never
+        # relabels the target as repaired.
         link.outcome = status
+        link.verification_outcome = verification_outcome
+        if resolved_approval is not None:
+            link.approval_state = {
+                **dict(link.approval_state or {}),
+                "artifactRefs": {
+                    **dict(
+                        (link.approval_state or {}).get("artifactRefs") or {}
+                    ),
+                    "actionRequest": request_artifact.artifact_id,
+                    "actionResult": result_artifact.artifact_id,
+                    "verification": verification_artifact.artifact_id,
+                    "auditEvent": audit_artifact.artifact_id,
+                    "targetAnnotation": annotation_artifact.artifact_id,
+                },
+            }
         await self._session.commit()
-        return {
+        response = {
             "schemaVersion": "v1",
             "actionKind": action_kind,
+            # Delivery/application status of the action itself.
             "status": status,
+            # Trusted post-action repair verification, kept distinct from delivery.
+            "verification": {
+                "outcome": verification_outcome,
+                "deliveryStatus": status,
+                "automaticallyVerifiable": (
+                    verification_result.contract.automatically_verifiable
+                ),
+                "verifierKind": verification_result.contract.verifier_kind,
+                "reason": verification_reason,
+                "resultingIdentity": verification_resulting_identity,
+            },
             "artifactRefs": {
                 "actionRequest": request_artifact.artifact_id,
                 "actionResult": result_artifact.artifact_id,
@@ -577,6 +1302,11 @@ class RemediationEvidenceToolService:
                 "targetAnnotation": annotation_artifact.artifact_id,
             },
         }
+        if "policyAuthority" in result_payload:
+            response["policyAuthority"] = result_payload["policyAuthority"]
+        if "approvalBinding" in result_payload:
+            response["approvalBinding"] = result_payload["approvalBinding"]
+        return response
 
     async def publish_lifecycle_summary(
         self,
@@ -621,7 +1351,13 @@ class RemediationEvidenceToolService:
             principal=principal,
         )
 
-        link.outcome = str(final_summary.get("resolution") or link.outcome or "")
+        # The lifecycle resolution is recorded in its own column so it never
+        # overwrites ``link.outcome`` (the latest action *delivery* status). Prior
+        # to issue #3622 this write clobbered the delivery projection and changed
+        # the column's meaning across phases.
+        resolution = _string_or_none(final_summary.get("resolution"))
+        if resolution is not None:
+            link.resolution = resolution
         await self._session.commit()
         return {
             "schemaVersion": "v1",
@@ -870,6 +1606,20 @@ def _normalize_sequence(value: int | None, *, default_cursor: Any) -> int | None
         return max(0, parsed)
     return None
 
+
+def _approval_binding_from_state(state: Mapping[str, Any]) -> dict[str, Any]:
+    """Build downstream policy evidence from one trusted persisted decision."""
+
+    return {
+        "policyRef": state.get("policyRef"),
+        "policyDigest": state.get("policyDigest"),
+        "snapshotRef": state.get("policySnapshotRef"),
+        "targetExpectedState": state.get("expectedTargetState"),
+        "approvalClass": state.get("approvalClass"),
+        "reviewerRule": state.get("reviewerRule"),
+    }
+
+
 def _normalize_action_result_status(value: Any) -> str:
     status = _required_string(value, "status")
     if status not in _ALLOWED_ACTION_RESULT_STATUSES:
@@ -879,13 +1629,13 @@ def _normalize_action_result_status(value: Any) -> str:
     return status
 
 def _annotation_decision_for_status(status: str) -> str:
-    if status in {"applied", "failed", "timed_out"}:
+    if status in {"accepted", "applied", "failed", "timed_out"}:
         return "attempted"
     if status == "no_op":
         return "skipped"
     if status == "approval_required":
         return "approval_required"
-    if status in {"rejected", "precondition_failed"}:
+    if status in {"rejected", "denied", "precondition_failed"}:
         return "denied"
     return "escalated"
 
@@ -958,8 +1708,10 @@ def _enum_value(value: Any) -> str | None:
     return _string_or_none(enum_value)
 
 __all__ = [
+    "MoonMindControlPlaneRemediationActionExecutor",
     "RemediationActionExecutor",
     "RemediationActionRequestPreparation",
+    "RemediationEvidencePage",
     "RemediationEvidenceToolError",
     "RemediationEvidenceToolService",
     "RemediationLiveFollowEvent",

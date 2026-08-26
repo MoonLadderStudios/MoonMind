@@ -20,6 +20,10 @@ from moonmind.workflows.temporal.artifacts import (
     ExecutionRef,
     TemporalArtifactService,
 )
+from moonmind.workflows.temporal.remediation_verification import (
+    REMEDIATION_VERIFICATION_OUTCOMES,
+    VERIFIED_RESOLVED,
+)
 from moonmind.utils.logging import redact_sensitive_text
 
 REMEDIATION_CONTEXT_LINK_TYPE = "remediation.context"
@@ -31,6 +35,8 @@ REMEDIATION_ARTIFACT_TYPES = frozenset(
         "remediation.plan",
         "remediation.attempt",
         "remediation.decision_log",
+        "remediation.approval_request",
+        "remediation.approval_decision",
         "remediation.action_request",
         "remediation.action_result",
         "remediation.audit_event",
@@ -92,6 +98,18 @@ REMEDIATION_PREVENTION_STATUSES = frozenset(
         "policy_blocked",
     }
 )
+# Prevention verification is distinct from immediate repair verification: it
+# describes whether the long-term recurrence-prevention change (branch/PR) has
+# been verified, not whether the failed target was repaired (issue #3622).
+REMEDIATION_PREVENTION_VERIFICATION_OUTCOMES = frozenset(
+    {
+        "not_applicable",
+        "pending",
+        "verified",
+        "failed",
+        "unverified",
+    }
+)
 REMEDIATION_LOCK_RELEASE_STATUSES = frozenset(
     {"attempted", "released", "not_held", "failed"}
 )
@@ -104,6 +122,20 @@ TARGET_EVIDENCE_CLASSES = (
     ("diagnostics", "diagnosticsRef"),
     ("provider_snapshot", "providerSnapshotRef"),
     ("continuity", "continuityRefs"),
+)
+OMNIGENT_EVIDENCE_INDEX_FIELDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("execution_and_steps", ("executionDetailRef", "stepExecutionDetailRefs", "failureTaxonomyRef")),
+    ("bridge_events", ("bridgeEventPageRefs", "normalizedEventJournalRef", "rawEventJournalRef")),
+    ("capture", ("initialSnapshotRef", "finalSnapshotRef", "captureManifestRef", "resourceManifestRef")),
+    ("workspace", ("changedFilesRef", "workspaceFilesRef", "sessionFilesRef", "diffRef", "childSessionRefs")),
+    ("host_and_session", ("hostRef", "sessionRef", "agentRef", "hostBindingRef", "endpointRef")),
+    ("provider_and_leases", ("providerProfileRef", "providerLeaseRef", "hostLeaseRef", "credentialGenerationRef")),
+    ("launch", ("executionProfileRef", "launchPolicyRef", "effectiveLaunchSnapshotRef")),
+    ("checkpoint_and_recovery", ("checkpointManifestRefs", "externalStateRefs", "workspaceAuthorityRef", "recoveryDecisionRef")),
+    ("checkpoint_branches", ("checkpointBranchRefs", "branchTurnRefs", "gitRef", "comparisonRef", "promotionRef")),
+    ("lifecycle", ("incidentManifestRef", "recoveryManifestRef", "cleanupManifestRef", "janitorManifestRef", "terminalPublicationManifestRef")),
+    ("policy", ("policySnapshotRef", "approvalSnapshotRef", "lockSnapshotRef", "capturePolicyRef", "retentionPolicyRef", "redactionPolicyRef")),
+    ("prior_remediation", ("priorAttemptRefs", "cumulativeWorkspaceHeadRef", "verificationResultRefs", "preventionOutputRefs")),
 )
 SECRET_LIKE_POLICY_KEY_PARTS = (
     "api_key",
@@ -265,12 +297,21 @@ class RemediationContextBuilder:
             agent_runs=agent_runs,
             live_follow=live_follow,
         )
-        unavailable_classes = [
-            item["class"]
-            for item in availability
-            if item.get("status")
-            in {"missing", "partial", "denied", "unavailable", "unsupported"}
-        ]
+        omnigent_evidence_index = self._omnigent_evidence_index(target_evidence)
+        degraded_statuses = {
+            "missing",
+            "partial",
+            "denied",
+            "unavailable",
+            "unsupported",
+        }
+        unavailable_classes = list(
+            dict.fromkeys(
+                item["class"]
+                for item in (*availability, *omnigent_evidence_index)
+                if item.get("status") in degraded_statuses
+            )
+        )
 
         return {
             "schemaVersion": REMEDIATION_CONTEXT_SCHEMA_VERSION,
@@ -285,6 +326,7 @@ class RemediationContextBuilder:
                 "targetArtifactRefs": self._target_artifact_refs(target_record),
                 "agentRuns": agent_runs,
                 "availability": availability,
+                "omnigentIndex": omnigent_evidence_index,
                 "evidenceDegraded": bool(unavailable_classes),
                 "unavailableEvidenceClasses": unavailable_classes,
                 **self._diagnosis_hints_payload(target_evidence),
@@ -333,7 +375,11 @@ class RemediationContextBuilder:
     def _target_evidence_payload(
         record: db_models.TemporalExecutionCanonicalRecord,
     ) -> Mapping[str, Any]:
-        for source in (record.memo, record.parameters, record.integration_state):
+        for source in (
+            record.memo,
+            record.parameters,
+            getattr(record, "integration_state", None),
+        ):
             if not isinstance(source, Mapping):
                 continue
             evidence = source.get("remediationEvidence") or source.get(
@@ -509,6 +555,48 @@ class RemediationContextBuilder:
         return availability
 
     @staticmethod
+    def _omnigent_evidence_index(
+        target_evidence: Mapping[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Project the full host-backed evidence ledger without embedding bodies."""
+
+        generated_at = _safe_optional_string(
+            target_evidence.get("observedAt") or target_evidence.get("generatedAt")
+        )
+        index: list[dict[str, Any]] = []
+        for class_name, fields in OMNIGENT_EVIDENCE_INDEX_FIELDS:
+            refs: list[dict[str, str]] = []
+            seen: set[tuple[str, str | None]] = set()
+            for field_name in fields:
+                raw_value = target_evidence.get(field_name)
+                values = raw_value if isinstance(raw_value, list) else [raw_value]
+                for value in values:
+                    ref = _artifact_ref_payload(value, kind=field_name)
+                    if ref is None:
+                        continue
+                    key = (ref.get("artifact_id") or ref.get("ref") or "", ref.get("kind"))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    refs.append(ref)
+            record: dict[str, Any] = {
+                "class": class_name,
+                "status": "available" if refs else "missing",
+                "bounded": True,
+                "contentsIncluded": False,
+                "refs": refs,
+            }
+            if generated_at:
+                record["observedAt"] = generated_at
+                record["freshness"] = "source_reported"
+            else:
+                record["freshness"] = "unknown"
+            if not refs:
+                record["degradedReason"] = "historical evidence was not recorded"
+            index.append(record)
+        return index
+
+    @staticmethod
     def _live_follow_payload(
         *,
         link: db_models.TemporalExecutionRemediationLink,
@@ -612,9 +700,9 @@ class RemediationContextBuilder:
                     refs.append(ref)
 
         for kind, raw_ref in (
-            ("input", record.input_ref),
-            ("plan", record.plan_ref),
-            ("manifest", record.manifest_ref),
+            ("input", getattr(record, "input_ref", None)),
+            ("plan", getattr(record, "plan_ref", None)),
+            ("manifest", getattr(record, "manifest_ref", None)),
         ):
             ref = _artifact_ref_payload(raw_ref, kind=kind)
             if ref is not None:
@@ -654,6 +742,7 @@ class RemediationLifecyclePublisher:
         payload: Mapping[str, Any],
         target_workflow_id: str | None = None,
         target_run_id: str | None = None,
+        extra_metadata: Mapping[str, Any] | None = None,
         principal: str = "service:remediation-lifecycle",
     ) -> db_models.TemporalArtifact:
         workflow_id = _required_string(
@@ -699,6 +788,12 @@ class RemediationLifecyclePublisher:
             metadata_json["targetWorkflowId"] = target_workflow_id
         if target_run_id := _string_or_none(target_run_id):
             metadata_json["targetRunId"] = target_run_id
+        if extra_metadata:
+            # Compact, non-sensitive projection so dashboards can render the
+            # verification classification without fetching the artifact body.
+            safe_extra = _safe_policy_mapping(extra_metadata)
+            for key, value in (safe_extra or {}).items():
+                metadata_json.setdefault(str(key), value)
 
         artifact, _upload = await self._artifact_service.create(
             principal=principal,
@@ -1082,15 +1177,34 @@ def build_remediation_repair_decision(
     action_request_ref: str | None = None,
     action_result_ref: str | None = None,
     verification_ref: str | None = None,
+    delivery_status: str | None = None,
+    verification_outcome: str | None = None,
+    resulting_identity: Mapping[str, Any] | None = None,
+    remaining_operator_work: str | None = None,
     metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build a bounded target-level immediate repair decision."""
+    """Build a bounded target-level immediate repair decision.
+
+    ``delivery_status`` (the action delivery/application status) and
+    ``verification_outcome`` (the trusted post-action repair-verification
+    classification) are recorded as separate fields so a delivered action never
+    relabels the target as repaired (issue #3622).
+    """
 
     normalized_decision = _validated_choice(
         decision, REMEDIATION_REPAIR_DECISIONS, "decision"
     )
     normalized_outcome = _validated_choice(
         repair_outcome, REMEDIATION_REPAIR_OUTCOMES, "repair_outcome"
+    )
+    normalized_verification_outcome = (
+        _validated_choice(
+            verification_outcome,
+            REMEDIATION_VERIFICATION_OUTCOMES,
+            "verification_outcome",
+        )
+        if verification_outcome is not None
+        else None
     )
     if normalized_decision == "attempted" and not (
         action_request_ref and action_result_ref and verification_ref
@@ -1101,6 +1215,18 @@ def build_remediation_repair_decision(
         )
     if normalized_decision != "attempted" and normalized_outcome == "repaired":
         raise ValueError("repair_outcome repaired requires an attempted repair")
+    # A delivered action is only a *repair* once trusted post-action verification
+    # independently confirmed the target reached ``verified_resolved`` (issue
+    # #3622). Actions whose contract has no owning verifier (e.g.
+    # workload.restart_helper_container) therefore can never be labeled repaired
+    # from delivery alone.
+    if normalized_outcome == "repaired" and (
+        normalized_verification_outcome != VERIFIED_RESOLVED
+    ):
+        raise ValueError(
+            "repair_outcome repaired requires verification_outcome "
+            f"'{VERIFIED_RESOLVED}'"
+        )
 
     pinned = _required_lifecycle_string(pinned_run_id, "pinned_run_id")
     current = _safe_identifier_string(current_run_id) or pinned
@@ -1128,6 +1254,17 @@ def build_remediation_repair_decision(
         ),
         "repairOutcome": normalized_outcome,
     }
+    if delivery_status is not None:
+        payload["deliveryStatus"] = _required_redacted_text(
+            delivery_status, "delivery_status"
+        )
+    if normalized_verification_outcome is not None:
+        payload["verificationOutcome"] = normalized_verification_outcome
+    if resulting_identity is not None:
+        if safe_identity := _safe_policy_mapping(resulting_identity):
+            payload["resultingIdentity"] = safe_identity
+    if remaining := _redacted_optional_text(remaining_operator_work):
+        payload["remainingOperatorWork"] = remaining
     candidate = _repair_candidate_payload(
         action_kind=candidate_action_kind,
         reason=candidate_reason,
@@ -1148,12 +1285,27 @@ def build_remediation_prevention_outcome(
     pull_request_url: str | None = None,
     findings_ref: str | None = None,
     blocked_reason: str | None = None,
+    prevention_verification_outcome: str | None = None,
     metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build a bounded recurrence-prevention outcome."""
+    """Build a bounded recurrence-prevention outcome.
+
+    ``prevention_verification_outcome`` is the verification of the long-term
+    prevention change (branch/PR) and remains distinct from immediate repair
+    verification (issue #3622).
+    """
 
     normalized_status = _validated_choice(
         status, REMEDIATION_PREVENTION_STATUSES, "status"
+    )
+    normalized_prevention_verification = (
+        _validated_choice(
+            prevention_verification_outcome,
+            REMEDIATION_PREVENTION_VERIFICATION_OUTCOMES,
+            "prevention_verification_outcome",
+        )
+        if prevention_verification_outcome is not None
+        else None
     )
     safe_pr_url = _safe_public_url(pull_request_url)
     safe_findings_ref = _artifact_ref_string(findings_ref, "findings_ref")
@@ -1189,6 +1341,8 @@ def build_remediation_prevention_outcome(
         payload["findingsRef"] = safe_findings_ref
     if safe_blocked_reason:
         payload["blockedReason"] = safe_blocked_reason
+    if normalized_prevention_verification is not None:
+        payload["preventionVerificationOutcome"] = normalized_prevention_verification
     if safe_metadata := _safe_policy_mapping(metadata):
         payload["metadata"] = safe_metadata
     return payload
@@ -1471,11 +1625,23 @@ def _validate_repair_payload(value: Mapping[str, Any]) -> None:
     _validated_choice(
         value.get("decision"), REMEDIATION_REPAIR_DECISIONS, "repair.decision"
     )
-    _validated_choice(
+    repair_outcome = _validated_choice(
         value.get("repairOutcome"),
         REMEDIATION_REPAIR_OUTCOMES,
         "repair.repairOutcome",
     )
+    # A caller-supplied repair mapping may only claim ``repaired`` when trusted
+    # post-action verification confirmed ``verified_resolved`` (issue #3622).
+    # This closes the integration-lifecycle path where a delivered action with no
+    # owning verifier (e.g. workload.restart_helper_container) could be published
+    # as repaired without verification.
+    if repair_outcome == "repaired":
+        verification_outcome = _string_or_none(value.get("verificationOutcome"))
+        if verification_outcome != VERIFIED_RESOLVED:
+            raise ValueError(
+                "repair.repairOutcome repaired requires "
+                f"repair.verificationOutcome '{VERIFIED_RESOLVED}'"
+            )
 
 def _validate_prevention_payload(value: Mapping[str, Any]) -> None:
     if not isinstance(value, Mapping):

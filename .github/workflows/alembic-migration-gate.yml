@@ -1,4 +1,4 @@
-name: Alembic Migration Gate
+name: CI / Alembic Migration Gate
 
 "on":
   pull_request:
@@ -50,10 +50,9 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 1
-          submodules: recursive
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 

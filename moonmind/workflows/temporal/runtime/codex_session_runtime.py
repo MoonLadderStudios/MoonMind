@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
+import hashlib
 import json
 import os
 import queue
@@ -15,6 +17,7 @@ import sys
 import tempfile
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,6 +26,7 @@ from typing import Any, Callable, Iterator, Mapping, Sequence
 from pydantic import BaseModel, ConfigDict, Field
 
 from moonmind.schemas.managed_session_models import (
+    CODEX_TURN_RUNTIME_SELECTION_CONTRACT,
     CodexManagedSessionArtifactsPublication,
     CodexManagedSessionClearRequest,
     CodexManagedSessionHandle,
@@ -38,9 +42,6 @@ from moonmind.schemas.managed_session_models import (
     SteerCodexManagedSessionTurnRequest,
     TerminateCodexManagedSessionRequest,
 )
-from moonmind.workflows.automation.preflight import (
-    run_docker_sidecar_preflight_check,
-)
 from moonmind.workflows.codex_session_timeouts import (
     DEFAULT_CODEX_TURN_COMPLETION_TIMEOUT_SECONDS,
 )
@@ -50,20 +51,36 @@ from moonmind.workflows.provider_failures import (
 )
 
 _STATE_FILENAME = ".moonmind-codex-session-state.json"
+_STATE_LOCK_FILENAME = ".moonmind-codex-session-state.lock"
 _READY_LOOP_SECONDS = 3600.0
 _DEFAULT_TURN_COMPLETION_TIMEOUT_SECONDS = (
     float(DEFAULT_CODEX_TURN_COMPLETION_TIMEOUT_SECONDS)
 )
 _STDOUT_EOF = object()
 _AUTH_SEED_EXCLUDED_NAMES = frozenset({".tmp", "config.toml", "sessions", "tmp"})
-_AUTH_SEED_EXCLUDED_FILE_NAMES = frozenset({".codex-remote-plugin-install.json"})
+_AUTH_STATE_FILENAME = "auth.json"
+_AUTH_SYNC_LOCK_FILENAME = ".moonmind-auth-sync.lock"
+_AUTH_SEED_EXCLUDED_FILE_NAMES = frozenset(
+    {".codex-remote-plugin-install.json", _AUTH_SYNC_LOCK_FILENAME}
+)
 _AUTH_SEED_EXCLUDED_PREFIXES: tuple[str, ...] = ("logs_", "state_")
 _ROLLOUT_RECOVERY_MAX_BYTES = 4 * 1024 * 1024
 _ROLLOUT_RECOVERY_TIMESTAMP_SKEW_SECONDS = 5.0
 _LOG_RECOVERY_MAX_ROWS = 200
 _LOG_RECOVERY_PROVIDER_MAX_ROWS = 200
 _LOG_RECOVERY_SQLITE_TIMEOUT_SECONDS = 1.0
+_PROVIDER_LOG_SETTLE_GRACE_SECONDS = 1.0
+_PROVIDER_LOG_SETTLE_RETRY_SECONDS = 0.1
 _LOG_RECOVERY_PROVIDER_MARKERS: tuple[str, ...] = provider_failure_search_markers()
+_CODEX_PROVIDER_RESPONSE_LOG_MARKERS: tuple[str, ...] = (
+    "url=https://chatgpt.com/backend-api/codex/responses",
+    "url=https://api.openai.com/v1/responses",
+)
+_HTTP_PROVIDER_STATUS_LOG_PATTERN = re.compile(
+    r"\bstatus=(?P<status>401|403|429|500|502|503|504)"
+    r"\s+(?P<reason>[A-Za-z][A-Za-z -]{0,80}?)(?:\s+headers=|$)",
+    re.IGNORECASE,
+)
 EMPTY_ASSISTANT_FAILURE_CAUSE = "app_server_protocol_empty_turn"
 _EMPTY_ASSISTANT_FAILURE_REASONS: tuple[str, ...] = (
     "codex app-server task_complete produced no assistant output",
@@ -76,9 +93,10 @@ def _is_empty_assistant_failure_reason(value: str | None) -> bool:
         value
         and value.strip().lower() in _EMPTY_ASSISTANT_FAILURE_REASONS
     )
-_CODEX_PROVIDER_CREDITS_EXHAUSTED_REASON = (
-    "Codex provider reported no remaining credits (usage limit reached); "
-    "retry after a profile cooldown or update the provider profile."
+_CODEX_PROVIDER_USAGE_LIMIT_REACHED_REASON = (
+    "Codex provider reported that its usage limit was reached and no additional "
+    "credits are available; retry after a profile cooldown or update the provider "
+    "profile."
 )
 _DIAGNOSTIC_TEXT_MAX_CHARS = 1000
 _RPC_TRACE_MAX_ENTRIES = 80
@@ -127,6 +145,7 @@ def _redact_text(value: Any, *, max_chars: int) -> str:
 class _RolloutTurnScan:
     references_turn: bool = False
     assistant_text: str = ""
+    terminal_assistant_text: str = ""
     saw_task_complete: bool = False
     error_text: str | None = None
     provider_failure_reason: str | None = None
@@ -175,15 +194,20 @@ class _RolloutLiveMirror:
     turn_started_at: float | None = None
     last_assistant_text: str = ""
     last_assistant_text_matches_active_turn: bool = False
+    terminal_assistant_text: str = ""
+    saw_task_complete: bool = False
+    terminal_error_text: str | None = None
     inside_active_turn: bool = False
     emitted_assistant_texts: set[str] = field(default_factory=set)
     emitted_live_keys: set[str] = field(default_factory=set)
+    observations: list[dict[str, Any]] = field(default_factory=list)
 
 class CodexSessionRuntimeState(BaseModel):
     """Persisted logical-to-vendor session mapping for one container session."""
 
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
+    state_revision: int = Field(default=0, alias="stateRevision", ge=0)
     session_id: str = Field(..., alias="sessionId")
     session_epoch: int = Field(..., alias="sessionEpoch", ge=1)
     logical_thread_id: str = Field(..., alias="logicalThreadId")
@@ -200,6 +224,9 @@ class CodexSessionRuntimeState(BaseModel):
     last_turn_error: str | None = Field(None, alias="lastTurnError")
     last_failure_class: str | None = Field(None, alias="lastFailureClass")
     last_disposition: str | None = Field(None, alias="lastDisposition")
+    observability_events: list[dict[str, Any]] = Field(
+        default_factory=list, alias="observabilityEvents"
+    )
 
 class CodexAppServerRpcClient:
     """Minimal JSON-RPC stdio client for ``codex app-server``."""
@@ -539,6 +566,7 @@ class CodexManagedSessionRuntime:
         self._auth_volume_path = (
             Path(auth_volume_path) if str(auth_volume_path or "").strip() else None
         )
+        self._auth_seed_digest: str | None = None
         self._image_ref = image_ref
         self._control_url = control_url
         self._container_id = container_id
@@ -629,6 +657,8 @@ class CodexManagedSessionRuntime:
             )
 
         self._ensure_directories()
+        durable_auth = source_root / _AUTH_STATE_FILENAME
+        self._auth_seed_digest = self._file_digest(durable_auth)
         for source_path in sorted(source_root.iterdir()):
             if not self._should_seed_auth_entry(source_path):
                 continue
@@ -644,6 +674,81 @@ class CodexManagedSessionRuntime:
                 )
                 continue
             self._copy_auth_seed_file(source_path, destination)
+
+    @staticmethod
+    def _file_digest(path: Path) -> str | None:
+        if path.is_symlink() or not path.is_file():
+            return None
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def _sync_codex_auth_to_volume(self) -> None:
+        """Persist a rotated Codex OAuth token without clobbering newer auth.
+
+        Codex needs a writable per-run home for its runtime state, while the
+        provider profile owns the durable OAuth volume.  Refresh tokens rotate,
+        so a successful refresh in the per-run home must be copied back.  The
+        seed digest plus a volume-local lock form a compare-and-swap boundary:
+        if another session or a reconnect changed durable auth, this session
+        refuses to overwrite it.
+        """
+
+        if self._auth_volume_path is None or self._auth_seed_digest is None:
+            return
+        try:
+            local_auth = self._codex_home_path / _AUTH_STATE_FILENAME
+            local_digest = self._file_digest(local_auth)
+            if local_digest is None or local_digest == self._auth_seed_digest:
+                return
+
+            durable_auth = self._auth_volume_path / _AUTH_STATE_FILENAME
+            lock_path = self._auth_volume_path / _AUTH_SYNC_LOCK_FILENAME
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            with lock_path.open("a+b") as lock_handle:
+                try:
+                    fcntl.flock(
+                        lock_handle.fileno(),
+                        fcntl.LOCK_EX | fcntl.LOCK_NB,
+                    )
+                except BlockingIOError:
+                    self._record_auth_sync_warning(
+                        "durable auth volume lock is busy; a later lifecycle "
+                        "boundary will retry"
+                    )
+                    return
+                if self._file_digest(durable_auth) != self._auth_seed_digest:
+                    return
+                temp_fd, temp_name = tempfile.mkstemp(
+                    prefix=f".{_AUTH_STATE_FILENAME}.",
+                    dir=str(self._auth_volume_path),
+                )
+                os.close(temp_fd)
+                temp_path = Path(temp_name)
+                try:
+                    shutil.copy2(local_auth, temp_path)
+                    with temp_path.open("rb") as temp_handle:
+                        os.fsync(temp_handle.fileno())
+                    os.replace(temp_path, durable_auth)
+                    self._auth_seed_digest = local_digest
+                finally:
+                    temp_path.unlink(missing_ok=True)
+        except Exception as exc:
+            self._record_auth_sync_warning(f"rotated auth persistence failed: {exc}")
+
+    def _record_auth_sync_warning(self, message: str) -> None:
+        try:
+            self._append_spool(
+                "stderr",
+                "auth sync deferred: "
+                f"{_redact_text(message, max_chars=_DIAGNOSTIC_TEXT_MAX_CHARS)}\n",
+            )
+        except OSError:
+            # Synchronization diagnostics are best-effort and must not replace
+            # the authoritative assistant turn outcome.
+            pass
 
     def _append_spool(self, stream_name: str, text: str) -> None:
         if stream_name not in {"stdout", "stderr"}:
@@ -743,12 +848,60 @@ class CodexManagedSessionRuntime:
             self._state_path.read_text(encoding="utf-8")
         )
 
-    def _save_state(self, state: CodexSessionRuntimeState) -> None:
+    @contextmanager
+    def _state_lock(self) -> Iterator[None]:
         self._ensure_directories()
-        self._state_path.write_text(
-            state.model_dump_json(by_alias=True, exclude_none=True, indent=2) + "\n",
-            encoding="utf-8",
+        lock_path = self._state_path.parent / _STATE_LOCK_FILENAME
+        with lock_path.open("a+b") as lock_handle:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+            yield
+
+    def _save_state(self, state: CodexSessionRuntimeState) -> None:
+        with self._state_lock():
+            self._save_state_locked(state)
+
+    def _save_state_locked(self, state: CodexSessionRuntimeState) -> None:
+        current: CodexSessionRuntimeState | None = None
+        if self._state_path.is_file():
+            current = CodexSessionRuntimeState.model_validate_json(
+                self._state_path.read_text(encoding="utf-8")
+            )
+            if current.session_id != state.session_id:
+                raise RuntimeError(
+                    "sessionId does not match the active managed session"
+                )
+            if current.state_revision != state.state_revision:
+                raise RuntimeError(
+                    "sessionEpoch does not match the active managed session: "
+                    "managed session state advanced while the action was running"
+                )
+
+        next_revision = (current.state_revision if current is not None else 0) + 1
+        next_state = state.model_copy(update={"state_revision": next_revision})
+        payload = (
+            next_state.model_dump_json(
+                by_alias=True,
+                exclude_none=True,
+                indent=2,
+            )
+            + "\n"
         )
+        temp_fd, temp_name = tempfile.mkstemp(
+            prefix=f"{_STATE_FILENAME}.",
+            suffix=".tmp",
+            dir=str(self._state_path.parent),
+        )
+        temp_path = Path(temp_name)
+        try:
+            with os.fdopen(temp_fd, "w", encoding="utf-8") as handle:
+                temp_fd = -1
+                handle.write(payload)
+            os.replace(temp_path, self._state_path)
+            state.state_revision = next_revision
+        finally:
+            if temp_fd >= 0:
+                os.close(temp_fd)
+            temp_path.unlink(missing_ok=True)
 
     def _session_state(self, state: CodexSessionRuntimeState) -> CodexManagedSessionState:
         return CodexManagedSessionState(
@@ -770,6 +923,9 @@ class CodexManagedSessionRuntime:
             "vendorThreadId": state.vendor_thread_id,
             **dict(metadata or {}),
         }
+        merged["turnRuntimeSelectionContract"] = (
+            CODEX_TURN_RUNTIME_SELECTION_CONTRACT
+        )
         if state.last_assistant_text:
             merged.setdefault("lastAssistantText", state.last_assistant_text)
         if state.last_turn_id:
@@ -782,6 +938,8 @@ class CodexManagedSessionRuntime:
             merged.setdefault("failureClass", state.last_failure_class)
         if state.last_disposition:
             merged.setdefault("disposition", state.last_disposition)
+        if state.observability_events:
+            merged.setdefault("observabilityEvents", state.observability_events)
         return CodexManagedSessionHandle(
             sessionState=self._session_state(state),
             status=status,
@@ -790,8 +948,11 @@ class CodexManagedSessionRuntime:
             metadata=merged,
         )
 
-    def _validate_locator(self, request: CodexManagedSessionLocator) -> CodexSessionRuntimeState:
-        state = self._load_state()
+    @staticmethod
+    def _validate_state_locator(
+        state: CodexSessionRuntimeState,
+        request: CodexManagedSessionLocator,
+    ) -> None:
         if state.session_id != request.session_id:
             raise RuntimeError("sessionId does not match the active managed session")
         if state.session_epoch != request.session_epoch:
@@ -800,6 +961,10 @@ class CodexManagedSessionRuntime:
             raise RuntimeError("containerId does not match the active managed session")
         if state.logical_thread_id != request.thread_id:
             raise RuntimeError("threadId does not match the active managed session")
+
+    def _validate_locator(self, request: CodexManagedSessionLocator) -> CodexSessionRuntimeState:
+        state = self._load_state()
+        self._validate_state_locator(state, request)
         return state
 
     @staticmethod
@@ -958,6 +1123,29 @@ class CodexManagedSessionRuntime:
         return False
 
     @staticmethod
+    def _payload_has_turn_reference(payload: Any) -> bool:
+        if isinstance(payload, Mapping):
+            if str(payload.get("turnId") or payload.get("turn_id") or "").strip():
+                return True
+            turn_payload = payload.get("turn")
+            if isinstance(turn_payload, Mapping) and str(
+                turn_payload.get("id") or ""
+            ).strip():
+                return True
+            return any(
+                CodexManagedSessionRuntime._payload_has_turn_reference(
+                    payload.get(nested_key)
+                )
+                for nested_key in ("payload", "data", "delta", "item", "event")
+            )
+        if isinstance(payload, list):
+            return any(
+                CodexManagedSessionRuntime._payload_has_turn_reference(item)
+                for item in payload
+            )
+        return False
+
+    @staticmethod
     def _rollout_entry_timestamp(payload: Mapping[str, Any]) -> float | None:
         timestamp_text = str(payload.get("timestamp") or "").strip()
         if not timestamp_text:
@@ -1013,7 +1201,6 @@ class CodexManagedSessionRuntime:
             return _RolloutTurnScan()
         last_text = ""
         terminal_text = ""
-        terminal_cutoff = None
         references_active_turn = False
         entries_scanned = 0
         entries_referencing_turn = 0
@@ -1022,10 +1209,6 @@ class CodexManagedSessionRuntime:
         error_text: str | None = None
         provider_failure_reason: str | None = None
         inside_active_turn = False
-        if turn_started_at is not None:
-            terminal_cutoff = (
-                float(turn_started_at) - _ROLLOUT_RECOVERY_TIMESTAMP_SKEW_SECONDS
-            )
         try:
             rollout_file = Path(rollout_path)
             for stripped in self._iter_rollout_lines(rollout_file):
@@ -1039,40 +1222,37 @@ class CodexManagedSessionRuntime:
                     continue
                 entries_scanned += 1
                 references_turn = self._payload_references_turn(payload, vendor_turn_id)
+                has_turn_reference = self._payload_has_turn_reference(payload)
                 if references_turn:
                     references_active_turn = True
                     entries_referencing_turn += 1
                     text = self._assistant_text_from_rollout_entry(payload)
                     if text:
                         last_text = text
-                text = self._terminal_assistant_text_from_rollout_entry(payload)
-                if text:
-                    if references_turn:
-                        terminal_text = text
-                    elif terminal_cutoff is not None:
-                        entry_timestamp = self._rollout_entry_timestamp(payload)
-                        if entry_timestamp is not None and entry_timestamp >= terminal_cutoff:
-                            terminal_text = text
                 entry_type = str(payload.get("type") or "").strip().lower()
-                if entry_type != "event_msg":
-                    continue
                 event_payload = payload.get("payload")
-                if not isinstance(event_payload, Mapping):
+                event_type = ""
+                if entry_type == "event_msg" and isinstance(event_payload, Mapping):
+                    event_type = str(event_payload.get("type") or "").strip().lower()
+                if event_type == "task_started":
+                    inside_active_turn = references_turn
+                event_belongs_to_turn = references_turn or (
+                    inside_active_turn and not has_turn_reference
+                )
+                text = self._terminal_assistant_text_from_rollout_entry(payload)
+                if text and event_belongs_to_turn:
+                    terminal_text = text
+                if entry_type != "event_msg" or not isinstance(
+                    event_payload, Mapping
+                ):
                     continue
-                event_type = str(event_payload.get("type") or "").strip().lower()
-                event_belongs_to_turn = references_turn or inside_active_turn
-                if event_type == "task_started" and references_turn:
-                    inside_active_turn = True
-                    event_belongs_to_turn = True
                 if event_belongs_to_turn and event_type and event_type not in event_types:
                     event_types.append(event_type)
                 if event_belongs_to_turn and provider_failure_reason is None:
                     provider_failure_reason = (
                         self._provider_failure_reason_from_rollout_event(event_payload)
                     )
-                if not references_turn:
-                    continue
-                if event_type != "task_complete":
+                if event_type != "task_complete" or not event_belongs_to_turn:
                     continue
                 saw_task_complete = True
                 inside_active_turn = False
@@ -1088,6 +1268,7 @@ class CodexManagedSessionRuntime:
         return _RolloutTurnScan(
             references_turn=references_active_turn,
             assistant_text=last_text or terminal_text,
+            terminal_assistant_text=terminal_text,
             saw_task_complete=saw_task_complete,
             error_text=error_text,
             provider_failure_reason=provider_failure_reason,
@@ -1107,13 +1288,35 @@ class CodexManagedSessionRuntime:
         rate_limits = event_payload.get("rate_limits")
         if not isinstance(rate_limits, Mapping):
             return None
+        reached_type = str(
+            rate_limits.get("rate_limit_reached_type") or ""
+        ).strip()
+        if reached_type:
+            return _CODEX_PROVIDER_USAGE_LIMIT_REACHED_REASON
         credits = rate_limits.get("credits")
         if not isinstance(credits, Mapping):
             return None
         has_credits = credits.get("has_credits")
         unlimited = credits.get("unlimited")
-        if has_credits is False and unlimited is not True:
-            return _CODEX_PROVIDER_CREDITS_EXHAUSTED_REASON
+        if has_credits is not False or unlimited is True:
+            return None
+        # ``credits`` describes optional purchased add-on credits. A zero
+        # balance is normal while included ChatGPT plan usage remains. Older
+        # Codex payloads may omit ``rate_limit_reached_type``, so only infer
+        # exhaustion when an included usage window is itself at 100%.
+        for limit_name in ("primary", "secondary", "individual_limit"):
+            limit = rate_limits.get(limit_name)
+            if not isinstance(limit, Mapping):
+                continue
+            used_percent = limit.get("used_percent")
+            if isinstance(used_percent, bool):
+                continue
+            try:
+                exhausted = float(used_percent) >= 100.0
+            except (TypeError, ValueError):
+                exhausted = False
+            if exhausted:
+                return _CODEX_PROVIDER_USAGE_LIMIT_REACHED_REASON
         return None
 
     @staticmethod
@@ -1303,6 +1506,7 @@ class CodexManagedSessionRuntime:
                         payload,
                         vendor_turn_id,
                     )
+                    has_turn_reference = self._payload_has_turn_reference(payload)
                     entry_type = str(payload.get("type") or "").strip().lower()
                     event_payload = payload.get("payload")
                     event_type = ""
@@ -1312,10 +1516,11 @@ class CodexManagedSessionRuntime:
                         event_type = str(
                             event_payload.get("type") or ""
                         ).strip().lower()
-                    if event_type == "task_started" and references_turn:
-                        mirror.inside_active_turn = True
+                    if event_type == "task_started":
+                        mirror.inside_active_turn = references_turn
                     belongs_to_active_turn = (
-                        references_turn or mirror.inside_active_turn
+                        references_turn
+                        or (mirror.inside_active_turn and not has_turn_reference)
                     )
                     if (
                         mirror.turn_started_at is not None
@@ -1332,6 +1537,20 @@ class CodexManagedSessionRuntime:
                         mirror.offset = handle.tell()
                         continue
                     live_output = self._rollout_entry_live_output(payload)
+                    terminal_text = self._terminal_assistant_text_from_rollout_entry(
+                        payload
+                    )
+                    if terminal_text and belongs_to_active_turn:
+                        mirror.terminal_assistant_text = terminal_text
+                    if event_type == "task_complete" and belongs_to_active_turn:
+                        mirror.saw_task_complete = True
+                        for field_name in ("error", "reason", "message"):
+                            extracted_error = self._error_text_from_value(
+                                event_payload.get(field_name)
+                            )
+                            if extracted_error:
+                                mirror.terminal_error_text = extracted_error
+                                break
                     if live_output is None:
                         mirror.offset = handle.tell()
                         continue
@@ -1356,6 +1575,22 @@ class CodexManagedSessionRuntime:
                             mirror.offset = handle.tell()
                             continue
                         mirror.emitted_assistant_texts.add(normalized_text)
+                    if belongs_to_active_turn:
+                        observation_kind = {
+                            "assistant": "assistant_message_completed",
+                            "tool_call": "tool_call_started",
+                            "tool_output": "tool_call_output",
+                            "task_complete": "turn_completed",
+                        }.get(label)
+                        if observation_kind:
+                            mirror.observations.append(
+                                {
+                                    "kind": observation_kind,
+                                    "turnId": vendor_turn_id,
+                                    "text": text.strip(),
+                                    "metadata": {"sourceEventId": live_key},
+                                }
+                            )
                     updates.append((stream_name, text))
                     if event_type == "task_complete" and belongs_to_active_turn:
                         mirror.inside_active_turn = False
@@ -1368,6 +1603,9 @@ class CodexManagedSessionRuntime:
                     )
                     if stream_text:
                         self._append_spool(stream_name, stream_text)
+                if mirror.observations:
+                    state.observability_events = mirror.observations[-100:]
+                    self._save_state(state)
         except OSError:
             return
 
@@ -1474,9 +1712,27 @@ class CodexManagedSessionRuntime:
             recovered = text[marker_index + len(marker) :].strip()
             if recovered:
                 return recovered
+        refresh_marker = "Failed to refresh token:"
+        refresh_index = text.find(refresh_marker)
+        if refresh_index >= 0:
+            recovered = text[refresh_index + len(refresh_marker) :].strip()
+            if recovered:
+                return recovered
         recovered = cls._extract_quoted_log_field(text, "error.message")
         if recovered:
             return recovered
+        status_match = (
+            _HTTP_PROVIDER_STATUS_LOG_PATTERN.search(text)
+            if any(
+                marker in text.lower()
+                for marker in _CODEX_PROVIDER_RESPONSE_LOG_MARKERS
+            )
+            else None
+        )
+        if status_match is not None:
+            status = status_match.group("status")
+            reason = " ".join(status_match.group("reason").split())
+            return f"HTTP {status} {reason}"
         received_marker = "Received message "
         received_index = text.find(received_marker)
         if received_index >= 0:
@@ -1593,6 +1849,27 @@ class CodexManagedSessionRuntime:
             if provider_rows_remaining <= 0:
                 break
         return None
+
+    def _settled_turn_error_from_logs(
+        self,
+        vendor_turn_id: str,
+        *,
+        turn_started_at: float | None = None,
+    ) -> str | None:
+        """Allow Codex's asynchronous SQLite logger to commit terminal errors."""
+
+        deadline = time.monotonic() + _PROVIDER_LOG_SETTLE_GRACE_SECONDS
+        while True:
+            recovered = self._extract_turn_error_from_logs(
+                vendor_turn_id,
+                turn_started_at=turn_started_at,
+            )
+            if recovered:
+                return recovered
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            time.sleep(min(_PROVIDER_LOG_SETTLE_RETRY_SECONDS, remaining))
 
     def _recent_runtime_log_excerpts(
         self,
@@ -1728,6 +2005,7 @@ class CodexManagedSessionRuntime:
             "entriesScanned": scan.entries_scanned,
             "entriesReferencingTurn": scan.entries_referencing_turn,
             "referencesTurn": scan.references_turn,
+            "hasTerminalAssistantText": bool(scan.terminal_assistant_text),
             "sawTaskComplete": scan.saw_task_complete,
             "eventTypes": list(scan.event_types),
             "errorText": cls._diagnostic_value(scan.error_text),
@@ -1975,6 +2253,99 @@ class CodexManagedSessionRuntime:
                 )
         return None
 
+    def _stale_turn_rollout_terminal_outcome(
+        self,
+        scan: _RolloutTurnScan,
+        *,
+        vendor_turn_id: str,
+        turn_started_at: float | None,
+    ) -> _TurnTerminalOutcome | None:
+        """Accept only provider-owned terminal transcript evidence.
+
+        A normal assistant message may be commentary emitted while tools are
+        still running, so it cannot override an app-server ``inProgress``
+        projection. A fresh final-phase assistant message or task-complete event
+        is terminal evidence and may reconcile that stale projection.
+        """
+
+        if not (
+            scan.terminal_assistant_text
+            or scan.saw_task_complete
+            or scan.error_text
+        ):
+            return None
+        outcome = self._rollout_terminal_outcome_from_scan(
+            scan,
+            vendor_turn_id=vendor_turn_id,
+            turn_started_at=turn_started_at,
+        )
+        if outcome is not None:
+            return outcome
+        if scan.saw_task_complete:
+            return _TurnTerminalOutcome(status="completed")
+        return None
+
+    @staticmethod
+    def _live_rollout_terminal_outcome(
+        mirror: _RolloutLiveMirror,
+    ) -> _TurnTerminalOutcome | None:
+        if mirror.terminal_error_text:
+            return _TurnTerminalOutcome(
+                status="failed",
+                error_text=mirror.terminal_error_text,
+                failure_class="permanent",
+            )
+        if mirror.terminal_assistant_text or mirror.saw_task_complete:
+            return _TurnTerminalOutcome(status="completed")
+        return None
+
+    @classmethod
+    def _terminal_notification_turn(
+        cls,
+        notification: Mapping[str, Any],
+        *,
+        vendor_turn_id: str,
+    ) -> tuple[Mapping[str, Any], _TurnTerminalOutcome] | None:
+        params = notification.get("params")
+        if not isinstance(params, Mapping):
+            return None
+        turn_payload = params.get("turn")
+        if not isinstance(turn_payload, Mapping):
+            return None
+        if str(turn_payload.get("id") or "").strip() != vendor_turn_id:
+            return None
+        outcome = cls._terminal_turn_outcome(turn_payload)
+        if outcome is None:
+            return None
+        return turn_payload, outcome
+
+    @staticmethod
+    def _thread_payload_with_terminal_turn(
+        thread_payload: Mapping[str, Any],
+        *,
+        turn_payload: Mapping[str, Any],
+        vendor_turn_id: str,
+    ) -> Mapping[str, Any]:
+        merged_payload = dict(thread_payload)
+        raw_thread = thread_payload.get("thread")
+        merged_thread = dict(raw_thread) if isinstance(raw_thread, Mapping) else {}
+        raw_turns = merged_thread.get("turns")
+        turns = list(raw_turns) if isinstance(raw_turns, list) else []
+        replaced = False
+        for index, existing_turn in enumerate(turns):
+            if not isinstance(existing_turn, Mapping):
+                continue
+            if str(existing_turn.get("id") or "").strip() != vendor_turn_id:
+                continue
+            turns[index] = dict(turn_payload)
+            replaced = True
+            break
+        if not replaced:
+            turns.append(dict(turn_payload))
+        merged_thread["turns"] = turns
+        merged_payload["thread"] = merged_thread
+        return merged_payload
+
     def _completed_turn_without_assistant_outcome(
         self,
         *,
@@ -2051,20 +2422,6 @@ class CodexManagedSessionRuntime:
         client: CodexAppServerRpcClient | None = None,
         vendor_thread_id: str | None = None,
     ) -> _CompletedTurnInspection:
-        assistant_text = self._extract_assistant_text(
-            thread_payload,
-            vendor_turn_id=vendor_turn_id,
-        )
-        if assistant_text:
-            return _CompletedTurnInspection(assistant_text=assistant_text)
-        if client is not None and vendor_thread_id:
-            assistant_text = self._assistant_text_from_turn_items_list(
-                client=client,
-                vendor_thread_id=vendor_thread_id,
-                vendor_turn_id=vendor_turn_id,
-            )
-            if assistant_text:
-                return _CompletedTurnInspection(assistant_text=assistant_text)
         vendor_thread_path = self._resolved_rollout_path(
             state=state,
             thread_payload=thread_payload,
@@ -2074,6 +2431,31 @@ class CodexManagedSessionRuntime:
             vendor_turn_id=vendor_turn_id,
             turn_started_at=state.last_control_at,
         )
+        if rollout_scan.terminal_assistant_text:
+            return _CompletedTurnInspection(
+                assistant_text=rollout_scan.terminal_assistant_text,
+                rollout_scan=rollout_scan,
+            )
+        assistant_text = self._extract_assistant_text(
+            thread_payload,
+            vendor_turn_id=vendor_turn_id,
+        )
+        if assistant_text:
+            return _CompletedTurnInspection(
+                assistant_text=assistant_text,
+                rollout_scan=rollout_scan,
+            )
+        if client is not None and vendor_thread_id:
+            assistant_text = self._assistant_text_from_turn_items_list(
+                client=client,
+                vendor_thread_id=vendor_thread_id,
+                vendor_turn_id=vendor_turn_id,
+            )
+            if assistant_text:
+                return _CompletedTurnInspection(
+                    assistant_text=assistant_text,
+                    rollout_scan=rollout_scan,
+                )
         return _CompletedTurnInspection(
             assistant_text=rollout_scan.assistant_text,
             rollout_scan=rollout_scan,
@@ -2176,9 +2558,14 @@ class CodexManagedSessionRuntime:
         vendor_turn_id: str,
         rollout_scan: _RolloutTurnScan | None = None,
     ) -> _TurnTerminalOutcome | None:
+        failed_thread_outcome = self._failed_thread_terminal_outcome(
+            state=state,
+            thread_payload=thread_payload,
+            vendor_turn_id=vendor_turn_id,
+        )
+        if failed_thread_outcome is not None:
+            return failed_thread_outcome
         thread_outcome = self._terminal_thread_outcome(thread_payload)
-        if thread_outcome is not None and thread_outcome.status != "completed":
-            return thread_outcome
 
         if rollout_scan is None:
             vendor_thread_path = self._resolved_rollout_path(
@@ -2206,6 +2593,29 @@ class CodexManagedSessionRuntime:
         if thread_outcome is not None and not rollout_scan.references_turn:
             return thread_outcome
         return None
+
+    def _failed_thread_terminal_outcome(
+        self,
+        *,
+        state: CodexSessionRuntimeState,
+        thread_payload: Mapping[str, Any],
+        vendor_turn_id: str,
+    ) -> _TurnTerminalOutcome | None:
+        thread_outcome = self._terminal_thread_outcome(thread_payload)
+        if thread_outcome is None or thread_outcome.status == "completed":
+            return None
+        if self._thread_status_type(thread_payload) == "systemerror":
+            recovered_error = self._settled_turn_error_from_logs(
+                vendor_turn_id,
+                turn_started_at=state.last_control_at,
+            )
+            if recovered_error:
+                return _TurnTerminalOutcome(
+                    status="failed",
+                    error_text=recovered_error,
+                    failure_class="permanent",
+                )
+        return thread_outcome
 
     def _wait_for_turn_completion(
         self,
@@ -2267,6 +2677,16 @@ class CodexManagedSessionRuntime:
                 outcome = self._terminal_turn_outcome(turn_payload)
                 if outcome is not None:
                     return thread_payload, outcome
+                outcome = self._failed_thread_terminal_outcome(
+                    state=state,
+                    thread_payload=thread_payload,
+                    vendor_turn_id=vendor_turn_id,
+                )
+                if outcome is not None:
+                    return thread_payload, outcome
+                outcome = self._live_rollout_terminal_outcome(rollout_mirror)
+                if outcome is not None:
+                    return thread_payload, outcome
             else:
                 state = self._load_state()
                 vendor_thread_path = self._resolved_rollout_path(
@@ -2297,7 +2717,7 @@ class CodexManagedSessionRuntime:
                     remaining = deadline - now
                     if grace_remaining > 0 and remaining > 0:
                         try:
-                            client.wait_for_notification(
+                            notification = client.wait_for_notification(
                                 None,
                                 timeout_seconds=min(
                                     _MISSING_TURN_VISIBILITY_RETRY_SECONDS,
@@ -2305,6 +2725,20 @@ class CodexManagedSessionRuntime:
                                     remaining,
                                 ),
                             )
+                            terminal_notification = self._terminal_notification_turn(
+                                notification,
+                                vendor_turn_id=vendor_turn_id,
+                            )
+                            if terminal_notification is not None:
+                                terminal_turn, outcome = terminal_notification
+                                return (
+                                    self._thread_payload_with_terminal_turn(
+                                        thread_payload,
+                                        turn_payload=terminal_turn,
+                                        vendor_turn_id=vendor_turn_id,
+                                    ),
+                                    outcome,
+                                )
                             continue
                         except TimeoutError:
                             # Expected during grace-period polling; retry until the deadline.
@@ -2327,12 +2761,26 @@ class CodexManagedSessionRuntime:
                 )
 
             try:
-                client.wait_for_notification(
+                notification = client.wait_for_notification(
                     None,
                     timeout_seconds=min(1.0, remaining),
                 )
             except TimeoutError:
                 continue
+            terminal_notification = self._terminal_notification_turn(
+                notification,
+                vendor_turn_id=vendor_turn_id,
+            )
+            if terminal_notification is not None:
+                terminal_turn, outcome = terminal_notification
+                return (
+                    self._thread_payload_with_terminal_turn(
+                        thread_payload,
+                        turn_payload=terminal_turn,
+                        vendor_turn_id=vendor_turn_id,
+                    ),
+                    outcome,
+                )
 
     def _find_vendor_thread_path(self, vendor_thread_id: str) -> str | None:
         sessions_root = self._codex_home_path / "sessions"
@@ -2496,10 +2944,10 @@ class CodexManagedSessionRuntime:
         status_type = cls._thread_status_type(thread_payload)
         if status_type == "idle":
             return _TurnTerminalOutcome(status="completed")
-        if status_type in {"failed", "error"}:
+        if status_type in {"failed", "error", "systemerror"}:
             return _TurnTerminalOutcome(
                 status="failed",
-                error_text=cls._thread_status_reason(thread_payload),
+                error_text=cls._thread_status_reason(thread_payload) or status_type,
                 failure_class="permanent",
             )
         if status_type in {"interrupted", "cancelled", "canceled"}:
@@ -2535,6 +2983,7 @@ class CodexManagedSessionRuntime:
         if status == "completed":
             state.last_assistant_text = assistant_text or None
         self._save_state(state)
+        self._sync_codex_auth_to_volume()
         if (
             append_assistant_to_spool
             and status == "completed"
@@ -2544,6 +2993,26 @@ class CodexManagedSessionRuntime:
             self._append_spool("stdout", f"assistant: {assistant_text}\n")
         if status in {"failed", "interrupted"} and error_text and previous_status != status:
             self._append_spool("stderr", f"turn {status}: {error_text}\n")
+
+    @staticmethod
+    def _assistant_text_was_published(
+        state: CodexSessionRuntimeState,
+        *,
+        turn_id: str,
+        assistant_text: str,
+    ) -> bool:
+        expected = assistant_text.strip()
+        if not expected:
+            return False
+        for event in state.observability_events:
+            if event.get("kind") != "assistant_message_completed":
+                continue
+            if str(event.get("turnId") or "").strip() != turn_id:
+                continue
+            observed = str(event.get("text") or "").strip()
+            if observed.removeprefix("assistant: ").strip() == expected:
+                return True
+        return False
 
     def _refresh_turn_state(
         self,
@@ -2584,7 +3053,27 @@ class CodexManagedSessionRuntime:
         if isinstance(turn_payload, Mapping):
             outcome = self._terminal_turn_outcome(turn_payload)
             if outcome is None:
-                return state
+                outcome = self._failed_thread_terminal_outcome(
+                    state=state,
+                    thread_payload=thread_payload,
+                    vendor_turn_id=active_turn_id,
+                )
+            if outcome is None:
+                rollout_scan = self._scan_rollout_for_turn(
+                    self._resolved_rollout_path(
+                        state=state,
+                        thread_payload=thread_payload,
+                    ),
+                    vendor_turn_id=active_turn_id,
+                    turn_started_at=state.last_control_at,
+                )
+                outcome = self._stale_turn_rollout_terminal_outcome(
+                    rollout_scan,
+                    vendor_turn_id=active_turn_id,
+                    turn_started_at=state.last_control_at,
+                )
+                if outcome is None:
+                    return state
         else:
             outcome = self._missing_turn_terminal_outcome(
                 state=state,
@@ -2631,6 +3120,11 @@ class CodexManagedSessionRuntime:
             status=status,
             assistant_text=assistant_text,
             error_text=error_text,
+            append_assistant_to_spool=not self._assistant_text_was_published(
+                state,
+                turn_id=active_turn_id,
+                assistant_text=assistant_text,
+            ),
             failure_class=failure_class,
             disposition=disposition,
         )
@@ -2652,6 +3146,28 @@ class CodexManagedSessionRuntime:
     ) -> CodexManagedSessionHandle:
         self._ensure_directories()
         self._seed_codex_home_from_auth_volume()
+        existing_state: CodexSessionRuntimeState | None = None
+        if self._state_path.is_file():
+            existing_state = self._load_state()
+            if existing_state.session_id != request.session_id:
+                raise RuntimeError(
+                    "sessionId does not match the active managed session"
+                )
+            if existing_state.session_epoch != request.session_epoch:
+                raise RuntimeError(
+                    "sessionEpoch does not match the active managed session"
+                )
+            if (
+                existing_state.container_id != self._container_id
+                and not request.replace_existing
+            ):
+                raise RuntimeError(
+                    "containerId does not match the active managed session"
+                )
+            if existing_state.logical_thread_id != request.thread_id:
+                raise RuntimeError(
+                    "threadId does not match the active managed session"
+                )
         client = self._initialized_app_server_client()
         started = client.request("thread/start", {"cwd": str(self._workspace_path)})
         thread_payload = started.get("thread")
@@ -2663,6 +3179,9 @@ class CodexManagedSessionRuntime:
         vendor_thread_path = self._normalized_thread_path(thread_payload.get("path"))
 
         state = CodexSessionRuntimeState(
+            stateRevision=(
+                existing_state.state_revision if existing_state is not None else 0
+            ),
             sessionId=request.session_id,
             sessionEpoch=request.session_epoch,
             logicalThreadId=request.thread_id,
@@ -2675,6 +3194,7 @@ class CodexManagedSessionRuntime:
             lastControlAt=time.time(),
         )
         self._save_state(state)
+        self._sync_codex_auth_to_volume()
         self._append_spool(
             "stdout",
             f"session started: {request.session_id} thread={request.thread_id}\n",
@@ -2706,10 +3226,25 @@ class CodexManagedSessionRuntime:
         thread_recovery = self._recovery_thread_result(client=client, state=state)
         vendor_thread_id = thread_recovery.vendor_thread_id
         rollout_mirror = self._new_rollout_live_mirror(state)
+        recovered_vendor_thread_path = state.vendor_thread_path
 
-        started = client.request(
-            "turn/start",
-            {
+        # Hold state authority only across the provider admission handoff. The
+        # final locator/revision check happens before the billable turn starts,
+        # and the accepted provider turn id is durable before a concurrent
+        # clear, terminate, or observer can publish another state transition.
+        with self._state_lock():
+            authoritative_state = self._load_state()
+            self._validate_state_locator(authoritative_state, request)
+            if authoritative_state.state_revision != state.state_revision:
+                raise RuntimeError(
+                    "sessionEpoch does not match the active managed session: "
+                    "managed session state advanced before provider turn admission"
+                )
+            authoritative_state.vendor_thread_id = vendor_thread_id
+            authoritative_state.vendor_thread_path = recovered_vendor_thread_path
+            state = authoritative_state
+
+            turn_start_params: dict[str, Any] = {
                 "threadId": vendor_thread_id,
                 "input": [
                     {
@@ -2717,26 +3252,39 @@ class CodexManagedSessionRuntime:
                         "text": request.instructions,
                     }
                 ],
-            },
-        )
-        turn_payload = started.get("turn")
-        if not isinstance(turn_payload, Mapping):
-            raise RuntimeError("codex app-server turn/start did not return a turn")
-        vendor_turn_id = str(turn_payload.get("id") or "").strip()
-        if not vendor_turn_id:
-            raise RuntimeError("codex app-server turn/start returned a blank turn id")
+            }
+            if request.model is not None:
+                turn_start_params["model"] = request.model
+            if request.effort is not None:
+                turn_start_params["effort"] = request.effort
+            started = client.request("turn/start", turn_start_params)
+            turn_payload = started.get("turn")
+            if not isinstance(turn_payload, Mapping):
+                raise RuntimeError("codex app-server turn/start did not return a turn")
+            vendor_turn_id = str(turn_payload.get("id") or "").strip()
+            if not vendor_turn_id:
+                raise RuntimeError(
+                    "codex app-server turn/start returned a blank turn id"
+                )
 
-        state.active_turn_id = vendor_turn_id
-        state.last_turn_id = vendor_turn_id
-        state.last_turn_status = "running"
-        state.last_turn_error = None
-        state.last_control_action = "send_turn"
-        state.last_control_at = time.time()
-        rollout_mirror.turn_started_at = state.last_control_at
-        # Clear any stale skill-outcome marker so only a file written during
-        # this turn can upgrade an empty output to a no-op success.
-        self._reset_skill_outcome()
-        self._save_state(state)
+            state.active_turn_id = vendor_turn_id
+            state.last_turn_id = vendor_turn_id
+            state.last_turn_status = "running"
+            state.last_turn_error = None
+            state.observability_events = [
+                {
+                    "kind": "turn_started",
+                    "turnId": vendor_turn_id,
+                    "metadata": {"sourceEventId": f"{vendor_turn_id}:started"},
+                }
+            ]
+            state.last_control_action = "send_turn"
+            state.last_control_at = time.time()
+            rollout_mirror.turn_started_at = state.last_control_at
+            # Clear any stale skill-outcome marker so only a file written during
+            # this turn can upgrade an empty output to a no-op success.
+            self._reset_skill_outcome()
+            self._save_state_locked(state)
         self._append_spool("stdout", f"turn started: {vendor_turn_id}\n")
         try:
             thread_payload, outcome = self._wait_for_turn_completion(
@@ -2882,6 +3430,21 @@ class CodexManagedSessionRuntime:
                 )
         if disposition:
             metadata["disposition"] = disposition
+        terminal_observations = list(rollout_mirror.observations)
+        if status == "completed":
+            terminal_observations.append(
+                {
+                    "kind": "turn_completed",
+                    "turnId": vendor_turn_id,
+                    "metadata": {
+                        "sourceEventId": f"{vendor_turn_id}:turn_completed",
+                        "status": status,
+                    },
+                }
+            )
+        if terminal_observations:
+            metadata["observabilityEvents"] = terminal_observations[-100:]
+            state.observability_events = terminal_observations[-100:]
         self._finalize_turn(
             state=state,
             turn_id=vendor_turn_id,
@@ -3013,6 +3576,7 @@ class CodexManagedSessionRuntime:
         state.last_control_action = "clear_session"
         state.last_control_at = time.time()
         self._save_state(state)
+        self._sync_codex_auth_to_volume()
         self._append_spool(
             "stdout",
             f"session cleared: epoch={state.session_epoch} thread={state.logical_thread_id}\n",
@@ -3028,6 +3592,7 @@ class CodexManagedSessionRuntime:
         state.last_control_action = "terminate_session"
         state.last_control_at = time.time()
         self._save_state(state)
+        self._sync_codex_auth_to_volume()
         self._append_spool("stdout", f"session terminated: {request.session_id}\n")
         return self._handle(state, status="terminated")
 
@@ -3125,16 +3690,6 @@ def _validated_runtime_environment() -> dict[str, str]:
         "image_ref": image_ref,
     }
 
-def _run_docker_sidecar_runtime_preflight() -> None:
-    result = run_docker_sidecar_preflight_check(env=os.environ)
-    if result.status.value != "failed":
-        return
-    message = result.message or "Docker sidecar preflight failed."
-    if result.diagnostics_ref:
-        message = f"{message} diagnosticsRef={result.diagnostics_ref}"
-    raise RuntimeError(message)
-
-
 def _runtime_from_environment() -> CodexManagedSessionRuntime:
     env = _validated_runtime_environment()
     workspace_path = env["workspace_path"]
@@ -3186,12 +3741,10 @@ def _emit_json(payload: BaseModel | Mapping[str, Any], *, exit_code: int = 0) ->
 
 def _run_ready() -> int:
     _validated_runtime_environment()
-    _run_docker_sidecar_runtime_preflight()
     return _emit_json({"ready": True})
 
 def _run_serve() -> int:
     _validated_runtime_environment()
-    _run_docker_sidecar_runtime_preflight()
     stopping = False
 
     def _handle_signal(signum: int, _frame: object) -> None:

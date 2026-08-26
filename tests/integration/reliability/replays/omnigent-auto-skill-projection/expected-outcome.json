@@ -1,0 +1,4 @@
+{
+  "invariant": "every agent step carries an immutable resolved skill snapshot, including an empty snapshot when selectedSkill is the auto sentinel",
+  "resolvedSkillsetRef": "artifact://skillsets/mm-717ea339-node-1-empty"
+}

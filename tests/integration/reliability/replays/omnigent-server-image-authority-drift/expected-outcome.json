@@ -1,0 +1,11 @@
+{
+  "invariant": "a bootstrap-owned default policy advances through an immutable version when stock image inputs move, and live server attestation binds actual repository-digest evidence rather than mutable configured tag text",
+  "reconciledPolicyIds": [
+    "codex-on-demand",
+    "codex-static",
+    "omnigent-codex"
+  ],
+  "defaultPolicyVersion": 2,
+  "serverImageRefObserved": "ghcr.io/omnigent-ai/omnigent-server@sha256:3333333333333333333333333333333333333333333333333333333333333333",
+  "serverArchitecture": "arm64"
+}

@@ -19,13 +19,22 @@ MoonMind should expose workflow navigation as one declarative display system wit
 | Sidebar list | `sidebar` | Show the workflow list as a left sidebar beside the primary surface. |
 | Full screen table | `table` | Show the full Workflows table as the primary surface. |
 
-For the first implementation, the system applies only to the Workflows and Create surfaces:
+The system is entity-neutral and currently has three opted-in collections, each with independent state, preferences, and route resolution:
+
+| Collection | Routes | Accessible name | Table option label | Preferences |
+| --- | --- | --- | --- | --- |
+| Workflows | `/workflows`, `/workflows/{workflowId}`, `/workflows/new` | `Workflow list display` | `Full screen table` | `workflowListDisplayMode`, `lastSelectedWorkflowId` |
+| Recurring | `/schedules`, `/schedules/{definitionId}` | `Recurring list display` | `Full table` | `recurringListDisplayMode`, `lastSelectedDefinitionId` |
+| Skills | `/skills`, `/skills/{skillId}` | `Skills list display` | `Full table` | `skillsListDisplayMode`, `lastSelectedSkillId` |
+
+For the Workflows collection specifically:
 
 1. Workflows detail surfaces may show **No list** or **Sidebar list**.
 2. The Workflows list route is the **Full screen table** state.
 3. The Create page may show **No list** or **Sidebar list**.
 4. Selecting **Full screen table** from Create navigates to the Workflows page.
-5. Future pages may opt into the same system by declaring how each mode composes with their primary surface.
+
+Recurring and Skills follow the same shape: their list route (`/schedules`, `/skills`) is the route-owned table surface, their detail routes support `hidden` and `sidebar`, and selecting the table option from a detail route returns to the list route. Skill-specific routes, catalog-table columns, and filter copy are canonical in [`SkillsTabDesign.md`](SkillsTabDesign.md). Selecting a mode while on one collection's route must never change another collection's state, navigation, or preferences. Future pages may opt into the same system by declaring how each mode composes with their primary surface.
 
 The interaction should feel like changing how much of the same workflow list is visible, not like jumping between unrelated pages. The sidebar must read as the natural collapsed form of the full table's first column.
 
@@ -196,7 +205,7 @@ Rules:
 7. Each icon-only option has an accessible name and visible focus state.
 8. Hover, selected, disabled, and focus states use shared dashboard control tokens.
 9. The shell supplies common placement and styling; each participating collection supplies its accessible name and route-resolution contract.
-10. Workflow and Recurring preferences remain independent.
+10. Workflow, Recurring, and Skills preferences remain independent.
 11. Routes without a declared display-mode contract hide the control.
 12. Mobile omits desktop-only modes until a mobile-specific contract exists.
 

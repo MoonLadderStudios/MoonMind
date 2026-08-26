@@ -1,0 +1,16 @@
+{
+  "incidentWorkflowId": "mm:c2723c5c-342e-4b7f-a07f-d4b94614f547",
+  "incidentRunId": "019f62a5-f3b0-7bbe-8e44-94535602edf0",
+  "logicalStepId": "tpl:github-issue-implement:02:6bbedb2a",
+  "runtime": "codex_cli",
+  "protocol": "managed-workspace-checkpoint-v1",
+  "failureShape": "archive progress emitted one Temporal heartbeat per file without yielding, overflowing the worker heartbeat queue",
+  "events": [
+    {"type": "checkpoint_requested", "boundary": "before_publication"},
+    {"type": "archive_file", "path": "alpha.txt"},
+    {"type": "archive_file", "path": "beta.txt"},
+    {"type": "archive_file", "path": "gamma.txt"}
+  ],
+  "heartbeatQueueCapacity": 1,
+  "heartbeatIntervalSeconds": 0.0
+}

@@ -17,15 +17,19 @@ from sqlalchemy import (
     Column,
     DateTime,
     Enum,
+    Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
     Uuid,
+    event,
     func,
     literal_column,
+    select,
     text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
@@ -34,6 +38,7 @@ from sqlalchemy.orm import (
     DeclarativeBase,
     Mapped,
     mapped_column,
+    reconstructor,
     relationship,
     validates,
 )
@@ -44,13 +49,19 @@ from api_service.core.encryption import (  # Added import for get_encryption_key
     get_encryption_key,
 )
 
+if TYPE_CHECKING:
+    from moonmind.workflows.automation.models import CodexAuthVolume, CodexWorkerShard
+
+
 class Base(DeclarativeBase):
     pass
+
 
 def _enum_values(enum_cls: type[enum.Enum]) -> list[str]:
     """Return enum members as stored DB labels, not Python enum names."""
 
     return [member.value for member in enum_cls]
+
 
 def _runtime_default_model_tier() -> dict[str, Any]:
     return {
@@ -60,6 +71,7 @@ def _runtime_default_model_tier() -> dict[str, Any]:
         "parameters": {},
         "annotations": {},
     }
+
 
 def _provider_profile_model_tiers_default_for_values(
     default_model: str | None,
@@ -77,12 +89,14 @@ def _provider_profile_model_tiers_default_for_values(
         ]
     return [_runtime_default_model_tier()]
 
+
 def _provider_profile_model_tiers_default(context: Any = None) -> list[dict[str, Any]]:
     params = context.get_current_parameters() if context is not None else {}
     return _provider_profile_model_tiers_default_for_values(
         params.get("default_model"),
         params.get("default_effort"),
     )
+
 
 # Note: fastapi-users[sqlalchemy] uses GUID/UUID by default for id.
 # If you need an Integer ID, you would use SQLAlchemyBaseUserTable[int]
@@ -107,6 +121,7 @@ class User(SQLAlchemyBaseUserTableUUID, Base):
     user_profile = relationship(
         "UserProfile", back_populates="user", uselist=False
     )  # Added relationship to UserProfile
+
 
 class UserProfile(Base):
     __tablename__ = "user_profile"
@@ -135,14 +150,18 @@ class UserProfile(Base):
 
     user = relationship("User", back_populates="user_profile")
 
+
 def _json_variant() -> JSON:
     return JSON().with_variant(JSONB(astext_type=Text()), "postgresql")
+
 
 def mutable_json_list() -> JSON:
     return MutableList.as_mutable(_json_variant())
 
+
 def mutable_json_dict() -> JSON:
     return MutableDict.as_mutable(_json_variant())
+
 
 class ManifestRecord(Base):
     __tablename__ = "manifest"
@@ -175,16 +194,19 @@ class ManifestRecord(Base):
     state_json = Column(mutable_json_dict(), nullable=True)
     state_updated_at = Column(DateTime(timezone=True), nullable=True)
 
+
 class RecurringWorkflowScheduleType(str, enum.Enum):
     """Supported recurring definition schedule kinds."""
 
     CRON = "cron"
+
 
 class RecurringWorkflowScopeType(str, enum.Enum):
     """Scope ownership for recurring definitions."""
 
     PERSONAL = "personal"
     GLOBAL = "global"
+
 
 class RecurringWorkflowRunOutcome(str, enum.Enum):
     """Dispatch result state for one recurring run decision."""
@@ -194,11 +216,13 @@ class RecurringWorkflowRunOutcome(str, enum.Enum):
     SKIPPED = "skipped"
     DISPATCH_ERROR = "dispatch_error"
 
+
 class RecurringWorkflowRunTrigger(str, enum.Enum):
     """How one recurring run row was created."""
 
     SCHEDULE = "schedule"
     MANUAL = "manual"
+
 
 class RecurringWorkflowDefinition(Base):
     """Persistent recurring schedule definition."""
@@ -245,7 +269,9 @@ class RecurringWorkflowDefinition(Base):
         String(32), nullable=True
     )
     last_dispatch_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    temporal_schedule_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    temporal_schedule_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
     owner_user_id: Mapped[Optional[UUID]] = mapped_column(
         Uuid,
         ForeignKey("user.id", ondelete="SET NULL"),
@@ -292,6 +318,7 @@ class RecurringWorkflowDefinition(Base):
         back_populates="definition",
         cascade="all, delete-orphan",
     )
+
 
 class RecurringWorkflowRun(Base):
     """Persistent recurring run dispatch decision row."""
@@ -358,7 +385,9 @@ class RecurringWorkflowRun(Base):
         DateTime(timezone=True),
         nullable=True,
     )
-    temporal_workflow_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    temporal_workflow_id: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )
     temporal_run_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -388,13 +417,26 @@ class OmnigentBridgeSession(Base):
 
     __tablename__ = "omnigent_bridge_sessions"
     __table_args__ = (
-        UniqueConstraint("idempotency_key", name="uq_omnigent_bridge_sessions_idempotency_key"),
+        UniqueConstraint(
+            "idempotency_key", name="uq_omnigent_bridge_sessions_idempotency_key"
+        ),
         Index("ix_omnigent_bridge_sessions_session", "omnigent_session_id"),
         Index("ix_omnigent_bridge_sessions_workflow", "moonmind_workflow_id"),
         Index("ix_omnigent_bridge_sessions_status", "status"),
+        # MoonLadderStudios/MoonMind#3633: opaque, unguessable browser-safe
+        # Workflow Chat binding handle. Unique so one logical binding maps to one
+        # id; nullable so historical rows and not-yet-bound sessions carry NULL
+        # until allocation (NULLs are distinct under both SQLite and Postgres
+        # unique indexes, so they never collide).
+        Index(
+            "uq_omnigent_bridge_sessions_chat_binding",
+            "chat_binding_id",
+            unique=True,
+        ),
     )
 
     bridge_session_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    chat_binding_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     provider: Mapped[str] = mapped_column(String(64), nullable=False)
     compatibility_profile: Mapped[str] = mapped_column(String(128), nullable=False)
     moonmind_workflow_id: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -403,12 +445,29 @@ class OmnigentBridgeSession(Base):
     step_execution_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     idempotency_key: Mapped[str] = mapped_column(String(512), nullable=False)
 
+    provider_profile_id: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )
+    provider_lease_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    credential_generation: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    host_binding_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    host_lease_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    effective_launch_snapshot_json: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        JSON, nullable=True
+    )
+
     omnigent_endpoint_ref: Mapped[str] = mapped_column(String(255), nullable=False)
-    omnigent_session_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    omnigent_session_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
     omnigent_host_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    omnigent_runner_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    omnigent_runner_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
     omnigent_agent_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    omnigent_agent_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    omnigent_agent_name: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
 
     host_type: Mapped[str] = mapped_column(String(32), nullable=False)
     workspace: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -422,7 +481,9 @@ class OmnigentBridgeSession(Base):
         default="not_prepared",
         server_default="not_prepared",
     )
-    first_message_digest: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    first_message_digest: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )
     first_message_marker: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     first_message_post_attempted_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -430,16 +491,30 @@ class OmnigentBridgeSession(Base):
     first_message_posted_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    first_message_pending_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    first_message_item_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    first_message_pending_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    first_message_item_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
 
     raw_events_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
-    normalized_events_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
-    initial_snapshot_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
-    final_snapshot_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
-    capture_manifest_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    normalized_events_ref: Mapped[Optional[str]] = mapped_column(
+        String(1024), nullable=True
+    )
+    initial_snapshot_ref: Mapped[Optional[str]] = mapped_column(
+        String(1024), nullable=True
+    )
+    final_snapshot_ref: Mapped[Optional[str]] = mapped_column(
+        String(1024), nullable=True
+    )
+    capture_manifest_ref: Mapped[Optional[str]] = mapped_column(
+        String(1024), nullable=True
+    )
     diagnostics_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
-    external_state_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    external_state_ref: Mapped[Optional[str]] = mapped_column(
+        String(1024), nullable=True
+    )
 
     terminal_refs: Mapped[dict[str, Any]] = mapped_column(
         mutable_json_dict(), nullable=False, default=dict
@@ -459,6 +534,101 @@ class OmnigentBridgeSession(Base):
     )
 
 
+class OmnigentPolicy(Base):
+    """Stable operator-owned policy identity."""
+
+    __tablename__ = "omnigent_policies"
+
+    policy_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    owner_user_id: Mapped[Optional[UUID]] = mapped_column(
+        Uuid, ForeignKey("user.id"), nullable=True
+    )
+    visibility: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="private"
+    )
+    default_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class OmnigentPolicyVersion(Base):
+    """Immutable normalized authority and complete lifecycle audit lineage."""
+
+    __tablename__ = "omnigent_policy_versions"
+    __table_args__ = (
+        UniqueConstraint("policy_id", "version", name="uq_omnigent_policy_version"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    policy_id: Mapped[str] = mapped_column(
+        ForeignKey("omnigent_policies.policy_id"), nullable=False, index=True
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
+    # Deliberately not MutableDict: document authority is append-only. Lifecycle
+    # changes are recorded separately and never dirty this JSON value in place.
+    document_json: Mapped[dict[str, Any]] = mapped_column(
+        _json_variant(), nullable=False
+    )
+    digest: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    parent_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    clone_source_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    supersedes_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_by: Mapped[str] = mapped_column(String(255), nullable=False)
+    activated_by: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    disabled_by: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    activated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    disabled_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    validation_json: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(), nullable=False, default=dict
+    )
+    compatibility_json: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(), nullable=False, default=dict
+    )
+    rollout_json: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(), nullable=False, default=dict
+    )
+    env_fallback_used: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+
+
+class OmnigentPolicyEvent(Base):
+    """Append-only audit event for lifecycle and default-selection changes."""
+
+    __tablename__ = "omnigent_policy_events"
+    __table_args__ = (
+        Index("ix_omnigent_policy_events_policy_created", "policy_id", "created_at"),
+    )
+
+    event_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    policy_id: Mapped[str] = mapped_column(
+        ForeignKey("omnigent_policies.policy_id"), nullable=False
+    )
+    version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    actor: Mapped[str] = mapped_column(String(255), nullable=False)
+    detail_json: Mapped[dict[str, Any]] = mapped_column(_json_variant(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class OmnigentBridgeSessionEvent(Base):
     """Durable index over the Omnigent bridge session event stream.
 
@@ -475,12 +645,20 @@ class OmnigentBridgeSessionEvent(Base):
             "ix_omnigent_bridge_session_events_sequence",
             "bridge_session_id",
             "sequence",
+            unique=True,
+        ),
+        Index(
+            "ix_omnigent_bridge_session_events_dedup",
+            "bridge_session_id",
+            "deduplication_key",
+            unique=True,
         ),
     )
 
     event_id: Mapped[str] = mapped_column(String(255), primary_key=True)
     bridge_session_id: Mapped[str] = mapped_column(String(255), nullable=False)
     sequence: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    deduplication_key: Mapped[str] = mapped_column(String(128), nullable=False)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     direction: Mapped[str] = mapped_column(String(32), nullable=False)
     event_type: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -489,6 +667,529 @@ class OmnigentBridgeSessionEvent(Base):
     artifact_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     metadata_: Mapped[dict[str, Any]] = mapped_column(
         "metadata", mutable_json_dict(), nullable=False, default=dict
+    )
+
+
+# ---------------------------------------------------------------------------
+# Omnigent control-plane durable aggregates
+#
+# Source: MoonLadderStudios/MoonMind#3703 ([Omnigent control plane 2/11]).
+# The overloaded ``omnigent_bridge_sessions`` row conflates logical
+# provider-session state with request/turn/continuation/cleanup attempts. These
+# aggregates separate the durable concepts so illegal lifecycle ownership is
+# hard or impossible to represent:
+#   * OmnigentSession               - one canonical provider-session authority
+#   * OmnigentTurnAttempt           - one logical turn/continuation/remediation
+#   * OmnigentObservation           - append-only bounded observation index
+#   * OmnigentCommand               - durable logical-side-effect journal
+#   * OmnigentReconciliationDecision- append-only reconciliation record
+#   * OmnigentChatBindingAlias      - safe resolution of prior binding handles
+# The legacy bridge tables are intentionally left in place; this issue is
+# additive (migration/rollout retirement is owned by a later issue).
+# ---------------------------------------------------------------------------
+
+
+class OmnigentSession(Base):
+    """One canonical row per logical provider-session authority.
+
+    Source: MoonLadderStudios/MoonMind#3703. Database invariants prevent more
+    than one canonical session authority for a Workflow/provider-session scope
+    and prevent two canonical rows from owning the same opaque chat binding.
+    Conflicting immutable authority fails closed at the repository boundary
+    rather than selecting the newest row.
+    """
+
+    __tablename__ = "omnigent_sessions"
+    __table_args__ = (
+        # At most one canonical authority per (workflow, provider session).
+        # provider_session_ref is nullable so a not-yet-attached session carries
+        # NULL; NULLs are distinct under both SQLite and Postgres unique indexes.
+        Index(
+            "uq_omnigent_sessions_scope",
+            "moonmind_workflow_id",
+            "provider_session_ref",
+            unique=True,
+        ),
+        # One opaque chat-binding identity maps to exactly one canonical session.
+        Index(
+            "uq_omnigent_sessions_chat_binding",
+            "chat_binding_id",
+            unique=True,
+        ),
+        Index("ix_omnigent_sessions_workflow", "moonmind_workflow_id"),
+        Index("ix_omnigent_sessions_deadline", "next_reconciliation_deadline"),
+        Index("ix_omnigent_sessions_execution_plan", "execution_plan_ref"),
+        Index("ix_omnigent_sessions_runtime_binding", "runtime_binding_ref"),
+    )
+
+    session_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    schema_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+
+    # Workflow / run / step / agent-run scope.
+    moonmind_workflow_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    moonmind_run_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    step_execution_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    moonmind_agent_run_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+
+    # Provider and compatibility profile.
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    compatibility_profile: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )
+
+    # Provider session attachment + one opaque chat-binding identity.
+    provider_session_ref: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    chat_binding_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+    # Immutable intent ref and digest.
+    intent_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    intent_digest: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+
+    # Immutable admitted execution authority plus one stable, CAS-fenced
+    # runtime-binding identity. Mutable lifecycle evidence advances inside the
+    # binding aggregate without changing this reference.
+    execution_plan_ref: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        ForeignKey("omnigent_execution_plans.plan_ref", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    runtime_binding_ref: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        ForeignKey(
+            "omnigent_runtime_bindings.binding_id", ondelete="RESTRICT"
+        ),
+        nullable=True,
+    )
+
+    # Desired / observed / reconciled lifecycle state.
+    desired_state: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="pending", server_default="pending"
+    )
+    observed_state: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    reconciled_state: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+    # Active turn attempt + provider cursors / frontier.
+    active_turn_attempt_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    provider_event_cursor: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    snapshot_frontier: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+    # Provider Profile / host binding / host lease / credential generations.
+    provider_profile_id: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )
+    host_binding_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    host_lease_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    provider_profile_generation: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
+    )
+    host_lease_generation: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    credential_generation: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # Compatibility and image-manifest refs.
+    compatibility_ref: Mapped[Optional[str]] = mapped_column(
+        String(1024), nullable=True
+    )
+    image_manifest_ref: Mapped[Optional[str]] = mapped_column(
+        String(1024), nullable=True
+    )
+
+    # Terminal / cleanup / historical-read state. Session terminality is stored
+    # separately from turn-attempt terminality (a terminal attempt does not
+    # terminalize the session).
+    terminal_state: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    terminal_evidence_ref: Mapped[Optional[str]] = mapped_column(
+        String(1024), nullable=True
+    )
+    cleanup_state: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="pending", server_default="pending"
+    )
+    historical_read_state: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="live", server_default="live"
+    )
+
+    # Optimistic revision and fencing generation.
+    revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    fencing_generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+
+    # Next reconciliation deadline and last decision reference.
+    next_reconciliation_deadline: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_decision_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+    metadata_: Mapped[dict[str, Any]] = mapped_column(
+        "metadata", mutable_json_dict(), nullable=False, default=dict
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class OmnigentTurnAttempt(Base):
+    """One row per logical instruction / continuation / steering / remediation
+    turn.
+
+    Source: MoonLadderStudios/MoonMind#3703. Only a turn attempt owns request
+    idempotency. It deliberately has **no** ``chat_binding_id`` column, so an
+    attempt can never carry chat-binding authority, and it cannot independently
+    terminalize the canonical session (attempt terminality is stored here;
+    session terminality lives on :class:`OmnigentSession`).
+    """
+
+    __tablename__ = "omnigent_turn_attempts"
+    __table_args__ = (
+        UniqueConstraint(
+            "idempotency_key", name="uq_omnigent_turn_attempts_idempotency_key"
+        ),
+        Index("ix_omnigent_turn_attempts_session", "session_id"),
+        Index("ix_omnigent_turn_attempts_state", "state"),
+    )
+
+    turn_attempt_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        String(255),
+        ForeignKey("omnigent_sessions.session_id"),
+        nullable=False,
+    )
+    schema_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+
+    # Step Execution and remediation / continuation lineage.
+    step_execution_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    lineage_kind: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="instruction", server_default="instruction"
+    )
+    parent_turn_attempt_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    remediation_of_turn_attempt_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+
+    # Request idempotency + instruction digest (attempt-owned).
+    idempotency_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    instruction_digest: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )
+
+    # Provider marker + provider turn / item identity.
+    provider_marker: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    provider_turn_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    provider_item_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+    # Delivery lifecycle: prepared, dispatching, delivery_unknown, accepted,
+    # running, terminal.
+    state: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="prepared", server_default="prepared"
+    )
+    terminal_state: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    attempt_outcome: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    terminal_evidence_ref: Mapped[Optional[str]] = mapped_column(
+        String(1024), nullable=True
+    )
+
+    revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    fencing_generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class OmnigentObservation(Base):
+    """Append-only, bounded index over authoritative observations.
+
+    Source: MoonLadderStudios/MoonMind#3703. Bounded searchable fields live in
+    PostgreSQL; full redacted payloads live in artifacts referenced by
+    ``payload_ref``. Deduplication identity and source sequence are enforced by
+    unique constraints so replayed batches are idempotent.
+    """
+
+    __tablename__ = "omnigent_observations"
+    __table_args__ = (
+        Index(
+            "uq_omnigent_observations_dedup",
+            "session_id",
+            "deduplication_key",
+            unique=True,
+        ),
+        Index("ix_omnigent_observations_session_observed", "session_id", "observed_at"),
+        Index("ix_omnigent_observations_type", "session_id", "observation_type"),
+    )
+
+    observation_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        String(255),
+        ForeignKey("omnigent_sessions.session_id"),
+        nullable=False,
+    )
+    schema_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    observation_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    source_sequence: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    source_digest: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    deduplication_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    payload_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    bounded_index_: Mapped[dict[str, Any]] = mapped_column(
+        "bounded_index", mutable_json_dict(), nullable=False, default=dict
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class OmnigentCommand(Base):
+    """Durable command and idempotency journal for logical side effects.
+
+    Source: MoonLadderStudios/MoonMind#3703. This journal supports idempotency
+    and audit; Temporal remains the orchestration authority. A logical command
+    identity is unique so retries and delivery-ambiguous dispatches collapse to
+    one journal row.
+    """
+
+    __tablename__ = "omnigent_commands"
+    __table_args__ = (
+        UniqueConstraint(
+            "idempotency_key", name="uq_omnigent_commands_idempotency_key"
+        ),
+        Index("ix_omnigent_commands_session", "session_id"),
+        Index("ix_omnigent_commands_status", "status"),
+    )
+
+    command_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        String(255),
+        ForeignKey("omnigent_sessions.session_id"),
+        nullable=False,
+    )
+    schema_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    command_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    turn_attempt_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+    idempotency_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    expected_session_revision: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
+    )
+    fencing_generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    payload_digest: Mapped[str] = mapped_column(String(128), nullable=False)
+
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="pending", server_default="pending"
+    )
+    # Owner identity class (e.g. "session_supervisor", "janitor"): a low
+    # cardinality class, never a high-cardinality identity, so it is safe for
+    # metric labels (#3704).
+    owner_class: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    # Per-claim fencing token identifying the exact claimant that won execution
+    # authority. Unlike the low-cardinality ``owner_class`` (a safe metric label),
+    # this uniquely binds delivery/result settlement to the winning claimant so a
+    # racing loser that shares an ``owner_class`` cannot settle the command (#3704).
+    claim_token: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    provider_receipt_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    delivery_ambiguous: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    result_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    # Own monotonic state_version so a claim/delivery/result transition is a
+    # revision-fenced compare-and-swap, not a blind field overwrite (#3704).
+    revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    retry_policy_: Mapped[dict[str, Any]] = mapped_column(
+        "retry_policy", mutable_json_dict(), nullable=False, default=dict
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class OmnigentReconciliationDecision(Base):
+    """Append-only record of a reconciliation decision.
+
+    Source: MoonLadderStudios/MoonMind#3703.
+    """
+
+    __tablename__ = "omnigent_reconciliation_decisions"
+    __table_args__ = (
+        Index(
+            "ix_omnigent_reconciliation_decisions_session_created",
+            "session_id",
+            "created_at",
+        ),
+    )
+
+    decision_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        String(255),
+        ForeignKey("omnigent_sessions.session_id"),
+        nullable=False,
+    )
+    schema_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    input_state_digest: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )
+    observation_frontier_digest: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )
+    expected_revision: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    fencing_generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    decision_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    reason_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    resulting_command_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    next_deadline: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    product_visible_transition: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )
+    trace_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    diagnostics_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class OmnigentChatBindingAlias(Base):
+    """Safe resolution of previously issued chat-binding handles.
+
+    Source: MoonLadderStudios/MoonMind#3703. Duplicate chat-binding URLs from
+    the legacy bridge rows resolve to the canonical session (``active``) or fail
+    closed as a stable diagnostic (``quarantined``). Aliases never expose
+    provider session IDs; they map only to the canonical ``session_id``.
+    """
+
+    __tablename__ = "omnigent_chat_binding_aliases"
+    __table_args__ = (Index("ix_omnigent_chat_binding_aliases_session", "session_id"),)
+
+    chat_binding_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    session_id: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        ForeignKey("omnigent_sessions.session_id"),
+        nullable=True,
+    )
+    alias_state: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="active", server_default="active"
+    )
+    diagnostic_reason: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class OmnigentCleanupAuthority(Base):
+    """Durable cleanup / janitor authority for one canonical session.
+
+    Source: MoonLadderStudios/MoonMind#3704 ([Omnigent control plane 3/11]).
+    Cleanup must be fenced against the host, Provider Profile lease, and
+    provider-session generations it was claimed against, so a janitor cannot
+    stop or release resources that now belong to a replacement generation. The
+    ``generation`` is a strictly increasing token; each claim bumps it. Exactly
+    one owner may hold ``claimed`` (a claim compare-and-swaps against the current
+    ``revision``), and a former owner cannot complete cleanup after a newer
+    generation is claimed.
+    """
+
+    __tablename__ = "omnigent_cleanup_authority"
+    __table_args__ = (Index("ix_omnigent_cleanup_authority_state", "state"),)
+
+    session_id: Mapped[str] = mapped_column(
+        String(255),
+        ForeignKey("omnigent_sessions.session_id"),
+        primary_key=True,
+    )
+    schema_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    state: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="unclaimed", server_default="unclaimed"
+    )
+    owner_class: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    # Per-claim fencing token identifying the exact janitor that won cleanup
+    # authority. ``owner_class`` stays a low-cardinality metric label; this token
+    # binds completion to the winning claimant so a racing janitor sharing an
+    # ``owner_class`` cannot complete a cleanup it never won (#3704).
+    claim_token: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    fenced_host_generation: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
+    )
+    fenced_profile_generation: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
+    )
+    fenced_provider_epoch: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
     )
 
 
@@ -507,13 +1208,19 @@ class WorkflowCheckpointBranch(Base):
     root_workflow_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     source_run_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     logical_step_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    source_execution_ordinal: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    source_execution_ordinal: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
+    )
     source_checkpoint_boundary: Mapped[str] = mapped_column(String(64), nullable=False)
     source_checkpoint_ref: Mapped[str] = mapped_column(String(1024), nullable=False)
-    source_checkpoint_digest: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    source_checkpoint_digest: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )
     source_state_kind: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     source_state_ref: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
-    source_state_digest: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    source_state_digest: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )
     parent_branch_id: Mapped[Optional[str]] = mapped_column(
         String(255),
         ForeignKey("workflow_checkpoint_branches.branch_id", ondelete="SET NULL"),
@@ -528,7 +1235,9 @@ class WorkflowCheckpointBranch(Base):
         String(64), nullable=False, default="root", server_default="root"
     )
     workspace_policy: Mapped[str] = mapped_column(String(64), nullable=False)
-    runtime_context_policy: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    runtime_context_policy: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )
     git_repository: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     git_base_branch: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     git_base_commit: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
@@ -539,7 +1248,28 @@ class WorkflowCheckpointBranch(Base):
     current_head_checkpoint_ref: Mapped[Optional[str]] = mapped_column(
         String(1024), nullable=True
     )
-    current_head_commit: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    current_head_checkpoint_digest: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )
+    current_head_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    current_head_attempt_ordinal: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
+    )
+    remediation_loop_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    remediation_head_status: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )
+    latest_verification_ref: Mapped[Optional[str]] = mapped_column(
+        String(1024), nullable=True
+    )
+    latest_verification_verdict: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )
+    current_head_commit: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )
     pull_request_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     publish_status: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     promotion_evidence: Mapped[Optional[dict[str, Any]]] = mapped_column(
@@ -614,17 +1344,27 @@ class WorkflowCheckpointBranchTurn(Base):
         nullable=True,
     )
     source_checkpoint_ref: Mapped[str] = mapped_column(String(1024), nullable=False)
-    source_checkpoint_digest: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    source_checkpoint_digest: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )
     source_state_kind: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     source_state_ref: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
-    source_state_digest: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    source_state_digest: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )
     instruction_ref: Mapped[str] = mapped_column(String(1024), nullable=False)
     instruction_digest: Mapped[str] = mapped_column(String(128), nullable=False)
-    context_bundle_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    context_bundle_ref: Mapped[Optional[str]] = mapped_column(
+        String(1024), nullable=True
+    )
     workspace_policy: Mapped[str] = mapped_column(String(96), nullable=False)
-    runtime_context_policy: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    runtime_context_policy: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )
     git_work_branch: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    workspace_restore_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    workspace_restore_ref: Mapped[Optional[str]] = mapped_column(
+        String(1024), nullable=True
+    )
     git_binding_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     step_execution_manifest_ref: Mapped[Optional[str]] = mapped_column(
         String(1024), nullable=True
@@ -632,8 +1372,12 @@ class WorkflowCheckpointBranchTurn(Base):
     created_step_execution_id: Mapped[Optional[str]] = mapped_column(
         String(255), nullable=True
     )
-    runtime_agent_run_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    provider_session_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    runtime_agent_run_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    provider_session_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
     idempotency_key: Mapped[str] = mapped_column(String(512), nullable=False)
     status: Mapped[str] = mapped_column(
         String(64), nullable=False, default="preparing", server_default="preparing"
@@ -737,7 +1481,9 @@ class WorkflowCheckpointBranchArtifact(Base):
     )
     branch_turn_id: Mapped[Optional[str]] = mapped_column(
         String(255),
-        ForeignKey("workflow_checkpoint_branch_turns.branch_turn_id", ondelete="CASCADE"),
+        ForeignKey(
+            "workflow_checkpoint_branch_turns.branch_turn_id", ondelete="CASCADE"
+        ),
         nullable=True,
     )
     artifact_kind: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -805,6 +1551,7 @@ __all__ = [
     "SkillSetEntry",
 ]
 
+
 class SecretStatus(str, enum.Enum):
     """Lifecycle state for a MoonMind managed secret."""
 
@@ -813,6 +1560,7 @@ class SecretStatus(str, enum.Enum):
     ROTATED = "rotated"
     DELETED = "deleted"
     INVALID = "invalid"
+
 
 class ManagedSecret(Base):
     """Encrypted durable storage for SecretRefs."""
@@ -825,7 +1573,9 @@ class ManagedSecret(Base):
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     slug: Mapped[str] = mapped_column(String(255), nullable=False)
-    ciphertext: Mapped[str] = mapped_column(StringEncryptedType(Text, get_encryption_key), nullable=False)
+    ciphertext: Mapped[str] = mapped_column(
+        StringEncryptedType(Text, get_encryption_key), nullable=False
+    )
     status: Mapped[SecretStatus] = mapped_column(
         Enum(
             SecretStatus,
@@ -913,9 +1663,7 @@ class SettingsAuditEvent(Base):
     """Durable non-secret settings change audit event."""
 
     __tablename__ = "settings_audit_events"
-    __table_args__ = (
-        Index("ix_settings_audit_events_key_scope", "key", "scope"),
-    )
+    __table_args__ = (Index("ix_settings_audit_events_key_scope", "key", "scope"),)
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     event_type: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -945,6 +1693,7 @@ class SettingsAuditEvent(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
+
 class ApproverRoleListType(TypeDecorator):
     """Persist approver roles as a PostgreSQL ARRAY or JSON elsewhere."""
 
@@ -966,11 +1715,13 @@ class ApproverRoleListType(TypeDecorator):
             return []
         return list(value)
 
+
 class PresetScopeType(str, enum.Enum):
     """Scope owner for preset visibility."""
 
     GLOBAL = "global"
     PERSONAL = "personal"
+
 
 class PresetReleaseStatus(str, enum.Enum):
     """Lifecycle state for current preset definitions."""
@@ -978,6 +1729,7 @@ class PresetReleaseStatus(str, enum.Enum):
     DRAFT = "draft"
     ACTIVE = "active"
     INACTIVE = "inactive"
+
 
 class Preset(Base):
     """Top-level catalog entry for reusable presets."""
@@ -1059,6 +1811,7 @@ class Preset(Base):
         cascade="all, delete-orphan",
     )
 
+
 class PresetFavorite(Base):
     """User favorites for quick preset access."""
 
@@ -1080,9 +1833,8 @@ class PresetFavorite(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
-    template: Mapped[Preset] = relationship(
-        "Preset", back_populates="favorites"
-    )
+    template: Mapped[Preset] = relationship("Preset", back_populates="favorites")
+
 
 class PresetRecent(Base):
     """Tracks most recent template applications per user."""
@@ -1113,6 +1865,7 @@ class PresetRecent(Base):
 
     template: Mapped[Preset] = relationship("Preset")
 
+
 class WorkflowRunStatus(str, enum.Enum):
     """Lifecycle states tracked for Spec workflow runs."""
 
@@ -1124,6 +1877,7 @@ class WorkflowRunStatus(str, enum.Enum):
     CANCELLED = "cancelled"
     RETRYING = "retrying"
 
+
 class WorkflowRunPhase(str, enum.Enum):
     """High-level phase executed by the Spec workflow chain."""
 
@@ -1133,6 +1887,7 @@ class WorkflowRunPhase(str, enum.Enum):
     PUBLISH = "publish"
     COMPLETE = "complete"
 
+
 class WorkflowTaskStatus(str, enum.Enum):
     """Execution state tracked for each workflow task."""
 
@@ -1141,6 +1896,7 @@ class WorkflowTaskStatus(str, enum.Enum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     SKIPPED = "skipped"
+
 
 class WorkflowTaskName(str, enum.Enum):
     """Supported workflow task identifiers for the chain."""
@@ -1152,6 +1908,7 @@ class WorkflowTaskName(str, enum.Enum):
     FINALIZE = "finalize"
     RETRY_HOOK = "retry-hook"
 
+
 class CodexPreflightStatus(str, enum.Enum):
     """Codex login verification result stored on a run."""
 
@@ -1160,6 +1917,7 @@ class CodexPreflightStatus(str, enum.Enum):
     FAILED = "failed"
     SKIPPED = "skipped"
 
+
 class CodexCredentialStatus(str, enum.Enum):
     """Result of Codex credential validation."""
 
@@ -1167,12 +1925,14 @@ class CodexCredentialStatus(str, enum.Enum):
     INVALID = "invalid"
     EXPIRES_SOON = "expires_soon"
 
+
 class GitHubCredentialStatus(str, enum.Enum):
     """Result of GitHub credential validation."""
 
     VALID = "valid"
     INVALID = "invalid"
     SCOPE_MISSING = "scope_missing"
+
 
 class WorkflowArtifactType(str, enum.Enum):
     """Artifacts captured while the Spec workflow executes."""
@@ -1185,20 +1945,18 @@ class WorkflowArtifactType(str, enum.Enum):
     PR_PAYLOAD = "pr_payload"
     RETRY_CONTEXT = "retry_context"
 
+
 from moonmind.core.artifacts import (
-    TemporalArtifactStorageBackend,
     TemporalArtifactEncryption,
-    TemporalArtifactStatus,
-    TemporalArtifactRetentionClass,
     TemporalArtifactRedactionLevel,
+    TemporalArtifactRetentionClass,
+    TemporalArtifactStatus,
+    TemporalArtifactStorageBackend,
     TemporalArtifactUploadMode,
 )
 from moonmind.statuses.close_status import TemporalExecutionCloseStatus
-from moonmind.statuses.checkpoint_branch import (
-    CheckpointBranchState,
-    CheckpointBranchTurnState,
-)
 from moonmind.statuses.workflow import MoonMindWorkflowState
+
 
 class TemporalWorkflowType(str, enum.Enum):
     """Supported root workflow type catalog entries."""
@@ -1207,12 +1965,14 @@ class TemporalWorkflowType(str, enum.Enum):
     MANIFEST_INGEST = "MoonMind.ManifestIngest"
     PROVIDER_PROFILE_MANAGER = "MoonMind.ProviderProfileManager"
 
+
 class TemporalExecutionOwnerType(str, enum.Enum):
     """Owner class mirrored into the execution projection and Visibility model."""
 
     USER = "user"
     SYSTEM = "system"
     SERVICE = "service"
+
 
 class TemporalExecutionProjectionSyncState(str, enum.Enum):
     """Freshness marker for the execution projection row."""
@@ -1222,12 +1982,14 @@ class TemporalExecutionProjectionSyncState(str, enum.Enum):
     REPAIR_PENDING = "repair_pending"
     ORPHANED = "orphaned"
 
+
 class TemporalExecutionProjectionSourceMode(str, enum.Enum):
     """How authoritative the current projection row is meant to be."""
 
     PROJECTION_ONLY = "projection_only"
     MIXED = "mixed"
     TEMPORAL_AUTHORITATIVE = "temporal_authoritative"
+
 
 class TemporalExecutionCanonicalRecord(Base):
     """Authoritative execution state mirrored from the Temporal control plane."""
@@ -1372,6 +2134,7 @@ class TemporalExecutionCanonicalRecord(Base):
         DateTime(timezone=True), nullable=True
     )
 
+
 class CheckpointBranchKind(str, enum.Enum):
     """Product-level checkpoint branch type."""
 
@@ -1440,6 +2203,7 @@ class TemporalExecutionDependency(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
+
 class TemporalExecutionRemediationLink(Base):
     """Durable directed relationship from a remediation run to its target."""
 
@@ -1478,14 +2242,29 @@ class TemporalExecutionRemediationLink(Base):
     active_lock_holder: Mapped[Optional[str]] = mapped_column(
         String(255), nullable=True
     )
-    latest_action_summary: Mapped[Optional[str]] = mapped_column(
-        Text, nullable=True
-    )
+    latest_action_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # ``outcome`` records the latest action *delivery* status.
     outcome: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    # ``resolution`` records the terminal remediation *lifecycle* resolution
+    # (issue #3622). It is stored separately from ``outcome`` so the final
+    # lifecycle summary never overwrites the delivery projection, and the two
+    # never change meaning across phases.
+    resolution: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    # ``verification_outcome`` records the trusted post-action *repair*
+    # verification classification (issue #3622), kept distinct from delivery so
+    # a delivered action never relabels the target as repaired.
+    verification_outcome: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )
     mutation_guard_lock_state: Mapped[Optional[dict[str, Any]]] = mapped_column(
         mutable_json_dict(), nullable=True
     )
     mutation_guard_ledger_state: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        mutable_json_dict(), nullable=True
+    )
+    # Canonical, bounded reviewer approval lifecycle for this remediation.
+    # Credential bodies and raw infrastructure authority are forbidden here.
+    approval_state: Mapped[Optional[dict[str, Any]]] = mapped_column(
         mutable_json_dict(), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
@@ -1497,6 +2276,144 @@ class TemporalExecutionRemediationLink(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+
+
+class ControlStopContinuationRecord(Base):
+    """Authoritative admission and idempotency record for a control stop."""
+
+    __tablename__ = "control_stop_continuations"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_workflow_id",
+            "source_run_id",
+            "control_stop_id",
+            name="uq_control_stop_continuations_source_stop",
+        ),
+        UniqueConstraint(
+            "destination_workflow_id",
+            name="uq_control_stop_continuations_destination",
+        ),
+        Index(
+            "ix_control_stop_continuations_source_workflow",
+            "source_workflow_id",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    source_workflow_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    control_stop_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    contract_payload: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(), nullable=False
+    )
+    artifact_digests: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(), nullable=False
+    )
+    deployment_generation: Mapped[str] = mapped_column(String(255), nullable=False)
+    deployment_promoted: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    destination_workflow_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    workspace_head_ref: Mapped[Optional[str]] = mapped_column(
+        String(1024), nullable=True
+    )
+    remaining_work_ref: Mapped[Optional[str]] = mapped_column(
+        String(1024), nullable=True
+    )
+    reserved_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class WorkflowLinkedContinuationRecord(Base):
+    """Durable, idempotent linked-continuation lineage (MoonLadderStudios/MoonMind#3641).
+
+    Records the explicit **Continue in a new workflow** action taken from a
+    *terminal* source Workflow Execution: it pins the exact source workflow/run
+    (and Step lineage where relevant) plus the authorized MoonMind evidence refs
+    the continuation carried, and binds one client idempotency key to exactly one
+    destination Workflow Execution. Duplicate submissions of the same key resolve
+    to the same destination rather than creating two linked workflows.
+
+    This is distinct from ``ControlStopContinuationRecord`` (control-stop
+    remediation), remediation links, and checkpoint branches: it is the terminal
+    "linked continuation" relationship (``relationship_type='linked_continuation'``)
+    presented bidirectionally on both source and continuation Workflows. The
+    source Workflow, its run, Step ledger, provider session, artifacts, and
+    publication result are never mutated by creating this record.
+    """
+
+    __tablename__ = "workflow_linked_continuations"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_workflow_id",
+            "source_run_id",
+            "idempotency_key",
+            name="uq_workflow_linked_continuations_source_key",
+        ),
+        UniqueConstraint(
+            "destination_workflow_id",
+            name="uq_workflow_linked_continuations_destination",
+        ),
+        Index(
+            "ix_workflow_linked_continuations_source_workflow",
+            "source_workflow_id",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    source_workflow_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    request_digest: Mapped[str] = mapped_column(String(128), nullable=False)
+    relationship_type: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        default="linked_continuation",
+        server_default=text("'linked_continuation'"),
+    )
+    source_logical_step_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    source_step_execution_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    # Bounded, browser-safe pinned source identity/evidence refs (finish summary,
+    # final snapshot, capture manifest, selected artifact refs). MoonMind artifact
+    # refs only; never a provider-native path, host/runner id, or credential.
+    pinned_source_refs: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(), nullable=False, default=dict
+    )
+    created_by: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    bounded_purpose: Mapped[Optional[str]] = mapped_column(String(2000), nullable=True)
+    destination_workflow_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    destination_run_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    reserved_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
 
 class WorkflowCheckpointBranchOperation(Base):
     """Idempotency ledger for branch side-effecting operations."""
@@ -1724,6 +2641,7 @@ class TemporalExecutionRecord(Base):
                 break
         return candidate
 
+
 class TemporalIntegrationCorrelationRecord(Base):
     """Durable lookup record for resolving integration callbacks to workflows."""
 
@@ -1775,6 +2693,7 @@ class TemporalIntegrationCorrelationRecord(Base):
         onupdate=func.now(),
     )
 
+
 class WorkflowExecutionSourceMapping(Base):
     """Persisted global workflow execution index for canonical source resolution."""
 
@@ -1812,6 +2731,7 @@ class WorkflowExecutionSourceMapping(Base):
         if not normalized:
             raise ValueError("workflow_id is required")
         return normalized
+
 
 class WorkflowCredentialAudit(Base):
     """Credential verification metadata recorded for each workflow run."""
@@ -1877,6 +2797,7 @@ class WorkflowCredentialAudit(Base):
         foreign_keys=[workflow_run_id],
     )
 
+
 class TemporalArtifact(Base):
     """Metadata index row for one Temporal artifact blob."""
 
@@ -1887,6 +2808,7 @@ class TemporalArtifact(Base):
         Index("ix_temporal_artifacts_expires_at", "expires_at"),
         Index("ix_temporal_artifacts_deleted_at", "deleted_at"),
         Index("ix_temporal_artifacts_hard_deleted_at", "hard_deleted_at"),
+        Index("ix_temporal_artifacts_storage_key", "storage_key"),
     )
 
     artifact_id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -1914,7 +2836,7 @@ class TemporalArtifact(Base):
         default=TemporalArtifactStorageBackend.S3,
         server_default=TemporalArtifactStorageBackend.S3.value,
     )
-    storage_key: Mapped[str] = mapped_column(String(1024), nullable=False, unique=True)
+    storage_key: Mapped[str] = mapped_column(String(1024), nullable=False)
     encryption: Mapped[TemporalArtifactEncryption] = mapped_column(
         Enum(
             TemporalArtifactEncryption,
@@ -2020,6 +2942,7 @@ class TemporalArtifact(Base):
         order_by="TemporalArtifactPin.pinned_at",
     )
 
+
 class TemporalArtifactLink(Base):
     """Execution linkage row giving an artifact semantic meaning."""
 
@@ -2066,6 +2989,7 @@ class TemporalArtifactLink(Base):
         back_populates="links",
     )
 
+
 class TemporalArtifactPin(Base):
     """Optional explicit pin row for artifacts exempt from lifecycle cleanup."""
 
@@ -2092,6 +3016,7 @@ class TemporalArtifactPin(Base):
         "TemporalArtifact",
         back_populates="pins",
     )
+
 
 class WorkflowRun(Base):
     """Top-level record per Spec workflow execution."""
@@ -2204,8 +3129,7 @@ class WorkflowRun(Base):
         "WorkflowCredentialAudit",
         back_populates="workflow_run",
         cascade="all, delete-orphan",
-        primaryjoin=lambda: WorkflowRun.id
-        == WorkflowCredentialAudit.workflow_run_id,
+        primaryjoin=lambda: WorkflowRun.id == WorkflowCredentialAudit.workflow_run_id,
         foreign_keys=lambda: [WorkflowCredentialAudit.workflow_run_id],
         uselist=False,
     )
@@ -2227,6 +3151,7 @@ class WorkflowRun(Base):
         primaryjoin="WorkflowRun.codex_queue == CodexWorkerShard.queue_name",
         foreign_keys=lambda: [WorkflowRun.codex_queue],
     )
+
 
 class WorkflowArtifact(Base):
     """Artifact metadata captured for a workflow run."""
@@ -2266,6 +3191,7 @@ class WorkflowArtifact(Base):
     workflow_run: Mapped[WorkflowRun] = relationship(
         "WorkflowRun", back_populates="artifacts"
     )
+
 
 class WorkflowTaskState(Base):
     """Per-task execution status persisted for monitoring."""
@@ -2339,10 +3265,12 @@ class WorkflowTaskState(Base):
         back_populates="task_states",
     )
 
+
 class ProviderCredentialSource(str, enum.Enum):
     OAUTH_VOLUME = "oauth_volume"
     SECRET_REF = "secret_ref"
     NONE = "none"
+
 
 class RuntimeMaterializationMode(str, enum.Enum):
     OAUTH_HOME = "oauth_home"
@@ -2351,12 +3279,14 @@ class RuntimeMaterializationMode(str, enum.Enum):
     CONFIG_BUNDLE = "config_bundle"
     COMPOSITE = "composite"
 
+
 class ManagedAgentRateLimitPolicy(str, enum.Enum):
     """Rate limit handling policy for a managed agent provider profile."""
 
     BACKOFF = "backoff"
     QUEUE = "queue"
     FAIL_FAST = "fail_fast"
+
 
 class ProviderProfileAuthState(str, enum.Enum):
     """Persisted provider-profile credential activation state."""
@@ -2368,6 +3298,7 @@ class ProviderProfileAuthState(str, enum.Enum):
     VALIDATION_FAILED = "validation_failed"
     DISCONNECTED = "disconnected"
 
+
 class ProviderProfileDisabledReason(str, enum.Enum):
     """Persisted reason a provider profile is disabled."""
 
@@ -2377,6 +3308,7 @@ class ProviderProfileDisabledReason(str, enum.Enum):
     POLICY_DISABLED = "policy_disabled"
     DISCONNECTED = "disconnected"
 
+
 class ProviderProfileAuthMethod(str, enum.Enum):
     """Last verified auth method for provider-profile activation."""
 
@@ -2384,11 +3316,15 @@ class ProviderProfileAuthMethod(str, enum.Enum):
     SECRET_REF = "secret_ref"
     MANUAL = "manual"
 
+
 class ManagedAgentProviderProfile(Base):
     """Named provider configuration and execution policy for a managed agent runtime."""
 
     __tablename__ = "managed_agent_provider_profiles"
     __table_args__ = (
+        UniqueConstraint(
+            "capacity_scope_ref", name="uq_provider_profile_capacity_scope"
+        ),
         Index("ix_provider_profiles_runtime", "runtime_id"),
         Index("ix_provider_profiles_provider", "provider_id"),
         Index("ix_provider_profiles_runtime_provider", "runtime_id", "provider_id"),
@@ -2425,6 +3361,16 @@ class ManagedAgentProviderProfile(Base):
             "default_model_tier >= 1",
             name="ck_provider_profiles_default_model_tier_positive",
         ),
+        CheckConstraint(
+            "NOT (runtime_id IN ('codex_cli', 'claude_code') "
+            "AND credential_source = 'oauth_volume' "
+            "AND runtime_materialization_mode = 'oauth_home') OR max_parallel_runs = 1",
+            name="ck_provider_profiles_oauth_home_exclusive_capacity",
+        ),
+        CheckConstraint(
+            "credential_generation >= 1",
+            name="ck_provider_profiles_credential_generation_positive",
+        ),
         Index(
             "ux_provider_profiles_runtime_default",
             "runtime_id",
@@ -2435,8 +3381,14 @@ class ManagedAgentProviderProfile(Base):
     )
 
     profile_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    capacity_scope_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+    credential_generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
     runtime_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    provider_id: Mapped[str] = mapped_column(String(64), nullable=False, default="unknown", server_default=text("'unknown'"))
+    provider_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="unknown", server_default=text("'unknown'")
+    )
     provider_label: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     default_model: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     default_effort: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
@@ -2451,9 +3403,23 @@ class ManagedAgentProviderProfile(Base):
     default_model_tier: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1, server_default=text("1")
     )
-    model_overrides: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    model_overrides: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        JSON, nullable=True
+    )
+    model_catalog_evidence_json: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        JSON, nullable=True
+    )
+    runtime_validation_image_ref: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    runtime_validation_version: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )
 
     def __init__(self, **kwargs: Any) -> None:
+        profile_id = str(kwargs.get("profile_id") or "").strip()
+        if profile_id and not kwargs.get("capacity_scope_ref"):
+            kwargs["capacity_scope_ref"] = f"provider-profile:{profile_id}"
         super().__init__(**kwargs)
         if kwargs.get("model_tiers") is None:
             self.model_tiers = _provider_profile_model_tiers_default_for_values(
@@ -2495,7 +3461,9 @@ class ManagedAgentProviderProfile(Base):
     )
 
     tags: Mapped[Optional[list[str]]] = mapped_column(JSON, nullable=True)
-    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=100, server_default=text("100"))
+    priority: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=100, server_default=text("100")
+    )
 
     auth_state: Mapped[ProviderProfileAuthState] = mapped_column(
         Enum(
@@ -2538,13 +3506,19 @@ class ManagedAgentProviderProfile(Base):
 
     volume_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     volume_mount_path: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
-    
+
     secret_refs: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
     clear_env_keys: Mapped[Optional[list[str]]] = mapped_column(JSON, nullable=True)
     env_template: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
-    file_templates: Mapped[Optional[list[dict[str, Any]]]] = mapped_column(JSON, nullable=True)
-    home_path_overrides: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
-    command_behavior: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    file_templates: Mapped[Optional[list[dict[str, Any]]]] = mapped_column(
+        JSON, nullable=True
+    )
+    home_path_overrides: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        JSON, nullable=True
+    )
+    command_behavior: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        JSON, nullable=True
+    )
 
     max_parallel_runs: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1, server_default=text("1")
@@ -2567,9 +3541,7 @@ class ManagedAgentProviderProfile(Base):
     max_lease_duration_seconds: Mapped[int] = mapped_column(
         Integer, nullable=False, default=7200, server_default=text("7200")
     )
-    owner_user_id: Mapped[Optional[UUID]] = mapped_column(
-        Uuid, nullable=True
-    )
+    owner_user_id: Mapped[Optional[UUID]] = mapped_column(Uuid, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -2579,6 +3551,154 @@ class ManagedAgentProviderProfile(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+
+
+class OmnigentAgentProfile(Base):
+    """Stable MoonMind-owned identity for an Omnigent agent configuration."""
+
+    __tablename__ = "omnigent_agent_profiles"
+    __table_args__ = (
+        Index("ix_omnigent_agent_profiles_state", "state"),
+        Index("ix_omnigent_agent_profiles_owner", "owner_id"),
+    )
+    profile_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    owner_id: Mapped[Optional[UUID]] = mapped_column(
+        Uuid, ForeignKey("user.id", ondelete="SET NULL"), nullable=True
+    )
+    visibility: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="private"
+    )
+    state: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
+    active_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    default_for_runtime: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class OmnigentAgentProfileVersion(Base):
+    """Immutable normalized profile document and its audit evidence."""
+
+    __tablename__ = "omnigent_agent_profile_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "profile_id", "version", name="uq_omnigent_agent_profile_version"
+        ),
+        UniqueConstraint(
+            "profile_id", "digest", name="uq_omnigent_agent_profile_digest"
+        ),
+    )
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    profile_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("omnigent_agent_profiles.profile_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    digest: Mapped[str] = mapped_column(String(71), nullable=False)
+    document: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    parent_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    cloned_from_profile_id: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )
+    cloned_from_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    upstream_snapshot: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        JSON, nullable=True
+    )
+    validation_result: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        JSON, nullable=True
+    )
+    rollout_metadata: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        JSON, nullable=True
+    )
+    created_by: Mapped[Optional[UUID]] = mapped_column(
+        Uuid, ForeignKey("user.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class OmnigentAgentProfileAuditEvent(Base):
+    """Immutable lifecycle evidence for a MoonMind-owned agent profile."""
+
+    __tablename__ = "omnigent_agent_profile_audit_events"
+    __table_args__ = (
+        Index("ix_omnigent_agent_profile_audit_profile", "profile_id", "created_at"),
+    )
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    profile_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("omnigent_agent_profiles.profile_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    actor_id: Mapped[Optional[UUID]] = mapped_column(
+        Uuid, ForeignKey("user.id", ondelete="SET NULL"), nullable=True
+    )
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class OmnigentAgentProfileUsage(Base):
+    """Exact immutable profile selection retained by an authoring surface."""
+
+    __tablename__ = "omnigent_agent_profile_usage"
+    __table_args__ = (
+        UniqueConstraint(
+            "consumer_type", "consumer_id", name="uq_omnigent_profile_consumer"
+        ),
+        Index("ix_omnigent_profile_usage_profile", "profile_id", "version"),
+    )
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    consumer_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    consumer_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    profile_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("omnigent_agent_profiles.profile_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    digest: Mapped[str] = mapped_column(String(71), nullable=False)
+    effective_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class OmnigentUpstreamAgentProjection(Base):
+    """Last-known bounded projection of one stable upstream identity."""
+
+    __tablename__ = "omnigent_upstream_agent_projections"
+    __table_args__ = (Index("ix_omnigent_upstream_agents_endpoint", "endpoint_ref"),)
+    projection_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    endpoint_ref: Mapped[str] = mapped_column(String(128), nullable=False)
+    bridge_mode: Mapped[str] = mapped_column(String(64), nullable=False)
+    upstream_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    upstream_version: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    metadata_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    available: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    compatible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    last_successful_sync_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_attempt_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
 
 class OAuthSessionStatus(str, enum.Enum):
     """Lifecycle status for a managed agent OAuth session."""
@@ -2593,6 +3713,7 @@ class OAuthSessionStatus(str, enum.Enum):
     FAILED = "failed"
     CANCELLED = "cancelled"
     EXPIRED = "expired"
+
 
 class ManagedAgentOAuthSession(Base):
     """OAuth session for managed agents (browser runner transport removed)."""
@@ -2622,9 +3743,7 @@ class ManagedAgentOAuthSession(Base):
         String(64), nullable=False, default="none", server_default=text("'none'")
     )
     volume_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    volume_mount_path: Mapped[Optional[str]] = mapped_column(
-        String(512), nullable=True
-    )
+    volume_mount_path: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     status: Mapped[OAuthSessionStatus] = mapped_column(
         Enum(
             OAuthSessionStatus,
@@ -2637,18 +3756,36 @@ class ManagedAgentOAuthSession(Base):
         default=OAuthSessionStatus.PENDING,
         server_default=OAuthSessionStatus.PENDING.value,
     )
-    requested_by_user_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    requested_by_user_id: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )
     account_label: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    terminal_session_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
-    terminal_bridge_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
-    connected_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    disconnected_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    terminal_session_id: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )
+    terminal_bridge_id: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )
+    connected_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    disconnected_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     container_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     worker_service: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    started_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    cancelled_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     failure_reason: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     metadata_json: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -2660,6 +3797,7 @@ class ManagedAgentOAuthSession(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+
 
 class ProviderProfileSlotLease(Base):
     """Persisted slot lease state for ProviderProfileManager crash recovery.
@@ -2673,16 +3811,307 @@ class ProviderProfileSlotLease(Base):
     __table_args__ = (
         Index("ix_provider_slot_leases_runtime", "runtime_id"),
         Index("ix_provider_slot_leases_workflow", "workflow_id"),
-        UniqueConstraint("runtime_id", "workflow_id", name="uq_provider_slot_lease_runtime_workflow"),
+        UniqueConstraint(
+            "runtime_id", "workflow_id", name="uq_provider_slot_lease_runtime_workflow"
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     runtime_id: Mapped[str] = mapped_column(String(64), nullable=False)
     workflow_id: Mapped[str] = mapped_column(String(255), nullable=False)
     profile_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    lease_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    owner_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    purpose: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        default="execution_direct",
+        server_default=text("'execution_direct'"),
+    )
+    owner_is_workflow: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
+    step_execution_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    oauth_session_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    idempotency_key: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     granted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+class OmnigentOAuthHostBindingRecord(Base):
+    """Durable, secret-free configuration for one profile-bound OAuth host."""
+
+    __tablename__ = "omnigent_oauth_host_bindings"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider_profile_id", name="uq_omnigent_oauth_binding_profile"
+        ),
+        UniqueConstraint(
+            "binding_ref",
+            "provider_profile_id",
+            name="uq_omnigent_oauth_binding_ref_profile",
+        ),
+    )
+
+    binding_ref: Mapped[str] = mapped_column(String(255), primary_key=True)
+    provider_profile_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("managed_agent_provider_profiles.profile_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    endpoint_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+    harness: Mapped[str] = mapped_column(String(64), nullable=False)
+    credential_mount_template_json: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False
+    )
+    static_host_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    host_launch_profile_ref: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    execution_profile_ref: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    launch_policy_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    effective_launch_snapshot_json: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        JSON, nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.validate_credential_mount_ref()
+
+    @reconstructor
+    def _validate_loaded_credential_mount_ref(self) -> None:
+        self.validate_credential_mount_ref()
+
+    def validate_credential_mount_ref(self) -> None:
+        """Validate the portable mount contract on construction and ORM load."""
+
+        from moonmind.schemas.agent_runtime_models import CredentialMountRef
+
+        mount_ref = CredentialMountRef.model_validate(
+            self.credential_mount_template_json
+        )
+        if mount_ref.auth_volume_ref.provider_profile_id != self.provider_profile_id:
+            raise ValueError(
+                "credential_mount_template_json must belong to provider_profile_id"
+            )
+
+
+class OmnigentHostAuthProfileRecord(Base):
+    """Singleton durable owner for safe embedded host-auth lifecycle metadata."""
+
+    __tablename__ = "omnigent_host_auth_profiles"
+
+    profile_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class OmnigentOAuthHostLeaseRecord(Base):
+    """Durable lifecycle state for the single host consuming an OAuth profile."""
+
+    __tablename__ = "omnigent_oauth_host_leases"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider_lease_id", name="uq_omnigent_oauth_host_provider_lease"
+        ),
+        UniqueConstraint("idempotency_key", name="uq_omnigent_oauth_host_idempotency"),
+        CheckConstraint(
+            "status IN ('allocating','starting','ready','assigned','draining','stopped','failed')",
+            name="ck_omnigent_oauth_host_lease_status",
+        ),
+        ForeignKeyConstraint(
+            ["binding_ref", "provider_profile_id"],
+            [
+                "omnigent_oauth_host_bindings.binding_ref",
+                "omnigent_oauth_host_bindings.provider_profile_id",
+            ],
+            name="fk_omnigent_oauth_host_lease_binding_profile",
+            ondelete="CASCADE",
+        ),
+        CheckConstraint(
+            "credential_generation >= 1",
+            name="ck_omnigent_oauth_host_lease_generation",
+        ),
+        CheckConstraint(
+            "host_auth_generation IS NULL OR host_auth_generation >= 1",
+            name="ck_omnigent_oauth_host_lease_host_auth_generation",
+        ),
+        CheckConstraint(
+            "expires_at > acquired_at",
+            name="ck_omnigent_oauth_host_lease_expiry",
+        ),
+        Index(
+            "ux_omnigent_oauth_host_lease_active_profile",
+            "provider_profile_id",
+            unique=True,
+            sqlite_where=text(
+                "status IN ('allocating','starting','ready','assigned','draining')"
+            ),
+            postgresql_where=text(
+                "status IN ('allocating','starting','ready','assigned','draining')"
+            ),
+        ),
+        Index("ix_omnigent_oauth_host_lease_profile", "provider_profile_id"),
+        Index("ix_omnigent_oauth_host_lease_workflow", "holder_workflow_id"),
+        Index("ix_omnigent_oauth_host_lease_expiry", "expires_at"),
+    )
+
+    lease_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    provider_profile_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("managed_agent_provider_profiles.profile_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    provider_lease_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    binding_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+    credential_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Embedded host/server authentication is intentionally distinct from the
+    # Provider Profile OAuth credential generation above.
+    host_auth_profile_id: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )
+    host_auth_generation: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    holder_workflow_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    agent_run_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    lease_purpose: Mapped[str] = mapped_column(String(64), nullable=False)
+    container_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    container_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    omnigent_host_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    omnigent_session_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    bridge_session_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    effective_launch_snapshot_json: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        JSON, nullable=True
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    acquired_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    last_heartbeat_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    host_capabilities_json: Mapped[dict] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    host_readiness: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    disconnected_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    ready_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    assigned_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    draining_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    stopped_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    cleanup_completed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    error_code: Mapped[Optional[str]] = mapped_column(String(96), nullable=True)
+    error_summary: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+
+    def validate_binding_generation(
+        self,
+        *,
+        binding: OmnigentOAuthHostBindingRecord,
+        profile: ManagedAgentProviderProfile,
+    ) -> None:
+        """Reject a lease that does not match its binding and credential generation."""
+
+        binding.validate_credential_mount_ref()
+        from moonmind.schemas.agent_runtime_models import CredentialMountRef
+
+        mount_ref = CredentialMountRef.model_validate(
+            binding.credential_mount_template_json
+        )
+        mount_generation = mount_ref.auth_volume_ref.credential_generation
+        if (
+            binding.binding_ref != self.binding_ref
+            or binding.provider_profile_id != self.provider_profile_id
+            or profile.profile_id != self.provider_profile_id
+        ):
+            raise ValueError("host lease binding must belong to provider_profile_id")
+        if (
+            self.credential_generation != mount_generation
+            or self.credential_generation != profile.credential_generation
+        ):
+            raise ValueError(
+                "host lease credential_generation must match binding and profile"
+            )
+
+
+@event.listens_for(OmnigentOAuthHostLeaseRecord, "before_insert")
+@event.listens_for(OmnigentOAuthHostLeaseRecord, "before_update")
+def _validate_omnigent_oauth_host_lease_generation(
+    _mapper: Any,
+    connection: Any,
+    target: OmnigentOAuthHostLeaseRecord,
+) -> None:
+    """Fail closed when a host lease carries stale credential identity."""
+
+    binding_table = OmnigentOAuthHostBindingRecord.__table__
+    profile_table = ManagedAgentProviderProfile.__table__
+    binding_row = (
+        connection.execute(
+            select(
+                binding_table.c.provider_profile_id,
+                binding_table.c.credential_mount_template_json,
+            ).where(binding_table.c.binding_ref == target.binding_ref)
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if binding_row is None:
+        raise ValueError("host lease binding_ref does not exist")
+    profile_generation = connection.execute(
+        select(profile_table.c.credential_generation).where(
+            profile_table.c.profile_id == target.provider_profile_id
+        )
+    ).scalar_one_or_none()
+    if profile_generation is None:
+        raise ValueError("host lease provider_profile_id does not exist")
+
+    from moonmind.schemas.agent_runtime_models import CredentialMountRef
+
+    mount_ref = CredentialMountRef.model_validate(
+        binding_row["credential_mount_template_json"]
+    )
+    if (
+        target.credential_generation != mount_ref.auth_volume_ref.credential_generation
+        or target.credential_generation != profile_generation
+    ):
+        raise ValueError(
+            "host lease credential_generation must match binding and profile"
+        )
+
 
 class AgentSkillSourceKind(str, enum.Enum):
     """Source provenance for a resolved skill."""
@@ -2692,19 +4121,19 @@ class AgentSkillSourceKind(str, enum.Enum):
     REPO = "repo"
     LOCAL = "local"
 
+
 class AgentSkillFormat(str, enum.Enum):
     """Supported payload formatting for skill content."""
 
     MARKDOWN = "markdown"
     BUNDLE = "bundle"
 
+
 class AgentSkillDefinition(Base):
     """Current definition and content evidence for a reusable agent skill."""
 
     __tablename__ = "agent_skill_definitions"
-    __table_args__ = (
-        Index("ix_agent_skill_definitions_slug", "slug", unique=True),
-    )
+    __table_args__ = (Index("ix_agent_skill_definitions_slug", "slug", unique=True),)
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     slug: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -2734,13 +4163,12 @@ class AgentSkillDefinition(Base):
         onupdate=func.now(),
     )
 
+
 class SkillSet(Base):
     """A collection of selected skills for task context grouping."""
 
     __tablename__ = "skill_sets"
-    __table_args__ = (
-        Index("ix_skill_sets_slug", "slug", unique=True),
-    )
+    __table_args__ = (Index("ix_skill_sets_slug", "slug", unique=True),)
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     slug: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -2762,6 +4190,7 @@ class SkillSet(Base):
         cascade="all, delete-orphan",
     )
 
+
 class SkillSetEntry(Base):
     """Membership rule explicitly including an agent skill block within a SkillSet."""
 
@@ -2776,23 +4205,106 @@ class SkillSetEntry(Base):
         Uuid, ForeignKey("skill_sets.id", ondelete="CASCADE"), nullable=False
     )
     skill_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("agent_skill_definitions.id", ondelete="CASCADE"), nullable=False
+        Uuid,
+        ForeignKey("agent_skill_definitions.id", ondelete="CASCADE"),
+        nullable=False,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
-    skill_set: Mapped[SkillSet] = relationship(
-        "SkillSet", back_populates="entries"
-    )
-    skill: Mapped[AgentSkillDefinition] = relationship(
-        "AgentSkillDefinition"
-    )
+    skill_set: Mapped[SkillSet] = relationship("SkillSet", back_populates="entries")
+    skill: Mapped[AgentSkillDefinition] = relationship("AgentSkillDefinition")
 
     @property
     def skill_slug(self) -> str:
         """Return the slug of the associated skill."""
         return self.skill.slug
+
+
+def _default_container_job_auxiliary_outcome() -> dict[str, str]:
+    from moonmind.schemas.container_job_models import AuxiliaryOutcomeState
+
+    return {"state": AuxiliaryOutcomeState.NOT_ATTEMPTED.value}
+
+
+class ContainerJobRecord(Base):
+    """API-owned durable container-job identity and compact observations."""
+
+    __tablename__ = "container_jobs"
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_type",
+            "owner_id",
+            "idempotency_key",
+            name="uq_container_jobs_owner_idempotency",
+        ),
+        Index(
+            "ix_container_jobs_owner_created", "owner_type", "owner_id", "created_at"
+        ),
+    )
+
+    job_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    contract_version: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="v1"
+    )
+    owner_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    owner_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_json: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(), nullable=False
+    )
+    request_json: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(), nullable=False
+    )
+    state: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
+    backend_kind: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    backend_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    image_observation_json: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        mutable_json_dict(), nullable=True
+    )
+    authorization_observation_json: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        mutable_json_dict(), nullable=True
+    )
+    terminal_outcome_json: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        mutable_json_dict(), nullable=True
+    )
+    publication_outcome_json: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(),
+        nullable=False,
+        default=_default_container_job_auxiliary_outcome,
+    )
+    cleanup_outcome_json: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(),
+        nullable=False,
+        default=_default_container_job_auxiliary_outcome,
+    )
+    logs_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    artifacts_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    # Durable observability-event journal ref (terminal live-log fallback) and
+    # compact non-sensitive execution observations (MoonLadderStudios/MoonMind#3258).
+    events_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    workspace_probe: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    started_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    duration_seconds: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    cancel_idempotency_key: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
 
 def _register_workflow_model_dependencies() -> None:
     """Import workflow ORM models so string relationships can resolve."""
@@ -2802,4 +4314,418 @@ def _register_workflow_model_dependencies() -> None:
 
     import_module("moonmind.workflows.automation.models")
 
+
 _register_workflow_model_dependencies()
+
+
+# ---------------------------------------------------------------------------
+# Generic Omnigent execution plan and runtime binding persistence
+# Source: docs/Omnigent/OmnigentHarnessPlatformDesign.md §§16-17
+# Plan is secret-free, digest-addressed, persisted before provider leases.
+# Runtime binding is fenced, staged, acquired-generations + exact-host
+# attestation, immutable core after commitment.
+# ---------------------------------------------------------------------------
+
+
+class OmnigentExecutionPlanRecord(Base):
+    """Durable, immutable, secret-free execution plan envelope.
+
+    The planRef is digest-addressed from canonical payload bytes; retries
+    load the same plan via planRef. No workflow input may author
+    executionRealizerRef – it is trusted planner selection only.
+    """
+
+    __tablename__ = "omnigent_execution_plans"
+    __table_args__ = (
+        Index("ix_omnigent_execution_plans_created", "created_at"),
+        Index("ix_omnigent_execution_plans_harness", "harness_id"),
+    )
+
+    plan_ref: Mapped[str] = mapped_column(String(255), primary_key=True)
+    schema_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    agent_profile_snapshot_ref: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    credential_binding_set_ref: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    harness_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    harness_implementation_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+    host_class_ref: Mapped[str] = mapped_column(String(128), nullable=False)
+    launch_policy_ref: Mapped[str] = mapped_column(String(128), nullable=False)
+    execution_realizer_ref: Mapped[str] = mapped_column(String(64), nullable=False)
+    support_combination_key: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    created_by: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+
+class OmnigentRuntimeBindingRecord(Base):
+    """Fenced runtime binding aggregate (staged).
+
+    Immutable core: planRef, provider profile selections, acquired
+    generations, materializer selections. Mutable lifecycle is stored via
+    control-plane aggregates; this record snapshots the latest fenced state
+    plus digests for terminal evidence.
+    """
+
+    __tablename__ = "omnigent_runtime_bindings"
+    __table_args__ = (
+        UniqueConstraint(
+            "execution_plan_ref",
+            "execution_scope_ref",
+            name="uq_omnigent_runtime_binding_plan_scope",
+        ),
+        Index("ix_omnigent_runtime_bindings_plan", "execution_plan_ref"),
+        Index("ix_omnigent_runtime_bindings_host", "omnigent_host_id"),
+        Index("ix_omnigent_runtime_bindings_session", "omnigent_session_id"),
+    )
+
+    runtime_binding_ref: Mapped[str] = mapped_column(String(255), primary_key=True)
+    binding_id: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    latest_snapshot_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+    execution_plan_ref: Mapped[str] = mapped_column(
+        String(255),
+        ForeignKey("omnigent_execution_plans.plan_ref", ondelete="CASCADE"),
+        nullable=False,
+    )
+    execution_scope_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
+    fencing_generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
+    state: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="credentials_acquired",
+        server_default=text("'credentials_acquired'"),
+    )
+    failure_code: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    terminal_result_json: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        JSON, nullable=True
+    )
+    heartbeat_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    provider_leases_json: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    host_binding_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    host_lease_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    host_lease_generation: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    omnigent_host_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    runner_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    session_id: Mapped[Optional[str]] = mapped_column(
+        "omnigent_session_id", String(255), nullable=True
+    )
+    chat_binding_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    credential_runtime_handles_json: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    attestation_refs_json: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    cleanup_authority_refs_json: Mapped[list[Any]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class OmnigentHostBindingRecordV2(Base):
+    """Generic host binding (post-OAuth): supports any HostClass + harness.
+
+    Preserves old OmnigentOAuthHostBindingRecord for codex-profile-bound@1.
+    """
+
+    __tablename__ = "omnigent_host_bindings_v2"
+    __table_args__ = (
+        UniqueConstraint("binding_id", name="uq_omnigent_host_binding_v2_id"),
+        Index("ix_omnigent_host_bindings_v2_class", "host_class_ref"),
+        Index("ix_omnigent_host_bindings_v2_harness", "harness_id"),
+    )
+
+    binding_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    host_class_ref: Mapped[str] = mapped_column(String(128), nullable=False)
+    launch_policy_ref: Mapped[str] = mapped_column(String(128), nullable=False)
+    harness_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    harness_implementation_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+    execution_plan_ref: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        ForeignKey("omnigent_execution_plans.plan_ref", ondelete="SET NULL"),
+        nullable=True,
+    )
+    provider_profile_refs_json: Mapped[list[str]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class OmnigentHostLeaseRecordV2(Base):
+    """Generic host lease (on-demand or static-connected) with fencing."""
+
+    __tablename__ = "omnigent_host_leases_v2"
+    __table_args__ = (
+        Index("ix_omnigent_host_leases_v2_binding", "binding_id"),
+        Index("ix_omnigent_host_leases_v2_host", "omnigent_host_id"),
+        Index("ix_omnigent_host_leases_v2_status", "status"),
+    )
+
+    lease_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    binding_id: Mapped[str] = mapped_column(
+        String(255),
+        ForeignKey("omnigent_host_bindings_v2.binding_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    host_class_ref: Mapped[str] = mapped_column(String(128), nullable=False)
+    runtime_binding_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="allocating"
+    )
+    omnigent_host_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    host_lease_generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1
+    )
+    cleanup_handle_json: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        JSON, nullable=True
+    )
+    heartbeat_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class OmnigentCredentialRuntimeRecord(Base):
+    """Durable credential materialization evidence (secret-free)."""
+
+    __tablename__ = "omnigent_credential_runtimes"
+    __table_args__ = (
+        Index("ix_omnigent_credential_runtimes_profile", "provider_profile_ref"),
+        Index("ix_omnigent_credential_runtimes_materializer", "materializer_ref"),
+    )
+
+    credential_runtime_ref: Mapped[str] = mapped_column(String(255), primary_key=True)
+    provider_profile_ref: Mapped[str] = mapped_column(String(128), nullable=False)
+    provider_lease_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+    credential_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    materializer_ref: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    access_mode: Mapped[str] = mapped_column(String(32), nullable=False)
+    cleanup_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+    attestation_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    attachments_json: Mapped[list[Any]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    cleanup_state: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="active"
+    )
+    cleanup_evidence_json: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        JSON, nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class OmnigentCredentialBindingSetRecord(Base):
+    """Versioned credential-binding sets (immutable per version)."""
+
+    __tablename__ = "omnigent_credential_binding_sets"
+    __table_args__ = (
+        UniqueConstraint(
+            "binding_set_id", "version", name="uq_omnigent_binding_set_version"
+        ),
+        Index("ix_omnigent_binding_sets_id", "binding_set_id"),
+    )
+
+    binding_set_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    digest: Mapped[str] = mapped_column(String(80), nullable=False)
+    canonical_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    ref: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class OmnigentHarnessCatalogSnapshotRecord(Base):
+    """Immutable projection of one authenticated Omnigent inventory sync."""
+
+    __tablename__ = "omnigent_harness_catalog_snapshots"
+    __table_args__ = (
+        Index("ix_omnigent_catalog_endpoint_observed", "endpoint_ref", "observed_at"),
+    )
+
+    catalog_ref: Mapped[str] = mapped_column(String(255), primary_key=True)
+    endpoint_ref: Mapped[str] = mapped_column(String(128), nullable=False)
+    omnigent_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    omnigent_build_digest: Mapped[str] = mapped_column(String(71), nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    source_digest: Mapped[str] = mapped_column(String(71), nullable=False)
+    snapshot_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    diagnostics_json: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class OmnigentHarnessTrustRecord(Base):
+    """Trust classification bound to an exact implementation reference."""
+
+    __tablename__ = "omnigent_harness_trust_records"
+    __table_args__ = (Index("ix_omnigent_trust_harness", "harness_id"),)
+
+    implementation_ref: Mapped[str] = mapped_column(String(255), primary_key=True)
+    harness_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    catalog_ref: Mapped[str] = mapped_column(
+        String(255),
+        ForeignKey(
+            "omnigent_harness_catalog_snapshots.catalog_ref", ondelete="RESTRICT"
+        ),
+        nullable=False,
+    )
+    trust_state: Mapped[str] = mapped_column(String(32), nullable=False)
+    reason_code: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    plugin_load_error_json: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        JSON, nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class OmnigentExecutionPlanUsageRecord(Base):
+    """Retry-stable binding from execution identity to its first plan."""
+
+    __tablename__ = "omnigent_execution_plan_usages"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_omnigent_plan_usage_idempotency"),
+        UniqueConstraint(
+            "workflow_id",
+            "step_execution_id",
+            "idempotency_key",
+            name="uq_omnigent_plan_usage_execution",
+        ),
+        Index("ix_omnigent_plan_usage_plan", "plan_ref"),
+    )
+
+    usage_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    workflow_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    step_execution_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    plan_ref: Mapped[str] = mapped_column(
+        String(255),
+        ForeignKey("omnigent_execution_plans.plan_ref", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    request_digest: Mapped[str] = mapped_column(String(71), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class MergeAutomationReviewRequestRecord(Base):
+    """Durable side-effect ledger for one automated-review request.
+
+    GitHub comment creation carries no idempotency key of its own, so a lost
+    response after a successful POST would otherwise look like "never posted".
+    This ledger binds one logical request identity (parent workflow + repository
+    + PR + head SHA + provider) to at most one posted comment, and records the
+    instant the request attempt started so a retry can reconcile against
+    comments created by the configured identity after that instant instead of
+    posting a second request.
+    """
+
+    __tablename__ = "merge_automation_review_requests"
+    # ``request_key`` is the primary key: the deterministic identity of one
+    # automated review request. A separate unique constraint on it would only
+    # add a duplicate index.
+    __table_args__ = (
+        Index(
+            "ix_merge_automation_review_requests_pr",
+            "repository",
+            "pr_number",
+        ),
+        Index(
+            "ix_merge_automation_review_requests_parent",
+            "parent_workflow_id",
+        ),
+    )
+
+    request_key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    parent_workflow_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    repository: Mapped[str] = mapped_column(String(255), nullable=False)
+    pr_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    head_sha: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    command: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="pending", server_default="pending"
+    )
+    request_comment_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, nullable=True
+    )
+    request_comment_url: Mapped[Optional[str]] = mapped_column(
+        String(1024), nullable=True
+    )
+    actor: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    reconciled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    failure_reason: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    attempt_started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    requested_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )

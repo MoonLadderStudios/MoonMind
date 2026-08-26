@@ -15,6 +15,7 @@ from temporalio.common import (
 )
 from moonmind.workflows.temporal.workflows.run import (
     DEPENDENCY_GATE_PATCH,
+    RUN_MEMO_RUNTIME_INHERITANCE_PATCH,
     MoonMindUserWorkflow,
 )
 
@@ -125,6 +126,76 @@ def test_initializes_recurring_run_from_string_temporal_scheduled_start_time(
 
     assert result[-1] == scheduled_start
     assert workflow_instance._scheduled_for == scheduled_start
+
+
+def test_scheduled_run_memo_preserves_compact_runtime_inheritance(monkeypatch):
+    workflow_instance = MoonMindUserWorkflow()
+    captured_memos: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        MoonMindUserWorkflow,
+        "_trusted_owner_metadata",
+        lambda self: ("user", "user-1"),
+    )
+    monkeypatch.setattr(workflow, "memo", lambda: {})
+    monkeypatch.setattr(
+        workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_MEMO_RUNTIME_INHERITANCE_PATCH,
+    )
+    monkeypatch.setattr(workflow, "upsert_memo", captured_memos.append)
+
+    workflow_instance._initialize_from_payload(
+        {
+            "workflow_type": "MoonMind.UserWorkflow",
+            "initial_parameters": {
+                "targetRuntime": "codex_cli",
+                "model": "gpt-5.3-codex-spark",
+                "effort": "xhigh",
+                "profileId": "codex_openai_oauth",
+                "task": {
+                    "runtime": {
+                        "mode": "codex_cli",
+                        "model": "gpt-5.3-codex-spark",
+                        "effort": "xhigh",
+                        "profileId": "codex_openai_oauth",
+                    }
+                },
+            },
+        }
+    )
+    workflow_instance._update_memo()
+
+    assert captured_memos[-1]["parameters"] == {
+        "targetRuntime": "codex_cli",
+        "model": "gpt-5.3-codex-spark",
+        "effort": "xhigh",
+        "profileId": "codex_openai_oauth",
+        "workflow": {
+            "runtime": {
+                "mode": "codex_cli",
+                "model": "gpt-5.3-codex-spark",
+                "effort": "xhigh",
+                "executionProfileRef": "codex_openai_oauth",
+            }
+        },
+    }
+
+
+def test_runtime_inheritance_memo_patch_preserves_previous_history_shape(monkeypatch):
+    workflow_instance = MoonMindUserWorkflow()
+    workflow_instance._runtime_inheritance_parameters = {
+        "targetRuntime": "codex_cli"
+    }
+    captured_memos: list[dict[str, object]] = []
+
+    monkeypatch.setattr(workflow, "patched", lambda _patch_id: False)
+    monkeypatch.setattr(workflow, "upsert_memo", captured_memos.append)
+
+    workflow_instance._update_memo()
+
+    assert "parameters" not in captured_memos[-1]
+
 
 @pytest.mark.asyncio
 async def test_run_workflow_scheduled(mock_run_environment):

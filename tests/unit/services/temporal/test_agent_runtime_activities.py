@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import BaseModel
 
-from moonmind.schemas.agent_runtime_models import AgentRunResult
+from moonmind.schemas.agent_runtime_models import (
+    AgentRunResult,
+    resolve_execution_budget,
+)
 from moonmind.workflows.temporal.artifacts import ExecutionRef
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
@@ -169,6 +173,58 @@ async def test_publish_artifacts_writes_managed_session_input_reference_artifact
         "output.summary",
         "output.agent_result",
     ]
+
+
+@pytest.mark.asyncio
+async def test_publish_artifacts_compacts_metadata_added_after_near_limit_input():
+    metadata = {
+        "lastAssistantText": "A" * 8000,
+        "operator_summary": "",
+        "terminalContractSatisfied": True,
+    }
+    base_size = len(
+        json.dumps(metadata, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
+    metadata["operator_summary"] = "B" * (16_250 - base_size)
+    encoded_size = len(
+        json.dumps(metadata, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
+    assert encoded_size == 16_250
+    input_result = AgentRunResult(summary="done", metadata=metadata)
+    captured_payloads: list[object] = []
+
+    async def fake_write_json_artifact(
+        _service,
+        *,
+        principal,
+        payload,
+        execution_ref=None,
+        metadata_json=None,
+    ):
+        del principal, execution_ref, metadata_json
+        captured_payloads.append(payload)
+        artifact_id = (
+            "art_summary_" + "s" * 64
+            if len(captured_payloads) == 1
+            else "art_result_" + "r" * 64
+        )
+        return SimpleNamespace(artifact_id=artifact_id)
+
+    activities = TemporalAgentRuntimeActivities(artifact_service=object())
+    with patch(
+        "moonmind.workflows.temporal.activity_runtime._write_json_artifact",
+        new=fake_write_json_artifact,
+    ):
+        result = await activities.agent_runtime_publish_artifacts(input_result)
+
+    assert isinstance(result, AgentRunResult)
+    assert result.metadata["outputSummaryRef"] == "art_summary_" + "s" * 64
+    assert result.metadata["outputAgentResultRef"] == "art_result_" + "r" * 64
+    assert result.metadata["workflowHistoryMetadataCompacted"] is True
+    assert "lastAssistantText" not in result.metadata
+    assert result.metadata["operator_summary"].startswith("B")
+    assert captured_payloads[1]["metadata"]["lastAssistantText"] == "A" * 8000
+    AgentRunResult.model_validate(result.model_dump(mode="json", by_alias=True))
 
 @pytest.mark.asyncio
 async def test_publish_artifacts_captures_story_breakdown_handoff(tmp_path):
@@ -643,10 +699,13 @@ async def test_agent_runtime_launch_defers_support_cleanup_until_fetch_result():
     [task] = list(activities._supervision_tasks)
     await task
 
+    # The supervisor receives the whole progress-aware budget resolved from the
+    # request's timeoutPolicy, not a lone deadline: it must extend for observed
+    # progress and terminate on exactly the numbers the workflow enforces.
     mock_supervisor.supervise.assert_awaited_once_with(
         run_id="run-cleanup-1",
         process=ANY,
-        timeout_seconds=3600,
+        budget=resolve_execution_budget(agent_kind="managed", timeout_policy=None),
         cleanup_paths=None,
         deferred_cleanup_paths=["/tmp/cleanup.file"],
     )

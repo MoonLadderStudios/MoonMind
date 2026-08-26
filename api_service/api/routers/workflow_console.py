@@ -172,7 +172,7 @@ DASHBOARD_DESTINATIONS: tuple[DashboardDestination, ...] = (
         icon_key="moon",
         canonical_path="/schedules",
         path_patterns=("/schedules", "/schedules/:definitionId"),
-        navigation_group="primary",
+        navigation_group="system",
         page_classification="workspace",
         capability_key="schedules",
         endpoint_key="schedules",
@@ -185,16 +185,16 @@ DASHBOARD_DESTINATIONS: tuple[DashboardDestination, ...] = (
         icon_key="sparkles",
         canonical_path="/skills",
         path_patterns=("/skills/*",),
-        navigation_group="primary",
+        navigation_group="system",
         page_classification="workspace",
         capability_key="skills",
         endpoint_key="skills",
+        display_mode="skills-list",
         page="skills",
-        data_wide_panel=False,
     ),
     DashboardDestination(
         key="manifests",
-        label="RAG / Manifests",
+        label="Manifests",
         icon_key="manifest",
         canonical_path="/manifests",
         path_patterns=("/manifests", "/manifests/:manifestName"),
@@ -206,7 +206,7 @@ DASHBOARD_DESTINATIONS: tuple[DashboardDestination, ...] = (
     ),
     DashboardDestination(
         key="omnigent-agents",
-        label="Omnigent Agents",
+        label="Agents",
         icon_key="bot",
         canonical_path="/omnigent/agents",
         path_patterns=("/omnigent/agents/*",),
@@ -218,7 +218,7 @@ DASHBOARD_DESTINATIONS: tuple[DashboardDestination, ...] = (
     ),
     DashboardDestination(
         key="omnigent-policies",
-        label="Omnigent Policies",
+        label="Policies",
         icon_key="shield-check",
         canonical_path="/omnigent/policies",
         path_patterns=("/omnigent/policies/*",),
@@ -242,7 +242,7 @@ DASHBOARD_DESTINATIONS: tuple[DashboardDestination, ...] = (
     ),
     DashboardDestination(
         key="artifacts",
-        label="Artifacts / Observability",
+        label="Artifacts",
         icon_key="archive",
         canonical_path="/artifacts",
         path_patterns=("/artifacts/*", "/observability/*"),
@@ -1582,6 +1582,7 @@ async def get_dashboard_ui_info(
         and bridge_config.host_protocol_mode == HOST_PROTOCOL_MODE_PROXY
         and build_omnigent_gate().enabled
     )
+    settings_permissions = settings_permissions_for_user(_user)
     return DashboardUiInfoResponse(
         buildId=system_config.get("buildId"),
         features={
@@ -1597,9 +1598,7 @@ async def get_dashboard_ui_info(
             "oauthTerminal": True,
             "remediationCollection": True,
             "omnigentAgents": omnigent_agents_available,
-            # No authorized policy inventory read contract exists yet. Advertising
-            # this explicitly keeps the rail and route free of dead links.
-            "omnigentPolicies": False,
+            "omnigentPolicies": "settings.catalog.read" in settings_permissions,
         },
         limits={
             "workflowListDefaultPageSize": 50,
@@ -1618,6 +1617,7 @@ async def get_dashboard_ui_info(
             "skills": "/api/workflows/skills",
             "schedules": "/api/recurring-workflows",
             "settings": "/api/settings",
+            "omnigentPolicies": "/api/omnigent/policies",
             "manifests": "/api/manifests",
             "remediations": "/api/executions/remediations",
             **(
@@ -1628,7 +1628,7 @@ async def get_dashboard_ui_info(
         },
         destinations=_dashboard_destination_info(),
         dashboardConfig=dashboard_config,
-        settingsPermissions=sorted(settings_permissions_for_user(_user)),
+        settingsPermissions=sorted(settings_permissions),
         workerPause=_worker_pause_sources(),
     )
 

@@ -1,0 +1,34 @@
+{
+  "failureShapeId": "batch-workflows-invalid-range",
+  "incidentWorkflowId": "mm:3df0b867-a25a-4560-b21d-fad3689f5fd8",
+  "issueRange": "3370-3425",
+  "maxWorkflows": 25,
+  "requestedCount": 56,
+  "terminalContract": {
+    "contractId": "batch_workflows_fanout.v1",
+    "relativePath": "artifacts/batch-workflows-result.json",
+    "expectedSchemaVersion": "moonmind.batch-workflows-result.v1",
+    "executionRef": "workflow:run:step:execution:1"
+  },
+  "terminalEvidence": {
+    "schemaVersion": "moonmind.batch-workflows-result.v1",
+    "contractId": "batch_workflows_fanout.v1",
+    "executionRef": "workflow:run:step:execution:1",
+    "targetsSha256": null,
+    "status": "failed",
+    "requested": 56,
+    "created": 0,
+    "queued": [],
+    "skipped": [],
+    "errors": [
+      {
+        "code": "BATCH_FANOUT_INPUT_INVALID",
+        "error": "Range 3370-3425 contains 56 issues; maximum is 25."
+      }
+    ],
+    "failure": {
+      "code": "BATCH_FANOUT_INPUT_INVALID",
+      "message": "Range 3370-3425 contains 56 issues; maximum is 25."
+    }
+  }
+}

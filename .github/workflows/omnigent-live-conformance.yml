@@ -1,0 +1,630 @@
+name: Provider / Omnigent Live Conformance
+
+on:
+  schedule:
+    - cron: "41 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      server_image:
+        description: "Optional digest-pinned stock Omnigent server image override"
+        required: false
+        type: string
+      host_image:
+        description: "Optional digest-pinned stock Omnigent host image override"
+        required: false
+        type: string
+      opencode_host_image:
+        description: "Optional digest-pinned dedicated OpenCode host image override"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: omnigent-live-conformance
+  cancel-in-progress: false
+
+jobs:
+  live-matrix:
+    name: Live ${{ matrix.mode }} conformance
+    runs-on: [self-hosted, linux, omnigent-provider-verification]
+    environment: omnigent-provider-verification
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        mode: [browser, product, cumulative, stock, static, ondemand, failures, workflow_chat]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install test dependencies
+        run: python -m pip install -e .[tests]
+      - name: Install controlling browser
+        if: ${{ matrix.mode == 'browser' || matrix.mode == 'workflow_chat' }}
+        run: |
+          npm ci --no-fund --no-audit
+          npx playwright install --with-deps chromium
+      - name: Materialize browser authentication state
+        if: ${{ matrix.mode == 'browser' || matrix.mode == 'workflow_chat' }}
+        env:
+          BROWSER_STORAGE_STATE: ${{ secrets.MOONMIND_OMNIGENT_BROWSER_STORAGE_STATE }}
+        run: |
+          python -c 'import os,pathlib; p=pathlib.Path(os.environ["RUNNER_TEMP"])/"moonmind-browser-state.json"; p.write_text(os.environ["BROWSER_STORAGE_STATE"], encoding="utf-8"); p.chmod(0o600)'
+      - name: Resolve pinned image inputs
+        id: images
+        shell: bash
+        env:
+          DISPATCH_SERVER_IMAGE: ${{ inputs.server_image }}
+          DISPATCH_HOST_IMAGE: ${{ inputs.host_image }}
+          DEFAULT_SERVER_IMAGE: ${{ vars.OMNIGENT_CONFORMANCE_SERVER_IMAGE }}
+          DEFAULT_HOST_IMAGE: ${{ vars.OMNIGENT_CONFORMANCE_HOST_IMAGE }}
+          DISPATCH_OPENCODE_HOST_IMAGE: ${{ inputs.opencode_host_image }}
+          DEFAULT_OPENCODE_HOST_IMAGE: ${{ vars.OMNIGENT_CONFORMANCE_OPENCODE_HOST_IMAGE }}
+        run: |
+          server_image="${DISPATCH_SERVER_IMAGE:-$DEFAULT_SERVER_IMAGE}"
+          host_image="${DISPATCH_HOST_IMAGE:-$DEFAULT_HOST_IMAGE}"
+          opencode_host_image="${DISPATCH_OPENCODE_HOST_IMAGE:-$DEFAULT_OPENCODE_HOST_IMAGE}"
+          if [[ ! "$server_image" =~ @sha256:[0-9a-fA-F]{64}$ ]]; then
+            echo "::error::The Omnigent server image must be configured by immutable digest"
+            exit 1
+          fi
+          if [[ ! "$host_image" =~ @sha256:[0-9a-fA-F]{64}$ ]]; then
+            echo "::error::The Omnigent host image must be configured by immutable digest"
+            exit 1
+          fi
+          # The OpenCode combination runs the dedicated OpenCode host image, so
+          # workflow_chat cannot be qualified by the Codex host digest alone.
+          # Any configured value must be digest-pinned in every mode.
+          if [[ "${{ matrix.mode }}" == "workflow_chat" || -n "$opencode_host_image" ]]; then
+            if [[ ! "$opencode_host_image" =~ @sha256:[0-9a-fA-F]{64}$ ]]; then
+              echo "::error::The dedicated OpenCode host image must be configured by immutable digest"
+              exit 1
+            fi
+          fi
+          echo "server=$server_image" >> "$GITHUB_OUTPUT"
+          echo "host=$host_image" >> "$GITHUB_OUTPUT"
+          echo "opencode_host=$opencode_host_image" >> "$GITHUB_OUTPUT"
+      - name: Record case start
+        id: case_start
+        shell: bash
+        run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
+      - name: Run credentialed live matrix case
+        id: live_case
+        env:
+          OMNIGENT_ENABLED: ${{ vars.OMNIGENT_ENABLED }}
+          OMNIGENT_SERVER_URL: ${{ vars.OMNIGENT_SERVER_URL }}
+          OMNIGENT_API_TOKEN: ${{ secrets.OMNIGENT_API_TOKEN }}
+          OMNIGENT_DEFAULT_AGENT_NAME: ${{ vars.OMNIGENT_DEFAULT_AGENT_NAME }}
+          MOONMIND_OMNIGENT_ACTION_COMMAND: ${{ secrets.MOONMIND_OMNIGENT_ACTION_COMMAND }}
+          MOONMIND_OMNIGENT_LOG_EVIDENCE: ${{ vars.MOONMIND_OMNIGENT_LOG_EVIDENCE }}
+          MOONMIND_OMNIGENT_TEMPORAL_HISTORY_EVIDENCE: ${{ vars.MOONMIND_OMNIGENT_TEMPORAL_HISTORY_EVIDENCE }}
+          MOONMIND_OMNIGENT_SCREENSHOT_EVIDENCE: ${{ vars.MOONMIND_OMNIGENT_SCREENSHOT_EVIDENCE }}
+          MOONMIND_OMNIGENT_ARCHIVE_EVIDENCE: ${{ vars.MOONMIND_OMNIGENT_ARCHIVE_EVIDENCE }}
+          MOONMIND_OMNIGENT_DASHBOARD_URL: ${{ vars.MOONMIND_OMNIGENT_DASHBOARD_URL }}
+          MOONMIND_OMNIGENT_PROVIDER_PROFILE_ID: ${{ vars.MOONMIND_OMNIGENT_PROVIDER_PROFILE_ID }}
+          MOONMIND_OMNIGENT_TEST_REPOSITORY: ${{ vars.MOONMIND_OMNIGENT_TEST_REPOSITORY }}
+          MOONMIND_OMNIGENT_TEST_BRANCH: ${{ vars.MOONMIND_OMNIGENT_TEST_BRANCH }}
+          MOONMIND_OMNIGENT_BROWSER_STORAGE_STATE: ${{ runner.temp }}/moonmind-browser-state.json
+          MOONMIND_OMNIGENT_ACCEPTANCE_CANARY_TOKEN: ${{ secrets.MOONMIND_OMNIGENT_ACCEPTANCE_CANARY_TOKEN }}
+          MOONMIND_OMNIGENT_WORKFLOW_CHAT_SUPERSEDED_REPORT: ${{ vars.MOONMIND_OMNIGENT_WORKFLOW_CHAT_SUPERSEDED_REPORT }}
+        run: |
+          python tools/run_omnigent_live_conformance.py \
+            --mode "${{ matrix.mode }}" \
+            --server-image "${{ steps.images.outputs.server }}" \
+            --host-image "${{ steps.images.outputs.host }}" \
+            --opencode-host-image "${{ steps.images.outputs.opencode_host }}" \
+            --source-commit "${{ github.sha }}" \
+            --output-dir "artifacts/omnigent-conformance/live/${{ matrix.mode }}"
+      - name: Stage secret-safe case evidence
+        if: always()
+        shell: bash
+        env:
+          LIVE_CASE_OUTCOME: ${{ steps.live_case.outcome }}
+          CASE_START_EPOCH: ${{ steps.case_start.outputs.epoch }}
+        run: |
+          source_dir="artifacts/omnigent-conformance/live/${{ matrix.mode }}"
+          upload_dir="artifacts/omnigent-conformance/upload/${{ matrix.mode }}"
+          mkdir -p "$upload_dir"
+          if [[ "$LIVE_CASE_OUTCOME" == "success" ]]; then
+            cp -R "$source_dir"/. "$upload_dir"/
+          else
+            # Emit bounded, redacted failure diagnostics rather than a single
+            # opaque marker (issue #3710): a safe failure summary, setup
+            # stage, runner health, sanitized log tail, and duration.
+            duration=$(( $(date +%s) - ${CASE_START_EPOCH:-$(date +%s)} ))
+            log_file="$source_dir/case.log"
+            [[ -f "$log_file" ]] || log_file=""
+            python tools/stage_omnigent_failure_evidence.py \
+              --mode "${{ matrix.mode }}" \
+              --outcome "$LIVE_CASE_OUTCOME" \
+              --setup-stage "run-credentialed-live-matrix-case" \
+              --failure-summary "live conformance case '${{ matrix.mode }}' did not complete successfully" \
+              --runner-status "self-hosted omnigent-provider-verification" \
+              --duration-seconds "$duration" \
+              ${log_file:+--log-file "$log_file"} \
+              --upload-dir "$upload_dir"
+          fi
+      - name: Upload case evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: omnigent-live-${{ matrix.mode }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/omnigent-conformance/upload/${{ matrix.mode }}
+          if-no-files-found: error
+          retention-days: 30
+
+  publish-matrix:
+    name: Publish passing matrix evidence
+    needs: live-matrix
+    if: ${{ needs.live-matrix.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install acceptance validator dependencies
+        run: python -m pip install -e .
+      - name: Download passing case evidence
+        uses: actions/download-artifact@v8
+        with:
+          pattern: omnigent-live-*-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/omnigent-conformance/published
+      - name: Write publication manifest
+        shell: bash
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from datetime import datetime, timedelta, timezone
+          from pathlib import Path
+          root = Path("artifacts/omnigent-conformance/published")
+          reports = sorted(root.glob("*/report.json"))
+          if len(reports) != 8:
+              raise SystemExit(f"expected eight passing reports, found {len(reports)}")
+          report_payloads = [json.loads(path.read_text(encoding="utf-8")) for path in reports]
+          for path, report in zip(reports, report_payloads):
+              if report.get("schemaVersion") != "moonmind.omnigent.conformance-report/v1":
+                  raise SystemExit(f"unsupported report schema: {path}")
+              if report.get("summary", {}).get("failed"):
+                  raise SystemExit(f"failed cases cannot be published: {path}")
+              if not any(case.get("status") == "passed" for case in report.get("cases", [])):
+                  raise SystemExit(f"report has no passing controlling case: {path}")
+          product_paths = list(root.glob("*/product-evidence.json"))
+          if len(product_paths) != 1:
+              raise SystemExit(f"expected one product evidence document, found {len(product_paths)}")
+          product = json.loads(product_paths[0].read_text(encoding="utf-8"))
+          browser_paths = list(root.glob("*/browser-evidence.json"))
+          if len(browser_paths) != 1:
+              raise SystemExit(
+                  f"expected one browser evidence document, found {len(browser_paths)}"
+              )
+          browser = json.loads(browser_paths[0].read_text(encoding="utf-8"))
+          if browser.get("issue") != "MoonLadderStudios/MoonMind#3508":
+              raise SystemExit("browser evidence is not bound to issue #3508")
+          required_rows = {
+              "static_profile_bound", "static_restart_replay",
+              "on_demand_policy_selected", "repository_read_analysis",
+              "repository_mutation_publication",
+              "failed_credential_readiness_admission",
+              "failed_host_registration_readiness",
+              "active_cancellation_interruption",
+              "partial_start_cleanup_janitor",
+          }
+          rows = browser.get("rows", {})
+          if set(rows) != required_rows:
+              raise SystemExit("browser evidence lacks the complete release row inventory")
+          def published_ref(ref):
+              if not isinstance(ref, str):
+                  raise SystemExit("browser evidence ref must be a string")
+              value = ref[5:] if ref.startswith("file:") else ref
+              path = Path(value)
+              if not path.is_absolute():
+                  return ref
+              candidates = [
+                  item for item in root.rglob(path.name)
+                  if item.is_file()
+              ]
+              if len(candidates) != 1:
+                  raise SystemExit(
+                      f"cannot rewrite file evidence ref into artifact: {path.name}"
+                  )
+              return str(candidates[0].relative_to(root))
+          for row in rows.values():
+              refs = row.get("evidenceRefs")
+              if not isinstance(refs, list):
+                  raise SystemExit("browser row evidence refs must be a list")
+              row["evidenceRefs"] = [published_ref(ref) for ref in refs]
+          browser["rows"] = rows
+          browser_paths[0].write_text(
+              json.dumps(browser, indent=2) + "\n", encoding="utf-8"
+          )
+          workflow_chat_paths = list(root.glob("*/workflow-chat-acceptance.json"))
+          if len(workflow_chat_paths) != 1:
+              raise SystemExit(
+                  "expected one Workflow Chat acceptance artifact, "
+                  f"found {len(workflow_chat_paths)}"
+              )
+          from moonmind.omnigent.workflow_chat_acceptance import (
+              validate_workflow_chat_acceptance_manifest,
+          )
+          workflow_chat_path = workflow_chat_paths[0]
+          workflow_chat = json.loads(
+              workflow_chat_path.read_text(encoding="utf-8")
+          )
+          validate_workflow_chat_acceptance_manifest(
+              workflow_chat,
+              evidence_root=workflow_chat_path.parent,
+              expected_commit=os.environ["GITHUB_SHA"],
+          )
+          # #3712 retirement guards consume the acceptance report directly:
+          # the criterion is derived from the manifest, never asserted by hand.
+          from moonmind.omnigent.legacy_retirement import (
+              RetirementCriterion,
+              criteria_from_native_chat_acceptance,
+          )
+          native_chat_criteria = criteria_from_native_chat_acceptance(
+              workflow_chat,
+              evidence_root=workflow_chat_path.parent,
+              expected_commit=os.environ["GITHUB_SHA"],
+          )
+          if RetirementCriterion.NATIVE_CHAT_ACCEPTANCE_PASSED not in native_chat_criteria:
+              raise SystemExit(
+                  "native Workflow Chat acceptance evidence does not satisfy its "
+                  "retirement criterion"
+              )
+          # Execution admission consumes a distinct, protected exact-combination
+          # projection. It is derived only after the credentialed matrix and its
+          # complete evidence manifest validate; the API cannot manufacture this
+          # authority from the plan it is trying to admit.
+          from moonmind.omnigent.execution_support_evidence import (
+              ProtectedExecutionSupportEvidence,
+          )
+          from moonmind.omnigent.session_supervisor_rollback import (
+              SUPERVISOR_ROLLBACK_POLICY_VERSION,
+          )
+          from moonmind.schemas.omnigent_session_models import (
+              OMNIGENT_SESSION_COMPATIBILITY_VERSION,
+              OMNIGENT_SESSION_FEATURE_GENERATION,
+          )
+          support_fields = {
+              "omnigentServerBuildRef", "omnigentHostBuildRef",
+              "harnessImplementationRef", "vendorRuntimeRefs",
+              "agentSourceRef", "materializerRefs",
+              "providerCompatibilityClass", "hostClassRef", "architecture",
+              "launchPolicyRef", "modelConfigDigest", "executionRealizerRef",
+              "requiredCapabilitiesDigest",
+          }
+          workflow_chat_digest = "sha256:" + hashlib.sha256(
+              workflow_chat_path.read_bytes()
+          ).hexdigest()
+          protected_run_ref = (
+              f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}"
+              f"/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+          )
+          support_entries = []
+          for combination_id, combination in sorted(
+              workflow_chat["combinations"].items()
+          ):
+              if combination.get("status") != "passed":
+                  continue
+              identity = combination.get("bindingIdentity") or {}
+              candidate = {
+                  "schemaVersion": (
+                      "moonmind.omnigent-protected-execution-support-evidence/v1"
+                  ),
+                  "evidenceIssuer": (
+                      "moonmind-protected-omnigent-conformance@1"
+                  ),
+                  "status": "passed",
+                  "sourceCommit": workflow_chat["sourceCommit"],
+                  "protectedRunRef": protected_run_ref,
+                  "evidenceManifestRef": str(
+                      workflow_chat_path.relative_to(root)
+                  ),
+                  "evidenceManifestDigest": workflow_chat_digest,
+                  "generatedAt": workflow_chat["generatedAt"],
+                  "expiresAt": workflow_chat["expiresAt"],
+                  "supportClassification": (
+                      "connected_host"
+                      if combination.get("hostMode") == "static_compose"
+                      else "fully_managed"
+                  ),
+                  "supportCombinationKey": identity.get(
+                      "supportCombinationKey"
+                  ),
+                  "supportIdentity": {
+                      field: identity.get(field) for field in support_fields
+                  },
+                  "hostImageRef": combination.get("hostImageRef"),
+                  "policySnapshotDigest": identity.get(
+                      "policySnapshotDigest"
+                  ),
+                  "effectiveLaunchSnapshotDigest": identity.get(
+                      "effectiveLaunchSnapshotDigest"
+                  ),
+                  "policyGateRef": (
+                      "github-actions:omnigent-live-conformance/"
+                      f"{os.environ['GITHUB_RUN_ID']}/"
+                      f"{os.environ['GITHUB_RUN_ATTEMPT']}/{combination_id}"
+                  ),
+                  "policyQualified": True,
+                  "exactArtifactsVerified": True,
+                  "featureGeneration": OMNIGENT_SESSION_FEATURE_GENERATION,
+                  "replayCompatibilityVersion": (
+                      OMNIGENT_SESSION_COMPATIBILITY_VERSION
+                  ),
+                  "rollbackPolicyVersion": (
+                      SUPERVISOR_ROLLBACK_POLICY_VERSION
+                  ),
+              }
+              support_entries.append(
+                  ProtectedExecutionSupportEvidence.model_validate(
+                      candidate
+                  ).model_dump(mode="json", by_alias=True)
+              )
+          if not support_entries:
+              raise SystemExit(
+                  "protected execution support has no passing combinations"
+              )
+          (root / "execution-support-evidence.json").write_text(
+              json.dumps(
+                  {
+                      "schemaVersion": (
+                          "moonmind.omnigent-protected-execution-support-index/v1"
+                      ),
+                      "sourceCommit": workflow_chat["sourceCommit"],
+                      "entries": support_entries,
+                  },
+                  indent=2,
+                  sort_keys=True,
+              ) + "\n",
+              encoding="utf-8",
+          )
+          authority_fields = {
+              "authoredWorkflowRef", "taskInputSnapshotRef", "compiledRuntimeRequestRef",
+              "executionProfileRef", "launchPolicyRef", "effectiveLaunchSnapshotRef",
+              "providerProfileRef", "providerLeaseId", "hostBindingRef", "hostLeaseId",
+              "hostId", "hostCapability", "bridgeSessionId", "omnigentSessionId",
+              "firstMessageId", "eventCursor", "workspaceLocator", "sourceCommit",
+              "resourceRefs", "artifactRefs", "terminalState", "cleanupState",
+              "janitorState", "providerProfileRelease", "networkPolicyRef", "runtime",
+              "hostMode",
+          }
+          admission_rows = {
+              "failed_credential_readiness_admission",
+              "failed_host_registration_readiness",
+          }
+          for name, row in rows.items():
+              if row.get("status") != "passed":
+                  raise SystemExit(f"browser row did not pass: {name}")
+              assertions = row.get("assertions", {})
+              required_assertions = (
+                  "browser_originated", "normal_create_request_rejected",
+                  "distinct_admission_reason", "no_fallback",
+              ) if name in admission_rows else (
+                  "browser_originated", "normal_create_request",
+                  "workflow_detail_terminal_replay", "no_fallback",
+              )
+              if any(assertions.get(key) is not True for key in required_assertions):
+                  raise SystemExit(f"browser row lacks a controlling assertion: {name}")
+              authority = row.get("authorityChain", {})
+              if name in admission_rows:
+                  if (
+                      not isinstance(authority, dict)
+                      or set(authority) != {"providerProfileRef"}
+                      or not authority.get("providerProfileRef")
+                  ):
+                      raise SystemExit("admission evidence lacks bounded authority")
+                  continue
+              if any(not authority.get(key) for key in authority_fields):
+                  raise SystemExit("browser evidence lacks a complete authority chain")
+              if (authority.get("hostCapability") != "codex-native"
+                      or authority.get("runtime") != "external/omnigent"):
+                  raise SystemExit("browser evidence contains a runtime fallback")
+          cumulative_paths = list(root.glob("*/cumulative-evidence.json"))
+          if len(cumulative_paths) != 1:
+              raise SystemExit(
+                  f"expected one cumulative evidence document, found {len(cumulative_paths)}"
+              )
+          cumulative = json.loads(cumulative_paths[0].read_text(encoding="utf-8"))
+          if cumulative.get("issue") != "MoonLadderStudios/MoonMind#3480":
+              raise SystemExit("cumulative evidence is not bound to issue #3480")
+          required_cumulative = {
+              "normal_create_api", "authored_state_persisted",
+              "external_omnigent_compilation", "c0_c1_c2_head_transitions",
+              "source_destroyed_before_restore", "marker_a_restored_before_marker_b",
+              "verification_read_only", "continuation_idempotent",
+              "prior_side_effects_not_replayed", "workflow_detail_after_removal",
+              "profile_released_last", "no_fallback",
+          }
+          if any(cumulative.get("assertions", {}).get(key) is not True
+                 for key in required_cumulative):
+              raise SystemExit("cumulative evidence lacks a controlling assertion")
+          rollout = cumulative.get("rollout", {})
+          if any(rollout.get(key) is not True for key in (
+              "canary", "disableNewSelection", "rollback", "historicalReads",
+              "workerVersionReplay",
+          )):
+              raise SystemExit("cumulative evidence lacks rollout and replay gates")
+          if not cumulative.get("failureMatrix"):
+              raise SystemExit("cumulative evidence lacks the integrated failure matrix")
+          required_assertions = {
+              "normal_create_api", "authored_intent_and_snapshot",
+              "external_omnigent_compilation", "selected_profile_policy_workspace",
+              "real_temporal_activity_route", "workflow_detail_sse", "release_last",
+              "replay_after_host_removal", "no_fallback",
+          }
+          if any(product.get("assertions", {}).get(key) is not True for key in required_assertions):
+              raise SystemExit("product evidence lacks a controlling assertion")
+          required_records = {
+              "runtimeCatalog", "createRequest", "authoredWorkflow", "taskInputSnapshot",
+              "compiledExecutionRequest", "temporalHistory", "hostBinding", "profileLease",
+              "workflowDetail", "bridgeEvents", "artifactInventory", "cleanupResult",
+          }
+          if not required_records.issubset(set(product.get("sourceRecordTypes", []))):
+              raise SystemExit("product evidence lacks independently resolved production records")
+          required_ids = {"workflowId", "runId", "stepId", "bridgeId", "hostId", "sessionId"}
+          if any(not product.get("identifiers", {}).get(key) for key in required_ids):
+              raise SystemExit("product evidence lacks safe lifecycle identifiers")
+          selection = product.get("selection", {})
+          if selection.get("agentKind") != "external" or selection.get("agentId") != "omnigent":
+              raise SystemExit("product evidence is not the explicit Omnigent selection")
+          if not isinstance(selection.get("providerProfileRef"), str) or not selection["providerProfileRef"].strip():
+              raise SystemExit("product evidence lacks the selected provider profile")
+          if not product.get("schemaVersions") or not product.get("evidenceRefs"):
+              raise SystemExit("product evidence lacks schema versions or durable evidence refs")
+          acceptance = product.get("acceptance", {})
+          required_acceptance = {
+              "credentialGeneration", "executionProfileRef", "policyVersion",
+              "effectiveLaunchSnapshotDigest", "serverImageDigest", "hostImageDigest",
+              "caseOutcomes", "secretScan", "evidence", "cleanupAndRelease",
+          }
+          if any(not acceptance.get(key) for key in required_acceptance):
+              raise SystemExit("product evidence lacks a required acceptance-report field")
+          for digest_key in ("effectiveLaunchSnapshotDigest", "serverImageDigest", "hostImageDigest"):
+              digest = acceptance[digest_key]
+              if not isinstance(digest, str) or not digest.startswith("sha256:") or len(digest) != 71:
+                  raise SystemExit(f"product evidence has invalid immutable digest: {digest_key}")
+          report_images = [report.get("images", {}) for report in report_payloads]
+          expected_images = {
+              "server": acceptance["serverImageDigest"],
+              "host": acceptance["hostImageDigest"],
+          }
+          for image_key, expected_digest in expected_images.items():
+              tested = {images.get(image_key, "").rsplit("@", 1)[-1] for images in report_images}
+              if tested != {expected_digest}:
+                  raise SystemExit(
+                      f"product evidence {image_key} image digest does not match live reports"
+                  )
+          case_outcomes = acceptance["caseOutcomes"]
+          if not isinstance(case_outcomes, dict) or not case_outcomes or any(
+              outcome != "passed" for outcome in case_outcomes.values()
+          ):
+              raise SystemExit("product evidence contains missing or non-passing case outcomes")
+          secret_scan = acceptance["secretScan"]
+          if not isinstance(secret_scan, dict) or secret_scan.get("status") != "passed":
+              raise SystemExit("product evidence lacks a passing secret scan")
+          cleanup = acceptance["cleanupAndRelease"]
+          if not isinstance(cleanup, dict) or any(cleanup.get(key) is not True for key in (
+              "runOwnedResourcesRemoved", "oauthVolumePreserved",
+              "unrelatedResourcesPreserved", "profileReleasedLast",
+          )):
+              raise SystemExit("product evidence lacks complete cleanup and release results")
+          evidence = acceptance["evidence"]
+          if not isinstance(evidence, dict) or any(
+              not evidence.get(key) for key in ("artifacts", "diagnostics", "history")
+          ):
+              raise SystemExit("product evidence lacks required evidence references")
+          manifest = {
+              "schemaVersion": "moonmind.omnigent.product-acceptance/v1",
+              "issue": "MoonLadderStudios/MoonMind#3508",
+              "parentIssue": "MoonLadderStudios/MoonMind#3448",
+              "acceptanceIssue": "MoonLadderStudios/MoonMind#3456",
+              "cumulativeRemediationIssue": "MoonLadderStudios/MoonMind#3480",
+              "cumulativeRemediationParent": "MoonLadderStudios/MoonMind#3471",
+              "nativeWorkflowChatIssue": "MoonLadderStudios/MoonMind#3642",
+              "nativeWorkflowChatParent": "MoonLadderStudios/MoonMind#3632",
+              "runId": os.environ["GITHUB_RUN_ID"],
+              "runAttempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "sourceCommit": os.environ["GITHUB_SHA"],
+              "runUrl": (
+                  f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}"
+                  f"/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+              ),
+              "artifactName": (
+                  f"omnigent-live-published-matrix-{os.environ['GITHUB_RUN_ID']}-"
+                  f"{os.environ['GITHUB_RUN_ATTEMPT']}"
+              ),
+              "reports": [str(path.relative_to(root)) for path in reports],
+              "productEvidence": str(product_paths[0].relative_to(root)),
+              "browserEvidence": str(browser_paths[0].relative_to(root)),
+              "browserRows": rows,
+              "cumulativeRemediationEvidence": str(cumulative_paths[0].relative_to(root)),
+              "nativeWorkflowChatEvidence": str(workflow_chat_path.relative_to(root)),
+              "nativeWorkflowChatCombinations": sorted(workflow_chat["combinations"]),
+              "nativeWorkflowChatRetirementCriteria": sorted(
+                  criterion.value for criterion in native_chat_criteria
+              ),
+              "productSchemaVersions": product["schemaVersions"],
+              "selection": selection,
+              "executionProfileRef": acceptance["executionProfileRef"],
+              "policyVersion": acceptance["policyVersion"],
+              "effectiveLaunchSnapshotDigest": acceptance["effectiveLaunchSnapshotDigest"],
+              "providerProfile": {
+                  "safeRef": selection["providerProfileRef"],
+                  "credentialGeneration": acceptance["credentialGeneration"],
+              },
+              "images": {
+                  "serverDigest": acceptance["serverImageDigest"],
+                  "hostDigest": acceptance["hostImageDigest"],
+              },
+              "safeIdentities": product["identifiers"],
+              "caseOutcomes": acceptance["caseOutcomes"],
+              "secretScan": acceptance["secretScan"],
+              "evidence": acceptance["evidence"],
+              "cleanupAndRelease": acceptance["cleanupAndRelease"],
+              "replayAfterHostRemoval": product["assertions"]["replay_after_host_removal"],
+              "noFallback": product["assertions"]["no_fallback"],
+              "modes": ["browser", "product", "cumulative", "stock", "static", "ondemand", "failures", "workflow_chat"],
+              "status": "passed",
+              "generatedAt": datetime.now(timezone.utc).isoformat(),
+              "expiresAt": (datetime.now(timezone.utc) + timedelta(days=30)).isoformat(),
+              "producer": {"workflow": os.environ["GITHUB_WORKFLOW"], "runId": os.environ["GITHUB_RUN_ID"]},
+              "supersessionPolicy": "newest passing report for the same commit and immutable image digests",
+          }
+          (root / "published-matrix.json").write_text(
+              json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+          )
+          PY
+      - name: Upload published matrix
+        uses: actions/upload-artifact@v7
+        with:
+          name: omnigent-live-published-matrix-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/omnigent-conformance/published
+          if-no-files-found: error
+          retention-days: 90
+      - name: Write publication summary
+        shell: bash
+        run: |
+          {
+            echo "### Omnigent credentialed conformance matrix"
+            echo ""
+            echo "- Issues: \`MoonLadderStudios/MoonMind#3508\` (parent \`#3448\`) and native Workflow Chat \`#3642\` (parent \`#3632\`)"
+            echo "- Result: browser, product-create, cumulative remediation, stock, static, on-demand, failure, and native Workflow Chat cases passed"
+            echo "- Durable evidence: \`omnigent-live-published-matrix-${{ github.run_id }}-${{ github.run_attempt }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Link passing acceptance report from owning issues
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          artifact="omnigent-live-published-matrix-${{ github.run_id }}-${{ github.run_attempt }}"
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          comment_file="${RUNNER_TEMP}/omnigent-matrix-comment.md"
+          {
+            echo "Credentialed Codex–Omnigent conformance matrix: PASS"
+            echo
+            echo "- Run: ${run_url} (attempt ${{ github.run_attempt }})"
+            echo "- Commit: \`${{ github.sha }}\`"
+            echo "- Modes: \`browser\`, \`product\`, \`cumulative\`, \`stock\`, \`static\`, \`ondemand\`, \`failures\`, \`workflow_chat\`"
+            echo "- Durable artifact: \`${artifact}\`"
+            echo "- Evidence refs and immutable image digests: the eight \`report.json\` trees in \`${artifact}\`"
+          } > "$comment_file"
+          gh issue comment 3508 --repo "${{ github.repository }}" --body-file "$comment_file"
+          gh issue comment 3448 --repo "${{ github.repository }}" --body-file "$comment_file"
+          gh issue comment 3642 --repo "${{ github.repository }}" --body-file "$comment_file"
+          gh issue comment 3632 --repo "${{ github.repository }}" --body-file "$comment_file"

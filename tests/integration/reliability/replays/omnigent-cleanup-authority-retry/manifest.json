@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "escaped-failure-replay/v1",
+  "incidentWorkflowId": "mm:4e1c43a5-650f-4ec8-bc6b-b53ed427c770",
+  "childWorkflowId": "mm:4e1c43a5-650f-4ec8-bc6b-b53ed427c770:agent:node-1",
+  "activityType": "integration.omnigent.profile_bound_execute",
+  "failureCode": "CODEX_OAUTH_LOGIN_STATUS_FAILED",
+  "retryFailure": "live host identity changed from durable cleanup authority",
+  "failureShape": "docker exec raced on-demand host readiness; after successful cleanup, the Temporal retry reopened the unposted bridge while retaining the stopped host endpoint as live cleanup authority",
+  "idempotencyKey": "replay-cleanup-authority-retry",
+  "firstEndpointIdentity": "4bdad87bfcdfbfb790a0cd5a48cff5cd89364b53e2b8e3a7f9dbce5fb401d9bd",
+  "replacementEndpointIdentity": "b63dfa7b7f0c58c88b837991666991983455b75bb1320fc2b14f85392dbf91d7"
+}

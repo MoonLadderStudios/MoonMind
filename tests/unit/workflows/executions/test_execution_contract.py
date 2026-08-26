@@ -9,6 +9,7 @@ from moonmind.workflows.executions.execution_contract import (
     build_authoritative_workflow_input_snapshot,
     build_effective_workflow_skill_selectors,
     build_runtime_command_preview_config,
+    decode_recorded_legacy_workflow_history_v1,
     CanonicalWorkflowExecutionPayload,
     ResumeFromFailedStepRef,
     SUPPORTED_PUBLISH_MODES,
@@ -21,6 +22,21 @@ from moonmind.workflows.executions.execution_contract import (
     WorkflowRecoveryProvenance,
     WorkflowStepSpec,
 )
+
+
+def test_recorded_legacy_decoder_is_separate_from_new_submission_validation() -> None:
+    legacy = {
+        "repository": "owner/repo",
+        "ref": "release",
+        "instruction": "Continue recorded work",
+    }
+    decoded = decode_recorded_legacy_workflow_history_v1(
+        job_type="codex_exec", payload=legacy
+    )
+    assert decoded["repository"]["repository"]["name"] == "owner/repo"
+    assert decoded["repository"]["branch"]["name"] == "release"
+    with pytest.raises(WorkflowContractError, match="no longer accepted"):
+        build_canonical_workflow_view(job_type="codex_exec", payload=legacy)
 from tests.helpers.step_type_payloads import (
     mixed_tool_skill_step,
     preset_step,
@@ -343,6 +359,68 @@ def test_mm786_task_steps_accept_runtime_selection_and_snapshot_it() -> None:
     }
 
 
+def test_github_3453_canonical_contract_preserves_omnigent_selection() -> None:
+    payload = {
+        "repository": "MoonLadderStudios/MoonMind",
+        "targetRuntime": "omnigent",
+        "omnigent": {
+            "executionTargetRef": "omnigent-codex@1",
+            "launchPolicyRef": "codex-on-demand@1",
+            "agent": {"harnessOverride": "codex-native"},
+            "capture": {"required": True},
+        },
+        "workflow": {
+            "instructions": "Run through the selected Codex OAuth profile.",
+            "runtime": {
+                "mode": "omnigent",
+                "executionProfileRef": "codex-oauth-profile",
+            },
+            "steps": [
+                {
+                    "id": "direct-review",
+                    "instructions": "Review directly.",
+                    "runtime": {"mode": "codex_cli"},
+                },
+                {
+                    "id": "omnigent-implement",
+                    "instructions": "Implement through Omnigent.",
+                    "runtime": {
+                        "mode": "omnigent",
+                        "executionProfileRef": "codex-oauth-profile",
+                        "omnigent": {
+                            "executionTargetRef": "omnigent-codex@1",
+                            "launchPolicyRef": "codex-on-demand@1",
+                        },
+                    },
+                },
+            ],
+        },
+    }
+
+    canonical = build_canonical_workflow_view(job_type="task", payload=payload)
+
+    assert canonical["targetRuntime"] == "omnigent"
+    assert canonical["workflow"]["runtime"]["mode"] == "omnigent"
+    assert (
+        canonical["workflow"]["runtime"]["executionProfileRef"]
+        == "codex-oauth-profile"
+    )
+    assert canonical["omnigent"] == payload["omnigent"]
+    assert canonical["workflow"]["steps"][0]["runtime"]["mode"] == "codex_cli"
+    assert canonical["workflow"]["steps"][1]["runtime"]["mode"] == "omnigent"
+
+    snapshot = build_authoritative_workflow_input_snapshot(
+        task_payload=canonical["workflow"],
+        target_runtime=canonical["targetRuntime"],
+    )
+    assert snapshot["runtime"]["mode"] == "omnigent"
+    assert snapshot["runtime"]["executionProfileRef"] == "codex-oauth-profile"
+    assert snapshot["steps"][1]["runtime"]["omnigent"] == {
+        "executionTargetRef": "omnigent-codex@1",
+        "launchPolicyRef": "codex-on-demand@1",
+    }
+
+
 def test_runtime_command_unknown_valid_commands_are_opaque_not_rejected() -> None:
     snapshot = build_authoritative_workflow_input_snapshot(
         task_payload={
@@ -647,6 +725,27 @@ def test_task_step_spec_with_step_skills() -> None:
     assert spec.skills is not None
     assert spec.skills.exclude == ["bad-skill"]
     assert spec.skills.materialization_mode == "none"
+
+
+def test_task_step_spec_normalizes_repository_operation() -> None:
+    spec = WorkflowStepSpec.model_validate(
+        {
+            "id": "verify",
+            "instructions": "Inspect without changing the repository.",
+            "repositoryOperation": "READ",
+        }
+    )
+
+    assert spec.repository_operation == "read"
+
+    with pytest.raises(ValidationError, match="repositoryOperation"):
+        WorkflowStepSpec.model_validate(
+            {
+                "id": "verify",
+                "instructions": "Inspect the repository.",
+                "repositoryOperation": "inspect",
+            }
+        )
 
 def test_canonical_task_payload_accepts_legacy_preset_version_keys() -> None:
     payload = CanonicalWorkflowExecutionPayload.model_validate(
@@ -1147,11 +1246,15 @@ def test_pr_publish_derives_gh_without_implicit_git_for_non_repository_workflow(
     assert "git" not in result["requiredCapabilities"]
 
 
-def test_required_capabilities_derive_git_from_repository_or_git_context() -> None:
+def test_required_capabilities_derive_git_from_provider_target() -> None:
     repository_result = build_canonical_workflow_view(
         job_type="task",
         payload={
-            "repository": "MoonLadderStudios/MoonMind",
+            "repository": {
+                "provider": "git",
+                "repository": {"name": "MoonLadderStudios/MoonMind"},
+                "branch": {"name": "main"},
+            },
             "targetRuntime": "codex_cli",
             "task": {
                 "instructions": "Run repository-backed work.",
@@ -1159,20 +1262,12 @@ def test_required_capabilities_derive_git_from_repository_or_git_context() -> No
             },
         },
     )
-    git_context_result = build_canonical_workflow_view(
-        job_type="task",
-        payload={
-            "targetRuntime": "codex_cli",
-            "task": {
-                "instructions": "Run branch-backed work.",
-                "git": {"branch": "feature/mm-945"},
-                "publish": {"mode": "none"},
-            },
-        },
-    )
 
     assert "git" in repository_result["requiredCapabilities"]
-    assert "git" in git_context_result["requiredCapabilities"]
+    assert (
+        repository_result["repository"]["connectionRef"]
+        == "repository-connection:git-default"
+    )
 
 
 def test_explicit_git_required_capability_is_preserved_without_repository_context() -> None:
@@ -1225,6 +1320,20 @@ def test_step_skill_metadata_required_capabilities_aggregate_into_canonical_requ
     )
 
     assert set(result["requiredCapabilities"]) >= {"git", "gh", "jira"}
+
+
+def test_enqueue_children_skill_derives_execution_fanout_capability() -> None:
+    result = build_canonical_workflow_view(
+        job_type="task",
+        payload={
+            "task": {
+                "instructions": "Queue one resolver per pull request.",
+                "skill": {"id": "batch-pr-resolver"},
+            },
+        },
+    )
+
+    assert "execution.fanout" in result["requiredCapabilities"]
 
 
 def test_mm569_tool_validation_error_identifies_required_field_path() -> None:
@@ -1431,16 +1540,16 @@ def test_workflow_skill_side_effect_metadata_forces_none_for_unknown_skill() -> 
     "skill_id",
     ["fix-comments", "fix-ci", "fix-merge-conflicts"],
 )
-def test_codex_skill_payload_defaults_auto_publish_capable_skill_to_auto(
+def test_recorded_codex_skill_defaults_auto_publish_capable_skill_to_auto(
     skill_id: str,
 ) -> None:
-    """codex_skill submissions that omit publishMode must default to ``auto``.
+    """Recorded codex_skill payloads that omit publishMode default to ``auto``.
 
     The legacy payload path must preserve omitted publish mode until the
     selected-skill resolver can apply the auto publishing contract.
     """
 
-    result = build_canonical_workflow_view(
+    result = decode_recorded_legacy_workflow_history_v1(
         job_type="codex_skill",
         payload={
             "skillId": skill_id,
@@ -1928,7 +2037,12 @@ _VALID_RESUME_BLOCK = {
 }
 
 _BASE_TASK_PAYLOAD = {
-    "repository": "test/repo",
+    "repository": {
+        "provider": "git",
+        "connectionRef": "repository-connection:git-default",
+        "repository": {"name": "test/repo"},
+        "branch": {"name": "main"},
+    },
     "workflow": {"instructions": "Do work"},
 }
 
@@ -2189,27 +2303,35 @@ def test_fr009_empty_depends_on_normalized_to_none() -> None:
     assert spec.depends_on is None
 
 
-# FR-010/011: task.git.branch is the canonical field; targetBranch is stripped.
+# MM-1219 atomic cutover: workflow.git is history-only, never new authoring.
 
-def test_fr010_branch_is_canonical_authored_field() -> None:
-    """MM-638 FR-010: task.git.branch is accepted and present in canonical output."""
+@pytest.mark.parametrize("git", [{"branch": "feature/my-branch"}, {"targetBranch": "legacy"}])
+def test_workflow_git_is_rejected_for_new_authoring(git: dict[str, str]) -> None:
+    with pytest.raises(WorkflowContractError, match="workflow.git is not accepted"):
+        build_canonical_workflow_view(
+            job_type="task",
+            payload=_canonical_task_payload({"git": git}),
+        )
+
+
+def test_step_tool_capabilities_feed_repository_derivation() -> None:
     result = build_canonical_workflow_view(
         job_type="task",
-        payload=_canonical_task_payload({"git": {"branch": "feature/my-branch"}}),
+        payload=_canonical_task_payload(
+            {
+                "steps": [
+                    {
+                        "instructions": "Inspect repository",
+                        "tool": {
+                            "name": "repository-inspector",
+                            "requiredCapabilities": ["repo.lock"],
+                        },
+                    }
+                ]
+            }
+        ),
     )
-    assert result["workflow"]["git"]["branch"] == "feature/my-branch"
-
-
-def test_mm668_target_branch_is_not_active_authored_branch_input() -> None:
-    """MM-668: targetBranch must not be normalized into active authored branch."""
-    result = build_canonical_workflow_view(
-        job_type="task",
-        payload=_canonical_task_payload({
-            "git": {"targetBranch": "feature/legacy"},
-        }),
-    )
-    assert result["workflow"]["git"]["branch"] is None
-    assert "targetBranch" not in result["workflow"]["git"]
+    assert "repo.lock" in result["requiredCapabilities"]
 
 
 # SC-001: Full recover_from_failed_step acceptance scenario
@@ -2365,14 +2487,10 @@ def test_edge_case_recovery_checkpoint_ref_empty_is_rejected() -> None:
         ResumeFromFailedStepRef.model_validate(bad_resume)
 
 
-def test_edge_case_branch_and_starting_branch_both_preserved() -> None:
-    """MM-638 edge case: branch and startingBranch are distinct fields and both preserved."""
+def test_edge_case_repository_branch_is_preserved_without_workflow_git() -> None:
     result = build_canonical_workflow_view(
         job_type="task",
-        payload=_canonical_task_payload({
-            "git": {"branch": "main", "startingBranch": "sha-abc123"},
-        }),
+        payload=_canonical_task_payload({}),
     )
-    git = result["workflow"]["git"]
-    assert git["branch"] == "main"
-    assert git["startingBranch"] == "sha-abc123"
+    assert result["repository"]["branch"] == {"name": "main"}
+    assert "git" not in result["workflow"]

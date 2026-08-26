@@ -9,6 +9,7 @@ import urllib.request
 import pytest
 
 from moonmind.workflows.temporal.worker_healthcheck import (
+    WorkerHealthState,
     _build_response_body,
     _is_enabled,
     _port,
@@ -102,6 +103,47 @@ async def test_start_healthcheck_server_responds(monkeypatch):
         assert body["status"] == "ok"
         assert body["fleet"] == "test_fleet"
         assert isinstance(body["uptime_seconds"], int)
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_readiness_fails_closed_until_worker_pollers_start(monkeypatch):
+    monkeypatch.setenv("WORKER_HEALTHCHECK_ENABLED", "true")
+    monkeypatch.setenv("WORKER_HEALTHCHECK_PORT", "0")
+    state = WorkerHealthState(
+        readiness_metadata={
+            "workflowTypes": ["MoonMind.PRResolver"],
+            "registryFingerprint": "sha256:abc",
+        }
+    )
+    server = await start_healthcheck_server(state)
+    assert server is not None
+    port = server.sockets[0].getsockname()[1]
+    loop = asyncio.get_running_loop()
+    try:
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            await loop.run_in_executor(
+                None,
+                lambda: urllib.request.urlopen(
+                    f"http://127.0.0.1:{port}/readyz", timeout=5
+                ).read(),
+            )
+        assert exc_info.value.code == 503
+
+        state.temporal_connected = True
+        state.workers_constructed = True
+        state.pollers_started = True
+        response_bytes = await loop.run_in_executor(
+            None,
+            lambda: urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/readyz", timeout=5
+            ).read(),
+        )
+        body = json.loads(response_bytes)
+        assert body["ready"] is True
+        assert body["workflowTypes"] == ["MoonMind.PRResolver"]
     finally:
         server.close()
         await server.wait_closed()

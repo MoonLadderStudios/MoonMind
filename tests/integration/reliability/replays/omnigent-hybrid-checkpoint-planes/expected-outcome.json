@@ -1,0 +1,8 @@
+{
+  "invariant": "Omnigent external-state evidence and sandbox workspace evidence remain independent planes in the same v2 checkpoint",
+  "sessionCheckpointKind": "external_state_ref",
+  "workspaceCheckpointKind": "worktree_archive",
+  "workspaceAuthority": "moonmind_sandbox",
+  "captureActivity": "workspace.capture_checkpoint",
+  "checkpointCreateActivity": "step_checkpoint.create_v2"
+}

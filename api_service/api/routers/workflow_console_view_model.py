@@ -17,6 +17,7 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from moonmind.config.settings import WorkflowSettings, settings
+from moonmind.omnigent.execution_profiles import public_execution_catalog
 from moonmind.utils.build_info import resolve_moonmind_build_id
 from moonmind.workflows.executions.runtime_defaults import (
     DEFAULT_REPOSITORY,
@@ -544,7 +545,12 @@ def status_maps() -> dict[str, dict[str, str]]:
     return deepcopy(_STATUS_MAPS)
 
 def _build_supported_runtimes() -> list[str]:
-    supported: list[str] = ["codex_cli", "claude_code", "codex_cloud"]
+    supported: list[str] = [
+        "omnigent",
+        "codex_cli",
+        "claude_code",
+        "codex_cloud",
+    ]
     if settings.jules_runtime_gate.enabled:
         supported.append("jules")
     return supported
@@ -682,6 +688,13 @@ def build_runtime_config(
         if jira_runtime_config
         else {}
     )
+    retrieval_collections = [
+        item.strip()
+        for item in os.environ.get(
+            "MOONMIND_FOLLOWUP_RETRIEVAL_COLLECTIONS", "repo,docs"
+        ).split(",")
+        if item.strip()
+    ]
 
     return {
         "initialPath": initial_path,
@@ -756,6 +769,7 @@ def build_runtime_config(
         },
         "system": {
             **system_metadata,
+            "omnigentExecutionCatalog": public_execution_catalog(),
             "defaultRepository": default_repository,
             "repositoryOptions": repository_options,
             "defaultRuntime": default_runtime,
@@ -764,6 +778,14 @@ def build_runtime_config(
             "defaultModelByRuntime": default_model_by_runtime,
             "defaultEffortByRuntime": default_effort_by_runtime,
             "defaultPublishMode": default_publish_mode,
+            "retrievalAuthoring": {
+                "collections": retrieval_collections,
+                "topK": int(os.environ.get("MOONMIND_FOLLOWUP_RETRIEVAL_MAX_TOP_K", "8")),
+                "maxContextTokens": int(os.environ.get("MOONMIND_FOLLOWUP_RETRIEVAL_MAX_CONTEXT_TOKENS", "8192")),
+                "maxQueries": int(os.environ.get("MOONMIND_FOLLOWUP_RETRIEVAL_MAX_QUERIES", "12")),
+                "latencyMs": int(os.environ.get("MOONMIND_FOLLOWUP_RETRIEVAL_MAX_LATENCY_MS", "5000")),
+                "maxLifetimeSeconds": int(os.environ.get("MOONMIND_FOLLOWUP_RETRIEVAL_MAX_LIFETIME_SECONDS", "900")),
+            },
             # Keep workflow proposals opt-in from the submit form so Temporal
             # remains the default execution substrate for new runs.
             "defaultProposeWorkflows": False,

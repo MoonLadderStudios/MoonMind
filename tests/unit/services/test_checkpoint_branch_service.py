@@ -28,6 +28,16 @@ from moonmind.schemas.checkpoint_branch_models import (
     StepExecutionBranchMetadataModel,
 )
 from moonmind.schemas.temporal_models import StepExecutionManifestModel
+from moonmind.workflows.temporal.remediation_workspace_head import (
+    REMEDIATION_HEAD_MISMATCH,
+    REMEDIATION_HEAD_STALE_VERSION,
+    REMEDIATION_VERIFIER_CONTAMINATION,
+    RemediationAttemptInput,
+    RemediationAttemptOutput,
+    RemediationHeadError,
+    VerificationEvidence,
+    WorkspaceMaterializationEvidence,
+)
 
 
 @pytest_asyncio.fixture()
@@ -75,6 +85,323 @@ def _branch_payload(**overrides):
     }
     payload.update(overrides)
     return payload
+
+
+def _captured_output(*, attempt: int, parent: str, parent_digest: str):
+    return RemediationAttemptOutput(
+        attemptEvidenceRef=f"artifact://remediation/attempt-{attempt}",
+        parentCheckpointRef=parent,
+        parentWorkspaceDigest=parent_digest,
+        outputCheckpointRef=f"artifact://checkpoint/c{attempt}",
+        outputWorkspaceDigest=f"sha256:c{attempt}",
+        checkpointManifestRef=f"artifact://manifest/c{attempt}",
+        candidateDiffRef=f"artifact://diff/r{attempt}",
+        changedFilesRef=f"artifact://changed/r{attempt}",
+        targetedChecksRef=f"artifact://checks/r{attempt}",
+        outcome="candidate_captured",
+    )
+
+
+@pytest.mark.asyncio
+async def test_remediation_head_initialization_and_atomic_cumulative_advancement(
+    checkpoint_branch_session: AsyncSession,
+) -> None:
+    service = CheckpointBranchService(checkpoint_branch_session)
+    await service.create_branch(_branch_payload())
+    root = await service.initialize_remediation_head(
+        workflow_id="wf-1", branch_id="cbr-1", loop_id="loop-1"
+    )
+    attempt_1 = RemediationAttemptInput(
+        loopId="loop-1", attemptOrdinal=1,
+        baseCheckpointRef=root.head_checkpoint_ref,
+        expectedBaseDigest=root.head_workspace_digest,
+        expectedHeadVersion=root.head_version,
+    )
+    head_1 = await service.advance_remediation_head(
+        workflow_id="wf-1", branch_id="cbr-1", attempt=attempt_1,
+        output=_captured_output(
+            attempt=1, parent=root.head_checkpoint_ref,
+            parent_digest=root.head_workspace_digest,
+        ),
+        step_execution_id="wf-1:run-1:remediate:execution:1",
+        transition_id="attempt-1",
+    )
+    attempt_2 = RemediationAttemptInput(
+        loopId="loop-1", attemptOrdinal=2,
+        baseCheckpointRef=head_1.head_checkpoint_ref,
+        expectedBaseDigest=head_1.head_workspace_digest,
+        expectedHeadVersion=head_1.head_version,
+    )
+    head_2 = await service.advance_remediation_head(
+        workflow_id="wf-1", branch_id="cbr-1", attempt=attempt_2,
+        output=_captured_output(
+            attempt=2, parent=head_1.head_checkpoint_ref,
+            parent_digest=head_1.head_workspace_digest,
+        ),
+        step_execution_id="wf-1:run-1:remediate:execution:2",
+        transition_id="attempt-2",
+    )
+
+    assert head_2.head_checkpoint_ref == "artifact://checkpoint/c2"
+    assert head_2.head_workspace_digest == "sha256:c2"
+    assert head_2.head_version == 3
+    assert head_2.head_attempt_ordinal == 2
+
+
+@pytest.mark.asyncio
+async def test_remediation_head_reconciles_duplicate_and_rejects_stale_writer(
+    checkpoint_branch_session: AsyncSession,
+) -> None:
+    service = CheckpointBranchService(checkpoint_branch_session)
+    await service.create_branch(_branch_payload())
+    root = await service.initialize_remediation_head(
+        workflow_id="wf-1", branch_id="cbr-1", loop_id="loop-1"
+    )
+    attempt = RemediationAttemptInput(
+        loopId="loop-1", attemptOrdinal=1,
+        baseCheckpointRef=root.head_checkpoint_ref,
+        expectedBaseDigest=root.head_workspace_digest,
+        expectedHeadVersion=1,
+    )
+    output = _captured_output(
+        attempt=1, parent=root.head_checkpoint_ref,
+        parent_digest=root.head_workspace_digest,
+    )
+    advanced = await service.advance_remediation_head(
+        workflow_id="wf-1", branch_id="cbr-1", attempt=attempt, output=output,
+        step_execution_id="wf-1:run-1:remediate:execution:1",
+        transition_id="stable-attempt-1",
+    )
+    replayed = await service.advance_remediation_head(
+        workflow_id="wf-1", branch_id="cbr-1", attempt=attempt, output=output,
+        step_execution_id="wf-1:run-1:remediate:execution:1",
+        transition_id="stable-attempt-1",
+    )
+    assert replayed == advanced
+
+    with pytest.raises(RemediationHeadError) as exc_info:
+        await service.advance_remediation_head(
+            workflow_id="wf-1", branch_id="cbr-1", attempt=attempt,
+            output=_captured_output(
+                attempt=1, parent=root.head_checkpoint_ref,
+                parent_digest=root.head_workspace_digest,
+            ),
+            step_execution_id="wf-1:run-1:remediate:execution:stale",
+            transition_id="stale-attempt",
+        )
+    assert exc_info.value.code == REMEDIATION_HEAD_STALE_VERSION
+
+
+@pytest.mark.asyncio
+async def test_no_change_attempt_advances_persisted_ordinal(
+    checkpoint_branch_session: AsyncSession,
+) -> None:
+    service = CheckpointBranchService(checkpoint_branch_session)
+    await service.create_branch(_branch_payload())
+    root = await service.initialize_remediation_head(
+        workflow_id="wf-1", branch_id="cbr-1", loop_id="loop-1"
+    )
+    attempt = RemediationAttemptInput(
+        loopId="loop-1",
+        attemptOrdinal=1,
+        baseCheckpointRef=root.head_checkpoint_ref,
+        expectedBaseDigest=root.head_workspace_digest,
+        expectedHeadVersion=root.head_version,
+    )
+    output = RemediationAttemptOutput(
+        attemptEvidenceRef="artifact://remediation/no-change-1",
+        parentCheckpointRef=root.head_checkpoint_ref,
+        parentWorkspaceDigest=root.head_workspace_digest,
+        outcome="no_candidate_change",
+    )
+    updated = await service.advance_remediation_head(
+        workflow_id="wf-1",
+        branch_id="cbr-1",
+        attempt=attempt,
+        output=output,
+        step_execution_id="wf-1:run-1:remediate:execution:1",
+        transition_id="no-change-1",
+    )
+
+    assert updated.head_version == root.head_version
+    assert updated.head_checkpoint_ref == root.head_checkpoint_ref
+    assert updated.head_attempt_ordinal == 1
+
+
+@pytest.mark.asyncio
+async def test_remediation_head_initialization_fails_without_root_digest(
+    checkpoint_branch_session: AsyncSession,
+) -> None:
+    service = CheckpointBranchService(checkpoint_branch_session)
+    payload = _branch_payload()
+    payload["source"].pop("checkpointDigest")
+    await service.create_branch(payload)
+
+    with pytest.raises(RemediationHeadError) as exc_info:
+        await service.initialize_remediation_head(
+            workflow_id="wf-1", branch_id="cbr-1", loop_id="loop-1"
+        )
+    assert exc_info.value.code == REMEDIATION_HEAD_MISMATCH
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["live", "restored"])
+async def test_persisted_head_authorizes_only_exact_materialization(
+    checkpoint_branch_session: AsyncSession,
+    mode: str,
+) -> None:
+    service = CheckpointBranchService(checkpoint_branch_session)
+    await service.create_branch(_branch_payload())
+    head = await service.initialize_remediation_head(
+        workflow_id="wf-1", branch_id="cbr-1", loop_id="loop-1"
+    )
+    attempt = RemediationAttemptInput(
+        loopId=head.loop_id,
+        attemptOrdinal=1,
+        baseCheckpointRef=head.head_checkpoint_ref,
+        expectedBaseDigest=head.head_workspace_digest,
+        expectedHeadVersion=head.head_version,
+    )
+    evidence = WorkspaceMaterializationEvidence(
+        loopId=head.loop_id,
+        checkpointRef=head.head_checkpoint_ref,
+        workspaceDigest=head.head_workspace_digest,
+        headVersion=head.head_version,
+        ownerStepExecutionId="wf-1:run-1:remediate:execution:1",
+        mode=mode,
+    )
+
+    authorized = await service.authorize_remediation_materialization(
+        workflow_id="wf-1",
+        branch_id="cbr-1",
+        attempt=attempt,
+        evidence=evidence,
+        expected_owner_step_execution_id=evidence.owner_step_execution_id,
+    )
+    assert authorized == head
+
+    with pytest.raises(RemediationHeadError) as exc_info:
+        await service.authorize_remediation_materialization(
+            workflow_id="wf-1",
+            branch_id="cbr-1",
+            attempt=attempt,
+            evidence=evidence.model_copy(update={"workspace_digest": "sha256:wrong"}),
+            expected_owner_step_execution_id=evidence.owner_step_execution_id,
+        )
+    assert exc_info.value.code in {
+        REMEDIATION_HEAD_MISMATCH,
+        "REMEDIATION_HEAD_RESTORE_INVALID",
+    }
+
+
+@pytest.mark.asyncio
+async def test_remediation_verification_contamination_and_terminal_state_are_durable(
+    checkpoint_branch_session: AsyncSession,
+) -> None:
+    service = CheckpointBranchService(checkpoint_branch_session)
+    await service.create_branch(_branch_payload())
+    head = await service.initialize_remediation_head(
+        workflow_id="wf-1", branch_id="cbr-1", loop_id="loop-1"
+    )
+    contaminated = await service.record_remediation_verification(
+        workflow_id="wf-1",
+        branch_id="cbr-1",
+        evidence=VerificationEvidence(
+            inputHeadRef=head.head_checkpoint_ref,
+            inputHeadDigest=head.head_workspace_digest,
+            inputHeadVersion=head.head_version,
+            preVerificationWorkspaceDigest=head.head_workspace_digest,
+            postVerificationWorkspaceDigest="sha256:mutated",
+            verifierArtifactRef="artifact://verification/v1",
+            verdict="FULLY_IMPLEMENTED",
+        ),
+    )
+    assert contaminated.status.value == "contaminated"
+    assert contaminated.latest_verification_verdict == REMEDIATION_VERIFIER_CONTAMINATION
+    replayed = await service.record_remediation_verification(
+        workflow_id="wf-1",
+        branch_id="cbr-1",
+        evidence=VerificationEvidence(
+            inputHeadRef=head.head_checkpoint_ref,
+            inputHeadDigest=head.head_workspace_digest,
+            inputHeadVersion=head.head_version,
+            preVerificationWorkspaceDigest=head.head_workspace_digest,
+            postVerificationWorkspaceDigest="sha256:mutated",
+            verifierArtifactRef="artifact://verification/v1",
+            verdict="FULLY_IMPLEMENTED",
+        ),
+    )
+    assert replayed == contaminated
+
+    terminal = await service.mark_remediation_terminal(
+        workflow_id="wf-1",
+        branch_id="cbr-1",
+        remaining_work_ref="artifact://remaining/work-1",
+        expected_head_ref=contaminated.head_checkpoint_ref,
+        expected_head_digest=contaminated.head_workspace_digest,
+        expected_head_version=contaminated.head_version,
+    )
+    assert terminal.status.value == "terminal_remaining_work"
+    assert terminal.head_checkpoint_ref == head.head_checkpoint_ref
+
+    await checkpoint_branch_session.refresh(
+        await checkpoint_branch_session.get(WorkflowCheckpointBranch, "cbr-1")
+    )
+    artifacts = (
+        await checkpoint_branch_session.execute(
+            select(WorkflowCheckpointBranchArtifact).where(
+                WorkflowCheckpointBranchArtifact.branch_id == "cbr-1"
+            )
+        )
+    ).scalars().all()
+    assert {artifact.artifact_ref for artifact in artifacts} == {
+        "artifact://verification/v1",
+        "artifact://remaining/work-1",
+    }
+
+
+@pytest.mark.asyncio
+async def test_remediation_rollback_is_atomic_and_rejects_stale_version(
+    checkpoint_branch_session: AsyncSession,
+) -> None:
+    service = CheckpointBranchService(checkpoint_branch_session)
+    await service.create_branch(_branch_payload())
+    head = await service.initialize_remediation_head(
+        workflow_id="wf-1", branch_id="cbr-1", loop_id="loop-1"
+    )
+    rolled_back = await service.rollback_remediation_head(
+        workflow_id="wf-1",
+        branch_id="cbr-1",
+        expected_head_version=head.head_version,
+        checkpoint_ref="artifact://checkpoint/rollback",
+        workspace_digest="sha256:rollback",
+        evidence_ref="artifact://rollback/evidence-1",
+        transition_id="rollback-1",
+    )
+    assert rolled_back.head_checkpoint_ref == "artifact://checkpoint/rollback"
+    assert rolled_back.head_version == head.head_version + 1
+    replayed = await service.rollback_remediation_head(
+        workflow_id="wf-1",
+        branch_id="cbr-1",
+        expected_head_version=head.head_version,
+        checkpoint_ref="artifact://checkpoint/rollback",
+        workspace_digest="sha256:rollback",
+        evidence_ref="artifact://rollback/evidence-1",
+        transition_id="rollback-1",
+    )
+    assert replayed == rolled_back
+
+    with pytest.raises(RemediationHeadError) as exc_info:
+        await service.rollback_remediation_head(
+            workflow_id="wf-1",
+            branch_id="cbr-1",
+            expected_head_version=head.head_version,
+            checkpoint_ref="artifact://checkpoint/stale",
+            workspace_digest="sha256:stale",
+            evidence_ref="artifact://rollback/stale",
+            transition_id="rollback-stale",
+        )
+    assert exc_info.value.code == REMEDIATION_HEAD_STALE_VERSION
 
 
 def test_checkpoint_branch_requires_checkpoint_or_typed_source_state() -> None:
@@ -152,8 +479,6 @@ async def test_checkpoint_branch_service_persists_branch_turn_artifact_and_git_b
             "runtimeContextPolicy": "fresh_agent_run",
             "instructionRef": "artifact://instructions/1",
             "instructionDigest": "sha256:instructions",
-            "contextBundleRef": "artifact://context/1",
-            "createdStepExecutionId": "wf-1:run-branch:implement:execution:1",
             "idempotencyKey": "MM-1088:cbr-1:turn-1",
             "status": "created",
         }
@@ -178,7 +503,8 @@ async def test_checkpoint_branch_service_persists_branch_turn_artifact_and_git_b
     await checkpoint_branch_session.commit()
 
     assert SOURCE_TRACEABILITY_ISSUES == ("MM-1087", "MM-1088")
-    assert branch.branch_id != turn.created_step_execution_id
+    assert turn.created_step_execution_id is None
+    assert turn.context_bundle_ref is None
     assert branch.workflow_id == "wf-1"
     assert branch.source_run_id == "run-1"
     assert branch.logical_step_id == "implement"
@@ -244,8 +570,8 @@ async def test_checkpoint_branch_service_preserves_child_lineage(
     assert child.parent_turn_id == "cbt-parent"
 
 
-def test_checkpoint_branch_turn_rejects_step_execution_identity_reuse() -> None:
-    with pytest.raises(ValidationError, match="branch and turn ids"):
+def test_checkpoint_branch_turn_rejects_caller_owned_runtime_identity() -> None:
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         CheckpointBranchTurnCreateModel.model_validate(
             {
                 "branchTurnId": "cbt-1",
@@ -405,7 +731,6 @@ async def test_checkpoint_branch_graph_operations_and_queries(
             "instructionRef": "artifact://instructions/continue",
             "instructionDigest": "sha256:continue",
             "idempotencyKey": "MM-1099:cbr-graph:continue",
-            "createdStepExecutionId": "wf-1:run-branch:implement:execution:2",
             "workspacePolicy": "restore_pre_execution",
         },
     )
@@ -421,9 +746,6 @@ async def test_checkpoint_branch_graph_operations_and_queries(
             "idempotencyKey": "MM-1099:cbr-child:create",
             "workspacePolicy": "continue_from_previous_execution",
             "runtimeContextPolicy": "fresh_agent_run",
-            "createdStepExecutionId": "wf-1:run-branch:implement:execution:3",
-            "runtimeAgentRunId": "agent-run-child",
-            "providerSessionId": "conv-child",
         },
     )
     await service.archive_branch(workflow_id="wf-1", branch_id=child.branch.branch_id)
@@ -452,7 +774,7 @@ async def test_checkpoint_branch_graph_operations_and_queries(
         for artifact in branch_by_id["cbr-graph"].artifacts
     )
     assert all(
-        turn.created_step_execution_id not in {turn.branch_id, turn.branch_turn_id}
+        turn.created_step_execution_id is None
         for item in branches
         for turn in item.turns
     )
@@ -461,14 +783,11 @@ async def test_checkpoint_branch_graph_operations_and_queries(
     assert continued.workspace_policy == "restore_pre_execution"
     assert branch_by_id["cbr-graph"].branch.workspace_policy == "restore_pre_execution"
 
-    # Fork binds the created turn as the child branch head with runtime ids.
+    # Persistence does not author runtime authority before the execution owner.
     child_turn = branch_by_id["cbr-child"].turns[0]
-    assert (
-        branch_by_id["cbr-child"].branch.current_head_step_execution_id
-        == "wf-1:run-branch:implement:execution:3"
-    )
-    assert child_turn.runtime_agent_run_id == "agent-run-child"
-    assert child_turn.provider_session_id == "conv-child"
+    assert branch_by_id["cbr-child"].branch.current_head_step_execution_id is None
+    assert child_turn.runtime_agent_run_id is None
+    assert child_turn.provider_session_id is None
 
 
 @pytest.mark.asyncio
@@ -492,7 +811,6 @@ async def test_checkpoint_branch_graph_operations_are_idempotent_by_operation_id
             "instructionRef": "artifact://instructions/continue",
             "instructionDigest": "sha256:continue",
             "idempotencyKey": "MM-1099:cbr-idempotent:continue",
-            "createdStepExecutionId": "wf-1:run-branch:implement:execution:2",
         },
     )
     duplicate_continue = await service.continue_branch(
@@ -502,7 +820,6 @@ async def test_checkpoint_branch_graph_operations_are_idempotent_by_operation_id
             "instructionRef": "artifact://instructions/continue",
             "instructionDigest": "sha256:continue",
             "idempotencyKey": "MM-1099:cbr-idempotent:continue",
-            "createdStepExecutionId": "wf-1:run-branch:implement:execution:2",
         },
     )
     fork_payload = {
@@ -863,31 +1180,43 @@ async def test_checkpoint_branch_service_launches_turn_with_context_manifest_and
         branch_turn_id=turn_id,
     )
 
-    launched = await service.launch_turn(
+    launched = await service.claim_turn_execution(
         workflow_id="wf-1",
         branch_id="cbr-launch",
         branch_turn_id=turn_id,
         context_bundle_ref="artifact://context/cbr-launch-turn-1",
         step_execution_manifest_ref="artifact://manifest/cbr-launch-turn-1",
-        checkpoint_ref="artifact://checkpoint/cbr-launch-turn-1",
         diagnostics_ref="artifact://diagnostics/cbr-launch-turn-1",
         agent_request_ref="artifact://agent-request/cbr-launch-turn-1",
-        agent_result_ref="artifact://agent-result/cbr-launch-turn-1",
         created_step_execution_id="wf-1:run-branch:implement:execution:4",
-        idempotency_key=launch_key,
+        runtime_agent_run_id="checkpoint-branch-agent:cbr-launch:turn-1",
+        launch_idempotency_key=launch_key,
+        execution_workflow_id=f"checkpoint-branch-turn:{turn_id}",
     )
-    replayed = await service.launch_turn(
+    replayed = await service.claim_turn_execution(
         workflow_id="wf-1",
         branch_id="cbr-launch",
         branch_turn_id=turn_id,
         context_bundle_ref="artifact://context/cbr-launch-turn-1",
         step_execution_manifest_ref="artifact://manifest/cbr-launch-turn-1",
-        checkpoint_ref="artifact://checkpoint/cbr-launch-turn-1",
         diagnostics_ref="artifact://diagnostics/cbr-launch-turn-1",
         agent_request_ref="artifact://agent-request/cbr-launch-turn-1",
-        agent_result_ref="artifact://agent-result/cbr-launch-turn-1",
         created_step_execution_id="wf-1:run-branch:implement:execution:4",
-        idempotency_key=launch_key,
+        runtime_agent_run_id="checkpoint-branch-agent:cbr-launch:turn-1",
+        launch_idempotency_key=launch_key,
+        execution_workflow_id=f"checkpoint-branch-turn:{turn_id}",
+    )
+    assert launched.status == "preparing"
+    finalized = await service.finalize_turn_execution(
+        workflow_id="wf-1",
+        branch_id="cbr-launch",
+        branch_turn_id=turn_id,
+        outcome="succeeded",
+        agent_result_ref="artifact://agent-result/cbr-launch-turn-1",
+        diagnostics_ref="artifact://terminal-diagnostics/cbr-launch-turn-1",
+        checkpoint_ref="artifact://checkpoint/cbr-launch-turn-1",
+        checkpoint_digest="sha256:checkpoint-turn-1",
+        provider_session_id="omnigent-session-turn-1",
     )
     await checkpoint_branch_session.commit()
 
@@ -909,7 +1238,8 @@ async def test_checkpoint_branch_service_launches_turn_with_context_manifest_and
     assert replayed.created_step_execution_id == (
         "wf-1:run-branch:implement:execution:4"
     )
-    assert replayed.status == "running"
+    assert finalized.status == "checking"
+    assert finalized.diagnostics["verificationPending"] is True
 
     stored_graph = await service.read_branch_graph(
         workflow_id="wf-1", branch_id="cbr-launch"
@@ -921,10 +1251,11 @@ async def test_checkpoint_branch_service_launches_turn_with_context_manifest_and
         "runtime.branch_turn.agent_request.json",
         "runtime.branch_turn.agent_result.json",
         "output.branch_turn.step_execution_manifest.json",
+        "output.branch_turn.launch_diagnostics.json",
         "output.branch_turn.checkpoint.json",
         "output.branch_turn.diagnostics.json",
     }.issubset(artifact_kinds)
-    assert len(stored_graph.artifacts) == 7
+    assert len(stored_graph.artifacts) == 8
     assert stored_graph.branch.current_head_step_execution_id == (
         "wf-1:run-branch:implement:execution:4"
     )
@@ -946,16 +1277,18 @@ async def test_checkpoint_branch_service_rejects_launch_mutation_and_bad_key(
     turn_id = graph.turns[0].branch_turn_id
 
     with pytest.raises(ValueError, match="branch turn launch idempotency key"):
-        await service.launch_turn(
+        await service.claim_turn_execution(
             workflow_id="wf-1",
             branch_id="cbr-immutable",
             branch_turn_id=turn_id,
             context_bundle_ref="artifact://context/1",
             step_execution_manifest_ref="artifact://manifest/1",
-            checkpoint_ref="artifact://checkpoint/1",
             diagnostics_ref="artifact://diagnostics/1",
+            agent_request_ref="artifact://request/1",
             created_step_execution_id="wf-1:run-branch:implement:execution:5",
-            idempotency_key="MM-1100:cbr-immutable:wrong",
+            runtime_agent_run_id="agent-run-1",
+            launch_idempotency_key="MM-1100:cbr-immutable:wrong",
+            execution_workflow_id=f"checkpoint-branch-turn:{turn_id}",
         )
 
     launch_key = build_branch_turn_launch_idempotency_key(
@@ -963,41 +1296,33 @@ async def test_checkpoint_branch_service_rejects_launch_mutation_and_bad_key(
         branch_id="cbr-immutable",
         branch_turn_id=turn_id,
     )
-    await service.launch_turn(
+    await service.claim_turn_execution(
         workflow_id="wf-1",
         branch_id="cbr-immutable",
         branch_turn_id=turn_id,
         context_bundle_ref="artifact://context/1",
         step_execution_manifest_ref="artifact://manifest/1",
-        checkpoint_ref="artifact://checkpoint/1",
         diagnostics_ref="artifact://diagnostics/1",
+        agent_request_ref="artifact://request/1",
         created_step_execution_id="wf-1:run-branch:implement:execution:5",
-        idempotency_key=launch_key,
+        runtime_agent_run_id="agent-run-1",
+        launch_idempotency_key=launch_key,
+        execution_workflow_id=f"checkpoint-branch-turn:{turn_id}",
     )
 
     with pytest.raises(ValueError, match="immutable launch field context_bundle_ref"):
-        await service.launch_turn(
+        await service.claim_turn_execution(
             workflow_id="wf-1",
             branch_id="cbr-immutable",
             branch_turn_id=turn_id,
             context_bundle_ref="artifact://context/changed",
             step_execution_manifest_ref="artifact://manifest/1",
-            checkpoint_ref="artifact://checkpoint/1",
             diagnostics_ref="artifact://diagnostics/1",
+            agent_request_ref="artifact://request/1",
             created_step_execution_id="wf-1:run-branch:implement:execution:5",
-            idempotency_key=launch_key,
-        )
-
-    with pytest.raises(ValueError, match="requires Step Execution evidence"):
-        await service.launch_turn(
-            workflow_id="wf-1",
-            branch_id="cbr-immutable",
-            branch_turn_id=turn_id,
-            context_bundle_ref="artifact://context/1",
-            step_execution_manifest_ref="artifact://manifest/1",
-            checkpoint_ref="artifact://checkpoint/1",
-            diagnostics_ref="artifact://diagnostics/1",
-            idempotency_key=launch_key,
+            runtime_agent_run_id="agent-run-1",
+            launch_idempotency_key=launch_key,
+            execution_workflow_id=f"checkpoint-branch-turn:{turn_id}",
         )
 
 
@@ -1029,16 +1354,18 @@ async def test_checkpoint_branch_service_launch_rejects_terminal_branch(
     with pytest.raises(
         ValueError, match="cannot launch checkpoint branch turn in state 'archived'"
     ):
-        await service.launch_turn(
+        await service.claim_turn_execution(
             workflow_id="wf-1",
             branch_id="cbr-launch-archived",
             branch_turn_id=turn_id,
             context_bundle_ref="artifact://context/1",
             step_execution_manifest_ref="artifact://manifest/1",
-            checkpoint_ref=None,
             diagnostics_ref="artifact://diagnostics/1",
+            agent_request_ref="artifact://request/1",
             created_step_execution_id="wf-1:run-branch:implement:execution:6",
-            idempotency_key=launch_key,
+            runtime_agent_run_id="agent-run-1",
+            launch_idempotency_key=launch_key,
+            execution_workflow_id=f"checkpoint-branch-turn:{turn_id}",
         )
 
 
@@ -1062,16 +1389,18 @@ async def test_checkpoint_branch_service_launch_records_only_real_optional_artif
         branch_turn_id=turn_id,
     )
 
-    await service.launch_turn(
+    await service.claim_turn_execution(
         workflow_id="wf-1",
         branch_id="cbr-launch-optional",
         branch_turn_id=turn_id,
         context_bundle_ref="artifact://context/1",
         step_execution_manifest_ref="artifact://manifest/1",
-        checkpoint_ref=None,
         diagnostics_ref="artifact://diagnostics/1",
+        agent_request_ref="artifact://request/1",
         created_step_execution_id="wf-1:run-branch:implement:execution:7",
-        idempotency_key=launch_key,
+        runtime_agent_run_id="agent-run-1",
+        launch_idempotency_key=launch_key,
+        execution_workflow_id=f"checkpoint-branch-turn:{turn_id}",
     )
 
     stored_graph = await service.read_branch_graph(
@@ -1081,8 +1410,9 @@ async def test_checkpoint_branch_service_launch_records_only_real_optional_artif
 
     assert artifact_kinds == {
         "runtime.branch_turn.context_bundle.json",
+        "runtime.branch_turn.agent_request.json",
         "output.branch_turn.step_execution_manifest.json",
-        "output.branch_turn.diagnostics.json",
+        "output.branch_turn.launch_diagnostics.json",
     }
 
 

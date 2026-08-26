@@ -1,0 +1,7 @@
+{
+  "missingEvidence": ["var/pr_resolver/result.json"],
+  "continuationCount": 2,
+  "sameSession": true,
+  "failureCode": "INCOMPLETE_TERMINAL_CONTRACT",
+  "failureClass": "execution_error"
+}

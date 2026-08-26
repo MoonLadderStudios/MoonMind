@@ -269,6 +269,12 @@ class SessionResourceModel(BaseModel):
     default_read_ref: Optional[ArtifactRefModel] = None
     preview_artifact_ref: Optional[ArtifactRefModel] = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    preview_available: bool = False
+    download_available: bool = True
+    completeness_status: Literal["complete", "degraded", "pending"] = "complete"
+    unavailable_reason: Optional[str] = None
+    source_event_sequence: Optional[int] = None
+    related_resource_ids: list[str] = Field(default_factory=list)
     content_url: str
     download_url: str
 
@@ -285,24 +291,38 @@ class SessionResourceListResponse(BaseModel):
 class ArtifactSessionControlRequest(BaseModel):
     """Operator control request for one workflow-scoped artifact session."""
 
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
+    schema_version: Literal[1] = Field(1, alias="schemaVersion")
+    control_request_id: str = Field(..., alias="controlRequestId", min_length=1)
+    idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
     action: Literal[
-        "send_follow_up",
+        "continue_same_session",
         "clear_session",
         "interrupt_turn",
         "cancel_session",
     ]
     message: str | None = None
     reason: str | None = None
+    expected_session_epoch: int = Field(..., alias="expectedSessionEpoch", ge=1)
+    expected_turn_id: str | None = Field(None, alias="expectedTurnId")
+    actor_principal: str | None = Field(None, alias="actorPrincipal")
 
     def model_post_init(self, __context: Any) -> None:
         if self.message is not None:
             self.message = require_non_blank(self.message, field_name="message")
         if self.reason is not None:
             self.reason = require_non_blank(self.reason, field_name="reason")
-        if self.action == "send_follow_up" and self.message is None:
-            raise ValueError("message is required when action=send_follow_up")
+        self.control_request_id = require_non_blank(self.control_request_id, field_name="controlRequestId")
+        self.idempotency_key = require_non_blank(self.idempotency_key, field_name="idempotencyKey")
+        if self.expected_turn_id is not None:
+            self.expected_turn_id = require_non_blank(self.expected_turn_id, field_name="expectedTurnId")
+        if self.action == "continue_same_session" and self.message is None:
+            raise ValueError("message is required when action=continue_same_session")
+        if self.action == "interrupt_turn" and self.expected_turn_id is None:
+            raise ValueError("expectedTurnId is required when action=interrupt_turn")
+        if self.action in {"clear_session", "cancel_session"} and self.reason is None:
+            raise ValueError("reason is required for destructive session controls")
 
 class ArtifactSessionControlResponse(BaseModel):
     """Control response envelope with the refreshed session projection."""
@@ -310,11 +330,16 @@ class ArtifactSessionControlResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     action: Literal[
-        "send_follow_up",
+        "continue_same_session",
         "clear_session",
         "interrupt_turn",
         "cancel_session",
     ]
+    control_request_id: str = Field(..., alias="controlRequestId")
+    status: Literal["accepted", "rejected", "completed", "failed", "delivery_unknown"]
+    stable_reason_code: str | None = Field(None, alias="stableReasonCode")
+    control_event_ref: str | None = Field(None, alias="controlEventRef")
+    completed_at: datetime | None = Field(None, alias="completedAt")
     projection: ArtifactSessionProjectionModel
 
 class PresignDownloadResponse(BaseModel):

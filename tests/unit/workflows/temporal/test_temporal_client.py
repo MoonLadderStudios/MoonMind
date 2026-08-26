@@ -32,10 +32,11 @@ def adapter() -> TemporalClientAdapter:
 async def test_temporal_client_uses_shared_pydantic_data_converter(monkeypatch):
     captured: dict[str, object] = {}
 
-    async def fake_connect(address, *, namespace, data_converter):
+    async def fake_connect(address, *, namespace, data_converter, interceptors):
         captured["address"] = address
         captured["namespace"] = namespace
         captured["data_converter"] = data_converter
+        captured["interceptors"] = interceptors
         return AsyncMock()
 
     monkeypatch.setattr(temporal_client_module.Client, "connect", fake_connect)
@@ -43,6 +44,7 @@ async def test_temporal_client_uses_shared_pydantic_data_converter(monkeypatch):
     await temporal_client_module.get_temporal_client("temporal:7233", "default")
 
     assert captured["data_converter"] is MOONMIND_TEMPORAL_DATA_CONVERTER
+    assert captured["interceptors"] == []
 
 
 async def test_default_adapter_refuses_implicit_live_connection_under_pytest(
@@ -58,10 +60,11 @@ async def test_default_adapter_refuses_implicit_live_connection_under_pytest(
 async def test_default_adapter_allows_explicit_live_connection_opt_in(monkeypatch):
     captured: dict[str, object] = {}
 
-    async def fake_connect(address, *, namespace, data_converter):
+    async def fake_connect(address, *, namespace, data_converter, interceptors):
         captured["address"] = address
         captured["namespace"] = namespace
         captured["data_converter"] = data_converter
+        captured["interceptors"] = interceptors
         return AsyncMock()
 
     monkeypatch.setenv("MOONMIND_ALLOW_LIVE_TEMPORAL_IN_TESTS", "1")
@@ -71,6 +74,7 @@ async def test_default_adapter_allows_explicit_live_connection_opt_in(monkeypatc
 
     assert connected is not None
     assert captured["data_converter"] is MOONMIND_TEMPORAL_DATA_CONVERTER
+    assert captured["interceptors"] == []
 
 
 async def test_explicit_task_queue_override_wins_over_default_topology():

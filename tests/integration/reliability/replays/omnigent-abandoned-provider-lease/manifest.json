@@ -1,0 +1,7 @@
+{
+  "incidentWorkflowId": "mm:651a14f6-ff53-43e9-a91b-b37ad276f9ef",
+  "failureShape": "a canceled or worker-terminated profile-bound Activity left its host and ProviderProfileManager slot leased, so an exact rerun waited until the 90-minute safety expiry",
+  "hostLeaseRef": "ohl_replay_abandoned",
+  "providerProfileId": "codex_openai_oauth",
+  "providerLeaseRef": "profile-lease:execution_omnigent:replay"
+}

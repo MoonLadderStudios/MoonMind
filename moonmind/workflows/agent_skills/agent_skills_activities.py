@@ -7,6 +7,8 @@ from typing import Any
 
 from temporalio import activity
 
+from pr_resolver_core import IMPLEMENTATION_CONTRACT
+
 from moonmind.schemas.agent_skill_models import (
     AgentSkillFormat,
     ResolvedSkillSet,
@@ -99,7 +101,15 @@ class AgentSkillsActivities:
 
             skill_dir = Path(skill.provenance.source_path)
             try:
-                payload = self._build_skill_bundle_payload(skill_dir)
+                payload = self._build_skill_bundle_payload(
+                    skill_dir,
+                    include_pr_resolver_core=(
+                        skill.skill_name == "pr-resolver"
+                        and skill.provenance.source_kind.value == "built_in"
+                        and skill.implementation is not None
+                        and skill.implementation.contract == IMPLEMENTATION_CONTRACT
+                    ),
+                )
             except OSError as exc:
                 raise RuntimeError(
                     f"failed to persist selected skill '{skill.skill_name}' from {skill_dir}: {exc}"
@@ -145,7 +155,11 @@ class AgentSkillsActivities:
         return resolved_set.model_copy(update={"skills": updated_skills})
 
     @staticmethod
-    def _build_skill_bundle_payload(skill_dir: Path) -> bytes:
+    def _build_skill_bundle_payload(
+        skill_dir: Path,
+        *,
+        include_pr_resolver_core: bool = False,
+    ) -> bytes:
         if not skill_dir.is_dir():
             raise OSError(f"skill source path is not a directory: {skill_dir}")
         skill_doc = skill_dir / "SKILL.md"
@@ -180,6 +194,19 @@ class AgentSkillsActivities:
                             f"{path} -> {source_path}"
                         ) from exc
                 archive.add(source_path, arcname=str(path.relative_to(skill_dir)))
+            if include_pr_resolver_core:
+                core_root = allowed_root / "pr_resolver_core"
+                if not (core_root / "__init__.py").is_file():
+                    raise OSError(
+                        "built-in pr-resolver bundle is missing pr_resolver_core"
+                    )
+                for path in sorted(core_root.rglob("*.py")):
+                    archive.add(
+                        path,
+                        arcname=str(
+                            Path("lib") / "pr_resolver_core" / path.relative_to(core_root)
+                        ),
+                    )
         return buffer.getvalue()
 
     @staticmethod

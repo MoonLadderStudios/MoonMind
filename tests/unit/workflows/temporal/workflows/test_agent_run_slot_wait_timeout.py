@@ -4,19 +4,23 @@ The awaiting state (waiting for a provider-profile slot) must not consume the
 execution timeout budget.  ``overall_start`` is reset after slot acquisition
 so the full timeout is available for actual execution.
 
-The slot wait uses a timeout+retry loop: if the manager doesn't respond within
-``_SLOT_WAIT_TIMEOUT_SECONDS``, the AgentRun resets the manager and re-requests.
+The slot wait uses a timeout+retry loop. Recovery may ensure and re-request the
+manager, but it must never terminate the singleton while credential consumers
+may still be active.
 """
 
 import inspect
 import textwrap
 
 from moonmind.workflows.temporal.workflows.agent_run import (
+    ACCURATE_SLOT_WAIT_REASON_PATCH_ID,
     MANAGER_SLOT_WAIT_INSPECTION_PATCH_ID,
+    NON_DESTRUCTIVE_SLOT_WAIT_RECOVERY_PATCH_ID,
+    PRESERVE_DURABLE_SLOT_REQUEST_ON_AMBIGUOUS_INSPECTION_PATCH_ID,
     MoonMindAgentRun,
     RunStatus,
     _SLOT_WAIT_TIMEOUT_SECONDS,
-    _SLOT_WAIT_MAX_RESETS,
+    _SLOT_WAIT_MAX_RECOVERY_ATTEMPTS,
 )
 
 class TestSlotWaitRetryBehavior:
@@ -24,7 +28,7 @@ class TestSlotWaitRetryBehavior:
 
     def test_slot_wait_has_timeout_in_patched_path(self):
         """The patched ``wait_condition`` call for slot assignment must have
-        a timeout so that a stuck manager triggers a reset."""
+        a timeout so that a stuck manager triggers bounded recovery."""
         import ast
 
         source = textwrap.dedent(inspect.getsource(MoonMindAgentRun.run))
@@ -62,7 +66,7 @@ class TestSlotWaitRetryBehavior:
 
         assert found_with_timeout, (
             "The patched slot-wait path must use wait_condition with a timeout "
-            "to detect and recover from a stuck manager"
+            "to detect and recover from an unavailable manager"
         )
         # The legacy (unpatched) path should still have no timeout
         assert found_without_timeout, (
@@ -141,22 +145,25 @@ class TestSlotWaitRetryBehavior:
 
     def test_slot_wait_constants_are_sane(self):
         """Verify the slot wait constants have reasonable values."""
+        assert NON_DESTRUCTIVE_SLOT_WAIT_RECOVERY_PATCH_ID.endswith(
+            "non-destructive-slot-wait-recovery-v1"
+        )
         assert _SLOT_WAIT_TIMEOUT_SECONDS >= 60, (
             "Slot wait timeout should be at least 60 seconds to allow for "
             "normal manager processing delays"
         )
-        assert _SLOT_WAIT_MAX_RESETS >= 1, (
-            "Must allow at least one manager reset attempt"
+        assert _SLOT_WAIT_MAX_RECOVERY_ATTEMPTS >= 1, (
+            "Must allow at least one manager recovery attempt"
         )
-        assert _SLOT_WAIT_MAX_RESETS <= 10, (
-            "Too many reset attempts would delay failure detection"
+        assert _SLOT_WAIT_MAX_RECOVERY_ATTEMPTS <= 10, (
+            "Too many recovery attempts would delay failure detection"
         )
 
-    def test_reset_and_request_slot_method_exists(self):
-        """The _reset_and_request_slot helper must exist for the retry loop."""
-        assert hasattr(MoonMindAgentRun, "_reset_and_request_slot"), (
-            "MoonMindAgentRun must have _reset_and_request_slot method "
-            "for resetting a stuck manager during slot acquisition"
+    def test_recover_and_request_slot_method_exists(self):
+        """The recovery helper must preserve singleton lease authority."""
+        assert hasattr(MoonMindAgentRun, "_recover_and_request_slot"), (
+            "MoonMindAgentRun must have _recover_and_request_slot for bounded "
+            "non-destructive slot recovery"
         )
 
     def test_slot_timeout_inspects_manager_before_reset(self):
@@ -172,24 +179,53 @@ class TestSlotWaitRetryBehavior:
             MoonMindAgentRun._manager_state_for_slot_wait
         )
         assert source.index("_manager_state_for_slot_wait") < source.index(
-            "_reset_and_request_slot"
+            "_recover_and_request_slot"
         )
         assert "re-requesting without reset" in source
+        assert "NON_DESTRUCTIVE_SLOT_WAIT_RECOVERY_PATCH_ID" in source
 
-    def test_reset_and_request_slot_uses_ensure_signal_fallback(self):
-        """The reset path must tolerate the fresh-manager signal race."""
-        source = inspect.getsource(MoonMindAgentRun._reset_and_request_slot)
+    def test_accurate_initial_wait_reason_is_replay_gated(self):
+        source = inspect.getsource(MoonMindAgentRun.run)
+
+        assert (
+            ACCURATE_SLOT_WAIT_REASON_PATCH_ID
+            == "agent-run-accurate-slot-wait-reason-v1"
+        )
+        assert "workflow.patched(ACCURATE_SLOT_WAIT_REASON_PATCH_ID)" in source
+        assert "execution_profile_ref=request.execution_profile_ref" in source
+
+    def test_runtime_selection_refreshes_wait_reason_after_inspection(self):
+        source = inspect.getsource(MoonMindAgentRun.run)
+
+        assert "refresh_waiting_reason = True" in source
+        assert "not self.runtime_selection_updated_event.is_set()" in source
+        assert "_inspected_provider_slot_waiting_reason" in source
+
+    def test_recover_and_request_slot_uses_ensure_signal_fallback(self):
+        """Recovery must tolerate the fresh-manager signal race without reset."""
+        source = inspect.getsource(MoonMindAgentRun._recover_and_request_slot)
 
         assert "_ensure_manager_and_signal" in source
         assert "manager_handle.signal(\"request_slot\"" not in source
+        assert "provider_profile.reset_manager" not in source
 
-    def test_slot_timeout_probe_failure_falls_back_to_reset(self):
-        """Manager inspection errors must not fail the AgentRun timeout path."""
+    def test_slot_timeout_probe_failure_preserves_durable_request(self):
+        """Inspection ambiguity must not amplify load with ensure/re-request work."""
         source = inspect.getsource(MoonMindAgentRun.run)
 
         assert "except CancelledError:" in source
-        assert "falling back to reset path" in source
+        assert (
+            PRESERVE_DURABLE_SLOT_REQUEST_ON_AMBIGUOUS_INSPECTION_PATCH_ID
+            == "agent-run-preserve-slot-request-on-ambiguous-inspection-v1"
+        )
+        assert "preserving the durable slot request" in source
+        assert 'manager_state.get("inspection_succeeded")' in source
+        assert "if preserve_durable_slot_request:" in source
+        assert "continue" in source
+        # The old replay path remains available for histories that already
+        # recorded manager recovery commands before this patch marker.
         assert 'manager_state = {"running": False}' in source
+        assert "_recover_and_request_slot" in source
 
     def test_healthy_manager_does_not_duplicate_pending_request(self):
         """If this workflow is already pending, timeout recovery must not re-signal."""

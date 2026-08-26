@@ -1,0 +1,9 @@
+{
+  "incidentWorkflowId": "mm:e8ca7030-2c79-4cf3-923d-dd40994606c1",
+  "incidentRunId": "019fd3e1-16e2-70d4-9b27-1b6f49d7ac1f",
+  "failedChildWorkflowId": "mm:e8ca7030-2c79-4cf3-923d-dd40994606c1:agent:node-1:execution3:retry2",
+  "failureShape": "the on-demand container became healthy but stock host-catalog publication remained offline beyond one minute on a later activity attempt",
+  "boundary": "healthy on-demand host to stock host-catalog publication",
+  "emptyCatalogReads": 40,
+  "containerName": "mm-omnigent-host-ohld921e095d61a95f0b3801b46b06d5284"
+}

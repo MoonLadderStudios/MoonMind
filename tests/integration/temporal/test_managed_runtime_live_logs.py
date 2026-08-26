@@ -5,6 +5,7 @@ to artifact storage. Uses short-lived real subprocesses where noted.
 """
 
 from __future__ import annotations
+from moonmind.schemas.agent_runtime_models import resolve_execution_budget
 
 import asyncio
 from datetime import UTC, datetime
@@ -130,7 +131,7 @@ async def test_supervisor_streams_managed_logs_to_artifacts(tmp_path: Path):
     result = await supervisor.supervise(
         run_id="managed-stream-1",
         process=process,
-        timeout_seconds=30,
+        budget=resolve_execution_budget(timeout_policy={"timeout_seconds": 30}),
     )
 
     # Verify supervision completed successfully.
@@ -188,7 +189,7 @@ async def test_exit_code_capture_during_streaming(tmp_path: Path):
     result = await supervisor.supervise(
         run_id=run_id,
         process=process,
-        timeout_seconds=30,
+        budget=resolve_execution_budget(timeout_policy={"timeout_seconds": 30}),
         exit_code_path=str(exit_code_file),
     )
 
@@ -302,7 +303,7 @@ async def test_supervisor_streams_concurrently_with_process(tmp_path: Path):
         supervisor.supervise(
             run_id=run_id,
             process=process,
-            timeout_seconds=60,
+            budget=resolve_execution_budget(timeout_policy={"timeout_seconds": 60}),
         ),
         timeout=15,
     )
@@ -351,7 +352,7 @@ async def test_supervisor_with_none_stdout_stderr_completes(tmp_path: Path):
     result = await supervisor.supervise(
         run_id=run_id,
         process=process,
-        timeout_seconds=10,
+        budget=resolve_execution_budget(timeout_policy={"timeout_seconds": 10}),
     )
 
     assert result.status == "completed"
@@ -421,7 +422,7 @@ async def test_long_running_launch_is_visible_through_observability_routes(
         supervisor.supervise(
             run_id=run_id,
             process=process,
-            timeout_seconds=30,
+            budget=resolve_execution_budget(timeout_policy={"timeout_seconds": 30}),
             cleanup_paths=cleanup_paths,
             deferred_cleanup_paths=deferred_cleanup_paths,
         )

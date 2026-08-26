@@ -12,7 +12,11 @@ import inspect
 import textwrap
 from types import SimpleNamespace
 
+import pytest
+from temporalio.exceptions import ApplicationError
+
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 
 
@@ -331,6 +335,145 @@ class TestEnsureManagerAutoStart:
         assert "profileSelector" not in request.parameters
         assert "profileSelector" not in request.parameters["task"]["runtime"]
 
+    def test_runtime_selection_update_detaches_incompatible_managed_session(self):
+        """Replay mm:d3ca1354: a Codex retry was switched to Claude while queued."""
+        workflow_instance = MoonMindAgentRun()
+        request = _agent_request(
+            managedSession={
+                "workflowId": "mm:d3ca1354:session:codex_cli",
+                "agentRunId": "mm:d3ca1354",
+                "sessionId": "sess:mm:d3ca1354:codex_cli",
+                "sessionEpoch": 2,
+                "runtimeId": "codex_cli",
+                "executionProfileRef": "codex-openrouter",
+            },
+            stepExecution={
+                "schemaVersion": "v1",
+                "workflowId": "mm:d3ca1354",
+                "runId": "replay-run",
+                "logicalStepId": "node-1",
+                "executionOrdinal": 2,
+                "stepExecutionId": "mm:d3ca1354:replay-run:node-1:execution:2",
+                "reason": "runtime_recovered",
+                "runtimeContextPolicy": "fresh_agent_run",
+                "runtimeSelection": {
+                    "runtimeId": "codex_cli",
+                    "agentKind": "managed",
+                    "model": "gpt-5.6-sol",
+                    "effort": "high",
+                    "executionProfileRef": "codex-openrouter",
+                    "skillId": "pr-resolver",
+                },
+                "runtimeSessionReset": {
+                    "resolvedPolicy": "fresh_agent_run",
+                },
+            },
+        )
+
+        workflow_instance._apply_runtime_selection_update(
+            request,
+            {
+                "targetRuntime": "claude_code",
+                "executionProfileRef": "claude-anthropic",
+                "model": "claude-opus-4-7",
+                "effort": "high",
+                "parametersPatch": {
+                    "targetRuntime": "claude_code",
+                    "model": "claude-opus-4-7",
+                    "workflow": {
+                        "runtime": {
+                            "mode": "claude_code",
+                            "profileId": "claude-anthropic",
+                        }
+                    },
+                },
+            },
+        )
+        workflow_instance._synchronize_runtime_selection_authority(request)
+
+        assert request.agent_id == "claude_code"
+        assert request.managed_session is None
+        assert request.step_execution is not None
+        assert request.step_execution.runtime_session_reset is None
+        assert request.step_execution.runtime_selection == {
+            "runtimeId": "claude_code",
+            "agentKind": "managed",
+            "model": "claude-opus-4-7",
+            "effort": "high",
+            "executionProfileRef": "claude-anthropic",
+            "skillId": "pr-resolver",
+        }
+        AgentExecutionRequest.model_validate(
+            request.model_dump(mode="json", by_alias=True)
+        )
+
+    def test_runtime_selection_update_detaches_session_for_new_profile(self):
+        """A queued Codex retry must not reuse credentials from its old profile."""
+        workflow_instance = MoonMindAgentRun()
+        request = _agent_request(
+            managedSession={
+                "workflowId": "task:session:codex_cli",
+                "agentRunId": "task",
+                "sessionId": "sess:task:codex_cli",
+                "sessionEpoch": 2,
+                "runtimeId": "codex_cli",
+                "executionProfileRef": "codex-openrouter",
+            },
+            stepExecution={
+                "schemaVersion": "v1",
+                "workflowId": "task",
+                "runId": "run",
+                "logicalStepId": "node-1",
+                "executionOrdinal": 2,
+                "stepExecutionId": "task:run:node-1:execution:2",
+                "reason": "runtime_recovered",
+                "runtimeContextPolicy": "fresh_agent_run",
+                "runtimeSelection": {
+                    "runtimeId": "codex_cli",
+                    "agentKind": "managed",
+                    "executionProfileRef": "codex-openrouter",
+                },
+                "runtimeSessionReset": {
+                    "resolvedPolicy": "fresh_agent_run",
+                },
+            },
+        )
+
+        workflow_instance._apply_runtime_selection_update(
+            request,
+            {
+                "targetRuntime": "codex_cli",
+                "executionProfileRef": "codex-openai",
+            },
+        )
+        workflow_instance._synchronize_runtime_selection_authority(request)
+
+        assert request.managed_session is None
+        assert workflow_instance._managed_session_detached_for_runtime_selection
+        assert request.step_execution is not None
+        assert request.step_execution.runtime_session_reset is None
+        assert request.step_execution.runtime_selection[
+            "executionProfileRef"
+        ] == "codex-openai"
+
+    def test_runtime_selection_validation_is_non_retryable_and_sanitized(self):
+        """Invalid input edits must fail AgentRun instead of looping a workflow task."""
+        workflow_instance = MoonMindAgentRun()
+        request = _agent_request()
+        secret_value = "do-not-include-this-secret"
+
+        workflow_instance._apply_runtime_selection_update(
+            request,
+            {"parametersPatch": {"apiKey": secret_value}},
+        )
+
+        with pytest.raises(ApplicationError) as exc_info:
+            workflow_instance._synchronize_runtime_selection_authority(request)
+
+        assert exc_info.value.type == "InvalidRuntimeSelection"
+        assert exc_info.value.non_retryable is True
+        assert secret_value not in str(exc_info.value)
+
     def test_runtime_selection_update_clears_profile_when_runtime_changes_without_new_profile(
         self,
     ):
@@ -376,6 +519,199 @@ class TestEnsureManagerAutoStart:
             not in request.parameters["authoredTaskInput"]["runtime"]
         )
         assert "profileSelector" not in request.parameters["workflow"]["runtime"]
+
+    def test_runtime_and_profile_edit_replaces_stale_launch_selection(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Awaiting-slot edits must replace every runtime launch authority."""
+
+        monkeypatch.setattr(agent_run_module.workflow, "patched", lambda _patch: True)
+        workflow_instance = MoonMindAgentRun()
+        request = _agent_request(
+            parameters={
+                "targetRuntime": "codex_cli",
+                "profileId": "codex_openai_oauth",
+                "model": "gpt-5.6-sol",
+                "requestedModel": "gpt-5.6-sol",
+                "resolvedModel": "gpt-5.6-sol",
+                "effort": "high",
+                "modelTier": 4,
+                "tierFallback": "clamp",
+                "modelTierResolution": {
+                    "providerProfileId": "codex_openai_oauth",
+                    "resolvedModel": "gpt-5.6-sol",
+                },
+                "task": {
+                    "runtime": {
+                        "mode": "codex_cli",
+                        "model": "gpt-5.6-sol",
+                        "effort": "high",
+                        "profileId": "codex_openai_oauth",
+                    }
+                },
+                "authoredTaskInput": {
+                    "runtime": {
+                        "mode": "codex_cli",
+                        "model": "gpt-5.6-sol",
+                        "effort": "high",
+                        "profileId": "codex_openai_oauth",
+                    }
+                },
+                "authoredWorkflowInput": {
+                    "runtime": {
+                        "mode": "codex_cli",
+                        "model": "gpt-5.6-sol",
+                        "effort": "high",
+                        "profileId": "codex_openai_oauth",
+                    }
+                },
+                "workflow": {
+                    "runtime": {
+                        "mode": "codex_cli",
+                        "model": "gpt-5.6-sol",
+                        "effort": "high",
+                        "profileId": "codex_openai_oauth",
+                    }
+                },
+            },
+            stepExecution={
+                "schemaVersion": "v1",
+                "workflowId": "mm:runtime-edit",
+                "runId": "run-1",
+                "logicalStepId": "node-1",
+                "executionOrdinal": 1,
+                "stepExecutionId": "mm:runtime-edit:run-1:node-1:execution:1",
+                "runtimeContextPolicy": "fresh_agent_run",
+                "runtimeSelection": {
+                    "runtimeId": "codex_cli",
+                    "model": "gpt-5.6-sol",
+                    "effort": "high",
+                    "executionProfileRef": "codex_openai_oauth",
+                },
+            },
+        )
+
+        workflow_instance._apply_runtime_selection_update(
+            request,
+            {
+                "targetRuntime": "claude_code",
+                "executionProfileRef": "claude_anthropic_oauth",
+                "parametersPatch": {
+                    "targetRuntime": "claude_code",
+                    "profileId": "claude_anthropic_oauth",
+                    "model": None,
+                    "requestedModel": None,
+                    "resolvedModel": None,
+                    "effort": None,
+                    "modelTier": None,
+                    "workflow": {
+                        "runtime": {
+                            "mode": "claude_code",
+                            "profileId": "claude_anthropic_oauth",
+                        }
+                    },
+                },
+            },
+            refresh_derived_selection=True,
+        )
+
+        assert request.agent_id == "claude_code"
+        assert request.execution_profile_ref == "claude_anthropic_oauth"
+        for field in (
+            "model",
+            "requestedModel",
+            "resolvedModel",
+            "effort",
+            "modelTierResolution",
+            "modelTier",
+            "tierFallback",
+        ):
+            assert field not in request.parameters
+        for container in (
+            "task",
+            "authoredTaskInput",
+            "authoredWorkflowInput",
+            "workflow",
+        ):
+            runtime = request.parameters[container]["runtime"]
+            assert runtime["mode"] == "claude_code"
+            assert runtime["profileId"] == "claude_anthropic_oauth"
+            assert "model" not in runtime
+            assert "effort" not in runtime
+        assert request.step_execution is not None
+        assert request.step_execution.runtime_selection == {
+            "runtimeId": "claude_code",
+            "executionProfileRef": "claude_anthropic_oauth",
+        }
+
+    def test_runtime_edit_without_tier_patch_clears_stale_tier_metadata(self):
+        """Automation runtime edits must not inherit the old profile's tier."""
+
+        workflow_instance = MoonMindAgentRun()
+        request = _agent_request(
+            parameters={
+                "targetRuntime": "codex_cli",
+                "modelTier": 4,
+                "tierFallback": "clamp",
+                "requestedModel": "gpt-5.6-sol",
+                "resolvedModel": "gpt-5.6-sol",
+                "modelTierResolution": {"resolvedModel": "gpt-5.6-sol"},
+                "workflow": {
+                    "runtime": {
+                        "mode": "codex_cli",
+                        "modelTier": 4,
+                        "tierFallback": "clamp",
+                        "requestedModel": "gpt-5.6-sol",
+                    }
+                },
+            },
+        )
+
+        workflow_instance._apply_runtime_selection_update(
+            request,
+            {
+                "targetRuntime": "claude_code",
+                "parametersPatch": {
+                    "targetRuntime": "claude_code",
+                    "workflow": {"runtime": {"mode": "claude_code"}},
+                },
+            },
+            refresh_derived_selection=True,
+        )
+
+        for field in (
+            "modelTier",
+            "tierFallback",
+            "requestedModel",
+            "resolvedModel",
+            "modelTierResolution",
+        ):
+            assert field not in request.parameters
+        assert request.parameters["workflow"]["runtime"] == {
+            "mode": "claude_code"
+        }
+
+    def test_runtime_edit_preserves_explicit_nested_model_tier(self):
+        """An explicit tier remains authoritative across a runtime edit."""
+
+        workflow_instance = MoonMindAgentRun()
+        request = _agent_request()
+
+        workflow_instance._apply_runtime_selection_update(
+            request,
+            {
+                "targetRuntime": "claude_code",
+                "parametersPatch": {
+                    "workflow": {
+                        "runtime": {"mode": "claude_code", "modelTier": 2}
+                    }
+                },
+            },
+            refresh_derived_selection=True,
+        )
+
+        assert request.parameters["workflow"]["runtime"]["modelTier"] == 2
 
     def test_runtime_selection_update_clears_profile_when_profile_patch_is_empty(
         self,
@@ -735,6 +1071,59 @@ class TestEnsureManagerAutoStart:
                 tuple_assignment_count += 1
 
         assert tuple_assignment_count == 2
+
+    def test_slot_assignment_refreshes_launch_policy_from_edited_selection(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Launch policy and step metadata must use the assigned selection."""
+
+        workflow_instance = MoonMindAgentRun()
+        request = _agent_request(
+            agentId="claude_code",
+            executionProfileRef="claude_anthropic_oauth",
+            stepExecution={
+                "schemaVersion": "v1",
+                "workflowId": "mm:runtime-edit",
+                "runId": "run-1",
+                "logicalStepId": "node-1",
+                "executionOrdinal": 1,
+                "stepExecutionId": "mm:runtime-edit:run-1:node-1:execution:1",
+                "runtimeContextPolicy": "fresh_agent_run",
+                "runtimeSelection": {},
+            },
+        )
+        assert request.step_execution is not None
+        request.step_execution.runtime_selection = None  # type: ignore[assignment]
+        observed: dict[str, object] = {}
+
+        def capture_policy(
+            policy_request: AgentExecutionRequest,
+            *,
+            use_extended_claude_no_progress_window: bool,
+        ) -> dict[str, object]:
+            observed["request"] = policy_request
+            observed["extended"] = use_extended_claude_no_progress_window
+            return {"runtime": policy_request.agent_id}
+
+        monkeypatch.setattr(
+            workflow_instance,
+            "_resiliency_policy_for_request",
+            capture_policy,
+        )
+
+        policy = workflow_instance._refresh_selection_after_slot_assignment(
+            request,
+            use_extended_claude_no_progress_window=True,
+        )
+
+        assert policy == {"runtime": "claude_code"}
+        assert observed == {"request": request, "extended": True}
+        assert request.step_execution is not None
+        assert request.step_execution.runtime_selection == {
+            "runtimeId": "claude_code",
+            "executionProfileRef": "claude_anthropic_oauth",
+        }
 
     def test_slot_wait_runtime_update_validates_after_profile_sync(self):
         """Edited exact profiles must fail fast after the refreshed profile snapshot."""

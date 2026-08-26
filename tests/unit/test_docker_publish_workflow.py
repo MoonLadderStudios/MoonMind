@@ -41,15 +41,17 @@ def test_docker_publish_generates_version_before_platform_builds() -> None:
     assert build_job["needs"] == "metadata"
 
 
-def test_docker_publish_does_not_require_submodules() -> None:
-    # MoonSpec skills are vendored real files under .agents/skills, so the
-    # image build must not depend on submodule checkout state.
+def test_docker_publish_initializes_only_required_omnigent_submodule() -> None:
+    # MoonSpec skills are vendored real files under .agents/skills, while the
+    # runtime image embeds verifier sources from the pinned Omnigent revision.
+    # Initialize that one required source without cloning unrelated submodules.
     workflow = _load_workflow()
 
+    build_steps = workflow["jobs"]["build"]["steps"]
     checkout = next(
         (
             step
-            for step in workflow["jobs"]["build"]["steps"]
+            for step in build_steps
             if step.get("uses", "").startswith("actions/checkout@")
         ),
         None,
@@ -57,6 +59,17 @@ def test_docker_publish_does_not_require_submodules() -> None:
 
     assert checkout is not None, "Checkout step not found"
     assert "submodules" not in checkout.get("with", {})
+
+    initialize = next(
+        (
+            step
+            for step in build_steps
+            if step.get("name") == "Initialize pinned Omnigent verifier source"
+        ),
+        None,
+    )
+    assert initialize is not None, "Pinned Omnigent initialization step not found"
+    assert initialize["run"] == "git submodule update --init --depth 1 -- omnigent"
 
 
 def test_app_image_ships_vendored_skills_without_moonspec_submodule() -> None:
@@ -92,9 +105,8 @@ def test_docker_publish_passes_manifest_tag_into_image_build_metadata() -> None:
 
 
 def test_docker_publish_writes_build_summary_for_promotion() -> None:
-    # The app build mirrors the PentestGPT runner summary so an operator can copy
-    # the version tag / digest straight into the Promote GHCR image to stable
-    # workflow. `latest` stays the automatic current-build channel.
+    # The summary lets an operator copy the version tag and digest straight into
+    # the Release / Promote Stable workflow.
     workflow = _load_workflow()
     merge_steps = workflow["jobs"]["merge"]["steps"]
 
@@ -112,21 +124,10 @@ def test_docker_publish_writes_build_summary_for_promotion() -> None:
     assert 'docker buildx imagetools inspect "${IMAGE_NAME}:latest"' in run
     assert "{{.Manifest.Digest}}" in run
     assert "${IMAGE_NAME}:${VERSION}@${DIGEST}" in run
-    assert "Promote GHCR image to stable" in run
+    assert "Release / Promote Stable" in run
     assert "VERSION=\"${{ needs.metadata.outputs.version_tag }}\"" in run
 
 
-def test_docker_publish_no_longer_builds_pentestgpt_runner() -> None:
-    # MM-867: PentestGPT runner publishing lives in pentestgpt-runner.yml so
-    # runner-only changes do not publish the app image.
-    workflow = _load_workflow()
-    jobs = workflow["jobs"]
-    metadata_outputs = jobs["metadata"].get("outputs", {})
-
-    assert "PENTEST_RUNNER_VULN_SEVERITY_THRESHOLD" not in workflow.get("env", {})
-    assert "pentest_image_name" not in metadata_outputs
-    assert "build-pentestgpt" not in jobs
-    assert "merge-pentestgpt" not in jobs
 
 
 def test_docker_publish_frontend_checks_do_not_duplicate_production_build() -> None:
@@ -164,7 +165,7 @@ def test_dockerfile_uses_buildkit_package_cache_mounts() -> None:
     assert 'Binary::apt::APT::Keep-Downloaded-Packages "true";' in dockerfile
     assert (
         dockerfile.count('Binary::apt::APT::Keep-Downloaded-Packages "true";')
-        == 3
+        == 4
     )
 
 
@@ -222,11 +223,15 @@ def test_runtime_project_install_precedes_non_package_asset_copies() -> None:
     dockerfile = DOCKERFILE_PATH.read_text(encoding="utf-8")
 
     moonmind_copy_index = dockerfile.index("COPY moonmind /app/moonmind/")
+    resolver_core_copy_index = dockerfile.index(
+        "COPY pr_resolver_core /app/pr_resolver_core/"
+    )
     project_install_index = dockerfile.index(
         "pip install --disable-pip-version-check --no-deps ."
     )
 
     assert moonmind_copy_index < project_install_index
+    assert resolver_core_copy_index < project_install_index
     for copied_path in (
         "COPY api_service /app/api_service/",
         "COPY config /app/config/",

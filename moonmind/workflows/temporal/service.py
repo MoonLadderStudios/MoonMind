@@ -18,7 +18,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from pydantic import ValidationError
-from sqlalchemy import Select, case, func, select
+from sqlalchemy import Select, case, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,7 +38,10 @@ from api_service.db.models import (
     TemporalExecutionRemediationLink,
     TemporalIntegrationCorrelationRecord,
     TemporalWorkflowType,
+    WorkflowCheckpointBranch,
+    WorkflowCheckpointBranchArtifact,
     WorkflowCheckpointBranchOperation,
+    WorkflowCheckpointBranchTurn,
 )
 from moonmind.config.settings import settings
 from moonmind.security import scan_outbound_text
@@ -65,6 +68,7 @@ from moonmind.schemas.temporal_models import (
     RecoverySourceModel,
     has_user_workflow_plan_source,
 )
+from moonmind.schemas.workflow_recovery_models import WorkflowRecoveryTargetModel
 from moonmind.services.skill_step_inputs import validate_skill_step_inputs
 from moonmind.security.outbound_scan import scan_outbound_text
 from moonmind.workflows.temporal.client import TemporalClientAdapter
@@ -73,6 +77,17 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactService,
 )
 from moonmind.workflows.temporal.checkpoint_policy import resolve_checkpoint_policy
+from moonmind.workflows.temporal.activity_catalog import (
+    TemporalActivityCatalogError,
+    build_default_activity_catalog,
+)
+from moonmind.workflows.executions.runtime_capabilities import (
+    resolve_runtime_execution_capabilities,
+)
+from moonmind.workflows.executions.repository_contract import (
+    repository_branch_from_value,
+    repository_name_from_value,
+)
 from moonmind.workflows.temporal.hard_switch_cutover import (
     resolve_user_workflow_start_contract,
 )
@@ -106,12 +121,19 @@ from moonmind.workflows.executions.preset_expansion import (
     has_unexpanded_task_template,
 )
 from moonmind.workflows.executions.title_derivation import synthesize_execution_title
-from moonmind.workflows.temporal.remediation_context import RemediationContextBuilder
+from moonmind.workflows.executions.checkpoint_resume_admission import (
+    AdmittedCheckpointResumeDecision,
+)
+from moonmind.workflows.temporal.remediation_context import (
+    RemediationContextBuilder,
+    RemediationLifecyclePublisher,
+)
 from moonmind.workflows.temporal.title_search import tokenize_title
 
 TERMINAL_STATES: frozenset[MoonMindWorkflowState] = TERMINAL_WORKFLOW_STATES
 SEND_MESSAGE_SCAN_LOCATION = "execution.send_message.message"
 CREATE_IDEMPOTENCY_KEY_MAX_LENGTH = 128
+_BEST_EFFORT_SESSION_TERMINATION_TIMEOUT_SECONDS = 5.0
 FULL_RERUN_RECOVERY_CARRYOVER_PARAM_KEYS = frozenset(
     {
         "recoverySource",
@@ -195,7 +217,39 @@ def _blocked_send_message_reason(diagnostics: list[str]) -> str:
     return f"Blocked outbound content at {SEND_MESSAGE_SCAN_LOCATION}"
 
 
-def _merge_automation_publish_selected(parameters: Mapping[str, Any]) -> bool:
+_MERGE_AUTOMATION_PR_TARGET_KEYS = (
+    "selector",
+    "number",
+    "prNumber",
+    "pr_number",
+    "url",
+    "prUrl",
+    "pr_url",
+    "branch",
+)
+
+
+def _names_a_pull_request(target: object) -> bool:
+    """Return whether *target* identifies a pull request that already exists."""
+
+    if isinstance(target, Mapping):
+        return any(
+            str(target.get(key) or "").strip()
+            for key in _MERGE_AUTOMATION_PR_TARGET_KEYS
+        )
+    return bool(str(target or "").strip())
+
+
+def _merge_automation_selected(parameters: Mapping[str, Any]) -> bool:
+    """Return whether this submission needs the merge-automation worker group.
+
+    Merge automation is selected either by publishing a pull request with the
+    gate enabled, or by targeting an existing pull request directly. A preset
+    that resolves an existing PR publishes nothing of its own (``mode: none``)
+    because the gate owns every commit, review request, and merge, so publish
+    mode alone cannot decide the task queue.
+    """
+
     task_payload = _workflow_payload(parameters)
     task_publish = _mapping_payload(task_payload.get("publish"))
     publish_payload = _mapping_payload(parameters.get("publish"))
@@ -207,8 +261,6 @@ def _merge_automation_publish_selected(parameters: Mapping[str, Any]) -> bool:
         or publish_payload.get("mode")
         or ""
     ).strip().lower()
-    if publish_mode != "pr":
-        return False
 
     candidates = (
         publish_payload.get("mergeAutomation")
@@ -217,15 +269,28 @@ def _merge_automation_publish_selected(parameters: Mapping[str, Any]) -> bool:
         task_publish.get("mergeAutomation") or task_publish.get("merge_automation"),
         parameters.get("mergeAutomation") or parameters.get("merge_automation"),
     )
-    return any(
-        isinstance(candidate, Mapping)
-        and _truthy_enabled(candidate.get("enabled"))
-        for candidate in candidates
-    )
+    for candidate in candidates:
+        if not isinstance(candidate, Mapping) or not _truthy_enabled(
+            candidate.get("enabled")
+        ):
+            continue
+        if publish_mode == "pr":
+            return True
+        if _names_a_pull_request(
+            candidate.get("pullRequest") or candidate.get("pull_request")
+        ):
+            return True
+        if _truthy_enabled(
+            _mapping_payload(
+                candidate.get("reviewLoop") or candidate.get("review_loop")
+            ).get("enabled")
+        ):
+            return True
+    return False
 
 
 def _workflow_start_task_queue(parameters: Mapping[str, Any]) -> str | None:
-    if not _merge_automation_publish_selected(parameters):
+    if not _merge_automation_selected(parameters):
         return None
     return settings.temporal.merge_automation_workflow_task_queue
 
@@ -233,6 +298,13 @@ def _workflow_start_task_queue(parameters: Mapping[str, Any]) -> str | None:
 ALLOWED_REMEDIATION_AUTHORITY_MODES = frozenset(
     {"observe_only", "approval_gated", "admin_auto"}
 )
+ALLOWED_REMEDIATION_MODES = frozenset(
+    {"snapshot", "live_follow", "snapshot_then_follow"}
+)
+MAX_REMEDIATION_STEP_SELECTORS = 25
+MAX_REMEDIATION_CHECKPOINT_BRANCH_LINKS = 10
+MAX_REMEDIATION_CHECKPOINT_BRANCH_TURNS = 25
+MAX_REMEDIATION_CHECKPOINT_BRANCH_ARTIFACTS = 500
 
 
 def _first_nonempty_text(*values: Any) -> str | None:
@@ -624,6 +696,16 @@ class TemporalExecutionService:
             f"{path} must use a MoonMind artifact ref."
         )
 
+    @staticmethod
+    def _autonomous_remediation_release_authorized() -> bool:
+        """Read the server-owned gate lazily to avoid workflow import cycles."""
+
+        from moonmind.omnigent.remediation_matrix import (
+            load_remediation_release_status,
+        )
+
+        return load_remediation_release_status().autonomous_rollout_authorized
+
     async def _validate_remediation_link(
         self,
         *,
@@ -632,6 +714,7 @@ class TemporalExecutionService:
         new_run_id: str,
         owner_id: str | None,
         owner_type: TemporalExecutionOwnerType,
+        submission_parameters: Mapping[str, Any],
     ) -> TemporalExecutionRemediationLink:
         target = remediation.get("target")
         if not isinstance(target, Mapping):
@@ -671,6 +754,40 @@ class TemporalExecutionService:
                 f"'{authority_mode}'. Supported values: {supported}."
             )
 
+        remediation_mode = str(
+            remediation.get("mode") or "snapshot_then_follow"
+        ).strip() or "snapshot_then_follow"
+        if remediation_mode not in ALLOWED_REMEDIATION_MODES:
+            supported = ", ".join(sorted(ALLOWED_REMEDIATION_MODES))
+            raise TemporalExecutionValidationError(
+                "Unsupported workflow.remediation.mode "
+                f"'{remediation_mode}'. Supported values: {supported}."
+            )
+
+        authored_branch = repository_branch_from_value(
+            submission_parameters.get("repository")
+        )
+        if authored_branch:
+            self._validate_remediation_git_branch(
+                authored_branch,
+                path="repository.branch.name",
+                allow_protected=True,
+            )
+        task_payload = _workflow_payload(submission_parameters)
+        publish_payload = task_payload.get("publish")
+        publish_payload = (
+            publish_payload if isinstance(publish_payload, Mapping) else {}
+        )
+        publish_mode = str(
+            publish_payload.get("mode")
+            or submission_parameters.get("publishMode")
+            or ""
+        ).strip()
+        if publish_mode and publish_mode not in {"auto", "none", "branch", "pr"}:
+            raise TemporalExecutionValidationError(
+                "workflow.publish.mode is unsupported for remediation."
+            )
+
         target_record = await self._session.get(
             TemporalExecutionCanonicalRecord, target_workflow_id
         )
@@ -686,6 +803,15 @@ class TemporalExecutionService:
         ):
             raise TemporalExecutionValidationError(
                 f"Remediation target unauthorized: {target_workflow_id}"
+            )
+        if (
+            authority_mode == "admin_auto"
+            and not self._autonomous_remediation_release_authorized()
+        ):
+            raise TemporalExecutionValidationError(
+                "workflow.remediation.authorityMode 'admin_auto' is disabled until "
+                "the server-owned MoonLadderStudios/MoonMind#3626 operator "
+                "remediation release gate authorizes autonomous rollout."
             )
         if getattr(target_record, "workflow_type", None) is not TemporalWorkflowType.USER_WORKFLOW:
             wf_type_value = getattr(
@@ -728,13 +854,17 @@ class TemporalExecutionService:
                 raise TemporalExecutionValidationError(
                     "workflow.remediation.target.agentRunIds must be a list of strings."
                 )
+            if len(agent_run_ids) > MAX_REMEDIATION_STEP_SELECTORS:
+                raise TemporalExecutionValidationError(
+                    "workflow.remediation.target.agentRunIds must contain at most "
+                    f"{MAX_REMEDIATION_STEP_SELECTORS} items."
+                )
             allowed_agent_run_ids = self._target_agent_run_ids(target_record)
-            if allowed_agent_run_ids:
-                requested_agent_run_ids = {str(item).strip() for item in agent_run_ids}
-                if not requested_agent_run_ids.issubset(allowed_agent_run_ids):
-                    raise TemporalExecutionValidationError(
-                        "workflow.remediation.target.agentRunIds must belong to the target execution."
-                    )
+            requested_agent_run_ids = {str(item).strip() for item in agent_run_ids}
+            if not requested_agent_run_ids.issubset(allowed_agent_run_ids):
+                raise TemporalExecutionValidationError(
+                    "workflow.remediation.target.agentRunIds must belong to the target execution."
+                )
         step_selectors = (
             target.get("stepSelectors")
             if "stepSelectors" in target
@@ -747,17 +877,139 @@ class TemporalExecutionService:
                 raise TemporalExecutionValidationError(
                     "workflow.remediation.target.stepSelectors must be a list of objects."
                 )
+            if len(step_selectors) > MAX_REMEDIATION_STEP_SELECTORS:
+                raise TemporalExecutionValidationError(
+                    "workflow.remediation.target.stepSelectors must contain at most "
+                    f"{MAX_REMEDIATION_STEP_SELECTORS} items."
+                )
+            selector_identity = self._target_step_selector_identity(target_record)
             for item in step_selectors:
+                logical_step_id = str(
+                    item.get("logicalStepId")
+                    or item.get("logical_step_id")
+                    or item.get("stepId")
+                    or item.get("step_id")
+                    or ""
+                ).strip()
                 checkpoint_ref = str(
                     item.get("checkpointRef") or item.get("checkpoint_ref") or ""
                 ).strip()
+                agent_run_id = str(
+                    item.get("agentRunId") or item.get("agent_run_id") or ""
+                ).strip()
+                step_execution_id = str(
+                    item.get("stepExecutionId")
+                    or item.get("step_execution_id")
+                    or ""
+                ).strip()
+                if (
+                    not logical_step_id
+                    and not checkpoint_ref
+                    and not agent_run_id
+                    and not step_execution_id
+                ):
+                    raise TemporalExecutionValidationError(
+                        "workflow.remediation.target.stepSelectors entries must identify a step, Step Execution, checkpoint, or Agent Run."
+                    )
                 if checkpoint_ref and not checkpoint_ref.startswith("artifact://"):
                     raise TemporalExecutionValidationError(
                         "workflow.remediation.target.stepSelectors checkpointRef must be an artifact ref."
                     )
+                if (
+                    logical_step_id
+                    and logical_step_id not in selector_identity["logical_step_ids"]
+                ):
+                    raise TemporalExecutionValidationError(
+                        "workflow.remediation.target.stepSelectors logicalStepId must belong to the target execution."
+                    )
+                if (
+                    checkpoint_ref
+                    and checkpoint_ref not in selector_identity["checkpoint_refs"]
+                ):
+                    raise TemporalExecutionValidationError(
+                        "workflow.remediation.target.stepSelectors checkpointRef must belong to the target execution."
+                    )
+                if (
+                    agent_run_id
+                    and agent_run_id not in selector_identity["agent_run_ids"]
+                ):
+                    raise TemporalExecutionValidationError(
+                        "workflow.remediation.target.stepSelectors agentRunId must belong to the target execution."
+                    )
+                if (
+                    step_execution_id
+                    and step_execution_id
+                    not in selector_identity["step_execution_ids"]
+                ):
+                    raise TemporalExecutionValidationError(
+                        "workflow.remediation.target.stepSelectors stepExecutionId must belong to the target execution."
+                    )
+                attempt = item.get("attempt")
+                if attempt is not None and (
+                    isinstance(attempt, bool)
+                    or not isinstance(attempt, int)
+                    or attempt < 1
+                ):
+                    raise TemporalExecutionValidationError(
+                        "workflow.remediation.target.stepSelectors attempt must be a positive integer."
+                    )
+                if attempt is not None:
+                    known_attempts = selector_identity[
+                        "attempts_by_logical_step"
+                    ].get(logical_step_id, set())
+                    if not logical_step_id or attempt not in known_attempts:
+                        raise TemporalExecutionValidationError(
+                            "workflow.remediation.target.stepSelectors attempt must match the target Step Execution."
+                        )
+                checkpoint_digest = str(
+                    item.get("checkpointDigest")
+                    or item.get("checkpoint_digest")
+                    or ""
+                ).strip()
+                known_digests = selector_identity["checkpoint_digests"].get(
+                    checkpoint_ref, set()
+                )
+                if checkpoint_digest and checkpoint_digest not in known_digests:
+                    raise TemporalExecutionValidationError(
+                        "workflow.remediation.target.stepSelectors checkpointDigest must match the target checkpoint."
+                    )
+                supplied_identity = {
+                    key: value
+                    for key, value in {
+                        "logical_step_id": logical_step_id,
+                        "step_execution_id": step_execution_id,
+                        "checkpoint_ref": checkpoint_ref,
+                        "checkpoint_digest": checkpoint_digest,
+                        "agent_run_id": agent_run_id,
+                        "attempt": attempt,
+                    }.items()
+                    if value not in {None, ""}
+                }
+                if not any(
+                    all(
+                        candidate.get(key) == value
+                        for key, value in supplied_identity.items()
+                    )
+                    for candidate in selector_identity["canonical_tuples"]
+                ):
+                    raise TemporalExecutionValidationError(
+                        "workflow.remediation.target.stepSelectors fields must identify one target Step Execution/checkpoint."
+                    )
 
         evidence_policy = remediation.get("evidencePolicy")
         self._validate_remediation_evidence_policy(evidence_policy)
+        for policy_name in (
+            "approvalPolicy",
+            "lockPolicy",
+            "verificationPolicy",
+        ):
+            policy = remediation.get(policy_name)
+            if policy is None:
+                continue
+            if not isinstance(policy, Mapping):
+                raise TemporalExecutionValidationError(
+                    f"workflow.remediation.{policy_name} must be an object."
+                )
         checkpoint_branch_policy = remediation.get("checkpointBranchPolicy")
         if checkpoint_branch_policy is not None:
             if not isinstance(checkpoint_branch_policy, Mapping):
@@ -783,11 +1035,37 @@ class TemporalExecutionService:
                 raise TemporalExecutionValidationError(
                     "workflow.remediation.checkpointBranchPolicy.runtimeContextPolicy must be fresh_agent_run."
                 )
+            workspace_policy = str(
+                checkpoint_branch_policy.get("workspacePolicy") or ""
+            ).strip()
+            if workspace_policy and workspace_policy not in {
+                "continue_from_previous_execution",
+                "restore_pre_execution",
+                "apply_previous_execution_diff_to_clean_baseline",
+                "start_from_last_passed_commit",
+                "fresh_branch_from_source",
+            }:
+                raise TemporalExecutionValidationError(
+                    "workflow.remediation.checkpointBranchPolicy.workspacePolicy is unsupported."
+                )
+            work_branch = str(
+                checkpoint_branch_policy.get("gitWorkBranch") or ""
+            ).strip()
+            if work_branch:
+                self._validate_remediation_git_branch(
+                    work_branch,
+                    path="workflow.remediation.checkpointBranchPolicy.gitWorkBranch",
+                    allow_protected=False,
+                )
 
         trigger = remediation.get("trigger")
         trigger_type = None
         if isinstance(trigger, Mapping):
             trigger_type = str(trigger.get("type") or "").strip() or None
+        elif trigger is not None:
+            raise TemporalExecutionValidationError(
+                "workflow.remediation.trigger must be an object."
+            )
         action_policy_ref = str(remediation.get("actionPolicyRef") or "").strip()
         if (
             action_policy_ref
@@ -804,8 +1082,7 @@ class TemporalExecutionService:
             remediation_run_id=new_run_id,
             target_workflow_id=target_record.workflow_id,
             target_run_id=target_record.run_id,
-            mode=str(remediation.get("mode") or "snapshot_then_follow").strip()
-            or "snapshot_then_follow",
+            mode=remediation_mode,
             authority_mode=authority_mode,
             status="created",
             trigger_type=trigger_type,
@@ -823,6 +1100,166 @@ class TemporalExecutionService:
         ):
             cls._collect_agent_run_ids(payload, output)
         return output
+
+    @staticmethod
+    def _validate_remediation_git_branch(
+        value: str, *, path: str, allow_protected: bool
+    ) -> None:
+        parts = value.split("/")
+        invalid = (
+            len(value) > 255
+            or value != value.strip()
+            or value.startswith(("/", "-", "refs/"))
+            or value.endswith(("/", ".", ".lock"))
+            or "//" in value
+            or ".." in value
+            or "@{" in value
+            or any(character in value for character in " ~^:?*[\\")
+            or any(ord(character) < 32 or ord(character) == 127 for character in value)
+            or any(part.startswith(".") or part.endswith(".lock") for part in parts)
+        )
+        protected = value.lower() in {"main", "master", "head"}
+        if invalid or (protected and not allow_protected):
+            raise TemporalExecutionValidationError(
+                f"{path} is not an allowed git branch."
+            )
+
+    @classmethod
+    def _target_step_selector_identity(
+        cls, record: TemporalExecutionCanonicalRecord
+    ) -> dict[str, Any]:
+        """Collect target-owned selector identity from canonical persisted state.
+
+        Remediation authoring may copy selectors from several bounded target
+        projections, but create admission must never trust those posted values.
+        The canonical record remains the source of truth for exact membership.
+        """
+
+        output: dict[str, Any] = {
+            "logical_step_ids": set(),
+            "step_execution_ids": set(),
+            "attempts_by_logical_step": {},
+            "checkpoint_refs": set(),
+            "checkpoint_digests": {},
+            "agent_run_ids": set(),
+            "canonical_tuples": [],
+        }
+        for payload in (
+            getattr(record, "parameters", None),
+            getattr(record, "memo", None),
+            getattr(record, "search_attributes", None),
+            getattr(record, "finish_summary_json", None),
+            getattr(record, "integration_state", None),
+        ):
+            cls._collect_target_step_selector_identity(payload, output)
+        cls._collect_agent_run_ids(
+            {
+                "artifactRefs": getattr(record, "artifact_refs", None),
+            },
+            output["agent_run_ids"],
+        )
+        return output
+
+    @classmethod
+    def _collect_target_step_selector_identity(
+        cls,
+        value: Any,
+        output: dict[str, Any],
+        inherited: Mapping[str, Any] | None = None,
+    ) -> None:
+        if isinstance(value, Mapping):
+            canonical = dict(inherited or {})
+            logical_step_id = str(
+                value.get("logicalStepId")
+                or value.get("logical_step_id")
+                or value.get("stepId")
+                or value.get("step_id")
+                or ""
+            ).strip()
+            if logical_step_id:
+                output["logical_step_ids"].add(logical_step_id)
+                canonical["logical_step_id"] = logical_step_id
+
+            step_execution_id = str(
+                value.get("stepExecutionId")
+                or value.get("step_execution_id")
+                or ""
+            ).strip()
+            if step_execution_id:
+                output["step_execution_ids"].add(step_execution_id)
+                canonical["step_execution_id"] = step_execution_id
+
+            attempt = value.get("attempt")
+            if (
+                logical_step_id
+                and isinstance(attempt, int)
+                and not isinstance(attempt, bool)
+                and attempt > 0
+            ):
+                output["attempts_by_logical_step"].setdefault(
+                    logical_step_id, set()
+                ).add(attempt)
+                canonical["attempt"] = attempt
+
+            checkpoint_digest = str(
+                value.get("checkpointDigest")
+                or value.get("checkpoint_digest")
+                or ""
+            ).strip()
+            checkpoint_refs: list[str] = []
+            for key in (
+                "checkpointRef",
+                "checkpoint_ref",
+                "stateCheckpointRef",
+                "stepCheckpointRef",
+                "checkpointBeforeRef",
+                "checkpointAfterRef",
+            ):
+                checkpoint_ref = str(value.get(key) or "").strip()
+                if not checkpoint_ref:
+                    continue
+                output["checkpoint_refs"].add(checkpoint_ref)
+                checkpoint_refs.append(checkpoint_ref)
+                if checkpoint_digest:
+                    output["checkpoint_digests"].setdefault(
+                        checkpoint_ref, set()
+                    ).add(checkpoint_digest)
+            refs_by_boundary = value.get("checkpointRefsByBoundary")
+            if isinstance(refs_by_boundary, Mapping):
+                for item in refs_by_boundary.values():
+                    checkpoint_ref = str(item or "").strip()
+                    if checkpoint_ref:
+                        output["checkpoint_refs"].add(checkpoint_ref)
+                        checkpoint_refs.append(checkpoint_ref)
+
+            agent_run_id = str(
+                value.get("agentRunId") or value.get("agent_run_id") or ""
+            ).strip()
+            if agent_run_id:
+                output["agent_run_ids"].add(agent_run_id)
+                canonical["agent_run_id"] = agent_run_id
+            if checkpoint_digest:
+                canonical["checkpoint_digest"] = checkpoint_digest
+            for checkpoint_ref in dict.fromkeys(checkpoint_refs):
+                output["canonical_tuples"].append(
+                    {**canonical, "checkpoint_ref": checkpoint_ref}
+                )
+            if canonical and not checkpoint_refs:
+                output["canonical_tuples"].append(dict(canonical))
+
+            child_identity = {
+                key: item
+                for key, item in canonical.items()
+                if key != "checkpoint_digest"
+            }
+            for item in value.values():
+                cls._collect_target_step_selector_identity(
+                    item, output, child_identity
+                )
+            return
+        if isinstance(value, list | tuple):
+            for item in value:
+                cls._collect_target_step_selector_identity(item, output, inherited)
 
     @classmethod
     def _collect_agent_run_ids(cls, value: Any, output: set[str]) -> None:
@@ -876,9 +1313,7 @@ class TemporalExecutionService:
             TemporalExecutionRemediationLink.updated_at.desc(),
             TemporalExecutionRemediationLink.remediation_workflow_id.asc(),
         )
-        links = await self._scalars_all(stmt)
-        await self._attach_remediation_checkpoint_branch_links(links)
-        return links
+        return await self._scalars_all(stmt)
 
     async def list_remediations_for_target(
         self, target_workflow_id: str
@@ -914,16 +1349,104 @@ class TemporalExecutionService:
         }
         if not remediation_ids or not target_ids:
             return
-        result = await self._session.execute(
-            select(WorkflowCheckpointBranchOperation).where(
+        operation_result = await self._session.execute(
+            select(WorkflowCheckpointBranchOperation)
+            .where(
                 WorkflowCheckpointBranchOperation.workflow_id.in_(target_ids),
                 WorkflowCheckpointBranchOperation.operation == "checkpoint_branch.create",
+                or_(
+                    WorkflowCheckpointBranchOperation.response_payload[
+                        "remediation"
+                    ]["workflowId"].as_string().in_(remediation_ids),
+                    WorkflowCheckpointBranchOperation.response_payload[
+                        "remediation"
+                    ]["remediationWorkflowId"].as_string().in_(remediation_ids),
+                ),
+            )
+            .order_by(WorkflowCheckpointBranchOperation.created_at.desc())
+            .limit(MAX_REMEDIATION_CHECKPOINT_BRANCH_LINKS)
+        )
+        operations = list(operation_result.scalars())
+        branch_ids = {
+            str(operation.branch_id)
+            for operation in operations
+            if operation.branch_id
+        }
+        if not branch_ids:
+            return
+        branch_result = await self._session.execute(
+            select(WorkflowCheckpointBranch).where(
+                WorkflowCheckpointBranch.branch_id.in_(branch_ids)
             )
         )
+        branches_by_id = {
+            branch.branch_id: branch for branch in branch_result.scalars()
+        }
+        turns_by_id: dict[str, WorkflowCheckpointBranchTurn] = {}
+        turns_by_branch: dict[str, list[WorkflowCheckpointBranchTurn]] = {}
+        artifacts_by_branch: dict[str, dict[str, dict[str, str]]] = {}
+        artifacts_by_turn: dict[str, dict[str, dict[str, str]]] = {}
+        if branch_ids:
+            for branch_id in sorted(branch_ids):
+                turn_result = await self._session.execute(
+                    select(WorkflowCheckpointBranchTurn)
+                    .where(WorkflowCheckpointBranchTurn.branch_id == branch_id)
+                    .order_by(
+                        WorkflowCheckpointBranchTurn.created_at.desc(),
+                        WorkflowCheckpointBranchTurn.branch_turn_id.desc(),
+                    )
+                    .limit(MAX_REMEDIATION_CHECKPOINT_BRANCH_TURNS)
+                )
+                branch_turns = list(turn_result.scalars())
+                branch_turns.reverse()
+                for turn in branch_turns:
+                    turns_by_id[turn.branch_turn_id] = turn
+                    turns_by_branch.setdefault(turn.branch_id, []).append(turn)
+            selected_turn_ids = set(turns_by_id)
+            artifact_result = await self._session.execute(
+                select(WorkflowCheckpointBranchArtifact)
+                .where(
+                    WorkflowCheckpointBranchArtifact.branch_id.in_(branch_ids),
+                    or_(
+                        WorkflowCheckpointBranchArtifact.branch_turn_id.is_(None),
+                        WorkflowCheckpointBranchArtifact.branch_turn_id.in_(
+                            selected_turn_ids
+                        ),
+                    ),
+                )
+                .order_by(
+                    WorkflowCheckpointBranchArtifact.created_at.desc(),
+                    WorkflowCheckpointBranchArtifact.artifact_kind.desc(),
+                )
+                .limit(MAX_REMEDIATION_CHECKPOINT_BRANCH_ARTIFACTS)
+            )
+            artifacts = list(artifact_result.scalars())
+            artifacts.reverse()
+            for artifact in artifacts:
+                artifact_kind = str(artifact.artifact_kind or "").strip()
+                artifact_ref = str(artifact.artifact_ref or "").strip()
+                if not artifact_kind or not artifact_ref:
+                    continue
+                if artifact_kind.startswith(
+                    ("comparison.", "output.branch_comparison.")
+                ):
+                    category = "comparisonArtifacts"
+                elif artifact_kind.startswith("output."):
+                    category = "outputArtifacts"
+                else:
+                    continue
+                if artifact.branch_turn_id:
+                    artifacts_by_turn.setdefault(
+                        artifact.branch_turn_id, {}
+                    ).setdefault(category, {})[artifact_kind] = artifact_ref
+                else:
+                    artifacts_by_branch.setdefault(
+                        artifact.branch_id, {}
+                    ).setdefault(category, {})[artifact_kind] = artifact_ref
         branch_links_by_remediation: dict[str, list[dict[str, Any]]] = {
             remediation_id: [] for remediation_id in remediation_ids
         }
-        for operation in result.scalars():
+        for operation in reversed(operations):
             payload = operation.response_payload
             if not isinstance(payload, Mapping):
                 continue
@@ -948,6 +1471,114 @@ class TemporalExecutionService:
                 or remediation.get("checkpointRef"),
                 "contextArtifactRef": remediation.get("contextArtifactRef"),
             }
+            branch = branches_by_id.get(operation.branch_id)
+            turn = turns_by_id.get(str(operation.branch_turn_id or ""))
+            if branch is not None:
+                branch_link.update(
+                    {
+                        "logicalStepId": branch.logical_step_id,
+                        "branchState": branch.state,
+                        "workspacePolicy": branch.workspace_policy,
+                        "runtimeContextPolicy": branch.runtime_context_policy,
+                        "gitBaseBranch": branch.git_base_branch,
+                        "gitWorkBranch": branch.git_work_branch,
+                        "currentHeadCommit": branch.current_head_commit,
+                        "pullRequestUrl": branch.pull_request_url,
+                        "publishStatus": branch.publish_status,
+                        "promotionEvidence": branch.promotion_evidence,
+                        "archiveReason": branch.archive_reason,
+                        "promotedAt": (
+                            branch.promoted_at.isoformat()
+                            if branch.promoted_at
+                            else None
+                        ),
+                        "archivedAt": (
+                            branch.archived_at.isoformat()
+                            if branch.archived_at
+                            else None
+                        ),
+                    }
+                )
+                branch_link.update(artifacts_by_branch.get(branch.branch_id, {}))
+                branch_link["turns"] = [
+                    {
+                        "branchTurnId": branch_turn.branch_turn_id,
+                        "parentTurnId": branch_turn.parent_turn_id,
+                        "status": branch_turn.status,
+                        "createdStepExecutionId": branch_turn.created_step_execution_id,
+                        "runtimeAgentRunId": branch_turn.runtime_agent_run_id,
+                        "providerSessionId": branch_turn.provider_session_id,
+                        "instructionRef": branch_turn.instruction_ref,
+                        "instructionDigest": branch_turn.instruction_digest,
+                        "sourceCheckpointRef": branch_turn.source_checkpoint_ref,
+                        "contextBundleRef": branch_turn.context_bundle_ref,
+                        "stepExecutionManifestRef": (
+                            branch_turn.step_execution_manifest_ref
+                        ),
+                        "gitWorkBranch": branch_turn.git_work_branch,
+                        "startedAt": (
+                            branch_turn.started_at.isoformat()
+                            if branch_turn.started_at
+                            else None
+                        ),
+                        "completedAt": (
+                            branch_turn.completed_at.isoformat()
+                            if branch_turn.completed_at
+                            else None
+                        ),
+                        "createdAt": branch_turn.created_at.isoformat(),
+                        "updatedAt": branch_turn.updated_at.isoformat(),
+                        **artifacts_by_turn.get(branch_turn.branch_turn_id, {}),
+                    }
+                    for branch_turn in turns_by_branch.get(branch.branch_id, [])
+                ]
+            if turn is not None:
+                branch_link.update(
+                    {
+                        "turnState": turn.status,
+                        "runtimeAgentRunId": turn.runtime_agent_run_id,
+                        "providerSessionId": turn.provider_session_id,
+                        "instructionRef": turn.instruction_ref,
+                        "turnStartedAt": (
+                            turn.started_at.isoformat() if turn.started_at else None
+                        ),
+                        "turnCompletedAt": (
+                            turn.completed_at.isoformat()
+                            if turn.completed_at
+                            else None
+                        ),
+                    }
+                )
+            if branch is not None and branch.remediation_loop_id:
+                remaining_work_ref = (branch.artifact_refs or {}).get(
+                    "remediationRemainingWork"
+                )
+                branch_link.update(
+                    {
+                        "loopId": branch.remediation_loop_id,
+                        "rootCheckpointRef": branch.source_checkpoint_ref,
+                        "rootWorkspaceDigest": branch.source_checkpoint_digest,
+                        "headCheckpointRef": branch.current_head_checkpoint_ref,
+                        "headWorkspaceDigest": branch.current_head_checkpoint_digest,
+                        "headStepExecutionId": branch.current_head_step_execution_id,
+                        "headAttemptOrdinal": branch.current_head_attempt_ordinal,
+                        "headVersion": branch.current_head_version,
+                        "headStatus": branch.remediation_head_status,
+                        "latestVerificationRef": branch.latest_verification_ref,
+                        "latestVerificationVerdict": branch.latest_verification_verdict,
+                        "remainingWorkRef": remaining_work_ref,
+                    }
+                )
+                if (
+                    branch.current_head_checkpoint_ref
+                    and branch.current_head_checkpoint_digest
+                    and branch.current_head_version is not None
+                ):
+                    branch_link["nextActionBaseline"] = {
+                        "checkpointRef": branch.current_head_checkpoint_ref,
+                        "workspaceDigest": branch.current_head_checkpoint_digest,
+                        "headVersion": branch.current_head_version,
+                    }
             branch_links_by_remediation[remediation_workflow_id].append(
                 {key: value for key, value in branch_link.items() if value is not None}
             )
@@ -966,6 +1597,7 @@ class TemporalExecutionService:
         decision: str,
         comment: str | None,
         actor: str | None,
+        actor_can_approve_high_risk: bool = False,
     ) -> dict[str, Any]:
         if decision not in {"approved", "rejected"}:
             raise TemporalExecutionValidationError(
@@ -976,7 +1608,12 @@ class TemporalExecutionService:
             TemporalExecutionRemediationLink,
             remediation_workflow_id,
         )
-        expected_request_id = f"{remediation_workflow_id}:approval"
+        approval = link.approval_state if link is not None else None
+        expected_request_id = (
+            str(approval.get("requestId") or "")
+            if isinstance(approval, Mapping)
+            else ""
+        )
         if (
             link is None
             or link.authority_mode != "approval_gated"
@@ -986,6 +1623,79 @@ class TemporalExecutionService:
             raise TemporalExecutionValidationError(
                 "request_id must reference a pending approval-gated remediation."
             )
+        assert isinstance(approval, Mapping)
+        if (
+            approval.get("reviewerRule") == "high_risk_reviewer"
+            and not actor_can_approve_high_risk
+        ):
+            raise TemporalExecutionValidationError(
+                "high-risk approval requires a privileged reviewer."
+            )
+        if actor and actor == approval.get("requestingActor"):
+            raise TemporalExecutionValidationError(
+                "the requesting actor cannot approve its own remediation action."
+            )
+        current_status = str(approval.get("status") or "")
+        normalized_decision = "denied" if decision == "rejected" else decision
+        if current_status == normalized_decision:
+            return {
+                "accepted": True,
+                "workflowId": remediation_workflow_id,
+                "requestId": request_id,
+                "decision": decision,
+            }
+        if current_status != "pending":
+            raise TemporalExecutionValidationError(
+                "approval decision is terminal and cannot be reinterpreted."
+            )
+        decided_at = datetime.now(UTC)
+        try:
+            expires_at = datetime.fromisoformat(str(approval.get("expiresAt") or ""))
+        except ValueError as exc:
+            raise TemporalExecutionValidationError("approval expiration is invalid.") from exc
+        if expires_at <= decided_at:
+            link.approval_state = {**dict(approval), "status": "expired"}
+            await self._session.commit()
+            raise TemporalExecutionValidationError("approval request has expired.")
+        link.approval_state = {
+            **dict(approval),
+            "status": normalized_decision,
+            "decisionActor": actor,
+            "rationale": (comment[:500] if comment else None),
+            "decidedAt": decided_at.isoformat(),
+        }
+        decision_artifact = await RemediationLifecyclePublisher(
+            session=self._session,
+            artifact_service=TemporalArtifactService(
+                TemporalArtifactRepository(self._session)
+            ),
+        ).publish_json_artifact(
+            remediation_workflow_id=remediation_workflow_id,
+            artifact_type="remediation.approval_decision",
+            name=f"decisions/remediation_approval-{request_id}.json",
+            payload={
+                "schemaVersion": "v1",
+                "approvalRef": approval.get("approvalRef"),
+                "requestDigest": approval.get("requestDigest"),
+                "decision": normalized_decision,
+                "decisionActor": actor,
+                "rationale": (comment[:500] if comment else None),
+                "decidedAt": decided_at.isoformat(),
+                "approvalRequestArtifactRef": dict(
+                    approval.get("artifactRefs") or {}
+                ).get("approvalRequest"),
+            },
+            target_workflow_id=link.target_workflow_id,
+            target_run_id=link.target_run_id,
+            principal="service:remediation-approval",
+        )
+        link.approval_state = {
+            **dict(link.approval_state),
+            "artifactRefs": {
+                **dict(approval.get("artifactRefs") or {}),
+                "approvalDecision": decision_artifact.artifact_id,
+            },
+        }
         detail_parts = [f"requestId={request_id}"]
         if actor:
             detail_parts.append(f"actor={actor}")
@@ -1196,6 +1906,8 @@ class TemporalExecutionService:
         start_delay: timedelta | None = None,
         scheduled_for: datetime | None = None,
         _skip_pause_guard: bool = False,
+        _workflow_id: str | None = None,
+        _run_id: str | None = None,
     ) -> TemporalExecutionRecord:
         # --- Worker Pause API Guard (DOC-REQ-001, DOC-REQ-005, FR-005) ---
         if not _skip_pause_guard and await self.check_system_paused():
@@ -1252,8 +1964,12 @@ class TemporalExecutionService:
         )
 
         now = _utc_now()
-        workflow_id = f"mm:{uuid4()}"
-        run_id = str(uuid4())
+        workflow_id = _workflow_id or f"mm:{uuid4()}"
+        if not workflow_id.startswith("mm:"):
+            raise TemporalExecutionValidationError(
+                "Explicit workflow identity must use the canonical mm: prefix."
+            )
+        run_id = _run_id or str(uuid4())
         normalized_depends_on: list[str] = []
         remediation_link: TemporalExecutionRemediationLink | None = None
         task_mapping: Mapping[str, Any] = {}
@@ -1283,6 +1999,7 @@ class TemporalExecutionService:
                     new_run_id=run_id,
                     owner_id=owner,
                     owner_type=owner_type_enum,
+                    submission_parameters=initial_parameters or {},
                 )
 
         if (
@@ -1697,8 +2414,11 @@ class TemporalExecutionService:
     ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
         canonical_workflow_id = self.canonicalize_workflow_id(workflow_id)
 
+        description: Any | None = None
         try:
-            await self._client_adapter.describe_workflow(canonical_workflow_id)
+            description = await self._client_adapter.describe_workflow(
+                canonical_workflow_id
+            )
         except Exception as exc:
             logger.debug(
                 "Temporal describe failed for %s: %s", canonical_workflow_id, exc
@@ -1708,15 +2428,39 @@ class TemporalExecutionService:
             canonical_workflow_id,
         )
         if record is None:
-            if not include_orphaned:
-                raise TemporalExecutionNotFoundError(
-                    f"Workflow execution {canonical_workflow_id} was not found"
+            projection: TemporalExecutionRecord | None = None
+            if description is not None:
+                try:
+                    from api_service.core.sync import sync_execution_projection
+
+                    projection = await sync_execution_projection(
+                        self._session,
+                        description,
+                    )
+                    await self._session.commit()
+                    await self._session.refresh(projection)
+                except Exception as exc:
+                    await self._session.rollback()
+                    logger.warning(
+                        "Temporal projection sync failed for source-less execution %s: %s",
+                        canonical_workflow_id,
+                        exc,
+                        exc_info=True,
+                    )
+            if projection is None:
+                projection = await self._load_projection_execution(
+                    canonical_workflow_id,
+                    include_orphaned=include_orphaned,
                 )
-            projection = await self._load_projection_execution(
-                canonical_workflow_id,
-                include_orphaned=True,
-            )
-            if projection is not None:
+            if projection is not None and (
+                include_orphaned
+                or projection.source_mode
+                == TemporalExecutionProjectionSourceMode.TEMPORAL_AUTHORITATIVE
+            ):
+                # Temporal Schedules start UserWorkflow executions directly, so
+                # those runs have no API-created canonical source row. Their
+                # Temporal-authoritative projection is the durable control-plane
+                # record used for ownership and parent-runtime inheritance.
                 return projection
             raise TemporalExecutionNotFoundError(
                 f"Workflow execution {canonical_workflow_id} was not found"
@@ -1937,6 +2681,33 @@ class TemporalExecutionService:
         await self._session.commit()
         await self._session.refresh(record)
         await self._sync_projection_best_effort(record)
+        return response
+
+    async def create_fresh_rerun_execution(
+        self,
+        *,
+        workflow_id: str,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        """Create a distinct rerun execution through the canonical service boundary."""
+
+        record = await self._require_source_execution(workflow_id)
+        if (
+            idempotency_key == record.last_update_idempotency_key
+            and isinstance(record.last_update_response, dict)
+        ):
+            return dict(record.last_update_response)
+        response = await self._create_fresh_rerun_execution(
+            record,
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            parameters_patch=None,
+            idempotency_key=idempotency_key,
+        )
+        record.last_update_idempotency_key = idempotency_key
+        record.last_update_response = dict(response)
+        await self._session.commit()
+        await self._session.refresh(record)
         return response
 
     @staticmethod
@@ -2456,26 +3227,29 @@ class TemporalExecutionService:
         reason_text = (reason or default_reason).strip() or default_reason
 
         if record.state in TERMINAL_STATES:
+            if record.workflow_type is TemporalWorkflowType.USER_WORKFLOW:
+                # The Temporal close may have committed before auxiliary
+                # managed-session cleanup ran. Retrying cancel against a
+                # terminal execution must therefore remain an idempotent
+                # cleanup opportunity instead of returning immediately.
+                await self._best_effort_terminate_workflow_scoped_managed_sessions(
+                    workflow_id=record.workflow_id,
+                    reason=reason_text,
+                )
             if isinstance(record, TemporalExecutionCanonicalRecord):
                 return await self._sync_projection_best_effort(record)
             return record
 
-        if record.workflow_type is TemporalWorkflowType.USER_WORKFLOW:
-            await self._best_effort_terminate_workflow_scoped_managed_sessions(
-                workflow_id=record.workflow_id,
-                reason=reason_text,
-            )
-
         try:
             if graceful:
-                if record.workflow_type is TemporalWorkflowType.USER_WORKFLOW:
-                    await self._client_adapter.update_workflow(
-                        record.workflow_id,
-                        "Cancel",
-                        reason_text,
-                    )
-                else:
-                    await self._client_adapter.cancel_workflow(record.workflow_id)
+                # Temporal cancellation is the authoritative terminal action.
+                # A workflow update can change MoonMind's projection while the
+                # main coroutine remains blocked awaiting an AgentRun child,
+                # leaving both executions live and eligible for provider slots.
+                # Cancel the execution itself so Temporal propagates
+                # cancellation through child-workflow ownership and runs the
+                # AgentRun cleanup path that releases provider leases.
+                await self._client_adapter.cancel_workflow(record.workflow_id)
             else:
                 await self._client_adapter.terminate_workflow(
                     record.workflow_id,
@@ -2513,6 +3287,15 @@ class TemporalExecutionService:
         await self._session.commit()
         await self._session.refresh(record)
         await self._fan_out_dependency_resolution(record)
+        if record.workflow_type is TemporalWorkflowType.USER_WORKFLOW:
+            # Session cleanup is auxiliary to the authoritative Temporal close
+            # request. Dispatch it only after the parent cancellation and
+            # terminal state are durable so a stuck runtime cannot make
+            # the operator's cancel command a no-op.
+            await self._best_effort_terminate_workflow_scoped_managed_sessions(
+                workflow_id=record.workflow_id,
+                reason=reason_text,
+            )
         if isinstance(record, TemporalExecutionCanonicalRecord):
             return await self._sync_projection_best_effort(record)
         return record
@@ -2892,10 +3675,21 @@ class TemporalExecutionService:
 
         session_workflow_id = f"{workflow_id}:session:{session_record.runtime_id}"
         try:
-            await self._client_adapter.update_workflow(
-                session_workflow_id,
-                "TerminateSession",
-                {"reason": reason},
+            await asyncio.wait_for(
+                self._client_adapter.update_workflow(
+                    session_workflow_id,
+                    "TerminateSession",
+                    {"reason": reason},
+                ),
+                timeout=_BEST_EFFORT_SESSION_TERMINATION_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Best-effort session termination timed out after %.1fs for "
+                "workflow %s session %s",
+                _BEST_EFFORT_SESSION_TERMINATION_TIMEOUT_SECONDS,
+                workflow_id,
+                session_record.session_id,
             )
         except Exception:
             logger.warning(
@@ -3139,7 +3933,7 @@ class TemporalExecutionService:
         next_input_ref = input_artifact_ref or record.input_ref
         next_plan_ref = plan_artifact_ref or record.plan_ref
         task_params = params.get("task") if isinstance(params.get("task"), dict) else {}
-        repository = str(params.get("repository") or "").strip() or None
+        repository = repository_name_from_value(params.get("repository")) or None
         title = (
             str(task_params.get("title") or "").strip()
             or str((record.memo or {}).get("title") or "").strip()
@@ -3281,6 +4075,208 @@ class TemporalExecutionService:
         recovery_provenance["sourceRunId"] = canonical_run_id
         return recovery_provenance
 
+    async def create_typed_recovery_execution(
+        self,
+        record: TemporalExecutionCanonicalRecord,
+        *,
+        recovery_target: WorkflowRecoveryTargetModel | Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Create exactly one linked destination from an admitted recovery target."""
+
+        try:
+            target = (
+                recovery_target
+                if isinstance(recovery_target, WorkflowRecoveryTargetModel)
+                else WorkflowRecoveryTargetModel.model_validate(recovery_target)
+            )
+            target.require_admitted()
+        except ValidationError as exc:
+            raise TemporalExecutionValidationError(
+                "Typed recovery target is invalid."
+            ) from exc
+        except ValueError as exc:
+            raise TemporalExecutionRecoveryCheckpointError(str(exc)) from exc
+
+        source_run_id = str(record.run_id or "").strip()
+        if record.workflow_type is not TemporalWorkflowType.USER_WORKFLOW:
+            raise TemporalExecutionValidationError(
+                "Typed recovery is only available for MoonMind.UserWorkflow executions."
+            )
+        if record.state not in TERMINAL_WORKFLOW_STATES:
+            raise TemporalExecutionValidationError(
+                "Typed recovery requires an immutable terminal source execution."
+            )
+        if (
+            target.source.workflow_id != record.workflow_id
+            or target.source.run_id != source_run_id
+        ):
+            raise TemporalExecutionValidationError(
+                "Typed recovery source identity does not match the source execution."
+            )
+        if (
+            record.input_ref
+            and target.source.task_input_snapshot_ref != record.input_ref
+            and target.source.task_input_snapshot_ref
+            != str((record.memo or {}).get("task_input_snapshot_ref") or "")
+        ):
+            raise TemporalExecutionValidationError(
+                "Typed recovery task input snapshot does not match the source execution."
+            )
+        if record.plan_ref and target.source.plan_ref not in {None, record.plan_ref}:
+            raise TemporalExecutionValidationError(
+                "Typed recovery plan ref does not match the source execution."
+            )
+        if target.target.kind in {"publication", "restoration_failure"}:
+            raise TemporalExecutionRecoveryCheckpointError(
+                "RECOVERY_PHASE_UNSUPPORTED"
+            )
+        if target.target.kind == "failed_step" and target.preserved_step_refs:
+            # The existing resume path materializes preserved steps from their
+            # expanded identities and output refs. Ref-only typed collections
+            # are not dereferenced by the workflow yet, so admitting them would
+            # repeat already completed work.
+            raise TemporalExecutionRecoveryCheckpointError(
+                "RECOVERY_PHASE_UNSUPPORTED"
+            )
+        trusted_capabilities = resolve_runtime_execution_capabilities(
+            target.destination.runtime_id
+        )
+        if (
+            trusted_capabilities is None
+            or target.capability_snapshot
+            != trusted_capabilities.model_dump(by_alias=True, mode="json")
+        ):
+            raise TemporalExecutionRecoveryCheckpointError(
+                "RECOVERY_CAPABILITY_DIGEST_MISMATCH"
+            )
+        source_artifact_refs = {
+            str(ref).strip() for ref in (record.artifact_refs or []) if str(ref).strip()
+        }
+        required_recovery_refs = {
+            target.checkpoint.ref,
+            target.checkpoint.validation_ref,
+        }
+        if not required_recovery_refs.issubset(source_artifact_refs):
+            raise TemporalExecutionRecoveryCheckpointError(
+                "RECOVERY_CHECKPOINT_INVALID"
+            )
+        await self._validate_readable_temporal_artifact_ref(
+            target.checkpoint.ref,
+            field_name="recoveryTarget.checkpoint.ref",
+        )
+        await self._validate_readable_temporal_artifact_ref(
+            target.checkpoint.validation_ref,
+            field_name="recoveryTarget.checkpoint.validationRef",
+        )
+        existing_destination = await self._session.get(
+            TemporalExecutionCanonicalRecord,
+            target.destination.workflow_id,
+        )
+        if (
+            existing_destination is not None
+            and existing_destination.create_idempotency_key
+            != target.destination.creation_key
+        ):
+            raise TemporalExecutionRecoveryCheckpointError(
+                "RECOVERY_DESTINATION_IDENTITY_MISMATCH"
+            )
+
+        params = dict(record.parameters or {})
+        for key in AGENT_RUN_ID_PARAM_KEYS:
+            params.pop(key, None)
+        frozen_target = target.model_dump(by_alias=True, mode="json")
+        destination_run_id = str(uuid4())
+        workflow_params = dict(_workflow_payload(params))
+        workflow_params["recovery"] = {
+            "schemaVersion": target.schema_version,
+            "kind": target.target.kind,
+            "phase": target.continuation.phase,
+            "sourceWorkflowId": target.source.workflow_id,
+            "sourceRunId": target.source.run_id,
+            "creationKey": target.destination.creation_key,
+        }
+        params.pop("task", None)
+        params["workflow"] = workflow_params
+        params["recoveryTarget"] = frozen_target
+        params["recoverySource"] = {
+            "sourceWorkflowId": target.source.workflow_id,
+            "sourceRunId": target.source.run_id,
+            "sourcePlanRef": target.source.plan_ref,
+            "sourcePlanDigest": target.source.plan_digest,
+            "recoveryCheckpointRef": target.checkpoint.ref,
+            "failedRunRecoveryManifestRef": target.checkpoint.validation_ref,
+            "recoveryWorkspace": {
+                "checkpointRef": target.checkpoint.ref,
+                "checkpointKind": target.checkpoint.kind,
+                "checkpointDigest": target.checkpoint.digest,
+                "validationRef": target.checkpoint.validation_ref,
+            },
+            "preservedSteps": [],
+            "preservedStepRefs": list(target.preserved_step_refs),
+            "selectedStartStepId": target.target.logical_step_id,
+            "selectedStartStepExecution": target.target.source_step_execution_id,
+            "recoveryMode": "selected_step",
+        }
+        params["recoveryLineage"] = {
+            "source": target.source.model_dump(by_alias=True, mode="json"),
+            "checkpointRef": target.checkpoint.ref,
+            "checkpointDigest": target.checkpoint.digest,
+            "preservedStepRefs": list(target.preserved_step_refs),
+            "sideEffectDispositionRef": target.side_effect_disposition_ref,
+            "destinationWorkflowId": target.destination.workflow_id,
+            "destinationRunId": destination_run_id,
+            "destinationWorkspaceReservationId": (
+                target.destination.workspace_reservation_id
+            ),
+        }
+
+        created = await self.create_execution(
+            workflow_type=record.workflow_type.value,
+            owner_id=record.owner_id,
+            owner_type=record.owner_type.value if record.owner_type else "user",
+            title=str((record.memo or {}).get("title") or "").strip() or None,
+            input_artifact_ref=record.input_ref,
+            plan_artifact_ref=record.plan_ref,
+            manifest_artifact_ref=record.manifest_ref,
+            failure_policy=None,
+            initial_parameters=params,
+            idempotency_key=target.destination.creation_key,
+            repository=repository_name_from_value(params.get("repository")) or None,
+            integration=None,
+            summary=(
+                f"Typed {target.target.kind} recovery from {record.workflow_id}."
+            ),
+            _workflow_id=target.destination.workflow_id,
+            _run_id=destination_run_id,
+        )
+        destination = await self._session.get(
+            TemporalExecutionCanonicalRecord, created.workflow_id
+        )
+        if destination is not None:
+            destination_params = dict(destination.parameters or {})
+            lineage = dict(destination_params.get("recoveryLineage") or {})
+            lineage["destinationRunId"] = created.run_id
+            destination_params["recoveryLineage"] = lineage
+            destination.parameters = destination_params
+            await self._session.flush()
+        return {
+            "accepted": True,
+            "applied": "created_recovery_execution",
+            "targetKind": target.target.kind,
+            "continuationPhase": target.continuation.phase,
+            "source": {
+                "workflowId": record.workflow_id,
+                "runId": source_run_id,
+            },
+            "execution": {
+                "workflowId": created.workflow_id,
+                "runId": created.run_id,
+                "detailHref": f"/workflows/{created.workflow_id}",
+            },
+            "recoveryCheckpointRef": target.checkpoint.ref,
+            "creationKey": target.destination.creation_key,
+        }
+
     async def create_failed_step_recovery_execution(
         self,
         record: TemporalExecutionCanonicalRecord,
@@ -3291,6 +4287,7 @@ class TemporalExecutionService:
         failed_run_recovery_manifest_ref: str | None = None,
         failed_run_recovery_manifest: Mapping[str, Any] | None = None,
         selected_start_step_id: str | None = None,
+        admitted_checkpoint_resume_decision: AdmittedCheckpointResumeDecision | None = None,
     ) -> dict[str, Any]:
         """Create a linked follow-up execution for failed-step recovery."""
 
@@ -3301,6 +4298,13 @@ class TemporalExecutionService:
         if record.state is not MoonMindWorkflowState.FAILED:
             raise TemporalExecutionValidationError(
                 "Failed-step recovery is only available for failed executions."
+            )
+        if (
+            admitted_checkpoint_resume_decision is not None
+            and not admitted_checkpoint_resume_decision.admitted
+        ):
+            raise TemporalExecutionRecoveryCheckpointError(
+                "Checkpoint Resume admission is not eligible."
             )
         source_run_id = str(record.run_id or "").strip()
         if not source_run_id:
@@ -3359,6 +4363,73 @@ class TemporalExecutionService:
             raise TemporalExecutionRecoveryCheckpointError(
                 "Failed-run recovery manifest does not allow resume."
             )
+        eligibility = recovery_manifest.recovery_eligibility
+        if eligibility.requested_action != "resume_from_workspace_checkpoint":
+            raise TemporalExecutionRecoveryCheckpointError(
+                "Recovery manifest does not authorize checkpoint Resume."
+            )
+        immutable_proof = (
+            eligibility.resume_phase,
+            eligibility.checkpoint_boundary,
+            eligibility.checkpoint_kind,
+            eligibility.target_runtime_id,
+            eligibility.capability_set_version,
+            eligibility.capability_digest,
+            eligibility.restore_activity,
+            eligibility.workspace_authority,
+        )
+        # Legacy manifests recorded only requiredBoundary/checkpointRef. A
+        # boundary alone therefore does not opt an old payload into v2 proof
+        # validation; any other proof field does.
+        has_immutable_proof = any(
+            value for index, value in enumerate(immutable_proof) if index != 1
+        )
+        if has_immutable_proof and not all(immutable_proof):
+            raise TemporalExecutionRecoveryCheckpointError(
+                "CHECKPOINT_CAPABILITY_SNAPSHOT_MISSING"
+            )
+        if (
+            has_immutable_proof
+            and eligibility.checkpoint_boundary != recovery_manifest.validation.boundary
+        ):
+            raise TemporalExecutionRecoveryCheckpointError(
+                "CHECKPOINT_BOUNDARY_INCOMPATIBLE"
+            )
+        if any(
+            item.disposition in {"blocked", "needs_compensation"}
+            for item in recovery_manifest.side_effect_dispositions
+        ):
+            raise TemporalExecutionRecoveryCheckpointError(
+                "CHECKPOINT_SIDE_EFFECT_UNSAFE"
+            )
+        if has_immutable_proof:
+            capabilities = resolve_runtime_execution_capabilities(
+                eligibility.target_runtime_id
+            )
+            if capabilities is None:
+                raise TemporalExecutionRecoveryCheckpointError(
+                    "CHECKPOINT_CAPABILITY_SNAPSHOT_MISSING"
+                )
+            if capabilities.capability_digest != eligibility.capability_digest:
+                raise TemporalExecutionRecoveryCheckpointError(
+                    "CHECKPOINT_CAPABILITY_DIGEST_MISMATCH"
+                )
+            if eligibility.checkpoint_kind not in capabilities.checkpoint_restore_kinds:
+                raise TemporalExecutionRecoveryCheckpointError(
+                    "CHECKPOINT_KIND_INCOMPATIBLE"
+                )
+            if capabilities.checkpoint_restore_activity != eligibility.restore_activity:
+                raise TemporalExecutionRecoveryCheckpointError(
+                    "CHECKPOINT_RESTORE_ROUTE_MISSING"
+                )
+            try:
+                build_default_activity_catalog().resolve_activity(
+                    eligibility.restore_activity
+                )
+            except TemporalActivityCatalogError as exc:
+                raise TemporalExecutionRecoveryCheckpointError(
+                    "CHECKPOINT_RESTORE_ROUTE_MISSING"
+                ) from exc
         if recovery_manifest.workflow_id != record.workflow_id:
             raise TemporalExecutionRecoveryCheckpointError(
                 "Failed-run recovery manifest workflowId does not match source execution."
@@ -3453,7 +4524,10 @@ class TemporalExecutionService:
         params = dict(record.parameters or {})
         for key in AGENT_RUN_ID_PARAM_KEYS:
             params.pop(key, None)
-        recovery_source_payload = RecoverySourceModel(
+        recovery_source_fields = dict(
+            checkpointSourceWorkflowId=checkpoint.source.workflow_id,
+            checkpointSourceRunId=checkpoint.source.run_id,
+            sideEffectSafe=True,
             sourceWorkflowId=record.workflow_id,
             sourceRunId=source_run_id,
             sourceTaskInputSnapshotRef=source_snapshot_ref,
@@ -3471,11 +4545,135 @@ class TemporalExecutionService:
             recoveryCheckpointRef=checkpoint_ref,
             recoveryWorkspace=checkpoint.recovery_workspace,
             preservedSteps=preserved_steps,
-        ).model_dump(by_alias=True, mode="json")
+        )
+        if has_immutable_proof:
+            recovery_source_payload = RecoverySourceModel(
+                recoveryAction="resume_from_workspace_checkpoint",
+                resumePhase=eligibility.resume_phase,
+                targetRuntimeId=eligibility.target_runtime_id,
+                capabilitySetVersion=eligibility.capability_set_version,
+                capabilityDigest=eligibility.capability_digest,
+                checkpointKind=eligibility.checkpoint_kind,
+                checkpointRestoreKinds=eligibility.checkpoint_restore_kinds,
+                checkpointRestoreActivity=eligibility.restore_activity,
+                workspaceAuthority=eligibility.workspace_authority,
+                selectedTargetRuntimeId=eligibility.target_runtime_id,
+                selectedCapabilityDigest=capabilities.capability_digest,
+                registeredRestoreActivity=capabilities.checkpoint_restore_activity,
+                **recovery_source_fields,
+            ).model_dump(by_alias=True, mode="json")
+        else:
+            # Preserve the exact pre-v2 recovery shape for manifests recorded
+            # before immutable runtime proof was introduced.
+            recovery_source_payload = {
+                "kind": "recover_from_failed_step",
+                "sourceWorkflowId": record.workflow_id,
+                "sourceRunId": source_run_id,
+                "sourceTaskInputSnapshotRef": source_snapshot_ref,
+                "sourcePlanRef": checkpoint.plan_ref or source_plan_ref,
+                "sourcePlanDigest": checkpoint.plan_digest,
+                "failedStepId": failed_step_id,
+                "failedStepExecution": failed_step_execution,
+                "recoveryMode": recovery_mode,
+                "selectedStartStepId": (
+                    failed_step_id if recovery_mode == "selected_step" else None
+                ),
+                "selectedStartStepExecution": (
+                    failed_step_execution if recovery_mode == "selected_step" else None
+                ),
+                "recoveryCheckpointRef": checkpoint_ref,
+                "recoveryWorkspace": checkpoint.recovery_workspace,
+                "preservedSteps": [
+                    step.model_dump(by_alias=True, mode="json")
+                    for step in preserved_steps
+                ],
+            }
         recovery_source_payload["failedRunRecoveryManifestRef"] = manifest_ref
+        # Preserve the validated Omnigent authority snapshot at the Activity
+        # boundary.  The resumed workflow must not silently turn an Omnigent
+        # checkpoint into a fresh profile-bound execution.
+        omnigent_checkpoint = checkpoint_payload.get("omnigentCheckpoint")
+        if omnigent_checkpoint is None:
+            omnigent_checkpoint = checkpoint_payload.get("omnigent_checkpoint")
+        if omnigent_checkpoint is not None:
+            try:
+                from moonmind.omnigent.checkpoints import OmnigentCheckpointIdentity
+
+                validated_omnigent = OmnigentCheckpointIdentity.model_validate(
+                    omnigent_checkpoint
+                )
+                if (
+                    recovery_mode == "selected_step"
+                    and validated_omnigent.logical_step_id != failed_step_id
+                ):
+                    raise TemporalExecutionRecoveryCheckpointError(
+                        "Selected start step has no matching Omnigent checkpoint evidence."
+                    )
+                recovery_source_payload["omnigentCheckpoint"] = (
+                    validated_omnigent.model_dump(
+                        by_alias=True, mode="json", exclude_none=True
+                    )
+                )
+                task_payload = _workflow_payload(params)
+                runtime_payload = _mapping_payload(task_payload.get("runtime"))
+                instruction_identity = hashlib.sha256(
+                    source_snapshot_ref.encode("utf-8")
+                ).hexdigest()
+                immutable_snapshot = {
+                    "instructionDigest": f"sha256:{instruction_identity}",
+                    "runtimeId": eligibility.target_runtime_id,
+                    "model": str(
+                        runtime_payload.get("model")
+                        or task_payload.get("model")
+                        or params.get("model")
+                        or "default"
+                    ),
+                    "effort": str(
+                        runtime_payload.get("effort")
+                        or task_payload.get("effort")
+                        or params.get("effort")
+                        or "default"
+                    ),
+                    "providerProfileId": validated_omnigent.provider_profile_id,
+                    "launchPolicyRef": validated_omnigent.launch_policy_ref,
+                    "repositoryBranch": validated_omnigent.source_branch,
+                    "publishMode": str(
+                        task_payload.get("publishMode")
+                        or params.get("publishMode")
+                        or "none"
+                    ),
+                }
+                # Pin the checkpoint's validated selection into the authored
+                # launch. A later profile/default lookup must not silently alter
+                # a recovery after the immutable comparison has admitted it.
+                pinned_runtime_payload = dict(runtime_payload)
+                pinned_runtime_payload["model"] = immutable_snapshot["model"]
+                pinned_runtime_payload["effort"] = immutable_snapshot["effort"]
+                task_payload["runtime"] = pinned_runtime_payload
+                task_payload["model"] = immutable_snapshot["model"]
+                task_payload["effort"] = immutable_snapshot["effort"]
+                task_payload["publishMode"] = immutable_snapshot["publishMode"]
+                params[
+                    "workflow" if _mapping_payload(params.get("workflow")) else "task"
+                ] = task_payload
+                # This command preserves the source workflow inputs. Branch
+                # APIs construct a distinct requested snapshot when an operator
+                # changes any immutable dimension.
+                recovery_source_payload["immutableSource"] = immutable_snapshot
+                recovery_source_payload["immutableRequested"] = dict(
+                    immutable_snapshot
+                )
+            except ValidationError as exc:
+                raise TemporalExecutionRecoveryCheckpointError(
+                    "Omnigent recovery checkpoint identity is invalid."
+                ) from exc
         recovery_source_payload["selectedCheckpointBoundary"] = (
             recovery_manifest.validation.boundary
         )
+        if admitted_checkpoint_resume_decision is not None:
+            recovery_source_payload["admittedCheckpointResumeDecision"] = (
+                admitted_checkpoint_resume_decision.model_dump(by_alias=True, mode="json")
+            )
         if recovery_mode == "last_failed_step":
             recovery_source_payload.pop("recoveryMode", None)
             recovery_source_payload.pop("selectedStartStepId", None)
@@ -3527,6 +4725,10 @@ class TemporalExecutionService:
             "dependencySignatures": dependency_signatures,
             "workspacePolicy": workspace_policy,
         }
+        if admitted_checkpoint_resume_decision is not None:
+            recover_ref["admittedCheckpointResumeDecision"] = (
+                admitted_checkpoint_resume_decision.model_dump(by_alias=True, mode="json")
+            )
         recover_ref["failedRunRecoveryManifestRef"] = manifest_ref
         if recovery_mode == "selected_step":
             recover_ref["recoveryMode"] = recovery_mode
@@ -3545,7 +4747,7 @@ class TemporalExecutionService:
             or str((record.memo or {}).get("title") or "").strip()
             or None
         )
-        repository = str(params.get("repository") or "").strip() or None
+        repository = repository_name_from_value(params.get("repository")) or None
         created = await self.create_execution(
             workflow_type=record.workflow_type.value,
             owner_id=record.owner_id,

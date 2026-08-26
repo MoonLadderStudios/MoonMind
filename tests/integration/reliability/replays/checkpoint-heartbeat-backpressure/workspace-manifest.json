@@ -1,0 +1,7 @@
+{
+  "artifacts": [
+    {"path": "alpha.txt", "content": "alpha checkpoint evidence\n"},
+    {"path": "beta.txt", "content": "beta checkpoint evidence\n"},
+    {"path": "gamma.txt", "content": "gamma checkpoint evidence\n"}
+  ]
+}

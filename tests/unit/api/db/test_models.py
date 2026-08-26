@@ -69,6 +69,15 @@ def test_checkpoint_branch_persistence_models_expose_binding_columns():
 
     assert {"branch_id", "workspace_policy", "git_work_branch"} <= branch_columns
     assert {
+        "current_head_checkpoint_digest",
+        "current_head_version",
+        "current_head_attempt_ordinal",
+        "remediation_loop_id",
+        "remediation_head_status",
+        "latest_verification_ref",
+        "latest_verification_verdict",
+    } <= branch_columns
+    assert {
         "branch_turn_id",
         "branch_id",
         "workspace_policy",

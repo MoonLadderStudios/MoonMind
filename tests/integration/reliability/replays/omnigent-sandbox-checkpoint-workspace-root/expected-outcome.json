@@ -1,0 +1,5 @@
+{
+  "invariant": "the sandbox activity worker resolves typed workspace locators from the same shared volume root used by the agent-runtime materializer",
+  "workspaceRoot": "/work/agent_jobs",
+  "workspaceVolumeMount": "agent_workspaces:/work/agent_jobs"
+}

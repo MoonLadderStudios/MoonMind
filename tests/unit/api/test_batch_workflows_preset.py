@@ -73,7 +73,8 @@ async def test_batch_workflows_seed_validates_and_exposes_batch_contract(tmp_pat
             template = await _load_preset(session)
             annotations = template.annotations or {}
 
-            assert template.title == "Batch Workflows"
+            assert template.title == "Batch Jira Workflows"
+            assert template.slug == "batch-workflows"
             assert template.scope_type is PresetScopeType.GLOBAL
 
             schema = annotations["inputSchema"]
@@ -109,6 +110,7 @@ async def test_batch_workflows_seed_validates_and_exposes_batch_contract(tmp_pat
             assert schema["properties"]["run_ref"]["enum"] == [
                 "skill:jira-verify",
                 "preset:jira-implement",
+                "preset:jira-orchestrate",
             ]
 
             assert schema["properties"]["publish_mode"]["enum"] == [
@@ -122,7 +124,13 @@ async def test_batch_workflows_seed_validates_and_exposes_batch_contract(tmp_pat
             ui_schema = annotations["uiSchema"]
             assert ui_schema["run_ref"]["widget"] == "select"
             assert ui_schema["constraints"] == {"widget": "textarea", "advanced": True}
-            assert ui_schema["run_verify"] == {"widget": "checkbox"}
+            assert ui_schema["run_verify"] == {
+                "widget": "checkbox",
+                "visibleWhen": {
+                    "field": "run_ref",
+                    "oneOf": ["preset:jira-implement", "preset:jira-orchestrate"],
+                },
+            }
             assert ui_schema["update_status"] == {
                 "widget": "checkbox",
                 "visibleWhen": {
@@ -167,18 +175,13 @@ async def test_batch_workflows_seed_validates_and_exposes_batch_contract(tmp_pat
                 bindings["preset:jira-implement"]["run_verify"]
                 == "{{ shared.run_verify }}"
             )
-            assert (
-                bindings["preset:github-issue-implement"]["run_verify"]
-                == "{{ shared.run_verify }}"
-            )
-            assert (
-                bindings["preset:github-issue-implement"]["github_issue"]
-                == "{{ target.githubIssue }}"
-            )
-            assert (
-                bindings["preset:github-issue-implement"]["github_issue_ref"]
-                == "{{ target.githubIssue.repository }}#{{ target.githubIssue.number }}"
-            )
+            assert bindings["preset:jira-orchestrate"] == {
+                "jira_issue": "{{ target.jiraIssue }}",
+                "jira_issue_key": "{{ target.jiraIssue.key }}",
+                "constraints": "{{ shared.constraints }}",
+                "run_verify": "{{ shared.run_verify }}",
+            }
+            assert all("github" not in run_ref for run_ref in bindings)
 
             # Workflow-level directives.
             assert annotations["runtimeInheritance"] == "caller"
@@ -191,13 +194,12 @@ async def test_batch_workflows_seed_validates_and_exposes_batch_contract(tmp_pat
             assert len(template.steps) == 1
             step = template.steps[0]
             assert step["skill"]["id"] == "batch-workflows"
-            # The parent only orchestrates/queues; it must not hard-require the
-            # jira capability or GitHub-only batches would be blocked at launch
-            # in environments without a trusted Jira integration. Per-target
-            # jira readiness is enforced on the child workflows instead.
+            # The parent resolves a Jira status cohort before queueing children,
+            # so trusted Jira readiness must be enforced before agent launch.
             assert sorted(step["skill"]["requiredCapabilities"]) == [
                 "gh",
                 "git",
+                "jira",
             ]
 
 
@@ -266,9 +268,7 @@ async def test_batch_workflows_expands_orchestration_step(tmp_path):
 
             assert "git" in expanded["capabilities"]
             assert "gh" in expanded["capabilities"]
-            # GitHub-only batches must not be gated on Jira readiness, so the
-            # parent preset no longer advertises the jira capability.
-            assert "jira" not in expanded["capabilities"]
+            assert "jira" in expanded["capabilities"]
 
 
 async def test_batch_workflows_expands_repository_from_context_when_not_provided(tmp_path):

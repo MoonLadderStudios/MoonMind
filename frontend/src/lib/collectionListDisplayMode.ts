@@ -27,6 +27,7 @@ export type CollectionListDisplayRouteAction =
   | 'none'
   | 'navigate-workflows'
   | 'navigate-recurring'
+  | 'navigate-skills'
   | 'navigate-selected-detail'
   | 'resolve-first-row';
 
@@ -78,6 +79,33 @@ export type ResolveRecurringListDisplayInput = {
   search?: string | URLSearchParams | null;
   selectedDefinitionId?: string | null;
   firstVisibleDefinitionId?: string | null;
+};
+
+export type SkillListDisplaySurface = 'skills-table' | 'skill-detail';
+
+export type SkillListSelection = {
+  skillId: string | null;
+  source: 'route' | 'last-selected' | 'first-visible-row' | 'none';
+};
+
+export type ResolvedSkillListDisplay = {
+  requestedMode: CollectionListDisplayMode;
+  effectiveMode: CollectionListDisplayMode;
+  surface: SkillListDisplaySurface;
+  routeAction: CollectionListDisplayRouteAction;
+  primarySurface: 'skill-detail' | 'skill-table' | 'empty-skills';
+  listSurface: CollectionListDisplayListSurface;
+  selection: SkillListSelection;
+  targetPath: string;
+  status: string | null;
+};
+
+export type ResolveSkillListDisplayInput = {
+  pathname: string;
+  requestedMode: CollectionListDisplayMode;
+  search?: string | URLSearchParams | null;
+  selectedSkillId?: string | null;
+  firstVisibleSkillId?: string | null;
 };
 
 export type ResolveWorkflowListDisplayInput = {
@@ -230,6 +258,125 @@ function encodeRecurringDetailPath(
   search: string | URLSearchParams | null | undefined,
 ): string {
   return pathWithSearch(`/schedules/${encodeURIComponent(definitionId)}`, search);
+}
+
+export function encodeSkillDetailPath(
+  skillId: string,
+  search?: string | URLSearchParams | null,
+): string {
+  return pathWithSearch(`/skills/${encodeURIComponent(skillId)}`, search);
+}
+
+export function decodeSkillDetail(pathname: string): { skillId: string } | null {
+  const parts = normalizedPathname(pathname).split('/').slice(1);
+  if (parts.length !== 2 || parts[0] !== 'skills') {
+    return null;
+  }
+  let skillId: string;
+  try {
+    skillId = decodeURIComponent(parts[1] ?? '');
+  } catch {
+    return null;
+  }
+  if (!skillId || skillId.includes('/')) {
+    return null;
+  }
+  return { skillId };
+}
+
+function selectedSkill(input: ResolveSkillListDisplayInput): SkillListSelection {
+  const selected = input.selectedSkillId?.trim();
+  if (selected) {
+    return { skillId: selected, source: 'last-selected' };
+  }
+  const first = input.firstVisibleSkillId?.trim();
+  if (first) {
+    return { skillId: first, source: 'first-visible-row' };
+  }
+  return { skillId: null, source: 'none' };
+}
+
+export function resolveSkillListDisplay(
+  input: ResolveSkillListDisplayInput,
+): ResolvedSkillListDisplay | null {
+  const pathname = normalizedPathname(input.pathname);
+  const requestedMode = input.requestedMode;
+
+  if (pathname === '/skills') {
+    if (requestedMode === 'table') {
+      return {
+        requestedMode,
+        effectiveMode: 'table',
+        surface: 'skills-table',
+        routeAction: 'none',
+        primarySurface: 'skill-table',
+        listSurface: 'table',
+        selection: { skillId: null, source: 'none' },
+        targetPath: pathWithSearch('/skills', input.search),
+        status: null,
+      };
+    }
+
+    const selection = selectedSkill(input);
+    if (selection.skillId) {
+      return {
+        requestedMode,
+        effectiveMode: requestedMode,
+        surface: 'skills-table',
+        routeAction: selection.source === 'first-visible-row'
+          ? 'resolve-first-row'
+          : 'navigate-selected-detail',
+        primarySurface: 'skill-detail',
+        listSurface: requestedMode === 'hidden' ? 'none' : 'sidebar',
+        selection,
+        targetPath: encodeSkillDetailPath(selection.skillId, input.search),
+        status: null,
+      };
+    }
+
+    return {
+      requestedMode,
+      effectiveMode: 'table',
+      surface: 'skills-table',
+      routeAction: 'none',
+      primarySurface: 'empty-skills',
+      listSurface: 'table',
+      selection,
+      targetPath: pathWithSearch('/skills', input.search),
+      status: 'No skill can be opened from the current list.',
+    };
+  }
+
+  const detail = decodeSkillDetail(pathname);
+  if (!detail) {
+    return null;
+  }
+
+  if (requestedMode === 'table') {
+    return {
+      requestedMode,
+      effectiveMode: 'table',
+      surface: 'skill-detail',
+      routeAction: 'navigate-skills',
+      primarySurface: 'skill-table',
+      listSurface: 'table',
+      selection: { skillId: detail.skillId, source: 'route' },
+      targetPath: pathWithSearch('/skills', input.search),
+      status: null,
+    };
+  }
+
+  return {
+    requestedMode,
+    effectiveMode: requestedMode,
+    surface: 'skill-detail',
+    routeAction: 'none',
+    primarySurface: 'skill-detail',
+    listSurface: requestedMode === 'hidden' ? 'none' : 'sidebar',
+    selection: { skillId: detail.skillId, source: 'route' },
+    targetPath: pathWithSearch(pathname, input.search),
+    status: null,
+  };
 }
 
 export function resolveRecurringListDisplay(

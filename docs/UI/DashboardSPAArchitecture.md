@@ -219,13 +219,15 @@ The shell owns:
 - optional command palette provider;
 - shared workspace and collection-display state.
 
-On desktop, the masthead contains the brand and top-level links, including Workflows, Create, Recurring, and Skills. Navigation uses router-native links (`Link`, `NavLink`, or equivalent), and active state comes from the current route rather than direct DOM mutation.
+On desktop, the masthead contains the brand, the primary links Workflows and Create, and the System menu trigger. Recurring and Skills are System destinations grouped under **Workflow resources**. Navigation uses router-native links (`Link`, `NavLink`, or equivalent), and active state comes from the current route rather than direct DOM mutation; the System trigger is active on Recurring and Skills routes.
 
 Below it, the dashboard content region hosts route-family workspaces. A collection workspace may render one contextual collection sidebar as its first column and a primary pane as its second. That sidebar lists Workflows, Recurring schedules, or Skills for the active route; it never contains top-level page links. The workspace must never render an application-navigation sidebar beside the collection sidebar.
 
 `docs/UI/CollectionWorkspaceLayout.md` is canonical for geometry, shared sidebar anatomy, and the common Workflow/Recurring detail frame. List-display controls for participating collections live in the shell/workspace utility area associated with that collection.
 
-Required primitives include `DashboardNavigation`, `CollectionWorkspace`, `CollectionSidebar`, and `EntityDetailFrame`. Workflows, Recurring, and Skills supply adapters rather than copying layout or CSS.
+Required primitives include `DashboardNavigation`, `DashboardSystemMenu`, `CollectionWorkspace`, `CollectionSidebar`, and `EntityDetailFrame`. Primary destinations (Workflows and Create) render as direct masthead links. Feature-enabled workflow-resource, operations, and system destinations — including Recurring and Skills — render under the System control: a popover on desktop and an inline section in the mobile navigation drawer. Their direct destination URLs remain canonical; System is a menu trigger, not a route or landing page.
+
+Collection sidebars remain entity lists for their owning collection and never become application navigation. Grouping a destination under System does not move its content or change its route.
 
 Legacy server-rendered navigation partials should be removed after the SPA shell owns masthead navigation and global utilities. On tablet/mobile, masthead navigation may use a menu and the collection sidebar may collapse into a list-to-detail flow. Non-rendered desktop controls must be absent from the accessibility tree.
 
@@ -282,6 +284,29 @@ Rules:
 - feature gates should hide routes or controls without breaking direct deep links;
 - page data comes from page-specific APIs, not from the shell document;
 - route-specific boot configuration and `/api/dashboard/config` are superseded by this endpoint and should not coexist with it after the SPA target is implemented.
+
+---
+
+## 9.1 Build coherence and version skew
+
+The SPA is code-split: the served HTML references a hashed entry bundle, and the entry bundle references hashed lazy page chunks. Every file must come from one build. Skew has two independent defenses; neither may be removed without the other being strengthened:
+
+- **Client-side skew detection (fail-soft, loud).** The client compiles in its dashboard destination registry and compares it against `destinations` from `/api/ui/info`. A mismatch means the browser is executing assets from a different build than the API. The client must **not** discard the `uiInfo` payload on mismatch — server-provided capability flags remain the runtime truth and feature-gated navigation (for example the System menu) must keep working. Instead it renders a visible `role="alert"` version-skew banner (`.ui-version-skew-banner`) naming the server build id and logs the mismatch. Lazy chunk-load failures reload once per build id (`dynamicImportRecovery`) and otherwise surface the styled route error state.
+- **Deployment-side coherence verification.** `tools/verify_deployed_ui_assets.py --base-url <deployment>` fetches the served HTML, every asset it references, and every lazy chunk referenced by the entry bundle, and fails on any 404 or cross-build incoherence. Run it after every deploy.
+
+Operational rule: never hot-patch individual dist files into a running container (`docker cp` of an entry bundle without its chunks leaves a mixed-build static directory that appears to work only for browsers with warm caches). Ship UI changes by rebuilding and redeploying the image; the frontend dist is always rebuilt from source during the image build and verified by `tools/verify_vite_manifest.py`.
+
+## 9.2 Frontend regression-testing layers
+
+Each layer exists because the one above it cannot see that failure class:
+
+| Layer | Runner | Catches |
+| --- | --- | --- |
+| jsdom contract tests (`frontend/src/**/*.test.tsx`) | `./tools/test_unit.sh --dashboard-only` | DOM structure, routing, feature gating, authored-CSS contracts |
+| Real-browser computed-style tests (`frontend/src/browser/*.browser.test.{ts,tsx}`) | `npm run ui:test:browser` (CI: Playwright Chromium) | Computed styles jsdom cannot resolve: custom-property scoping, pseudo-element gradients, animation, viewport-driven media queries. **Approved visual aesthetics (exact colors, angles, alpha ceilings) are pinned here** — "an effect renders" is not the contract, "the approved effect renders" is |
+| Deployed-asset smoke (`tools/verify_deployed_ui_assets.py`) | post-deploy, any host | Mixed-build static dirs, missing lazy chunks, dead deployments that tests can never see |
+
+When a visual treatment is operator-approved, encode its computed values in a browser test in the same PR. A later "restore/fix the effect" change that alters the look must then fail tests and force an explicit, reviewed baseline update — this is the guardrail that was missing when the status-pill shimmer was restored with the wrong (never-approved) palette.
 
 ---
 
@@ -422,7 +447,7 @@ Frontend tests should cover:
 
 - route rendering under the client router;
 - internal navigation without `window.location.assign`;
-- active masthead state and shared Workflows/Recurring/Skills navigation;
+- active masthead state, including System-trigger activation on Recurring and Skills routes;
 - masthead and single collection-sidebar geometry;
 - shared Workflow/Recurring detail-frame composition;
 - QueryClient persistence across route changes;

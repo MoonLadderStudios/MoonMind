@@ -449,13 +449,59 @@ if ! git rev-parse --verify "origin/$BRANCH" >/dev/null 2>&1; then
   die "Remote branch 'origin/$BRANCH' does not exist."
 fi
 
-say "Checking out local branch '$BRANCH' tracking origin/$BRANCH"
-run_cmd git checkout -B "$BRANCH" "origin/$BRANCH"
+REMOTE_COMMIT="$(git rev-parse "origin/$BRANCH")"
+mapfile -t CHANGED_FILES < <(
+  if [[ "$PRE_PULL_COMMIT" == "$REMOTE_COMMIT" ]]; then
+    printf ''
+  else
+    git diff --name-only "${PRE_PULL_COMMIT}..${REMOTE_COMMIT}" --
+  fi
+)
 
-say "Pulling latest git changes"
-run_cmd git pull --ff-only origin "$BRANCH"
+SKILL_RESOLUTION_BARRIER_REQUIRED="false"
+for changed_file in "${CHANGED_FILES[@]}"; do
+  case "$changed_file" in
+    .agents/* | moonmind/services/skill_resolution.py | moonmind/workflows/agent_skills/*)
+      SKILL_RESOLUTION_BARRIER_REQUIRED="true"
+      break
+      ;;
+  esac
+done
+
+SKILL_RESOLUTION_SERVICE="temporal-worker-agent-runtime"
+SKILL_RESOLUTION_BARRIER_ACTIVE="false"
+
+resume_skill_resolution_worker() {
+  if [[ "$SKILL_RESOLUTION_BARRIER_ACTIVE" != "true" ]]; then
+    return
+  fi
+  if ! "${COMPOSE_CMD[@]}" config --services | grep -Fx "$SKILL_RESOLUTION_SERVICE" >/dev/null; then
+    warn "Cannot restart removed Skill resolution service $SKILL_RESOLUTION_SERVICE; normal Compose reconciliation must start its replacement."
+    return
+  fi
+  warn "Update exited while the Skill resolution barrier was active; restarting $SKILL_RESOLUTION_SERVICE."
+  "${COMPOSE_CMD[@]}" up -d --no-deps --force-recreate "$SKILL_RESOLUTION_SERVICE" || true
+}
+
+if [[ "$SKILL_RESOLUTION_BARRIER_REQUIRED" == "true" ]]; then
+  if ! "${COMPOSE_CMD[@]}" config --services | grep -Fx "$SKILL_RESOLUTION_SERVICE" >/dev/null; then
+    die "Skill resolution source changed but $SKILL_RESOLUTION_SERVICE is unavailable."
+  fi
+  say "Quiescing $SKILL_RESOLUTION_SERVICE before updating live-mounted Skill resolution source"
+  if [[ "$DRY_RUN" != "true" ]]; then
+    SKILL_RESOLUTION_BARRIER_ACTIVE="true"
+    trap resume_skill_resolution_worker EXIT
+  fi
+  run_cmd "${COMPOSE_CMD[@]}" stop "$SKILL_RESOLUTION_SERVICE"
+fi
+
+say "Checking out local branch '$BRANCH' at fetched commit $REMOTE_COMMIT"
+run_cmd git checkout -B "$BRANCH" "$REMOTE_COMMIT"
 
 POST_PULL_COMMIT="$(git rev-parse HEAD)"
+if [[ "$POST_PULL_COMMIT" != "$REMOTE_COMMIT" ]]; then
+  die "Checked-out commit $POST_PULL_COMMIT does not match fetched commit $REMOTE_COMMIT."
+fi
 
 if [[ "$SKIP_COMPOSE_PULL" != "true" ]]; then
   say "Pulling updated compose images"
@@ -473,17 +519,20 @@ if [[ "$SKIP_COMPOSE_PULL" != "true" ]]; then
   fi
 fi
 
+if [[ "$SKILL_RESOLUTION_BARRIER_REQUIRED" == "true" ]]; then
+  if "${COMPOSE_CMD[@]}" config --services | grep -Fx "$SKILL_RESOLUTION_SERVICE" >/dev/null; then
+    say "Recreating $SKILL_RESOLUTION_SERVICE with coherent Skill resolver, catalog, and image source"
+    run_cmd "${COMPOSE_CMD[@]}" up -d --no-deps --force-recreate "$SKILL_RESOLUTION_SERVICE"
+  else
+    say "Skill resolution service $SKILL_RESOLUTION_SERVICE was removed by the update; normal Compose reconciliation will start the replacement topology"
+  fi
+  SKILL_RESOLUTION_BARRIER_ACTIVE="false"
+  trap - EXIT
+fi
+
 if [[ "$PRE_PULL_COMMIT" == "$POST_PULL_COMMIT" ]]; then
   say "No new commit received from origin/$BRANCH; skipping file-based restart detection."
 fi
-
-mapfile -t CHANGED_FILES < <(
-  if [[ "$PRE_PULL_COMMIT" == "$POST_PULL_COMMIT" ]]; then
-    printf ''
-  else
-    git diff --name-only "${PRE_PULL_COMMIT}..${POST_PULL_COMMIT}" --
-  fi
-)
 
 if [[ "$PRE_PULL_COMMIT" == "$POST_PULL_COMMIT" ]]; then
   if [[ "$SKIP_COMPOSE_PULL" == "true" ]]; then
@@ -502,6 +551,7 @@ for service in "${COMPOSE_SERVICES[@]}"; do
 done
 
 declare -A target_services=()
+declare -A force_recreate_services=()
 
 add_target() {
   local service="$1"
@@ -528,6 +578,28 @@ add_all_services() {
   done
 }
 
+add_force_recreate_target() {
+  local service="$1"
+  add_target "$service"
+  if [[ "$service" == "temporal-worker-deployment-control" ]]; then
+    return
+  fi
+  if [[ -v target_services["$service"] ]]; then
+    force_recreate_services["$service"]=1
+  fi
+}
+
+add_runtime_source_services_for_recreate() {
+  local service
+  for service in "${COMPOSE_SERVICES[@]}"; do
+    case "$service" in
+      api | orchestrator | temporal-worker-*)
+        add_force_recreate_target "$service"
+        ;;
+    esac
+  done
+}
+
 if load_compose_service_images; then
   mark_stale_services_for_restart
 fi
@@ -540,15 +612,14 @@ for changed_file in "${CHANGED_FILES[@]}"; do
     docker-compose*.y*ml | .env* | AGENTS.md | .env-template* | .env.vllm-template* | .gitmodules )
       add_all_services
       ;;
-    services/*)
-      service="${changed_file#services/}"
-      service="${service%%/*}"
-      add_target "$service"
-      ;;
-    moonmind/*|tools/*|.agents/*|.gemini/*|specs/*|.specify/*|docs/*|README*|LICENSE|.gitignore )
+    moonmind/* | api_service/* | services/* | .agents/*)
       add_all_services
+      add_runtime_source_services_for_recreate
+      if [[ "$SKILL_RESOLUTION_BARRIER_REQUIRED" == "true" ]]; then
+        unset "force_recreate_services[$SKILL_RESOLUTION_SERVICE]"
+      fi
       ;;
-    api_service/*)
+    tools/* | .gemini/* | specs/* | .specify/* | docs/* | README* | LICENSE | .gitignore)
       add_all_services
       ;;
     init_db/*)
@@ -565,11 +636,11 @@ for changed_file in "${CHANGED_FILES[@]}"; do
   esac
 done
 
-readarray -t SERVICES_TO_RESTART < <(
-  for target in "${!target_services[@]}"; do
+readarray -t SERVICES_TO_RECREATE < <(
+  for target in "${!force_recreate_services[@]}"; do
     [[ -n "${target//[[:space:]]/}" ]] || continue
     case "$target" in
-      agent-workspaces-init | codex-auth-init | gemini-auth-init | init-db )
+      agent-workspaces-init | codex-auth-init | gemini-auth-init | init-db | temporal-worker-deployment-control)
         continue
         ;;
       *)
@@ -579,9 +650,27 @@ readarray -t SERVICES_TO_RESTART < <(
   done | sort
 )
 
-if [[ ${#SERVICES_TO_RESTART[@]} -eq 0 ]]; then
+readarray -t SERVICES_TO_RESTART < <(
+  for target in "${!target_services[@]}"; do
+    [[ -n "${target//[[:space:]]/}" ]] || continue
+    case "$target" in
+      agent-workspaces-init | codex-auth-init | gemini-auth-init | init-db | temporal-worker-deployment-control)
+        continue
+        ;;
+      *)
+        if [[ ! -v force_recreate_services["$target"] ]]; then
+          printf '%s\n' "$target"
+        fi
+        ;;
+    esac
+  done | sort
+)
+
+if [[ ${#SERVICES_TO_RESTART[@]} -eq 0 && ${#SERVICES_TO_RECREATE[@]} -eq 0 ]]; then
   say "No restartable services detected after filtering."
-else
+fi
+
+if [[ ${#SERVICES_TO_RESTART[@]} -gt 0 ]]; then
   if [[ "$RESTART_ORCHESTRATOR" == "true" ]]; then
     say "Restarting changed services: ${SERVICES_TO_RESTART[*]}"
   else
@@ -590,27 +679,13 @@ else
   run_cmd "${COMPOSE_CMD[@]}" up -d --no-deps "${SERVICES_TO_RESTART[@]}"
 fi
 
-if [[ ${#SERVICES_TO_RESTART[@]} -eq 0 ]]; then
-  say "No selected services require reconciliation."
-else
-  readarray -t RECONCILE_SERVICES < <(
-    for target in "${SERVICES_TO_RESTART[@]}"; do
-      [[ -n "${target//[[:space:]]/}" ]] || continue
-      printf '%s\n' "$target"
-    done
-  )
-
-  if [[ ${#RECONCILE_SERVICES[@]} -eq 0 ]]; then
-    say "No selected services require reconciliation."
-    :
-  else
+if [[ ${#SERVICES_TO_RECREATE[@]} -gt 0 ]]; then
   if [[ "$RESTART_ORCHESTRATOR" == "true" ]]; then
-    say "Reconciling selected services for reconciliation: ${RECONCILE_SERVICES[*]}"
+    say "Force-recreating services with updated bind-mounted runtime source: ${SERVICES_TO_RECREATE[*]}"
   else
-    say "Reconciling selected services for reconciliation (excluding orchestrator): ${RECONCILE_SERVICES[*]}"
+    say "Force-recreating services with updated bind-mounted runtime source (excluding orchestrator): ${SERVICES_TO_RECREATE[*]}"
   fi
-  run_cmd "${COMPOSE_CMD[@]}" up -d --no-deps "${RECONCILE_SERVICES[@]}"
-  fi
+  run_cmd "${COMPOSE_CMD[@]}" up -d --no-deps --force-recreate "${SERVICES_TO_RECREATE[@]}"
 fi
 
 say "MoonMind update complete"

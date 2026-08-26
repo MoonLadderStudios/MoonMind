@@ -37,17 +37,21 @@ from moonmind.schemas.agent_runtime_models import (
     _ALLOWED_MANAGED_LAUNCH_METADATA_KEYS,
     _contains_sensitive_key,
     AgentExecutionRequest,
+    AgentTerminalContract,
     AgentRunHandle,
     AgentRunResult,
     AgentRunStatus,
     ManagedAgentRuntimeProfile,
+    ManagedRuntimeWorkloadMode,
     ManagedRunRecord,
     ManagedRuntimeProfile,
     TERMINAL_AGENT_RUN_STATES,
-    build_docker_sidecar_launch_plan,
 )
-from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+from moonmind.workflows.executions.runtime_capabilities import (
+    resolve_runtime_execution_capabilities,
+)
 from moonmind.workflows.executions.runtime_defaults import resolve_runtime_defaults
+from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from api_service.services.provider_profile_readiness import (
     provider_profile_launch_ready_from_payload,
 )
@@ -82,11 +86,22 @@ _PR_RESOLVER_BLOCKED_STATUSES: frozenset[str] = frozenset(
     {"blocked", "attempts_exhausted"}
 )
 _PR_RESOLVER_MERGED_STATUSES: frozenset[str] = frozenset({"merged"})
+# fix_only finish mode reaches a clean merge gate without merging.
+_PR_RESOLVER_REVIEW_CLEAN_STATUSES: frozenset[str] = frozenset({"review_clean"})
 _PR_RESOLVER_TERMINAL_STATUSES: frozenset[str] = (
-    _PR_RESOLVER_FAILURE_STATUSES | _PR_RESOLVER_MERGED_STATUSES
+    _PR_RESOLVER_FAILURE_STATUSES
+    | _PR_RESOLVER_MERGED_STATUSES
+    | _PR_RESOLVER_REVIEW_CLEAN_STATUSES
 )
 _PR_RESOLVER_TERMINAL_DISPOSITIONS: frozenset[str] = frozenset(
-    {"merged", "already_merged", "reenter_gate", "manual_review", "hard_failure"}
+    {
+        "merged",
+        "already_merged",
+        "review_clean",
+        "reenter_gate",
+        "manual_review",
+        "hard_failure",
+    }
 )
 _PR_RESOLVER_REENTER_NEXT_STEPS: frozenset[str] = frozenset(
     {
@@ -113,7 +128,20 @@ _AUTO_PUBLISH_ALLOWED_STATUSES = frozenset(
 def managed_run_status_metadata(record: ManagedRunRecord) -> dict[str, Any]:
     """Return compact status metadata that is safe for workflow history."""
 
-    metadata: dict[str, Any] = {"runtimeId": record.runtime_id}
+    capabilities = resolve_runtime_execution_capabilities(record.runtime_id)
+    metadata: dict[str, Any] = {
+        "runtimeId": capabilities.runtime_id,
+        "capabilitySetVersion": capabilities.capability_set_version,
+        "capabilityDigest": capabilities.capability_digest,
+        "runtimeCapabilities": capabilities.model_dump(by_alias=True, mode="json"),
+    }
+    if record.workspace_path:
+        metadata["workspaceLocator"] = {
+            "kind": "managed_runtime",
+            "runtimeId": capabilities.runtime_id,
+            "agentRunId": record.run_id,
+            "relativePath": "repo",
+        }
     timestamp_fields = {
         "startedAt": record.started_at,
         "finishedAt": record.finished_at,
@@ -354,6 +382,7 @@ def _canonical_auto_publish_result(payload: Mapping[str, Any]) -> dict[str, Any]
         "mode": evidence.mode,
         "owner": evidence.owner,
         "skillId": evidence.skill_id,
+        "executionRef": evidence.execution_ref,
         "status": evidence.status,
         "action": evidence.action,
         "repository": evidence.repository,
@@ -453,7 +482,15 @@ def _normalize_pr_resolver_auto_publish_result(
         final.get("repository"),
         final.get("repo"),
     ) or _github_repository_from_pr_url(pr_url)
-    if not pr_url or not branch or not repository:
+    execution_ref = _first_stripped_text(
+        payload.get("executionRef"),
+        payload.get("execution_ref"),
+        resolver_payload.get("executionRef"),
+        resolver_payload.get("execution_ref"),
+        final.get("executionRef"),
+        final.get("execution_ref"),
+    )
+    if not pr_url or not branch or not repository or not execution_ref:
         return None
 
     verification = payload.get("verification")
@@ -479,6 +516,7 @@ def _normalize_pr_resolver_auto_publish_result(
         "mode": "auto",
         "owner": "agent",
         "skillId": "pr-resolver",
+        "executionRef": execution_ref,
         "status": "verified",
         "action": "merge",
         "repository": repository,
@@ -506,7 +544,8 @@ class ManagedProfileLaunchContext:
     delta_env_overrides: dict[str, str]
     passthrough_env_keys: list[str]
     env_keys_count: int
-    docker_sidecar_launch_plan: dict[str, Any] | None = None
+    workload_mode: ManagedRuntimeWorkloadMode = "container-jobs"
+    owner_user_id: str | None = None
 
 def default_credential_source_for_runtime(runtime_id: str) -> str:
     """Return the deterministic default credential source for one runtime."""
@@ -528,19 +567,16 @@ def build_managed_profile_launch_context(
 
     del workflow_id  # Reserved for activity-side shaping.
     runtime_profile = profile.get("runtime_profile") or profile.get("runtimeProfile")
-    docker_sidecar_launch_plan: dict[str, Any] | None = None
+    workload_mode: ManagedRuntimeWorkloadMode = "container-jobs"
     if runtime_profile is not None:
         if not isinstance(runtime_profile, Mapping):
             raise ValueError(
                 "runtime_profile must be a mapping of profile fields; "
                 "non-object runtime profiles cannot satisfy launch invariants"
             )
-        validated_runtime_profile = ManagedAgentRuntimeProfile.model_validate(
+        workload_mode = ManagedAgentRuntimeProfile.model_validate(
             runtime_profile
-        )
-        plan = build_docker_sidecar_launch_plan(validated_runtime_profile)
-        if plan is not None:
-            docker_sidecar_launch_plan = plan.model_dump(mode="json", by_alias=True)
+        ).workload_mode
     credential_source = str(
         profile.get("credential_source") or default_credential_source
     ).strip() or default_credential_source
@@ -556,6 +592,9 @@ def build_managed_profile_launch_context(
 
     profile_id = str(profile.get("profile_id") or "").strip()
     profile_runtime = str(runtime_for_profile or "").strip()
+    owner_user_id = str(
+        profile.get("owner_user_id") or profile.get("ownerUserId") or ""
+    ).strip() or None
 
     runtime_env_overrides = profile.get("runtime_env_overrides") or {}
     if isinstance(runtime_env_overrides, dict):
@@ -584,7 +623,8 @@ def build_managed_profile_launch_context(
         delta_env_overrides=delta_env_overrides,
         passthrough_env_keys=passthrough_env_keys,
         env_keys_count=len(delta_env_overrides) + len(passthrough_env_keys),
-        docker_sidecar_launch_plan=docker_sidecar_launch_plan,
+        workload_mode=workload_mode,
+        owner_user_id=owner_user_id,
     )
 
 def _in_workflow_context() -> bool:
@@ -825,6 +865,7 @@ def _derive_pr_resolver_metadata(
     workspace_path: str | None,
     *,
     merge_gate_owned: bool = False,
+    supports_same_session_continuation: bool = False,
     run_id: str | None = None,
     workflow_id: str | None = None,
     not_before: datetime | None = None,
@@ -864,7 +905,9 @@ def _derive_pr_resolver_metadata(
                 "terminalResultPresent": False,
                 "missingEvidence": [_PR_RESOLVER_RESULT_PATHS[0].as_posix()],
                 "retryRecommendation": (
-                    "continue_same_session" if merge_gate_owned else "retry_new_session"
+                    "continue_same_session"
+                    if merge_gate_owned and supports_same_session_continuation
+                    else "retry_new_session"
                 ),
             }
         )
@@ -980,14 +1023,19 @@ class ManagedAgentAdapter:
                 f"got '{request.agent_kind}'"
             )
 
+        runtime_for_profile = self._runtime_id or request.agent_id
+        # Status and result collection consume the same canonical capability
+        # descriptor, so reject unsupported generic runtimes before launching
+        # a process that could never be polled to completion.
+        capabilities = resolve_runtime_execution_capabilities(runtime_for_profile)
+        runtime_for_profile = capabilities.runtime_id
+
         profile = await self._resolve_profile(
             execution_profile_ref=request.execution_profile_ref,
-            runtime_id=self._runtime_id or request.agent_id,
+            runtime_id=runtime_for_profile,
             profile_selector=request.profile_selector.model_dump(by_alias=True, exclude_none=True) if hasattr(request, "profile_selector") and request.profile_selector else None,
         )
         profile_id: str = profile["profile_id"]
-        runtime_for_profile = self._runtime_id or request.agent_id
-
         # --- Strategy delegation for defaults (Phase 1) ---
         from moonmind.workflows.temporal.runtime.strategies import get_strategy
 
@@ -1022,7 +1070,30 @@ class ManagedAgentAdapter:
         # (DOC-REQ-008 / constitution security rule).
         self._active_profile_id = launch_context.profile_id
         
-        run_id = _generate_run_id()
+        workspace_spec = request.workspace_spec or {}
+        workspace_locator = workspace_spec.get("workspaceLocator") or {}
+        restored_run_id = (
+            str(workspace_locator.get("agentRunId") or "").strip()
+            if isinstance(workspace_locator, Mapping)
+            else ""
+        )
+        restored_runtime_id = (
+            str(workspace_locator.get("runtimeId") or "").strip()
+            if isinstance(workspace_locator, Mapping)
+            else ""
+        )
+        if restored_run_id and restored_runtime_id:
+            from moonmind.workflows.executions.runtime_defaults import (
+                normalize_runtime_id,
+            )
+
+            if normalize_runtime_id(restored_runtime_id) != normalize_runtime_id(
+                runtime_for_profile
+            ):
+                raise RuntimeError(
+                    "managed workspace locator runtime does not match selected runtime"
+                )
+        run_id = restored_run_id or _generate_run_id()
         started_at = _current_time()
 
         # NOTE: Slot acquisition is handled by AgentRun before adapter.start()
@@ -1079,6 +1150,44 @@ class ManagedAgentAdapter:
             
             # The workspace path is usually managed by the worker, but we can pass it if known
             workspace_path = None
+            restoration_requirement = None
+            if restored_run_id:
+                restored_record = (
+                    self._run_store.load(restored_run_id)
+                    if self._run_store is not None
+                    else None
+                )
+                if restored_record is not None and restored_record.workspace_path:
+                    allowed_workspace_workflow_ids = {
+                        self._workflow_id,
+                        request.correlation_id,
+                    }
+                    if request.step_execution is not None:
+                        allowed_workspace_workflow_ids.add(
+                            request.step_execution.workflow_id
+                        )
+                    if (
+                        restored_record.workflow_id
+                        and restored_record.workflow_id
+                        not in allowed_workspace_workflow_ids
+                    ):
+                        raise RuntimeError(
+                            "managed workspace locator belongs to another AgentRun"
+                        )
+                    workspace_path = restored_record.workspace_path
+                else:
+                    workspace_path = str(
+                        Path("/var/lib/moonmind/managed-runs")
+                        / restored_run_id
+                        / "repo"
+                    )
+                checkpoint_ref = workspace_spec.get("sourceCheckpointRef")
+                capability_digest = workspace_spec.get("capabilityDigest")
+                if checkpoint_ref or capability_digest:
+                    restoration_requirement = {
+                        "checkpointRef": checkpoint_ref,
+                        "capabilityDigest": capability_digest,
+                    }
             
             record_dict = await self._run_launcher(
                 payload={
@@ -1087,12 +1196,22 @@ class ManagedAgentAdapter:
                     "request": request.model_dump(mode="json", by_alias=True) if hasattr(request, "model_dump") else request,
                     "profile": profile_obj.model_dump(mode="json", by_alias=True),
                     "workspace_path": workspace_path,
+                    "restoration_requirement": restoration_requirement,
                 }
             )
+            terminal_contract = record_dict.get("terminalContract")
+            if isinstance(terminal_contract, Mapping):
+                request.terminal_contract = AgentTerminalContract.model_validate(
+                    dict(terminal_contract)
+                )
             status = record_dict.get("status", "launching")
         elif self._run_store is not None:
             record = ManagedRunRecord(
                 run_id=run_id,
+                workflow_id=self._workflow_id,
+                owner_run_id=(request.step_execution.run_id if request.step_execution else None),
+                logical_step_id=(request.step_execution.logical_step_id if request.step_execution else None),
+                execution_ordinal=(request.step_execution.execution_ordinal if request.step_execution else None),
                 agent_id=request.agent_id,
                 runtime_id=self._runtime_id or request.agent_id,
                 status="launching",
@@ -1119,9 +1238,6 @@ class ManagedAgentAdapter:
                 "profile_id": launch_context.profile_id,
                 "credential_source": credential_source,
                 "env_keys_count": launch_context.env_keys_count,
-                "docker_sidecar_launch_plan": (
-                    launch_context.docker_sidecar_launch_plan
-                ),
             },
         )
 
@@ -1183,15 +1299,19 @@ class ManagedAgentAdapter:
                         output_refs.append(ref)
                 summary = record.error_message or f"Completed with status {record.status}"
                 failure_class = record.failure_class
-                metadata = _derive_pr_resolver_metadata(
-                    record.workspace_path,
-                    merge_gate_owned=pr_resolver_merge_gate_owned,
-                    run_id=record.run_id,
-                    workflow_id=record.workflow_id,
-                    not_before=record.started_at,
-                )
-                if not pr_resolver_expected:
-                    metadata.pop("retryRecommendation", None)
+                metadata: dict[str, Any] = {}
+                if pr_resolver_expected:
+                    metadata = _derive_pr_resolver_metadata(
+                        record.workspace_path,
+                        merge_gate_owned=pr_resolver_merge_gate_owned,
+                        supports_same_session_continuation=(
+                            resolve_runtime_execution_capabilities(record.runtime_id)
+                            .supports_same_session_continuation
+                        ),
+                        run_id=record.run_id,
+                        workflow_id=record.workflow_id,
+                        not_before=record.started_at,
+                    )
                 if (
                     include_workspace_auto_publish_evidence
                     and "publishResult" not in metadata

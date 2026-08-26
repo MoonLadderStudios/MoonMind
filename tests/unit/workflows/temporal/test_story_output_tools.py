@@ -230,6 +230,31 @@ class _FakeHttpClient:
         return _FakeHttpResponse({"id": 1})
 
 
+class _CommentReadTimeoutHttpClient(_FakeHttpClient):
+    timeouts: list[float] = []
+
+    def __init__(self, *args, timeout: float, **kwargs) -> None:
+        super().__init__(*args, timeout=timeout, **kwargs)
+        self.__class__.timeouts.append(timeout)
+
+    async def post(self, url: str, **kwargs):
+        self.requests.append(("POST", url, kwargs))
+        raise story_tools.httpx.ReadTimeout(
+            "response timed out after GitHub accepted the comment",
+            request=story_tools.httpx.Request("POST", url),
+        )
+
+
+class _CommentHttpRejectedClient(_FakeHttpClient):
+    async def post(self, url: str, **kwargs):
+        self.requests.append(("POST", url, kwargs))
+        return story_tools.httpx.Response(
+            403,
+            request=story_tools.httpx.Request("POST", url),
+            json={"message": "secondary rate limit"},
+        )
+
+
 @pytest.mark.asyncio
 async def test_load_github_issue_preset_brief_uses_requested_artifact_path(
     monkeypatch: pytest.MonkeyPatch,
@@ -393,6 +418,169 @@ async def test_update_github_issue_status_allows_code_review_without_verificatio
 
 
 @pytest.mark.asyncio
+async def test_update_github_issue_status_declares_completed_close_side_effect(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(story_tools.httpx, "AsyncClient", _FakeHttpClient)
+    service = _FakeGitHubService()
+
+    result = await update_github_issue_status(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "mode": "finalize_after_pr_or_done",
+        },
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["sideEffect"] == {
+        "effectClass": "external_non_idempotent",
+        "kind": "github",
+        "operation": "github.issue.close",
+        "target": "https://github.com/MoonLadderStudios/MoonMind/issues/1067",
+        "summary": (
+            "Updated GitHub issue MoonLadderStudios/MoonMind#1067 with mode done."
+        ),
+    }
+
+
+@pytest.mark.asyncio
+async def test_update_github_issue_status_preserves_patch_when_comment_times_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _CommentReadTimeoutHttpClient.timeouts = []
+    monkeypatch.setattr(
+        story_tools.httpx,
+        "AsyncClient",
+        _CommentReadTimeoutHttpClient,
+    )
+    service = _FakeGitHubService()
+
+    result = await update_github_issue_status(
+        {
+            "repository": "MoonLadderStudios/Tactics",
+            "issueNumber": 2355,
+            "mode": "start",
+        },
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["appliedActions"] == ["patch_issue"]
+    assert result.outputs["commentStatus"] == "unconfirmed"
+    assert result.outputs["confirmedLabels"] == ["status: in-progress"]
+    assert result.outputs["warnings"] == [
+        "GitHub issue status was updated, but the automation comment result "
+        "could not be confirmed after ReadTimeout; the comment was not retried "
+        "to avoid a duplicate."
+    ]
+    assert _CommentReadTimeoutHttpClient.timeouts == [10.0, 15.0]
+    assert (
+        _CommentReadTimeoutHttpClient.timeouts[0]
+        + (2 * _CommentReadTimeoutHttpClient.timeouts[1])
+        < 60.0
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_github_issue_status_retries_confirmed_comment_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        story_tools.httpx,
+        "AsyncClient",
+        _CommentHttpRejectedClient,
+    )
+    service = _FakeGitHubService()
+
+    result = await update_github_issue_status(
+        {
+            "repository": "MoonLadderStudios/Tactics",
+            "issueNumber": 2355,
+            "mode": "start",
+        },
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "FAILED"
+    assert result.outputs["appliedActions"] == ["patch_issue"]
+    assert result.outputs["commentStatus"] == "rejected"
+    assert result.outputs["confirmedLabels"] == ["status: in-progress"]
+    assert result.outputs["summary"] == (
+        "GitHub issue status was updated, but the automation comment failed "
+        "with HTTP 403. github status 403"
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_github_issue_status_blocks_done_when_pushed_changes_have_no_pr() -> None:
+    service = _FakeGitHubService()
+
+    result = await update_github_issue_status(
+        {
+            "repository": "MoonLadderStudios/Tactics",
+            "issueNumber": 2231,
+            "mode": "finalize_after_pr_or_done",
+            "previousOutputs": {
+                "push_status": "pushed",
+                "push_branch": "feature/issue-2231",
+                "push_commit_count": 6,
+            },
+        },
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "FAILED"
+    assert result.outputs == {
+        "issueRef": "MoonLadderStudios/Tactics#2231",
+        "decision": "blocked",
+        "pushStatus": "pushed",
+        "commitCount": 6,
+        "summary": (
+            "Skipped GitHub issue finalization because repository changes were "
+            "published without an authoritative pull request URL."
+        ),
+    }
+    assert service.token_requests == []
+
+
+@pytest.mark.asyncio
+async def test_update_github_issue_status_uses_pr_url_from_publish_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(story_tools.httpx, "AsyncClient", _FakeHttpClient)
+    service = _FakeGitHubService()
+
+    result = await update_github_issue_status(
+        {
+            "repository": "MoonLadderStudios/Tactics",
+            "issueNumber": 2231,
+            "mode": "finalize_after_pr_or_done",
+            "requireVerification": False,
+            "previousOutputs": {
+                "publishContext": {
+                    "pushStatus": "pushed",
+                    "commitCount": 6,
+                    "pullRequestUrl": (
+                        "https://github.com/MoonLadderStudios/Tactics/pull/2240"
+                    ),
+                },
+            },
+        },
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["appliedActions"] == ["patch_issue", "comment"]
+    assert result.outputs["sideEffect"]["operation"] == "github.issue.update"
+    assert service.token_requests == [
+        "MoonLadderStudios/Tactics",
+        "MoonLadderStudios/Tactics",
+    ]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("require_verification", [None, "", "   "])
 async def test_update_github_issue_status_requires_verification_for_blank_values(
     tmp_path,
@@ -464,6 +652,37 @@ async def test_update_github_issue_status_uses_previous_verification_payload(
         "MoonLadderStudios/MoonMind",
         "MoonLadderStudios/MoonMind",
     ]
+
+
+@pytest.mark.asyncio
+async def test_update_github_issue_status_uses_previous_pull_request_output(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(story_tools.httpx, "AsyncClient", _FakeHttpClient)
+    service = _FakeGitHubService()
+
+    result = await update_github_issue_status(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 3324,
+            "mode": "finalize_after_pr_or_done",
+            "pullRequestArtifactPath": str(tmp_path / "unavailable-pr.json"),
+            "verificationArtifactPath": str(tmp_path / "unavailable-verify.json"),
+            "previousOutputs": {
+                "pull_request_url": (
+                    "https://github.com/MoonLadderStudios/MoonMind/pull/3343"
+                ),
+                "moonSpecVerify": {"verdict": "FULLY_IMPLEMENTED"},
+            },
+        },
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["appliedActions"] == ["patch_issue", "comment"]
+    assert "mode code_review" in result.outputs["summary"]
+    assert result.outputs["sideEffect"]["operation"] == "github.issue.update"
 
 
 @pytest.mark.asyncio
@@ -1400,11 +1619,7 @@ async def test_create_github_issues_from_reconciled_story_breakdown():
     request = service.create_issue_requests[0]
     assert request["repo"] == "MoonLadderStudios/MoonMind"
     assert request["title"] == "Create GitHub issue story output"
-    assert request["labels"] == [
-        "moonmind",
-        "MM-1068",
-        "moonmind-workflow-mm-1068-run",
-    ]
+    assert request["labels"] == ["moonmind", "MM-1068"]
     assert "Source Document: docs/Workflows/SkillAndPlanContracts.md" in request["body"]
     assert "Source Title: MM-1063: Update Presets" in request["body"]
     assert "Source Sections:" in request["body"]
@@ -1412,6 +1627,29 @@ async def test_create_github_issues_from_reconciled_story_breakdown():
     assert "DESIGN-REQ-014" in request["body"]
     assert "One issue is created." in request["body"]
     assert request["github_token"] is None
+
+
+@pytest.mark.asyncio
+async def test_create_github_issues_does_not_synthesize_workflow_label():
+    service = _FakeGitHubService()
+
+    result = await create_github_issues_from_stories(
+        {
+            "repository": "MoonLadderStudios/Tactics",
+            "workflowId": "mm:04cd8f17-f248-42d2-874e-d1bbf8dc039a",
+            "stories": [
+                {
+                    "id": "STORY-001",
+                    "summary": "Authorize the deterministic background catalog",
+                    "description": "Create the remaining implementation story.",
+                }
+            ],
+        },
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert service.create_issue_requests[0]["labels"] == []
 
 
 @pytest.mark.asyncio
@@ -1625,6 +1863,42 @@ async def test_create_github_issue_workflows_from_issue_mappings():
     assert "Source canonical claim IDs: DESIGN-REQ-007." in workflow["instructions"]
     assert "breakdown task" not in workflow["instructions"]
     assert "breakdown workflow" in workflow["instructions"]
+
+
+@pytest.mark.asyncio
+async def test_create_github_issue_workflow_preserves_merge_automation_publish_shape():
+    creator = _FakeExecutionCreator()
+
+    await create_github_issue_implement_workflows_from_issue_mappings(
+        {
+            "github": {
+                "issueMappings": [
+                    {
+                        "storyId": "STORY-001",
+                        "summary": "Merge automatically",
+                        "repository": "MoonLadderStudios/MoonMind",
+                        "issueNumber": "11",
+                    }
+                ]
+            },
+            "githubOrchestration": {
+                "task": {
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "publish": {
+                        "mode": "pr",
+                        "mergeAutomation": {"enabled": True},
+                    },
+                }
+            },
+        },
+        execution_creator=creator,
+    )
+
+    workflow = creator.requests[0]["initial_parameters"]["workflow"]
+    assert workflow["publish"] == {
+        "mode": "pr",
+        "mergeAutomation": {"enabled": True},
+    }
 
 
 @pytest.mark.asyncio

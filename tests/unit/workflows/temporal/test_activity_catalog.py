@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import pytest
+from temporalio import activity
 
+from moonmind.config.settings import TemporalSettings
 from moonmind.workflows.skills.skill_plan_contracts import parse_skill_definition
 from moonmind.workflows.temporal.activity_catalog import (
     ARTIFACTS_FLEET,
@@ -22,6 +24,14 @@ from moonmind.workflows.temporal.activity_catalog import (
     build_default_activity_catalog,
     manifest_ingest_activity_routes,
 )
+from moonmind.workflows.temporal.activity_runtime import (
+    _ACTIVITY_HANDLER_ATTRS,
+    validate_activity_catalog_runtime_bindings,
+)
+from moonmind.workflows.temporal.workflow_registry import (
+    workflow_fleet_activity_handlers,
+)
+
 
 def _skill_definition(
     *,
@@ -80,12 +90,12 @@ def test_default_catalog_exposes_canonical_queues_and_fleets():
         == INTEGRATIONS_TASK_QUEUE
     )
     omnigent_route = catalog.resolve_activity("integration.omnigent.execute")
-    assert omnigent_route.task_queue == INTEGRATIONS_TASK_QUEUE
-    assert omnigent_route.capability_class == "integration:omnigent"
+    assert omnigent_route.task_queue == AGENT_RUNTIME_TASK_QUEUE
+    assert omnigent_route.capability_class == "agent_runtime"
     assert omnigent_route.heartbeat_required is True
     assert (
         catalog.resolve_activity("integration.omnigent.execute").task_queue
-        == INTEGRATIONS_TASK_QUEUE
+        == AGENT_RUNTIME_TASK_QUEUE
     )
     assert (
         catalog.resolve_activity("workload.run").task_queue
@@ -124,6 +134,62 @@ def test_default_catalog_exposes_canonical_queues_and_fleets():
     assert "deployment_control" in fleets[DEPLOYMENT_FLEET].capabilities
     assert "docker_workload" in fleets[AGENT_RUNTIME_FLEET].capabilities
 
+
+def test_agent_runtime_control_queue_must_be_isolated() -> None:
+    temporal_settings = TemporalSettings(
+        activity_agent_runtime_task_queue="shared-agent-runtime",
+        activity_agent_runtime_control_task_queue="shared-agent-runtime",
+    )
+
+    with pytest.raises(TemporalActivityCatalogError, match="must be isolated"):
+        build_default_activity_catalog(temporal_settings)
+
+
+def test_default_catalog_matches_runtime_binding_inventory() -> None:
+    """Every concrete handler must be routable, and every route executable."""
+    catalog = build_default_activity_catalog()
+    catalog_activity_types = {
+        definition.activity_type for definition in catalog.activities
+    }
+    workflow_local_activity_types = {
+        activity._Definition.must_from_callable(handler).name
+        for handler in workflow_fleet_activity_handlers()
+    }
+    catalog_workflow_local_activity_types = (
+        catalog_activity_types & workflow_local_activity_types
+    )
+
+    validate_activity_catalog_runtime_bindings(catalog)
+    assert catalog_workflow_local_activity_types == {
+        "integration.resolve_adapter_metadata",
+        "checkpoint_branch.turn.mark_running",
+        "checkpoint_branch.turn.persist_terminal",
+        "checkpoint_branch.turn.persist_terminal_rejection",
+    }
+    assert catalog_activity_types - catalog_workflow_local_activity_types == (
+        set(_ACTIVITY_HANDLER_ATTRS) - {"mm.tool.execute"}
+    )
+
+
+def test_terminal_evidence_evaluation_routes_to_agent_runtime_fleet() -> None:
+    temporal_settings = TemporalSettings()
+    catalog = build_default_activity_catalog(temporal_settings)
+    route = catalog.resolve_activity(
+        "agent_runtime.evaluate_terminal_evidence"
+    )
+
+    assert route.fleet == AGENT_RUNTIME_FLEET
+    assert (
+        route.task_queue
+        == temporal_settings.activity_agent_runtime_control_task_queue
+    )
+    fleet = {item.fleet: item for item in catalog.fleets}[AGENT_RUNTIME_FLEET]
+    assert fleet.task_queues == (
+        AGENT_RUNTIME_TASK_QUEUE,
+        temporal_settings.activity_agent_runtime_control_task_queue,
+    )
+
+
 def test_plan_generate_timeout_budget_allows_retry_after_attempt_timeout():
     catalog = build_default_activity_catalog()
 
@@ -147,6 +213,17 @@ def test_launch_session_timeout_budget_covers_cold_sidecar_startup():
     assert route.timeouts.heartbeat_timeout_seconds == 120
     assert route.heartbeat_required is True
     assert route.retries.max_attempts == 3
+
+def test_managed_status_timeout_budget_covers_worker_fleet_rollout():
+    catalog = build_default_activity_catalog()
+
+    route = catalog.resolve_activity("agent_runtime.status")
+
+    assert route.timeouts.start_to_close_seconds == 60
+    assert route.timeouts.schedule_to_close_seconds == 600
+    assert route.timeouts.heartbeat_timeout_seconds == 30
+    assert route.heartbeat_required is True
+    assert route.retries.max_attempts == 2
 
 def test_resolve_skill_uses_capability_routing_for_mm_skill_execute():
     catalog = build_default_activity_catalog()
@@ -220,21 +297,6 @@ def test_resolve_explicit_activity_uses_catalog_binding():
     assert route.fleet == INTEGRATIONS_FLEET
     assert route.task_queue == INTEGRATIONS_TASK_QUEUE
 
-def test_resolve_curated_pentest_activity_uses_agent_runtime_binding():
-    catalog = build_default_activity_catalog()
-    route = catalog.resolve_skill(
-        _skill_definition(
-            activity_type="security.pentest.execute",
-            capabilities=["agent_runtime"],
-            binding_reason="stronger_isolation",
-        )
-    )
-
-    assert route.activity_type == "security.pentest.execute"
-    assert route.fleet == AGENT_RUNTIME_FLEET
-    assert route.task_queue == AGENT_RUNTIME_TASK_QUEUE
-    assert route.capability_class == "agent_runtime"
-    assert route.heartbeat_required is True
 
 def test_resolve_explicit_activity_requires_binding_reason():
     catalog = build_default_activity_catalog()
@@ -264,10 +326,15 @@ def test_checkpoint_activity_routes_stay_on_allowed_fleets():
     catalog = build_default_activity_catalog()
 
     expected = {
+        "agent_runtime.capture_workspace_checkpoint": (
+            AGENT_RUNTIME_FLEET,
+            AGENT_RUNTIME_TASK_QUEUE,
+        ),
         "workspace.capture_checkpoint": (SANDBOX_FLEET, SANDBOX_TASK_QUEUE),
         "workspace.apply_policy": (SANDBOX_FLEET, SANDBOX_TASK_QUEUE),
         "workspace.classify_git_effect": (SANDBOX_FLEET, SANDBOX_TASK_QUEUE),
         "step_checkpoint.create": (ARTIFACTS_FLEET, ARTIFACTS_TASK_QUEUE),
+        "step_checkpoint.create_v2": (ARTIFACTS_FLEET, ARTIFACTS_TASK_QUEUE),
         "step_checkpoint.validate": (ARTIFACTS_FLEET, ARTIFACTS_TASK_QUEUE),
     }
 
@@ -279,5 +346,10 @@ def test_checkpoint_activity_routes_stay_on_allowed_fleets():
         assert route.retries.max_attempts >= 1
 
     fleets = {fleet.fleet: fleet for fleet in catalog.fleets}
+    assert (
+        "agent_runtime.capture_workspace_checkpoint"
+        in fleets[AGENT_RUNTIME_FLEET].activity_types
+    )
     assert "workspace.capture_checkpoint" in fleets[SANDBOX_FLEET].activity_types
     assert "step_checkpoint.create" in fleets[ARTIFACTS_FLEET].activity_types
+    assert "step_checkpoint.create_v2" in fleets[ARTIFACTS_FLEET].activity_types

@@ -11,21 +11,21 @@ MoonMind is an open-source framework that makes Claude Code and Codex CLI **safe
 
 For now, MoonMind is focused on software engineering use cases, but can be used for other use cases as well and this will be made easier in the future (e.g. not requiring a git repo).
 
-UPDATE: MoonMind is in the process of incorporating [Omnigent-host](https://github.com/omnigent-ai/omnigent) as a supported managed agent, which will make MoonMind compatible with Claude Code, Codex, Antigravity, Cursor, OpenCode, Hermes, Pi, and other agents. This should be finished by the end of July 2026.
+MoonMind includes a first-class Codex-through-[Omnigent](https://github.com/omnigent-ai/omnigent) managed-runtime path with profile and policy readiness gating, an on-demand default host, optional static hosting, durable event replay, controls, and artifact harvesting. It is available for normal explicit selection; making it the preselected Codex default remains gated by the protected live support matrix. Direct Codex remains a truthfully labeled migration fallback and historical-read substrate. See the [versioned support and cutover matrix](docs/Omnigent/CodexSupportAndCutover.md). Claude-through-Omnigent parity is deliberately deferred.
 
 ## Quick Start
 
 1. [Install Docker Desktop](https://docs.docker.com/get-started/get-docker/)
 2. Install git
 3. `git clone https://github.com/MoonLadderStudios/MoonMind.git`
-4. `cd MoonMind && git submodule update --init --recursive`. This initializes separately licensed submodules, including Omnigent.
+4. `cd MoonMind && git submodule update --init --recursive`. This initializes the submodules like Omnigent.
 5. Run `docker compose up -d` to start the service
 6. Open [http://localhost:7000](http://localhost:7000). For combined MoonMind plus Omnigent validation, see [Combined Stack Validation and Rollback](docs/Omnigent/CombinedStackValidationAndRollback.md).
 7. In Settings:
     - Add a GitHub personal access token
     - Add an API key or click OAuth to authenticate a provider profile
     - Configure any other secrets or settings you want to adjust for your first workflow
-8. Click Create and submit a workflow!
+8. Click Create and submit a workflow. Choose Codex via Omnigent when its readiness entry is available; the default changes only through the evidence-gated rollout described in the support matrix.
 
 `.env` is optional for normal local startup. Use `.env-template` only when you want to override defaults or preconfigure advanced settings before launch.
 
@@ -36,6 +36,8 @@ If you already have a subscription with a model provider:
 2. Click OAuth next to the profile
 3. Follow the instructions on the new tab
 4. Go back to Settings and click Finalize
+
+After Finalize, a launch-ready OAuth profile is available to the normal on-demand Omnigent path without additional Compose configuration. Dedicated static hosts are an optional advanced deployment choice; to use one, enable the matching host profile in `.env`, for example `COMPOSE_PROFILES="omnigent-host-codex"`, rerun `docker compose up -d`, and explicitly select its static host policy. The dedicated hosts live in the canonical Compose file, so no platform-specific `COMPOSE_FILE` list is required. See [Combined Stack Validation and Rollback](docs/Omnigent/CombinedStackValidationAndRollback.md#dedicated-oauth-hosts).
 
 ## Why MoonMind?
 
@@ -55,7 +57,7 @@ MoonMind exists to answer those questions. Progress against each promise below i
 An autonomous agent with your credentials and a shell is a liability unless something constrains it. MoonMind builds the constraints into the execution substrate rather than trusting the agent to behave:
 
 - **Provider Profiles as policy.** A profile binds runtime, provider, credential source, materialization, concurrency slots, cooldowns, and routing into one declared contract — so model and credential policy is explicit per run, never ambient environment state.
-- **Sandboxed execution.** Managed runtime sessions and specialized workloads run in isolated Docker boundaries with strict capability routing. Ordinary sessions get a private sidecar Docker daemon — never the host socket. File allowlists restrict what a run may modify.
+- **Sandboxed execution.** Managed runtime sessions and specialized workloads run in isolated Docker boundaries with strict capability routing. Containerized build and test jobs are submitted through MoonMind's API-owned Docker Backend Service; agent runtimes never receive the host Docker socket. File allowlists restrict what a run may modify.
 - **Secrets stay out of the blast radius.** Durable contracts carry secret *references*, never raw values; credentials are resolved only at controlled launch boundaries and automatically redacted from logs, artifacts, and outbound text. OAuth credentials live in isolated per-runtime volumes, so one runtime cannot read another's auth state.
 - **Outbound scanning.** A high-security mode adds deterministic secret scans at outbound boundaries — before an agent posts a PR comment, sends a message, pushes a commit, or publishes an artifact.
 - **Fail-fast, not fall-back.** Missing or revoked credentials produce explicit, actionable failures. MoonMind never silently substitutes an alternate credential source or rewrites billing-relevant values like model identifiers.
@@ -66,7 +68,7 @@ Where this is headed: typed policy envelopes that declare per-run what an agent 
 
 Submit a refactoring job, close your laptop, and let MoonMind handle the rest. Every run is backed by [Temporal](https://temporal.io/), so workflows survive container crashes, worker restarts, and host reboots:
 
-- **Durable step ledger and checkpoints.** Long workflows are decomposed into steps whose state, attempts, and outputs are persisted as immutable artifacts. When a step fails, you resume from the last good checkpoint — completed work is never re-bought.
+- **Durable step ledger and step-boundary checkpoints.** Long workflows are decomposed into steps whose state, attempts, and outputs are persisted as immutable artifacts. When compatible workspace capture and restore evidence exists, a failed step can resume from the last good step boundary — completed work is never re-bought.
 - **Stuck detection and escalating intervention.** MoonMind detects looping or silently stalled agents and applies escalating responses — soft reset, hard reset, termination — before they burn through your API budget.
 - **Rate limits as a first-class citizen.** Runtime strategies recognize provider rate-limit signals in live output and respond with slot-based concurrency control and cooldowns instead of blind retry storms.
 - **Idempotent by design.** Externally visible side effects — starting runs, publishing results, posting to GitHub or Jira — are retry-safe, so a crash mid-operation never produces duplicates.
@@ -99,14 +101,14 @@ MoonMind runs as a set of decoupled containers from a single `docker-compose.yam
 
 | Component | Role |
 | --- | --- |
-| **API Service** | FastAPI control plane for the dashboard, `/api/executions`, artifacts, templates, proposals, and MCP/context surfaces. |
+| **API Service** | FastAPI control plane for the dashboard, `/api/executions`, artifacts, templates, proposals, MCP tools, and the API-owned Docker Backend Service contract. |
 | **Temporal Server** | Durable execution engine with PostgreSQL persistence. |
-| **Worker Fleet** | Specialized isolated workers for orchestration, sandbox execution, LLM calls, managed runtime supervision, and external integrations. |
-| **Managed Session Plane** | Workflow-scoped owned runtime sessions for Codex CLI. Ordinary managed-session Docker work uses a per-session sidecar daemon rather than the host socket. Claude Code and additional runtime adapters can adopt the same shared `ManagedSession*` pattern once they provide a runtime-specific session controller. |
-| **Docker Workload Plane** | Control-plane-launched specialized workload containers for MoonMind admin/update, helper, and deliberately gated exceptional workloads, kept separate from managed agent session identity. |
+| **Worker Fleet** | Specialized isolated workers for orchestration, sandbox execution, LLM calls, managed runtime supervision, external integrations, and durable container-job execution. |
+| **Managed Session Plane** | Workflow-scoped Codex CLI compatibility sessions and profile-bound Codex-through-Omnigent sessions. Omnigent is a normal selectable runtime; its live matrix governs staged preselected-default promotion. Container jobs remain separate from session identity. |
+| **Docker Backend Service** | Authenticated MCP/HTTP container-job surface that resolves workspaces, applies policy, dispatches bounded jobs through Temporal, and uses one deployment-selected Docker daemon whose image cache is reusable across workflows. |
 | **Dashboard** | Operational dashboard for managing workflows, reviewing per-step progress, and inspecting logs, diagnostics, and artifacts. |
 | **Qdrant & MinIO** | Vector database for RAG/memory, and S3-compatible artifact storage. |
-| **Docker Proxy** | Restricted Docker socket access for control-plane workload workers; ordinary managed sessions use their private sidecar daemon instead of the host socket. |
+| **Docker Proxy** | Restricted system-Docker access for trusted MoonMind backend execution; it is not exposed to managed sessions or Omnigent runners. |
 
 ## Contributing
 

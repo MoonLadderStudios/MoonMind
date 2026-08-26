@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -8,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from moonmind.schemas.managed_session_models import CodexManagedSessionBinding
 from moonmind.schemas.resilience_policy_models import compile_resilience_policy
 from moonmind.schemas.temporal_models import (
     STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE,
@@ -17,8 +19,16 @@ from moonmind.schemas.temporal_models import (
 from moonmind.workflows.executions.prepared_context import (
     build_durable_retrieval_manifest_artifact,
 )
+from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
+from moonmind.workflows.temporal.activity_runtime import TemporalCheckpointActivities
+from moonmind.workflows.temporal.remediation_workspace_head import (
+    RemediationWorkspaceHead,
+)
 from moonmind.workflows.temporal.workflows import run as run_module
-from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+from moonmind.workflows.temporal.workflows.run import (
+    GateTransitionDecision,
+    MoonMindRunWorkflow,
+)
 
 def _configure_workflow_runtime(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
     workflow_info = SimpleNamespace(
@@ -57,6 +67,23 @@ def _configure_workflow_runtime(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
     )
     return memo_updates
 
+
+def test_pre_cutover_review_retry_ignores_plan_routed_transition() -> None:
+    transition = GateTransitionDecision(
+        disposition="accept",
+        routing_disposition="stop_at_control_gate",
+        reason_code="no_remediation_successor",
+    )
+
+    assert MoonMindRunWorkflow._gate_transition_allows_review_retry(
+        plan_routed_moonspec_remediation_enabled=False,
+        transition=transition,
+    )
+    assert not MoonMindRunWorkflow._gate_transition_allows_review_retry(
+        plan_routed_moonspec_remediation_enabled=True,
+        transition=transition,
+    )
+
 def _ordered_nodes() -> list[dict]:
     return [
         {
@@ -91,6 +118,285 @@ def _checkpoint_create_result(payload: Any) -> dict[str, Any]:
         "workspaceKind": workspace_kind,
         "diagnosticRefs": [],
         "idempotencyKey": checkpoint_id,
+    }
+
+
+def _managed_checkpoint_capture_result(payload: Any) -> dict[str, Any]:
+    return {
+        "status": "captured",
+        "workspace": {
+            "kind": "worktree_archive",
+            "baseCommit": "abc123",
+            "archiveRef": "artifact://managed/archive",
+            "archiveDigest": "sha256:" + ("a" * 64),
+            "workspaceDigest": "sha256:" + ("d" * 64),
+            "workspaceIdentityDigest": "sha256:" + ("c" * 64),
+            "manifestRef": "artifact://managed/manifest",
+            "manifestDigest": "sha256:" + ("b" * 64),
+            "includesUntracked": True,
+            "includesIgnoredFiles": False,
+        },
+        "diagnosticRefs": ["artifact://managed/manifest"],
+        "idempotencyKey": payload["idempotencyKey"],
+    }
+
+
+def _empty_skill_resolution() -> dict[str, str]:
+    return {"manifestRef": "art_empty_skill_snapshot"}
+
+
+@pytest.mark.asyncio
+async def test_omnigent_result_is_joined_into_canonical_checkpoint_at_workflow_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exercise the normal AgentRun metadata -> workflow -> activity journey."""
+
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: True)
+    store = InMemoryArtifactStore()
+    checkpoint_activities = TemporalCheckpointActivities(artifact_store=store)
+    external_ref = "artifact://omnigent/external-state"
+    external_bytes = json.dumps(
+        {
+            "omnigentSessionId": "session-3509",
+            "firstMessage": {
+                "digest": "sha256:" + "1" * 64,
+                "responseIdentifiers": {"itemId": "message-3509"},
+            },
+            "lastCommittedBridgeEventCursor": "event-9",
+        },
+        sort_keys=True,
+    ).encode()
+
+    async def read_checkpoint_artifact(artifact_ref: str) -> bytes:
+        if artifact_ref == external_ref:
+            return external_bytes
+        return store.get_bytes(artifact_ref)
+
+    monkeypatch.setattr(checkpoint_activities, "_read_bytes", read_checkpoint_artifact)
+    workflow_instance = MoonMindRunWorkflow()
+    now = datetime(2026, 8, 2, 12, 0, tzinfo=UTC)
+    workflow_instance._input_ref = "artifact://task/input"
+    workflow_instance._plan_ref = "artifact://plan/current"
+    workflow_instance._prepared_artifact_refs = ["artifact://instructions/current"]
+    workflow_instance._initialize_step_ledger(
+        ordered_nodes=[{"id": "implement", "inputs": {"title": "Implement"}}],
+        dependency_map={"implement": []},
+        updated_at=now,
+    )
+    workflow_instance._mark_step_running(
+        "implement", updated_at=now, summary="Implementing"
+    )
+    normal_result = {
+        "agentKind": "external",
+        "agentId": "omnigent",
+        "workloadResult": {
+            "metadata": {
+                "omnigentCheckpointCapture": {
+                    "providerProfileId": "codex",
+                    "credentialRef": "credential://provider-profile/codex/generation/3",
+                    "credentialGeneration": 3,
+                    "providerLeaseRef": "provider-lease-1",
+                    "hostBindingRef": "binding-1",
+                    "hostLeaseRef": "host-lease-1",
+                    "endpointRef": "endpoint-1",
+                    "omnigentHostId": "host-1",
+                    "bridgeSessionId": "bridge-1",
+                    "effectiveLaunchRef": "omnigent-launch:sha256:" + "3" * 64,
+                    "executionProfileRef": "profile://codex",
+                    "launchPolicyRef": "policy://default",
+                    "externalStateRef": external_ref,
+                    "idempotencyKey": "agent-run-3509",
+                    "sourceBranch": "main",
+                    "publicationState": "none",
+                },
+                "workspaceLocator": {
+                    "kind": "sandbox",
+                    "workspaceId": "replacement-workspace",
+                    "relativePath": "repo",
+                },
+            }
+        },
+    }
+    workflow_instance._record_step_workspace_capture_input("implement", normal_result)
+
+    async def execute_activity(
+        activity: str, payload: dict[str, Any], **_kwargs: Any
+    ) -> dict[str, Any]:
+        if activity == "workspace.capture_checkpoint":
+            return {
+                "status": "captured",
+                "workspace": {
+                    "kind": "worktree_archive",
+                    "baseCommit": "abc123",
+                    "headCommit": "def456",
+                    "archiveRef": "artifact://workspace/archive",
+                    "manifestRef": "artifact://workspace/manifest",
+                    "archiveDigest": "sha256:" + "2" * 64,
+                    "createdAt": now.isoformat(),
+                },
+                "diagnosticRefs": [],
+            }
+        assert activity == "step_checkpoint.create_v2"
+        return await checkpoint_activities.step_checkpoint_create(payload)
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", execute_activity)
+
+    first_ref = await workflow_instance._record_canonical_step_checkpoint(
+        "implement", boundary="after_execution", updated_at=now
+    )
+    retry_ref = await workflow_instance._record_canonical_step_checkpoint(
+        "implement", boundary="after_execution", updated_at=now
+    )
+
+    assert retry_ref == first_ref
+    checkpoint = json.loads(store.get_bytes(first_ref))
+    identity = checkpoint["omnigentCheckpoint"]
+    assert identity["schemaVersion"] == "v2"
+    assert identity["boundary"] == "after_execution"
+    assert identity["externalStateRef"] == external_ref
+    assert identity["workspaceCheckpointRef"] == "artifact://workspace/archive"
+    assert identity["instructionRefs"] == ["artifact://instructions/current"]
+    assert identity["validation"]["valid"] is True
+
+    incomplete = dict(normal_result)
+    incomplete["workloadResult"] = {
+        "metadata": {
+            **normal_result["workloadResult"]["metadata"],
+            "omnigentCheckpointCapture": {
+                **normal_result["workloadResult"]["metadata"][
+                    "omnigentCheckpointCapture"
+                ],
+                "externalStateRef": None,
+            },
+        }
+    }
+    workflow_instance._record_step_workspace_capture_input("implement", incomplete)
+    terminal_ref = await workflow_instance._record_canonical_step_checkpoint(
+        "implement", boundary="before_publication", updated_at=now
+    )
+    terminal = json.loads(store.get_bytes(terminal_ref))
+    assert "omnigentCheckpoint" not in terminal
+    assert terminal["stepOutputs"]["omnigentCheckpointValidation"] == {
+        "valid": False,
+        "reasons": ["capture_incomplete_or_unresolvable"],
+        "liveReattachAvailable": False,
+        "workspaceColdRestoreAvailable": False,
+        "branchCreationAvailable": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_dynamic_remediation_validates_active_managed_session_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: True)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 7, 25, 18, 0, tzinfo=UTC)
+    node = {
+        "id": "remediation-1",
+        "tool": {"type": "agent_runtime", "name": "codex_cli"},
+        "inputs": {
+            "runtime": {"mode": "codex_cli"},
+        },
+        "annotations": {
+            "issueImplementRole": "moonspec-remediation",
+            "moonSpecRemediationAttempt": 1,
+            "workspaceCaptureSourceIdentity": {
+                "workflowId": "wf-run-1",
+                "runId": "run-1",
+                "logicalStepId": "initial-verification",
+                "executionOrdinal": 1,
+            },
+        },
+    }
+    workflow._initialize_step_ledger(
+        ordered_nodes=[node],
+        dependency_map={"remediation-1": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running(
+        "remediation-1",
+        updated_at=now,
+        summary="Remediating",
+    )
+    workflow._codex_session_binding = CodexManagedSessionBinding(
+        workflowId="wf-run-1:session:codex_cli",
+        agentRunId="wf-run-1",
+        sessionId="sess:wf-run-1:codex_cli",
+        sessionEpoch=2,
+        runtimeId="codex_cli",
+    )
+    workflow._remediation_workspace_head = RemediationWorkspaceHead(
+        loopId="loop-1",
+        branchRef="checkpoint-branch:loop-1",
+        rootCheckpointRef="artifact://workspace/C0",
+        rootWorkspaceDigest="sha256:" + ("d" * 64),
+        rootWorkspaceIdentityDigest="sha256:" + ("c" * 64),
+        headCheckpointRef="artifact://workspace/C0",
+        headWorkspaceDigest="sha256:" + ("d" * 64),
+        headWorkspaceIdentityDigest="sha256:" + ("c" * 64),
+    )
+    capture_input_source = dict(node["inputs"])
+    workflow._inject_remediation_managed_session_checkpoint_source_identity(
+        node=node,
+        capture_input_source=capture_input_source,
+    )
+    workflow._record_step_workspace_capture_input(
+        "remediation-1",
+        capture_input_source,
+    )
+    captured: list[dict[str, Any]] = []
+
+    async def fake_execute_activity(
+        activity: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        captured.append({"activity": activity, "payload": payload})
+        if activity == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
+        assert activity == "step_checkpoint.create"
+        return _checkpoint_create_result(payload)
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
+
+    identity = workflow._canonical_step_checkpoint_identity("remediation-1")
+    assert identity is not None
+    await workflow._capture_canonical_step_checkpoint_workspace(
+        "remediation-1",
+        identity=identity,
+        boundary="after_prepare",
+    )
+    assert "sourceIdentity" not in captured[0]["payload"]
+    captured.clear()
+
+    await workflow._record_canonical_step_checkpoint(
+        "remediation-1",
+        boundary="before_execution",
+        updated_at=now,
+    )
+
+    materialized = workflow._validate_remediation_workspace_materialization(
+        "remediation-1"
+    )
+    assert captured[0]["payload"]["workspaceLocator"] == {
+        "kind": "managed_runtime",
+        "runtimeId": "codex_cli",
+        "agentRunId": "wf-run-1",
+        "relativePath": ".",
+    }
+    assert captured[0]["payload"]["sourceIdentity"] == {
+        "workflowId": "wf-run-1",
+        "runId": "run-1",
+        "logicalStepId": "initial-verification",
+        "executionOrdinal": 1,
+    }
+    assert materialized == {
+        "checkpointRef": "artifact://workspace/C0",
+        "workspaceDigest": "sha256:" + ("d" * 64),
+        "workspaceIdentityDigest": "sha256:" + ("c" * 64),
     }
 
 
@@ -202,8 +508,7 @@ def test_step_execution_manifest_start_write_keeps_replay_patch_guard() -> None:
         "                    )"
     )
     non_agent_guard = (
-        'tool_type != "agent_runtime"\n'
-        "                        and step_execution_manifest_enabled"
+        'if tool_type != "agent_runtime" and step_execution_manifest_enabled:'
     )
     start_manifest_call = (
         "await self._record_step_execution_manifest(\n"
@@ -1084,6 +1389,313 @@ def test_review_gate_retry_requires_reattempt_recommendation(
     ) is True
 
 
+def test_moonspec_verifier_resolves_only_exact_next_remediation_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    nodes = [
+        {
+            "id": "remediate-1",
+            "annotations": {
+                "issueImplementRole": "moonspec-remediation",
+                "moonSpecRemediationAttempt": 1,
+                "moonSpecRemediationMaxAttempts": 2,
+            },
+        },
+        {
+            "id": "verify-1",
+            "annotations": {
+                "issueImplementRole": "moonspec-verification-gate",
+                "moonSpecRemediationAttempt": 1,
+                "moonSpecRemediationMaxAttempts": 2,
+            },
+        },
+        {
+            "id": "remediate-2",
+            "annotations": {
+                "issueImplementRole": "moonspec-remediation",
+                "moonSpecRemediationAttempt": 2,
+                "moonSpecRemediationMaxAttempts": 2,
+            },
+        },
+        {
+            "id": "verify-2",
+            "annotations": {
+                "issueImplementRole": "moonspec-verification-gate",
+                "moonSpecRemediationAttempt": 2,
+                "moonSpecRemediationMaxAttempts": 2,
+                "moonSpecFinalRemediationGate": True,
+            },
+        },
+    ]
+    for attempt in range(3, 7):
+        nodes.extend(
+            [
+                {
+                    "id": f"remediate-{attempt}",
+                    "annotations": {
+                        "issueImplementRole": "moonspec-remediation",
+                        "moonSpecRemediationAttempt": attempt,
+                        "moonSpecRemediationMaxAttempts": 2,
+                    },
+                },
+                {
+                    "id": f"verify-{attempt}",
+                    "annotations": {
+                        "issueImplementRole": "moonspec-verification-gate",
+                        "moonSpecRemediationAttempt": attempt,
+                        "moonSpecRemediationMaxAttempts": 2,
+                        "moonSpecFinalRemediationGate": False,
+                    },
+                },
+            ]
+        )
+
+    successor, reason = workflow._resolve_next_moonspec_remediation_step(
+        ordered_nodes=nodes,
+        current_index=1,
+    )
+    assert successor is not None
+    assert successor.logical_step_id == "remediate-2"
+    assert reason == "verification_requested_remediation"
+
+    nodes[2]["annotations"]["moonSpecRemediationAttempt"] = 1
+    assert workflow._resolve_next_moonspec_remediation_step(
+        ordered_nodes=nodes,
+        current_index=1,
+    ) == (None, "no_remediation_successor")
+
+
+def test_final_moonspec_verifier_has_no_remediation_successor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    final_verifier = {
+        "id": "verify-6",
+        "annotations": {
+            "issueImplementRole": "moonspec-verification-gate",
+            "moonSpecRemediationAttempt": 6,
+            "moonSpecRemediationMaxAttempts": 6,
+        },
+    }
+
+    assert workflow._resolve_next_moonspec_remediation_step(
+        ordered_nodes=[final_verifier],
+        current_index=0,
+    ) == (None, "remediation_budget_exhausted")
+
+
+def test_moonspec_remediation_budget_uses_actual_active_step_ledger(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
+    nodes = [
+        {
+            "id": f"remediate-{attempt}",
+            "annotations": {
+                "issueImplementRole": "moonspec-remediation",
+                "moonSpecRemediationAttempt": attempt,
+                "moonSpecRemediationMaxAttempts": 2,
+            },
+        }
+        for attempt in range(1, 7)
+    ]
+    workflow._initialize_step_ledger(
+        ordered_nodes=nodes,
+        dependency_map={node["id"]: [] for node in nodes},
+        updated_at=now,
+    )
+    workflow._mark_step_running("remediate-1", updated_at=now, summary="Started")
+    workflow._mark_step_terminal(
+        "remediate-1", status="completed", updated_at=now, summary="Done"
+    )
+    workflow._mark_step_running("remediate-2", updated_at=now, summary="Started")
+
+    budget = workflow._moonspec_remediation_budget_metadata(
+        ordered_nodes=nodes,
+        current_attempt=6,
+        max_attempts=2,
+    )
+
+    assert budget == {
+        "maxAttempts": 2,
+        "currentAttempt": 6,
+        "attemptsStarted": 2,
+        "attemptsCompleted": 1,
+        "remainingAttempts": 0,
+        "exhausted": True,
+    }
+
+
+@pytest.mark.parametrize(
+    ("verdict", "recoverable", "disposition", "routing", "reason"),
+    [
+        ("ADDITIONAL_WORK_NEEDED", True, "accept", "advance_to_next_remediation", "verification_requested_remediation"),
+        ("NO_DETERMINATION", True, "retry", "retry_current_verifier", "recoverable_no_determination"),
+        ("NO_DETERMINATION", False, "accept", "stop_at_control_gate", "unrecoverable_no_determination"),
+        ("BLOCKED", False, "accept", "stop_at_control_gate", "terminal_gate_verdict"),
+        ("FAILED_UNRECOVERABLE", False, "accept", "stop_at_control_gate", "terminal_gate_verdict"),
+        ("FULLY_IMPLEMENTED", False, "accept", "exit_remediation_loop", "verification_passed"),
+    ],
+)
+def test_moonspec_gate_transition_matrix(
+    monkeypatch: pytest.MonkeyPatch,
+    verdict: str,
+    recoverable: bool,
+    disposition: str,
+    routing: str,
+    reason: str,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    nodes = [
+        {
+            "id": "remediate-1",
+            "annotations": {"issueImplementRole": "moonspec-remediation", "moonSpecRemediationAttempt": 1, "moonSpecRemediationMaxAttempts": 2},
+        },
+        {
+            "id": "verify-1",
+            "annotations": {"issueImplementRole": "moonspec-verification-gate", "moonSpecRemediationAttempt": 1, "moonSpecRemediationMaxAttempts": 2},
+        },
+        {
+            "id": "remediate-2",
+            "annotations": {"issueImplementRole": "moonspec-remediation", "moonSpecRemediationAttempt": 2, "moonSpecRemediationMaxAttempts": 2},
+        },
+        {
+            "id": "verify-2",
+            "annotations": {"issueImplementRole": "moonspec-verification-gate", "moonSpecRemediationAttempt": 2, "moonSpecRemediationMaxAttempts": 2, "moonSpecFinalRemediationGate": True},
+        },
+    ]
+    decision = workflow._resolve_gate_transition(
+        verdict=SimpleNamespace(verdict=verdict, recoverable_in_current_runtime=recoverable),
+        ordered_nodes=nodes,
+        current_index=1,
+    )
+    assert (decision.disposition, decision.routing_disposition, decision.reason_code) == (
+        disposition,
+        routing,
+        reason,
+    )
+
+
+def test_moonspec_gate_transition_handles_initial_final_and_malformed_topology(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    nodes = [
+        {
+            "id": "initial-verify",
+            "tool": {"name": "moonspec-verify"},
+            "inputs": {"selectedSkill": "moonspec-verify"},
+        },
+        {
+            "id": "remediate-1",
+            "annotations": {"issueImplementRole": "moonspec-remediation", "moonSpecRemediationAttempt": 1, "moonSpecRemediationMaxAttempts": 1},
+        },
+        {
+            "id": "verify-1",
+            "annotations": {"issueImplementRole": "moonspec-verification-gate", "moonSpecRemediationAttempt": 1, "moonSpecRemediationMaxAttempts": 1, "moonSpecFinalRemediationGate": True},
+        },
+    ]
+    verdict = SimpleNamespace(
+        verdict="ADDITIONAL_WORK_NEEDED",
+        recoverable_in_current_runtime=True,
+    )
+
+    initial = workflow._resolve_gate_transition(
+        verdict=verdict,
+        ordered_nodes=nodes,
+        current_index=0,
+    )
+    assert initial.successor is not None
+    assert initial.successor.logical_step_id == "remediate-1"
+
+    final = workflow._resolve_gate_transition(
+        verdict=verdict,
+        ordered_nodes=nodes,
+        current_index=2,
+    )
+    assert final.routing_disposition == "stop_at_control_gate"
+    assert final.reason_code == "remediation_budget_exhausted"
+
+    malformed_nodes = [*nodes, {**nodes[1], "id": "duplicate-remediation"}]
+    malformed = workflow._resolve_gate_transition(
+        verdict=verdict,
+        ordered_nodes=malformed_nodes,
+        current_index=0,
+    )
+    assert malformed.routing_disposition == "stop_at_control_gate"
+    assert malformed.reason_code == "no_remediation_successor"
+
+    ordinary = workflow._resolve_gate_transition(
+        verdict=verdict,
+        ordered_nodes=[{"id": "ordinary", "tool": {"name": "agent"}}],
+        current_index=0,
+    )
+    assert ordinary.disposition == "generic"
+
+    invalid = workflow._resolve_gate_transition(
+        verdict=SimpleNamespace(
+            verdict="NO_DETERMINATION",
+            recoverable_in_current_runtime=False,
+            invalid=True,
+            degraded=False,
+        ),
+        ordered_nodes=nodes,
+        current_index=2,
+    )
+    assert invalid.disposition == "invalid"
+    assert invalid.reason_code == "invalid_gate_result"
+
+
+def test_moonspec_gate_transition_emits_structured_observability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    events: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        workflow,
+        "_get_logger",
+        lambda: SimpleNamespace(
+            info=lambda message, payload: events.append((message, payload))
+        ),
+    )
+    transition = run_module.GateTransitionDecision(
+        disposition="accept",
+        routing_disposition="advance_to_next_remediation",
+        reason_code="verification_requested_remediation",
+        successor=run_module.MoonSpecRemediationSuccessor(
+            logical_step_id="remediate-2",
+            attempt=2,
+            max_attempts=6,
+            node_index=4,
+        ),
+    )
+    workflow._record_moonspec_gate_transition_event(
+        logical_step_id="verify-1",
+        node={
+            "annotations": {
+                "issueImplementRole": "moonspec-verification-gate",
+                "moonSpecRemediationAttempt": 1,
+                "moonSpecRemediationMaxAttempts": 6,
+            }
+        },
+        verdict="ADDITIONAL_WORK_NEEDED",
+        transition=transition,
+        review_retries_consumed=0,
+    )
+    assert events[0][0] == "moonspec_gate_transition %s"
+    payload = json.loads(events[0][1])
+    assert payload["nextLogicalStepId"] == "remediate-2"
+    assert payload["reviewRetriesConsumed"] == 0
+
+
 def test_run_progress_query_exposes_current_run_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1547,53 +2159,31 @@ def test_run_groups_child_lineage_and_evidence_into_step_row(
     }
 
 
-def test_run_records_direct_report_outputs_as_accepted_step_evidence(
+def test_run_promotes_omnigent_context_pack_ref_into_manifest_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_workflow_runtime(monkeypatch)
-    monkeypatch.setattr(
-        run_module.workflow,
-        "patched",
-        lambda patch_id: patch_id == run_module.RUN_DIRECT_TOOL_REPORT_OUTPUTS_PATCH,
-    )
     workflow = MoonMindRunWorkflow()
-    now = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
-    execution_result = {
-        "status": "COMPLETED",
-        "primary_report_ref": "art_pentest_report_1",
-        "summary_ref": "art_pentest_summary_1",
-        "diagnostics_artifact_ref": "art_pentest_diag_1",
-        "report_type": "security_pentest_report",
+    workflow._step_execution_context_projections[("omnigent-step", 1)] = {
+        "priorEvidenceRefs": []
     }
 
-    workflow._initialize_step_ledger(
-        ordered_nodes=[
-            {
-                "id": "pentest",
-                "tool": {"type": "skill", "name": "security.pentest.run"},
-                "inputs": {"title": "Run pentest"},
+    workflow._record_omnigent_initial_context_ref(
+        "omnigent-step",
+        attempt=1,
+        execution_result={
+            "metadata": {
+                "providerName": "omnigent",
+                "initialContextPackRef": "artifact://context/input.context-pack.json",
             }
-        ],
-        dependency_map={"pentest": []},
-        updated_at=now,
-    )
-    workflow._mark_step_running(
-        "pentest",
-        updated_at=now,
-        summary="Running pentest",
-    )
-    workflow._record_step_result_evidence(
-        "pentest",
-        execution_result=execution_result,
-        updated_at=now,
+        },
     )
 
-    step = workflow.get_step_ledger()["steps"][0]
+    assert workflow._step_execution_context_projections[
+        ("omnigent-step", 1)
+    ]["initialContextPackRef"] == "artifact://context/input.context-pack.json"
 
-    assert step["artifacts"]["outputPrimary"] == "art_pentest_report_1"
-    assert step["artifacts"]["outputSummary"] == "art_pentest_summary_1"
-    assert step["artifacts"]["runtimeDiagnostics"] == "art_pentest_diag_1"
-    assert workflow._step_has_accepted_output_evidence("pentest", execution_result)
+
 
 
 def test_run_waiting_state_captures_child_workflow_lineage(
@@ -2797,7 +3387,11 @@ async def test_run_records_pre_execution_checkpoint_from_node_workspace_inputs(
     monkeypatch.setattr(
         run_module.workflow,
         "patched",
-        lambda patch_id: patch_id == run_module.RUN_CANONICAL_STEP_CHECKPOINTS_PATCH,
+        lambda patch_id: patch_id
+        in {
+            run_module.RUN_CANONICAL_STEP_CHECKPOINTS_PATCH,
+            run_module.RUN_MANAGED_CHECKPOINT_AUTHORITY_PATCH,
+        },
     )
     workflow = MoonMindRunWorkflow()
     now = datetime(2026, 6, 13, 12, 0, tzinfo=UTC)
@@ -2834,6 +3428,7 @@ async def test_run_records_pre_execution_checkpoint_from_node_workspace_inputs(
                     "kind": "git_patch",
                     "baseCommit": payload["baseCommit"],
                     "patchRef": "artifact://patch/before_execution",
+                    "workspaceIdentityDigest": "sha256:" + ("c" * 64),
                     "manifestRef": "artifact://patch-manifest/before_execution",
                     "createdAt": "2026-06-13T12:00:00+00:00",
                 },
@@ -2866,6 +3461,971 @@ async def test_run_records_pre_execution_checkpoint_from_node_workspace_inputs(
     assert captured[1]["payload"]["workspace"]["patchRef"] == (
         "artifact://patch/before_execution"
     )
+    assert workflow._step_checkpoint_workspace_evidence_by_boundary == {
+        "implement": {
+            "before_execution": {
+                "checkpointRef": "artifact://checkpoint/before_execution",
+                "workspaceKind": "git_patch",
+                "workspaceDigest": "",
+                "workspaceIdentityDigest": "sha256:" + ("c" * 64),
+                "checkpointManifestRef": (
+                    "artifact://patch-manifest/before_execution"
+                ),
+            }
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_run_reuses_workspace_capture_until_execution_can_mutate_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            run_module.RUN_CANONICAL_STEP_CHECKPOINTS_PATCH,
+            run_module.RUN_MANAGED_CHECKPOINT_AUTHORITY_PATCH,
+            run_module.RUN_UNCHANGED_CHECKPOINT_REUSE_PATCH,
+        },
+    )
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 8, 13, 8, 0, tzinfo=UTC)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "implement", "inputs": {"title": "Implement"}}],
+        dependency_map={"implement": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running(
+        "implement",
+        updated_at=now,
+        summary="Implementing",
+    )
+    workflow._step_workspace_capture_inputs["implement"] = {
+        "workspacePath": "/work/agent_jobs/run-1/repo",
+        "baseCommit": "abc123",
+        "kind": "git_patch",
+    }
+    capture_boundaries: list[str] = []
+    checkpoint_boundaries: list[str] = []
+
+    async def fake_execute_activity(
+        activity: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        boundary = payload["boundary"]
+        if activity == "workspace.capture_checkpoint":
+            capture_boundaries.append(boundary)
+            return {
+                "status": "captured",
+                "workspace": {
+                    "kind": "git_patch",
+                    "baseCommit": "abc123",
+                    "patchRef": f"artifact://patch/{len(capture_boundaries)}",
+                    "manifestRef": f"artifact://manifest/{len(capture_boundaries)}",
+                },
+                "diagnosticRefs": [
+                    f"artifact://manifest/{len(capture_boundaries)}"
+                ],
+            }
+        assert activity == "step_checkpoint.create"
+        checkpoint_boundaries.append(boundary)
+        return {
+            "checkpointRef": f"artifact://checkpoint/{boundary}",
+            "checkpointId": payload["idempotencyKey"],
+            "contentType": STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE,
+            "workspaceKind": payload["workspace"]["kind"],
+            "diagnosticRefs": [],
+            "idempotencyKey": payload["idempotencyKey"],
+        }
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
+
+    await workflow._record_canonical_step_checkpoint(
+        "implement",
+        boundary="after_prepare",
+        updated_at=now,
+    )
+    await workflow._record_canonical_step_checkpoint(
+        "implement",
+        boundary="before_execution",
+        updated_at=now,
+    )
+    assert capture_boundaries == ["after_prepare"]
+    assert checkpoint_boundaries == ["after_prepare", "before_execution"]
+
+    workflow._mark_step_workspace_mutation_started("implement")
+    await workflow._record_canonical_step_checkpoint(
+        "implement",
+        boundary="after_execution",
+        updated_at=now,
+    )
+    assert capture_boundaries == ["after_prepare", "after_execution"]
+    assert checkpoint_boundaries == [
+        "after_prepare",
+        "before_execution",
+        "after_execution",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_degrades_managed_checkpoint_without_sandbox_capture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            run_module.RUN_CANONICAL_STEP_CHECKPOINTS_PATCH,
+            run_module.RUN_MANAGED_CHECKPOINT_AUTHORITY_PATCH,
+        },
+    )
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 6, 13, 12, 0, tzinfo=UTC)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "implement", "inputs": {"title": "Implement"}}],
+        dependency_map={"implement": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running("implement", updated_at=now, summary="Implementing")
+    workflow._record_step_workspace_capture_input(
+        "implement",
+        {
+            "agentKind": "managed",
+            "agentId": "codex_cli",
+            "workspaceRoot": "/work/agent_jobs/managed-run-1/repo",
+            "baseCommit": "abc123",
+            "checkpointKind": "git_patch",
+        },
+    )
+
+    async def unexpected_activity(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("managed workspace must not reach a sandbox activity")
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", unexpected_activity)
+
+    result = await workflow._record_canonical_step_checkpoint(
+        "implement", boundary="after_execution", updated_at=now
+    )
+
+    assert result is None
+    assert workflow._step_checkpoint_capture_outcomes["implement"] == {
+        "status": "unsupported",
+        "failureCode": "CHECKPOINT_CAPABILITY_UNSUPPORTED",
+        "boundary": "after_execution",
+        "captureAuthority": "managed_runtime",
+        "captureActivity": None,
+        "capabilityCriticality": "recoverability_only",
+    }
+    assert workflow._step_workspace_capture_inputs["implement"][
+        "captureAuthority"
+    ] == "managed_runtime"
+
+
+@pytest.mark.asyncio
+async def test_managed_checkpoint_capability_gap_reaches_finalization_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            run_module.RUN_CANONICAL_STEP_CHECKPOINTS_PATCH,
+            run_module.RUN_MANAGED_CHECKPOINT_AUTHORITY_PATCH,
+        },
+    )
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 6, 13, 12, 0, tzinfo=UTC)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "implement", "inputs": {"title": "Implement"}}],
+        dependency_map={"implement": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running("implement", updated_at=now, summary="Implementing")
+    workflow._record_step_workspace_capture_input(
+        "implement",
+        {
+            "agentKind": "managed",
+            "agentId": "codex_cli",
+            "workspaceRoot": "/work/agent_jobs/managed-run-1/repo",
+            "baseCommit": "abc123",
+        },
+    )
+
+    async def unexpected_activity(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("managed workspace must not reach a sandbox activity")
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", unexpected_activity)
+
+    await workflow._finalize_after_execution_checkpoint("implement", updated_at=now)
+
+    step = workflow.get_step_ledger()["steps"][0]
+    assert step["finalizationOutcome"] == {
+        "status": "unsupported",
+        "phase": "after_execution_checkpoint",
+        "criticality": "recoverability_only",
+        "failureCode": "CHECKPOINT_CAPABILITY_UNSUPPORTED",
+        "terminalFailureCode": None,
+        "retryCount": 0,
+        "checkpointRef": None,
+        "message": "Checkpoint capture is unsupported by this runtime.",
+        "updatedAt": "2026-06-13T12:00:00Z",
+    }
+
+
+@pytest.mark.asyncio
+async def test_managed_checkpoint_defers_until_runtime_locator_is_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: True)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 7, 14, 5, 25, tzinfo=UTC)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "node-1", "inputs": {"title": "Investigate"}}],
+        dependency_map={"node-1": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running("node-1", updated_at=now, summary="Investigating")
+    workflow._record_step_workspace_capture_input(
+        "node-1",
+        {
+            "agentKind": "managed",
+            "agentId": "codex_cli",
+        },
+    )
+
+    async def unexpected_activity(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("capture must wait for the AgentRun workspace locator")
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", unexpected_activity)
+
+    checkpoint_ref = await workflow._record_canonical_step_checkpoint(
+        "node-1", boundary="after_prepare", updated_at=now
+    )
+
+    assert checkpoint_ref is None
+    assert workflow._step_checkpoint_capture_outcomes["node-1"] == {
+        "status": "deferred",
+        "failureCode": "CHECKPOINT_WORKSPACE_LOCATOR_UNAVAILABLE",
+        "boundary": "after_prepare",
+        "captureAuthority": "managed_runtime",
+        "captureActivity": "agent_runtime.capture_workspace_checkpoint",
+        "capabilityCriticality": "recoverability_only",
+    }
+
+
+@pytest.mark.asyncio
+async def test_managed_checkpoint_locator_guard_replays_previous_activity_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        != run_module.RUN_MANAGED_CHECKPOINT_LOCATOR_GUARD_PATCH,
+    )
+    workflow = MoonMindRunWorkflow()
+    workflow._record_step_workspace_capture_input(
+        "node-1",
+        {
+            "agentKind": "managed",
+            "agentId": "codex_cli",
+        },
+    )
+    captured: list[dict[str, Any]] = []
+
+    async def previous_capture_activity(
+        activity_type: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        captured.append({"activity": activity_type, "payload": payload})
+        return {
+            "status": "captured",
+            "workspace": {"kind": "worktree_archive"},
+            "diagnosticRefs": [],
+        }
+
+    monkeypatch.setattr(
+        run_module.workflow,
+        "execute_activity",
+        previous_capture_activity,
+    )
+    identity = StepExecutionIdentityModel(
+        workflowId="workflow-1",
+        runId="run-1",
+        logicalStepId="node-1",
+        executionOrdinal=1,
+    )
+
+    await workflow._capture_canonical_step_checkpoint_workspace(
+        "node-1", identity=identity, boundary="after_prepare"
+    )
+
+    assert [call["activity"] for call in captured] == [
+        "agent_runtime.capture_workspace_checkpoint"
+    ]
+    assert "workspaceLocator" not in captured[0]["payload"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("boundary", ["after_prepare", "before_execution"])
+async def test_omnigent_checkpoint_defers_until_sandbox_workspace_is_materialized(
+    monkeypatch: pytest.MonkeyPatch,
+    boundary: str,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: True)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 8, 5, 6, 30, tzinfo=UTC)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "node-1", "inputs": {"title": "Implement"}}],
+        dependency_map={"node-1": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running("node-1", updated_at=now, summary="Implementing")
+    workflow._record_step_workspace_capture_input(
+        "node-1",
+        {
+            "agentKind": "external",
+            "agentId": "omnigent",
+            "runtime": {"mode": "omnigent"},
+        },
+        initialize_omnigent_capture=True,
+    )
+
+    async def unexpected_activity(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("capture must wait for Omnigent workspace materialization")
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", unexpected_activity)
+
+    checkpoint_ref = await workflow._record_canonical_step_checkpoint(
+        "node-1",
+        boundary=boundary,
+        updated_at=now,
+    )
+
+    assert checkpoint_ref is None
+    assert workflow._step_checkpoint_capture_outcomes["node-1"] == {
+        "status": "deferred",
+        "failureCode": "CHECKPOINT_WORKSPACE_MATERIALIZATION_PENDING",
+        "boundary": boundary,
+        "captureAuthority": "moonmind_sandbox",
+        "captureActivity": "workspace.capture_checkpoint",
+        "capabilityCriticality": "required",
+    }
+
+
+@pytest.mark.asyncio
+async def test_omnigent_checkpoint_guard_replays_previous_activity_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        != run_module.RUN_OMNIGENT_PREMATERIALIZATION_CHECKPOINT_GUARD_PATCH,
+    )
+    workflow = MoonMindRunWorkflow()
+    workflow._record_step_workspace_capture_input(
+        "node-1",
+        {
+            "agentKind": "external",
+            "agentId": "omnigent",
+            "runtime": {"mode": "omnigent"},
+        },
+        initialize_omnigent_capture=True,
+    )
+    captured: list[dict[str, Any]] = []
+
+    async def previous_capture_activity(
+        activity_type: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        captured.append({"activity": activity_type, "payload": payload})
+        return {
+            "status": "captured",
+            "workspace": {"kind": "worktree_archive"},
+            "diagnosticRefs": [],
+        }
+
+    monkeypatch.setattr(
+        run_module.workflow,
+        "execute_activity",
+        previous_capture_activity,
+    )
+    identity = StepExecutionIdentityModel(
+        workflowId="workflow-1",
+        runId="run-1",
+        logicalStepId="node-1",
+        executionOrdinal=1,
+    )
+
+    await workflow._capture_canonical_step_checkpoint_workspace(
+        "node-1", identity=identity, boundary="after_prepare"
+    )
+
+    assert [call["activity"] for call in captured] == [
+        "workspace.capture_checkpoint"
+    ]
+    assert captured[0]["payload"]["workspaceLocator"]["kind"] == "sandbox"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("boundary", ["after_execution", "before_publication"])
+async def test_omnigent_checkpoint_guard_does_not_defer_terminal_boundaries(
+    monkeypatch: pytest.MonkeyPatch,
+    boundary: str,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: True)
+    workflow = MoonMindRunWorkflow()
+    workflow._record_step_workspace_capture_input(
+        "node-1",
+        {
+            "agentKind": "external",
+            "agentId": "omnigent",
+            "runtime": {"mode": "omnigent"},
+        },
+        initialize_omnigent_capture=True,
+    )
+    captured: list[str] = []
+
+    async def capture_activity(
+        activity_type: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        captured.append(activity_type)
+        return _managed_checkpoint_capture_result(payload)
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", capture_activity)
+    identity = StepExecutionIdentityModel(
+        workflowId="workflow-1",
+        runId="run-1",
+        logicalStepId="node-1",
+        executionOrdinal=1,
+    )
+
+    await workflow._capture_canonical_step_checkpoint_workspace(
+        "node-1", identity=identity, boundary=boundary
+    )
+
+    assert captured == ["workspace.capture_checkpoint"]
+
+
+@pytest.mark.asyncio
+async def test_non_omnigent_input_cannot_inject_prematerialization_defer_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: True)
+    workflow = MoonMindRunWorkflow()
+    workflow._record_step_workspace_capture_input(
+        "node-1",
+        {
+            "omnigentCheckpointCapture": {
+                "captureBoundaryState": "session_not_started"
+            },
+            "workspaceLocator": {
+                "kind": "sandbox",
+                "workspaceId": "sandbox-workspace",
+                "relativePath": "repo",
+            },
+            "checkpointKind": "worktree_archive",
+        },
+    )
+    capture_input = workflow._step_workspace_capture_inputs["node-1"]
+    assert "omnigentCheckpointCapture" not in capture_input
+    assert "omnigentPrematerializationOwned" not in capture_input
+    captured: list[str] = []
+
+    async def capture_activity(
+        activity_type: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        captured.append(activity_type)
+        return _managed_checkpoint_capture_result(payload)
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", capture_activity)
+    identity = StepExecutionIdentityModel(
+        workflowId="workflow-1",
+        runId="run-1",
+        logicalStepId="node-1",
+        executionOrdinal=1,
+    )
+
+    await workflow._capture_canonical_step_checkpoint_workspace(
+        "node-1", identity=identity, boundary="after_prepare"
+    )
+
+    assert captured == ["workspace.capture_checkpoint"]
+
+
+def test_run_derives_managed_authority_from_agent_id() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    workflow._record_step_workspace_capture_input(
+        "implement",
+        {
+            "agentId": "codex_cli",
+            "workspaceRoot": "/work/agent_jobs/managed-run-1/repo",
+            "baseCommit": "abc123",
+        },
+    )
+
+    assert workflow._step_workspace_capture_inputs["implement"][
+        "captureAuthority"
+    ] == "managed_runtime"
+
+
+def test_run_records_capability_snapshot_without_identity_checkpoint_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == run_module.RUN_RUNTIME_EXECUTION_CAPABILITIES_PATCH,
+    )
+    workflow = MoonMindRunWorkflow()
+
+    workflow._record_step_workspace_capture_input(
+        "implement",
+        {
+            "agentKind": "external",
+            "agentId": "jules",
+            "workspaceRoot": "/provider/workspace",
+            "baseCommit": "abc123",
+            "checkpointKind": "git_patch",
+            "checkpointCriticality": "required",
+        },
+    )
+
+    capture = workflow._step_workspace_capture_inputs["implement"]
+    assert capture["captureAuthority"] == "external_provider"
+    assert capture["criticality"] == "unsupported"
+    assert capture["runtimeCapabilities"]["runtimeId"] == "jules"
+    assert capture["kind"] == "git_patch"
+
+
+@pytest.mark.asyncio
+async def test_managed_checkpoint_replay_preserves_pre_authority_activity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == run_module.RUN_CANONICAL_STEP_CHECKPOINTS_PATCH,
+    )
+    workflow = MoonMindRunWorkflow()
+    workflow._record_step_workspace_capture_input(
+        "implement",
+        {
+            "agentKind": "managed",
+            "agentId": "codex_cli",
+            "workspaceRoot": "/work/agent_jobs/managed-run-1/repo",
+            "baseCommit": "abc123",
+            "checkpointKind": "git_patch",
+        },
+    )
+    captured: list[dict[str, Any]] = []
+
+    async def fake_execute_activity(
+        activity: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        captured.append({"activity": activity, "payload": payload})
+        return {
+            "status": "captured",
+            "workspace": {"kind": payload["kind"]},
+            "diagnosticRefs": [],
+        }
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
+    identity = StepExecutionIdentityModel(
+        workflowId="workflow-1",
+        runId="run-1",
+        logicalStepId="implement",
+        executionOrdinal=1,
+    )
+
+    result = await workflow._capture_canonical_step_checkpoint_workspace(
+        "implement", identity=identity, boundary="after_execution"
+    )
+
+    assert result == {"workspace": {"kind": "git_patch"}, "diagnosticRefs": []}
+    assert [call["activity"] for call in captured] == [
+        "workspace.capture_checkpoint"
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("criticality", "expected_status", "attention_required"),
+    [
+        ("required", "failed", True),
+        ("recoverability_only", "degraded", False),
+    ],
+)
+async def test_after_execution_finalization_failure_preserves_primary_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+    criticality: str,
+    expected_status: str,
+    attention_required: bool,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 6, 13, 12, 0, tzinfo=UTC)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "implement", "inputs": {"title": "Implement"}}],
+        dependency_map={"implement": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running("implement", updated_at=now, summary="Implementing")
+    workflow._step_workspace_capture_inputs["implement"] = {
+        "workspacePath": "/work/agent_jobs/run-1/repo",
+        "criticality": criticality,
+    }
+    row = workflow._step_ledger_row_for("implement")
+    assert row is not None
+    row["artifacts"] = {
+        "outputPrimary": "artifact://result",
+        "runtimeMergedLogs": "artifact://logs",
+        "runtimeDiagnostics": "artifact://diagnostics",
+    }
+    workflow._record_primary_execution_outcome(
+        "implement",
+        execution_result={"status": "COMPLETED"},
+        result_status="COMPLETED",
+        recorded_at=now,
+    )
+
+    async def fail_checkpoint(*args: Any, **kwargs: Any) -> None:
+        try:
+            raise ValueError(
+                "checkpoint service unavailable password=raw-secret "
+                "Authorization: Bearer raw-token"
+            )
+        except ValueError as cause:
+            raise RuntimeError("Activity task failed") from cause
+
+    monkeypatch.setattr(workflow, "_record_canonical_step_checkpoint", fail_checkpoint)
+    await workflow._finalize_after_execution_checkpoint("implement", updated_at=now)
+
+    step = workflow.get_step_ledger()["steps"][0]
+    assert step["executionOutcome"] == {
+        "status": "succeeded",
+        "resultRef": "artifact://result",
+        "outputRefs": [
+            "artifact://result",
+            "artifact://logs",
+            "artifact://diagnostics",
+        ],
+        "diagnosticsRef": "artifact://diagnostics",
+        "workspaceLocator": "/work/agent_jobs/run-1/repo",
+        "recordedAt": "2026-06-13T12:00:00Z",
+    }
+    assert step["finalizationOutcome"]["status"] == expected_status
+    assert step["finalizationOutcome"]["failureCode"] == (
+        "FINALIZATION_CHECKPOINT_FAILED"
+    )
+    assert step["finalizationOutcome"]["phase"] == "after_execution_checkpoint"
+    assert step["finalizationOutcome"]["message"] == (
+        "checkpoint service unavailable password=[REDACTED] "
+        "[REDACTED_AUTHORIZATION]"
+    )
+    assert "raw-secret" not in str(step["finalizationOutcome"])
+    assert "raw-token" not in str(step["finalizationOutcome"])
+    assert workflow._attention_required is attention_required
+    assert workflow._summary.startswith("Execution succeeded; finalization failed")
+    completion = workflow._determine_publish_completion(
+        parameters={"publishMode": "none"}
+    )
+    if criticality == "required":
+        assert completion[0] == "failed"
+        assert completion[2] is True
+    else:
+        assert completion[0] == "success"
+
+
+@pytest.mark.asyncio
+async def test_required_invalid_checkpoint_blocks_publication(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 8, 5, 21, 8, tzinfo=UTC)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "implement", "inputs": {"title": "Implement"}}],
+        dependency_map={"implement": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running("implement", updated_at=now, summary="Implementing")
+    workflow._step_workspace_capture_inputs["implement"] = {
+        "workspaceLocator": {
+            "kind": "sandbox",
+            "workspaceId": "workspace-1",
+            "relativePath": "repo",
+        },
+        "criticality": "required",
+    }
+    workflow._step_checkpoint_capture_outcomes["implement"] = {
+        "status": "invalid",
+        "failureCode": "invalid_checkpoint",
+        "summary": "Git rejected the repository ownership boundary.",
+        "capabilityCriticality": "required",
+    }
+
+    async def missing_checkpoint(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(
+        workflow, "_record_canonical_step_checkpoint", missing_checkpoint
+    )
+    await workflow._finalize_after_execution_checkpoint("implement", updated_at=now)
+
+    outcome = workflow.get_step_ledger()["steps"][0]["finalizationOutcome"]
+    assert outcome["status"] == "failed"
+    assert outcome["failureCode"] == "invalid_checkpoint"
+    assert outcome["message"] == "Git rejected the repository ownership boundary."
+    assert workflow._publish_status == "failed"
+    assert workflow._publish_reason == (
+        "Execution succeeded, but its required after-execution workspace "
+        "checkpoint failed."
+    )
+
+
+@pytest.mark.asyncio
+async def test_after_execution_finalization_is_idempotent_and_does_not_execute_agent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 6, 13, 12, 0, tzinfo=UTC)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "implement", "inputs": {"title": "Implement"}}],
+        dependency_map={"implement": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running("implement", updated_at=now, summary="Implementing")
+    workflow._step_workspace_capture_inputs["implement"] = {
+        "workspacePath": "/work/agent_jobs/run-1/repo",
+        "criticality": "required",
+    }
+    checkpoint_calls = 0
+
+    async def checkpoint(*args: Any, **kwargs: Any) -> str:
+        nonlocal checkpoint_calls
+        checkpoint_calls += 1
+        return "artifact://checkpoint/after_execution"
+
+    monkeypatch.setattr(workflow, "_record_canonical_step_checkpoint", checkpoint)
+    await workflow._finalize_after_execution_checkpoint("implement", updated_at=now)
+    await workflow._finalize_after_execution_checkpoint("implement", updated_at=now)
+
+    step = workflow.get_step_ledger()["steps"][0]
+    assert checkpoint_calls == 1
+    assert step["executionOrdinal"] == 1
+    assert step["finalizationOutcome"]["status"] == "succeeded"
+    assert step["finalizationOutcome"]["checkpointRef"] == (
+        "artifact://checkpoint/after_execution"
+    )
+
+
+@pytest.mark.asyncio
+async def test_publish_none_skips_required_prepublication_checkpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 7, 14, 7, 14, tzinfo=UTC)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "queue-issues", "inputs": {"title": "Queue issues"}}],
+        dependency_map={"queue-issues": []},
+        updated_at=now,
+    )
+
+    async def unexpected_checkpoint(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("publishMode none has no pre-publication boundary")
+
+    monkeypatch.setattr(
+        workflow,
+        "_record_canonical_step_checkpoint",
+        unexpected_checkpoint,
+    )
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: True)
+
+    failed = await workflow._record_prepublication_checkpoint(
+        "queue-issues",
+        publish_mode="none",
+        updated_at=now,
+    )
+
+    assert failed is False
+    assert workflow._attention_required is False
+
+
+@pytest.mark.asyncio
+async def test_remediation_requires_prepublication_checkpoint_without_publish(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 7, 14, 7, 14, tzinfo=UTC)
+    calls: list[str] = []
+
+    async def checkpoint(
+        _logical_step_id: str,
+        *,
+        boundary: str,
+        updated_at: datetime,
+    ) -> str:
+        calls.append(boundary)
+        return "artifact://checkpoint/before_publication"
+
+    monkeypatch.setattr(workflow, "_record_canonical_step_checkpoint", checkpoint)
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: True)
+
+    failed = await workflow._record_prepublication_checkpoint(
+        "remediation-1",
+        publish_mode="none",
+        updated_at=now,
+        required_for_remediation=True,
+    )
+
+    assert failed is False
+    assert calls == ["before_publication"]
+
+
+@pytest.mark.asyncio
+async def test_legacy_history_preserves_prepublication_checkpoint_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 7, 14, 7, 14, tzinfo=UTC)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "queue-issues", "inputs": {"title": "Queue issues"}}],
+        dependency_map={"queue-issues": []},
+        updated_at=now,
+    )
+    calls: list[str] = []
+
+    async def checkpoint(
+        _logical_step_id: str,
+        *,
+        boundary: str,
+        updated_at: datetime,
+    ) -> str:
+        calls.append(boundary)
+        return "artifact://checkpoint/before_publication"
+
+    monkeypatch.setattr(workflow, "_record_canonical_step_checkpoint", checkpoint)
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: False)
+
+    failed = await workflow._record_prepublication_checkpoint(
+        "queue-issues",
+        publish_mode="none",
+        updated_at=now,
+    )
+
+    assert failed is False
+    assert calls == ["before_publication"]
+
+
+@pytest.mark.asyncio
+async def test_prepublication_checkpoint_failure_blocks_publish_repair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 7, 14, 7, 14, tzinfo=UTC)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "assess", "inputs": {"title": "Assess"}}],
+        dependency_map={"assess": []},
+        updated_at=now,
+    )
+    workflow._last_publish_repair_request = SimpleNamespace(agent_kind="managed")
+
+    async def fail_checkpoint(*_args: Any, **_kwargs: Any) -> None:
+        raise asyncio.QueueFull
+
+    monkeypatch.setattr(workflow, "_record_canonical_step_checkpoint", fail_checkpoint)
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: True)
+
+    failed = await workflow._record_prepublication_checkpoint(
+        "assess",
+        publish_mode="pr",
+        updated_at=now,
+    )
+
+    assert failed is True
+    assert workflow._publish_status == "failed"
+    assert workflow._publish_reason == (
+        "Execution succeeded; finalization failed during the pre-publication checkpoint."
+    )
+    assert workflow.get_step_ledger()["steps"][0]["finalizationOutcome"]["message"] == (
+        "QueueFull"
+    )
+    assert workflow._publish_repair_is_available(parameters={"publishMode": "pr"}) is False
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: False)
+    assert workflow._publish_repair_is_available(parameters={"publishMode": "pr"}) is True
+
+
+@pytest.mark.asyncio
+async def test_after_execution_finalization_retry_preserves_retry_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 6, 13, 12, 0, tzinfo=UTC)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "implement", "inputs": {"title": "Implement"}}],
+        dependency_map={"implement": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running("implement", updated_at=now, summary="Implementing")
+    workflow._step_workspace_capture_inputs["implement"] = {
+        "workspacePath": "/work/agent_jobs/run-1/repo",
+        "criticality": "required",
+    }
+    checkpoint_calls = 0
+
+    async def checkpoint(*args: Any, **kwargs: Any) -> str:
+        nonlocal checkpoint_calls
+        checkpoint_calls += 1
+        if checkpoint_calls == 1:
+            raise RuntimeError("checkpoint service unavailable")
+        return "artifact://checkpoint/after_execution"
+
+    monkeypatch.setattr(workflow, "_record_canonical_step_checkpoint", checkpoint)
+    await workflow._finalize_after_execution_checkpoint("implement", updated_at=now)
+    await workflow._finalize_after_execution_checkpoint("implement", updated_at=now)
+    await workflow._finalize_after_execution_checkpoint("implement", updated_at=now)
+
+    step = workflow.get_step_ledger()["steps"][0]
+    assert checkpoint_calls == 2
+    assert step["finalizationOutcome"]["status"] == "succeeded"
+    assert step["finalizationOutcome"]["retryCount"] == 1
+    assert step["finalizationOutcome"]["checkpointRef"] == (
+        "artifact://checkpoint/after_execution"
+    )
+    assert workflow._attention_required is False
+    assert workflow._summary == "Execution succeeded; finalization retry completed."
 
 
 @pytest.mark.asyncio
@@ -2876,7 +4436,11 @@ async def test_run_uses_external_omnigent_identity_for_checkpoint_capture(
     monkeypatch.setattr(
         run_module.workflow,
         "patched",
-        lambda patch_id: patch_id == run_module.RUN_CANONICAL_STEP_CHECKPOINTS_PATCH,
+        lambda patch_id: patch_id in {
+            run_module.RUN_CANONICAL_STEP_CHECKPOINTS_PATCH,
+            run_module.RUN_RUNTIME_EXECUTION_CAPABILITIES_PATCH,
+            run_module.RUN_MANAGED_CHECKPOINT_AUTHORITY_PATCH,
+        },
     )
     workflow = MoonMindRunWorkflow()
     now = datetime(2026, 6, 13, 12, 0, tzinfo=UTC)
@@ -2904,7 +4468,11 @@ async def test_run_uses_external_omnigent_identity_for_checkpoint_capture(
         tool_name="external",
         step_execution=1,
     )
-    workflow._record_step_workspace_capture_input("implement", node_inputs)
+    workflow._record_step_workspace_capture_input(
+        "implement",
+        node_inputs,
+        initialize_omnigent_capture=True,
+    )
 
     async def fake_execute_activity(
         activity: str,
@@ -2913,17 +4481,10 @@ async def test_run_uses_external_omnigent_identity_for_checkpoint_capture(
     ) -> dict[str, Any]:
         captured.append({"activity": activity, "payload": payload, "kwargs": kwargs})
         if activity == "workspace.capture_checkpoint":
-            assert payload["kind"] == "external_state_ref"
-            return {
-                "status": "captured",
-                "workspace": {
-                    "kind": "external_state_ref",
-                    "externalStateRef": "artifact://omnigent/state",
-                    "createdAt": "2026-06-13T12:00:00+00:00",
-                },
-                "diagnosticRefs": ["artifact://omnigent/manifest"],
-            }
-        assert activity == "step_checkpoint.create"
+            assert payload["kind"] == "worktree_archive"
+            assert payload["workspaceLocator"]["kind"] == "sandbox"
+            return _managed_checkpoint_capture_result(payload)
+        assert activity == "step_checkpoint.create_v2"
         return _checkpoint_create_result(payload)
 
     monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
@@ -2945,12 +4506,96 @@ async def test_run_uses_external_omnigent_identity_for_checkpoint_capture(
     assert result == "artifact://checkpoint/before_execution"
     assert [(call["activity"], call["payload"]["boundary"]) for call in captured] == [
         ("workspace.capture_checkpoint", "before_execution"),
-        ("step_checkpoint.create", "before_execution"),
+        ("step_checkpoint.create_v2", "before_execution"),
     ]
-    assert captured[0]["payload"]["kind"] == "external_state_ref"
-    assert captured[1]["payload"]["workspace"]["kind"] == "external_state_ref"
+    assert captured[0]["payload"]["kind"] == "worktree_archive"
+    assert captured[1]["payload"]["workspace"]["kind"] == "worktree_archive"
     assert "patchRef" not in captured[1]["payload"]["workspace"]
-    assert "archiveRef" not in captured[1]["payload"]["workspace"]
+    assert "archiveRef" in captured[1]["payload"]["workspace"]
+    assert workflow._step_checkpoint_workspace_evidence_by_boundary == {
+        "implement": {
+                "before_execution": {
+                    "checkpointRef": "artifact://checkpoint/before_execution",
+                    "workspaceKind": "worktree_archive",
+                    "workspaceDigest": "sha256:" + ("d" * 64),
+                    "workspaceIdentityDigest": "sha256:" + ("c" * 64),
+                    "checkpointManifestRef": "artifact://managed/manifest",
+            }
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_omnigent_result_keeps_session_ref_separate_from_workspace_capture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: True)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 8, 5, 20, 11, tzinfo=UTC)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "implement", "inputs": {"title": "Implement"}}],
+        dependency_map={"implement": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running("implement", updated_at=now, summary="Implementing")
+    workflow._record_step_workspace_capture_input(
+        "implement",
+        {
+            "targetRuntime": "omnigent",
+        },
+        initialize_omnigent_capture=True,
+    )
+    workflow._record_step_workspace_capture_input(
+        "implement",
+        {
+            "workspaceLocator": {
+                "kind": "sandbox",
+                "workspaceId": "workspace-replay",
+                "relativePath": "repo",
+            },
+            "externalStateRef": "artifact://omnigent/replay/external-state.json",
+            "checkpointKind": "external_state_ref",
+            "omnigentCheckpointCapture": {
+                "externalStateRef": "artifact://omnigent/replay/external-state.json"
+            },
+        },
+    )
+    capture_input = workflow._step_workspace_capture_inputs["implement"]
+
+    assert capture_input["externalStateRef"] == (
+        "artifact://omnigent/replay/external-state.json"
+    )
+    assert capture_input["workspaceLocator"]["kind"] == "sandbox"
+    assert "kind" not in capture_input
+
+    captured: list[dict[str, Any]] = []
+
+    async def fake_execute_activity(
+        activity: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        captured.append({"activity": activity, "payload": payload})
+        if activity == "workspace.capture_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
+        return _checkpoint_create_result(payload)
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
+
+    checkpoint_ref = await workflow._record_canonical_step_checkpoint(
+        "implement",
+        boundary="after_execution",
+        updated_at=now,
+    )
+
+    assert checkpoint_ref == "artifact://checkpoint/after_execution"
+    assert captured[0]["payload"]["kind"] == "worktree_archive"
+    assert captured[0]["payload"]["externalStateRef"] == (
+        "artifact://omnigent/replay/external-state.json"
+    )
+    assert captured[1]["activity"] == "step_checkpoint.create_v2"
+    assert captured[1]["payload"]["workspace"]["kind"] == "worktree_archive"
 
 
 def test_run_derives_external_omnigent_identity_from_runtime_selection() -> None:
@@ -2966,10 +4611,12 @@ def test_run_derives_external_omnigent_identity_from_runtime_selection() -> None
     )
 
     assert workflow._step_external_agent_ids["implement"] == "omnigent"
-    assert workflow._step_workspace_capture_inputs["implement"] == {
-        "workspacePath": "/work/agent_jobs/run-1/repo",
-        "baseCommit": "abc123",
-    }
+    capture = workflow._step_workspace_capture_inputs["implement"]
+    assert capture["workspacePath"] == "/work/agent_jobs/run-1/repo"
+    assert capture["baseCommit"] == "abc123"
+    assert capture["captureAuthority"] == "moonmind_sandbox"
+    assert capture["runtimeCapabilities"]["runtimeId"] == "omnigent"
+    assert "kind" not in capture
 
 
 @pytest.mark.asyncio
@@ -3060,7 +4707,9 @@ async def test_run_keeps_non_omnigent_and_legacy_checkpoint_capture_defaults(
         for call in captured
         if call["activity"] == "workspace.capture_checkpoint"
     ]
-    assert capture_kinds == ["git_patch", "git_patch"]
+    # A newly recognized external runtime cannot silently enter local capture;
+    # only the explicit legacy sandbox path retains its replay behavior.
+    assert capture_kinds == ["git_patch"]
 
 
 @pytest.mark.asyncio
@@ -3525,6 +5174,111 @@ def test_run_reads_nested_workload_metadata_from_legacy_workload_result(
     assert "stdout" not in step["workload"]
 
 @pytest.mark.asyncio
+async def test_run_execution_stage_propagates_agent_child_cancellation_under_continue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    plan_payload = _approval_policy_plan_payload()
+    plan_payload["policy"]["failure_mode"] = "CONTINUE"
+    artifact_sequence = iter(range(1, 20))
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: Any = None,
+        **_kwargs: Any,
+    ) -> Any:
+        if activity_type == "agent_skill.resolve":
+            return _empty_skill_resolution()
+        if activity_type == "resilience.compile_policy":
+            return _resilience_policy_compile_result(payload)
+        if activity_type == "provider_profile.list":
+            return {"profiles": []}
+        if activity_type == "artifact.create":
+            if str(payload.get("name") or "").startswith(
+                "reports/resilience_policy"
+            ):
+                return _resilience_policy_artifact_create_result()
+            return (
+                {"artifact_id": f"art_{next(artifact_sequence)}"},
+                {"upload_url": "unused"},
+            )
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
+        if activity_type == "step_checkpoint.create":
+            return _checkpoint_create_result(payload)
+        raise AssertionError(f"unexpected activity: {activity_type}")
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        _args: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        raise run_module.CancelledError("parent cancellation")
+
+    async def fake_execute_typed_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        if activity_type == "artifact.read":
+            artifact_ref = getattr(payload, "artifact_ref", None)
+            if artifact_ref == "art_plan_1":
+                return json.dumps(plan_payload).encode("utf-8")
+            if artifact_ref == "artifact://registry/1":
+                return json.dumps(_registry_payload()).encode("utf-8")
+        if activity_type == "artifact.write_complete":
+            return {"ok": True}
+        raise AssertionError(f"unexpected typed activity: {activity_type}")
+
+    monkeypatch.setattr(
+        run_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        run_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        run_module,
+        "execute_typed_activity",
+        fake_execute_typed_activity,
+    )
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: True)
+
+    with pytest.raises(run_module.CancelledError, match="parent cancellation"):
+        await workflow._run_execution_stage(
+            parameters={"repo": "MoonLadderStudios/MoonMind"},
+            plan_ref="art_plan_1",
+        )
+
+    step = workflow.get_step_ledger()["steps"][0]
+    assert step["status"] == "awaiting_external"
+
+
+def test_agent_child_cancellation_propagation_preserves_pre_patch_histories(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cancellation = run_module.CancelledError("parent cancellation")
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: False)
+    assert not MoonMindRunWorkflow._should_propagate_agent_child_cancellation(
+        cancellation
+    )
+
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: (
+            patch_id == run_module.RUN_PROPAGATE_AGENT_CHILD_CANCELLATION_PATCH
+        ),
+    )
+    assert MoonMindRunWorkflow._should_propagate_agent_child_cancellation(cancellation)
+
+
+@pytest.mark.asyncio
 async def test_run_execution_stage_marks_step_reviewing_and_records_passed_check(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3540,9 +5294,11 @@ async def test_run_execution_stage_marks_step_reviewing_and_records_passed_check
 
     async def fake_execute_activity(
         activity_type: str,
-        payload: Any,
+        payload: Any = None,
         **_kwargs: Any,
     ) -> Any:
+        if activity_type == "agent_skill.resolve":
+            return _empty_skill_resolution()
         if activity_type == "resilience.compile_policy":
             return _resilience_policy_compile_result(payload)
         if activity_type == "provider_profile.list":
@@ -3565,6 +5321,8 @@ async def test_run_execution_stage_marks_step_reviewing_and_records_passed_check
                 "feedback": None,
                 "issues": [],
             }
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
         if activity_type == "step_checkpoint.create":
             return _checkpoint_create_result(payload)
         raise AssertionError(f"unexpected activity: {activity_type}")
@@ -3735,9 +5493,11 @@ async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retr
 
     async def fake_execute_activity(
         activity_type: str,
-        payload: Any,
+        payload: Any = None,
         **_kwargs: Any,
     ) -> Any:
+        if activity_type == "agent_skill.resolve":
+            return _empty_skill_resolution()
         if activity_type == "resilience.compile_policy":
             return _resilience_policy_compile_result(payload)
         if activity_type == "provider_profile.list":
@@ -3753,6 +5513,8 @@ async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retr
             return ({"artifact_id": next(review_artifact_ids)}, {"upload_url": "unused"})
         if activity_type == "step.review":
             return next(review_verdicts)
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
         if activity_type == "step_checkpoint.create":
             return _checkpoint_create_result(payload)
         raise AssertionError(f"unexpected activity: {activity_type}")
@@ -3914,9 +5676,11 @@ async def test_run_execution_stage_stops_downstream_handoff_when_gate_budget_exh
 
     async def fake_execute_activity(
         activity_type: str,
-        payload: Any,
+        payload: Any = None,
         **_kwargs: Any,
     ) -> Any:
+        if activity_type == "agent_skill.resolve":
+            return _empty_skill_resolution()
         if activity_type == "resilience.compile_policy":
             return _resilience_policy_compile_result(payload)
         if activity_type == "provider_profile.list":
@@ -3934,6 +5698,8 @@ async def test_run_execution_stage_stops_downstream_handoff_when_gate_budget_exh
                 "remainingWorkRef": "art_remaining_work_1",
                 "recommendedNextAction": "needs_human",
             }
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
         if activity_type == "step_checkpoint.create":
             return _checkpoint_create_result(payload)
         raise AssertionError(f"unexpected activity: {activity_type}")
@@ -4019,6 +5785,9 @@ async def test_run_execution_stage_stops_downstream_handoff_when_gate_budget_exh
         "gate": "approval_policy",
         "maxAttempts": 1,
         "attemptsConsumed": 1,
+        "maxExecutions": 1,
+        "executionsConsumed": 1,
+        "retriesConsumed": 0,
         "remainingExecutions": 0,
         "additionalStopDimension": {
             "type": "consecutive_no_progress_attempts",
@@ -4087,9 +5856,11 @@ async def test_run_execution_stage_stops_downstream_handoff_when_no_progress_bud
 
     async def fake_execute_activity(
         activity_type: str,
-        payload: Any,
+        payload: Any = None,
         **_kwargs: Any,
     ) -> Any:
+        if activity_type == "agent_skill.resolve":
+            return _empty_skill_resolution()
         if activity_type == "resilience.compile_policy":
             return _resilience_policy_compile_result(payload)
         if activity_type == "provider_profile.list":
@@ -4107,6 +5878,8 @@ async def test_run_execution_stage_stops_downstream_handoff_when_no_progress_bud
                 "remainingWorkRef": "art_remaining_work_1",
                 "recommendedNextAction": "needs_human",
             }
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
         if activity_type == "step_checkpoint.create":
             return _checkpoint_create_result(payload)
         raise AssertionError(f"unexpected activity: {activity_type}")
@@ -4238,9 +6011,11 @@ async def test_run_execution_stage_continues_independent_nodes_after_gate_stop(
 
     async def fake_execute_activity(
         activity_type: str,
-        payload: Any,
+        payload: Any = None,
         **_kwargs: Any,
     ) -> Any:
+        if activity_type == "agent_skill.resolve":
+            return _empty_skill_resolution()
         if activity_type == "resilience.compile_policy":
             return _resilience_policy_compile_result(payload)
         if activity_type == "provider_profile.list":
@@ -4258,6 +6033,8 @@ async def test_run_execution_stage_continues_independent_nodes_after_gate_stop(
                 "remainingWorkRef": "art_remaining_work_1",
                 "recommendedNextAction": "needs_human",
             }
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
         if activity_type == "step_checkpoint.create":
             return _checkpoint_create_result(payload)
         raise AssertionError(f"unexpected activity: {activity_type}")
@@ -4388,9 +6165,11 @@ async def test_run_execution_stage_retries_agent_runtime_reviews_with_feedback_i
 
     async def fake_execute_activity(
         activity_type: str,
-        payload: Any,
+        payload: Any = None,
         **_kwargs: Any,
     ) -> Any:
+        if activity_type == "agent_skill.resolve":
+            return _empty_skill_resolution()
         if activity_type == "resilience.compile_policy":
             return _resilience_policy_compile_result(payload)
         if activity_type == "provider_profile.list":
@@ -4406,6 +6185,8 @@ async def test_run_execution_stage_retries_agent_runtime_reviews_with_feedback_i
             return ({"artifact_id": next(review_artifact_ids)}, {"upload_url": "unused"})
         if activity_type == "step.review":
             return next(review_verdicts)
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
         if activity_type == "step_checkpoint.create":
             return _checkpoint_create_result(payload)
         raise AssertionError(f"unexpected activity: {activity_type}")

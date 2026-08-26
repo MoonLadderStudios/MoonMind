@@ -47,24 +47,37 @@ In WSL, `./tools/test_unit.sh` automatically delegates to `./tools/test_unit_doc
 The GitHub unit-test workflow uses impact-aware backend suite selection for pull requests. A `select-test-suites` job runs `tools/select_test_suites.py` against the changed files and emits suite decisions for:
 
 - `unit_fast`
+- `unit_slow`
 - `api_component`
 - `temporal_boundary`
 - `integration_ci`
+- `reliability_journey`
 - `full_backend`
 
-Branch protection should require the always-running `ci-required` summary job instead of the conditional backend suite jobs. `ci-required` fails when any suite selected by the selector is skipped, cancelled, or unsuccessful.
+Branch protection should require the always-running `ci-required` summary job instead of the conditional backend suite jobs, plus the standalone `migration-gate` check. `ci-required` is a pure result aggregator with no checkout, submodule, setup, or repository command; it evaluates every dependency and reports each failed, cancelled, timed-out, or unexpectedly skipped selected job before exiting. `migration-gate` independently blocks migration-graph and clean-database upgrade failures.
 
-Routine backend pull requests run the cheap unit safety net first. API/router/auth/db/service changes also run the component suite. Temporal workflow, runtime, activity-boundary, signal/update, replay, or Temporal schema changes run the Temporal boundary suite. Docker, integration, database, compose, migration, dependency, or test-runner changes run hermetic `integration_ci` as needed.
+Static repository policy checks run in a parallel `preflight-policy` job that starts immediately alongside `select-test-suites`, rather than on the serial tail of `ci-required`. It owns docs and workflow terminology guardrails, removed-capability semantics, status-token domain and audit checks, the GitHub workflow display-name guard, and AgentSession deployment-safety validation, so those checks are no longer duplicated in `unit-fast`. Backend jobs use shallow, submodule-free checkouts; only `moonspec-projection` initializes a submodule, and it initializes only `moonspec`. The selector, deployment-safety validation, and the generated-contract detector share `tools/ci/compute_changed_files.sh` to compute the exact changed-file list from the event's base and head commits.
 
-The selector fails open. Empty changed-file input, unknown paths, CI workflow changes, dependency file changes, test-runner changes, pytest configuration changes, selector changes, pushes to `main`, scheduled runs, and manual dispatches all force `full_backend=true`. On that path, the workflow runs the canonical backend unit command:
+Routine backend pull requests run the cheap unit safety net first. API/router/auth/db/service changes also run the component suite. Temporal workflow, runtime, activity-boundary, signal/update, replay, or Temporal schema changes run the Temporal boundary suite. Changes under workflow adapters, Temporal workflows, checked-in `.agents/skills` bundles, Docker runtime paths, checkpoint schemas, and reliability replay fixtures run the hermetic reliability journey suite. Docker, integration, database, compose, migration, dependency, or test-runner changes run hermetic `integration_ci` as needed.
+
+The selector fails open. Empty changed-file input, unknown paths, CI workflow changes, dependency file changes, test-runner changes, pytest configuration changes, selector changes, pushes to `main`, scheduled runs, and manual dispatches all force `full_backend=true`. That path selects every exclusive backend shard, including `unit_slow`; it does not replace `unit-fast` with the broad unit wrapper.
+
+The ownership verifier runs on full-backend paths and checks that every eligible provider-free pytest node has exactly one CI owner. The precedence is `slow > temporal_boundary > component > unit_fast`.
+
+The invariant fast-unit command is:
 
 ```bash
-./tools/test_unit.sh --python-only
+python -m pytest tests/unit \
+  --ignore=tests/unit/workflows/temporal \
+  --ignore=tests/unit/api \
+  --ignore=tests/unit/api_service \
+  -m "unit_fast and not provider_verification and not requires_credentials" \
+  -q -n auto --dist loadfile --durations=25
 ```
 
 `./tools/test_unit.sh` reports the slowest Python tests with `--durations`; set `MOONMIND_PYTEST_DURATIONS` to tune the count. In CI it also writes JUnit XML unless `MOONMIND_PYTEST_JUNITXML` points at a different output path.
 
-The workflow still runs a dedicated frontend validation job, and the generated-contract check still runs only when `tools/check_openapi_affecting_changes.sh` reports an OpenAPI-affecting path.
+The workflow selects `frontend-static` and the Chromium/Firefox browser matrix independently by changed-file impact. They run in parallel, while the always-running `test-frontend` result job preserves the stable required-check context and explicitly passes known non-frontend changes. The generated-contract check remains separate and still runs only when `tools/check_openapi_affecting_changes.sh` reports an OpenAPI-affecting path.
 
 See [Backend Test Selection Strategy](BackendTestSelection.md) for the detailed selector contract, category definitions, full-backend fail-open rules, and maintenance guidance.
 
@@ -103,16 +116,25 @@ pre-commit install
 
 ```bash
 python -m pytest tests/unit \
-  -m "not temporal_boundary and not component and not slow" \
+  --ignore=tests/unit/workflows/temporal \
+  --ignore=tests/unit/api \
+  --ignore=tests/unit/api_service \
+  -m "unit_fast and not provider_verification and not requires_credentials" \
   -q -n auto --dist loadfile --durations=25
 
 python -m pytest tests/unit/api tests/unit/api_service tests/component/api \
-  -m "component and not temporal_boundary and not slow" \
+  -m "component and not temporal_boundary and not slow and not provider_verification and not requires_credentials" \
   -q -n auto --dist loadfile --durations=25
 
 python -m pytest tests/unit/workflows/temporal \
-  -m "temporal_boundary and not slow" \
+  -m "temporal_boundary and not slow and not provider_verification and not requires_credentials" \
   -q --durations=25
+
+python -m pytest tests/unit \
+  -m "slow and not provider_verification and not requires_credentials and not integration" \
+  -q --durations=50
+
+python tools/verify_test_shard_ownership.py
 ```
 
 7. Run `./tools/test_integration.sh` only when Docker, compose, migrations, integration tests, runtime infrastructure, or another selector-selected hermetic integration boundary changed.

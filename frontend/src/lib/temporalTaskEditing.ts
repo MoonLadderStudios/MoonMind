@@ -107,6 +107,12 @@ export type TemporalSubmissionDraftPresetPayload = {
 export type TemporalSubmissionDraft = {
   runtime: string | null;
   providerProfile: string | null;
+  agentProfile: {
+    profileId: string;
+    version: number | null;
+  } | null;
+  omnigentExecutionTargetRef: string | null;
+  omnigentLaunchPolicyRef: string | null;
   model: string | null;
   effort: string | null;
   modelTier: number | null;
@@ -125,6 +131,7 @@ export type TemporalSubmissionDraft = {
     id: string;
     title: string;
     instructions: string;
+    repositoryOperation?: 'read' | 'write';
     runtime?: {
       mode?: string | null;
       model?: string | null;
@@ -152,6 +159,7 @@ export type TemporalSubmissionDraft = {
       contentType: string;
       sizeBytes: number;
     }>;
+    annotations?: Record<string, unknown>;
     storyOutput?: Record<string, unknown>;
     jiraOrchestration?: Record<string, unknown>;
     runtimeCommand?: Record<string, unknown>;
@@ -533,6 +541,14 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
           ? 'tool'
           : 'skill';
   const instructions = stringValue(step.instructions);
+  const rawRepositoryOperation = stringValue(
+    step.repositoryOperation,
+    step.repository_operation,
+  ).toLowerCase();
+  const repositoryOperation: 'read' | 'write' | null =
+    rawRepositoryOperation === 'read' || rawRepositoryOperation === 'write'
+      ? rawRepositoryOperation
+      : null;
   const id = stringValue(step.id);
   const templateStepId = stringValue(
     step.templateStepId,
@@ -540,6 +556,7 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     id.startsWith('tpl:') ? id : '',
   );
   const storyOutput = firstObjectValue(step.storyOutput, step.story_output);
+  const annotations = objectValue(step.annotations);
   const jiraOrchestration = firstObjectValue(
     step.jiraOrchestration,
     step.jira_orchestration,
@@ -561,6 +578,7 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     id,
     title: stringValue(step.title),
     instructions,
+    ...(repositoryOperation ? { repositoryOperation } : {}),
     ...(Object.keys(runtime).length > 0 ? { runtime } : {}),
     stepType,
     ...(Object.keys(tool).length > 0 ? { tool } : {}),
@@ -607,6 +625,7 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     ),
     ...(inputAttachments.length > 0 ? { inputAttachments } : {}),
     ...(templateAttachments.length > 0 ? { templateAttachments } : {}),
+    ...(Object.keys(annotations).length > 0 ? { annotations } : {}),
     ...(Object.keys(storyOutput).length > 0 ? { storyOutput } : {}),
     ...(Object.keys(jiraOrchestration).length > 0 ? { jiraOrchestration } : {}),
     ...(Object.keys(runtimeCommand).length > 0 ? { runtimeCommand } : {}),
@@ -616,6 +635,7 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     result.id ||
     result.title ||
     result.instructions ||
+    Boolean(result.repositoryOperation) ||
     Object.keys(runtime).length > 0 ||
     result.stepType !== 'skill' ||
     result.skillId ||
@@ -627,6 +647,7 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     result.templateInstructions ||
     inputAttachments.length > 0 ||
     templateAttachments.length > 0 ||
+    Object.keys(annotations).length > 0 ||
     Object.keys(storyOutput).length > 0 ||
     Object.keys(jiraOrchestration).length > 0 ||
     Object.keys(runtimeCommand).length > 0;
@@ -896,6 +917,10 @@ export function buildTemporalSubmissionDraftFromExecution(
     : workflowRecord(artifactParams);
   const runtime = objectValue(task.runtime);
   const artifactRuntime = objectValue(artifactTask.runtime);
+  const agentProfile = objectValue(params.agentProfile);
+  const agentProfileSnapshot = objectValue(params.agentProfileSnapshot);
+  const omnigent = objectValue(params.omnigent);
+  const artifactOmnigent = objectValue(artifactParams.omnigent);
   const git = objectValue(task.git);
   const artifactGit = objectValue(artifactTask.git);
   const publish = objectValue(task.publish);
@@ -985,6 +1010,31 @@ export function buildTemporalSubmissionDraftFromExecution(
       params.profileId,
       runtime.profileId,
       artifactRuntime.profileId,
+    ),
+    agentProfile: (() => {
+      const profileId = nullableStringValue(
+        agentProfile.profileId,
+        agentProfileSnapshot.profileId,
+      );
+      return profileId
+        ? {
+            profileId,
+            version: positiveIntegerValue(
+              agentProfile.version,
+              agentProfileSnapshot.version,
+            ),
+          }
+        : null;
+    })(),
+    omnigentExecutionTargetRef: nullableStringValue(
+      snapshotDraft.omnigentExecutionTargetRef,
+      omnigent.executionTargetRef,
+      artifactOmnigent.executionTargetRef,
+    ),
+    omnigentLaunchPolicyRef: nullableStringValue(
+      snapshotDraft.omnigentLaunchPolicyRef,
+      omnigent.launchPolicyRef,
+      artifactOmnigent.launchPolicyRef,
     ),
     model: nullableStringValue(
       snapshotDraft.model,

@@ -2,33 +2,145 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
+import os
+import shutil
+import socket
+import subprocess
+import tempfile
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
 import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
-from sqlalchemy import select
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
+from api_service.api.routers.executions import _get_service, router
+from api_service.auth_providers import get_current_user
+from api_service.db.base import get_async_session
 from api_service.db.models import (
     Base,
     TemporalExecutionCanonicalRecord,
     TemporalWorkflowType,
     WorkflowCheckpointBranch,
     WorkflowCheckpointBranchArtifact,
+    WorkflowCheckpointBranchGitBinding,
     WorkflowCheckpointBranchOperation,
+    WorkflowCheckpointBranchTurn,
 )
 from api_service.services.checkpoint_branch_service import (
     CheckpointBranchService,
     build_branch_turn_launch_idempotency_key,
 )
+from api_service.services.checkpoint_branch_turn_execution import (
+    CheckpointBranchTurnExecutionOwner,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
+
+
+@pytest.fixture
+def checkpoint_branch_postgres_url():
+    """Provide isolated PostgreSQL without a manually managed test service."""
+
+    configured = os.getenv("MOONMIND_TEST_POSTGRES_URL", "").strip()
+    if configured:
+        if configured.startswith("postgresql://"):
+            configured = configured.replace(
+                "postgresql://", "postgresql+asyncpg://", 1
+            )
+        if not configured.startswith("postgresql+asyncpg://"):
+            pytest.fail("MOONMIND_TEST_POSTGRES_URL must use PostgreSQL")
+        yield configured
+        return
+
+    initdb_path = shutil.which("initdb")
+    if initdb_path is None:
+        candidates = sorted(Path("/usr/lib/postgresql").glob("*/bin/initdb"))
+        initdb_path = str(candidates[-1]) if candidates else None
+    if initdb_path is None:
+        pytest.fail(
+            "PostgreSQL test binaries are unavailable in the Python test image"
+        )
+    initdb = str(Path(initdb_path))
+    pg_ctl = str(Path(initdb).with_name("pg_ctl"))
+    data_root = Path(tempfile.mkdtemp(prefix="moonmind-checkpoint-postgres-"))
+    data_dir = data_root / "data"
+    log_path = data_root / "postgres.log"
+    command_prefix: list[str] = []
+    if os.geteuid() == 0:
+        # docker-compose.test.yaml intentionally runs pytest as root, while
+        # PostgreSQL refuses to initialize as root. Keep the isolated cluster
+        # owned by the package-created postgres account in that path.
+        shutil.chown(data_root, user="postgres", group="postgres")
+        command_prefix = ["runuser", "--user", "postgres", "--"]
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+    subprocess.run(
+        [
+            *command_prefix,
+            initdb,
+            "--pgdata",
+            str(data_dir),
+            "--username",
+            "postgres",
+            "--auth",
+            "trust",
+            "--encoding",
+            "UTF8",
+            "--no-locale",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        [
+            *command_prefix,
+            pg_ctl,
+            "--pgdata",
+            str(data_dir),
+            "--log",
+            str(log_path),
+            "--options",
+            f"-F -p {port} -h 127.0.0.1 -k {data_dir}",
+            "--wait",
+            "start",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    try:
+        yield f"postgresql+asyncpg://postgres@127.0.0.1:{port}/postgres"
+    finally:
+        subprocess.run(
+            [
+                *command_prefix,
+                pg_ctl,
+                "--pgdata",
+                str(data_dir),
+                "--mode",
+                "immediate",
+                "--wait",
+                "stop",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        shutil.rmtree(data_root, ignore_errors=True)
 
 
 def _load_migration_module():
@@ -178,24 +290,39 @@ async def test_checkpoint_branch_launch_persists_minimum_artifact_refs_without_d
             branch_id="cbr-integration",
             branch_turn_id=turn_id,
         )
-        launch_args = {
+        claim_args = {
             "workflow_id": "mm:wf-branch",
             "branch_id": "cbr-integration",
             "branch_turn_id": turn_id,
             "context_bundle_ref": "artifact://context/integration",
             "step_execution_manifest_ref": "artifact://manifest/integration",
-            "checkpoint_ref": "artifact://checkpoint/integration",
             "diagnostics_ref": "artifact://diagnostics/integration",
             "agent_request_ref": "artifact://agent-request/integration",
-            "agent_result_ref": "artifact://agent-result/integration",
             "created_step_execution_id": (
                 "mm:wf-branch:run-branch:implement:execution:3"
             ),
-            "idempotency_key": launch_key,
+            "runtime_agent_run_id": "mm:wf-branch:agent:branch-turn",
+            "execution_workflow_id": "checkpoint-branch-turn:integration",
+            "launch_idempotency_key": launch_key,
         }
 
-        await service.launch_turn(**launch_args)
-        await service.launch_turn(**launch_args)
+        await service.claim_turn_execution(**claim_args)
+        await service.claim_turn_execution(**claim_args)
+        finalize_args = {
+            "workflow_id": "mm:wf-branch",
+            "branch_id": "cbr-integration",
+            "branch_turn_id": turn_id,
+            "outcome": "succeeded",
+            "agent_result_ref": "artifact://agent-result/integration",
+            "diagnostics_ref": "artifact://terminal-diagnostics/integration",
+            "checkpoint_ref": "artifact://checkpoint/integration",
+            "checkpoint_digest": "sha256:terminal-checkpoint",
+            "provider_session_id": "omnigent-session-integration",
+            "output_refs": ["artifact://output/integration"],
+            "terminal_disposition": "verification_pending",
+        }
+        await service.finalize_turn_execution(**finalize_args)
+        await service.finalize_turn_execution(**finalize_args)
         await session.commit()
 
         artifacts = (
@@ -212,11 +339,262 @@ async def test_checkpoint_branch_launch_persists_minimum_artifact_refs_without_d
         "input.branch_turn.instructions.md",
         "output.branch_turn.checkpoint.json",
         "output.branch_turn.diagnostics.json",
+        "output.branch_turn.launch_diagnostics.json",
         "output.branch_turn.step_execution_manifest.json",
         "runtime.branch_turn.agent_request.json",
         "runtime.branch_turn.agent_result.json",
         "runtime.branch_turn.context_bundle.json",
     ]
+
+
+@pytest.mark.asyncio
+async def test_public_checkpoint_branch_launch_is_idempotent_under_postgres_race(
+    monkeypatch: pytest.MonkeyPatch,
+    checkpoint_branch_postgres_url: str,
+) -> None:
+    """Exercise the public launch ledger and owner under real row locking."""
+
+    engine = create_async_engine(checkpoint_branch_postgres_url)
+    assert engine.dialect.name == "postgresql"
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    sessions = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    suffix = uuid4().hex
+    workflow_id = f"mm:wf-checkpoint-launch-race-{suffix}"
+    run_id = f"run-checkpoint-launch-race-{suffix}"
+    branch_id = f"cbr-launch-race-{suffix}"
+    turn_id = f"cbt-launch-race-{suffix}"
+    request_key = f"checkpoint-launch-race-{suffix}"
+    user = SimpleNamespace(
+        id=uuid4(),
+        email="checkpoint-launch-race@example.test",
+        is_superuser=True,
+        roles=[],
+    )
+    source = TemporalExecutionCanonicalRecord(
+        workflow_id=workflow_id,
+        run_id=run_id,
+        namespace="default",
+        workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+        owner_id=str(user.id),
+        owner_type="user",
+        state="executing",
+        entry="api",
+        search_attributes={
+            "mm_owner_id": str(user.id),
+            "mm_owner_type": "user",
+        },
+        memo={},
+        parameters={},
+        artifact_refs=[],
+    )
+    async with sessions() as session:
+        session.add(source)
+        await session.commit()
+        service = CheckpointBranchService(session)
+        await service.create_branch_graph(
+            {
+                "branchId": branch_id,
+                "branchTurnId": turn_id,
+                "source": {
+                    "workflowId": workflow_id,
+                    "runId": run_id,
+                    "logicalStepId": "implement",
+                    "sourceExecutionOrdinal": 2,
+                    "checkpointBoundary": "after_execution",
+                    "checkpointRef": f"artifact://checkpoint/{suffix}",
+                    "checkpointDigest": "sha256:" + "1" * 64,
+                },
+                "label": "PostgreSQL launch race",
+                "workspacePolicy": (
+                    "apply_previous_execution_diff_to_clean_baseline"
+                ),
+                "runtimeContextPolicy": "fresh_agent_run",
+                "instructionRef": f"artifact://instruction/{suffix}",
+                "instructionDigest": "sha256:" + "2" * 64,
+                "idempotencyKey": f"graph-{suffix}",
+            }
+        )
+        await service.configure_server_launch_authority(
+            workflow_id=workflow_id,
+            branch_id=branch_id,
+            branch_turn_id=turn_id,
+            repository="MoonLadderStudios/MoonMind",
+            base_branch="main",
+            base_commit="abc123",
+            work_branch=f"feature/checkpoint-launch-race-{suffix}",
+            provider_profile_ref="profile-race",
+        )
+        await session.commit()
+
+    omnigent_payload = {
+        "executionProfileRef": "profile-race",
+        "launchPolicyRef": "codex-on-demand@1",
+        "idempotencyKey": f"source-message-{suffix}",
+        "sourceBranch": "main",
+        "publicationState": "none",
+    }
+    omnigent_checkpoint = SimpleNamespace(
+        workflow_id=workflow_id,
+        step_execution_id=f"{workflow_id}:source-step",
+        bridge_session_id=f"bridge-{suffix}",
+        omnigent_session_id=None,
+        execution_profile_ref="profile-race",
+        launch_policy_ref="codex-on-demand@1",
+        execution_plan_ref=None,
+        idempotency_key=f"source-message-{suffix}",
+        source_branch="main",
+        publication_state="none",
+        model_dump=lambda **_kwargs: dict(omnigent_payload),
+    )
+    checkpoint = SimpleNamespace(omnigent=omnigent_checkpoint)
+    profile = SimpleNamespace(
+        profile_id="profile-race",
+        runtime_id="codex_cli",
+        default_model="gpt-test",
+        default_effort="high",
+    )
+    policy_snapshot = {
+        "boundaries": {"execution": {"profileRef": "omnigent-codex@1"}}
+    }
+
+    async def validated_authority(_owner, **_kwargs):
+        return checkpoint, profile, policy_snapshot
+
+    async def stable_artifact(
+        _owner,
+        *,
+        content_type: str,
+        payload: bytes,
+        kind: str,
+        branch_turn_id: str,
+    ) -> str:
+        del content_type, payload
+        return f"artifact://postgres-race/{branch_turn_id}/{kind}"
+
+    started_workflow_ids: set[str] = set()
+    start_attempts = 0
+
+    async def record_start(_owner, *, branch, turn, binding) -> None:
+        nonlocal start_attempts
+        del branch, binding
+        start_attempts += 1
+        started_workflow_ids.add(turn.diagnostics["executionWorkflowId"])
+
+    monkeypatch.setattr(
+        CheckpointBranchTurnExecutionOwner,
+        "_validate_source_authority",
+        validated_authority,
+    )
+    monkeypatch.setattr(
+        CheckpointBranchTurnExecutionOwner,
+        "_write_artifact",
+        stable_artifact,
+    )
+    monkeypatch.setattr(
+        CheckpointBranchTurnExecutionOwner,
+        "_start_claimed_turn",
+        record_start,
+    )
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[_get_service] = lambda: SimpleNamespace(
+        describe_execution=AsyncMock(return_value=source)
+    )
+
+    async def session_override():
+        async with sessions() as session:
+            yield session
+
+    app.dependency_overrides[get_async_session] = session_override
+    user_dependencies = {
+        dependency.call
+        for route_item in router.routes
+        if route_item.dependant is not None
+        for dependency in route_item.dependant.dependencies
+        if getattr(dependency.call, "__name__", "") == "_current_user_fallback"
+    } or {get_current_user()}
+    for dependency in user_dependencies:
+        app.dependency_overrides[dependency] = lambda: user
+
+    endpoint = (
+        f"/api/executions/{workflow_id}/checkpoint-branches/{branch_id}/"
+        f"turns/{turn_id}/launch"
+    )
+    body = {"idempotencyKey": request_key, "expectedBranchHeadVersion": 1}
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        first, second = await asyncio.gather(
+            client.post(endpoint, json=body),
+            client.post(endpoint, json=body),
+        )
+
+    assert first.status_code == second.status_code == 200
+    assert first.json()["createdStepExecutionId"] == second.json()[
+        "createdStepExecutionId"
+    ]
+    assert first.json()["runtimeAgentRunId"] == second.json()[
+        "runtimeAgentRunId"
+    ]
+    assert len(started_workflow_ids) == 1
+    assert start_attempts == 2
+
+    async with sessions() as session:
+        turn = await session.get(WorkflowCheckpointBranchTurn, turn_id)
+        operations = list(
+            (
+                await session.execute(
+                    select(WorkflowCheckpointBranchOperation).where(
+                        WorkflowCheckpointBranchOperation.workflow_id == workflow_id,
+                        WorkflowCheckpointBranchOperation.idempotency_key == request_key,
+                    )
+                )
+            ).scalars()
+        )
+        assert turn is not None
+        assert turn.created_step_execution_id == first.json()[
+            "createdStepExecutionId"
+        ]
+        assert len(operations) == 1
+
+        await session.execute(
+            delete(WorkflowCheckpointBranchOperation).where(
+                WorkflowCheckpointBranchOperation.workflow_id == workflow_id
+            )
+        )
+        await session.execute(
+            delete(WorkflowCheckpointBranchArtifact).where(
+                WorkflowCheckpointBranchArtifact.branch_id == branch_id
+            )
+        )
+        await session.execute(
+            delete(WorkflowCheckpointBranchGitBinding).where(
+                WorkflowCheckpointBranchGitBinding.branch_id == branch_id
+            )
+        )
+        await session.execute(
+            delete(WorkflowCheckpointBranchTurn).where(
+                WorkflowCheckpointBranchTurn.branch_id == branch_id
+            )
+        )
+        await session.execute(
+            delete(WorkflowCheckpointBranch).where(
+                WorkflowCheckpointBranch.branch_id == branch_id
+            )
+        )
+        await session.execute(
+            delete(TemporalExecutionCanonicalRecord).where(
+                TemporalExecutionCanonicalRecord.workflow_id == workflow_id
+            )
+        )
+        await session.commit()
+
+    app.dependency_overrides.clear()
+    await engine.dispose()
 
 
 @pytest.mark.asyncio

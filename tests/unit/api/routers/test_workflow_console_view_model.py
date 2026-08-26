@@ -47,6 +47,7 @@ def test_status_maps_returns_copy() -> None:
     assert dashboard_view_model.status_maps()["temporal"]["queued"] == "queued"
 
 def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
+    monkeypatch.delenv("MOONMIND_FOLLOWUP_RETRIEVAL_COLLECTIONS", raising=False)
     monkeypatch.setattr(settings.anthropic, "anthropic_api_key", None)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("CLAUDE_API_KEY", raising=False)
@@ -60,6 +61,7 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     )
 
     config = dashboard_view_model.build_runtime_config("/workflows")
+    assert config["system"]["retrievalAuthoring"]["collections"] == ["repo", "docs"]
     assert config["initialPath"] == "/workflows"
     assert config["pollIntervalsMs"]["list"] > 0
     assert config["sources"]["temporal"]["list"] == "/api/executions"
@@ -130,14 +132,25 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert temporal_dashboard["debugFieldsEnabled"] is False
     assert config["statusMaps"]["temporal"]["executing"] == "running"
     assert "defaultRepository" in config["system"]
+    omnigent_catalog = config["system"]["omnigentExecutionCatalog"]
+    assert omnigent_catalog["profiles"][0]["ref"] == "omnigent-codex@1"
+    assert {policy["hostMode"] for policy in omnigent_catalog["policies"]} == {
+        "static_compose",
+        "on_demand_docker",
+    }
     assert "buildId" in config["system"]
-    assert config["system"]["defaultRuntime"] in ("codex_cli", "claude_code")
+    assert config["system"]["defaultRuntime"] == "omnigent"
     assert "defaultModel" in config["system"]
     assert "defaultEffort" in config["system"]
     assert "defaultModelByRuntime" in config["system"]
     assert "defaultEffortByRuntime" in config["system"]
     assert config["system"]["workerRuntimeEnv"] == "MOONMIND_WORKER_RUNTIME"
-    assert config["system"]["supportedRuntimes"] == ["codex_cli", "claude_code", "codex_cloud"]
+    assert config["system"]["supportedRuntimes"] == [
+        "omnigent",
+        "codex_cli",
+        "claude_code",
+        "codex_cloud",
+    ]
     assert "runtimeCommandPreview" in config["system"]
     assert "claude_code" in config["system"]["supportedWorkerRuntimes"]
     assert "presetCatalog" in config["system"]
@@ -378,7 +391,12 @@ def test_build_runtime_config_uses_claude_from_runtime_env(monkeypatch) -> None:
 
     config = dashboard_view_model.build_runtime_config("/workflows")
 
-    assert config["system"]["supportedRuntimes"] == ["codex_cli", "claude_code", "codex_cloud"]
+    assert config["system"]["supportedRuntimes"] == [
+        "omnigent",
+        "codex_cli",
+        "claude_code",
+        "codex_cloud",
+    ]
     assert config["system"]["defaultRuntime"] == "claude_code"
     assert config["system"]["defaultModel"] == "claude-opus-4-8"
 
@@ -727,7 +745,12 @@ def test_build_runtime_config_includes_claude_without_api_key(monkeypatch) -> No
 
     config = dashboard_view_model.build_runtime_config("/workflows")
 
-    assert config["system"]["supportedRuntimes"] == ["codex_cli", "claude_code", "codex_cloud"]
+    assert config["system"]["supportedRuntimes"] == [
+        "omnigent",
+        "codex_cli",
+        "claude_code",
+        "codex_cloud",
+    ]
 
 def test_build_runtime_config_uses_temporal_dashboard_settings(monkeypatch) -> None:
     monkeypatch.setattr(settings.temporal_dashboard, "enabled", False)
@@ -787,6 +810,7 @@ def test_build_runtime_config_includes_jules_when_enabled(monkeypatch) -> None:
     config = dashboard_view_model.build_runtime_config("/workflows")
 
     assert config["system"]["supportedRuntimes"] == [
+        "omnigent",
         "codex_cli",
         "claude_code",
         "codex_cloud",

@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from temporalio import exceptions
+from temporalio import activity as temporal_activity
 
 from api_service.db.models import (
     Base,
@@ -20,6 +23,14 @@ from api_service.db.models import (
     ProviderProfileAuthState,
     RuntimeMaterializationMode,
 )
+from moonmind.omnigent.oauth_hosts import (
+    HostPreflightFailure,
+    OmnigentOAuthHostError,
+)
+from moonmind.provider_profiles.lease_client import (
+    CredentialLeasePurpose,
+    ProviderProfileLeaseClient,
+)
 from moonmind.workflows.temporal.activities import oauth_session_activities
 from moonmind.workflows.temporal.activities.oauth_session_activities import (
     oauth_session_register_profile,
@@ -30,6 +41,7 @@ from moonmind.workflows.temporal.activities.oauth_session_activities import (
 from moonmind.workflows.temporal.activity_catalog import build_default_activity_catalog
 from moonmind.workflows.temporal.activity_catalog import AGENT_RUNTIME_FLEET
 from moonmind.workflows.temporal.activity_catalog import ARTIFACTS_FLEET
+from moonmind.workflows.temporal.artifacts import TemporalArtifactActivities
 from moonmind.workflows.temporal.runtime.providers import registry as provider_registry
 from moonmind.workflows.temporal.workers import list_registered_workflow_types
 
@@ -65,6 +77,18 @@ class TestOAuthSessionCatalogRegistration:
         route = catalog.resolve_activity("oauth_session.update_status")
         assert route.activity_type == "oauth_session.update_status"
         assert route.fleet == ARTIFACTS_FLEET
+
+    def test_maintenance_lease_acquisition_routes_to_artifacts(self) -> None:
+        catalog = build_default_activity_catalog()
+        route = catalog.resolve_activity(
+            "provider_profile.acquire_credential_maintenance_lease"
+        )
+        assert route.fleet == ARTIFACTS_FLEET
+        assert route.task_queue == "mm.activity.artifacts"
+        assert route.timeouts.start_to_close_seconds == 1800
+        assert route.timeouts.heartbeat_timeout_seconds == 30
+        assert route.retries.max_attempts == 3
+        assert route.heartbeat_required is True
 
     def test_mark_failed_in_catalog(self) -> None:
         catalog = build_default_activity_catalog()
@@ -108,6 +132,62 @@ class TestOAuthSessionCatalogRegistration:
         assert route.timeouts.start_to_close_seconds == 30
         assert route.timeouts.schedule_to_close_seconds == 60
 
+
+@pytest.mark.asyncio
+async def test_maintenance_lease_activity_heartbeats_while_waiting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease_ready = asyncio.Event()
+    heartbeat_details: list[dict] = []
+    original_wait = asyncio.wait
+    wait_calls = 0
+
+    async def acquire_maintenance_lease(_self, **_kwargs):
+        await lease_ready.wait()
+        return SimpleNamespace(
+            profile_id="codex_openai_oauth",
+            runtime_id="codex_cli",
+            lease_id="oauth-session:oas-heartbeat",
+            owner_id="oauth-session:oas-heartbeat",
+            purpose=CredentialLeasePurpose.OAUTH_RECONNECT,
+            already_held=False,
+        )
+
+    async def controlled_wait(tasks, *, timeout):
+        nonlocal wait_calls
+        wait_calls += 1
+        if wait_calls == 1:
+            lease_ready.set()
+            return set(), set(tasks)
+        return await original_wait(tasks, timeout=timeout)
+
+    monkeypatch.setattr(
+        ProviderProfileLeaseClient,
+        "acquire_maintenance_lease",
+        acquire_maintenance_lease,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.artifacts.asyncio.wait",
+        controlled_wait,
+    )
+    monkeypatch.setattr(
+        temporal_activity,
+        "heartbeat",
+        lambda details: heartbeat_details.append(details),
+    )
+
+    result = await TemporalArtifactActivities(
+        None  # type: ignore[arg-type]
+    ).provider_profile_acquire_credential_maintenance_lease(
+        runtime_id="codex_cli",
+        profile_id="codex_openai_oauth",
+        owner_id="oauth-session:oas-heartbeat",
+        purpose="oauth_reconnect",
+    )
+
+    assert result["lease_id"] == "oauth-session:oas-heartbeat"
+    assert heartbeat_details == [{"phase": "waiting_for_maintenance_lease"}]
+
 class TestOAuthSessionWorkflowRegistration:
     """Verify the OAuth session workflow is registered."""
 
@@ -120,6 +200,233 @@ class TestOAuthSessionWorkflowRegistration:
         assert route.activity_type == "oauth_session.cleanup_stale"
         assert route.fleet == "artifacts"
         assert route.timeouts.start_to_close_seconds == 60
+
+
+@pytest.mark.asyncio
+async def test_revalidate_bound_host_uses_credential_only_runtime_preflight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "oas-revalidate-bound-host"
+    effective_launch = {"snapshotRef": "omnigent-launch:sha256:test"}
+    binding = SimpleNamespace(
+        host_launch_profile_ref="codex-on-demand@1",
+        effective_launch_snapshot=effective_launch,
+    )
+    lease = SimpleNamespace(
+        lease_id="ohl-revalidate",
+        status="allocating",
+        credential_generation=7,
+        omnigent_host_id=None,
+        effective_launch_snapshot=effective_launch,
+    )
+    observed: dict[str, object] = {}
+
+    class Repository:
+        def __init__(self, _session_factory) -> None:
+            pass
+
+        async def refresh_binding_generation(self, profile_id: str):
+            assert profile_id == "codex_openai_oauth"
+            return binding
+
+        async def create_or_get_host_lease(self, **kwargs):
+            observed["lease_request"] = kwargs
+            return lease
+
+        async def transition_host_lease(
+            self, _lease_id, *, expected_status, new_status, fields=None
+        ):
+            assert lease.status == expected_status
+            lease.status = new_status
+            for key, value in dict(fields or {}).items():
+                setattr(lease, key, value)
+            return lease
+
+        async def mark_host_lease_stopped(self, lease_id: str) -> None:
+            assert lease_id == lease.lease_id
+            lease.status = "stopped"
+
+    class Runtime:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        async def validate_credential_mount(
+            self,
+            *,
+            binding,
+            host_lease,
+            effective_launch,
+        ):
+            observed["validate_credential_mount"] = {
+                "binding": binding,
+                "host_lease": host_lease,
+                "effective_launch": effective_launch,
+            }
+            if observed.get("fail_validation") == "credential":
+                raise OmnigentOAuthHostError(
+                    "credential preflight failed",
+                    code=HostPreflightFailure.LOGIN_STATUS_FAILED.value,
+                )
+            if observed.get("fail_validation"):
+                raise RuntimeError("credential preflight failed")
+            return {"validationMode": "credential_only"}
+
+        async def stop_host(self, **kwargs):
+            observed["stop_host"] = kwargs
+            if observed.get("fail_cleanup"):
+                return {"cleanupResult": "failed"}
+            return {"cleanupResult": "succeeded"}
+
+    class Client:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+    monkeypatch.setattr(
+        "moonmind.omnigent.oauth_hosts.OmnigentOAuthHostRepository", Repository
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.oauth_host_runtime.OmnigentOAuthHostRuntime", Runtime
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.adapters.omnigent_client.OmnigentHttpClient", Client
+    )
+    monkeypatch.setattr(
+        "moonmind.repositories.lore_runtime.build_lore_repository_adapter_from_environment",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.settings.resolved_server_url", lambda: "http://omnigent"
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.settings.resolved_api_token", lambda: "test-token"
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.settings.resolved_proxy_forward_headers", lambda: ()
+    )
+
+    result = await oauth_session_activities.oauth_session_revalidate_bound_host(
+        {
+            "session_id": session_id,
+            "profile_id": "codex_openai_oauth",
+            "provider_lease_id": "provider-lease-revalidate",
+        }
+    )
+
+    assert result == {
+        "profile_id": "codex_openai_oauth",
+        "status": "ready",
+        "credential_generation": 7,
+        "validation_mode": "credential_only",
+    }
+    assert observed["validate_credential_mount"] == {
+        "binding": binding,
+        "host_lease": lease,
+        "effective_launch": effective_launch,
+    }
+    assert observed["stop_host"] == {"binding": binding, "host_lease": lease}
+    assert lease.status == "stopped"
+
+    @asynccontextmanager
+    async def profile_mutation_forbidden():
+        raise AssertionError(
+            "an untyped runtime failure must not mutate credential readiness"
+        )
+        yield
+
+    monkeypatch.setattr(
+        oauth_session_activities,
+        "get_async_session_context",
+        profile_mutation_forbidden,
+    )
+    observed["fail_validation"] = True
+    lease.status = "allocating"
+
+    with pytest.raises(RuntimeError, match="credential preflight failed"):
+        await oauth_session_activities.oauth_session_revalidate_bound_host(
+            {
+                "session_id": session_id,
+                "profile_id": "codex_openai_oauth",
+                "provider_lease_id": "provider-lease-revalidate",
+            }
+        )
+
+    assert lease.status == "stopped"
+    assert observed["stop_host"] == {"binding": binding, "host_lease": lease}
+
+    profile = SimpleNamespace(
+        profile_id="codex_openai_oauth",
+        runtime_id="codex_cli",
+        enabled=True,
+        auth_state=ProviderProfileAuthState.CONNECTED,
+        disabled_reason=None,
+        command_behavior={
+            "auth_readiness": {"connected": True, "launch_ready": True}
+        },
+    )
+    commits = 0
+
+    @asynccontextmanager
+    async def profile_context():
+        class Database:
+            async def execute(self, _statement):
+                return SimpleNamespace(scalar_one_or_none=lambda: profile)
+
+            async def commit(self):
+                nonlocal commits
+                commits += 1
+
+        yield Database()
+
+    async def sync_profile_manager(*, session, runtime_id):
+        assert session is not None
+        assert runtime_id == "codex_cli"
+
+    monkeypatch.setattr(
+        oauth_session_activities,
+        "get_async_session_context",
+        profile_context,
+    )
+    monkeypatch.setattr(
+        "api_service.services.provider_profile_service.sync_provider_profile_manager",
+        sync_profile_manager,
+    )
+    observed["fail_validation"] = "credential"
+    lease.status = "allocating"
+
+    with pytest.raises(OmnigentOAuthHostError, match="credential preflight failed"):
+        await oauth_session_activities.oauth_session_revalidate_bound_host(
+            {
+                "session_id": session_id,
+                "profile_id": "codex_openai_oauth",
+                "provider_lease_id": "provider-lease-revalidate",
+            }
+        )
+
+    assert commits == 1
+    assert profile.enabled is False
+    assert profile.auth_state == ProviderProfileAuthState.VALIDATION_FAILED
+    assert profile.disabled_reason.value == "auth_invalid"
+    assert profile.command_behavior["auth_readiness"] == {
+        "connected": False,
+        "launch_ready": False,
+        "failure_reason": "credential_login_status_failed",
+    }
+
+    observed["fail_validation"] = False
+    observed["fail_cleanup"] = True
+    lease.status = "allocating"
+
+    with pytest.raises(OmnigentOAuthHostError, match="cleanup was not proven"):
+        await oauth_session_activities.oauth_session_revalidate_bound_host(
+            {
+                "session_id": session_id,
+                "profile_id": "codex_openai_oauth",
+                "provider_lease_id": "provider-lease-revalidate",
+            }
+        )
+
+    assert lease.status == "starting"
+
 
 @pytest.mark.asyncio
 async def test_register_profile_activity_persists_oauth_home_codex_profile(
@@ -166,6 +473,7 @@ async def test_register_profile_activity_persists_oauth_home_codex_profile(
 
     result = await oauth_session_register_profile({"session_id": session_id})
     assert result["status"] == "registered"
+    assert result["capacity_normalized_to_exclusive"] is True
 
     async with _oauth_activity_session_factory() as session:
         profile = await session.get(ManagedAgentProviderProfile, profile_id)
@@ -180,13 +488,136 @@ async def test_register_profile_activity_persists_oauth_home_codex_profile(
         )
         assert profile.volume_ref == "codex_auth_volume"
         assert profile.volume_mount_path == "/home/app/.codex"
-        assert profile.max_parallel_runs == 3
+        assert profile.max_parallel_runs == 1
         assert profile.enabled is True
         assert profile.auth_state == ProviderProfileAuthState.CONNECTED
         assert profile.disabled_reason is None
         assert profile.last_auth_method == ProviderProfileAuthMethod.OAUTH_VOLUME
         assert profile.first_authenticated_at is not None
         assert profile.last_validated_at is not None
+        oauth_session = await session.get(ManagedAgentOAuthSession, session_id)
+        assert oauth_session is not None
+        assert oauth_session.metadata_json["max_parallel_runs"] == 1
+        assert (
+            oauth_session.metadata_json["capacity_normalized_to_exclusive"] is True
+        )
+        first_authenticated_at = profile.first_authenticated_at
+
+    retry_result = await oauth_session_register_profile({"session_id": session_id})
+    assert retry_result["status"] == "registered"
+    async with _oauth_activity_session_factory() as session:
+        retried_profile = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert retried_profile is not None
+        assert retried_profile.max_parallel_runs == 1
+        assert retried_profile.first_authenticated_at == first_authenticated_at
+
+
+@pytest.mark.asyncio
+async def test_register_profile_activity_normalizes_claude_oauth_capacity(
+    _oauth_activity_session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "oas_activityregisterclaude"
+    profile_id = "claude-activity-oauth"
+    async with _oauth_activity_session_factory() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="claude_code",
+                profile_id=profile_id,
+                volume_ref="claude_auth_volume",
+                volume_mount_path="/home/app/.claude",
+                status=OAuthSessionStatus.REGISTERING_PROFILE,
+                requested_by_user_id="not-a-uuid",
+                account_label="claude account",
+                metadata_json={"provider_id": "anthropic", "max_parallel_runs": 3},
+            )
+        )
+        await session.commit()
+
+    async def _noop_sync(**_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        oauth_session_activities,
+        "get_async_session_context",
+        lambda: _session_context(_oauth_activity_session_factory),
+    )
+    monkeypatch.setattr(
+        "api_service.services.provider_profile_service.sync_provider_profile_manager",
+        _noop_sync,
+    )
+
+    result = await oauth_session_register_profile({"session_id": session_id})
+
+    assert result["capacity_normalized_to_exclusive"] is True
+    async with _oauth_activity_session_factory() as session:
+        profile = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert profile is not None
+        assert profile.max_parallel_runs == 1
+
+
+@pytest.mark.asyncio
+async def test_register_profile_activity_retries_cleanly_after_commit_failure(
+    _oauth_activity_session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "oas_activitycommitretry"
+    profile_id = "codex-activity-commit-retry"
+    async with _oauth_activity_session_factory() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="codex_cli",
+                profile_id=profile_id,
+                volume_ref="codex_auth_volume",
+                volume_mount_path="/home/app/.codex",
+                status=OAuthSessionStatus.REGISTERING_PROFILE,
+                requested_by_user_id="not-a-uuid",
+                account_label="codex account",
+                metadata_json={"provider_id": "openai", "max_parallel_runs": 3},
+            )
+        )
+        await session.commit()
+
+    @asynccontextmanager
+    async def _failing_session_context():
+        async with _oauth_activity_session_factory() as session:
+            async def _fail_commit() -> None:
+                raise RuntimeError("injected commit failure")
+
+            session.commit = _fail_commit  # type: ignore[method-assign]
+            yield session
+
+    async def _noop_sync(**_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        oauth_session_activities,
+        "get_async_session_context",
+        _failing_session_context,
+    )
+    monkeypatch.setattr(
+        "api_service.services.provider_profile_service.sync_provider_profile_manager",
+        _noop_sync,
+    )
+    with pytest.raises(RuntimeError, match="injected commit failure"):
+        await oauth_session_register_profile({"session_id": session_id})
+
+    async with _oauth_activity_session_factory() as session:
+        assert await session.get(ManagedAgentProviderProfile, profile_id) is None
+
+    monkeypatch.setattr(
+        oauth_session_activities,
+        "get_async_session_context",
+        lambda: _session_context(_oauth_activity_session_factory),
+    )
+    result = await oauth_session_register_profile({"session_id": session_id})
+    assert result["status"] == "registered"
+    async with _oauth_activity_session_factory() as session:
+        profile = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert profile is not None
+        assert profile.max_parallel_runs == 1
 
 @pytest.mark.asyncio
 async def test_register_profile_activity_rejects_codex_oauth_profile_without_refs(

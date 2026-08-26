@@ -48,6 +48,9 @@ class TestNormalizeRuntimeId:
     def test_unknown_runtime_passthrough(self):
         assert normalize_runtime_id("some_future_runtime") == "some_future_runtime"
 
+    def test_omnigent_product_selector_is_not_normalized_to_codex(self):
+        assert normalize_runtime_id("Omnigent") == "omnigent"
+
     def test_none_falls_back_to_default(self):
         # None / empty falls back to DEFAULT_WORKFLOW_RUNTIME
         result = normalize_runtime_id(None)
@@ -192,8 +195,9 @@ class TestResolveEffectiveModelNone:
             requested_model=None,
             env={},
         )
-        assert model == "gpt-5.5"
-        assert source == "runtime_default"
+        # Default runtime is now omnigent, which has no hard-coded model default
+        assert model is None
+        assert source == "none"
 
 # ---------------------------------------------------------------------------
 # Precedence ordering (all three levels)

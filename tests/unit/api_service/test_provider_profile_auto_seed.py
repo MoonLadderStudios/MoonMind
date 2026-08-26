@@ -1,9 +1,10 @@
 """Unit tests for _auto_seed_provider_profiles startup function."""
 
 import asyncio
+from enum import Enum
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -27,6 +28,72 @@ FIRST_PARTY_API_PROFILE_IDS = {
     "codex_openai_api",
     "claude_anthropic_api",
 }
+
+LEGACY_SETUP_PROFILE_SPECS = {
+    "claude_anthropic_default": (
+        "claude_code",
+        "anthropic",
+        "Claude Code (setup required)",
+    ),
+    "claude_anthropic": (
+        "claude_code",
+        "anthropic",
+        "Claude Code (setup required)",
+    ),
+    "codex_openai_default": ("codex_cli", "openai", "Codex CLI (setup required)"),
+    "codex_default": ("codex_cli", "openai", "Codex CLI (setup required)"),
+    "gemini_google_default": (
+        "gemini_cli",
+        "google",
+        "Gemini CLI (setup required)",
+    ),
+    "gemini_default": ("gemini_cli", "google", "Gemini CLI (setup required)"),
+}
+
+
+def test_legacy_setup_profile_detection_accepts_enum_values() -> None:
+    """Database rows may expose enum objects instead of their stored strings."""
+    from api_service.main import _is_untouched_legacy_setup_profile
+
+    class DatabaseValue(Enum):
+        NONE = "none"
+        API_KEY_ENV = "api_key_env"
+        NOT_CONFIGURED = "not_configured"
+        MISSING_CREDENTIALS = "missing_credentials"
+
+    assert _is_untouched_legacy_setup_profile(
+        "claude_anthropic",
+        {
+            "runtime_id": "claude_code",
+            "provider_id": "anthropic",
+            "provider_label": "Anthropic",
+            "account_label": "Claude Code (setup required)",
+            "default_model": None,
+            "default_effort": None,
+            "model_overrides": None,
+            "enabled": False,
+            "is_default": False,
+            "credential_source": DatabaseValue.NONE,
+            "runtime_materialization_mode": DatabaseValue.API_KEY_ENV,
+            "auth_state": DatabaseValue.NOT_CONFIGURED,
+            "disabled_reason": DatabaseValue.MISSING_CREDENTIALS,
+            "secret_refs": None,
+            "tags": None,
+            "priority": 100,
+            "clear_env_keys": None,
+            "env_template": None,
+            "file_templates": None,
+            "home_path_overrides": None,
+            "command_behavior": None,
+            "max_parallel_runs": 1,
+            "cooldown_after_429_seconds": 900,
+            "rate_limit_policy": "backoff",
+            "max_lease_duration_seconds": 7200,
+            "volume_ref": None,
+            "volume_mount_path": None,
+            "last_auth_method": None,
+        },
+    )
 
 @pytest.fixture()
 def _module_db(tmp_path):
@@ -117,6 +184,87 @@ async def test_auto_seed_creates_default_profiles(_module_db, monkeypatch):
     assert claude_profile.volume_ref is None
     assert claude_profile.volume_mount_path is None
     assert claude_profile.clear_env_keys is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enum_values", [False, True])
+async def test_auto_seed_persists_legacy_codex_oauth_capacity_repair(
+    _module_db, enum_values
+):
+    """Startup repairs both enum-shaped and string-shaped legacy ORM rows."""
+    from api_service.main import _auto_seed_provider_profiles
+
+    credential_source = (
+        ProviderCredentialSource.OAUTH_VOLUME if enum_values else "oauth_volume"
+    )
+    materialization_mode = (
+        RuntimeMaterializationMode.OAUTH_HOME if enum_values else "oauth_home"
+    )
+    async with db_base.async_session_maker() as session:
+        await session.execute(text("PRAGMA ignore_check_constraints = ON"))
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=f"legacy-codex-{enum_values}",
+                runtime_id="codex_cli",
+                provider_id="openai",
+                credential_source=credential_source,
+                runtime_materialization_mode=materialization_mode,
+                max_parallel_runs=3,
+                enabled=False,
+                auth_state=ProviderProfileAuthState.DISCONNECTED,
+            )
+        )
+        session.add_all(
+            [
+                ManagedAgentProviderProfile(
+                    profile_id=f"codex-api-control-{enum_values}",
+                    runtime_id="codex_cli",
+                    provider_id="openai",
+                    credential_source=ProviderCredentialSource.SECRET_REF,
+                    runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                    max_parallel_runs=4,
+                    enabled=False,
+                    auth_state=ProviderProfileAuthState.DISCONNECTED,
+                ),
+                ManagedAgentProviderProfile(
+                    profile_id=f"claude-oauth-control-{enum_values}",
+                    runtime_id="claude_code",
+                    provider_id="anthropic",
+                    credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                    runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                    max_parallel_runs=3,
+                    enabled=False,
+                    auth_state=ProviderProfileAuthState.DISCONNECTED,
+                ),
+            ]
+        )
+        await session.commit()
+        await session.execute(text("PRAGMA ignore_check_constraints = OFF"))
+
+    await _auto_seed_provider_profiles()
+
+    async with db_base.async_session_maker() as session:
+        repaired = await session.get(
+            ManagedAgentProviderProfile, f"legacy-codex-{enum_values}"
+        )
+        assert repaired is not None
+        assert repaired.max_parallel_runs == 1
+        codex_api = await session.get(
+            ManagedAgentProviderProfile, f"codex-api-control-{enum_values}"
+        )
+        claude_oauth = await session.get(
+            ManagedAgentProviderProfile, f"claude-oauth-control-{enum_values}"
+        )
+        assert codex_api is not None
+        assert codex_api.max_parallel_runs == 4
+        assert claude_oauth is not None
+        assert claude_oauth.max_parallel_runs == 3
+
+        from api_service.services.provider_profile_service import (
+            _manager_profile_payload,
+        )
+
+        assert _manager_profile_payload(repaired)["max_parallel_runs"] == 1
 
 
 @pytest.mark.asyncio
@@ -340,21 +488,64 @@ async def test_auto_seed_preserves_user_default_model_on_oauth_profile(
         assert profile is not None
         assert profile.default_model == "gpt-user-custom"
 
+
 @pytest.mark.asyncio
-async def test_auto_seed_deletes_deprecated_gemini_cli_profiles(
+async def test_auto_seed_repairs_legacy_codex_oauth_capacity_to_one(
     _module_db, monkeypatch
 ):
-    """Old Gemini CLI profile rows are removed during startup seeding."""
+    """Startup reconciliation repairs unsafe pre-invariant OAuth rows."""
+    from api_service.main import _auto_seed_provider_profiles
+
+    await _auto_seed_provider_profiles()
+
+    async with db_base.async_session_maker() as session:
+        await session.execute(text("PRAGMA ignore_check_constraints = ON"))
+        profile = await session.get(
+            ManagedAgentProviderProfile, "codex_openai_oauth"
+        )
+        assert profile is not None
+        profile.credential_source = ProviderCredentialSource.OAUTH_VOLUME
+        profile.runtime_materialization_mode = RuntimeMaterializationMode.OAUTH_HOME
+        profile.volume_ref = "codex_auth_volume"
+        profile.volume_mount_path = "/home/app/.codex"
+        profile.max_parallel_runs = 7
+        await session.commit()
+        await session.execute(text("PRAGMA ignore_check_constraints = OFF"))
+
+    seeded = await _auto_seed_provider_profiles()
+    assert seeded == []
+
+    async with db_base.async_session_maker() as session:
+        profile = await session.get(
+            ManagedAgentProviderProfile, "codex_openai_oauth"
+        )
+        assert profile is not None
+        assert profile.max_parallel_runs == 1
+
+@pytest.mark.asyncio
+async def test_auto_seed_deletes_untouched_legacy_setup_profiles(
+    _module_db, monkeypatch
+):
+    """All generated legacy setup stubs are removed during startup seeding."""
     from api_service.main import _auto_seed_provider_profiles
 
     async with db_base.async_session_maker() as session:
-        for profile_id in ("gemini_google_default", "gemini_default"):
+        for profile_id, (
+            runtime_id,
+            provider_id,
+            account_label,
+        ) in LEGACY_SETUP_PROFILE_SPECS.items():
             session.add(
                 ManagedAgentProviderProfile(
                     profile_id=profile_id,
-                    runtime_id="gemini_cli",
-                    provider_id="google",
-                    provider_label="Google",
+                    runtime_id=runtime_id,
+                    provider_id=provider_id,
+                    provider_label={
+                        "anthropic": "Anthropic",
+                        "openai": "OpenAI",
+                        "google": "Google",
+                    }[provider_id],
+                    account_label=account_label,
                     credential_source=ProviderCredentialSource.NONE,
                     runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
                     enabled=False,
@@ -373,8 +564,43 @@ async def test_auto_seed_deletes_deprecated_gemini_cli_profiles(
             await session.execute(select(ManagedAgentProviderProfile.profile_id))
         ).scalars().all()
 
-    assert "gemini_google_default" not in rows
-    assert "gemini_default" not in rows
+    assert set(rows) == FIRST_PARTY_SETUP_PROFILE_IDS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("edit_field", ["secret_refs", "volume_ref", "default_model"])
+async def test_auto_seed_preserves_edited_legacy_setup_profile(
+    _module_db, edit_field
+):
+    """A legacy ID with credential state is user data, not a generated stub."""
+    from api_service.main import _auto_seed_provider_profiles
+
+    values = {
+        "profile_id": "claude_anthropic",
+        "runtime_id": "claude_code",
+        "provider_id": "anthropic",
+        "account_label": "Claude Code (setup required)",
+        "credential_source": ProviderCredentialSource.NONE,
+        "runtime_materialization_mode": RuntimeMaterializationMode.API_KEY_ENV,
+        "enabled": False,
+        "is_default": False,
+        "auth_state": ProviderProfileAuthState.NOT_CONFIGURED,
+        "disabled_reason": ProviderProfileDisabledReason.MISSING_CREDENTIALS,
+        edit_field: {"anthropic_api_key": "secret://configured"}
+        if edit_field == "secret_refs"
+        else "claude_oauth_volume"
+        if edit_field == "volume_ref"
+        else "operator-selected-model",
+    }
+    async with db_base.async_session_maker() as session:
+        session.add(ManagedAgentProviderProfile(**values))
+        await session.commit()
+
+    await _auto_seed_provider_profiles()
+
+    async with db_base.async_session_maker() as session:
+        preserved = await session.get(ManagedAgentProviderProfile, "claude_anthropic")
+    assert preserved is not None
 
 @pytest.mark.asyncio
 async def test_auto_seed_excludes_minimax_when_env_unset(_module_db, monkeypatch):

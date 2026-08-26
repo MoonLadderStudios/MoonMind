@@ -8,16 +8,26 @@ import pytest
 from temporalio.exceptions import ApplicationError
 
 from moonmind.schemas.agent_runtime_models import (
+    MANAGED_PROCESS_LOST_DURING_RECONCILIATION,
     AgentExecutionRequest,
+    AgentRuntimeStepExecutionLaunch,
+    AgentTerminalContract,
     AgentRunHandle,
     AgentRunResult,
     AgentRunStatus,
     _MAX_SUMMARY_CHARS,
 )
+from moonmind.schemas.managed_session_models import (
+    SendCodexManagedSessionTurnRequest,
+)
 from moonmind.schemas.temporal_activity_models import AgentRuntimeFetchResultInput
 from moonmind.workflows.provider_failures import ProviderFailureEvent
 from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
-from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
+from moonmind.workflows.temporal.workflows.agent_run import (
+    CODEX_TURN_RUNTIME_SELECTION_PATCH_ID,
+    MoonMindAgentRun,
+    TERMINAL_EVIDENCE_CONTROL_QUEUE_PATCH_ID,
+)
 from moonmind.workflows.temporal.workflows.merge_gate import build_resolver_run_request
 
 pytestmark = [pytest.mark.asyncio]
@@ -51,6 +61,48 @@ def _configure_workflow_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda: datetime.now(timezone.utc),
     )
 
+
+@pytest.mark.parametrize("control_queue_patch_enabled", [False, True])
+async def test_terminal_evidence_queue_preserves_replay_route(
+    monkeypatch: pytest.MonkeyPatch,
+    control_queue_patch_enabled: bool,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        agent_run_module.workflow,
+        "patched",
+        lambda patch_id: (
+            control_queue_patch_enabled
+            if patch_id == TERMINAL_EVIDENCE_CONTROL_QUEUE_PATCH_ID
+            else True
+        ),
+    )
+    captured: dict[str, Any] = {}
+
+    async def fake_execute_typed_activity(
+        activity_name: str, args: object, **kwargs: Any
+    ) -> object:
+        captured.update(kwargs)
+        return {"activityName": activity_name, "args": args}
+
+    monkeypatch.setattr(
+        agent_run_module,
+        "execute_typed_activity",
+        fake_execute_typed_activity,
+    )
+
+    await MoonMindAgentRun()._execute_routed_activity(
+        "agent_runtime.evaluate_terminal_evidence",
+        {"candidate": "result"},
+    )
+
+    expected_queue = (
+        agent_run_module.settings.temporal.activity_agent_runtime_control_task_queue
+        if control_queue_patch_enabled
+        else agent_run_module.settings.temporal.activity_agent_runtime_task_queue
+    )
+    assert captured["task_queue"] == expected_queue
+
 def _managed_session_request(
     *,
     parameters: dict[str, Any] | None = None,
@@ -81,6 +133,662 @@ async def test_managed_session_request_preserves_explicit_empty_inputs() -> None
 
     assert request.parameters == {}
     assert request.workspace_spec == {}
+
+
+def _request_with_terminal_contract() -> AgentExecutionRequest:
+    return _managed_session_request().model_copy(
+        update={
+            "terminal_contract": AgentTerminalContract(
+                contractId="batch-fanout-v1",
+                relativePath="reports/result.json",
+                expectedSchemaVersion="1",
+                executionRef="exec-1",
+            )
+        }
+    )
+
+
+def _terminal_contract_snapshot(
+    *,
+    session_epoch: int,
+    container_id: str = "ctr-1",
+    thread_id: str = "thr-1",
+) -> dict[str, Any]:
+    binding = _managed_session_request().managed_session
+    assert binding is not None
+    return {
+        "binding": binding.model_copy(
+            update={"session_epoch": session_epoch}
+        ).model_dump(mode="json", by_alias=True),
+        "status": "active",
+        "containerId": container_id,
+        "threadId": thread_id,
+    }
+
+
+@pytest.mark.parametrize("runtime_selection_patch_enabled", [False, True])
+async def test_terminal_contract_continuation_is_agent_run_owned_and_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+    runtime_selection_patch_enabled: bool,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        agent_run_module.workflow,
+        "patched",
+        lambda patch_id: (
+            runtime_selection_patch_enabled
+            if patch_id == CODEX_TURN_RUNTIME_SELECTION_PATCH_ID
+            else True
+        ),
+    )
+    run = MoonMindAgentRun()
+    request = AgentExecutionRequest.model_validate(
+        _request_with_terminal_contract().model_dump(by_alias=True)
+    )
+    request.parameters["_moonmindActiveSkillsDir"] = (
+        "/work/runtime/skills_active/snapshot-retry"
+    )
+    request.parameters["model"] = "gpt-5.3-codex-spark"
+    request.parameters["effort"] = "xhigh"
+    request.step_execution = AgentRuntimeStepExecutionLaunch(
+        workflowId="wf-task-1",
+        runId="run-1",
+        logicalStepId="batch-workflows",
+        executionOrdinal=2,
+        stepExecutionId="wf-task-1:run-1:batch-workflows:execution:2",
+        runtimeContextPolicy="reuse_session_same_epoch",
+    )
+    request.workspace_spec["workspaceLocator"] = {
+        "kind": "sandbox",
+        "workspaceId": "sandbox-workspace-1",
+        "relativePath": "repo",
+    }
+    calls: list[tuple[str, Any]] = []
+    evaluations = 0
+
+    async def fake_activity(name: str, payload: Any, **_kwargs: Any) -> Any:
+        nonlocal evaluations
+        calls.append((name, payload))
+        if name == "agent_runtime.evaluate_terminal_evidence":
+            evaluations += 1
+            if evaluations == 1:
+                return {
+                    "summary": "missing",
+                    "failureClass": "execution_error",
+                    "metadata": {
+                        "terminalContractMissingEvidence": ["reports/result.json"]
+                    },
+                }
+            return {"summary": "recovered", "metadata": {}}
+        if name == "agent_runtime.load_session_snapshot":
+            return _terminal_contract_snapshot(
+                session_epoch=3,
+                container_id="ctr-reset",
+                thread_id="thr-reset",
+            )
+        if name == "agent_runtime.send_turn":
+            return {"status": "completed"}
+        if name == "agent_runtime.fetch_result":
+            return {"summary": "continued", "metadata": {}}
+        raise AssertionError(name)
+
+    run._execute_routed_activity = fake_activity  # type: ignore[method-assign]
+    result = await run._evaluate_terminal_contract(
+        request=request, result=AgentRunResult(summary="initial")
+    )
+
+    assert result.failure_class is None
+    assert result.metadata["terminalContractRecoveryOutcome"] == "recovered"
+    assert result.metadata["terminalContractContinuationCount"] == 1
+    assert calls[0][1]["runId"] == "wf-task-1"
+    assert calls[0][1]["workspaceLocator"] == {
+        "kind": "sandbox",
+        "workspaceId": "sandbox-workspace-1",
+        "relativePath": "repo",
+    }
+    assert calls[0][1]["workspaceOwnerWorkflowId"] == "wf-task-1"
+    assert calls[0][1]["workspaceOwnerStepExecutionId"] == (
+        "wf-task-1:run-1:batch-workflows:execution:2"
+    )
+    assert [name for name, _ in calls] == [
+        "agent_runtime.evaluate_terminal_evidence",
+        "agent_runtime.load_session_snapshot",
+        "agent_runtime.send_turn",
+        "agent_runtime.fetch_result",
+        "agent_runtime.evaluate_terminal_evidence",
+    ]
+    raw_turn = calls[2][1]
+    if runtime_selection_patch_enabled:
+        assert isinstance(raw_turn, SendCodexManagedSessionTurnRequest)
+    else:
+        assert isinstance(raw_turn, dict)
+        assert "model" not in raw_turn
+        assert "effort" not in raw_turn
+    turn = SendCodexManagedSessionTurnRequest.model_validate(raw_turn)
+    assert turn.request_id == "idem-managed-1:terminal-contract:1"
+    assert turn.session_epoch == 3
+    assert turn.container_id == "ctr-reset"
+    assert turn.thread_id == "thr-reset"
+    assert turn.model == (
+        "gpt-5.3-codex-spark" if runtime_selection_patch_enabled else None
+    )
+    assert turn.effort == ("xhigh" if runtime_selection_patch_enabled else None)
+    assert turn.environment == {
+        "MOONMIND_ACTIVE_SKILLS_DIR": "/work/runtime/skills_active/snapshot-retry",
+        "MOONMIND_STEP_EXECUTION_ID": (
+            "wf-task-1:run-1:batch-workflows:execution:2"
+        ),
+    }
+
+
+async def test_terminal_contract_preserves_primary_runtime_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+    calls: list[str] = []
+
+    async def fake_activity(name: str, _payload: Any, **_kwargs: Any) -> Any:
+        calls.append(name)
+        raise AssertionError(name)
+
+    run._execute_routed_activity = fake_activity  # type: ignore[method-assign]
+    primary_failure = AgentRunResult(
+        summary="codex app-server turn/completed produced no assistant output",
+        failureClass="execution_error",
+        providerErrorCode="CODEX_EMPTY_ASSISTANT_OUTPUT",
+    )
+
+    result = await run._evaluate_terminal_contract(
+        request=_request_with_terminal_contract(),
+        result=primary_failure,
+    )
+
+    assert result == primary_failure
+    assert calls == []
+
+
+async def test_terminal_contract_replays_pre_authority_snapshot_behavior(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        agent_run_module.workflow,
+        "patched",
+        lambda patch_id: (
+            patch_id
+            != agent_run_module.TERMINAL_CONTRACT_RUNTIME_FAILURE_AUTHORITY_PATCH_ID
+        ),
+    )
+    run = MoonMindAgentRun()
+    calls: list[tuple[str, Any]] = []
+    evaluations = 0
+
+    async def fake_activity(name: str, payload: Any, **_kwargs: Any) -> Any:
+        nonlocal evaluations
+        calls.append((name, payload))
+        if name == "agent_runtime.evaluate_terminal_evidence":
+            evaluations += 1
+            if evaluations == 1:
+                return {
+                    "summary": "missing",
+                    "failureClass": "execution_error",
+                    "metadata": {
+                        "terminalContractMissingEvidence": ["reports/result.json"]
+                    },
+                }
+            return {"summary": "recovered", "metadata": {}}
+        if name == "agent_runtime.load_session_snapshot":
+            return _terminal_contract_snapshot(session_epoch=3)
+        if name == "agent_runtime.send_turn":
+            return {"status": "completed"}
+        if name == "agent_runtime.fetch_result":
+            return {"summary": "continued", "metadata": {}}
+        raise AssertionError(name)
+
+    run._execute_routed_activity = fake_activity  # type: ignore[method-assign]
+
+    result = await run._evaluate_terminal_contract(
+        request=_request_with_terminal_contract(),
+        result=AgentRunResult(summary="initial"),
+    )
+
+    assert result.failure_class is None
+    turn = next(payload for name, payload in calls if name == "agent_runtime.send_turn")
+    assert turn.session_epoch == 1
+
+
+async def test_terminal_contract_uses_fresh_process_when_session_cannot_continue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+    run.run_id = "run-claude-1"
+    request = AgentExecutionRequest.model_validate(
+        {
+            **_request_with_terminal_contract().model_dump(by_alias=True),
+            "managedSession": None,
+            "agentId": "claude_code",
+        }
+    )
+    calls: list[str] = []
+
+    async def fake_activity(name: str, _payload: Any, **_kwargs: Any) -> Any:
+        calls.append(name)
+        return {
+            "summary": "missing",
+            "failureClass": "execution_error",
+            "providerErrorCode": "INCOMPLETE_TERMINAL_CONTRACT",
+            "metadata": {
+                "failureCode": "INCOMPLETE_TERMINAL_CONTRACT",
+                "terminalContractRetryable": True,
+                "terminalContractMissingEvidence": ["reports/result.json"],
+            },
+        }
+
+    run._execute_routed_activity = fake_activity  # type: ignore[method-assign]
+    result = await run._evaluate_terminal_contract(
+        request=request, result=AgentRunResult(summary="initial")
+    )
+
+    assert result.failure_class == "execution_error"
+    assert (
+        result.metadata["terminalContractRecoveryOutcome"]
+        == "fresh_process_available"
+    )
+    assert result.metadata["terminalContractContinuationCount"] == 0
+    assert calls == ["agent_runtime.evaluate_terminal_evidence"]
+
+    continuation = run._fresh_process_terminal_contract_request(
+        request=request,
+        result=result,
+    )
+    assert continuation is not None
+    assert continuation.workspace_spec["workspaceLocator"] == {
+        "kind": "managed_runtime",
+        "runtimeId": "claude_code",
+        "agentRunId": "run-claude-1",
+        "relativePath": "repo",
+    }
+    assert "do not schedule a wake-up" in continuation.instruction_ref
+
+
+async def test_lost_managed_process_gets_one_workspace_preserving_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+    run.run_id = "run-claude-lost-process"
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="claude_code",
+        executionProfileRef="claude-anthropic-oauth",
+        correlationId="mm:lost-process-workflow",
+        idempotencyKey="mm:lost-process-workflow:implement",
+        instructionRef="Implement the requested issue and publish the result.",
+        workspaceSpec={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetBranch": "github-issue-implement-moonladderstudios-9eea789f",
+        },
+        parameters={"model": "claude-opus-4-8", "publishMode": "auto"},
+    )
+    lost = AgentRunResult(
+        summary="Process 36009 not found during reconciliation",
+        failureClass="system_error",
+        providerErrorCode=MANAGED_PROCESS_LOST_DURING_RECONCILIATION,
+    )
+
+    recovery = run._managed_process_loss_recovery_request(
+        request=request,
+        result=lost,
+    )
+
+    assert recovery is not None
+    assert recovery.execution_profile_ref == request.execution_profile_ref
+    assert recovery.parameters == request.parameters
+    assert recovery.idempotency_key == request.idempotency_key
+    assert recovery.workspace_spec["workspaceLocator"] == {
+        "kind": "managed_runtime",
+        "runtimeId": "claude_code",
+        "agentRunId": "run-claude-lost-process",
+        "relativePath": "repo",
+    }
+    assert "reuse completed work instead of duplicating it" in (
+        recovery.instruction_ref
+    )
+
+    recovered = run._with_managed_process_loss_recovery_history(
+        AgentRunResult(summary="Published the requested pull request.")
+    )
+    assert recovered.metadata["managedProcessLossRecoveryOutcome"] == "recovered"
+    assert recovered.metadata["managedProcessLossRecoveryHistory"] == [
+        {
+            "attempt": 1,
+            "mode": "fresh_process",
+            "reason": "process_lost_during_reconciliation",
+            "outcome": "recovered",
+        }
+    ]
+
+
+async def test_lost_managed_process_recovery_is_bounded_and_typed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+    run.run_id = "run-claude-lost-twice"
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="claude_code",
+        executionProfileRef="claude-anthropic-oauth",
+        correlationId="mm:lost-process-twice",
+        idempotencyKey="mm:lost-process-twice:implement",
+        workspaceSpec={"repository": "MoonLadderStudios/MoonMind"},
+    )
+    unrelated = AgentRunResult(
+        summary="Managed runtime unavailable",
+        failureClass="system_error",
+        providerErrorCode="MANAGED_RUNTIME_UNAVAILABLE",
+    )
+    legacy_untyped = AgentRunResult(
+        summary="Process not found during reconciliation",
+        failureClass="system_error",
+    )
+    assert (
+        run._managed_process_loss_recovery_request(
+            request=request,
+            result=unrelated,
+        )
+        is None
+    )
+    assert (
+        run._managed_process_loss_recovery_request(
+            request=request,
+            result=legacy_untyped,
+        )
+        is None
+    )
+
+    lost = AgentRunResult(
+        summary="Process not found during reconciliation",
+        failureClass="system_error",
+        providerErrorCode=MANAGED_PROCESS_LOST_DURING_RECONCILIATION,
+    )
+    assert run._managed_process_loss_recovery_request(
+        request=request,
+        result=lost,
+    )
+    exhausted = run._with_managed_process_loss_recovery_history(lost)
+    assert exhausted.metadata["managedProcessLossRecoveryOutcome"] == "exhausted"
+    assert (
+        run._managed_process_loss_recovery_request(
+            request=request,
+            result=exhausted,
+        )
+        is None
+    )
+
+
+async def test_terminal_checkpoint_activity_failure_preserves_primary_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+    run.run_id = "run-claude-checkpoint"
+    request = AgentExecutionRequest.model_validate(
+        {
+            **_request_with_terminal_contract().model_dump(by_alias=True),
+            "managedSession": None,
+            "agentId": "claude_code",
+            "parameters": {"publishMode": "auto"},
+        }
+    )
+    primary = AgentRunResult(
+        summary="terminal evidence missing",
+        failureClass="execution_error",
+        metadata={"terminalContractSatisfied": False},
+    )
+
+    async def fail_checkpoint(
+        name: str, _payload: Any, **_kwargs: Any
+    ) -> Any:
+        assert name == "agent_runtime.publish_terminal_checkpoint"
+        raise RuntimeError("checkpoint routing unavailable")
+
+    run._execute_routed_activity = fail_checkpoint  # type: ignore[method-assign]
+    result = await run._publish_terminal_contract_failure_checkpoint(
+        request=request,
+        result=primary,
+    )
+
+    assert result.failure_class == primary.failure_class
+    assert result.summary == primary.summary
+    assert result.metadata["terminalPublication"] == {
+        "intent": "terminal_checkpoint",
+        "status": "failed",
+        "reasonCode": "terminal_checkpoint_activity_failed",
+        "attempted": True,
+        "errorType": "RuntimeError",
+    }
+
+
+async def test_gate_owned_pr_resolver_continuation_bypasses_runtime_capability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+    request = AgentExecutionRequest.model_validate(
+        {
+            **_request_with_terminal_contract().model_dump(by_alias=True),
+            "managedSession": None,
+            "agentId": "claude_code",
+            "terminalContinuationAuthority": {
+                "schemaVersion": "terminal-continuation-authority/v1",
+                "gateType": "merge_automation",
+                "ownerWorkflowId": "merge-automation:1",
+                "ownerRunId": "owner-run-1",
+                "ownerWorkflowType": "MoonMind.MergeAutomation",
+                "allowedActions": ["reenter_gate"],
+                "source": "validated_temporal_parent",
+            },
+        }
+    )
+
+    async def fake_activity(_name: str, _payload: Any, **_kwargs: Any) -> Any:
+        return {
+            "summary": "durable handoff",
+            "failureClass": "execution_error",
+            "providerErrorCode": "PR_RESOLVER_REENTER_GATE",
+            "metadata": {
+                "terminalContractOutcome": "continuation_requested",
+                "terminalContractExecutionRef": "exec-1",
+                "mergeAutomationDisposition": "reenter_gate",
+                "gatedContinuation": {
+                    "reason": "codex_review_grace_wait",
+                    "notBefore": "2026-07-12T05:05:49Z",
+                },
+            },
+        }
+
+    run._execute_routed_activity = fake_activity  # type: ignore[method-assign]
+    result = await run._evaluate_terminal_contract(
+        request=request, result=AgentRunResult(summary="initial")
+    )
+
+    assert result.failure_class is None
+    assert result.provider_error_code is None
+    assert (
+        result.metadata["terminalContractRecoveryOutcome"]
+        == "durable_parent_handoff"
+    )
+    assert result.metadata["terminalContractContinuationCount"] == 0
+    assert result.metrics["continuation_requested"] == 1
+    assert result.metrics["continuation_accepted"] == 1
+    assert "continuation_rejected_schema" not in result.metrics
+    assert "continuation_rejected_ownership" not in result.metrics
+    assert result.metadata["continuationReason"] == "codex_review_grace_wait"
+    assert result.metadata["continuationNotBefore"] == "2026-07-12T05:05:49Z"
+    assert result.metadata["continuationTimingSource"] == "skill_not_before"
+
+
+@pytest.mark.parametrize(
+    ("failure_class", "provider_error_code"),
+    [
+        ("integration_error", "AUTHENTICATION_FAILED"),
+        ("integration_error", "RATE_LIMITED"),
+        ("system_error", "MANAGED_RUNTIME_UNAVAILABLE"),
+        ("execution_error", "CLI_NONZERO_EXIT"),
+    ],
+)
+async def test_continuation_metadata_does_not_suppress_runtime_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    failure_class: str,
+    provider_error_code: str,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+    request = AgentExecutionRequest.model_validate(
+        {
+            **_request_with_terminal_contract().model_dump(by_alias=True),
+            "managedSession": None,
+            "agentId": "claude_code",
+            "terminalContinuationAuthority": {
+                "schemaVersion": "terminal-continuation-authority/v1",
+                "gateType": "merge_automation",
+                "ownerWorkflowId": "merge-automation:1",
+                "ownerRunId": "owner-run-1",
+                "ownerWorkflowType": "MoonMind.MergeAutomation",
+                "allowedActions": ["reenter_gate"],
+                "source": "validated_temporal_parent",
+            },
+        }
+    )
+
+    async def fake_activity(_name: str, _payload: Any, **_kwargs: Any) -> Any:
+        return {
+            "summary": "runtime failed",
+            "failureClass": failure_class,
+            "providerErrorCode": provider_error_code,
+            "metadata": {"terminalContractOutcome": "continuation_requested"},
+        }
+
+    run._execute_routed_activity = fake_activity  # type: ignore[method-assign]
+    result = await run._evaluate_terminal_contract(
+        request=request, result=AgentRunResult(summary="initial")
+    )
+
+    assert result.failure_class == failure_class
+    assert result.provider_error_code == provider_error_code
+    assert (
+        result.metadata["terminalContractRecoveryOutcome"]
+        == "continuation_rejected_failure_provenance"
+    )
+    assert result.metrics["continuation_requested"] == 1
+    assert result.metrics["continuation_rejected_schema"] == 1
+    assert "continuation_accepted" not in result.metrics
+
+
+async def test_terminal_contract_continuation_exhaustion_is_agent_run_owned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+    calls: list[tuple[str, Any]] = []
+
+    async def fake_activity(name: str, payload: Any, **_kwargs: Any) -> Any:
+        calls.append((name, payload))
+        if name == "agent_runtime.evaluate_terminal_evidence":
+            return {
+                "summary": "missing",
+                "failureClass": "execution_error",
+                "metadata": {"terminalContractMissingEvidence": ["reports/result.json"]},
+            }
+        if name == "agent_runtime.load_session_snapshot":
+            return _terminal_contract_snapshot(session_epoch=1)
+        if name == "agent_runtime.send_turn":
+            return {"status": "completed"}
+        if name == "agent_runtime.fetch_result":
+            return {"summary": "still missing", "metadata": {}}
+        raise AssertionError(name)
+
+    run._execute_routed_activity = fake_activity  # type: ignore[method-assign]
+    result = await run._evaluate_terminal_contract(
+        request=_request_with_terminal_contract(),
+        result=AgentRunResult(summary="initial"),
+    )
+
+    assert result.failure_class == "execution_error"
+    assert result.metadata["terminalContractContinuationCount"] == 2
+    assert result.metadata["terminalContractRecoveryOutcome"] == "incomplete"
+    turns = [payload for name, payload in calls if name == "agent_runtime.send_turn"]
+    assert [turn.request_id for turn in turns] == [
+        "idem-managed-1:terminal-contract:1",
+        "idem-managed-1:terminal-contract:2",
+    ]
+    assert {(turn.session_id, turn.thread_id) for turn in turns} == {
+        ("sess:wf-task-1:codex_cli", "thr-1")
+    }
+    assert {turn.session_epoch for turn in turns} == {1}
+
+
+async def test_terminal_contract_provider_failure_retains_contract_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+
+    async def fake_activity(name: str, _payload: Any, **_kwargs: Any) -> Any:
+        if name == "agent_runtime.evaluate_terminal_evidence":
+            return {
+                "summary": "missing",
+                "failureClass": "execution_error",
+                "metadata": {"terminalContractMissingEvidence": ["reports/result.json"]},
+            }
+        if name == "agent_runtime.load_session_snapshot":
+            return _terminal_contract_snapshot(session_epoch=1)
+        if name == "agent_runtime.send_turn":
+            raise RuntimeError("provider transport unavailable")
+        raise AssertionError(name)
+
+    run._execute_routed_activity = fake_activity  # type: ignore[method-assign]
+    result = await run._evaluate_terminal_contract(
+        request=_request_with_terminal_contract(),
+        result=AgentRunResult(summary="initial"),
+    )
+
+    assert result.failure_class == "execution_error"
+    assert result.metadata["terminalContractRecoveryOutcome"] == "provider_failure"
+    assert result.metadata["terminalContractContinuationCount"] == 1
+    assert result.metadata["terminalContractContinuationHistory"] == [
+        {"continuation": 1, "reason": "missing_terminal_evidence", "outcome": "provider_failure"}
+    ]
+
+
+async def test_terminal_contract_continuation_propagates_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+
+    async def fake_activity(name: str, _payload: Any, **_kwargs: Any) -> Any:
+        if name == "agent_runtime.evaluate_terminal_evidence":
+            return {
+                "summary": "missing",
+                "failureClass": "execution_error",
+                "metadata": {"terminalContractMissingEvidence": ["reports/result.json"]},
+            }
+        if name == "agent_runtime.load_session_snapshot":
+            return _terminal_contract_snapshot(session_epoch=1)
+        if name == "agent_runtime.send_turn":
+            raise asyncio.CancelledError
+        raise AssertionError(name)
+
+    run._execute_routed_activity = fake_activity  # type: ignore[method-assign]
+    with pytest.raises(asyncio.CancelledError):
+        await run._evaluate_terminal_contract(
+            request=_request_with_terminal_contract(),
+            result=AgentRunResult(summary="initial"),
+        )
 
 
 async def test_publish_terminal_result_compacts_replayed_moonspec_verify_metadata(
@@ -133,6 +841,81 @@ async def test_publish_terminal_result_compacts_replayed_moonspec_verify_metadat
     assert "requirementCoverage" not in result.metadata["moonSpecVerify"]
     assert run._terminal_result_payload_compacted_for_history is True
     AgentRunResult(**result.model_dump(mode="json", by_alias=True))
+
+
+async def test_publish_terminal_result_compacts_large_fanout_before_activity_decode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep a successful fan-out result inside the typed activity boundary."""
+
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+    request = _managed_session_request()
+    queued_children = []
+    for index in range(23):
+        issue_number = 2347 + index
+        execution_id = f"mm:00000000-0000-0000-0000-{index:012d}"
+        target_ref = f"MoonLadderStudios/Tactics#{issue_number}"
+        queued_children.append(
+            {
+                "provider": "github",
+                "ref": target_ref,
+                "workflowId": execution_id,
+                "executionId": execution_id,
+                "targetRef": target_ref,
+                "idempotencyKey": (
+                    f"batch-workflows:github:{target_ref}:sha256:" + "a" * 64
+                ),
+            }
+        )
+    provider_result = AgentRunResult(
+        summary="Completed with status completed",
+        metadata={
+            "lastAssistantText": "A" * 5000,
+            "operator_summary": "B" * 1410,
+            "queuedChildCount": len(queued_children),
+            "queuedChildren": queued_children,
+            "terminalContractId": "batch_workflows_fanout.v1",
+            "terminalContractEvidenceRef": "art_terminal_evidence",
+            "terminalContractSatisfied": True,
+            "terminalContractOutcome": "terminal_success",
+        },
+    )
+    unbounded = run._enrich_result_metadata(request=request, result=provider_result)
+    assert unbounded is not None
+    with pytest.raises(ValueError, match="metadata must serialize"):
+        AgentRunResult(**unbounded.model_dump(mode="json", by_alias=True))
+
+    published_payloads: list[AgentRunResult] = []
+
+    async def fake_publish_activity(
+        name: str,
+        payload: AgentRunResult,
+        **_kwargs: Any,
+    ) -> AgentRunResult:
+        assert name == "agent_runtime.publish_artifacts"
+        AgentRunResult(**payload.model_dump(mode="json", by_alias=True))
+        published_payloads.append(payload)
+        return payload
+
+    run._execute_routed_activity = fake_publish_activity  # type: ignore[method-assign]
+
+    result = await run._publish_terminal_result(
+        request=request,
+        result=provider_result,
+    )
+
+    assert len(published_payloads) == 1
+    compact_children = published_payloads[0].metadata["queuedChildren"]
+    assert len(compact_children) == len(queued_children)
+    assert compact_children[0] == {
+        "workflowId": queued_children[0]["workflowId"],
+        "ref": queued_children[0]["ref"],
+    }
+    assert result.metadata["queuedChildCount"] == len(queued_children)
+    assert result.metadata["terminalContractEvidenceRef"] == "art_terminal_evidence"
+    assert result.metadata["terminalContractSatisfied"] is True
+    assert run._terminal_result_payload_compacted_for_history is False
 
 
 async def test_publish_terminal_result_releases_slot_after_compacted_replay_cleanup(
@@ -226,6 +1009,118 @@ async def test_slot_waiting_reason_summarizes_capacity_or_cooldown() -> None:
     assert "provider=openai" in reason
     assert "missing_condition=capacity_or_cooldown" in reason
 
+
+async def test_manager_slot_waiting_reason_identifies_moonmind_capacity() -> None:
+    run = MoonMindAgentRun()
+    request = _managed_session_request().model_copy(
+        update={"execution_profile_ref": "codex-openai"}
+    )
+
+    reason = run._build_manager_slot_waiting_reason(
+        runtime_id="codex_cli",
+        request=request,
+        manager_state={
+            "requester_queue_position": 3,
+            "requested_profile": {
+                "profile_id": "codex-openai",
+                "max_parallel_runs": 1,
+                "current_leases_count": 1,
+                "cooldown_until": None,
+                "enabled": True,
+                "launch_ready": True,
+            },
+        },
+    )
+
+    assert "missing_condition=moonmind_slot_capacity" in reason
+    assert "slots_in_use=1" in reason
+    assert "max_parallel_runs=1" in reason
+    assert "queue_position=3" in reason
+    assert "capacity_or_cooldown" not in reason
+
+
+async def test_manager_slot_waiting_reason_identifies_provider_cooldown() -> None:
+    run = MoonMindAgentRun()
+    request = _managed_session_request().model_copy(
+        update={"execution_profile_ref": "codex-openai"}
+    )
+
+    reason = run._build_manager_slot_waiting_reason(
+        runtime_id="codex_cli",
+        request=request,
+        manager_state={
+            "requester_queue_position": 1,
+            "requested_profile": {
+                "profile_id": "codex-openai",
+                "max_parallel_runs": 1,
+                "current_leases_count": 0,
+                "cooldown_until": "2026-07-16T22:00:00+00:00",
+                "enabled": True,
+                "launch_ready": True,
+            },
+        },
+    )
+
+    assert "missing_condition=provider_cooldown" in reason
+    assert "cooldown_until=2026-07-16T22:00:00+00:00" in reason
+    assert "moonmind_slot_capacity" not in reason
+
+
+async def test_manager_slot_waiting_reason_prioritizes_profile_readiness() -> None:
+    run = MoonMindAgentRun()
+    request = _managed_session_request().model_copy(
+        update={"execution_profile_ref": "codex-openai"}
+    )
+
+    reason = run._build_manager_slot_waiting_reason(
+        runtime_id="codex_cli",
+        request=request,
+        manager_state={
+            "requested_profile": {
+                "profile_id": "codex-openai",
+                "max_parallel_runs": 1,
+                "current_leases_count": 1,
+                "cooldown_until": "2026-07-16T22:00:00+00:00",
+                "enabled": False,
+                "launch_ready": False,
+            },
+        },
+    )
+
+    assert "missing_condition=profile_not_launch_ready" in reason
+    assert "provider_cooldown" not in reason
+    assert "moonmind_slot_capacity" not in reason
+
+
+async def test_manager_state_omits_optional_profile_ref_from_legacy_payload() -> None:
+    run = MoonMindAgentRun()
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def fake_activity(
+        activity_name: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        calls.append((activity_name, payload))
+        return {"running": True}
+
+    run._execute_routed_activity = fake_activity  # type: ignore[method-assign]
+
+    await run._manager_state_for_slot_wait(
+        runtime_id="codex_cli",
+        requester_workflow_id="wf-agent-run-1",
+    )
+
+    assert calls == [
+        (
+            "provider_profile.manager_state",
+            {
+                "runtime_id": "codex_cli",
+                "requester_workflow_id": "wf-agent-run-1",
+            },
+        )
+    ]
+
 async def test_provider_cooldown_backoff_doubles_and_caps_per_profile() -> None:
     run = MoonMindAgentRun()
 
@@ -299,6 +1194,80 @@ async def test_managed_fetch_result_input_ignores_legacy_workspace_branch_for_he
     assert isinstance(activity_input, AgentRuntimeFetchResultInput)
     assert activity_input.target_branch == "main"
     assert activity_input.head_branch is None
+
+
+async def test_managed_fetch_result_versions_terminal_checkpoint_publication(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.workflows.agent_run.workflow.patched",
+        lambda patch_id: patch_id == "agent-run-terminal-checkpoint-publication-v1",
+    )
+    run = MoonMindAgentRun()
+    request = _managed_session_request(
+        parameters={"publishMode": "pr"},
+        workspace_spec={"startingBranch": "main"},
+    )
+
+    activity_input = run._build_managed_fetch_result_activity_input(request)
+
+    assert activity_input.terminal_checkpoint_publication_enabled is True
+
+
+async def test_managed_fetch_result_omits_terminal_checkpoint_fields_before_patch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.workflows.agent_run.workflow.patched",
+        lambda patch_id: False,
+    )
+    run = MoonMindAgentRun()
+    request = _managed_session_request(
+        parameters={"publishMode": "pr"},
+        workspace_spec={"startingBranch": "main"},
+    )
+
+    activity_input = run._build_managed_fetch_result_activity_input(request)
+
+    assert "terminal_checkpoint_publication_enabled" not in activity_input.model_fields_set
+    assert "no_remote_writes" not in activity_input.model_fields_set
+    assert "terminal_checkpoint_capability_supported" not in activity_input.model_fields_set
+
+
+async def test_managed_fetch_result_wires_terminal_checkpoint_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.workflows.agent_run.workflow.patched",
+        lambda patch_id: patch_id == "agent-run-terminal-checkpoint-publication-v1",
+    )
+    run = MoonMindAgentRun()
+    request = _managed_session_request(
+        parameters={
+            "publishMode": "pr",
+            "checkpointPolicy": {"publishOnGracefulFailure": False},
+            "dryRun": True,
+        },
+        workspace_spec={
+            "startingBranch": "main",
+            "noRemoteWrites": True,
+            "readOnly": True,
+            "authorityLost": True,
+            "terminalCheckpointPublicationUnsupported": True,
+        },
+    )
+
+    activity_input = run._build_managed_fetch_result_activity_input(request)
+
+    assert activity_input.terminal_checkpoint_publication_enabled is False
+    assert activity_input.no_remote_writes is True
+    assert activity_input.read_only is True
+    assert activity_input.dry_run is True
+    assert activity_input.workspace_authoritative is False
+    assert activity_input.terminal_checkpoint_capability_supported is False
 
 
 async def test_managed_fetch_result_input_uses_publish_base_for_pr_target_branch(
@@ -464,11 +1433,23 @@ async def test_managed_session_result_enrichment_omits_large_inline_instruction(
     large_instruction = "Use this request as the canonical input:\n" + (
         "Implement the workflow cleanup. " * 400
     )
-    request = _managed_session_request(instruction_ref=large_instruction)
+    request = _managed_session_request(
+        instruction_ref=large_instruction,
+        workspace_spec={
+            "workspacePath": "/work/agent_jobs/wf-task-1/repo",
+            "workspaceRoot": "/work/agent_jobs/wf-task-1/repo",
+            "workspace_path": "/work/agent_jobs/wf-task-1/repo",
+            "workspace_root": "/work/agent_jobs/wf-task-1/repo",
+            "baseCommit": "abc123",
+        },
+    )
 
     result = run._enrich_result_metadata(
         request=request,
-        result=AgentRunResult(summary="done", metadata={}),
+        result=AgentRunResult(
+            summary="done",
+            metadata={"workspacePath": "/work/agent_jobs/wf-task-1/repo"},
+        ),
     )
 
     assert result is not None
@@ -477,6 +1458,23 @@ async def test_managed_session_result_enrichment_omits_large_inline_instruction(
     assert len(result.metadata["instructionRefSha256"]) == 64
     assert "instructionRef" not in result.metadata
     assert result.metadata["managedSession"]["agentRunId"] == "wf-task-1"
+    assert result.metadata["agentKind"] == "managed"
+    assert result.metadata["agentId"] == "codex_cli"
+    assert result.metadata["runtimeCapabilities"]["workspaceAuthority"] == (
+        "managed_runtime"
+    )
+    assert result.metadata["runtimeCapabilities"]["checkpointCaptureKinds"] == [
+        "worktree_archive"
+    ]
+    assert result.metadata["workspaceLocator"] == {
+        "kind": "managed_runtime",
+        "runtimeId": "codex_cli",
+        "agentRunId": "wf-task-1",
+        "relativePath": "repo",
+    }
+    assert "workspacePath" not in result.metadata
+    assert "workspaceRoot" not in result.metadata
+    assert result.metadata["workspaceSpec"] == {"baseCommit": "abc123"}
 
 async def test_managed_session_result_enrichment_carries_story_output_paths(
     monkeypatch: pytest.MonkeyPatch,
@@ -1680,6 +2678,9 @@ async def test_agent_run_preserves_operator_profile_selection_after_cooldown_ret
     async def fake_fetch_managed_result(**_kwargs: Any) -> AgentRunResult:
         return fetch_results.pop(0)
 
+    async def fake_wait_condition(*_args: Any, **_kwargs: Any) -> bool:
+        return True
+
     async def fake_execute_routed_activity(
         activity_name: str,
         payload: Any,
@@ -1690,10 +2691,12 @@ async def test_agent_run_preserves_operator_profile_selection_after_cooldown_ret
         raise AssertionError(f"Unexpected routed activity: {activity_name}")
 
     monkeypatch.setattr(agent_run_module, "CodexSessionAdapter", _FakeCodexSessionAdapter)
+    monkeypatch.setattr(agent_run_module, "ManagedAgentAdapter", _FakeCodexSessionAdapter)
     monkeypatch.setattr(run, "_ensure_manager_and_signal", fake_ensure_manager_and_signal)
     monkeypatch.setattr(run, "_sync_manager_profiles", fake_sync_manager_profiles)
     monkeypatch.setattr(run, "_fetch_managed_result", fake_fetch_managed_result)
     monkeypatch.setattr(run, "_execute_routed_activity", fake_execute_routed_activity)
+    monkeypatch.setattr(agent_run_module.workflow, "wait_condition", fake_wait_condition)
     monkeypatch.setattr(
         agent_run_module.workflow,
         "get_external_workflow_handle",

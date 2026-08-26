@@ -368,3 +368,67 @@ def test_build_continue_as_new_input_preserves_compact_wait_state() -> None:
     assert payload["cycleCount"] == 3
     assert payload["resolverHistory"][0]["workflowId"] == "resolver-1"
     assert payload["expireAt"] == "2026-04-17T00:00:00Z"
+
+def test_build_resolver_run_request_defaults_to_merge_finish_mode() -> None:
+    request = build_resolver_run_request(
+        parent_workflow_id="mm:parent",
+        pull_request=_pull_request(),
+        jira_issue_key=None,
+        merge_method="squash",
+    )
+
+    task = request["initial_parameters"]["task"]
+    assert task["skill"]["args"]["finishMode"] == "merge"
+    assert "Resolve and merge pull request" in task["instructions"]
+    assert "--finish-mode fix_only" not in task["instructions"]
+
+def test_build_resolver_run_request_withholds_merge_authority_for_fix_only() -> None:
+    request = build_resolver_run_request(
+        parent_workflow_id="mm:parent",
+        pull_request=_pull_request(),
+        jira_issue_key=None,
+        merge_method="squash",
+        finish_mode="fix_only",
+    )
+
+    task = request["initial_parameters"]["task"]
+    assert task["skill"]["args"]["finishMode"] == "fix_only"
+    assert "stop without merging it" in task["instructions"]
+    assert "--finish-mode fix_only" in task["instructions"]
+    assert "Resolve and merge pull request" not in task["instructions"]
+    # The merge method still travels with the run so an enabled finish pass is
+    # not left guessing.
+    assert task["skill"]["args"]["mergeMethod"] == "squash"
+
+def test_build_resolver_run_request_normalizes_unknown_finish_mode() -> None:
+    request = build_resolver_run_request(
+        parent_workflow_id="mm:parent",
+        pull_request=_pull_request(),
+        jira_issue_key=None,
+        merge_method="squash",
+        finish_mode="",
+    )
+
+    assert (
+        request["initial_parameters"]["task"]["skill"]["args"]["finishMode"] == "merge"
+    )
+
+def test_fix_only_finish_mode_preserves_the_review_loop_instructions() -> None:
+    request = build_resolver_run_request(
+        parent_workflow_id="mm:parent",
+        pull_request=_pull_request(),
+        jira_issue_key=None,
+        merge_method="squash",
+        finish_mode="fix_only",
+        review_loop={
+            "enabled": True,
+            "provider": "codex",
+            "requireFreshReviewForEveryHead": True,
+        },
+    )
+
+    task = request["initial_parameters"]["task"]
+    assert task["skill"]["args"]["reviewProvider"] == "codex"
+    assert task["skill"]["args"]["requireFreshReview"] is True
+    assert "--review-provider codex" in task["instructions"]
+    assert "--finish-mode fix_only" in task["instructions"]

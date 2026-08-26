@@ -44,6 +44,11 @@ JIRA_UPDATE_ISSUE_STATUS_TOOL_NAME = "jira.update_issue_status"
 GITHUB_LOAD_ISSUE_PRESET_BRIEF_TOOL_NAME = "github.load_issue_preset_brief"
 GITHUB_CHECK_ISSUE_BLOCKERS_TOOL_NAME = "github.check_issue_blockers"
 GITHUB_UPDATE_ISSUE_STATUS_TOOL_NAME = "github.update_issue_status"
+GITHUB_RESOLVE_PULL_REQUEST_TARGET_TOOL_NAME = "github.resolve_pull_request_target"
+# The status tool runs inside a 60-second activity. One fetch plus the PATCH and
+# optional comment must leave enough time for the activity to classify results.
+_GITHUB_ISSUE_FETCH_TIMEOUT_SECONDS = 10.0
+_GITHUB_ISSUE_MUTATION_TIMEOUT_SECONDS = 15.0
 JIRA_STORY_TOOL_NAMES = frozenset(
     {
         JIRA_CREATE_ISSUES_TOOL_NAME,
@@ -3227,7 +3232,6 @@ def _github_labels(
     *,
     story: Mapping[str, Any],
     github_payload: Mapping[str, Any],
-    marker_label: str,
 ) -> list[str]:
     labels: list[str] = []
     for source in (github_payload, story):
@@ -3235,8 +3239,6 @@ def _github_labels(
             label = _string(item.get("name") if isinstance(item, Mapping) else item)
             if label:
                 labels.append(label)
-    if marker_label:
-        labels.append(marker_label)
     return list(dict.fromkeys(labels))
 
 
@@ -3506,7 +3508,6 @@ async def create_github_issues_from_stories(
         )
 
     service = github_service_factory()
-    marker_label = _workflow_marker_label(inputs=inputs, context=_context)
     created: list[dict[str, Any]] = []
     issue_mappings: list[dict[str, Any]] = []
     for index, story in enumerate(stories, start=1):
@@ -3521,7 +3522,6 @@ async def create_github_issues_from_stories(
             labels=_github_labels(
                 story=story,
                 github_payload=github_payload,
-                marker_label=marker_label,
             ),
             github_token=None,
         )
@@ -4421,7 +4421,7 @@ async def _fetch_github_issue(
     if not token:
         return None, resolution_error or "GitHub issue lookup is unavailable."
     headers = service._github_headers(token)
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    async with httpx.AsyncClient(timeout=_GITHUB_ISSUE_FETCH_TIMEOUT_SECONDS) as client:
         try:
             response = await client.get(
                 f"https://api.github.com/repos/{repository}/issues/{issue_number}",
@@ -4560,6 +4560,159 @@ async def check_github_issue_blockers(
             "blockingIssues": [],
             "summary": f"GitHub issue {issue_ref} has no configured blocker evidence.",
             **assessment_output,
+        },
+    )
+
+
+async def resolve_pull_request_target(
+    inputs: Mapping[str, Any],
+    _context: Mapping[str, Any] | None = None,
+    *,
+    github_service_factory: Callable[[], GitHubService] = GitHubService,
+) -> ToolResult:
+    """Resolve one existing pull request into canonical publish-context values.
+
+    Workflows that operate on an already published pull request (rather than
+    creating one) need the same durable identity a publish step would emit:
+    URL, exact head SHA, head branch, and base branch. Emitting them from a
+    trusted tool keeps merge automation head-SHA-sensitive from the first cycle.
+    """
+
+    repository = _github_repository_slug(
+        inputs.get("repository") or inputs.get("repo")
+    )
+    selector = _string(inputs.get("pullRequest") or inputs.get("pull_request"))
+    if not repository or not selector:
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "summary": (
+                    "Pull request target resolution requires a repository and a "
+                    "pull request number, URL, or head branch."
+                ),
+            },
+        )
+
+    service = github_service_factory()
+    resolution = await service.resolve_pull_request_selector(
+        repo=repository,
+        selector=selector,
+    )
+    if not resolution.resolved or not resolution.pr_number:
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "repository": repository,
+                "reasonCode": resolution.reason_code,
+                "summary": resolution.summary,
+            },
+        )
+
+    token, resolution_error = await service.resolve_github_token(repo=repository)
+    if not token:
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "repository": repository,
+                "prNumber": resolution.pr_number,
+                "summary": resolution_error
+                or "GitHub auth is not configured for pull request resolution.",
+            },
+        )
+    headers = service._github_headers(token)
+    async with httpx.AsyncClient(timeout=_GITHUB_ISSUE_FETCH_TIMEOUT_SECONDS) as client:
+        try:
+            response = await client.get(
+                f"https://api.github.com/repos/{repository}/pulls/{resolution.pr_number}",
+                headers=headers,
+            )
+            response.raise_for_status()
+            pr_data = response.json()
+        except httpx.HTTPStatusError as exc:
+            return ToolResult(
+                status="FAILED",
+                outputs={
+                    "repository": repository,
+                    "prNumber": resolution.pr_number,
+                    "summary": (
+                        "GitHub pull request fetch failed with HTTP "
+                        f"{exc.response.status_code}."
+                    ),
+                },
+            )
+        except (httpx.TransportError, httpx.TimeoutException) as exc:
+            return ToolResult(
+                status="FAILED",
+                outputs={
+                    "repository": repository,
+                    "prNumber": resolution.pr_number,
+                    "summary": (
+                        "GitHub pull request fetch failed: "
+                        f"{exc.__class__.__name__}."
+                    ),
+                },
+            )
+
+    if not isinstance(pr_data, dict):
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "repository": repository,
+                "prNumber": resolution.pr_number,
+                "summary": "GitHub returned an unexpected pull request payload.",
+            },
+        )
+    head = pr_data.get("head") if isinstance(pr_data.get("head"), dict) else {}
+    base = pr_data.get("base") if isinstance(pr_data.get("base"), dict) else {}
+    head_sha = _string(head.get("sha"))
+    if not head_sha:
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "repository": repository,
+                "prNumber": resolution.pr_number,
+                "summary": "GitHub pull request payload has no head SHA.",
+            },
+        )
+    # GitHub's pull-request lifecycle value, not a MoonMind workflow state.
+    # It only gates open/closed validation here and is echoed back unchanged.
+    provider_pr_state = _string(pr_data.get("state")).lower()
+    merged = bool(pr_data.get("merged"))
+    pr_url = _string(pr_data.get("html_url")) or (resolution.pr_url or "")
+    if merged or provider_pr_state != "open":
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "repository": repository,
+                "prNumber": resolution.pr_number,
+                "pullRequestUrl": pr_url,
+                "prState": "merged" if merged else provider_pr_state,
+                "summary": (
+                    f"Pull request {repository}#{resolution.pr_number} is not open; "
+                    "there is nothing to review and merge."
+                ),
+            },
+        )
+
+    return ToolResult(
+        status="COMPLETED",
+        outputs={
+            "repository": repository,
+            "prNumber": resolution.pr_number,
+            "pull_request_url": pr_url,
+            "pullRequestUrl": pr_url,
+            "head_sha": head_sha,
+            "headSha": head_sha,
+            "branch": _string(head.get("ref")),
+            "push_base_ref": _string(base.get("ref")),
+            "prState": provider_pr_state,
+            "isDraft": bool(pr_data.get("draft")),
+            "operator_summary": (
+                f"Targeting pull request {pr_url} at head {head_sha[:12]}."
+            ),
+            "summary": (
+                f"Resolved {repository}#{resolution.pr_number} at head {head_sha}."
+            ),
         },
     )
 
@@ -5017,11 +5170,66 @@ def _github_status_pull_request_url(
     inputs: Mapping[str, Any],
     context: Mapping[str, Any] | None,
 ) -> str:
+    previous_outputs = _github_status_previous_outputs(inputs, context)
+    previous_metadata = _mapping(previous_outputs.get("metadata"))
+    publish_context = _mapping(previous_outputs.get("publishContext"))
+    snake_publish_context = _mapping(previous_outputs.get("publish_context"))
     return _first_string(
         inputs.get("pullRequestUrl"),
         inputs.get("pull_request_url"),
+        previous_outputs.get("pullRequestUrl"),
+        previous_outputs.get("pull_request_url"),
+        previous_outputs.get("prUrl"),
+        previous_outputs.get("pr_url"),
+        previous_metadata.get("pullRequestUrl"),
+        previous_metadata.get("pull_request_url"),
+        previous_metadata.get("prUrl"),
+        previous_metadata.get("pr_url"),
+        publish_context.get("pullRequestUrl"),
+        publish_context.get("pull_request_url"),
+        publish_context.get("prUrl"),
+        publish_context.get("pr_url"),
+        snake_publish_context.get("pullRequestUrl"),
+        snake_publish_context.get("pull_request_url"),
+        snake_publish_context.get("prUrl"),
+        snake_publish_context.get("pr_url"),
         _pull_request_url_from_artifact_path(inputs, context),
     )
+
+
+def _github_status_publish_change_evidence(
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+) -> tuple[str, int]:
+    previous_outputs = _github_status_previous_outputs(inputs, context)
+    sources = (
+        inputs,
+        previous_outputs,
+        _mapping(previous_outputs.get("metadata")),
+        _mapping(previous_outputs.get("publishContext")),
+        _mapping(previous_outputs.get("publish_context")),
+    )
+    push_status = ""
+    commit_count = 0
+    for source in sources:
+        candidate_status = _first_string(
+            source.get("push_status"),
+            source.get("pushStatus"),
+        ).lower()
+        if candidate_status:
+            push_status = candidate_status
+        raw_count = source.get("push_commit_count")
+        if raw_count is None:
+            raw_count = source.get("pushCommitCount")
+        if raw_count is None:
+            raw_count = source.get("commitCount")
+        if isinstance(raw_count, bool):
+            continue
+        if isinstance(raw_count, (int, float)):
+            commit_count = max(commit_count, int(raw_count))
+        elif isinstance(raw_count, str) and raw_count.strip().isdigit():
+            commit_count = max(commit_count, int(raw_count.strip()))
+    return push_status, commit_count
 
 
 def _github_status_requires_verification(inputs: Mapping[str, Any]) -> bool:
@@ -5092,6 +5300,26 @@ async def update_github_issue_status(
             )
     pull_request_url = _github_status_pull_request_url(inputs, _context)
     if mode == "finalize_after_pr_or_done":
+        push_status, commit_count = _github_status_publish_change_evidence(
+            inputs,
+            _context,
+        )
+        if not pull_request_url and (
+            push_status in {"pushed", "published"} or commit_count > 0
+        ):
+            return ToolResult(
+                status="FAILED",
+                outputs={
+                    "issueRef": issue_ref,
+                    "decision": "blocked",
+                    "pushStatus": push_status,
+                    "commitCount": commit_count,
+                    "summary": (
+                        "Skipped GitHub issue finalization because repository changes "
+                        "were published without an authoritative pull request URL."
+                    ),
+                },
+            )
         if pull_request_url and require_verification:
             if not (
                 inputs.get("verificationArtifactPath")
@@ -5155,7 +5383,11 @@ async def update_github_issue_status(
     if actions.get("closeIssue"):
         patch_payload["state"] = "closed"
     applied: list[str] = []
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    warnings: list[str] = []
+    comment_body = ""
+    async with httpx.AsyncClient(
+        timeout=_GITHUB_ISSUE_MUTATION_TIMEOUT_SECONDS
+    ) as client:
         try:
             response = await client.patch(
                 f"https://api.github.com/repos/{repository}/issues/{issue_number}",
@@ -5165,13 +5397,38 @@ async def update_github_issue_status(
             response.raise_for_status()
             updated = response.json()
             applied.append("patch_issue")
-            comment_body = ""
-            pr_url = pull_request_url
-            if actions.get("commentPullRequestUrl") and pr_url:
-                comment_body = f"Implementation pull request: {pr_url}"
-            elif actions.get("comment"):
-                comment_body = f"MoonMind started implementation for {issue_ref}."
-            if comment_body:
+            updated_issue = _github_issue_payload(updated, repository)
+            issue_url = updated_issue.get("url") or issue.get("url")
+        except httpx.HTTPStatusError as exc:
+            summary = service._github_permission_summary(exc.response)
+            return ToolResult(
+                status="FAILED",
+                outputs={
+                    "issueRef": issue_ref,
+                    "summary": (
+                        "GitHub issue update failed with HTTP "
+                        f"{exc.response.status_code}. {summary}"
+                    ).strip(),
+                },
+            )
+        except (httpx.TransportError, httpx.TimeoutException) as exc:
+            return ToolResult(
+                status="FAILED",
+                outputs={
+                    "issueRef": issue_ref,
+                    "summary": (
+                        f"GitHub issue update failed: {exc.__class__.__name__}"
+                    ),
+                },
+            )
+
+        pr_url = pull_request_url
+        if actions.get("commentPullRequestUrl") and pr_url:
+            comment_body = f"Implementation pull request: {pr_url}"
+        elif actions.get("comment"):
+            comment_body = f"MoonMind started implementation for {issue_ref}."
+        if comment_body:
+            try:
                 comment_response = await client.post(
                     f"https://api.github.com/repos/{repository}/issues/{issue_number}/comments",
                     headers=headers,
@@ -5179,24 +5436,55 @@ async def update_github_issue_status(
                 )
                 comment_response.raise_for_status()
                 applied.append("comment")
-        except httpx.HTTPStatusError as exc:
-            summary = service._github_permission_summary(exc.response)
-            return ToolResult(
-                status="FAILED",
-                outputs={"issueRef": issue_ref, "summary": f"GitHub issue update failed with HTTP {exc.response.status_code}. {summary}".strip()},
-            )
-        except (httpx.TransportError, httpx.TimeoutException) as exc:
-            return ToolResult(status="FAILED", outputs={"issueRef": issue_ref, "summary": f"GitHub issue update failed: {exc.__class__.__name__}"})
-    updated_issue = _github_issue_payload(updated, repository)
+            except httpx.HTTPStatusError as exc:
+                summary = service._github_permission_summary(exc.response)
+                return ToolResult(
+                    status="FAILED",
+                    outputs={
+                        "issueRef": issue_ref,
+                        "issueUrl": issue_url,
+                        "appliedActions": applied,
+                        "confirmedState": updated_issue.get("state"),
+                        "confirmedLabels": updated_issue.get("labels"),
+                        "commentStatus": "rejected",
+                        "summary": (
+                            "GitHub issue status was updated, but the automation "
+                            f"comment failed with HTTP {exc.response.status_code}. "
+                            f"{summary}"
+                        ).strip(),
+                    },
+                )
+            except (httpx.TransportError, httpx.TimeoutException) as exc:
+                warnings.append(
+                    "GitHub issue status was updated, but the automation comment "
+                    f"result could not be confirmed after {exc.__class__.__name__}; "
+                    "the comment was not retried to avoid a duplicate."
+                )
+    summary = f"Updated GitHub issue {issue_ref} with mode {mode}."
+    outputs: dict[str, Any] = {
+        "issueUrl": issue_url,
+        "appliedActions": applied,
+        "confirmedState": updated_issue.get("state"),
+        "confirmedLabels": updated_issue.get("labels"),
+        "summary": summary,
+        "sideEffect": {
+            "effectClass": "external_non_idempotent",
+            "kind": "github",
+            "operation": (
+                "github.issue.close"
+                if actions.get("closeIssue")
+                else "github.issue.update"
+            ),
+            "target": issue_url,
+            "summary": summary,
+        },
+    }
+    if warnings:
+        outputs["warnings"] = warnings
+        outputs["commentStatus"] = "unconfirmed"
     return ToolResult(
         status="COMPLETED",
-        outputs={
-            "issueUrl": updated_issue.get("url") or issue.get("url"),
-            "appliedActions": applied,
-            "confirmedState": updated_issue.get("state"),
-            "confirmedLabels": updated_issue.get("labels"),
-            "summary": f"Updated GitHub issue {issue_ref} with mode {mode}.",
-        },
+        outputs=outputs,
     )
 
 
@@ -5715,6 +6003,17 @@ def register_story_output_tool_handlers(
         handler=_update_github_issue_status,
     )
 
+    async def _resolve_pull_request_target(
+        inputs: Mapping[str, Any],
+        context: Mapping[str, Any] | None = None,
+    ) -> ToolResult:
+        return await resolve_pull_request_target(inputs, context)
+
+    dispatcher.register_skill(
+        skill_name=GITHUB_RESOLVE_PULL_REQUEST_TARGET_TOOL_NAME,
+        handler=_resolve_pull_request_target,
+    )
+
     async def _discover_documents(
         inputs: Mapping[str, Any],
         context: Mapping[str, Any] | None = None,
@@ -5753,6 +6052,8 @@ __all__ = [
     "GITHUB_LOAD_ISSUE_PRESET_BRIEF_TOOL_NAME",
     "GITHUB_CHECK_ISSUE_BLOCKERS_TOOL_NAME",
     "GITHUB_UPDATE_ISSUE_STATUS_TOOL_NAME",
+    "GITHUB_RESOLVE_PULL_REQUEST_TARGET_TOOL_NAME",
+    "resolve_pull_request_target",
     "GITHUB_STORY_TOOL_NAMES",
     "JIRA_ORCHESTRATE_TASKS_TOOL_NAME",
     "JIRA_STORY_TOOL_NAMES",

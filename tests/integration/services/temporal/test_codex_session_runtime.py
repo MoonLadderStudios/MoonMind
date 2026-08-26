@@ -1,23 +1,276 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.schemas.managed_session_models import (
+    CodexManagedSessionBinding,
     CodexManagedSessionLocator,
+    CodexManagedSessionSnapshot,
+    FetchCodexManagedSessionSummaryRequest,
+    PublishCodexManagedSessionArtifactsRequest,
     SendCodexManagedSessionTurnRequest,
 )
+from moonmind.workflows.adapters.codex_session_adapter import CodexSessionAdapter
 from moonmind.workflows.temporal.runtime.codex_session_runtime import (
     CodexManagedSessionRuntime,
 )
+from moonmind.workflows.temporal.runtime.managed_session_controller import (
+    DockerCodexManagedSessionController,
+)
+from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from tests.helpers.codex_session_runtime import (
     launch_request,
     write_fake_app_server,
 )
+from tests.integration.reliability.helpers import load_replay
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
+
+
+@pytest.mark.asyncio
+async def test_runtime_replays_stale_final_answer_with_exact_model_and_effort(
+    tmp_path: Path,
+) -> None:
+    replay_id = "codex-stale-final-runtime-selection"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    transcript_source = (
+        Path(__file__).resolve().parents[2]
+        / "reliability"
+        / "replays"
+        / replay_id
+        / "provider-transcript.jsonl"
+    )
+    rollout_entries = [
+        json.loads(line)
+        for line in transcript_source.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    # Preserve the incident event order and payloads while moving its historical
+    # timestamps inside this test turn's rollout-freshness boundary.
+    replay_start = datetime.now(UTC) + timedelta(seconds=1)
+    for index, entry in enumerate(rollout_entries):
+        entry["timestamp"] = (
+            replay_start + timedelta(milliseconds=index)
+        ).isoformat().replace("+00:00", "Z")
+    request = launch_request(tmp_path)
+    transcript_path = Path(request.codex_home_path) / manifest["rolloutRelativePath"]
+    transcript_path.parent.mkdir(parents=True, exist_ok=True)
+    transcript_path.write_text("", encoding="utf-8")
+    turn_start_record_path = tmp_path / "turn-start.json"
+    script = write_fake_app_server(
+        tmp_path,
+        completion_notification_method=None,
+        complete_turn_on_read=False,
+        incomplete_assistant_text="Runtime still reports this turn as active",
+        start_thread_path=str(transcript_path),
+        thread_status_type=manifest["threadStatusType"],
+        rollout_entries_on_read=rollout_entries,
+        turn_start_record_path=turn_start_record_path,
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+        turn_completion_timeout_seconds=0.1,
+    )
+    runtime.launch_session(request)
+
+    async def command_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        del env
+        payload = json.loads(input_text or "{}")
+        action = command[-1]
+        if action == "session_status":
+            response = runtime.session_status(
+                CodexManagedSessionLocator.model_validate(payload)
+            )
+        elif action == "send_turn":
+            response = runtime.send_turn(
+                SendCodexManagedSessionTurnRequest.model_validate(payload)
+            )
+        else:
+            raise AssertionError(f"unexpected runtime action: {action}")
+        return 0, response.model_dump_json(by_alias=True), ""
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(tmp_path),
+        command_runner=command_runner,
+        turn_poll_interval_seconds=0,
+    )
+    binding = CodexManagedSessionBinding(
+        workflowId="wf-task-1:session:codex_cli",
+        agentRunId="wf-task-1",
+        sessionId="sess-1",
+        sessionEpoch=1,
+        runtimeId="codex_cli",
+        executionProfileRef="codex-default",
+    )
+
+    async def load_snapshot(_workflow_id: str) -> CodexManagedSessionSnapshot:
+        return CodexManagedSessionSnapshot(
+            binding=binding,
+            status="active",
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            activeTurnId=None,
+            terminationRequested=False,
+        )
+
+    async def unexpected_launch(_payload: object) -> object:
+        raise AssertionError("compatible managed session should be reused")
+
+    async def prepare_turn_instructions(_payload: dict[str, object]) -> str:
+        return "Reply with exactly the word OK"
+
+    async def fetch_summary(
+        summary_request: FetchCodexManagedSessionSummaryRequest,
+    ):
+        return runtime.fetch_session_summary(summary_request)
+
+    async def publish_artifacts(
+        publication_request: PublishCodexManagedSessionArtifactsRequest,
+    ):
+        return runtime.publish_session_artifacts(publication_request)
+
+    async def noop(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    async def profile_fetcher(*, runtime_id: str) -> dict[str, object]:
+        assert runtime_id == "codex_cli"
+        return {
+            "profiles": [
+                {
+                    "profile_id": "codex-default",
+                    "credential_source": "oauth_volume",
+                }
+            ]
+        }
+
+    adapter = CodexSessionAdapter(
+        profile_fetcher=profile_fetcher,
+        slot_requester=noop,
+        slot_releaser=noop,
+        cooldown_reporter=noop,
+        workflow_id="wf-agent-run-1",
+        runtime_id="codex_cli",
+        run_store=ManagedRunStore(tmp_path / "managed-runs"),
+        load_session_snapshot=load_snapshot,
+        launch_session=unexpected_launch,
+        session_status=controller.session_status,
+        prepare_turn_instructions=prepare_turn_instructions,
+        send_turn=controller.send_turn,
+        interrupt_turn=noop,
+        clear_remote_session=noop,
+        terminate_remote_session=noop,
+        fetch_remote_summary=fetch_summary,
+        publish_remote_artifacts=publish_artifacts,
+        attach_runtime_handles=noop,
+        apply_session_control_action=noop,
+        workspace_root=str(tmp_path),
+        session_image_ref=request.image_ref,
+    )
+    execution = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="codex",
+        executionProfileRef="codex-default",
+        correlationId="corr-replay-1",
+        idempotencyKey="idem-replay-1",
+        instructionRef="artifact:instructions",
+        managedSession=binding,
+        workspaceSpec={"workspacePath": request.workspace_path},
+        parameters={
+            "publishMode": "none",
+            "model": manifest["requestedModel"],
+            "effort": manifest["requestedEffort"],
+        },
+        timeoutPolicy={},
+    )
+
+    handle = await adapter.start(execution)
+    result = await adapter.fetch_result(handle.run_id)
+
+    assert handle.status == expected["status"]
+    assert result.summary == expected["assistantText"]
+    runtime_handle = runtime.session_status(
+        CodexManagedSessionLocator(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+        )
+    )
+    assert runtime_handle.session_state.active_turn_id == expected["activeTurnId"]
+    turn_start = json.loads(turn_start_record_path.read_text(encoding="utf-8"))
+    assert turn_start["model"] == expected["turnStart"]["model"]
+    assert turn_start["effort"] == expected["turnStart"]["effort"]
+
+
+def test_runtime_send_turn_accepts_terminal_notification_when_thread_read_lags(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    transcript_path = (
+        Path(request.codex_home_path)
+        / "sessions"
+        / "2026"
+        / "08"
+        / "10"
+        / "rollout-2026-08-10T15-09-23-vendor-thread-1.jsonl"
+    )
+    transcript_path.parent.mkdir(parents=True, exist_ok=True)
+    transcript_path.write_text("", encoding="utf-8")
+    final_text = "Completed while thread/read still reported inProgress"
+    script = write_fake_app_server(
+        tmp_path,
+        completion_notification_assistant_text=final_text,
+        completion_visible_on_thread_read=False,
+        complete_turn_on_read=False,
+        start_thread_path=str(transcript_path),
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+        turn_completion_timeout_seconds=0.1,
+    )
+    runtime.launch_session(request)
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "completed"
+    assert response.metadata["assistantText"] == final_text
+    assert response.session_state.active_turn_id is None
+
 
 def test_runtime_send_turn_recovers_task_complete_message_from_rollout_transcript(
     tmp_path: Path,

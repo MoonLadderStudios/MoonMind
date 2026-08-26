@@ -8,14 +8,15 @@ sessions. It does two things:
    (:class:`ManagedSessionRuntimeCapabilities`).
 2. Evaluates that metadata against the canonical set of required managed-session
    behaviors (launch, turn control, interrupt, reset/epoch, resume, terminate,
-   rate-limit, no-progress, checkpoint, outbound scan, and correlation) and
+   rate-limit, no-progress, session-state checkpointing, step-workspace
+   checkpoint capture/restore, outbound scan, and correlation) and
    produces a deterministic conformance report.
 
-The determination is *truthful* and *binary*: a runtime is either session-capable
-(every required behavior conforms) or it is not. There is intentionally no
-"partially session-capable" verdict. Non-conforming runtimes are reported with
-precise, actionable capability gaps so they cannot be surfaced as session-capable
-by mistake.
+The session determination is *truthful* and *binary*: a runtime is either capable
+of the required managed-session lifecycle or it is not. Step-workspace capture and
+restore are reported independently because policy may treat those gaps as
+recoverability-only. There is intentionally no "partially session-capable"
+verdict. Non-conforming behaviors are reported with precise, actionable gaps.
 
 Concrete adapters expose their descriptor at the adapter boundary (for example
 ``CodexSessionAdapter.managed_session_capabilities()``) so the suite runs against
@@ -39,8 +40,13 @@ from moonmind.schemas.managed_session_models import (
     ManagedSessionControlAction,
     canonical_managed_session_runtime_id,
 )
+from moonmind.workflows.executions.runtime_capabilities import (
+    RuntimeExecutionCapabilities,
+    resolve_runtime_execution_capabilities,
+)
 
 MANAGED_SESSION_CONFORMANCE_SUITE_ID = "managed-session-conformance"
+MANAGED_SESSION_CONFORMANCE_REPORT_VERSION = 2
 
 ManagedSessionConformanceBehavior = Literal[
     "launch",
@@ -51,14 +57,16 @@ ManagedSessionConformanceBehavior = Literal[
     "terminate",
     "rate_limit",
     "no_progress",
-    "checkpoint",
+    "session_state_checkpoint",
+    "step_workspace_checkpoint_capture",
+    "step_workspace_checkpoint_restore",
     "outbound_scan",
     "correlation",
 ]
 
-# The canonical, ordered set of behaviors a managed-session runtime must satisfy
-# before it can be surfaced as session-capable. These map one-to-one to the
-# MM-883 acceptance criteria.
+# The canonical, ordered set of behaviors every descriptor must report. Workspace
+# capture and restore are execution-policy capabilities rather than prerequisites
+# for preserving a managed session.
 REQUIRED_MANAGED_SESSION_BEHAVIORS: tuple[ManagedSessionConformanceBehavior, ...] = (
     "launch",
     "turn_control",
@@ -68,7 +76,9 @@ REQUIRED_MANAGED_SESSION_BEHAVIORS: tuple[ManagedSessionConformanceBehavior, ...
     "terminate",
     "rate_limit",
     "no_progress",
-    "checkpoint",
+    "session_state_checkpoint",
+    "step_workspace_checkpoint_capture",
+    "step_workspace_checkpoint_restore",
     "outbound_scan",
     "correlation",
 )
@@ -96,6 +106,26 @@ KNOWN_MANAGED_SESSION_RUNTIMES: tuple[str, ...] = (
 )
 
 ManagedSessionBehaviorDecision = Literal["conforms", "capability_gap"]
+WorkspaceAuthority = Literal[
+    "moonmind_sandbox", "managed_runtime", "external_provider", "none"
+]
+
+_CHECKPOINT_BEHAVIORS = frozenset(
+    {
+        "session_state_checkpoint",
+        "step_workspace_checkpoint_capture",
+        "step_workspace_checkpoint_restore",
+    }
+)
+
+# Workspace capture and restore are execution-policy capabilities. They are
+# deliberately not prerequisites for preserving a managed session/thread.
+_SESSION_CAPABILITY_BEHAVIORS = tuple(
+    behavior
+    for behavior in REQUIRED_MANAGED_SESSION_BEHAVIORS
+    if behavior
+    not in {"step_workspace_checkpoint_capture", "step_workspace_checkpoint_restore"}
+)
 
 
 class ManagedSessionBehaviorSupport(BaseModel):
@@ -106,7 +136,19 @@ class ManagedSessionBehaviorSupport(BaseModel):
     behavior: ManagedSessionConformanceBehavior = Field(..., alias="behavior")
     supported: bool = Field(..., alias="supported")
     invocation: str | None = Field(None, alias="invocation")
+    owner: str | None = Field(None, alias="owner")
+    workspace_authorities: tuple[WorkspaceAuthority, ...] = Field(
+        default=(), alias="workspaceAuthorities"
+    )
+    checkpoint_kinds: tuple[str, ...] = Field(default=(), alias="checkpointKinds")
+    compatible_workspace_policies: tuple[str, ...] = Field(
+        default=(), alias="compatibleWorkspacePolicies"
+    )
     evidence: tuple[str, ...] = Field(default=(), alias="evidence")
+    idempotency: str | None = Field(None, alias="idempotency")
+    retry_replay: str | None = Field(None, alias="retryReplay")
+    security_boundary: str | None = Field(None, alias="securityBoundary")
+    boundary_test: str | None = Field(None, alias="boundaryTest")
     gap_reason: str | None = Field(None, alias="gapReason")
 
     @model_validator(mode="after")
@@ -127,6 +169,39 @@ class ManagedSessionBehaviorSupport(BaseModel):
                     f"behavior '{self.behavior}' is supported and must not carry "
                     "a gapReason"
                 )
+            if self.behavior in _CHECKPOINT_BEHAVIORS:
+                required = {
+                    "owner": self.owner,
+                    "workspaceAuthorities": self.workspace_authorities,
+                    "checkpointKinds": self.checkpoint_kinds,
+                    "idempotency": self.idempotency,
+                    "retryReplay": self.retry_replay,
+                    "securityBoundary": self.security_boundary,
+                    "boundaryTest": self.boundary_test,
+                }
+                missing = [
+                    name
+                    for name, value in required.items()
+                    if not value or (isinstance(value, str) and not value.strip())
+                ]
+                if missing:
+                    raise ValueError(
+                        f"checkpoint behavior '{self.behavior}' is supported but "
+                        f"is missing required conformance fields: {', '.join(missing)}"
+                    )
+                if any(not kind.strip() for kind in self.checkpoint_kinds):
+                    raise ValueError(
+                        f"checkpoint behavior '{self.behavior}' is supported but "
+                        "declares a blank checkpointKind"
+                    )
+                if (
+                    self.behavior == "step_workspace_checkpoint_restore"
+                    and not self.compatible_workspace_policies
+                ):
+                    raise ValueError(
+                        "step workspace checkpoint restore support must declare "
+                        "compatibleWorkspacePolicies"
+                    )
         else:
             if not (self.gap_reason or "").strip():
                 raise ValueError(
@@ -147,15 +222,26 @@ class ManagedSessionRuntimeCapabilities(BaseModel):
     control_actions: tuple[ManagedSessionControlAction, ...] = Field(
         default=(), alias="controlActions"
     )
-    behaviors: tuple[ManagedSessionBehaviorSupport, ...] = Field(
-        ..., alias="behaviors"
-    )
+    behaviors: tuple[ManagedSessionBehaviorSupport, ...] = Field(..., alias="behaviors")
 
     @model_validator(mode="after")
     def _validate(self) -> "ManagedSessionRuntimeCapabilities":
         keys = [support.behavior for support in self.behaviors]
         if len(keys) != len(set(keys)):
             raise ValueError("behaviors must be unique per behavior key")
+        capture = self.behavior("step_workspace_checkpoint_capture")
+        restore = self.behavior("step_workspace_checkpoint_restore")
+        if capture and restore and capture.supported and restore.supported:
+            if capture.invocation == restore.invocation:
+                raise ValueError(
+                    "workspace capture and restore must declare distinct compatible "
+                    "invocations"
+                )
+            if set(capture.evidence) == set(restore.evidence):
+                raise ValueError(
+                    "workspace capture and restore cannot use identical evidence "
+                    "surfaces"
+                )
         return self
 
     def behavior(
@@ -171,15 +257,36 @@ def _gap(behavior: str, reason: str) -> dict[str, Any]:
     return {"behavior": behavior, "reason": reason}
 
 
+def _decision_details(
+    support: ManagedSessionBehaviorSupport | None,
+) -> dict[str, Any]:
+    """Serialize bounded invocation and evidence metadata for one behavior."""
+
+    return {
+        "invocation": support.invocation if support else None,
+        "owner": support.owner if support else None,
+        "workspaceAuthorities": list(support.workspace_authorities) if support else [],
+        "checkpointKinds": list(support.checkpoint_kinds) if support else [],
+        "compatibleWorkspacePolicies": (
+            list(support.compatible_workspace_policies) if support else []
+        ),
+        "evidence": list(support.evidence) if support else [],
+        "idempotency": support.idempotency if support else None,
+        "retryReplay": support.retry_replay if support else None,
+        "securityBoundary": support.security_boundary if support else None,
+        "boundaryTest": support.boundary_test if support else None,
+    }
+
+
 def evaluate_managed_session_conformance(
     capabilities: ManagedSessionRuntimeCapabilities,
 ) -> dict[str, Any]:
     """Evaluate one runtime's capability metadata against the required behaviors.
 
     Returns a deterministic report. ``sessionCapable`` is a truthful binary
-    determination: it is ``True`` only when every required behavior conforms.
-    Any missing or unsupported behavior produces an actionable capability gap and
-    forces ``sessionCapable`` to ``False`` -- there is no partial verdict.
+    determination over the managed-session lifecycle behaviors. Workspace capture
+    and restore decisions remain independent capability gaps so execution policy
+    can treat them as required, recoverability-only, or unsupported.
     """
 
     behavior_decisions: list[dict[str, Any]] = []
@@ -198,8 +305,7 @@ def evaluate_managed_session_conformance(
                     "behavior": behavior,
                     "decision": "capability_gap",
                     "supported": False,
-                    "invocation": None,
-                    "evidence": [],
+                    **_decision_details(None),
                     "gapReason": reason,
                 }
             )
@@ -215,8 +321,7 @@ def evaluate_managed_session_conformance(
                     "behavior": behavior,
                     "decision": "capability_gap",
                     "supported": False,
-                    "invocation": support.invocation,
-                    "evidence": list(support.evidence),
+                    **_decision_details(support),
                     "gapReason": reason,
                 }
             )
@@ -226,28 +331,30 @@ def evaluate_managed_session_conformance(
                 "behavior": behavior,
                 "decision": "conforms",
                 "supported": True,
-                "invocation": support.invocation,
-                "evidence": list(support.evidence),
+                **_decision_details(support),
                 "gapReason": None,
             }
         )
 
-    canonical_runtime_id = canonical_managed_session_runtime_id(
-        capabilities.runtime_id
-    )
+    canonical_runtime_id = canonical_managed_session_runtime_id(capabilities.runtime_id)
     # Defense in depth: a runtime with no canonical managed-session id must never
     # be determined session-capable, even if it declares every behavior.
-    if canonical_runtime_id is None and not capability_gaps:
+    if canonical_runtime_id is None:
         reason = (
             f"runtime '{capabilities.runtime_id}' has no canonical managed-session "
             "runtime id and must not be surfaced as session-capable"
         )
         capability_gaps.append(_gap("runtime_identity", reason))
 
-    session_capable = not capability_gaps
+    gap_behaviors = {gap["behavior"] for gap in capability_gaps}
+    session_capable = (
+        not any(behavior in gap_behaviors for behavior in _SESSION_CAPABILITY_BEHAVIORS)
+        and canonical_runtime_id is not None
+    )
     claim_truthful = session_capable == capabilities.session_capable_claim
 
     return {
+        "reportSchemaVersion": MANAGED_SESSION_CONFORMANCE_REPORT_VERSION,
         "runtimeId": capabilities.runtime_id,
         "runtimeFamily": capabilities.runtime_family,
         "canonicalRuntimeId": canonical_runtime_id,
@@ -261,16 +368,136 @@ def evaluate_managed_session_conformance(
     }
 
 
+def migrate_managed_session_conformance_report(
+    report: dict[str, Any],
+) -> dict[str, Any]:
+    """Upgrade a serialized v1 report to the precise v2 checkpoint model.
+
+    V1's generic ``checkpoint`` decision proves only session-state reference
+    publication. It is therefore migrated to ``session_state_checkpoint``.
+    Workspace capture and restore are added as explicit capability gaps; the
+    migration never manufactures those stronger claims from legacy evidence.
+    """
+
+    version = report.get("reportSchemaVersion", 1)
+    if version == MANAGED_SESSION_CONFORMANCE_REPORT_VERSION:
+        return dict(report)
+    if version != 1:
+        raise ValueError(
+            f"unsupported managed-session report schema version: {version}"
+        )
+
+    if isinstance(report.get("reports"), list):
+        migrated_summary = dict(report)
+        migrated_summary["reportSchemaVersion"] = (
+            MANAGED_SESSION_CONFORMANCE_REPORT_VERSION
+        )
+        migrated_summary["reports"] = [
+            migrate_managed_session_conformance_report(dict(child))
+            for child in report["reports"]
+        ]
+        required = report.get("requiredBehaviors")
+        if isinstance(required, list):
+            migrated_required: list[str] = []
+            for behavior in required:
+                if behavior == "checkpoint":
+                    migrated_required.extend(
+                        (
+                            "session_state_checkpoint",
+                            "step_workspace_checkpoint_capture",
+                            "step_workspace_checkpoint_restore",
+                        )
+                    )
+                else:
+                    migrated_required.append(behavior)
+            migrated_summary["requiredBehaviors"] = migrated_required
+        return migrated_summary
+
+    migrated = dict(report)
+
+    compact_gaps = report.get("capabilityGaps")
+    if isinstance(compact_gaps, dict):
+        migrated_compact_gaps: dict[str, list[dict[str, Any]]] = {}
+        for runtime_id, raw_gaps in compact_gaps.items():
+            gaps = []
+            for raw_gap in raw_gaps:
+                gap = dict(raw_gap)
+                if gap.get("behavior") == "checkpoint":
+                    gap["behavior"] = "session_state_checkpoint"
+                gaps.append(gap)
+            existing = {gap.get("behavior") for gap in gaps}
+            for behavior in (
+                "step_workspace_checkpoint_capture",
+                "step_workspace_checkpoint_restore",
+            ):
+                if behavior not in existing:
+                    gaps.append(
+                        _gap(
+                            behavior,
+                            f"legacy v1 report for runtime '{runtime_id}' did not "
+                            f"distinguish or prove {behavior}",
+                        )
+                    )
+            migrated_compact_gaps[runtime_id] = gaps
+        migrated["reportSchemaVersion"] = MANAGED_SESSION_CONFORMANCE_REPORT_VERSION
+        migrated["capabilityGaps"] = migrated_compact_gaps
+        return migrated
+
+    decisions: list[dict[str, Any]] = []
+    for raw in report.get("behaviorDecisions", []):
+        decision = dict(raw)
+        if decision.get("behavior") == "checkpoint":
+            decision["behavior"] = "session_state_checkpoint"
+        for key, default in _decision_details(None).items():
+            decision.setdefault(key, default)
+        decisions.append(decision)
+
+    existing = {item.get("behavior") for item in decisions}
+    gaps = []
+    for raw_gap in report.get("capabilityGaps", []):
+        gap = dict(raw_gap)
+        if gap.get("behavior") == "checkpoint":
+            gap["behavior"] = "session_state_checkpoint"
+        gaps.append(gap)
+    for behavior in (
+        "step_workspace_checkpoint_capture",
+        "step_workspace_checkpoint_restore",
+    ):
+        if behavior in existing:
+            continue
+        reason = (
+            f"legacy v1 report for runtime '{report.get('runtimeId', 'unknown')}' "
+            f"did not distinguish or prove {behavior}"
+        )
+        decisions.append(
+            {
+                "behavior": behavior,
+                "decision": "capability_gap",
+                "supported": False,
+                **_decision_details(None),
+                "gapReason": reason,
+            }
+        )
+        gaps.append(_gap(behavior, reason))
+
+    migrated["reportSchemaVersion"] = MANAGED_SESSION_CONFORMANCE_REPORT_VERSION
+    migrated["behaviorDecisions"] = decisions
+    migrated["capabilityGaps"] = gaps
+    return migrated
+
+
 def _codex_behavior(
     behavior: ManagedSessionConformanceBehavior,
     invocation: str,
     evidence: tuple[str, ...],
+    **checkpoint_contract: Any,
 ) -> ManagedSessionBehaviorSupport:
     return ManagedSessionBehaviorSupport(
         behavior=behavior,
         supported=True,
         invocation=invocation,
         evidence=evidence,
+        **checkpoint_contract,
     )
 
 
@@ -357,11 +584,51 @@ def codex_managed_session_capabilities() -> ManagedSessionRuntimeCapabilities:
                 ),
             ),
             _codex_behavior(
-                "checkpoint",
+                "session_state_checkpoint",
                 "PublishCodexManagedSessionArtifactsRequest",
                 (
                     "CodexManagedSessionSummary.latestCheckpointRef",
                     "latestResetBoundaryRef",
+                ),
+                owner="CodexSessionAdapter.fetch_result",
+                workspaceAuthorities=("managed_runtime",),
+                checkpointKinds=(
+                    "session_state_ref",
+                    "session_reset_boundary_ref",
+                ),
+                idempotency=(
+                    "publication reuses the managed session identity and artifact refs"
+                ),
+                retryReplay=(
+                    "adapter fetch/publish retries preserve sessionId, threadId, and "
+                    "sessionEpoch"
+                ),
+                securityBoundary=(
+                    "Codex managed-session controller resolves state inside the "
+                    "runtime-owned session container"
+                ),
+                boundaryTest=(
+                    "tests/unit/workflows/adapters/"
+                    "test_managed_session_conformance_boundary.py::"
+                    "test_session_state_checkpoint_boundary_invocation_and_evidence"
+                ),
+            ),
+            ManagedSessionBehaviorSupport(
+                behavior="step_workspace_checkpoint_capture",
+                supported=False,
+                gapReason=(
+                    "Codex managed sessions can publish session-state refs but do "
+                    "not yet declare a managed-runtime-owned Step Execution "
+                    "workspace capture invocation for git_patch or worktree_archive"
+                ),
+            ),
+            ManagedSessionBehaviorSupport(
+                behavior="step_workspace_checkpoint_restore",
+                supported=False,
+                gapReason=(
+                    "Codex managed sessions do not yet declare a workspace "
+                    "restore/materialization invocation or compatible workspace "
+                    "policies"
                 ),
             ),
             _codex_behavior(
@@ -426,6 +693,14 @@ def managed_session_capabilities_for_runtime(
     return unsupported_runtime_managed_session_capabilities(runtime_id)
 
 
+def runtime_execution_capabilities_for_runtime(
+    runtime_id: str,
+) -> RuntimeExecutionCapabilities:
+    """Return the canonical execution descriptor used by workflow policy."""
+
+    return resolve_runtime_execution_capabilities(runtime_id)
+
+
 def build_managed_session_conformance_summary(
     *,
     capabilities: Iterable[ManagedSessionRuntimeCapabilities] | None = None,
@@ -444,10 +719,13 @@ def build_managed_session_conformance_summary(
         evaluate_managed_session_conformance(descriptor) for descriptor in descriptors
     ]
     overall_result = (
-        "passed" if all(report["result"] == "passed" for report in reports) else "failed"
+        "passed"
+        if all(report["result"] == "passed" for report in reports)
+        else "failed"
     )
     return {
         "suite": MANAGED_SESSION_CONFORMANCE_SUITE_ID,
+        "reportSchemaVersion": MANAGED_SESSION_CONFORMANCE_REPORT_VERSION,
         "overallResult": overall_result,
         "requiredBehaviors": list(REQUIRED_MANAGED_SESSION_BEHAVIORS),
         "coverageIds": list(MM883_COVERAGE_IDS),
@@ -467,6 +745,7 @@ def run_managed_session_conformance() -> dict[str, Any]:
     summary = build_managed_session_conformance_summary()
     return {
         "suite": summary["suite"],
+        "reportSchemaVersion": summary["reportSchemaVersion"],
         "overallResult": summary["overallResult"],
         "sessionCapableRuntimes": summary["sessionCapableRuntimes"],
         "failedRuntimes": summary["failedRuntimes"],

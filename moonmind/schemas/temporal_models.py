@@ -17,9 +17,17 @@ from pydantic import (
 )
 from pydantic.json_schema import SkipJsonSchema
 
+from pr_resolver_core.review_providers import (
+    DEFAULT_AUTOMATED_REVIEW_PROVIDER,
+    automated_review_provider_or_raise,
+    resolve_automated_review_provider,
+)
+
+from moonmind.omnigent.checkpoints import OmnigentCheckpointIdentity
 from moonmind.schemas.checkpoint_branch_models import StepExecutionBranchMetadataModel
 from moonmind.schemas.temporal_artifact_models import CompactArtifactRefModel
 from moonmind.schemas.temporal_payload_policy import validate_compact_temporal_mapping
+from moonmind.schemas.workspace_locator_models import ExternalStateLocator, WorkspaceLocator
 from moonmind.statuses.step_execution import (
     StepExecutionReason,
     StepExecutionStatus,
@@ -103,17 +111,50 @@ EvidenceStatus = Literal[
     "skipped",
     "unavailable",
 ]
-RecoveryDefaultAction = Literal[
-    "resume_from_checkpoint",
-    "full_retry",
-    "environment_fix",
-    "none",
-]
-RecoveryOperatorGuidance = Literal[
-    "resume",
+RecoveryAction = Literal[
+    "continue_same_session",
+    "resume_from_workspace_checkpoint",
     "full_retry",
     "fix_environment",
-    "needs_human",
+    "manual_intervention",
+]
+RecoveryDefaultAction = RecoveryAction
+RecoveryResumePhase = Literal[
+    "rerun_failed_step",
+    "continue_to_gate",
+    "continue_after_gate",
+    "continue_to_remediation",
+    "resume_publication",
+    "retry_restoration",
+]
+CheckpointRecoveryDisabledReason = Literal[
+    "CHECKPOINT_CAPTURE_UNSUPPORTED",
+    "CHECKPOINT_RESTORE_UNSUPPORTED",
+    "CHECKPOINT_RESTORE_ROUTE_MISSING",
+    "CHECKPOINT_KIND_INCOMPATIBLE",
+    "CHECKPOINT_BOUNDARY_INCOMPATIBLE",
+    "CHECKPOINT_DESTINATION_IDENTITY_MISMATCH",
+    "CHECKPOINT_CAPABILITY_SNAPSHOT_MISSING",
+    "CHECKPOINT_CAPABILITY_DIGEST_MISMATCH",
+    "CHECKPOINT_ARTIFACT_INVALID",
+    "CHECKPOINT_SIDE_EFFECT_UNSAFE",
+    "RECOVERY_TARGET_UNAVAILABLE",
+]
+SameSessionRecoveryDisabledReason = Literal[
+    "SAME_SESSION_UNREACHABLE",
+    "SAME_SESSION_CONTINUATION_UNSUPPORTED",
+]
+RecoveryDisabledReason = (
+    CheckpointRecoveryDisabledReason
+    | SameSessionRecoveryDisabledReason
+    | Literal["environment_invalid"]
+)
+RecoveryOperatorGuidance = Literal[
+    "continue_same_session",
+    "resume_from_workspace_checkpoint",
+    "full_retry",
+    "fix_environment",
+    "manual_intervention",
 ]
 EnvironmentDiagnosticKind = Literal[
     "environment",
@@ -274,23 +315,112 @@ class RecoveryEligibilityDiagnosticModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     eligible: bool
+    requested_action: RecoveryAction = Field(
+        "resume_from_workspace_checkpoint", alias="requestedAction"
+    )
     default_action: RecoveryDefaultAction = Field(..., alias="defaultAction")
-    disabled_reason_code: str | None = Field(
+    disabled_reason_code: RecoveryDisabledReason | None = Field(
         None, alias="disabledReasonCode", max_length=120
     )
-    required_boundary: str | None = Field(None, alias="requiredBoundary", max_length=100)
+    checkpoint_boundary: str | None = Field(
+        None,
+        alias="checkpointBoundary",
+        validation_alias=AliasChoices("checkpointBoundary", "requiredBoundary"),
+        max_length=100,
+    )
+    resume_phase: RecoveryResumePhase | None = Field(None, alias="resumePhase")
+    checkpoint_kind: str | None = Field(None, alias="checkpointKind", max_length=100)
+    target_runtime_id: str | None = Field(None, alias="targetRuntimeId", max_length=100)
+    capability_set_version: str | None = Field(None, alias="capabilitySetVersion", max_length=100)
+    capability_digest: str | None = Field(None, alias="capabilityDigest", max_length=128)
+    checkpoint_restore_kinds: tuple[str, ...] = Field(default=(), alias="checkpointRestoreKinds")
+    restore_activity: str | None = Field(None, alias="restoreActivity", max_length=200)
+    workspace_authority: str | None = Field(None, alias="workspaceAuthority", max_length=100)
+    session_recoverable: bool | None = Field(None, alias="sessionRecoverable")
+    workspace_recoverable: bool | None = Field(None, alias="workspaceRecoverable")
+    branch_creation_available: bool | None = Field(
+        None, alias="branchCreationAvailable"
+    )
+    live_reattach_reason: str | None = Field(
+        None, alias="liveReattachReason", max_length=120
+    )
+    workspace_restore_reason: str | None = Field(
+        None, alias="workspaceRestoreReason", max_length=120
+    )
+    branch_creation_reason: str | None = Field(
+        None, alias="branchCreationReason", max_length=120
+    )
+    required_profile_ref: str | None = Field(
+        None, alias="requiredProfileRef", max_length=500
+    )
+    required_policy_ref: str | None = Field(
+        None, alias="requiredPolicyRef", max_length=500
+    )
+    capacity_blocked: bool | None = Field(None, alias="capacityBlocked")
+    readiness_blocked: bool | None = Field(None, alias="readinessBlocked")
+    checkpoint_digests: dict[str, str] = Field(
+        default_factory=dict, alias="checkpointDigests"
+    )
+    checkpoint_validation_status: str | None = Field(
+        None, alias="checkpointValidationStatus", max_length=80
+    )
+    authoritative_workspace_checkpoint_kind: str | None = Field(
+        None, alias="authoritativeWorkspaceCheckpointKind", max_length=100
+    )
+    partial_recovery_reason: str | None = Field(
+        None, alias="partialRecoveryReason", max_length=240
+    )
     checkpoint_ref: str | None = Field(None, alias="checkpointRef", max_length=500)
     source_workflow_id: str | None = Field(None, alias="sourceWorkflowId", max_length=200)
     source_run_id: str | None = Field(None, alias="sourceRunId", max_length=200)
+    live_session_id: str | None = Field(None, alias="liveSessionId", max_length=200)
+    supports_same_session_continuation: bool | None = Field(
+        None, alias="supportsSameSessionContinuation"
+    )
     operator_guidance: RecoveryOperatorGuidance = Field(..., alias="operatorGuidance")
     evidence: list[EvidenceRefStatusModel] = Field(default_factory=list)
+    runtime_id: str | None = Field(None, alias="runtimeId", max_length=80)
+    deployment_generation: str | None = Field(
+        None, alias="deploymentGeneration", max_length=120
+    )
+    capability_set_version: str | None = Field(
+        None, alias="capabilitySetVersion", max_length=120
+    )
+    capability_digest: str | None = Field(
+        None, alias="capabilityDigest", max_length=160
+    )
+    checkpoint_kind: str | None = Field(None, alias="checkpointKind", max_length=80)
+    promotion_state: str | None = Field(None, alias="promotionState", max_length=40)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _read_legacy_recovery_tokens(cls, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            return value
+        migrated = dict(value)
+        aliases = {
+            "resume_from_checkpoint": "resume_from_workspace_checkpoint",
+            "environment_fix": "fix_environment",
+            "resume": "resume_from_workspace_checkpoint",
+            "needs_human": "manual_intervention",
+        }
+        for key in ("defaultAction", "default_action", "operatorGuidance", "operator_guidance"):
+            if migrated.get(key) in aliases:
+                migrated[key] = aliases[migrated[key]]
+        return migrated
 
     @field_validator(
         "disabled_reason_code",
-        "required_boundary",
+        "checkpoint_boundary",
+        "checkpoint_kind",
+        "target_runtime_id",
+        "capability_set_version",
+        "capability_digest",
+        "restore_activity",
         "checkpoint_ref",
         "source_workflow_id",
         "source_run_id",
+        "live_session_id",
         mode="before",
     )
     @classmethod
@@ -302,21 +432,57 @@ class RecoveryEligibilityDiagnosticModel(BaseModel):
 
     @model_validator(mode="after")
     def _validate_decision(self) -> "RecoveryEligibilityDiagnosticModel":
+        if self.requested_action == "continue_same_session":
+            if self.checkpoint_ref or self.checkpoint_restore_kinds or self.restore_activity:
+                raise ValueError("same-session continuation cannot use checkpoint evidence")
+            if self.eligible:
+                if not self.live_session_id or not self.supports_same_session_continuation:
+                    raise ValueError("same-session continuation requires a reachable capable session")
+                if self.default_action != "continue_same_session":
+                    raise ValueError("eligible same-session continuation must be the default")
+                if self.operator_guidance != "continue_same_session":
+                    raise ValueError("eligible same-session continuation requires matching guidance")
+                if self.disabled_reason_code is not None:
+                    raise ValueError("eligible same-session continuation cannot be disabled")
+            else:
+                if self.disabled_reason_code not in {
+                    "SAME_SESSION_UNREACHABLE",
+                    "SAME_SESSION_CONTINUATION_UNSUPPORTED",
+                }:
+                    raise ValueError("ineligible same-session continuation requires a session reason")
+                if self.default_action == "continue_same_session":
+                    raise ValueError("ineligible same-session continuation cannot be the default")
+            return self
         if self.eligible:
-            if self.default_action != "resume_from_checkpoint":
-                raise ValueError("eligible checkpoint recovery requires resume_from_checkpoint")
+            if self.requested_action != "resume_from_workspace_checkpoint":
+                raise ValueError("eligible checkpoint recovery requires checkpoint Resume")
+            if self.default_action != "resume_from_workspace_checkpoint":
+                raise ValueError("eligible checkpoint recovery must default to checkpoint Resume")
             if not self.checkpoint_ref:
                 raise ValueError("eligible checkpoint recovery requires checkpointRef")
-            if self.operator_guidance != "resume":
+            if self.operator_guidance != "resume_from_workspace_checkpoint":
                 raise ValueError("eligible checkpoint recovery requires resume guidance")
+            # Old Temporal payloads had none of these fields. Continue to read
+            # them for replay, while every new decision carrying any v2 proof
+            # field must carry the complete immutable proof set.
+            proof = (
+                self.resume_phase, self.checkpoint_kind, self.target_runtime_id,
+                self.capability_set_version, self.capability_digest,
+                self.restore_activity, self.workspace_authority,
+            )
+            if any(proof):
+                if not all((self.checkpoint_boundary, *proof)):
+                    raise ValueError("checkpoint recovery requires immutable restore proof")
+                if self.checkpoint_kind not in self.checkpoint_restore_kinds:
+                    raise ValueError("checkpoint kind is absent from restore capability snapshot")
             if self.disabled_reason_code is not None:
                 raise ValueError("eligible checkpoint recovery cannot include disabledReasonCode")
         else:
             if not self.disabled_reason_code:
                 raise ValueError("ineligible checkpoint recovery requires disabledReasonCode")
-            if self.default_action == "resume_from_checkpoint":
+            if self.default_action == "resume_from_workspace_checkpoint":
                 raise ValueError("ineligible checkpoint recovery cannot default to resume")
-        if self.default_action == "environment_fix" and self.operator_guidance != "fix_environment":
+        if self.default_action == "fix_environment" and self.operator_guidance != "fix_environment":
             raise ValueError("environment recovery requires fix_environment guidance")
         return self
 
@@ -608,10 +774,6 @@ class FailedRunRecoveryManifestModel(BaseModel):
             if not self.validation.checkpoint_ref:
                 raise ValueError(
                     "resume cannot be allowed without a validated checkpoint ref"
-                )
-            if not self.failed_logical_step_id:
-                raise ValueError(
-                    "resume cannot be allowed without a failed logical step"
                 )
             if self.blocked_reason:
                 raise ValueError(
@@ -960,13 +1122,36 @@ class WorkspaceCheckpointEvidenceModel(BaseModel):
     head_commit: str | None = Field(None, alias="headCommit")
     patch_ref: str | None = Field(None, alias="patchRef")
     archive_ref: str | None = Field(None, alias="archiveRef")
+    archive_digest: str | None = Field(None, alias="archiveDigest")
+    archive_bytes: int | None = Field(None, alias="archiveBytes", ge=1)
+    workspace_digest: str | None = Field(
+        None,
+        alias="workspaceDigest",
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
+    workspace_identity_digest: str | None = Field(
+        None,
+        alias="workspaceIdentityDigest",
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
     workspace_ref: str | None = Field(None, alias="workspaceRef")
     workspace_artifact_ref: str | None = Field(None, alias="workspaceArtifactRef")
     external_state_ref: str | None = Field(None, alias="externalStateRef")
     idempotency_key: str | None = Field(None, alias="idempotencyKey")
     omnigent_session_id: str | None = Field(None, alias="omnigentSessionId")
     provider_session_ref: str | None = Field(None, alias="providerSessionRef")
+    provider_profile_id: str | None = Field(None, alias="providerProfileId")
+    credential_generation: int | None = Field(None, alias="credentialGeneration", ge=1)
+    provider_lease_ref: str | None = Field(None, alias="providerLeaseRef")
+    host_binding_ref: str | None = Field(None, alias="hostBindingRef")
+    host_lease_ref: str | None = Field(None, alias="hostLeaseRef")
+    endpoint_ref: str | None = Field(None, alias="endpointRef")
+    omnigent_host_id: str | None = Field(None, alias="omnigentHostId")
+    bridge_session_id: str | None = Field(None, alias="bridgeSessionId")
+    terminal_ref: str | None = Field(None, alias="terminalRef")
+    diagnostics_ref: str | None = Field(None, alias="diagnosticsRef")
     manifest_ref: str | None = Field(None, alias="manifestRef")
+    manifest_digest: str | None = Field(None, alias="manifestDigest")
     branch: str | None = Field(None, alias="branch")
     includes_untracked: bool = Field(False, alias="includesUntracked")
     includes_ignored_files: bool = Field(False, alias="includesIgnoredFiles")
@@ -978,13 +1163,26 @@ class WorkspaceCheckpointEvidenceModel(BaseModel):
         "head_commit",
         "patch_ref",
         "archive_ref",
+        "archive_digest",
+        "workspace_digest",
+        "workspace_identity_digest",
         "workspace_ref",
         "workspace_artifact_ref",
         "external_state_ref",
         "idempotency_key",
         "omnigent_session_id",
         "provider_session_ref",
+        "provider_profile_id",
+        "provider_lease_ref",
+        "host_binding_ref",
+        "host_lease_ref",
+        "endpoint_ref",
+        "omnigent_host_id",
+        "bridge_session_id",
+        "terminal_ref",
+        "diagnostics_ref",
         "manifest_ref",
+        "manifest_digest",
         "branch",
         mode="before",
     )
@@ -1022,10 +1220,41 @@ class WorkspaceCheckpointEvidenceModel(BaseModel):
             )
         if self.kind == "external_state_ref" and not self.external_state_ref:
             raise ValueError("external_state_ref checkpoint requires externalStateRef")
+        omnigent_identity = (
+            self.provider_profile_id,
+            self.credential_generation,
+            self.provider_lease_ref,
+            self.host_binding_ref,
+            self.host_lease_ref,
+            self.endpoint_ref,
+            self.omnigent_host_id,
+            self.omnigent_session_id,
+            self.bridge_session_id,
+        )
+        if any(value is not None for value in omnigent_identity):
+            if self.kind != "external_state_ref":
+                raise ValueError(
+                    "Omnigent checkpoint identity requires external_state_ref evidence"
+                )
+            required = {
+                "providerProfileId": self.provider_profile_id,
+                "credentialGeneration": self.credential_generation,
+                "hostBindingRef": self.host_binding_ref,
+                "endpointRef": self.endpoint_ref,
+                "bridgeSessionId": self.bridge_session_id,
+                "idempotencyKey": self.idempotency_key,
+            }
+            missing = [key for key, value in required.items() if value is None]
+            if missing:
+                raise ValueError(
+                    "Omnigent checkpoint identity is missing: " + ", ".join(missing)
+                )
+        dumped = self.model_dump(by_alias=True, mode="json")
         _reject_inline_checkpoint_evidence(
-            self.model_dump(by_alias=True, mode="json"),
+            dumped,
             "workspace",
         )
+        _reject_raw_secret_text(dumped, "workspace")
         return self
 
 
@@ -1080,6 +1309,9 @@ class StepExecutionCheckpointModel(BaseModel):
         default_factory=list, alias="preparedInputRefs"
     )
     workspace: WorkspaceCheckpointEvidenceModel = Field(..., alias="workspace")
+    omnigent: OmnigentCheckpointIdentity | None = Field(
+        None, alias="omnigentCheckpoint"
+    )
     step_outputs: dict[str, Any] = Field(default_factory=dict, alias="stepOutputs")
     validation: StepCheckpointValidationResultModel | None = Field(
         None, alias="validation"
@@ -1209,6 +1441,7 @@ class WorkspaceCheckpointCaptureInput(BaseModel):
     identity: StepExecutionIdentityModel = Field(..., alias="identity")
     boundary: StepExecutionCheckpointBoundary = Field(..., alias="boundary")
     kind: WorkspaceCheckpointKind = Field(..., alias="kind")
+    workspace_locator: WorkspaceLocator | None = Field(None, alias="workspaceLocator")
     workspace_root_ref: str | None = Field(None, alias="workspaceRootRef")
     workspace_path: str | None = Field(None, alias="workspacePath")
     external_state_ref: str | None = Field(None, alias="externalStateRef")
@@ -1249,12 +1482,22 @@ class WorkspaceCheckpointCaptureInput(BaseModel):
     @model_validator(mode="after")
     def _validate_input(self) -> "WorkspaceCheckpointCaptureInput":
         if self.kind == "external_state_ref":
-            if self.external_state_ref is None and self.workspace_root_ref is None:
+            if (
+                not isinstance(self.workspace_locator, ExternalStateLocator)
+                and self.external_state_ref is None
+                and self.workspace_root_ref is None
+            ):
                 raise ValueError(
                     "external_state_ref checkpoint capture requires externalStateRef"
                 )
-        elif self.workspace_root_ref is None and self.workspace_path is None:
-            raise ValueError("workspace capture requires workspaceRootRef or workspacePath")
+        elif (
+            self.workspace_locator is None
+            and self.workspace_root_ref is None
+            and self.workspace_path is None
+        ):
+            raise ValueError(
+                "workspace capture requires workspaceLocator, workspaceRootRef, or workspacePath"
+            )
         if self.kind == "git_patch" and self.base_commit is None:
             raise ValueError("git_patch checkpoint capture requires baseCommit")
         _reject_raw_secret_text(self.model_dump(by_alias=True), "captureInput")
@@ -1303,6 +1546,12 @@ class StepCheckpointCreateInput(BaseModel):
     boundary: StepExecutionCheckpointBoundary = Field(..., alias="boundary")
     task_input_snapshot_ref: str = Field(..., alias="taskInputSnapshotRef", min_length=1)
     workspace: WorkspaceCheckpointEvidenceModel = Field(..., alias="workspace")
+    omnigent: OmnigentCheckpointIdentity | None = Field(
+        None, alias="omnigentCheckpoint"
+    )
+    omnigent_capture: dict[str, Any] | None = Field(
+        None, alias="omnigentCheckpointCapture"
+    )
     created_at: datetime = Field(..., alias="createdAt")
     plan_ref: str | None = Field(None, alias="planRef")
     plan_digest: str | None = Field(None, alias="planDigest")
@@ -1318,6 +1567,17 @@ class StepCheckpointCreateInput(BaseModel):
             return None
         candidate = str(value).strip()
         return candidate or None
+
+    @field_validator("omnigent_capture", mode="before")
+    @classmethod
+    def _validate_omnigent_capture(cls, value: Any) -> dict[str, Any] | None:
+        if value is None:
+            return None
+        payload = validate_compact_temporal_mapping(
+            value, field_name="omnigentCheckpointCapture"
+        )
+        _reject_raw_secret_text(payload, "omnigentCheckpointCapture")
+        return payload
 
     @field_validator("prepared_input_refs", "diagnostic_refs")
     @classmethod
@@ -1430,6 +1690,9 @@ class WorkspacePolicyApplyInput(BaseModel):
     workspace_policy: WorkspacePolicy = Field(..., alias="workspacePolicy")
     checkpoint_ref: str = Field(..., alias="checkpointRef", min_length=1)
     checkpoint: dict[str, Any] = Field(default_factory=dict, alias="checkpoint")
+    target_workspace_locator: WorkspaceLocator | None = Field(
+        None, alias="targetWorkspaceLocator"
+    )
     target_workspace_ref: str | None = Field(None, alias="targetWorkspaceRef")
     expected_plan_ref: str | None = Field(None, alias="expectedPlanRef")
     expected_plan_digest: str | None = Field(None, alias="expectedPlanDigest")
@@ -1532,6 +1795,11 @@ class PullRequestRefModel(BaseModel):
 
 MergeAutomationPolicySetting = Literal["required", "optional", "disabled"]
 MergeMethod = Literal["merge", "squash", "rebase"]
+# How merge automation finishes once the gate opens and the resolver reports
+# that nothing is left to address. "merge" runs the final pr-resolver pass with
+# merge authority; "fix_only" stops at the open gate without a merge side
+# effect. Histories recorded before this field default to "merge".
+MergeAutomationFinishMode = Literal["merge", "fix_only"]
 PostMergeJiraStrategy = Literal["done_category"]
 
 class MergeAutomationGitHubGateModel(BaseModel):
@@ -1575,6 +1843,97 @@ class MergeAutomationResolverModel(BaseModel):
 
     skill: str = Field("pr-resolver", alias="skill")
     merge_method: MergeMethod = Field("squash", alias="mergeMethod")
+
+
+AutomatedReviewRequestMode = Literal["pr_comment"]
+
+
+class MergeAutomationReviewLoopModel(BaseModel):
+    """Request/remediate/request policy for one automated review provider.
+
+    The provider name is provider-neutral on purpose: the exact request command
+    and the reviewer identities that satisfy it come from the trusted
+    ``pr_resolver_core.review_providers`` registry, never from a child run.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    enabled: bool = Field(False, alias="enabled")
+    provider: str = Field(
+        DEFAULT_AUTOMATED_REVIEW_PROVIDER,
+        alias="provider",
+    )
+    request_mode: AutomatedReviewRequestMode = Field(
+        "pr_comment", alias="requestMode"
+    )
+    command: str | None = Field(None, alias="command")
+    require_fresh_review_for_every_head: bool = Field(
+        True, alias="requireFreshReviewForEveryHead"
+    )
+    request_after_remediation: bool = Field(True, alias="requestAfterRemediation")
+    max_cycles: int = Field(5, alias="maxCycles")
+    max_consecutive_no_progress_cycles: int = Field(
+        2, alias="maxConsecutiveNoProgressCycles"
+    )
+
+    @field_validator("provider", mode="before")
+    @classmethod
+    def _normalize_provider(cls, value: Any) -> str:
+        candidate = str(value or "").strip().lower()
+        return candidate or DEFAULT_AUTOMATED_REVIEW_PROVIDER
+
+    @field_validator("command", mode="before")
+    @classmethod
+    def _normalize_command(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        candidate = str(value).strip()
+        return candidate or None
+
+    @field_validator("max_cycles", mode="before")
+    @classmethod
+    def _normalize_max_cycles(cls, value: Any) -> int:
+        try:
+            candidate = int(value)
+        except (TypeError, ValueError):
+            return 5
+        if candidate <= 0:
+            return 5
+        return min(candidate, 50)
+
+    @field_validator("max_consecutive_no_progress_cycles", mode="before")
+    @classmethod
+    def _normalize_no_progress_cycles(cls, value: Any) -> int:
+        try:
+            candidate = int(value)
+        except (TypeError, ValueError):
+            return 2
+        if candidate <= 0:
+            return 2
+        return min(candidate, 10)
+
+    @model_validator(mode="after")
+    def _validate_provider_contract(self) -> "MergeAutomationReviewLoopModel":
+        if not self.enabled:
+            return self
+        record = resolve_automated_review_provider(self.provider)
+        if record is None:
+            raise ValueError(
+                "Enabled reviewLoop requires a supported provider; "
+                f"got '{self.provider}'."
+            )
+        if self.command is not None and self.command != record.command:
+            # A child run must never widen the request text. An explicit command
+            # is allowed only as an exact, operator-visible restatement of the
+            # trusted provider command.
+            raise ValueError(
+                "reviewLoop.command must match the configured provider command "
+                f"'{record.command}'."
+            )
+        return self
+
+    def resolved_command(self) -> str:
+        return automated_review_provider_or_raise(self.provider).command
 
 class MergeAutomationTimeoutsModel(BaseModel):
     """Bounded wait settings for merge automation."""
@@ -1634,6 +1993,45 @@ class MergeAutomationPostMergeJiraModel(BaseModel):
     def _validate_fields(cls, value: Any) -> dict[str, Any]:
         return validate_compact_temporal_mapping(value, field_name="postMergeJira.fields")
 
+
+class MergeAutomationPostMergeGithubModel(BaseModel):
+    """Runtime policy for GitHub issue completion after verified merge success."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    enabled: bool = Field(False, alias="enabled")
+    repository: str | None = Field(None, alias="repository")
+    issue_number: int | None = Field(None, alias="issueNumber")
+    required: bool = Field(True, alias="required")
+
+    @field_validator("repository", mode="before")
+    @classmethod
+    def _normalize_repository(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        candidate = str(value).strip()
+        return candidate or None
+
+    @field_validator("issue_number", mode="before")
+    @classmethod
+    def _normalize_issue_number(cls, value: Any) -> int | None:
+        if value is None or value == "":
+            return None
+        try:
+            candidate = int(value)
+        except (TypeError, ValueError):
+            return None
+        return candidate if candidate > 0 else None
+
+    @model_validator(mode="after")
+    def _require_identity_when_enabled(self) -> "MergeAutomationPostMergeGithubModel":
+        if self.enabled and (not self.repository or self.issue_number is None):
+            raise ValueError(
+                "Enabled postMergeGithub requires repository and issueNumber."
+            )
+        return self
+
+
 class MergeAutomationConfigModel(BaseModel):
     """Full merge automation configuration carried by workflow input."""
 
@@ -1655,6 +2053,17 @@ class MergeAutomationConfigModel(BaseModel):
         default_factory=MergeAutomationPostMergeJiraModel,
         alias="postMergeJira",
     )
+    post_merge_github: MergeAutomationPostMergeGithubModel = Field(
+        default_factory=MergeAutomationPostMergeGithubModel,
+        alias="postMergeGithub",
+    )
+    review_loop: MergeAutomationReviewLoopModel = Field(
+        default_factory=MergeAutomationReviewLoopModel,
+        alias="reviewLoop",
+    )
+    # One canonical finish mode for the whole gate. The resolver child request
+    # derives its merge authority from this value; it is never configured twice.
+    finish_mode: MergeAutomationFinishMode = Field("merge", alias="finishMode")
 
 ReadinessBlockerKind = Literal[
     "checks_running",
@@ -1669,6 +2078,10 @@ ReadinessBlockerKind = Literal[
     "manual_review",
     "failed",
     "resolver_disposition_invalid",
+    "resolver_continuation_invalid",
+    "automated_review_request_failed",
+    "review_cycle_budget_exhausted",
+    "review_loop_no_progress",
 ]
 
 class ReadinessBlockerModel(BaseModel):
@@ -1703,6 +2116,18 @@ class ReadinessEvidenceModel(BaseModel):
     automated_review_complete: bool | None = Field(
         None, alias="automatedReviewComplete"
     )
+    automated_review_completion_kind: str | None = Field(
+        None, alias="automatedReviewCompletionKind"
+    )
+    automated_review_completion_id: int | None = Field(
+        None, alias="automatedReviewCompletionId"
+    )
+    automated_review_completed_at: str | None = Field(
+        None, alias="automatedReviewCompletedAt"
+    )
+    automated_review_request_stale: bool | None = Field(
+        None, alias="automatedReviewRequestStale"
+    )
     jira_status_allowed: bool | None = Field(None, alias="jiraStatusAllowed")
     policy_allowed: bool | None = Field(None, alias="policyAllowed")
     blockers: list[ReadinessBlockerModel] = Field(default_factory=list, alias="blockers")
@@ -1720,6 +2145,47 @@ class ReadinessEvidenceModel(BaseModel):
         if self.ready and self.blockers:
             raise ValueError("ready evidence cannot include blockers")
         return self
+
+class AutomatedReviewRequestModel(BaseModel):
+    """One durable automated-review request bound to one exact head SHA."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    provider: str = Field(..., alias="provider")
+    head_sha: str = Field(..., alias="headSha")
+    request_key: str = Field(..., alias="requestKey")
+    request_comment_id: int | None = Field(None, alias="requestCommentId")
+    request_comment_url: str | None = Field(None, alias="requestCommentUrl")
+    requested_at: str | None = Field(None, alias="requestedAt")
+    actor: str | None = Field(None, alias="actor")
+    reconciled: bool = Field(False, alias="reconciled")
+
+    @field_validator("provider", "head_sha", "request_key")
+    @classmethod
+    def _required_text(cls, value: str) -> str:
+        candidate = str(value or "").strip()
+        if not candidate:
+            raise ValueError("field must be a non-empty string")
+        return candidate
+
+
+class AutomatedReviewCycleModel(BaseModel):
+    """Compact per-head record of one request/remediate/request cycle."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    cycle: int = Field(..., alias="cycle")
+    provider: str = Field(..., alias="provider")
+    head_sha: str = Field(..., alias="headSha")
+    request_key: str = Field(..., alias="requestKey")
+    request_comment_id: int | None = Field(None, alias="requestCommentId")
+    requested_at: str | None = Field(None, alias="requestedAt")
+    completion_kind: str | None = Field(None, alias="completionKind")
+    completion_id: int | None = Field(None, alias="completionId")
+    completed_at: str | None = Field(None, alias="completedAt")
+    status: str = Field("requested", alias="status")
+    progress_signature: str | None = Field(None, alias="progressSignature")
+
 
 class ResolverRunRefModel(BaseModel):
     """Reference to the resolver follow-up run launched by merge automation."""
@@ -1756,6 +2222,14 @@ class MergeAutomationStartInput(BaseModel):
         default_factory=list,
         alias="resolverHistory",
     )
+    review_cycles: list[AutomatedReviewCycleModel] = Field(
+        default_factory=list,
+        alias="reviewCycles",
+    )
+    active_review_request: AutomatedReviewRequestModel | None = Field(
+        None,
+        alias="activeReviewRequest",
+    )
     expire_at: str | None = Field(None, alias="expireAt")
     idempotency_key: str | None = Field(None, alias="idempotencyKey")
 
@@ -1773,6 +2247,138 @@ class MergeAutomationStartInput(BaseModel):
         if value < 0:
             raise ValueError("cycleCount must be non-negative")
         return value
+
+
+class PRResolverPolicyModel(BaseModel):
+    """Bounded retry and no-progress policy for ``MoonMind.PRResolver``."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    poll_interval_seconds: int = Field(60, alias="pollIntervalSeconds", ge=1, le=3600)
+    max_elapsed_seconds: int = Field(7200, alias="maxElapsedSeconds", ge=1, le=86400)
+    max_finalize_attempts: int = Field(60, alias="maxFinalizeAttempts", ge=1, le=500)
+    max_remediations_per_type: int = Field(
+        2, alias="maxRemediationsPerType", ge=1, le=20
+    )
+    max_identical_blockers_without_progress: int = Field(
+        2, alias="maxIdenticalBlockersWithoutProgress", ge=1, le=20
+    )
+    checks: Literal["required", "optional", "disabled"] = "required"
+    automated_review: Literal["required", "optional", "disabled"] = Field(
+        "required", alias="automatedReview"
+    )
+
+
+class PRResolverStartInput(BaseModel):
+    """Compact durable input for ``MoonMind.PRResolver``."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    workflow_type: Literal["MoonMind.PRResolver"] = Field(..., alias="workflowType")
+    parent_workflow_id: str = Field(..., alias="parentWorkflowId")
+    parent_run_id: str | None = Field(None, alias="parentRunId")
+    principal: str = Field(..., alias="principal")
+    repository: str = Field(..., alias="repository")
+    pr_number: int = Field(..., alias="prNumber", gt=0)
+    pr_url: str = Field(..., alias="prUrl")
+    merge_method: MergeMethod = Field("squash", alias="mergeMethod")
+    head_sha: str | None = Field(None, alias="headSha")
+    base_sha: str | None = Field(None, alias="baseSha")
+    step_id: str = Field(..., alias="stepId")
+    correlation_id: str = Field(..., alias="correlationId")
+    base_agent_request: dict[str, Any] = Field(..., alias="baseAgentRequest")
+    blocker_snapshot_refs: list[str] = Field(
+        default_factory=list, alias="blockerSnapshotRefs"
+    )
+    policy: PRResolverPolicyModel = Field(
+        default_factory=PRResolverPolicyModel, alias="policy"
+    )
+    shadow_mode: bool = Field(False, alias="shadowMode")
+    owned_by_merge_automation_gate: bool = Field(
+        False, alias="ownedByMergeAutomationGate"
+    )
+    implementation_identity: dict[str, Any] = Field(
+        default_factory=dict, alias="implementationIdentity"
+    )
+    worker_capability: dict[str, Any] = Field(
+        default_factory=dict, alias="workerCapability"
+    )
+    canary_mode: bool = Field(False, alias="canaryMode")
+
+    @field_validator(
+        "parent_workflow_id",
+        "principal",
+        "repository",
+        "pr_url",
+        "step_id",
+        "correlation_id",
+    )
+    @classmethod
+    def _required_pr_resolver_text(cls, value: str) -> str:
+        candidate = str(value or "").strip()
+        if not candidate:
+            raise ValueError("field must be a non-empty string")
+        return candidate
+
+    @field_validator("base_agent_request", mode="after")
+    @classmethod
+    def _compact_base_agent_request(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(
+            value, field_name="baseAgentRequest"
+        )
+
+
+class PRResolverTerminalResultModel(BaseModel):
+    """Canonical terminal resolver evidence returned to existing consumers."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    schema_version: Literal[3] = Field(3, alias="schemaVersion")
+    status: Literal["merged", "already_merged", "manual_review", "failed", "canceled"]
+    merge_outcome: Literal[
+        "merged", "already_merged", "manual_review", "failed", "canceled"
+    ] = Field(..., alias="mergeOutcome")
+    merge_automation_disposition: Literal[
+        "merged", "already_merged", "manual_review", "failed"
+    ] = Field(..., alias="mergeAutomationDisposition")
+    reason: str = Field(..., alias="reason")
+    reason_code: str = Field(..., alias="reasonCode")
+    next_step: str = Field(..., alias="nextStep")
+    repository: str
+    pr_number: int = Field(..., alias="prNumber")
+    pr_url: str = Field(..., alias="prUrl")
+    verified_head_sha: str | None = Field(None, alias="verifiedHeadSha")
+    verified_merge_sha: str | None = Field(None, alias="verifiedMergeSha")
+    finalize_attempt_count: int = Field(..., alias="finalizeAttemptCount")
+    remediation_counts: dict[str, int] = Field(
+        default_factory=dict, alias="remediationCounts"
+    )
+    attempt_summary_refs: list[str] = Field(
+        default_factory=list, alias="attemptSummaryRefs"
+    )
+    publish_evidence_ref: str | None = Field(None, alias="publishEvidenceRef")
+    latest_snapshot: dict[str, Any] = Field(default_factory=dict, alias="latestSnapshot")
+    timeline: list[dict[str, Any]] = Field(default_factory=list, alias="timeline")
+    workflow_id: str = Field(..., alias="workflowId")
+    step_id: str = Field(..., alias="stepId")
+    correlation_id: str = Field(..., alias="correlationId")
+    implementation_contract: str | None = Field(
+        None, alias="implementationContract"
+    )
+    resolver_core_version: str | None = Field(None, alias="resolverCoreVersion")
+    resolver_core_digest: str | None = Field(None, alias="resolverCoreDigest")
+    resolved_skill_content_digest: str | None = Field(
+        None, alias="resolvedSkillContentDigest"
+    )
+    resolved_skill_source: str | None = Field(None, alias="resolvedSkillSource")
+    worker_build_sha: str | None = Field(None, alias="workerBuildSha")
+    worker_image_digest: str | None = Field(None, alias="workerImageDigest")
+    worker_deployment_id: str | None = Field(None, alias="workerDeploymentId")
+    workflow_registry_fingerprint: str | None = Field(
+        None, alias="workflowRegistryFingerprint"
+    )
+    task_queue: str | None = Field(None, alias="taskQueue")
+    workflow_type: str | None = Field(None, alias="workflowType")
 
 class DependencyResolvedSignalPayload(BaseModel):
     """Signal payload emitted when a prerequisite execution reaches a terminal state."""
@@ -2272,6 +2878,26 @@ class RecoverySourceModel(BaseModel):
     kind: Literal["recover_from_failed_step"] = Field(
         "recover_from_failed_step", alias="kind"
     )
+    recovery_action: Literal["resume_from_workspace_checkpoint"] = Field(
+        "resume_from_workspace_checkpoint", alias="recoveryAction"
+    )
+    resume_phase: RecoveryResumePhase = Field(..., alias="resumePhase")
+    target_runtime_id: str = Field(..., alias="targetRuntimeId", min_length=1)
+    capability_set_version: str = Field(..., alias="capabilitySetVersion", min_length=1)
+    capability_digest: str = Field(..., alias="capabilityDigest", min_length=1)
+    checkpoint_kind: str = Field(..., alias="checkpointKind", min_length=1)
+    checkpoint_restore_kinds: tuple[str, ...] = Field(..., alias="checkpointRestoreKinds")
+    checkpoint_restore_activity: str = Field(..., alias="checkpointRestoreActivity", min_length=1)
+    workspace_authority: str = Field(..., alias="workspaceAuthority", min_length=1)
+    # Optional only while decoding pre-patch histories. New recovery creation
+    # supplies the complete proof set and patch-gated workflow preflight rejects
+    # absent or contradictory values before restoration.
+    selected_target_runtime_id: str | None = Field(None, alias="selectedTargetRuntimeId")
+    selected_capability_digest: str | None = Field(None, alias="selectedCapabilityDigest")
+    registered_restore_activity: str | None = Field(None, alias="registeredRestoreActivity")
+    checkpoint_source_workflow_id: str | None = Field(None, alias="checkpointSourceWorkflowId")
+    checkpoint_source_run_id: str | None = Field(None, alias="checkpointSourceRunId")
+    side_effect_safe: bool | None = Field(None, alias="sideEffectSafe")
     source_workflow_id: str = Field(..., alias="sourceWorkflowId", min_length=1)
     source_run_id: str = Field(..., alias="sourceRunId", min_length=1)
     source_task_input_snapshot_ref: str = Field(
@@ -2295,12 +2921,24 @@ class RecoverySourceModel(BaseModel):
     selected_checkpoint_boundary: str | None = Field(
         None, alias="selectedCheckpointBoundary"
     )
+    admitted_checkpoint_resume_decision: dict[str, Any] | None = Field(
+        None, alias="admittedCheckpointResumeDecision"
+    )
     recovery_workspace: dict[str, Any] = Field(
         default_factory=dict, alias="recoveryWorkspace"
     )
     preserved_steps: list[RecoveryCheckpointPreservedStepModel] = Field(
         default_factory=list, alias="preservedSteps"
     )
+    checkpoint_recovery: dict[str, Any] | None = Field(
+        None, alias="checkpointRecovery"
+    )
+
+    @model_validator(mode="after")
+    def _validate_restore_contract(self) -> "RecoverySourceModel":
+        if self.checkpoint_kind not in self.checkpoint_restore_kinds:
+            raise ValueError("checkpointKind must be present in checkpointRestoreKinds")
+        return self
 
 class ResumeExecutionRefModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
@@ -2324,6 +2962,33 @@ class RecoverFromFailedStepResponse(BaseModel):
         "Recovered from failed step", "Recovered from selected step"
     ] = Field("Recovered from failed step", alias="relationship")
     recovery_checkpoint_ref: str = Field(..., alias="recoveryCheckpointRef")
+
+
+class RecoverExecutionResponse(BaseModel):
+    """Response from the canonical typed recovery command."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    accepted: Literal[True] = Field(True, alias="accepted")
+    applied: Literal["created_recovery_execution"] = Field(
+        "created_recovery_execution", alias="applied"
+    )
+    target_kind: Literal[
+        "failed_step", "control_stop", "publication", "restoration_failure"
+    ] = Field(..., alias="targetKind")
+    continuation_phase: Literal[
+        "rerun_failed_step",
+        "continue_to_gate",
+        "continue_after_gate",
+        "continue_to_remediation",
+        "resume_publication",
+        "retry_restoration",
+    ] = Field(..., alias="continuationPhase")
+    source: ResumeExecutionRefModel
+    execution: ResumeExecutionRefModel
+    recovery_checkpoint_ref: str = Field(..., alias="recoveryCheckpointRef")
+    creation_key: str = Field(..., alias="creationKey")
+
 
 class SignalExecutionRequest(BaseModel):
     """Request payload for asynchronous workflow signals."""
@@ -2495,6 +3160,12 @@ class ExecutionActionCapabilityModel(BaseModel):
     can_resume: bool = Field(False, alias="canResume")
     can_failed_step_resume: bool = Field(
         False, alias="canResumeFromFailedStep"
+    )
+    can_continue_remediation: bool = Field(False, alias="canContinueRemediation")
+    can_retry_publication: bool = Field(False, alias="canRetryPublication")
+    can_full_retry: bool = Field(False, alias="canFullRetry")
+    action_evidence: dict[str, dict[str, Any]] = Field(
+        default_factory=dict, alias="actionEvidence"
     )
     can_cancel: bool = Field(False, alias="canCancel")
     can_reject: bool = Field(False, alias="canReject")
@@ -2691,6 +3362,38 @@ class ExecutionMergeAutomationResolverChildModel(BaseModel):
     status: str | None = Field(None, alias="status")
     detail_href: str | None = Field(None, alias="detailHref")
 
+class ExecutionMergeAutomationReviewCycleModel(BaseModel):
+    """One operator-visible automated review cycle."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    cycle: int | None = Field(None, alias="cycle")
+    provider: str | None = Field(None, alias="provider")
+    head_sha: str | None = Field(None, alias="headSha")
+    request_comment_id: int | None = Field(None, alias="requestCommentId")
+    requested_at: str | None = Field(None, alias="requestedAt")
+    completion_kind: str | None = Field(None, alias="completionKind")
+    completed_at: str | None = Field(None, alias="completedAt")
+    status: str | None = Field(None, alias="status")
+
+
+class ExecutionMergeAutomationReviewLoopModel(BaseModel):
+    """Automated review loop progress for an execution."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    enabled: bool = Field(False, alias="enabled")
+    provider: str | None = Field(None, alias="provider")
+    cycles: int | None = Field(None, alias="cycles")
+    max_cycles: int | None = Field(None, alias="maxCycles")
+    no_progress_cycles: int | None = Field(None, alias="noProgressCycles")
+    active_request: dict[str, Any] | None = Field(None, alias="activeRequest")
+    cycle_records: list[ExecutionMergeAutomationReviewCycleModel] = Field(
+        default_factory=list,
+        alias="cycleRecords",
+    )
+
+
 class ExecutionMergeAutomationModel(BaseModel):
     """Live or terminal merge automation visibility for an execution."""
 
@@ -2719,6 +3422,10 @@ class ExecutionMergeAutomationModel(BaseModel):
     resolver_children: list[ExecutionMergeAutomationResolverChildModel] = Field(
         default_factory=list,
         alias="resolverChildren",
+    )
+    review_loop: ExecutionMergeAutomationReviewLoopModel | None = Field(
+        None,
+        alias="reviewLoop",
     )
 
     @model_validator(mode="after")
@@ -2859,6 +3566,37 @@ class StepLedgerWorkloadModel(BaseModel):
     )
 
 
+class StepExecutionOutcomeModel(BaseModel):
+    """Authoritative primary execution outcome, independent of finalization."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    status: Literal["succeeded", "failed"]
+    result_ref: str | None = Field(None, alias="resultRef")
+    output_refs: list[str] = Field(default_factory=list, alias="outputRefs")
+    diagnostics_ref: str | None = Field(None, alias="diagnosticsRef")
+    workspace_locator: WorkspaceLocator | str | None = Field(None, alias="workspaceLocator")
+    recorded_at: datetime = Field(..., alias="recordedAt")
+
+
+class StepFinalizationOutcomeModel(BaseModel):
+    """Outcome of retryable work performed after primary execution."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    status: Literal[
+        "not_started", "succeeded", "retry_pending", "failed", "degraded", "unsupported"
+    ]
+    phase: str | None = None
+    criticality: Literal["required", "recoverability_only", "unsupported"]
+    failure_code: str | None = Field(None, alias="failureCode")
+    terminal_failure_code: str | None = Field(None, alias="terminalFailureCode")
+    retry_count: int = Field(0, alias="retryCount", ge=0)
+    checkpoint_ref: str | None = Field(None, alias="checkpointRef")
+    message: str | None = None
+    updated_at: datetime = Field(..., alias="updatedAt")
+
+
 StepTimingPrecision = Literal["exact", "live", "fallback", "unavailable"]
 
 
@@ -2985,6 +3723,12 @@ class StepLedgerRowModel(BaseModel):
         None, alias="recoveryPreservation"
     )
     workload: StepLedgerWorkloadModel | None = Field(None, alias="workload")
+    execution_outcome: StepExecutionOutcomeModel | None = Field(
+        None, alias="executionOutcome"
+    )
+    finalization_outcome: StepFinalizationOutcomeModel | None = Field(
+        None, alias="finalizationOutcome"
+    )
     timing: StepTimingModel | None = Field(None, alias="timing")
     last_error: str | None = Field(None, alias="lastError")
 
@@ -3279,6 +4023,20 @@ class ExecutionTargetDiagnosticsModel(BaseModel):
     )
     degraded_reason: str | None = Field(None, alias="degradedReason")
 
+class ExecutionOutputBranchModel(BaseModel):
+    """Verified repository output evidence, distinct from authored inputs."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    name: str
+    url: str | None = None
+    head_sha: str | None = Field(None, alias="headSha")
+    base_branch: str | None = Field(None, alias="baseBranch")
+    intent: Literal["normal", "terminal_checkpoint"] = "normal"
+    status: str
+    evidence_ref: str | None = Field(None, alias="evidenceRef")
+
+
 class ExecutionModel(BaseModel):
     """Materialized execution view returned by lifecycle APIs."""
 
@@ -3341,6 +4099,12 @@ class ExecutionModel(BaseModel):
         default_factory=WorkflowInputSnapshotDescriptorModel,
         alias="taskInputSnapshot",
     )
+    omnigent_execution_plan: dict[str, Any] | None = Field(
+        None, alias="omnigentExecutionPlan"
+    )
+    omnigent_runtime_binding: dict[str, Any] | None = Field(
+        None, alias="omnigentRuntimeBinding"
+    )
     target_runtime: Optional[str] = Field(None, alias="targetRuntime")
     target_skill: Optional[str] = Field(None, alias="targetSkill")
     model: Optional[str] = Field(None, alias="model")
@@ -3354,6 +4118,11 @@ class ExecutionModel(BaseModel):
     priority: Optional[int] = Field(None, alias="priority")
     starting_branch: Optional[str] = Field(None, alias="startingBranch")
     target_branch: Optional[str] = Field(None, alias="targetBranch")
+    output_branch: Optional["ExecutionOutputBranchModel"] = Field(
+        None,
+        alias="outputBranch",
+        description="Remotely verified branch produced by publication.",
+    )
     repository: Optional[str] = Field(None, alias="repository")
     pr_url: Optional[str] = Field(
         None,
@@ -3378,6 +4147,9 @@ class ExecutionModel(BaseModel):
         default_factory=ExecutionActionCapabilityModel, alias="actions"
     )
     resume: ExecutionResumeSummaryModel | None = Field(None, alias="resume")
+    recovery_eligibility: RecoveryEligibilityDiagnosticModel | None = Field(
+        None, alias="recoveryEligibility"
+    )
     related_runs: list[ExecutionRelatedRunModel] = Field(
         default_factory=list, alias="relatedRuns"
     )

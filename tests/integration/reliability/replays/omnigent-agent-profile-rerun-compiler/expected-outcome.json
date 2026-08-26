@@ -1,0 +1,18 @@
+{
+  "invariant": "trusted agent-profile authority is validated against the immutable snapshot and merged only after authored Omnigent intent passes validation",
+  "executionProfileRef": "codex_openai_oauth",
+  "omnigent": {
+    "endpointRef": "default",
+    "executionTargetRef": "omnigent-codex@1",
+    "launchPolicyRef": "codex-on-demand@1",
+    "agentProfileRef": {
+      "profileId": "omnigent-bootstrap-default",
+      "version": 1,
+      "digest": "sha256:2f95702919229bde2540932f94d2389f464d2555b212cee860692a2e22ea16c1"
+    },
+    "agent": {
+      "harnessOverride": "codex-native",
+      "agentId": "16a06503889b0c3034496821afd41b9e"
+    }
+  }
+}

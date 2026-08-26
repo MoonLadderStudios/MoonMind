@@ -24,6 +24,7 @@ export default defineConfig(({ command, mode }) => ({
     environment: 'jsdom',
     globals: true,
     include: ['frontend/src/**/*.test.{ts,tsx}'],
+    exclude: ['frontend/src/browser/**'],
     css: {
       include: /dashboard\.css$/,
     },

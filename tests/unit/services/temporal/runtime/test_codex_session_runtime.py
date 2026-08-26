@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import shutil
@@ -7,6 +8,7 @@ import sqlite3
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -20,7 +22,7 @@ from moonmind.schemas.managed_session_models import (
 from moonmind.workflows.automation import models as automation_models
 from moonmind.workflows.automation.preflight import CodexPreflightResult
 from moonmind.workflows.temporal.runtime.codex_session_runtime import (
-    _CODEX_PROVIDER_CREDITS_EXHAUSTED_REASON,
+    _CODEX_PROVIDER_USAGE_LIMIT_REACHED_REASON,
     CodexAppServerRpcClient,
     CodexManagedSessionRuntime,
     CodexSessionRuntimeState,
@@ -230,6 +232,257 @@ def test_runtime_launch_session_persists_logical_thread_mapping(tmp_path: Path) 
     assert state_payload["logicalThreadId"] == "logical-thread-1"
     assert state_payload["vendorThreadId"] == "vendor-thread-1"
     assert state_payload["vendorThreadPath"] == "/tmp/vendor-thread-1.jsonl"
+
+
+def test_runtime_launch_session_allows_controller_authorized_container_replacement(
+    tmp_path: Path,
+) -> None:
+    script = write_fake_app_server(tmp_path)
+    request = launch_request(tmp_path)
+    original_runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-old",
+        app_server_command=("python3", str(script)),
+    )
+    original_runtime.launch_session(request)
+    original_revision = original_runtime._load_state().state_revision
+    original_runtime.close()
+
+    unauthorized_runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-new",
+        app_server_command=("python3", str(script)),
+    )
+    with pytest.raises(
+        RuntimeError,
+        match="containerId does not match the active managed session",
+    ):
+        unauthorized_runtime.launch_session(request)
+
+    replacement = request.model_copy(update={"replace_existing": True})
+    handle = unauthorized_runtime.launch_session(replacement)
+
+    assert handle.status == "ready"
+    assert handle.session_state.container_id == "ctr-new"
+    state = unauthorized_runtime._load_state()
+    assert state.container_id == "ctr-new"
+    assert state.session_epoch == request.session_epoch
+    assert state.logical_thread_id == request.thread_id
+    assert state.state_revision == original_revision + 1
+    unauthorized_runtime.close()
+
+
+def test_runtime_state_save_failure_preserves_last_valid_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    script = write_fake_app_server(tmp_path)
+    request = launch_request(tmp_path)
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+    state_path = (
+        Path(request.session_workspace_path) / ".moonmind-codex-session-state.json"
+    )
+    previous_payload = state_path.read_text(encoding="utf-8")
+    state = runtime._load_state()
+    state.last_control_action = "send_turn"
+
+    def _fail_replace(_source: str | Path, _target: str | Path) -> None:
+        raise OSError("simulated atomic replace failure")
+
+    with monkeypatch.context() as replace_failure:
+        replace_failure.setattr(os, "replace", _fail_replace)
+
+        with pytest.raises(OSError, match="simulated atomic replace failure"):
+            runtime._save_state(state)
+
+    assert state_path.read_text(encoding="utf-8") == previous_payload
+    assert (
+        CodexSessionRuntimeState.model_validate_json(previous_payload).session_epoch
+        == 1
+    )
+    assert not list(state_path.parent.glob(f"{state_path.name}.*.tmp"))
+
+    handle = runtime.clear_session(
+        CodexManagedSessionClearRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            newThreadId="logical-thread-2",
+        )
+    )
+
+    assert handle.status == "ready"
+    assert handle.session_state.session_epoch == 2
+
+
+def test_runtime_stale_state_write_cannot_rollback_cleared_session(
+    tmp_path: Path,
+) -> None:
+    """Regression for mm:1b5eacdb: an observer must not restore an old epoch."""
+
+    script = write_fake_app_server(tmp_path)
+    request = launch_request(tmp_path)
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+    stale_observer_state = runtime._load_state()
+
+    runtime.clear_session(
+        CodexManagedSessionClearRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            newThreadId="logical-thread-2",
+        )
+    )
+    stale_observer_state.last_control_action = "session_status"
+
+    with pytest.raises(
+        RuntimeError,
+        match="managed session state advanced while the action was running",
+    ):
+        runtime._save_state(stale_observer_state)
+
+    authoritative_state = runtime._load_state()
+    assert authoritative_state.session_epoch == 2
+    assert authoritative_state.logical_thread_id == "logical-thread-2"
+    assert authoritative_state.state_revision > stale_observer_state.state_revision
+
+
+def test_runtime_send_turn_rechecks_revision_before_provider_admission(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    script = write_fake_app_server(tmp_path)
+    request = launch_request(tmp_path)
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+    client = runtime._initialized_app_server_client()
+    original_request = client.request
+    turn_start_calls: list[dict[str, object]] = []
+
+    def _record_provider_request(
+        method: str,
+        params: dict[str, object],
+    ) -> dict[str, object]:
+        if method == "turn/start":
+            turn_start_calls.append(dict(params))
+        return original_request(method, params)
+
+    monkeypatch.setattr(client, "request", _record_provider_request)
+
+    def _advance_state_during_recovery(
+        *,
+        client: object,
+        state: CodexSessionRuntimeState,
+    ) -> SimpleNamespace:
+        del client
+        concurrent = runtime._load_state()
+        concurrent.last_control_action = "terminate_session"
+        concurrent.last_control_at = time.time()
+        runtime._save_state(concurrent)
+        return SimpleNamespace(
+            vendor_thread_id=state.vendor_thread_id,
+            fallback_started=False,
+        )
+
+    monkeypatch.setattr(runtime, "_recovery_thread_result", _advance_state_during_recovery)
+
+    with pytest.raises(
+        RuntimeError,
+        match="managed session state advanced before provider turn admission",
+    ):
+        runtime.send_turn(
+            SendCodexManagedSessionTurnRequest(
+                sessionId=request.session_id,
+                sessionEpoch=request.session_epoch,
+                containerId="ctr-1",
+                threadId=request.thread_id,
+                instructions="Do not start this stale turn",
+            )
+        )
+
+    assert turn_start_calls == []
+    authoritative = runtime._load_state()
+    assert authoritative.last_control_action == "terminate_session"
+    assert authoritative.active_turn_id is None
+    runtime.close()
+
+
+def test_runtime_clear_session_advances_legacy_unrevisioned_state(
+    tmp_path: Path,
+) -> None:
+    script = write_fake_app_server(tmp_path)
+    request = launch_request(tmp_path)
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+    state_path = (
+        Path(request.session_workspace_path) / ".moonmind-codex-session-state.json"
+    )
+    legacy_payload = json.loads(state_path.read_text(encoding="utf-8"))
+    legacy_payload.pop("stateRevision")
+    state_path.write_text(json.dumps(legacy_payload) + "\n", encoding="utf-8")
+
+    handle = runtime.clear_session(
+        CodexManagedSessionClearRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            newThreadId="logical-thread-2",
+        )
+    )
+
+    assert handle.session_state.session_epoch == 2
+    assert runtime._load_state().state_revision == 1
 
 
 def test_runtime_clear_session_recovers_sqlite_state_runtime_init_failure(
@@ -1201,7 +1454,104 @@ def test_runtime_send_turn_preserves_live_assistant_output_outside_scan_tail(
     assert "failureCause" not in response.metadata
 
 
-def test_runtime_send_turn_classifies_no_credits_token_count_as_provider_failure(
+def test_runtime_send_turn_allows_zero_add_on_credits_with_included_usage_remaining(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    transcript_path = (
+        Path(request.codex_home_path)
+        / "sessions"
+        / "2026"
+        / "04"
+        / "10"
+        / "rollout-2026-04-10T17-55-14-vendor-thread-1.jsonl"
+    )
+    transcript_path.parent.mkdir(parents=True, exist_ok=True)
+    script = write_fake_app_server(
+        tmp_path,
+        assistant_text="Completed with included plan usage.",
+        start_thread_path=str(transcript_path),
+        rollout_entries_on_read=[
+            {
+                "timestamp": "2026-04-10T17:57:54.661Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "task_started",
+                    "turn_id": "vendor-turn-1",
+                },
+            },
+            {
+                "timestamp": "2026-04-10T17:57:55.100Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "rate_limits": {
+                        "limit_id": "codex",
+                        "primary": {
+                            "used_percent": 0.0,
+                            "window_minutes": 10080,
+                        },
+                        "credits": {
+                            "has_credits": False,
+                            "unlimited": False,
+                            "balance": "0",
+                        },
+                        "plan_type": "pro",
+                        "rate_limit_reached_type": None,
+                    },
+                },
+            },
+            {
+                "timestamp": "2026-04-10T17:57:55.661Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "task_complete",
+                    "turn_id": "vendor-turn-1",
+                    "last_agent_message": None,
+                },
+            },
+        ],
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "completed"
+    assert response.turn_id == "vendor-turn-1"
+    assert response.metadata["assistantText"] == "Completed with included plan usage."
+    assert "failureClass" not in response.metadata
+    handle = runtime.session_status(
+        CodexManagedSessionLocator(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+        )
+    )
+    assert handle.status == "ready"
+    assert "failureClass" not in handle.metadata
+    assert "lastTurnError" not in handle.metadata
+
+
+def test_runtime_send_turn_classifies_exhausted_included_usage_window(
     tmp_path: Path,
 ) -> None:
     request = launch_request(tmp_path)
@@ -1233,12 +1583,15 @@ def test_runtime_send_turn_classifies_no_credits_token_count_as_provider_failure
                 "payload": {
                     "type": "token_count",
                     "rate_limits": {
-                        "limit_id": "premium",
+                        "limit_id": "codex",
+                        "primary": {"used_percent": 100.0},
                         "credits": {
                             "has_credits": False,
                             "unlimited": False,
-                            "balance": None,
+                            "balance": "0",
                         },
+                        "plan_type": "pro",
+                        "rate_limit_reached_type": None,
                     },
                 },
             },
@@ -1278,7 +1631,7 @@ def test_runtime_send_turn_classifies_no_credits_token_count_as_provider_failure
     assert response.status == "failed"
     assert response.turn_id == "vendor-turn-1"
     assert response.metadata == {
-        "reason": _CODEX_PROVIDER_CREDITS_EXHAUSTED_REASON,
+        "reason": _CODEX_PROVIDER_USAGE_LIMIT_REACHED_REASON,
         "failureClass": "integration_error",
     }
     handle = runtime.session_status(
@@ -1291,8 +1644,28 @@ def test_runtime_send_turn_classifies_no_credits_token_count_as_provider_failure
     )
     assert handle.status == "failed"
     assert handle.metadata["failureClass"] == "integration_error"
-    assert handle.metadata["lastTurnError"] == _CODEX_PROVIDER_CREDITS_EXHAUSTED_REASON
+    assert (
+        handle.metadata["lastTurnError"]
+        == _CODEX_PROVIDER_USAGE_LIMIT_REACHED_REASON
+    )
     assert "retryRecommendedAction" not in response.metadata
+
+
+def test_runtime_provider_failure_reason_honors_explicit_reached_type() -> None:
+    reason = CodexManagedSessionRuntime._provider_failure_reason_from_rollout_event(
+        {
+            "type": "token_count",
+            "rate_limits": {
+                "limit_id": "codex",
+                "primary": {"used_percent": 99.0},
+                "credits": None,
+                "rate_limit_reached_type": "primary",
+            },
+        }
+    )
+
+    assert reason == _CODEX_PROVIDER_USAGE_LIMIT_REACHED_REASON
+
 
 def test_runtime_send_turn_recovers_usage_limit_from_recent_log_for_empty_task_complete(
     tmp_path: Path,
@@ -1364,6 +1737,285 @@ def test_runtime_send_turn_recovers_usage_limit_from_recent_log_for_empty_task_c
         "failureClass": "permanent",
         "reason": quota_summary,
     }
+
+
+def test_runtime_send_turn_recovers_auth_failure_from_recent_log_for_empty_task_complete(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    transcript_path = (
+        Path(request.codex_home_path)
+        / "sessions"
+        / "2026"
+        / "07"
+        / "13"
+        / "rollout-2026-07-13T17-55-14-vendor-thread-1.jsonl"
+    )
+    transcript_path.parent.mkdir(parents=True, exist_ok=True)
+    script = write_fake_app_server(
+        tmp_path,
+        assistant_text="",
+        start_thread_path=str(transcript_path),
+        rollout_entries_on_read=[
+            {
+                "timestamp": "2026-07-13T17:57:55.661Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "task_complete",
+                    "turn_id": "vendor-turn-1",
+                    "last_agent_message": None,
+                },
+            }
+        ],
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+    auth_summary = (
+        "Your access token could not be refreshed because your refresh token "
+        "was already used. Please log out and sign in again."
+    )
+    _write_fake_codex_logs_with_timestamps(
+        request.codex_home_path,
+        entries=[
+            (
+                int(time.time()) + 1,
+                "model_client:auth: Failed to refresh token: " + auth_summary,
+            )
+        ],
+    )
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "failed"
+    assert response.metadata == {
+        "failureClass": "permanent",
+        "reason": auth_summary,
+    }
+
+
+def test_runtime_send_turn_waits_for_auth_log_after_system_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    transcript_path = (
+        Path(request.codex_home_path)
+        / "sessions"
+        / "2026"
+        / "07"
+        / "13"
+        / "rollout-2026-07-13T16-58-45-vendor-thread-1.jsonl"
+    )
+    transcript_path.parent.mkdir(parents=True, exist_ok=True)
+    script = write_fake_app_server(
+        tmp_path,
+        assistant_text="",
+        omit_turns_on_read=True,
+        thread_status_type="systemError",
+        start_thread_path=str(transcript_path),
+        rollout_entries_on_read=[
+            {
+                "timestamp": "2026-07-13T16:58:47.056Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "task_complete",
+                    "turn_id": "vendor-turn-1",
+                    "last_agent_message": None,
+                },
+            }
+        ],
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+    auth_summary = (
+        "Your access token could not be refreshed because your refresh token "
+        "was already used. Please log out and sign in again."
+    )
+    recovery_attempts = iter((None, auth_summary))
+    monkeypatch.setattr(
+        runtime,
+        "_extract_turn_error_from_logs",
+        lambda *_args, **_kwargs: next(recovery_attempts),
+    )
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "failed"
+    assert response.metadata == {
+        "failureClass": "permanent",
+        "reason": auth_summary,
+    }
+    assert "retryRecommendedAction" not in response.metadata
+
+
+def test_runtime_send_turn_recovers_provider_capacity_from_system_error_http_status_log(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    transcript_path = (
+        Path(request.codex_home_path)
+        / "sessions"
+        / "2026"
+        / "07"
+        / "25"
+        / "rollout-2026-07-25T09-14-10-vendor-thread-1.jsonl"
+    )
+    transcript_path.parent.mkdir(parents=True, exist_ok=True)
+    script = write_fake_app_server(
+        tmp_path,
+        assistant_text="",
+        omit_turns_on_read=True,
+        thread_status_type="systemError",
+        start_thread_path=str(transcript_path),
+        rollout_entries_on_read=[
+            {
+                "timestamp": "2026-07-25T09:14:10.501Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "task_complete",
+                    "turn_id": "vendor-turn-1",
+                    "last_agent_message": None,
+                },
+            }
+        ],
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+    _write_fake_codex_logs_with_timestamps(
+        request.codex_home_path,
+        entries=[
+            (
+                int(time.time()) + 1,
+                "responses.stream_request: Request completed method=POST "
+                "url=https://chatgpt.com/backend-api/codex/responses "
+                "status=503 Service Unavailable headers={}",
+            )
+        ],
+    )
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "failed"
+    assert response.metadata == {
+        "failureClass": "permanent",
+        "reason": "HTTP 503 Service Unavailable",
+    }
+
+
+def test_runtime_send_turn_honors_system_error_with_visible_in_progress_turn(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    script = write_fake_app_server(
+        tmp_path,
+        assistant_text="",
+        completion_notification_method=None,
+        complete_turn_on_read=False,
+        thread_status_type="systemError",
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+    auth_summary = (
+        "Your access token could not be refreshed because your refresh token "
+        "was already used. Please log out and sign in again."
+    )
+    _write_fake_codex_logs_with_timestamps(
+        request.codex_home_path,
+        entries=[
+            (
+                int(time.time()) + 1,
+                "model_client:auth: Failed to refresh token: " + auth_summary,
+            )
+        ],
+    )
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "failed"
+    assert response.metadata == {
+        "failureClass": "permanent",
+        "reason": auth_summary,
+    }
+
+
+def test_system_error_thread_status_is_terminal_failure() -> None:
+    outcome = CodexManagedSessionRuntime._terminal_thread_outcome(
+        {"thread": {"status": {"type": "systemError"}}}
+    )
+
+    assert outcome is not None
+    assert outcome.status == "failed"
+    assert outcome.error_text == "systemerror"
+    assert outcome.failure_class == "permanent"
+
 
 def _spool_skill_outcome_path(request: LaunchCodexManagedSessionRequest) -> Path:
     return Path(request.artifact_spool_path) / "skill_outcome.json"
@@ -1788,6 +2440,7 @@ def test_runtime_send_turn_stays_running_when_rollout_turn_has_not_completed(
     )
     script = write_fake_app_server(
         tmp_path,
+        completion_notification_method=None,
         omit_turns_on_read=True,
         start_thread_path=str(transcript_path),
     )
@@ -1829,6 +2482,444 @@ def test_runtime_send_turn_stays_running_when_rollout_turn_has_not_completed(
     assert handle.status == "busy"
     assert handle.metadata["lastTurnStatus"] == "running"
 
+
+def test_runtime_send_turn_completes_from_final_answer_when_turn_status_is_stale(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    transcript_path = (
+        Path(request.codex_home_path)
+        / "sessions"
+        / "2026"
+        / "08"
+        / "10"
+        / "rollout-2026-08-10T15-09-29-vendor-thread-1.jsonl"
+    )
+    transcript_path.parent.mkdir(parents=True, exist_ok=True)
+    transcript_path.write_text("", encoding="utf-8")
+    script = write_fake_app_server(
+        tmp_path,
+        completion_notification_method=None,
+        complete_turn_on_read=False,
+        incomplete_assistant_text="Stale thread commentary",
+        start_thread_path=str(transcript_path),
+        thread_status_type="active",
+        rollout_entries_on_read=[
+            {
+                "timestamp": _iso_timestamp(minutes_offset=0),
+                "type": "event_msg",
+                "payload": {
+                    "type": "task_started",
+                    "turn_id": "vendor-turn-1",
+                },
+            },
+            {
+                "timestamp": _iso_timestamp(minutes_offset=0),
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": "Still working"}
+                    ],
+                    "phase": "commentary",
+                },
+            },
+            {
+                "timestamp": _iso_timestamp(minutes_offset=0),
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": "Authoritative result"}
+                    ],
+                    "phase": "final_answer",
+                },
+            },
+        ],
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+        turn_completion_timeout_seconds=0.1,
+    )
+    runtime.launch_session(request)
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "completed"
+    assert response.session_state.active_turn_id is None
+    assert response.metadata["assistantText"] == "Authoritative result"
+
+
+def test_runtime_session_status_rejects_prior_turn_final_before_active_boundary(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    transcript_path = (
+        Path(request.codex_home_path)
+        / "sessions"
+        / "2026"
+        / "08"
+        / "10"
+        / "rollout-2026-08-10T15-09-29-vendor-thread-1.jsonl"
+    )
+    transcript_path.parent.mkdir(parents=True, exist_ok=True)
+    transcript_path.write_text(
+        json.dumps(
+            {
+                "timestamp": _iso_timestamp(minutes_offset=0),
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": "Previous turn result"}
+                    ],
+                    "phase": "final_answer",
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    script = write_fake_app_server(
+        tmp_path,
+        completion_notification_method=None,
+        complete_turn_on_read=False,
+        start_thread_path=str(transcript_path),
+        thread_status_type="active",
+        rollout_entries_on_read=[
+            {
+                "timestamp": _iso_timestamp(minutes_offset=0),
+                "type": "event_msg",
+                "payload": {
+                    "type": "task_started",
+                    "turn_id": "vendor-turn-1",
+                },
+            }
+        ],
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+        turn_completion_timeout_seconds=0.01,
+    )
+    runtime.launch_session(request)
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+    handle = runtime.session_status(
+        CodexManagedSessionLocator(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+        )
+    )
+
+    assert response.status == "running"
+    assert handle.status == "busy"
+    assert handle.session_state.active_turn_id == "vendor-turn-1"
+
+
+def test_runtime_send_turn_prefers_failed_thread_over_rollout_final_answer(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    transcript_path = (
+        Path(request.codex_home_path)
+        / "sessions"
+        / "2026"
+        / "08"
+        / "10"
+        / "rollout-2026-08-10T15-09-29-vendor-thread-1.jsonl"
+    )
+    transcript_path.parent.mkdir(parents=True, exist_ok=True)
+    transcript_path.write_text("", encoding="utf-8")
+    script = write_fake_app_server(
+        tmp_path,
+        completion_notification_method=None,
+        complete_turn_on_read=False,
+        start_thread_path=str(transcript_path),
+        thread_status_type="failed",
+        thread_status_reason="provider failed the thread",
+        rollout_entries_on_read=[
+            {
+                "timestamp": _iso_timestamp(minutes_offset=0),
+                "type": "event_msg",
+                "payload": {
+                    "type": "task_started",
+                    "turn_id": "vendor-turn-1",
+                },
+            },
+            {
+                "timestamp": _iso_timestamp(minutes_offset=0),
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": "Do not hide failure"}
+                    ],
+                    "phase": "final_answer",
+                },
+            },
+        ],
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+        turn_completion_timeout_seconds=0.1,
+    )
+    runtime.launch_session(request)
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "failed"
+    assert response.metadata["reason"] == "provider failed the thread"
+
+
+def test_runtime_send_turn_does_not_complete_from_commentary_when_status_is_stale(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    transcript_path = (
+        Path(request.codex_home_path)
+        / "sessions"
+        / "2026"
+        / "08"
+        / "10"
+        / "rollout-2026-08-10T15-09-29-vendor-thread-1.jsonl"
+    )
+    transcript_path.parent.mkdir(parents=True, exist_ok=True)
+    transcript_path.write_text("", encoding="utf-8")
+    script = write_fake_app_server(
+        tmp_path,
+        completion_notification_method=None,
+        complete_turn_on_read=False,
+        start_thread_path=str(transcript_path),
+        thread_status_type="active",
+        rollout_entries_on_read=[
+            {
+                "timestamp": _iso_timestamp(minutes_offset=0),
+                "type": "event_msg",
+                "payload": {
+                    "type": "task_started",
+                    "turn_id": "vendor-turn-1",
+                },
+            },
+            {
+                "timestamp": _iso_timestamp(minutes_offset=0),
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": "Still working"}
+                    ],
+                    "phase": "commentary",
+                },
+            },
+        ],
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+        turn_completion_timeout_seconds=0.01,
+    )
+    runtime.launch_session(request)
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "running"
+    assert response.session_state.active_turn_id == "vendor-turn-1"
+
+    with transcript_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps(
+                {
+                    "timestamp": _iso_timestamp(minutes_offset=0),
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "Recovered final result",
+                            }
+                        ],
+                        "phase": "final_answer",
+                    },
+                }
+            )
+            + "\n"
+        )
+
+    handle = runtime.session_status(
+        CodexManagedSessionLocator(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+        )
+    )
+
+    assert handle.status == "ready"
+    assert handle.session_state.active_turn_id is None
+    assert handle.metadata["lastAssistantText"] == "Recovered final result"
+
+
+def test_runtime_session_status_does_not_duplicate_published_rollout_final_answer(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    transcript_path = (
+        Path(request.codex_home_path)
+        / "sessions"
+        / "2026"
+        / "08"
+        / "10"
+        / "rollout-2026-08-10T15-09-29-vendor-thread-1.jsonl"
+    )
+    transcript_path.parent.mkdir(parents=True, exist_ok=True)
+    transcript_path.write_text("", encoding="utf-8")
+    script = write_fake_app_server(
+        tmp_path,
+        completion_notification_method=None,
+        complete_turn_on_read=False,
+        start_thread_path=str(transcript_path),
+        thread_status_type="active",
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+    state = runtime._load_state()
+    state.active_turn_id = "vendor-turn-1"
+    state.last_turn_id = "vendor-turn-1"
+    state.last_turn_status = "running"
+    state.last_control_at = time.time()
+    state.observability_events = [
+        {
+            "kind": "assistant_message_completed",
+            "turnId": "vendor-turn-1",
+            "text": "assistant: Authoritative result",
+        }
+    ]
+    runtime._save_state(state)
+    transcript_path.write_text(
+        "\n".join(
+            json.dumps(entry)
+            for entry in (
+                {
+                    "timestamp": _iso_timestamp(minutes_offset=0),
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "task_started",
+                        "turn_id": "vendor-turn-1",
+                    },
+                },
+                {
+                    "timestamp": _iso_timestamp(minutes_offset=0),
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [
+                            {"type": "output_text", "text": "Authoritative result"}
+                        ],
+                        "phase": "final_answer",
+                    },
+                },
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    runtime._append_spool("stdout", "assistant: Authoritative result\n")
+
+    handle = runtime.session_status(
+        CodexManagedSessionLocator(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+        )
+    )
+
+    stdout_text = (Path(request.artifact_spool_path) / "stdout.log").read_text(
+        encoding="utf-8"
+    )
+    assert handle.status == "ready"
+    assert handle.metadata["lastAssistantText"] == "Authoritative result"
+    assert stdout_text.count("assistant: Authoritative result\n") == 1
+
+
 def test_runtime_session_status_fails_empty_task_complete_after_running_turn(
     tmp_path: Path,
 ) -> None:
@@ -1858,6 +2949,7 @@ def test_runtime_session_status_fails_empty_task_complete_after_running_turn(
     )
     script = write_fake_app_server(
         tmp_path,
+        completion_notification_method=None,
         omit_turns_on_read=True,
         start_thread_path=str(transcript_path),
     )
@@ -1950,6 +3042,7 @@ def test_runtime_send_turn_stays_running_when_large_rollout_tail_has_active_turn
     )
     script = write_fake_app_server(
         tmp_path,
+        completion_notification_method=None,
         omit_turns_on_read=True,
         start_thread_path=str(transcript_path),
     )
@@ -2085,7 +3178,7 @@ def test_runtime_send_turn_recovers_terminal_rollout_without_turn_reference(
                         "type": "event_msg",
                         "payload": {
                             "type": "task_started",
-                            "turn_id": "codex-turn-1",
+                            "turn_id": "vendor-turn-1",
                         },
                     }
                 ),
@@ -2124,7 +3217,7 @@ def test_runtime_send_turn_recovers_terminal_rollout_without_turn_reference(
                         "type": "event_msg",
                         "payload": {
                             "type": "task_complete",
-                            "turn_id": "codex-turn-1",
+                            "turn_id": "vendor-turn-1",
                             "last_agent_message": (
                                 "Recovered final answer without vendor turn id"
                             ),
@@ -2786,6 +3879,43 @@ def test_runtime_extract_turn_error_from_logs_recovers_recent_provider_error_wit
         == "The usage limit has been reached (status 429)"
     )
 
+
+def test_runtime_extract_turn_error_from_logs_ignores_unrelated_http_status(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", "-c", "raise SystemExit(0)"),
+    )
+    turn_started_at = int(time.time())
+    _write_fake_codex_logs_with_timestamps(
+        request.codex_home_path,
+        entries=[
+            (
+                turn_started_at,
+                "responses.stream_request: Request completed method=POST "
+                "url=https://telemetry.example.invalid/v1/traces "
+                "status=503 Service Unavailable headers={}",
+            )
+        ],
+    )
+
+    assert (
+        runtime._extract_turn_error_from_logs(
+            "vendor-turn-without-log-row",
+            turn_started_at=turn_started_at,
+        )
+        is None
+    )
+
+
 def test_runtime_extract_turn_error_from_logs_ignores_provider_error_before_turn_start(
     tmp_path: Path,
 ) -> None:
@@ -3122,6 +4252,58 @@ def test_runtime_send_turn_waits_for_fallback_started_turn_visibility(
     )
 
 
+def test_runtime_send_turn_preserves_completion_during_fallback_visibility_grace(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    transcript_path = (
+        Path(request.codex_home_path)
+        / "sessions"
+        / "2026"
+        / "06"
+        / "28"
+        / "rollout-2026-06-28T13-46-25-vendor-thread-2.jsonl"
+    )
+    transcript_path.parent.mkdir(parents=True)
+    transcript_path.write_text("", encoding="utf-8")
+    script = write_fake_app_server(
+        tmp_path,
+        fail_thread_resume=True,
+        start_thread_id="vendor-thread-2",
+        start_thread_path=str(transcript_path),
+        completion_notification_assistant_text="OK from terminal notification",
+        completion_visible_on_thread_read=False,
+        omit_turns_on_read=True,
+        omit_turns_when_incomplete=True,
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+        missing_turn_visibility_grace_seconds=0.01,
+    )
+    runtime.launch_session(request)
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "completed"
+    assert response.metadata["assistantText"] == "OK from terminal notification"
+    assert response.session_state.active_turn_id is None
+
+
 def test_runtime_send_turn_marks_missing_fallback_turn_subtype_after_grace(
     tmp_path: Path,
 ) -> None:
@@ -3138,6 +4320,7 @@ def test_runtime_send_turn_marks_missing_fallback_turn_subtype_after_grace(
     transcript_path.write_text("", encoding="utf-8")
     script = write_fake_app_server(
         tmp_path,
+        completion_notification_method=None,
         fail_thread_resume=True,
         start_thread_id="vendor-thread-2",
         start_thread_path=str(transcript_path),
@@ -4117,6 +5300,156 @@ def test_runtime_launch_session_auth_seed_overwrites_read_only_files_on_retry(
     )
     assert destination_auth.stat().st_mode & 0o777 == 0o444
 
+
+def test_runtime_syncs_rotated_auth_to_durable_volume(tmp_path: Path) -> None:
+    request = launch_request(tmp_path)
+    auth_volume_path = tmp_path / "auth-volume"
+    auth_volume_path.mkdir()
+    durable_auth_path = auth_volume_path / "auth.json"
+    durable_auth_path.write_text(
+        '{"credentialVersion":"seed"}', encoding="utf-8"
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        auth_volume_path=str(auth_volume_path),
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+    )
+    runtime._seed_codex_home_from_auth_volume()
+    Path(request.codex_home_path, "auth.json").write_text(
+        '{"credentialVersion":"rotated"}', encoding="utf-8"
+    )
+
+    runtime._sync_codex_auth_to_volume()
+
+    assert durable_auth_path.read_text(encoding="utf-8") == (
+        '{"credentialVersion":"rotated"}'
+    )
+    assert (auth_volume_path / ".moonmind-auth-sync.lock").is_file()
+
+
+def test_runtime_auth_sync_preserves_concurrent_reconnect(tmp_path: Path) -> None:
+    request = launch_request(tmp_path)
+    auth_volume_path = tmp_path / "auth-volume"
+    auth_volume_path.mkdir()
+    durable_auth_path = auth_volume_path / "auth.json"
+    durable_auth_path.write_text(
+        '{"credentialVersion":"seed"}', encoding="utf-8"
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        auth_volume_path=str(auth_volume_path),
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+    )
+    runtime._seed_codex_home_from_auth_volume()
+    Path(request.codex_home_path, "auth.json").write_text(
+        '{"credentialVersion":"rotated-by-run"}', encoding="utf-8"
+    )
+    durable_auth_path.write_text(
+        '{"credentialVersion":"reconnected"}', encoding="utf-8"
+    )
+
+    runtime._sync_codex_auth_to_volume()
+
+    assert durable_auth_path.read_text(encoding="utf-8") == (
+        '{"credentialVersion":"reconnected"}'
+    )
+
+
+def test_runtime_auth_sync_defers_when_volume_lock_is_busy(tmp_path: Path) -> None:
+    request = launch_request(tmp_path)
+    auth_volume_path = tmp_path / "auth-volume"
+    auth_volume_path.mkdir()
+    durable_auth_path = auth_volume_path / "auth.json"
+    durable_auth_path.write_text(
+        '{"credentialVersion":"seed"}', encoding="utf-8"
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        auth_volume_path=str(auth_volume_path),
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+    )
+    runtime._seed_codex_home_from_auth_volume()
+    Path(request.codex_home_path, "auth.json").write_text(
+        '{"credentialVersion":"rotated"}', encoding="utf-8"
+    )
+    lock_path = auth_volume_path / ".moonmind-auth-sync.lock"
+    with lock_path.open("a+b") as lock_handle:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        runtime._sync_codex_auth_to_volume()
+
+    assert durable_auth_path.read_text(encoding="utf-8") == (
+        '{"credentialVersion":"seed"}'
+    )
+    assert "auth sync deferred" in Path(
+        request.artifact_spool_path, "stderr.log"
+    ).read_text(encoding="utf-8")
+
+    runtime._sync_codex_auth_to_volume()
+
+    assert durable_auth_path.read_text(encoding="utf-8") == (
+        '{"credentialVersion":"rotated"}'
+    )
+
+
+def test_runtime_auth_sync_contains_filesystem_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = launch_request(tmp_path)
+    auth_volume_path = tmp_path / "auth-volume"
+    auth_volume_path.mkdir()
+    durable_auth_path = auth_volume_path / "auth.json"
+    durable_auth_path.write_text(
+        '{"credentialVersion":"seed"}', encoding="utf-8"
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        auth_volume_path=str(auth_volume_path),
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+    )
+    runtime._seed_codex_home_from_auth_volume()
+    Path(request.codex_home_path, "auth.json").write_text(
+        '{"credentialVersion":"rotated"}', encoding="utf-8"
+    )
+
+    def fail_copy(*_args: object, **_kwargs: object) -> None:
+        raise OSError("injected auth-volume write failure")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.codex_session_runtime.shutil.copy2",
+        fail_copy,
+    )
+
+    runtime._sync_codex_auth_to_volume()
+
+    assert durable_auth_path.read_text(encoding="utf-8") == (
+        '{"credentialVersion":"seed"}'
+    )
+    assert "rotated auth persistence failed" in Path(
+        request.artifact_spool_path, "stderr.log"
+    ).read_text(encoding="utf-8")
+
+
 def test_runtime_launch_session_rejects_missing_auth_volume_path(
     tmp_path: Path,
 ) -> None:
@@ -4230,50 +5563,6 @@ def test_run_ready_requires_runtime_environment(monkeypatch: pytest.MonkeyPatch,
     )
 
     with pytest.raises(RuntimeError, match="MOONMIND_SESSION_IMAGE_REF is required"):
-        _run_ready()
-
-
-def test_run_ready_fails_when_docker_sidecar_preflight_fails(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    workspace_path = tmp_path / "repo"
-    workspace_path.mkdir()
-    monkeypatch.setenv("MOONMIND_SESSION_WORKSPACE_PATH", str(workspace_path))
-    monkeypatch.setenv(
-        "MOONMIND_SESSION_WORKSPACE_STATE_PATH",
-        str(tmp_path / "session"),
-    )
-    monkeypatch.setenv(
-        "MOONMIND_SESSION_ARTIFACT_SPOOL_PATH",
-        str(tmp_path / "artifacts"),
-    )
-    monkeypatch.setenv(
-        "MOONMIND_SESSION_CODEX_HOME_PATH",
-        str(tmp_path / "codex-home"),
-    )
-    monkeypatch.setenv("MOONMIND_SESSION_IMAGE_REF", "ghcr.io/acme/moonmind:runtime")
-    monkeypatch.setenv("MOONMIND_MANAGED_SESSION_DOCKER_MODE", "docker-sidecar")
-    monkeypatch.setenv("DOCKER_HOST", "unix:///var/run/moonmind-docker/docker.sock")
-    monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.codex_session_runtime.shutil.which",
-        lambda _name: "/usr/bin/codex",
-    )
-
-    def fake_preflight(**_kwargs: object) -> CodexPreflightResult:
-        return CodexPreflightResult(
-            status=automation_models.CodexPreflightStatus.FAILED,
-            message="Docker sidecar preflight failed: docker info did not succeed.",
-            failure_class="system_error",
-            diagnostics_ref="preflight://docker-sidecar",
-        )
-
-    monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.codex_session_runtime.run_docker_sidecar_preflight_check",
-        fake_preflight,
-    )
-
-    with pytest.raises(RuntimeError, match="Docker sidecar preflight failed"):
         _run_ready()
 
 

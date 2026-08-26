@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch, ANY
 
 import pytest
+from temporalio import activity
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -24,7 +25,6 @@ from moonmind.workflows.temporal import worker_runtime
 from moonmind.workflows.temporal.worker_runtime import (
     MoonMindAgentRun,
     MoonMindManifestIngest,
-    MoonMindUserWorkflow,
     OpenTelemetryLoggingFilter,
     _OPENTELEMETRY_LOG_FORMAT,
     _build_agent_runtime_deps,
@@ -43,6 +43,7 @@ from moonmind.workflows.temporal.worker_runtime import (
     resolve_external_adapter,
     external_adapter_execution_style,
 )
+from moonmind.workflows.temporal.workflows.run import MoonMindUserWorkflow
 from moonmind.workflows.temporal.workers import (
     AGENT_RUNTIME_FLEET,
     DEPLOYMENT_FLEET,
@@ -322,6 +323,41 @@ def test_runtime_planner_preserves_execution_profile_ref():
     runtime_node = plan["nodes"][0]["inputs"]["runtime"]
     assert runtime_node["mode"] == "claude"
     assert runtime_node["executionProfileRef"] == "claude-minimax-oauth"
+
+
+def test_runtime_planner_preserves_canonical_repository_target_for_launch_readiness():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+    repository = {
+        "provider": "git",
+        "connectionRef": "repository-connection:git-default",
+        "repository": {"name": "MoonLadderStudios/MoonMind"},
+        "branch": {"name": "main"},
+    }
+
+    plan = planner(
+        inputs={
+            "workflow": {
+                "instructions": "Inspect the repository",
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "none"},
+            }
+        },
+        parameters={
+            "repository": repository,
+            "targetRuntime": "codex_cli",
+            "requiredCapabilities": ["codex_cli", "git", "repo.read"],
+        },
+        snapshot=snapshot,
+    )
+
+    node_inputs = plan["nodes"][0]["inputs"]
+    assert node_inputs["repositoryTarget"] == repository
+    assert node_inputs["repository"] == "MoonLadderStudios/MoonMind"
+    assert node_inputs["branch"] == "main"
 
 def test_runtime_planner_preserves_execution_profile_ref_snake_case():
     planner = _build_runtime_planner()
@@ -665,12 +701,16 @@ def test_runtime_planner_validates_skill_step_contract_and_carries_evidence():
                             "inputs": {"issueKey": "MM-1057"},
                             "inputSchema": {
                                 "type": "object",
-                                "required": ["issueKey", "repository"],
+                                "required": ["issueKey", "repository", "branch"],
                                 "properties": {
                                     "issueKey": {"type": "string"},
                                     "repository": {
                                         "type": "string",
                                         "x-moonmind-context-default": "repository",
+                                    },
+                                    "branch": {
+                                        "type": "string",
+                                        "x-moonmind-context-default": "branch",
                                     },
                                 },
                             },
@@ -682,7 +722,14 @@ def test_runtime_planner_validates_skill_step_contract_and_carries_evidence():
                 ],
             }
         },
-        parameters={"repository": "MoonLadderStudios/MoonMind"},
+        parameters={
+            "repository": {
+                "provider": "git",
+                "connectionRef": "repository-connection:git-default",
+                "repository": {"name": "MoonLadderStudios/MoonMind"},
+                "branch": {"name": "feature/mm-1219"},
+            }
+        },
         snapshot=snapshot,
     )
 
@@ -690,9 +737,11 @@ def test_runtime_planner_validates_skill_step_contract_and_carries_evidence():
     assert node_inputs["inputs"] == {
         "issueKey": "MM-1057",
         "repository": "MoonLadderStudios/MoonMind",
+        "branch": "feature/mm-1219",
     }
     assert node_inputs["issueKey"] == "MM-1057"
     assert node_inputs["repository"] == "MoonLadderStudios/MoonMind"
+    assert node_inputs["branch"] == "feature/mm-1219"
     assert node_inputs["inputContractDigest"] == "sha256:contract"
     assert node_inputs["contentDigest"] == "sha256:content"
     assert node_inputs["contentRef"] == "artifact:skill"
@@ -2640,6 +2689,155 @@ def test_runtime_planner_does_not_require_pr_branch_for_jira_verify():
     assert "targetBranch" not in node["inputs"]
     assert "commit your work" not in node["inputs"]["instructions"]
 
+def test_runtime_planner_exposes_jira_verify_inputs_with_explicit_instructions():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Verify Jira issue THOR-709.",
+                "tool": {"type": "skill", "name": "jira-verify"},
+                "skill": {"name": "jira-verify"},
+                "inputs": {
+                    "jira_issue_key": "THOR-709",
+                    "update_status": True,
+                },
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "none"},
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    node_inputs = plan["nodes"][0]["inputs"]
+    assert node_inputs["instructions"].startswith("Use $jira-verify.")
+    assert "Selected skill inputs:" in node_inputs["instructions"]
+    assert '"update_status": true' in node_inputs["instructions"]
+    assert node_inputs["skill"] == {
+        "name": "jira-verify",
+        "inputs": {
+            "jira_issue_key": "THOR-709",
+            "update_status": True,
+        },
+    }
+
+def test_runtime_planner_reads_inputs_from_nested_skill_with_tool_discriminator():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Verify Jira issue THOR-709.",
+                "tool": {"type": "skill", "name": "jira-verify"},
+                "skill": {
+                    "name": "jira-verify",
+                    "inputs": {
+                        "jira_issue_key": "THOR-709",
+                        "update_status": True,
+                    },
+                },
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "none"},
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    node_inputs = plan["nodes"][0]["inputs"]
+    assert '"update_status": true' in node_inputs["instructions"]
+    assert node_inputs["skill"]["inputs"]["update_status"] is True
+
+def test_runtime_planner_appends_inputs_despite_authored_heading_collision():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": (
+                    "Discuss the phrase Selected skill inputs:\n"
+                    "without treating it as runtime data."
+                ),
+                "tool": {"type": "skill", "name": "jira-verify"},
+                "inputs": {"update_status": True},
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "none"},
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    instructions = plan["nodes"][0]["inputs"]["instructions"]
+    assert instructions.count("Selected skill inputs:\n") == 2
+    assert 'Selected skill inputs:\n{\n  "update_status": true\n}' in instructions
+
+def test_runtime_planner_exposes_inputs_for_expanded_agent_skill_step():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Process the Jira verification steps.",
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "none"},
+                "steps": [
+                    {
+                        "id": "verify-one",
+                        "type": "skill",
+                        "instructions": "Verify THOR-709.",
+                        "skill": {
+                            "name": "jira-verify",
+                            "inputs": {
+                                "jira_issue_key": "THOR-709",
+                                "update_status": True,
+                            },
+                        },
+                    },
+                    {
+                        "id": "verify-two",
+                        "type": "skill",
+                        "instructions": "Verify THOR-710.",
+                        "skill": {
+                            "name": "jira-verify",
+                            "inputs": {"jira_issue_key": "THOR-710"},
+                        },
+                    },
+                ],
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    node_inputs = plan["nodes"][0]["inputs"]
+    assert node_inputs["selectedSkill"] == "jira-verify"
+    assert '"update_status": true' in node_inputs["instructions"]
+    assert node_inputs["skill"] == {
+        "name": "jira-verify",
+        "inputs": {
+            "jira_issue_key": "THOR-709",
+            "update_status": True,
+        },
+    }
+
 def test_runtime_planner_does_not_require_pr_branch_for_jira_pr_verify():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(
@@ -2825,7 +3023,83 @@ def test_runtime_planner_pr_resolver_injects_branch_selector_into_instruction():
         "Execute skill 'pr-resolver' with inputs:"
     )
     assert '"pr": "fix/my-feature-branch"' in node_inputs["instructions"]
+    assert node_inputs["timeoutPolicy"] == {"timeout_seconds": 9000}
     assert plan["metadata"]["title"] == "fix/my-feature-branch"
+
+
+def test_runtime_planner_pr_resolver_timeout_reaches_agent_execution_request(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+    plan = planner(
+        inputs={
+            "task": {
+                "tool": {"type": "skill", "name": "pr-resolver"},
+                "inputs": {"pr": "1434"},
+                "runtime": {"mode": "codex_cli"},
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.workflows.run.workflow.info",
+        workflow_info,
+    )
+
+    node = plan["nodes"][0]
+    request = MoonMindUserWorkflow()._build_agent_execution_request(
+        node_inputs=node["inputs"],
+        node_id=node["id"],
+        tool_name=node["tool"]["name"],
+    )
+
+    assert request.timeout_policy == {"timeout_seconds": 9000}
+
+
+def test_runtime_planner_pr_resolver_timeout_is_not_inherited_by_other_steps():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+    plan = planner(
+        inputs={
+            "task": {
+                "tool": {"type": "skill", "name": "pr-resolver"},
+                "inputs": {"pr": "1434"},
+                "runtime": {"mode": "codex_cli"},
+                "steps": [
+                    {
+                        "id": "generic",
+                        "tool": {"type": "agent_runtime", "name": "codex_cli"},
+                        "instructions": "Perform generic work.",
+                    },
+                    {
+                        "id": "jira",
+                        "tool": {
+                            "type": "agent_runtime",
+                            "name": "jira-issue-creator",
+                        },
+                        "instructions": "Create a Jira issue.",
+                    },
+                ],
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    assert all("timeoutPolicy" not in node["inputs"] for node in plan["nodes"])
 
 
 def test_runtime_planner_pr_resolver_uses_non_default_git_branch_as_selector():
@@ -2953,9 +3227,8 @@ def test_runtime_planner_requires_selector_for_pr_resolver_without_instructions(
     with pytest.raises(
         RuntimeError,
         match=(
-            "pr-resolver workflow requires workflow.tool.inputs.pr, "
-            "workflow.tool.inputs.branch, workflow.git.startingBranch, "
-            "or a non-default workflow.git.branch"
+            "pr-resolver requires an explicit pull request selector.*"
+            "A default checkout branch such as main does not identify a PR"
         ),
     ):
         planner(
@@ -2998,15 +3271,29 @@ def test_build_agent_runtime_deps_uses_artifacts_env_without_double_nesting(
     assert artifacts_root.is_dir()
     assert not (artifacts_root / "artifacts").exists()
 
-def test_build_agent_runtime_deps_reuses_global_session_network(
+
+def test_build_agent_runtime_deps_wires_production_lore_readiness_adapter(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
+    monkeypatch.setenv(
+        "MOONMIND_AGENT_RUNTIME_ARTIFACTS", str(tmp_path / "artifacts")
+    )
+
+    dependencies = _build_agent_runtime_deps()
+    launcher = dependencies[2]
+
+    assert launcher._lore_repository_readiness_adapter is not None
+
+
+def test_build_agent_runtime_deps_uses_canonical_control_plane_network(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ):
     artifacts_root = tmp_path / "artifacts"
     monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
     monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_ARTIFACTS", str(artifacts_root))
-    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_DOCKER_NETWORK", raising=False)
-    monkeypatch.setenv("MOONMIND_DOCKER_NETWORK", "shared-moonmind-network")
+    monkeypatch.setenv("MOONMIND_CONTROL_PLANE_NETWORK", "shared-moonmind-network")
     monkeypatch.setenv("MOONMIND_URL", "http://moonmind-api:8000")
 
     (
@@ -3217,6 +3504,65 @@ def test_runtime_planner_multi_step_step_fallback_instructions():
     assert plan["nodes"][0]["inputs"]["instructions"] == "Explicit step A"
     assert plan["nodes"][1]["inputs"]["instructions"] == "Task-level fallback"
 
+
+def test_runtime_planner_read_repository_step_removes_publish_authority():
+    planner = _build_runtime_planner()
+    snapshot = _make_snapshot()
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Implement and verify",
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "pr"},
+                "steps": [
+                    {
+                        "id": "implement",
+                        "instructions": "Implement the change.",
+                        "repositoryOperation": "write",
+                    },
+                    {
+                        "id": "verify",
+                        "instructions": "Verify without modifying the repository.",
+                        "repositoryOperation": "read",
+                    },
+                ],
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    assert plan["nodes"][0]["inputs"]["publishMode"] == "pr"
+    assert plan["nodes"][1]["inputs"]["repositoryOperation"] == "read"
+    assert plan["nodes"][1]["inputs"]["publishMode"] == "none"
+
+
+def test_runtime_planner_pr_step_defaults_repository_write_authority():
+    planner = _build_runtime_planner()
+    snapshot = _make_snapshot()
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Implement the change",
+                "runtime": {"mode": "omnigent"},
+                "publish": {"mode": "pr"},
+                "steps": [
+                    {
+                        "id": "implement",
+                        "instructions": "Implement the change.",
+                    }
+                ],
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    assert plan["nodes"][0]["inputs"]["repositoryOperation"] == "write"
+
+
 def test_runtime_planner_multi_step_auto_generated_ids():
     """When steps lack explicit IDs, sequential IDs are generated."""
     planner = _build_runtime_planner()
@@ -3357,6 +3703,50 @@ def test_runtime_planner_preserves_jira_implement_pr_handoff_instructions():
 
     pr_node = plan["nodes"][1]
     assert pr_node["inputs"]["title"] == "Create pull request"
+    assert pr_node["inputs"]["publishMode"] == "pr"
+    assert "Create a pull request" in pr_node["inputs"]["instructions"]
+    assert (
+        "Do NOT push or create a pull request"
+        not in pr_node["inputs"]["instructions"]
+    )
+    assert "commit your work" not in pr_node["inputs"]["instructions"]
+
+
+def test_runtime_planner_preserves_github_issue_pr_handoff_instructions():
+    planner = _build_runtime_planner()
+    snapshot = _make_snapshot()
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Implement GitHub issue org/repo#2231.",
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "pr"},
+                "appliedStepTemplates": [{"slug": "github-issue-implement"}],
+                "steps": [
+                    {
+                        "id": "implement",
+                        "title": "Implement",
+                        "instructions": "Implement the GitHub issue.",
+                    },
+                    {
+                        "id": "create-pr",
+                        "title": "Create pull request",
+                        "annotations": {
+                            "issueImplementRole": "pull-request-handoff",
+                        },
+                        "instructions": (
+                            "Create a pull request and record pull_request_url."
+                        ),
+                    },
+                ],
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    pr_node = plan["nodes"][1]
     assert pr_node["inputs"]["publishMode"] == "pr"
     assert "Create a pull request" in pr_node["inputs"]["instructions"]
     assert (
@@ -3650,9 +4040,8 @@ def test_runtime_planner_rejects_pr_resolver_with_only_jira_instructions_and_bas
     with pytest.raises(
         RuntimeError,
         match=(
-            "pr-resolver workflow requires workflow.tool.inputs.pr, "
-            "workflow.tool.inputs.branch, workflow.git.startingBranch, "
-            "or a non-default workflow.git.branch"
+            "pr-resolver requires an explicit pull request selector.*"
+            "A default checkout branch such as main does not identify a PR"
         ),
     ):
         planner(
@@ -3861,10 +4250,28 @@ async def test_main_async_workflow_fleet(
     from moonmind.workflows.temporal.workflows.agent_session import (
         MoonMindAgentSessionWorkflow,
     )
+    from moonmind.workflows.temporal.workflows.container_job import (
+        MoonMindContainerJobWorkflow,
+    )
+    from moonmind.workflows.temporal.workflows.checkpoint_branch_turn import (
+        MoonMindCheckpointBranchTurnWorkflow,
+        mark_checkpoint_branch_turn_running,
+        persist_checkpoint_branch_turn_terminal,
+        persist_checkpoint_branch_turn_terminal_rejection,
+    )
+    from moonmind.workflows.temporal.workflows.control_stop_continuation import (
+        MoonMindControlStopContinuationWorkflow,
+    )
     from moonmind.workflows.temporal.workflows.provider_profile_manager import MoonMindProviderProfileManagerWorkflow
     from moonmind.workflows.temporal.workflows.oauth_session import MoonMindOAuthSessionWorkflow as MoonMindOAuthSession
     from moonmind.workflows.temporal.workflows.merge_automation import (
         MoonMindMergeAutomationWorkflow,
+    )
+    from moonmind.workflows.temporal.workflows.pr_resolver import (
+        MoonMindPRResolverWorkflow,
+    )
+    from moonmind.workflows.temporal.workflows.publication_recovery import (
+        MoonMindPublicationRecoveryWorkflow,
     )
     from moonmind.workflows.temporal.workflows.managed_session_reconcile import (
         MoonMindManagedSessionReconcileWorkflow,
@@ -3872,23 +4279,40 @@ async def test_main_async_workflow_fleet(
     from moonmind.workflows.temporal.workflows.managed_runtime_workspace_cleanup import (
         MoonMindManagedRuntimeWorkspaceCleanupWorkflow,
     )
-    assert kwargs["workflows"] == [
+    from moonmind.workflows.temporal.workflows.omnigent_oauth_host_janitor import (
+        MoonMindOmnigentOAuthHostJanitorWorkflow,
+    )
+    from moonmind.workflows.temporal.workflows.omnigent_session import (
+        MoonMindOmnigentSessionWorkflow,
+    )
+
+    assert kwargs["workflows"] == (
         MoonMindUserWorkflow,
+        MoonMindContainerJobWorkflow,
         MoonMindManifestIngest,
+        MoonMindControlStopContinuationWorkflow,
         MoonMindProviderProfileManagerWorkflow,
         MoonMindAgentSessionWorkflow,
         MoonMindManagedSessionReconcileWorkflow,
         MoonMindManagedRuntimeWorkspaceCleanupWorkflow,
         MoonMindAgentRun,
+        MoonMindOmnigentSessionWorkflow,
+        MoonMindCheckpointBranchTurnWorkflow,
         MoonMindOAuthSession,
+        MoonMindOmnigentOAuthHostJanitorWorkflow,
         MoonMindMergeAutomationWorkflow,
-    ]
-    assert kwargs["activities"] == [
+        MoonMindPRResolverWorkflow,
+        MoonMindPublicationRecoveryWorkflow,
+    )
+    assert kwargs["activities"] == (
         resolve_adapter_metadata,
         get_activity_route,
         resolve_external_adapter,
         external_adapter_execution_style,
-    ]
+        mark_checkpoint_branch_turn_running,
+        persist_checkpoint_branch_turn_terminal,
+        persist_checkpoint_branch_turn_terminal_rejection,
+    )
     assert "deployment_config" not in kwargs
     assert "build_id" not in kwargs
     assert "use_worker_versioning" not in kwargs
@@ -3929,8 +4353,12 @@ async def test_main_async_activity_fleet(
     mock_worker_cls.return_value = mock_worker
     mock_worker.run = AsyncMock()
 
+    @activity.defn(name="test.handler")
+    async def test_handler() -> None:
+        return None
+
     mock_resources = AsyncMock()
-    mock_runtime_activities.return_value = (mock_resources, ["test_handler"])
+    mock_runtime_activities.return_value = (mock_resources, [test_handler])
 
     # Run
     await main_async()
@@ -3939,8 +4367,8 @@ async def test_main_async_activity_fleet(
     mock_worker_cls.assert_called_once()
     kwargs = mock_worker_cls.call_args.kwargs
     assert kwargs["task_queue"] == "mm.activity.artifacts"
-    assert kwargs["workflows"] == []
-    assert kwargs["activities"] == ["test_handler"]
+    assert kwargs["workflows"] == ()
+    assert kwargs["activities"] == (test_handler,)
     assert "deployment_config" not in kwargs
     assert "build_id" not in kwargs
     assert "use_worker_versioning" not in kwargs
@@ -4160,15 +4588,42 @@ async def test_build_runtime_activities_reconciles_managed_sessions_only_on_agen
     mock_binding.handler = "agent_runtime_handler"
     mock_build_bindings.return_value = [mock_binding]
 
+    async def attest(*, profile, **_kwargs):
+        return SimpleNamespace(
+            network_ref=profile.network_ref,
+            profile_ref=profile.ref,
+        )
+
+    attest_mock = AsyncMock(side_effect=attest)
+
     with (
         patch("moonmind.workflows.temporal.worker_runtime.settings") as mock_settings,
         patch(
             "moonmind.workflows.temporal.worker_runtime.get_async_session_context",
             side_effect=_fake_session_context,
         ),
+        patch(
+            "moonmind.workflows.temporal.worker_runtime.DockerContainerJobBackend"
+        ) as mock_backend_cls,
+        patch(
+            "moonmind.security.egress.attest_docker_egress",
+            new=attest_mock,
+        ),
     ):
         mock_settings.workflow.workflow_docker_mode = "profiles"
+        mock_backend_cls.return_value.check_readiness = AsyncMock()
         resources, handlers = await _build_runtime_activities(topology)
+
+    mock_backend_cls.return_value.check_readiness.assert_awaited_once()
+    assert attest_mock.await_count == 2
+    assert set(resources.enforced_network_refs) == {
+        "moonmind_restricted-egress-network",
+        "moonmind_omnigent-egress-network",
+    }
+    assert set(resources.enforced_egress_profile_refs) == {
+        "moonmind-provider-egress@1",
+        "moonmind-omnigent-egress@1",
+    }
 
     assert handlers == [
         "agent_runtime_handler",
@@ -4197,6 +4652,8 @@ async def test_build_runtime_activities_reconciles_managed_sessions_only_on_agen
         workload_registry=workload_registry,
         workload_launcher=workload_launcher,
         workflow_docker_mode="profiles",
+        raw_docker_cli_enabled=False,
+        container_job_backend=ANY,
     )
     mock_build_bindings.assert_called_once_with(
         fleet=AGENT_RUNTIME_FLEET,
@@ -4281,7 +4738,6 @@ async def test_build_runtime_activities_registers_deployment_tool_only_on_deploy
 
 @pytest.mark.asyncio
 @patch("moonmind.workflows.temporal.worker_runtime.settings")
-@patch("moonmind.workflows.temporal.worker_runtime.register_workload_tool_handlers")
 @patch("moonmind.workflows.temporal.worker_runtime.build_worker_activity_bindings")
 @patch("moonmind.workflows.temporal.worker_runtime._build_agent_runtime_deps")
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalAgentRuntimeActivities")
@@ -4307,7 +4763,6 @@ async def test_build_runtime_activities_registers_unrestricted_mode(
     mock_agent_runtime_activities_cls,
     mock_build_deps,
     mock_build_bindings,
-    mock_register_workload_tool_handlers,
     mock_settings,
 ):
     run_store = MagicMock()
@@ -4341,14 +4796,23 @@ async def test_build_runtime_activities_registers_unrestricted_mode(
     mock_binding.handler = "agent_runtime_handler"
     mock_build_bindings.return_value = [mock_binding]
 
-    with patch(
-        "moonmind.workflows.temporal.worker_runtime.get_async_session_context",
-        side_effect=_fake_session_context,
+    with (
+        patch(
+            "moonmind.workflows.temporal.worker_runtime.get_async_session_context",
+            side_effect=_fake_session_context,
+        ),
+        patch(
+            "moonmind.workflows.temporal.worker_runtime.DockerContainerJobBackend"
+        ) as mock_backend_cls,
+        patch(
+            "moonmind.security.egress.attest_docker_egress",
+            new=AsyncMock(return_value=MagicMock()),
+        ),
     ):
+        mock_backend_cls.return_value.check_readiness = AsyncMock()
         resources, _handlers = await _build_runtime_activities(topology)
 
     mock_agent_runtime_activities_cls.assert_called_once()
     assert mock_agent_runtime_activities_cls.call_args.kwargs["workflow_docker_mode"] == "unrestricted"
-    mock_register_workload_tool_handlers.assert_called_once()
-    assert mock_register_workload_tool_handlers.call_args.kwargs["workflow_docker_mode"] == "unrestricted"
+    # Legacy workload handlers are not registered on the agent-facing dispatcher.
     await resources.aclose()

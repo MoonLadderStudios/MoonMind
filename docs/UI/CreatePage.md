@@ -166,6 +166,13 @@ The frontend renders fields by reading `inputSchema`, optional `uiSchema`, and e
 
 The Create page must not hard-code a form for each preset or skill. New presets should be able to add new fields by updating their manifest, provided the fields use standard schema constructs or already-registered widgets.
 
+For Skill steps, guided mode shows fields named by the root `required` contract
+and every field participating in a root `oneOf` / `anyOf` required alternative,
+so the user can satisfy the contract without opening advanced controls. Other
+Skill properties remain available only in Advanced mode. This disclosure rule is
+derived from the selected Skill schema and must not use Skill-name allowlists or
+capability-specific frontend layouts.
+
 ## UI Schema and Widget Hints
 
 Validation belongs in `inputSchema`. Presentation belongs in `uiSchema` or namespaced schema hints.
@@ -382,6 +389,63 @@ Branch behavior:
 - Use a GitHub-backed branch dropdown when repository context is available.
 - Allow manual branch entry as an advanced fallback.
 - Show generated publish branch names before submission when relevant.
+
+## Context Retrieval Controls
+
+Context retrieval (RAG) authoring is an advanced control. The guided path relies
+on deployment retrieval policy, so the **Context retrieval (RAG)** disclosure in
+Execution controls renders only while **Advanced mode** is enabled, alongside the
+other advanced controls (optional Skill inputs, skill args, required
+capabilities, worker routing, Priority, Max Attempts).
+
+The disclosure rule must never make an operator-authored retrieval policy
+invisible:
+
+- While the controls are hidden, submission carries the unauthored default so
+  deployment retrieval policy applies, rather than a value the operator can no
+  longer see (the same rule as Priority and Max Attempts).
+- Reconstructing a rerun/edit source or importing a remediation draft that
+  already authored `rag` / `followUpRetrieval` enables Advanced mode, so the
+  inherited policy stays visible, editable, and resubmitted.
+- Turning Advanced mode off is therefore an explicit clear of that authoring, in
+  the same way as clearing the controls by hand: the retained retrieval
+  authoring resets to the unauthored default, so re-enabling Advanced mode for
+  an unrelated control cannot restore a policy the operator already cleared.
+
+These controls only narrow within deployment ceilings; the server re-clamps every
+submitted value.
+
+## Remediation Prefill
+
+When Workflow Detail opens `/workflows/new?intent=remediate&draftId=…`, the
+normal Create page imports a tab-scoped remediation draft. This remains ordinary,
+editable authoring: Create never submits a remediation implicitly.
+
+The visible **Remediation Draft** section separates:
+
+- **Pinned target identity (immutable):** target Workflow, exact run, original
+  outcome, and selected failed Step Execution/checkpoint evidence.
+- **Editable repair intent:** instructions, repository, starting and isolated
+  work branches, publish mode, Codex via Omnigent runtime, Agent Profile,
+  Provider Profile, execution target and launch policy, model, effort, retrieval
+  controls, remediation mode/authority, and the action, evidence, approval,
+  lock, verification, and Checkpoint Branch policies.
+
+The draft body stays in `sessionStorage`; a non-sensitive presence marker may be
+used only to explain that a copied URL belongs to another tab. Drafts carry
+schema version `1`, a `createdAt` timestamp, and a two-hour TTL. Import is
+single-use: storage is cleared after the complete draft has been validated and
+successfully copied into visible form state, or after explicit discard. Missing,
+malformed, expired, and cross-tab drafts produce distinct actionable errors and
+never partially prefill the form. Discard removes the storage marker and the
+`intent`/`draftId` query parameters.
+
+Submission uses ordinary `POST /api/executions` and persists canonical
+`task.remediation`. The server independently resolves target visibility and the
+exact current/pinned run, validates selected steps/checkpoints and Agent Runs,
+re-resolves profile and policy selections, validates branch/publish/authority
+values, and creates the durable bidirectional link. A target-run freshness
+warning directs the operator to open **Remediate** again when the pin changed.
 
 ## Jira Integration on Create
 

@@ -1,0 +1,16 @@
+{
+  "terminalOutcome": "terminal_success",
+  "parentState": "succeeded",
+  "queuedChildCount": 23,
+  "preservedQueuedChildFields": [
+    "workflowId",
+    "ref"
+  ],
+  "artifactOnlyQueuedChildFields": [
+    "provider",
+    "executionId",
+    "targetRef",
+    "idempotencyKey"
+  ],
+  "maxMetadataBytes": 16384
+}

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import json
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
@@ -48,6 +48,91 @@ from moonmind.workflows.temporal.remediation_context import (
     normalize_remediation_phase,
     normalize_remediation_resolution,
 )
+
+
+def test_omnigent_evidence_index_is_complete_bounded_and_explicitly_degraded():
+    index = RemediationContextBuilder._omnigent_evidence_index(
+        {
+            "generatedAt": "2026-07-26T12:00:00Z",
+            "bridgeEventPageRefs": ["art_bridge_page"],
+            "hostLeaseRef": {"artifact_id": "art_host_lease"},
+        }
+    )
+
+    by_class = {entry["class"]: entry for entry in index}
+    assert by_class["bridge_events"] == {
+        "class": "bridge_events",
+        "status": "available",
+        "bounded": True,
+        "contentsIncluded": False,
+        "refs": [
+            {
+                "artifact_id": "art_bridge_page",
+                "kind": "bridgeEventPageRefs",
+            }
+        ],
+        "observedAt": "2026-07-26T12:00:00Z",
+        "freshness": "source_reported",
+    }
+    assert by_class["provider_and_leases"]["status"] == "available"
+    assert by_class["provider_and_leases"]["refs"][0]["artifact_id"] == (
+        "art_host_lease"
+    )
+    assert by_class["prior_remediation"]["status"] == "missing"
+    assert by_class["prior_remediation"]["bounded"] is True
+    assert by_class["prior_remediation"]["freshness"] == "source_reported"
+    assert by_class["prior_remediation"]["degradedReason"] == (
+        "historical evidence was not recorded"
+    )
+
+
+def test_context_aggregate_is_degraded_when_omnigent_classes_are_missing():
+    target_record = SimpleNamespace(
+        workflow_id="target",
+        run_id="target-run",
+        state=MoonMindWorkflowState.EXECUTING,
+        close_status=None,
+        memo={},
+        parameters={},
+        artifact_refs=[],
+    )
+    remediation_record = SimpleNamespace(
+        workflow_id="remediation",
+        run_id="remediation-run",
+        state=MoonMindWorkflowState.EXECUTING,
+        close_status=None,
+        memo={},
+        parameters={
+            "workflow": {
+                "remediation": {
+                    "target": {"agentRunIds": ["agent-run"]},
+                    "evidencePolicy": {"liveFollow": "disabled"},
+                }
+            }
+        },
+        artifact_refs=[],
+    )
+    link = SimpleNamespace(
+        remediation_workflow_id="remediation",
+        remediation_run_id="remediation-run",
+        target_workflow_id="target",
+        target_run_id="target-run",
+        authority_mode="observe_only",
+        mode="snapshot",
+    )
+
+    payload = RemediationContextBuilder(
+        session=object(), artifact_service=object()
+    )._build_payload(
+        link=link,
+        remediation_record=remediation_record,
+        target_record=target_record,
+    )
+
+    evidence = payload["evidence"]
+    assert evidence["evidenceDegraded"] is True
+    assert "execution_and_steps" in evidence["unavailableEvidenceClasses"]
+    assert "prior_remediation" in evidence["unavailableEvidenceClasses"]
 from moonmind.workflows.temporal.remediation_actions import (
     RemediationActionAuthorityService,
     RemediationMutationGuardPolicy,
@@ -61,6 +146,10 @@ from moonmind.workflows.temporal.remediation_tools import (
     RemediationLiveFollowEvent,
     RemediationLiveFollowResult,
     RemediationLogReadResult,
+)
+from moonmind.workflows.temporal.remediation_verification import (
+    RemediationVerificationPhase,
+    TargetEvidenceSnapshot,
 )
 from moonmind.workflows.temporal.service import TemporalExecutionService
 
@@ -94,29 +183,42 @@ async def _create_target_and_remediation(
         initial_parameters=_valid_user_workflow_parameters(),
         idempotency_key=None,
     )
-    remediation = await execution_service.create_execution(
-        workflow_type="MoonMind.UserWorkflow",
-        owner_id=owner,
-        title="Remediate target",
-        input_artifact_ref=None,
-        plan_artifact_ref=None,
-        manifest_artifact_ref=None,
-        failure_policy=None,
-        initial_parameters={
-            "workflow": {
-                "remediation": {
-                    "target": {"workflowId": target.workflow_id},
-                    "authorityMode": authority_mode,
-                    "actionPolicyRef": action_policy_ref,
-                    "approvalPolicy": {
-                        "mode": "risk_gated",
-                        "autoAllowedRisk": "medium",
-                    },
-                }
-            }
-        },
-        idempotency_key=None,
+    # This helper owns post-admission remediation tests. Gate-denial behavior is
+    # covered separately by TemporalExecutionService tests, so explicitly open
+    # the release gate only when a caller needs an admin_auto fixture.
+    release_gate = (
+        patch.object(
+            TemporalExecutionService,
+            "_autonomous_remediation_release_authorized",
+            return_value=True,
+        )
+        if authority_mode == "admin_auto"
+        else nullcontext()
     )
+    with release_gate:
+        remediation = await execution_service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=owner,
+            title="Remediate target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "workflow": {
+                    "remediation": {
+                        "target": {"workflowId": target.workflow_id},
+                        "authorityMode": authority_mode,
+                        "actionPolicyRef": action_policy_ref,
+                        "approvalPolicy": {
+                            "mode": "risk_gated",
+                            "autoAllowedRisk": "medium",
+                        },
+                    }
+                }
+            },
+            idempotency_key=None,
+        )
     return target, remediation
 
 def _admin_permissions(**overrides):
@@ -134,7 +236,12 @@ def _admin_profile(**overrides):
     data = {
         "profile_ref": "admin_healer",
         "execution_principal": "service:admin-healer",
-        "allowed_action_kinds": ("workload.restart_helper_container", "session.terminate"),
+        "allowed_action_kinds": (
+            "execution.pause",
+            "execution.force_terminate",
+            "workload.restart_helper_container",
+            "session.terminate",
+        ),
         "enabled": True,
     }
     data.update(overrides)
@@ -158,6 +265,16 @@ CANONICAL_REMEDIATION_ACTIONS = {
     "workload.reap_orphan_container",
 }
 
+REQUESTABLE_REMEDIATION_ACTIONS = {
+    "checkpoint_branch.create_from_remediation_context",
+    "execution.pause",
+    "execution.resume",
+    "execution.request_rerun_same_workflow",
+    "execution.start_fresh_rerun",
+    "execution.cancel",
+    "execution.force_terminate",
+}
+
 def test_remediation_action_authority_lists_canonical_mm483_action_registry():
     service = RemediationActionAuthorityService(session=object())
 
@@ -168,7 +285,7 @@ def test_remediation_action_authority_lists_canonical_mm483_action_registry():
         ),
     )
 
-    assert {item["actionKind"] for item in allowed} == CANONICAL_REMEDIATION_ACTIONS
+    assert {item["actionKind"] for item in allowed} == REQUESTABLE_REMEDIATION_ACTIONS
     for item in allowed:
         assert item["riskTier"] in {"low", "medium", "high"}
         assert item["targetType"]
@@ -178,6 +295,11 @@ def test_remediation_action_authority_lists_canonical_mm483_action_registry():
         assert item["verificationRequired"] is True
         assert item["verificationHint"]
         assert item["auditPayloadShape"]
+        assert item["requestable"] is True
+        assert item["executionBackendReady"] is True
+        assert item["approvalBackendReady"] is True
+        assert item["verificationBackendReady"] is True
+        assert item["blockedReasons"] == []
 
 def test_remediation_action_authority_rejects_legacy_action_aliases():
     service = RemediationActionAuthorityService(session=object())
@@ -194,10 +316,7 @@ def test_remediation_action_authority_rejects_legacy_action_aliases():
         ),
     )
 
-    assert {item["actionKind"] for item in allowed} == {
-        "workload.restart_helper_container",
-        "session.terminate",
-    }
+    assert allowed == ()
 
 def test_remediation_action_authority_lists_policy_compatible_actions():
     service = RemediationActionAuthorityService(session=object())
@@ -211,20 +330,20 @@ def test_remediation_action_authority_lists_policy_compatible_actions():
     allowed = service.list_allowed_actions(
         permissions=_admin_permissions(),
         security_profile=_admin_profile(
-            allowed_action_kinds=("workload.restart_helper_container",)
+            allowed_action_kinds=("execution.pause",)
         ),
     )
 
-    assert [item["actionKind"] for item in allowed] == ["workload.restart_helper_container"]
+    assert [item["actionKind"] for item in allowed] == ["execution.pause"]
     assert allowed[0]["riskTier"] == "medium"
-    assert allowed[0]["targetType"] == "workload_container"
+    assert allowed[0]["targetType"] == "execution"
     assert allowed[0]["inputMetadata"]["reason"]["required"] is False
 
     allowed[0]["inputMetadata"]["reason"]["required"] = True
     listed_again = service.list_allowed_actions(
         permissions=_admin_permissions(),
         security_profile=_admin_profile(
-            allowed_action_kinds=("workload.restart_helper_container",)
+            allowed_action_kinds=("execution.pause",)
         ),
     )
     assert listed_again[0]["inputMetadata"]["reason"]["required"] is False
@@ -249,7 +368,7 @@ def test_remediation_action_authority_does_not_advertise_raw_admin_actions():
     )
 
     action_kinds = {item["actionKind"] for item in allowed}
-    assert action_kinds == {"workload.restart_helper_container", "session.terminate"}
+    assert action_kinds == set()
     assert not action_kinds.intersection(
         {
             "raw_host_shell",
@@ -322,7 +441,23 @@ async def test_remediation_context_builder_creates_bounded_linked_artifact(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters=_valid_user_workflow_parameters(),
+            initial_parameters={
+                **_valid_user_workflow_parameters(),
+                "stepLedger": {
+                    "steps": [
+                        {
+                            "logicalStepId": "run-tests",
+                            "attempt": 1,
+                            "agentRunId": "tr_selected",
+                            "checkpointRef": "artifact://checkpoints/run-tests",
+                            "checkpointDigest": "sha256:runtests",
+                        }
+                    ]
+                },
+                "agentRuns": [
+                    {"agentRunId": f"tr_{index:02d}"} for index in range(25)
+                ],
+            },
             idempotency_key=None,
             summary="Target summary",
         )
@@ -356,7 +491,7 @@ async def test_remediation_context_builder_creates_bounded_linked_artifact(
                             "stepSelectors": [
                                 {
                                     "logicalStepId": "run-tests",
-                                    "attempt": "1",
+                                    "attempt": 1,
                                     "agentRunId": "tr_selected",
                                     "checkpointRef": "artifact://checkpoints/run-tests",
                                     "checkpointDigest": "sha256:runtests",
@@ -588,7 +723,7 @@ async def test_remediation_context_builder_enriches_agent_run_evidence_and_live_
                             "stepSelectors": [
                                 {
                                     "logicalStepId": "run-tests",
-                                    "attempt": "2",
+                                    "attempt": 2,
                                     "agentRunId": "tr_live",
                                 }
                             ],
@@ -636,7 +771,7 @@ async def test_remediation_context_builder_enriches_agent_run_evidence_and_live_
                 ],
             }
         ]
-        assert result.payload["evidence"]["availability"] == [
+        assert result.payload["evidence"]["availability"][:7] == [
             {"class": "stdout", "status": "available"},
             {"class": "stderr", "status": "available"},
             {"class": "merged_logs", "status": "available"},
@@ -645,7 +780,7 @@ async def test_remediation_context_builder_enriches_agent_run_evidence_and_live_
             {"class": "continuity", "status": "available"},
             {"class": "live_follow", "status": "available"},
         ]
-        assert result.payload["evidence"]["evidenceDegraded"] is False
+        assert result.payload["evidence"]["evidenceDegraded"] is True
         assert result.payload["evidence"]["diagnosisHints"] == [
             "Prefer diagnostics before merged logs"
         ]
@@ -804,7 +939,7 @@ async def test_remediation_context_builder_records_historical_degraded_evidence(
             }
         ]
         assert result.payload["evidence"]["evidenceDegraded"] is True
-        assert result.payload["evidence"]["unavailableEvidenceClasses"] == [
+        assert result.payload["evidence"]["unavailableEvidenceClasses"][:6] == [
             "stdout",
             "stderr",
             "diagnostics",
@@ -812,7 +947,7 @@ async def test_remediation_context_builder_records_historical_degraded_evidence(
             "continuity",
             "live_follow",
         ]
-        assert result.payload["evidence"]["availability"] == [
+        assert result.payload["evidence"]["availability"][:7] == [
             {
                 "class": "stdout",
                 "status": "missing",
@@ -920,10 +1055,15 @@ async def test_remediation_context_builder_marks_unsupported_live_follow_degrade
         ).build_context(remediation_workflow_id=remediation.workflow_id)
 
         assert result.payload["evidence"]["evidenceDegraded"] is True
-        assert result.payload["evidence"]["unavailableEvidenceClasses"] == [
+        assert result.payload["evidence"]["unavailableEvidenceClasses"][0] == (
             "live_follow"
-        ]
-        assert result.payload["evidence"]["availability"][-1] == {
+        )
+        live_follow_availability = next(
+            item
+            for item in result.payload["evidence"]["availability"]
+            if item["class"] == "live_follow"
+        )
+        assert live_follow_availability == {
             "class": "live_follow",
             "status": "unsupported",
             "reason": "agent run does not support live follow",
@@ -1093,6 +1233,7 @@ def test_remediation_lifecycle_repair_prevention_and_decision_log_are_bounded():
         decision="attempted",
         decision_reason="fresh_target_health_and_policy_allowed",
         repair_outcome="repaired",
+        verification_outcome="verified_resolved",
         fresh_target_health_ref="art_health",
         authority_decision_ref="art_authority",
         guard_decision_ref="art_guard",
@@ -1129,6 +1270,7 @@ def test_remediation_lifecycle_repair_prevention_and_decision_log_are_bounded():
             "verification": "art_verification",
         },
         "repairOutcome": "repaired",
+        "verificationOutcome": "verified_resolved",
         "metadata": {"safe": "value"},
     }
 
@@ -1384,6 +1526,39 @@ def test_remediation_lifecycle_contract_rejects_invalid_or_incomplete_values():
             repair_outcome="repaired",
             action_request_ref="art_request",
             action_result_ref="art_result",
+        )
+
+    # A delivered action may not be labeled repaired without a trusted
+    # verified_resolved verification outcome (issue #3622).
+    with pytest.raises(ValueError, match="verified_resolved"):
+        build_remediation_repair_decision(
+            target_workflow_id="target-workflow",
+            pinned_run_id="target-run",
+            decision="attempted",
+            decision_reason="fresh",
+            repair_outcome="repaired",
+            action_request_ref="art_request",
+            action_result_ref="art_result",
+            verification_ref="art_verification",
+            verification_outcome="still_failed",
+        )
+
+    with pytest.raises(ValueError, match="verified_resolved"):
+        build_remediation_final_summary(
+            summary=build_remediation_summary_block(
+                target_workflow_id="target-workflow",
+                target_run_id="target-run",
+                phase="resolved",
+                mode="snapshot_then_follow",
+                authority_mode="admin_auto",
+            ),
+            repair={"decision": "attempted", "repairOutcome": "repaired"},
+            prevention=build_remediation_prevention_outcome(
+                status="no_reviewable_fix",
+                root_cause_category="none",
+                summary="No recurring defect.",
+            ),
+            lock_release="released",
         )
 
     with pytest.raises(ValueError, match="pullRequestUrl"):
@@ -1758,10 +1933,6 @@ class RecordingActionExecutor:
             "beforeStateRef": "artifact://before-state",
             "afterStateRef": "artifact://after-state",
             "sideEffects": [{"kind": "subsystem_call", "status": "accepted"}],
-            "verification": {
-                "status": "verified",
-                "targetWorkflowId": target_health.workflow_id,
-            },
         }
 
 
@@ -1786,7 +1957,6 @@ class SensitiveHintActionExecutor:
                 "with token=raw-secret-token"
             ),
             "sideEffects": [{"kind": "subsystem_call", "status": "accepted"}],
-            "verification": {"status": "verified"},
         }
 
 
@@ -1807,7 +1977,6 @@ class StatusOnlyActionExecutor:
             "status": self.status,
             "message": f"returned {self.status}",
             "sideEffects": [],
-            "verification": {"status": "not_verified"},
         }
 
 async def _read_artifact_json(artifact_service, artifact_id: str):
@@ -1843,7 +2012,10 @@ async def test_remediation_evidence_tools_read_only_context_declared_evidence(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters=_valid_user_workflow_parameters(),
+            initial_parameters={
+                **_valid_user_workflow_parameters(),
+                "agentRuns": [{"agentRunId": "tr_allowed"}],
+            },
             idempotency_key=None,
         )
         target_artifact, _upload = await artifact_service.create(
@@ -1980,7 +2152,10 @@ async def test_remediation_evidence_tools_gate_live_follow_by_context_policy(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters=_valid_user_workflow_parameters(),
+            initial_parameters={
+                **_valid_user_workflow_parameters(),
+                "agentRuns": [{"agentRunId": "tr_live"}],
+            },
             idempotency_key=None,
         )
         remediation = await execution_service.create_execution(
@@ -2103,7 +2278,10 @@ async def test_remediation_evidence_tools_prepare_action_request_rereads_target_
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters=_valid_user_workflow_parameters(),
+            initial_parameters={
+                **_valid_user_workflow_parameters(),
+                "agentRuns": [{"agentRunId": "tr_action"}],
+            },
             idempotency_key=None,
             summary="Initial target summary",
         )
@@ -2191,13 +2369,13 @@ async def test_remediation_execute_action_delegates_and_publishes_lifecycle_arti
         )
         await builder.build_context(remediation_workflow_id=remediation.workflow_id)
 
-        action_kind = "workload.restart_helper_container"
+        action_kind = "execution.pause"
         authority = await RemediationActionAuthorityService(
             session=session
         ).evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
             action_kind=action_kind,
-            parameters={"reason": "restart helper"},
+            parameters={"reason": "pause execution"},
             dry_run=False,
             idempotency_key="execute-action-1",
             requesting_principal="workflow:remediator",
@@ -2213,7 +2391,7 @@ async def test_remediation_execute_action_delegates_and_publishes_lifecycle_arti
             target_run_id=target.run_id,
             action_kind=action_kind,
             idempotency_key="execute-action-1",
-            parameters={"reason": "restart helper"},
+            parameters={"reason": "pause execution"},
             policy=RemediationMutationGuardPolicy(cooldown_seconds=0),
             now=datetime(2026, 4, 23, tzinfo=timezone.utc),
         )
@@ -2268,6 +2446,152 @@ async def test_remediation_execute_action_delegates_and_publishes_lifecycle_arti
 
 
 @pytest.mark.asyncio
+async def test_execute_action_preserves_approval_lifecycle_artifact_refs(
+    tmp_path, mock_client_adapter
+):
+    """Action evidence must extend the approval lifecycle for issue #3620."""
+
+    async with temporal_db(tmp_path) as session:
+        target, remediation = await _create_target_and_remediation(
+            session,
+            mock_client_adapter,
+            authority_mode="admin_auto",
+        )
+        artifact_service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        await RemediationContextBuilder(
+            session=session,
+            artifact_service=artifact_service,
+        ).build_context(remediation_workflow_id=remediation.workflow_id)
+
+        action_kind = "execution.pause"
+        parameters = {"reason": "pause execution"}
+        authority = await RemediationActionAuthorityService(
+            session=session
+        ).evaluate_action_request(
+            remediation_workflow_id=remediation.workflow_id,
+            action_kind=action_kind,
+            parameters=parameters,
+            dry_run=False,
+            idempotency_key="issue-3620-artifact-links",
+            requesting_principal="workflow:remediator",
+            permissions=_admin_permissions(),
+            security_profile=_admin_profile(allowed_action_kinds=(action_kind,)),
+        )
+        guard = await RemediationMutationGuardService(session=session).evaluate(
+            remediation_workflow_id=remediation.workflow_id,
+            remediation_run_id=remediation.run_id,
+            target_workflow_id=target.workflow_id,
+            target_run_id=target.run_id,
+            action_kind=action_kind,
+            idempotency_key="issue-3620-artifact-links",
+            parameters=parameters,
+            policy=RemediationMutationGuardPolicy(cooldown_seconds=0),
+            now=datetime(2026, 4, 23, tzinfo=timezone.utc),
+        )
+        link = await session.get(
+            TemporalExecutionRemediationLink,
+            remediation.workflow_id,
+        )
+        assert link is not None
+        link.approval_state = {
+            "approvalRef": "approval://remediation/issue-3620-artifact-links",
+            "status": "approved",
+            "expiresAt": (
+                datetime.now(timezone.utc) + timedelta(minutes=5)
+            ).isoformat(),
+            "requestDigest": "request-digest",
+            "artifactRefs": {
+                "approvalRequest": "artifact-approval-request",
+                "approvalDecision": "artifact-approval-decision",
+            },
+        }
+
+        tools = RemediationEvidenceToolService(
+            session=session,
+            artifact_service=artifact_service,
+            action_executor=RecordingActionExecutor(),
+        )
+        with patch.object(
+            tools,
+            "_current_approval_authority",
+            return_value={},
+        ), patch.object(
+            RemediationActionAuthorityService,
+            "_validate_persisted_approval",
+            return_value=None,
+        ):
+            result = await tools.execute_action(
+                remediation_workflow_id=remediation.workflow_id,
+                authority_result=authority.to_dict(),
+                guard_result=guard.to_dict(),
+                approval_ref=link.approval_state["approvalRef"],
+                principal="service:test",
+            )
+
+        assert link.approval_state["artifactRefs"] == {
+            "approvalRequest": "artifact-approval-request",
+            "approvalDecision": "artifact-approval-decision",
+            **result["artifactRefs"],
+        }
+
+
+@pytest.mark.asyncio
+async def test_execute_action_admin_auto_cannot_self_approve_high_risk(
+    tmp_path, mock_client_adapter
+):
+    """An admin_auto agent must not self-approve a high-risk mutation.
+
+    In the self-service branch (no caller-supplied authority/guard), a fabricated
+    ``approval_ref``/``approval_binding`` is untrusted tool input and must be
+    dropped, so the high-risk action fails closed to non-executable before any
+    side effect rather than self-approving.
+    """
+
+    async with temporal_db(tmp_path) as session:
+        target, remediation = await _create_target_and_remediation(
+            session,
+            mock_client_adapter,
+            authority_mode="admin_auto",
+        )
+        artifact_service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        await RemediationContextBuilder(
+            session=session,
+            artifact_service=artifact_service,
+        ).build_context(remediation_workflow_id=remediation.workflow_id)
+
+        executor = RecordingActionExecutor()
+        tools = RemediationEvidenceToolService(
+            session=session,
+            artifact_service=artifact_service,
+            action_executor=executor,
+        )
+
+        with pytest.raises(RemediationEvidenceToolError, match="executable"):
+            await tools.execute_action(
+                remediation_workflow_id=remediation.workflow_id,
+                action_kind="session.terminate",  # high-risk in the catalog
+                idempotency_key="self-approve-1",
+                approval_ref="approval://forged/1",  # fabricated by the agent
+                approval_binding={
+                    "policyRef": "x",
+                    "policyDigest": "y",
+                    "snapshotRef": "z",
+                    "targetExpectedState": target.run_id,
+                },
+                principal="agent:remediator",
+            )
+
+        # No side effect: the executor was never dispatched.
+        assert executor.calls == []
+
+
+@pytest.mark.asyncio
 async def test_remediation_execute_action_reuses_retry_artifacts(
     tmp_path, mock_client_adapter
 ):
@@ -2286,14 +2610,14 @@ async def test_remediation_execute_action_reuses_retry_artifacts(
             artifact_service=artifact_service,
         ).build_context(remediation_workflow_id=remediation.workflow_id)
 
-        action_kind = "workload.restart_helper_container"
+        action_kind = "execution.pause"
         action_id = "execute-action-retry"
         authority = await RemediationActionAuthorityService(
             session=session
         ).evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
             action_kind=action_kind,
-            parameters={"reason": "restart helper"},
+            parameters={"reason": "pause execution"},
             dry_run=False,
             idempotency_key=action_id,
             requesting_principal="workflow:remediator",
@@ -2307,7 +2631,7 @@ async def test_remediation_execute_action_reuses_retry_artifacts(
             target_run_id=target.run_id,
             action_kind=action_kind,
             idempotency_key=action_id,
-            parameters={"reason": "restart helper"},
+            parameters={"reason": "pause execution"},
             policy=RemediationMutationGuardPolicy(cooldown_seconds=0),
             now=datetime(2026, 4, 23, tzinfo=timezone.utc),
         )
@@ -2379,14 +2703,16 @@ async def test_remediation_execute_action_publishes_v1_request_and_result_artifa
             artifact_service=artifact_service,
         ).build_context(remediation_workflow_id=remediation.workflow_id)
 
-        action_kind = "workload.restart_helper_container"
+        action_kind = "execution.pause"
         action_id = "execute-action-v1"
         authority = await RemediationActionAuthorityService(
             session=session
         ).evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
             action_kind=action_kind,
-            parameters={"reason": "Authorization: Bearer raw-secret-token"},
+            parameters={
+                "reason": "Authorization: Bearer raw-secret-token",
+            },
             dry_run=False,
             idempotency_key=action_id,
             requesting_principal="workflow:remediator",
@@ -2400,7 +2726,7 @@ async def test_remediation_execute_action_publishes_v1_request_and_result_artifa
             target_run_id=target.run_id,
             action_kind=action_kind,
             idempotency_key=action_id,
-            parameters={"reason": "restart helper"},
+            parameters={"reason": "pause execution"},
             policy=RemediationMutationGuardPolicy(cooldown_seconds=0),
             now=datetime(2026, 4, 23, tzinfo=timezone.utc),
         )
@@ -2430,7 +2756,7 @@ async def test_remediation_execute_action_publishes_v1_request_and_result_artifa
         assert request_payload["requester"] == "workflow:remediator"
         assert request_payload["target"] == {
             "workflowId": target.workflow_id,
-            "resourceKind": "workload_container",
+            "resourceKind": "execution",
         }
         assert request_payload["riskTier"] == "medium"
         assert request_payload["dryRun"] is False
@@ -2472,13 +2798,13 @@ async def test_remediation_execute_action_rejects_unsupported_result_status(
             artifact_service=artifact_service,
         ).build_context(remediation_workflow_id=remediation.workflow_id)
 
-        action_kind = "workload.restart_helper_container"
+        action_kind = "execution.pause"
         authority = await RemediationActionAuthorityService(
             session=session
         ).evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
             action_kind=action_kind,
-            parameters={"reason": "restart helper"},
+            parameters={"reason": "pause execution"},
             dry_run=False,
             idempotency_key="unsupported-status",
             requesting_principal="workflow:remediator",
@@ -2492,7 +2818,7 @@ async def test_remediation_execute_action_rejects_unsupported_result_status(
             target_run_id=target.run_id,
             action_kind=action_kind,
             idempotency_key="unsupported-status",
-            parameters={"reason": "restart helper"},
+            parameters={"reason": "pause execution"},
             policy=RemediationMutationGuardPolicy(cooldown_seconds=0),
             now=datetime(2026, 4, 23, tzinfo=timezone.utc),
         )
@@ -2530,13 +2856,13 @@ async def test_remediation_execute_action_rejects_mismatched_authority_or_guard_
         )
         await builder.build_context(remediation_workflow_id=remediation.workflow_id)
 
-        action_kind = "workload.restart_helper_container"
+        action_kind = "execution.pause"
         authority = await RemediationActionAuthorityService(
             session=session
         ).evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
             action_kind=action_kind,
-            parameters={"reason": "restart helper"},
+            parameters={"reason": "pause execution"},
             dry_run=False,
             idempotency_key="execute-action-context",
             requesting_principal="workflow:remediator",
@@ -2552,7 +2878,7 @@ async def test_remediation_execute_action_rejects_mismatched_authority_or_guard_
             target_run_id=target.run_id,
             action_kind=action_kind,
             idempotency_key="execute-action-context",
-            parameters={"reason": "restart helper"},
+            parameters={"reason": "pause execution"},
             policy=RemediationMutationGuardPolicy(cooldown_seconds=0),
             now=datetime(2026, 4, 23, tzinfo=timezone.utc),
         )
@@ -2658,7 +2984,7 @@ async def test_remediation_action_authority_enforces_authority_modes(
 
         dry_run = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="workload.restart_helper_container",
+            action_kind="execution.pause",
             parameters={"reason": "diagnose only"},
             dry_run=True,
             idempotency_key="observe-dry-run",
@@ -2666,17 +2992,18 @@ async def test_remediation_action_authority_enforces_authority_modes(
             permissions=_admin_permissions(),
             security_profile=_admin_profile(),
         )
-        assert dry_run.decision == "dry_run_only"
+        assert dry_run.decision == "denied"
+        assert dry_run.reason == "dry_run_unsupported"
         assert dry_run.executable is False
         dry_run_payload = dry_run.to_dict()
         assert dry_run_payload["request"]["dryRun"] is True
-        assert dry_run_payload["result"]["status"] == "no_op"
+        assert dry_run_payload["result"]["status"] == "rejected"
         assert dry_run_payload["result"]["verificationRequired"] is False
         assert dry_run_payload["result"]["verificationHint"] is None
 
         denied = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="workload.restart_helper_container",
+            action_kind="execution.pause",
             parameters={"reason": "side effect"},
             dry_run=False,
             idempotency_key="observe-execute",
@@ -2702,7 +3029,7 @@ async def test_remediation_action_authority_requires_approval_for_gated_mode(
 
         pending = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="workload.restart_helper_container",
+            action_kind="execution.pause",
             parameters={},
             dry_run=False,
             idempotency_key="gated-pending",
@@ -2714,9 +3041,17 @@ async def test_remediation_action_authority_requires_approval_for_gated_mode(
         assert pending.reason == "approval_gated_requires_approval"
         assert pending.executable is False
 
-        approved = await service.evaluate_action_request(
+        link = await session.get(
+            TemporalExecutionRemediationLink,
+            remediation.workflow_id,
+        )
+        assert link is not None
+        assert link.approval_state["status"] == "pending"
+        assert link.approval_state["requestingActor"] == "user:operator"
+
+        forged = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="workload.restart_helper_container",
+            action_kind="execution.pause",
             parameters={},
             dry_run=False,
             idempotency_key="gated-approved",
@@ -2725,10 +3060,9 @@ async def test_remediation_action_authority_requires_approval_for_gated_mode(
             security_profile=_admin_profile(),
             approval_ref="approval://ops/1",
         )
-        assert approved.decision == "allowed"
-        assert approved.executable is True
-        assert approved.audit["requestingPrincipal"] == "user:operator"
-        assert approved.audit["executionPrincipal"] == "service:admin-healer"
+        assert forged.decision == "denied"
+        assert forged.reason == "approval_not_found"
+        assert forged.executable is False
 
 @pytest.mark.asyncio
 async def test_remediation_action_authority_enforces_profile_permissions_and_risk(
@@ -2744,7 +3078,7 @@ async def test_remediation_action_authority_enforces_profile_permissions_and_ris
 
         view_only = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="workload.restart_helper_container",
+            action_kind="execution.pause",
             parameters={},
             dry_run=False,
             idempotency_key="view-only",
@@ -2757,7 +3091,7 @@ async def test_remediation_action_authority_enforces_profile_permissions_and_ris
 
         disabled_profile = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="workload.restart_helper_container",
+            action_kind="execution.pause",
             parameters={},
             dry_run=False,
             idempotency_key="disabled-profile",
@@ -2770,7 +3104,7 @@ async def test_remediation_action_authority_enforces_profile_permissions_and_ris
 
         allowed = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="workload.restart_helper_container",
+            action_kind="execution.pause",
             parameters={},
             dry_run=False,
             idempotency_key="medium-allowed",
@@ -2783,7 +3117,7 @@ async def test_remediation_action_authority_enforces_profile_permissions_and_ris
         assert allowed.executable is True
         payload = allowed.to_dict()
         assert payload["schemaVersion"] == "v1"
-        assert payload["request"]["actionKind"] == "workload.restart_helper_container"
+        assert payload["request"]["actionKind"] == "execution.pause"
         assert payload["request"]["riskTier"] == "medium"
         assert payload["request"]["dryRun"] is False
         assert payload["result"]["status"] == "applied"
@@ -2794,7 +3128,7 @@ async def test_remediation_action_authority_enforces_profile_permissions_and_ris
 
         high_risk = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="session.terminate",
+            action_kind="execution.force_terminate",
             parameters={},
             dry_run=False,
             idempotency_key="high-risk",
@@ -2827,7 +3161,7 @@ async def test_remediation_action_authority_rejects_unsupported_authority_mode(
         service = RemediationActionAuthorityService(session=session)
         result = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="workload.restart_helper_container",
+            action_kind="execution.pause",
             parameters={},
             dry_run=False,
             idempotency_key="unsupported-authority",
@@ -2854,7 +3188,7 @@ async def test_remediation_action_authority_cache_keys_include_request_shape(
 
         allowed = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="workload.restart_helper_container",
+            action_kind="execution.pause",
             parameters={},
             dry_run=False,
             idempotency_key="same-idempotency-key",
@@ -2864,7 +3198,7 @@ async def test_remediation_action_authority_cache_keys_include_request_shape(
         )
         high_risk = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="session.terminate",
+            action_kind="execution.force_terminate",
             parameters={},
             dry_run=False,
             idempotency_key="same-idempotency-key",
@@ -2874,7 +3208,7 @@ async def test_remediation_action_authority_cache_keys_include_request_shape(
         )
         dry_run = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="workload.restart_helper_container",
+            action_kind="execution.pause",
             parameters={},
             dry_run=True,
             idempotency_key="same-idempotency-key",
@@ -3050,14 +3384,16 @@ async def test_remediation_action_authority_uses_prepared_action_context(
         )
         preparation = await tools.prepare_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="workload.restart_helper_container",
+            action_kind="execution.pause",
         )
 
         service = RemediationActionAuthorityService(session=session)
         decision = await service.evaluate_action_request(
             remediation_workflow_id=preparation.remediation_workflow_id,
             action_kind=preparation.action_kind,
-            parameters={"reason": f"target state was {preparation.target.state}"},
+            parameters={
+                "reason": f"target state was {preparation.target.state}",
+            },
             dry_run=False,
             idempotency_key="prepared-action",
             requesting_principal="workflow:remediator",
@@ -3083,7 +3419,7 @@ async def test_remediation_action_authority_validates_action_inputs(
 
         invalid = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="workload.restart_helper_container",
+            action_kind="execution.pause",
             parameters={"unknown": "value"},
             dry_run=False,
             idempotency_key="invalid-inputs",
@@ -3098,7 +3434,7 @@ async def test_remediation_action_authority_validates_action_inputs(
 
         wrong_type = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="workload.restart_helper_container",
+            action_kind="execution.pause",
             parameters={"reason": False},
             dry_run=False,
             idempotency_key="invalid-input-type",
@@ -3338,26 +3674,31 @@ async def test_remediation_mutation_guard_persists_locks_and_ledger_across_servi
         mock_client_adapter.start_workflow.side_effect = [
             SimpleNamespace(run_id="other-run")
         ]
-        other = await TemporalExecutionService(
-            session, client_adapter=mock_client_adapter
-        ).create_execution(
-            workflow_type="MoonMind.UserWorkflow",
-            owner_id=target.owner_id,
-            title="Second remediator",
-            input_artifact_ref=None,
-            plan_artifact_ref=None,
-            manifest_artifact_ref=None,
-            failure_policy=None,
-            initial_parameters={
-                "workflow": {
-                    "remediation": {
-                        "target": {"workflowId": target.workflow_id},
-                        "authorityMode": "admin_auto",
+        with patch.object(
+            TemporalExecutionService,
+            "_autonomous_remediation_release_authorized",
+            return_value=True,
+        ):
+            other = await TemporalExecutionService(
+                session, client_adapter=mock_client_adapter
+            ).create_execution(
+                workflow_type="MoonMind.UserWorkflow",
+                owner_id=target.owner_id,
+                title="Second remediator",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={
+                    "workflow": {
+                        "remediation": {
+                            "target": {"workflowId": target.workflow_id},
+                            "authorityMode": "admin_auto",
+                        }
                     }
-                }
-            },
-            idempotency_key=None,
-        )
+                },
+                idempotency_key=None,
+            )
         now = datetime(2026, 4, 22, tzinfo=timezone.utc)
         policy = RemediationMutationGuardPolicy(
             lock_ttl_seconds=60,
@@ -3631,3 +3972,406 @@ async def test_remediation_mutation_guard_serialization_redacts_sensitive_values
         assert "secret-token-value" not in serialized
         assert "/work/agent_jobs" not in serialized
         assert "X-Amz-Signature" not in serialized
+
+
+class _ScriptedVerificationReader:
+    """Deterministic fresh-evidence reader for verification-phase wiring tests."""
+
+    def __init__(self, *, before, after_sequence):
+        self._before = before
+        self._after = list(after_sequence)
+        self._index = -1
+
+    async def read_target_evidence(
+        self, *, contract, workflow_id, stage, pinned_run_id=None
+    ):
+        if stage == "before":
+            return self._before
+        self._index += 1
+        idx = min(self._index, len(self._after) - 1)
+        return self._after[idx]
+
+
+async def _noop_verification_sleep(_seconds):
+    return None
+
+
+def _verification_snapshot(stage, *, state, close_status=None, run_id="target-run", paused=None):
+    return TargetEvidenceSnapshot(
+        stage=stage,
+        available=True,
+        workflow_id="wf",
+        run_id=run_id,
+        state=state,
+        close_status=close_status,
+        paused=paused,
+    )
+
+
+async def _run_verified_cancel(session, tmp_path, mock_client_adapter, *, after_sequence):
+    """Drive execute_action for execution.cancel with a scripted verifier."""
+
+    target, remediation = await _create_target_and_remediation(
+        session,
+        mock_client_adapter,
+        authority_mode="admin_auto",
+    )
+    artifact_service = TemporalArtifactService(
+        TemporalArtifactRepository(session),
+        store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+    )
+    await RemediationContextBuilder(
+        session=session,
+        artifact_service=artifact_service,
+    ).build_context(remediation_workflow_id=remediation.workflow_id)
+
+    action_kind = "execution.cancel"
+    parameters = {"reason": "cancel target"}
+    authority = await RemediationActionAuthorityService(
+        session=session
+    ).evaluate_action_request(
+        remediation_workflow_id=remediation.workflow_id,
+        action_kind=action_kind,
+        parameters=parameters,
+        dry_run=False,
+        idempotency_key="verify-cancel-1",
+        requesting_principal="workflow:remediator",
+        permissions=_admin_permissions(),
+        security_profile=_admin_profile(allowed_action_kinds=(action_kind,)),
+    )
+    guard = await RemediationMutationGuardService(session=session).evaluate(
+        remediation_workflow_id=remediation.workflow_id,
+        remediation_run_id=remediation.run_id,
+        target_workflow_id=target.workflow_id,
+        target_run_id=target.run_id,
+        action_kind=action_kind,
+        idempotency_key="verify-cancel-1",
+        parameters=parameters,
+        policy=RemediationMutationGuardPolicy(cooldown_seconds=0),
+        now=datetime(2026, 4, 23, tzinfo=timezone.utc),
+    )
+
+    before = _verification_snapshot("before", state="executing")
+    phase = RemediationVerificationPhase(
+        reader=_ScriptedVerificationReader(before=before, after_sequence=after_sequence),
+        sleep=_noop_verification_sleep,
+        is_canceled=lambda: False,
+    )
+    executor = RecordingActionExecutor()
+    tools = RemediationEvidenceToolService(
+        session=session,
+        artifact_service=artifact_service,
+        action_executor=executor,
+        verification_phase=phase,
+    )
+    result = await tools.execute_action(
+        remediation_workflow_id=remediation.workflow_id,
+        authority_result=authority.to_dict(),
+        guard_result=guard.to_dict(),
+        principal="service:test",
+    )
+    link = await session.get(TemporalExecutionRemediationLink, remediation.workflow_id)
+    verification_payload = await _read_artifact_json(
+        artifact_service, result["artifactRefs"]["verification"]
+    )
+    return result, link, verification_payload, artifact_service
+
+
+@pytest.mark.asyncio
+async def test_execute_action_verification_phase_reports_verified_resolved(
+    tmp_path, mock_client_adapter
+):
+    """A cancel that reaches a terminal state is verified as resolved, and the
+    repair outcome is recorded separately from the delivery status."""
+
+    async with temporal_db(tmp_path) as session:
+        after = [
+            _verification_snapshot(
+                "immediate_after", state="canceled", close_status="canceled"
+            )
+        ]
+        result, link, verification_payload, _svc = await _run_verified_cancel(
+            session, tmp_path, mock_client_adapter, after_sequence=after
+        )
+
+        assert result["status"] == "applied"  # delivery
+        assert result["verification"]["outcome"] == "verified_resolved"  # repair
+        assert result["verification"]["deliveryStatus"] == "applied"
+        assert verification_payload["status"] == "verified_resolved"
+        assert verification_payload["outcome"] == "verified_resolved"
+        assert verification_payload["deliveryStatus"] == "applied"
+        assert "before" in verification_payload["targetStates"]
+        assert "immediateAfter" in verification_payload["targetStates"]
+        # Delivery and repair are separate durable projections.
+        assert link.outcome == "applied"
+        assert link.verification_outcome == "verified_resolved"
+
+
+@pytest.mark.asyncio
+async def test_execute_action_delivered_but_target_still_failed_is_not_repaired(
+    tmp_path, mock_client_adapter
+):
+    """A delivered action must not relabel a still-failing target as repaired."""
+
+    async with temporal_db(tmp_path) as session:
+        after = [
+            _verification_snapshot("immediate_after", state="executing"),
+            _verification_snapshot("stabilized", state="executing"),
+        ]
+        result, link, verification_payload, _svc = await _run_verified_cancel(
+            session, tmp_path, mock_client_adapter, after_sequence=after
+        )
+
+        assert result["status"] == "applied"
+        assert result["verification"]["outcome"] == "still_failed"
+        assert verification_payload["outcome"] == "still_failed"
+        assert link.outcome == "applied"
+        assert link.verification_outcome == "still_failed"
+
+
+@pytest.mark.asyncio
+async def test_execute_action_verification_artifact_metadata_carries_classification(
+    tmp_path, mock_client_adapter
+):
+    """The verification artifact metadata exposes the classification for the UI."""
+
+    async with temporal_db(tmp_path) as session:
+        after = [
+            _verification_snapshot(
+                "immediate_after", state="canceled", close_status="canceled"
+            )
+        ]
+        result, _link, _payload, artifact_service = await _run_verified_cancel(
+            session, tmp_path, mock_client_adapter, after_sequence=after
+        )
+        artifact, _payload_bytes = await artifact_service.read(
+            artifact_id=result["artifactRefs"]["verification"],
+            principal="service:test",
+        )
+        assert artifact.metadata_json["verificationOutcome"] == "verified_resolved"
+        assert artifact.metadata_json["verificationDeliveryStatus"] == "applied"
+
+
+async def _cancel_authority_and_guard(
+    session, target, remediation, *, idempotency_key
+):
+    action_kind = "execution.cancel"
+    parameters = {"reason": "cancel target"}
+    authority = await RemediationActionAuthorityService(
+        session=session
+    ).evaluate_action_request(
+        remediation_workflow_id=remediation.workflow_id,
+        action_kind=action_kind,
+        parameters=parameters,
+        dry_run=False,
+        idempotency_key=idempotency_key,
+        requesting_principal="workflow:remediator",
+        permissions=_admin_permissions(),
+        security_profile=_admin_profile(allowed_action_kinds=(action_kind,)),
+    )
+    guard = await RemediationMutationGuardService(session=session).evaluate(
+        remediation_workflow_id=remediation.workflow_id,
+        remediation_run_id=remediation.run_id,
+        target_workflow_id=target.workflow_id,
+        target_run_id=target.run_id,
+        action_kind=action_kind,
+        idempotency_key=idempotency_key,
+        parameters=parameters,
+        policy=RemediationMutationGuardPolicy(cooldown_seconds=0),
+        now=datetime(2026, 4, 23, tzinfo=timezone.utc),
+    )
+    return authority, guard
+
+
+@pytest.mark.asyncio
+async def test_execute_action_reuses_persisted_verification_on_retry_dedup(
+    tmp_path, mock_client_adapter
+):
+    """A retry after the verification artifact was published must reuse the
+    persisted authoritative outcome, not a freshly recomputed one (issue #3622)."""
+
+    async with temporal_db(tmp_path) as session:
+        target, remediation = await _create_target_and_remediation(
+            session, mock_client_adapter, authority_mode="admin_auto"
+        )
+        artifact_service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        await RemediationContextBuilder(
+            session=session, artifact_service=artifact_service
+        ).build_context(remediation_workflow_id=remediation.workflow_id)
+
+        before = _verification_snapshot("before", state="executing")
+
+        # First attempt: fresh evidence shows a terminal (canceled) state, so the
+        # verification artifact is published as verified_resolved.
+        authority, guard = await _cancel_authority_and_guard(
+            session, target, remediation, idempotency_key="verify-cancel-retry"
+        )
+        first_result = await RemediationEvidenceToolService(
+            session=session,
+            artifact_service=artifact_service,
+            action_executor=RecordingActionExecutor(),
+            verification_phase=RemediationVerificationPhase(
+                reader=_ScriptedVerificationReader(
+                    before=before,
+                    after_sequence=[
+                        _verification_snapshot(
+                            "immediate_after",
+                            state="canceled",
+                            close_status="canceled",
+                        )
+                    ],
+                ),
+                sleep=_noop_verification_sleep,
+                is_canceled=lambda: False,
+            ),
+        ).execute_action(
+            remediation_workflow_id=remediation.workflow_id,
+            authority_result=authority.to_dict(),
+            guard_result=guard.to_dict(),
+            principal="service:test",
+        )
+        assert first_result["verification"]["outcome"] == "verified_resolved"
+
+        # Retry with the same action identity but evidence that would recompute
+        # still_failed. The verification artifact dedups to the persisted one, so
+        # projections and the response must reflect the persisted outcome.
+        authority2, guard2 = await _cancel_authority_and_guard(
+            session, target, remediation, idempotency_key="verify-cancel-retry"
+        )
+        retry_result = await RemediationEvidenceToolService(
+            session=session,
+            artifact_service=artifact_service,
+            action_executor=RecordingActionExecutor(),
+            verification_phase=RemediationVerificationPhase(
+                reader=_ScriptedVerificationReader(
+                    before=before,
+                    after_sequence=[
+                        _verification_snapshot("immediate_after", state="executing"),
+                        _verification_snapshot("stabilized", state="executing"),
+                    ],
+                ),
+                sleep=_noop_verification_sleep,
+                is_canceled=lambda: False,
+            ),
+        ).execute_action(
+            remediation_workflow_id=remediation.workflow_id,
+            authority_result=authority2.to_dict(),
+            guard_result=guard2.to_dict(),
+            principal="service:test",
+        )
+
+        assert (
+            retry_result["artifactRefs"]["verification"]
+            == first_result["artifactRefs"]["verification"]
+        )
+        assert retry_result["verification"]["outcome"] == "verified_resolved"
+        link = await session.get(
+            TemporalExecutionRemediationLink, remediation.workflow_id
+        )
+        assert link.verification_outcome == "verified_resolved"
+        verification_payload = await _read_artifact_json(
+            artifact_service, retry_result["artifactRefs"]["verification"]
+        )
+        assert verification_payload["outcome"] == "verified_resolved"
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_summary_records_resolution_without_clobbering_delivery(
+    tmp_path, mock_client_adapter
+):
+    """The lifecycle resolution is stored distinctly from the delivery status
+    (issue #3622); it must not overwrite link.outcome."""
+
+    async with temporal_db(tmp_path) as session:
+        target, remediation = await _create_target_and_remediation(
+            session, mock_client_adapter, authority_mode="admin_auto"
+        )
+        artifact_service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        await RemediationContextBuilder(
+            session=session, artifact_service=artifact_service
+        ).build_context(remediation_workflow_id=remediation.workflow_id)
+
+        before = _verification_snapshot("before", state="executing")
+        authority, guard = await _cancel_authority_and_guard(
+            session, target, remediation, idempotency_key="lifecycle-delivery"
+        )
+        service = RemediationEvidenceToolService(
+            session=session,
+            artifact_service=artifact_service,
+            action_executor=RecordingActionExecutor(),
+            verification_phase=RemediationVerificationPhase(
+                reader=_ScriptedVerificationReader(
+                    before=before,
+                    after_sequence=[
+                        _verification_snapshot(
+                            "immediate_after",
+                            state="canceled",
+                            close_status="canceled",
+                        )
+                    ],
+                ),
+                sleep=_noop_verification_sleep,
+                is_canceled=lambda: False,
+            ),
+        )
+        await service.execute_action(
+            remediation_workflow_id=remediation.workflow_id,
+            authority_result=authority.to_dict(),
+            guard_result=guard.to_dict(),
+            principal="service:test",
+        )
+
+        link = await session.get(
+            TemporalExecutionRemediationLink, remediation.workflow_id
+        )
+        assert link.outcome == "applied"
+        assert link.resolution is None
+
+        summary_block = build_remediation_summary_block(
+            target_workflow_id=target.workflow_id,
+            target_run_id=target.run_id,
+            phase="resolved",
+            mode="snapshot_then_follow",
+            authority_mode="admin_auto",
+            resolution="resolved_after_action",
+        )
+        await service.publish_lifecycle_summary(
+            remediation_workflow_id=remediation.workflow_id,
+            summary=summary_block,
+            repair=build_remediation_repair_decision(
+                target_workflow_id=target.workflow_id,
+                pinned_run_id=target.run_id,
+                decision="skipped",
+                decision_reason="target_already_healthy",
+                repair_outcome="not_attempted",
+            ),
+            prevention=build_remediation_prevention_outcome(
+                status="no_reviewable_fix",
+                root_cause_category="none",
+                summary="No recurring defect.",
+            ),
+            decision_log_entries=(
+                {
+                    "timestamp": "2026-04-23T00:00:00Z",
+                    "phase": "resolved",
+                    "decisionType": "lifecycle_summary",
+                    "decision": "skipped",
+                    "reason": "target_already_healthy",
+                    "actor": "service:test",
+                    "targetWorkflowId": target.workflow_id,
+                    "targetRunId": target.run_id,
+                },
+            ),
+            lock_release="released",
+        )
+
+        await session.refresh(link)
+        # Delivery status is preserved; resolution is recorded separately.
+        assert link.outcome == "applied"
+        assert link.resolution == "resolved_after_action"

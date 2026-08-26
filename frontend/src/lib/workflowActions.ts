@@ -17,6 +17,33 @@ export const ExecutionActionsSchema = z
     canPause: z.boolean().optional(),
     canResume: z.boolean().optional(),
     canResumeFromFailedStep: z.boolean().optional(),
+    canContinueRemediation: z.boolean().optional(),
+    canRetryPublication: z.boolean().optional(),
+    canFullRetry: z.boolean().optional(),
+    actionEvidence: z.record(
+      z.string(),
+      z.object({
+        candidateRef: z.string().nullable().optional(),
+        remainingWorkRef: z.string().nullable().optional(),
+        controlStopId: z.string().nullable().optional(),
+        sourceBudget: z.object({
+          maxAttempts: z.number().int().positive(),
+          consumedAttempts: z.number().int().nonnegative(),
+          exhaustedDimension: z.string(),
+        }).passthrough().optional(),
+        continuationBudget: z.object({
+          grantId: z.string(),
+          maxAttempts: z.number().int().positive(),
+          maxConsecutiveNoProgressAttempts: z.number().int().positive(),
+          consumedAttempts: z.number().int().nonnegative().optional(),
+          consecutiveNoProgressAttempts: z.number().int().nonnegative().optional(),
+        }).passthrough().optional(),
+        destinationWorkflowId: z.string().nullable().optional(),
+        restorationEvidenceRef: z.string().nullable().optional(),
+        restorationEvidenceDigest: z.string().nullable().optional(),
+        hostSessionLifecycle: z.record(z.string(), z.unknown()).nullable().optional(),
+      }).passthrough(),
+    ).optional(),
     canCancel: z.boolean().optional(),
     canReject: z.boolean().optional(),
     canSendMessage: z.boolean().optional(),
@@ -49,6 +76,8 @@ export type WorkflowActionHandlers = {
   onRerun: () => void;
   onResumeFromFailedStep: () => void;
   onRecoverFromSelectedStep: () => void;
+  onContinueRemediation: () => void;
+  onRetryPublication: () => void;
   onPause: () => void;
   onResume: () => void;
   onApprove: () => void;
@@ -238,6 +267,20 @@ export function buildWorkflowActionMenuItems(
     disabledReason:
       "Available for failed, stuck, or intervention-required workflows.",
     onSelect: handlers.onCreateRemediation,
+  });
+  addButton({
+    id: 'continue-remediation',
+    label: 'Continue remediation',
+    available: Boolean(actions.canContinueRemediation),
+    disabledReason: disabledReason('canContinueRemediation'),
+    onSelect: handlers.onContinueRemediation,
+  });
+  addButton({
+    id: 'retry-publication',
+    label: 'Retry publication',
+    available: Boolean(actions.canRetryPublication),
+    disabledReason: disabledReason('canRetryPublication'),
+    onSelect: handlers.onRetryPublication,
   });
   if (taskEditingOn) {
     addButton({

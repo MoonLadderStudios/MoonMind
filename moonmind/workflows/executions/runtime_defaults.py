@@ -1,8 +1,9 @@
 """Helpers for resolving default workflow runtime settings.
 
-Canonical managed runtime IDs are: ``codex_cli`` and ``claude_code``.
-Short aliases (``codex``, ``claude``) are normalized to
-these canonical forms before any lookup.
+Canonical managed runtime IDs are ``codex_cli`` and ``claude_code``. Short
+aliases (``codex``, ``claude``) are normalized to these canonical forms before
+any lookup. Product selectors for other runtime families, including
+``omnigent``, are preserved unchanged.
 """
 
 from __future__ import annotations
@@ -10,7 +11,7 @@ from __future__ import annotations
 import os
 from typing import Any, Mapping
 
-DEFAULT_WORKFLOW_RUNTIME = "codex_cli"
+DEFAULT_WORKFLOW_RUNTIME = "omnigent"
 DEFAULT_REPOSITORY = "MoonLadderStudios/MoonMind"
 
 # Canonical runtime ids as primary keys.
@@ -26,6 +27,7 @@ _DEFAULT_RUNTIME_EFFORTS: dict[str, str] = {
 _RUNTIME_ALIASES: dict[str, str] = {
     "codex": "codex_cli",
     "claude": "claude_code",
+    "jules_api": "jules",
 }
 
 _RUNTIME_MODEL_ENV_KEYS: dict[str, tuple[str, ...]] = {

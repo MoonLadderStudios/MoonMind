@@ -6,17 +6,39 @@ import json
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api_service.api.routers.container_jobs import container_jobs_ready
 from api_service.auth_providers import get_current_user
 from api_service.db.base import async_session_maker, get_async_session
 from api_service.db.models import User
+from api_service.services.container_jobs import ContainerJobService
+from api_service.services.remediation_evidence import ManagedRunRemediationLogAdapter
+from api_service.services.remediation_actions import build_remediation_action_executor
 from moonmind.config.settings import settings
 from moonmind.integrations.jira.errors import JiraToolError
 from moonmind.integrations.jira.tool import JiraToolService
+from moonmind.mcp.container_job_tool_registry import (
+    ContainerJobToolContext,
+    ContainerJobToolRegistry,
+    classify_container_job_error,
+)
 from moonmind.mcp.executable_tool_registry import ExecutableToolDiscoveryRegistry
+from moonmind.schemas.container_job_models import (
+    ContainerJobSubmitRequest,
+    OwnerIdentity,
+)
+from moonmind.schemas.workspace_locator_models import (
+    ManagedWorkspaceLocator,
+    SandboxWorkspaceLocator,
+)
+from moonmind.security.container_job_capabilities import (
+    ContainerJobCapabilityError,
+    ContainerJobSessionCapability,
+    verify_container_job_session_capability,
+)
 from moonmind.mcp.jira_tool_registry import (
     JiraToolExecutionContext,
     JiraToolRegistry,
@@ -29,9 +51,11 @@ from moonmind.mcp.skills_on_demand_registry import (
     SkillsOnDemandToolExecutionContext,
     SkillsOnDemandToolRegistry,
 )
+from moonmind.mcp.remediation_tool_registry import (
+    RemediationToolExecutionContext,
+    RemediationToolRegistry,
+)
 from moonmind.mcp.tool_registry import (
-    QueueToolExecutionContext,
-    QueueToolRegistry,
     ResourceListResponse,
     ResourceMetadata,
     ToolArgumentsValidationError,
@@ -41,6 +65,7 @@ from moonmind.mcp.tool_registry import (
     ToolNotFoundError,
 )
 from moonmind.workflows import get_temporal_artifact_service
+from moonmind.workflows.temporal.remediation_tools import RemediationEvidenceToolService
 from moonmind.workflows.adapters.jules_client import JulesClient, JulesClientError
 
 logger = logging.getLogger(__name__)
@@ -50,26 +75,18 @@ MCP_PROTOCOL_VERSION = "2025-03-26"
 SUPPORTED_MCP_PROTOCOL_VERSIONS = {MCP_PROTOCOL_VERSION, "2025-06-18"}
 MCP_SERVER_INFO = {"name": "moonmind", "version": "0.1.0"}
 
-_queue_registry = QueueToolRegistry()
 _execution_tool_registry = ExecutableToolDiscoveryRegistry()
+_container_job_registry = ContainerJobToolRegistry()
 _skills_on_demand_registry = SkillsOnDemandToolRegistry(
     expose_commands=settings.workflow.skills_on_demand_enabled
 )
+_remediation_registry = RemediationToolRegistry()
 _jira_registry: JiraToolRegistry | None = None
 _jira_service: JiraToolService | None = None
 _jules_registry: JulesToolRegistry | None = None
 _jules_client: JulesClient | None = None
 
 _resources = (
-    ResourceMetadata(
-        uri="moonmind://context",
-        name="context-completion",
-        description=(
-            "Chat-style context completion endpoint with optional RAG, available "
-            "through POST /context."
-        ),
-        mime_type="application/json",
-    ),
     ResourceMetadata(
         uri="moonmind://mcp/tools",
         name="tool-catalog",
@@ -144,11 +161,18 @@ def _to_http_exception(exc: Exception) -> HTTPException:
     )
 
 
+def _list_container_job_tools() -> list[Any]:
+    if not container_jobs_ready():
+        return []
+    return _container_job_registry.list_tools()
+
+
 def _list_registered_tools() -> list[Any]:
     tools = (
-        _queue_registry.list_tools()
-        + _execution_tool_registry.list_tools()
+        _execution_tool_registry.list_tools()
         + _skills_on_demand_registry.list_tools()
+        + _remediation_registry.list_tools()
+        + _list_container_job_tools()
     )
     if _jira_registry is not None:
         tools = tools + _jira_registry.list_tools()
@@ -158,7 +182,11 @@ def _list_registered_tools() -> list[Any]:
 
 
 def _list_streamable_callable_tools() -> list[Any]:
-    tools = _queue_registry.list_tools() + _skills_on_demand_registry.list_tools()
+    tools = (
+        _skills_on_demand_registry.list_tools()
+        + _remediation_registry.list_tools()
+        + _list_container_job_tools()
+    )
     if _jira_registry is not None:
         tools = tools + _jira_registry.list_tools()
     if _jules_registry is not None:
@@ -166,11 +194,59 @@ def _list_streamable_callable_tools() -> list[Any]:
     return tools
 
 
+async def _dispatch_container_job_tool(
+    payload: ToolCallRequest,
+    owner: OwnerIdentity,
+    session: AsyncSession,
+) -> Any:
+    if not container_jobs_ready():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "backend_unavailable",
+                "message": "The container-job service is not enabled on this deployment.",
+            },
+        )
+    context = ContainerJobToolContext(
+        service=ContainerJobService(
+            session, artifacts=get_temporal_artifact_service(session)
+        ),
+        owner=owner,
+        transport="mcp",
+    )
+    try:
+        return await _container_job_registry.call_tool(
+            tool=payload.tool, arguments=payload.arguments, context=context
+        )
+    except ToolNotFoundError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - normalized to a stable MCP error
+        normalized = classify_container_job_error(exc)
+        raise HTTPException(
+            status_code=normalized.http_status,
+            detail={"code": normalized.code, "message": normalized.message},
+        ) from exc
+
+
 async def _dispatch_tool_call(
     payload: ToolCallRequest,
     user: User,
     session: AsyncSession | None = None,
 ) -> Any:
+    if _container_job_registry.has_tool(payload.tool):
+        if session is None:  # pragma: no cover - transport always provides a session
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "backend_unavailable",
+                    "message": "The container-job service requires a database session.",
+                },
+            )
+        return await _dispatch_container_job_tool(
+            payload,
+            OwnerIdentity(principalId=str(user.id), principalType="user"),
+            session,
+        )
     if _execution_tool_registry.has_tool(payload.tool):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -226,16 +302,30 @@ async def _dispatch_tool_call(
             arguments=payload.arguments,
             context=skills_context,
         )
+    if payload.tool.startswith("remediation."):
+        if session is None:  # pragma: no cover - HTTP transport always supplies it
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": "backend_unavailable"},
+            )
+        log_adapter = ManagedRunRemediationLogAdapter()
+        context = RemediationToolExecutionContext(
+            service=RemediationEvidenceToolService(
+                session=session,
+                artifact_service=get_temporal_artifact_service(session),
+                log_reader=log_adapter,
+                live_follower=log_adapter,
+                action_executor=build_remediation_action_executor(session=session),
+            ),
+            principal=str(user.id),
+        )
+        return await _remediation_registry.call_tool(
+            tool=payload.tool,
+            arguments=payload.arguments,
+            context=context,
+        )
 
-    queue_context = QueueToolExecutionContext(
-        service=None,
-        user_id=getattr(user, "id", None),
-    )
-    return await _queue_registry.call_tool(
-        tool=payload.tool,
-        arguments=payload.arguments,
-        context=queue_context,
-    )
+    raise ToolNotFoundError(payload.tool)
 
 
 def _json_rpc_result(request_id: str | int, result: dict[str, Any]) -> dict[str, Any]:
@@ -561,4 +651,121 @@ async def call_tool(
         raise _to_http_exception(exc) from None
     except Exception as exc:  # pragma: no cover - mapping layer
         raise _to_http_exception(exc) from exc
+    return ToolCallResponse(result=result)
+
+
+def _container_capability_token(authorization: str | None) -> str:
+    scheme, separator, token = str(authorization or "").strip().partition(" ")
+    if not separator or scheme.lower() != "bearer" or not token.strip():
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "code": "container_capability_required",
+                "message": "A managed-session container capability is required.",
+            },
+        )
+    return token.strip()
+
+
+def _enforce_container_capability_scope(
+    payload: ToolCallRequest,
+    capability: ContainerJobSessionCapability,
+) -> None:
+    if payload.tool != "container.submit":
+        return
+    try:
+        submission = ContainerJobSubmitRequest.model_validate(payload.arguments)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "invalid_tool_arguments",
+                "message": "Container-job request validation failed.",
+            },
+        ) from exc
+    workspace = submission.spec.workspace_ref
+    if capability.workspace_kind == "managed_runtime":
+        workspace_matches = bool(
+            isinstance(workspace, ManagedWorkspaceLocator)
+            and workspace.agent_run_id == capability.agent_run_id
+            and workspace.runtime_id == capability.runtime_id
+            and workspace.relative_path == capability.workspace_relative_path
+        )
+    else:
+        workspace_matches = bool(
+            isinstance(workspace, SandboxWorkspaceLocator)
+            and workspace.workspace_id == capability.workspace_id
+            and workspace.relative_path == capability.workspace_relative_path
+        )
+    if not workspace_matches:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "container_capability_scope_mismatch",
+                "message": (
+                    "Container workspace exceeds the session capability."
+                ),
+            },
+        )
+    source = submission.source
+    source_matches = bool(
+        source.agent_run_id == capability.agent_run_id
+        and source.workflow_id == capability.workflow_id
+        and source.step_id == capability.step_id
+    )
+    if capability.source_kind == "managed_session":
+        source_matches = bool(
+            source_matches
+            and source.source == "managed_session"
+            and source.managed_session_id == capability.session_id
+        )
+    else:
+        source_matches = bool(
+            source_matches
+            and source.source == "omnigent"
+            and source.omnigent_conversation_id == capability.session_id
+        )
+    if not source_matches:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "container_capability_scope_mismatch",
+                "message": (
+                    "Container correlation exceeds the managed-session capability."
+                ),
+            },
+        )
+
+
+@router.post("/container/tools/call", response_model=ToolCallResponse)
+async def call_managed_session_container_tool(
+    payload: ToolCallRequest,
+    authorization: str | None = Header(None, alias="Authorization"),
+    session: AsyncSession = Depends(get_async_session),
+) -> ToolCallResponse:
+    """Dispatch only container tools under a scoped managed-session capability."""
+
+    if not _container_job_registry.has_tool(payload.tool):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "tool_not_found",
+                "message": "The scoped endpoint exposes container tools only.",
+            },
+        )
+    try:
+        capability = verify_container_job_session_capability(
+            _container_capability_token(authorization),
+            secret=str(settings.security.JWT_SECRET_KEY or ""),
+        )
+    except ContainerJobCapabilityError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "code": "invalid_container_capability",
+                "message": str(exc),
+            },
+        ) from exc
+    _enforce_container_capability_scope(payload, capability)
+    result = await _dispatch_container_job_tool(payload, capability.owner, session)
     return ToolCallResponse(result=result)

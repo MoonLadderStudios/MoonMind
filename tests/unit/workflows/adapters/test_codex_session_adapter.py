@@ -17,9 +17,11 @@ from temporalio.exceptions import (
 
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
+    AgentRuntimeStepExecutionLaunch,
     ManagedRunRecord,
 )
 from moonmind.schemas.managed_session_models import (
+    CODEX_TURN_RUNTIME_SELECTION_CONTRACT,
     CodexManagedSessionArtifactsPublication,
     CodexManagedSessionBinding,
     CodexManagedSessionHandle,
@@ -38,20 +40,64 @@ from moonmind.workflows.codex_session_timeouts import (
 from moonmind.workflows.adapters.codex_session_adapter import (
     CodexSessionAdapter,
     CodexSessionRunFailedError,
+    _execution_fanout_authorization,
     _jira_skill_blocker_summary,
+    _managed_session_required_capabilities,
     _pr_resolver_terminal_contract,
+)
+from moonmind.workflows.temporal.workflows.agent_run import (
     _terminal_contract_continuation_instruction,
 )
 from moonmind.workflows.temporal.managed_session_errors import (
     is_managed_session_locator_mismatch_error,
 )
 from moonmind.workflows.temporal.runtime.codex_session_runtime import (
-    _CODEX_PROVIDER_CREDITS_EXHAUSTED_REASON,
-)
-from moonmind.workflows.temporal.runtime.managed_session_controller import (
-    DockerCodexManagedSessionController,
+    _CODEX_PROVIDER_USAGE_LIMIT_REACHED_REASON,
 )
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+
+
+async def test_managed_session_required_capabilities_preserve_omitted_replay_shape() -> None:
+    assert _managed_session_required_capabilities({}) is None
+    assert _managed_session_required_capabilities(
+        {"requiredCapabilities": []}
+    ) == []
+    assert _managed_session_required_capabilities(
+        {"requiredCapabilities": ["execution.fanout"]}
+    ) == ["execution.fanout"]
+
+    with pytest.raises(ValueError, match="must be a list"):
+        _managed_session_required_capabilities(
+            {"requiredCapabilities": "execution.fanout"}
+        )
+
+
+async def test_execution_fanout_authorization_comes_from_step_policy() -> None:
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="codex_cli",
+        correlationId="corr-1",
+        idempotencyKey="idem-1",
+        stepExecution={
+            "workflowId": "wf-1",
+            "runId": "run-1",
+            "logicalStepId": "step-1",
+            "executionOrdinal": 1,
+            "stepExecutionId": "wf-1:run-1:step-1:execution:1",
+            "runtimeContextPolicy": "fresh_agent_run",
+            "skillSourcePolicy": {
+                "executionFanout": {
+                    "authorized": True,
+                    "sourceKind": "built_in",
+                }
+            },
+        },
+    )
+
+    assert _execution_fanout_authorization(request) == {
+        "authorized": True,
+        "sourceKind": "built_in",
+    }
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -81,7 +127,7 @@ def test_pr_resolver_terminal_contract_requires_publish_evidence_for_merge(
     assert missing == ["artifacts/publish_result.json"]
     instruction = _terminal_contract_continuation_instruction(missing)
     assert "artifacts/publish_result.json" in instruction
-    assert "Do not declare completion" in instruction
+    assert "do not declare completion" in instruction
 
 
 def _terminal_contract_test_adapter(
@@ -164,234 +210,6 @@ def _pr_resolver_request(
     return request.model_copy(
         update={"parameters": {"publishMode": "none", "selectedSkill": "pr-resolver"}}
     )
-
-
-async def test_pr_resolver_continuation_recovers_on_same_session(tmp_path: Path) -> None:
-    binding = _binding()
-    workspace = tmp_path / "workspace"
-    requests: list[SendCodexManagedSessionTurnRequest] = []
-    termination_calls: list[Any] = []
-
-    async def _send_turn(
-        request: SendCodexManagedSessionTurnRequest,
-    ) -> CodexManagedSessionTurnResponse:
-        requests.append(request)
-        if len(requests) == 2:
-            result = workspace / "var" / "pr_resolver" / "result.json"
-            result.parent.mkdir(parents=True)
-            result.write_text('{"status":"blocked"}', encoding="utf-8")
-        return _turn_response(
-            session_id=request.session_id,
-            session_epoch=request.session_epoch,
-            container_id=request.container_id,
-            thread_id=request.thread_id,
-            turn_id=f"turn-{len(requests)}",
-        )
-
-    async def _terminate(request: Any) -> None:
-        termination_calls.append(request)
-
-    adapter = _terminal_contract_test_adapter(
-        tmp_path, send_turn=_send_turn, terminate_remote_session=_terminate
-    )
-    handle = await adapter.start(_pr_resolver_request(binding, workspace))
-    result = await adapter.fetch_result(handle.run_id)
-
-    assert handle.status == "completed"
-    assert len(requests) == 2
-    assert {(r.session_id, r.session_epoch, r.thread_id) for r in requests} == {
-        (binding.session_id, binding.session_epoch, "thread-terminal-contract")
-    }
-    assert requests[1].request_id == "idem-1:terminal-contract:1"
-    assert result.metadata["terminalContractRecoveryOutcome"] == "recovered"
-    assert result.metadata["terminalContractContinuationCount"] == 1
-    assert termination_calls == []
-
-
-async def test_pr_resolver_scripted_app_server_journey_resumes_active_shell(
-    tmp_path: Path,
-) -> None:
-    """Exercise recovery through the real controller/app-server command boundary."""
-    binding = _binding()
-    workspace = tmp_path / "workspace"
-    invoked: list[dict[str, Any]] = []
-    active_shell_id = "shell-session-3142"
-
-    async def _fake_app_server(
-        command: tuple[str, ...],
-        *,
-        input_text: str | None = None,
-        env: dict[str, str] | None = None,
-    ) -> tuple[int, str, str]:
-        del env
-        assert command[:3] == ("docker", "exec", "-i")
-        assert command[-2:] == ("invoke", "send_turn")
-        payload = json.loads(input_text or "{}")
-        invoked.append(payload)
-        if len(invoked) == 1:
-            metadata = {
-                "assistantText": "Outer wait completed.",
-                "toolResult": {
-                    "status": "completed",
-                    "payload": {"session_id": active_shell_id, "status": "running"},
-                },
-            }
-        else:
-            result = workspace / "var" / "pr_resolver" / "result.json"
-            result.parent.mkdir(parents=True)
-            result.write_text('{"status":"blocked"}', encoding="utf-8")
-            metadata = {"assistantText": "Resumed the shell and wrote evidence."}
-        response = {
-            "sessionState": {
-                "sessionId": payload["sessionId"],
-                "sessionEpoch": payload["sessionEpoch"],
-                "containerId": payload["containerId"],
-                "threadId": payload["threadId"],
-                "activeTurnId": None,
-            },
-            "turnId": f"vendor-turn-{len(invoked)}",
-            "status": "completed",
-            "metadata": metadata,
-        }
-        return 0, json.dumps(response), ""
-
-    controller = DockerCodexManagedSessionController(
-        workspace_volume_name="agent_workspaces",
-        codex_volume_name="codex_auth_volume",
-        workspace_root=str(tmp_path / "agent_jobs"),
-        command_runner=_fake_app_server,
-    )
-    adapter = _terminal_contract_test_adapter(tmp_path, send_turn=controller.send_turn)
-
-    handle = await adapter.start(_pr_resolver_request(binding, workspace))
-    result = await adapter.fetch_result(handle.run_id)
-
-    assert handle.status == "completed"
-    assert [item["requestId"] for item in invoked] == [
-        "idem-1:initial",
-        "idem-1:terminal-contract:1",
-    ]
-    assert {item["sessionId"] for item in invoked} == {binding.session_id}
-    assert {item["sessionEpoch"] for item in invoked} == {binding.session_epoch}
-    assert {item["threadId"] for item in invoked} == {"thread-terminal-contract"}
-    assert result.metadata["terminalContractRecoveryOutcome"] == "recovered"
-    assert result.metadata["terminalContractContinuationCount"] == 1
-
-
-async def test_pr_resolver_continuation_exhaustion_is_compact_execution_error(
-    tmp_path: Path,
-) -> None:
-    binding = _binding()
-    workspace = tmp_path / "workspace"
-    requests: list[SendCodexManagedSessionTurnRequest] = []
-
-    async def _send_turn(
-        request: SendCodexManagedSessionTurnRequest,
-    ) -> CodexManagedSessionTurnResponse:
-        requests.append(request)
-        return _turn_response(
-            session_id=request.session_id,
-            session_epoch=request.session_epoch,
-            container_id=request.container_id,
-            thread_id=request.thread_id,
-            turn_id=f"turn-{len(requests)}",
-        )
-
-    adapter = _terminal_contract_test_adapter(tmp_path, send_turn=_send_turn)
-    with pytest.raises(CodexSessionRunFailedError) as exc_info:
-        await adapter.start(_pr_resolver_request(binding, workspace))
-
-    result = exc_info.value.agent_run_result
-    assert result.failure_class == "execution_error"
-    assert result.metadata["failureCode"] == "INCOMPLETE_TERMINAL_CONTRACT"
-    assert result.metadata["terminalContractContinuationCount"] == 2
-    assert result.metadata["terminalContractMissingEvidence"] == [
-        "var/pr_resolver/result.json"
-    ]
-    assert [request.request_id for request in requests] == [
-        "idem-1:initial",
-        "idem-1:terminal-contract:1",
-        "idem-1:terminal-contract:2",
-    ]
-
-
-async def test_pr_resolver_continuation_provider_failure_retains_contract_context(
-    tmp_path: Path,
-) -> None:
-    binding = _binding()
-    workspace = tmp_path / "workspace"
-    calls = 0
-
-    async def _send_turn(
-        request: SendCodexManagedSessionTurnRequest,
-    ) -> CodexManagedSessionTurnResponse:
-        nonlocal calls
-        calls += 1
-        if calls == 2:
-            raise RuntimeError("provider transport unavailable")
-        return _turn_response(
-            session_id=request.session_id,
-            session_epoch=request.session_epoch,
-            container_id=request.container_id,
-            thread_id=request.thread_id,
-        )
-
-    adapter = _terminal_contract_test_adapter(tmp_path, send_turn=_send_turn)
-    with pytest.raises(CodexSessionRunFailedError) as exc_info:
-        await adapter.start(_pr_resolver_request(binding, workspace))
-
-    metadata = exc_info.value.agent_run_result.metadata
-    assert metadata["failureCode"] == "INCOMPLETE_TERMINAL_CONTRACT"
-    assert metadata["terminalContractRecoveryOutcome"] == "provider_failure"
-    assert metadata["terminalContractContinuationHistory"][0]["outcome"] == (
-        "provider_failure"
-    )
-    assert metadata["turnMetadata"]["continuationFailureType"] == "RuntimeError"
-    assert "provider transport unavailable" in exc_info.value.agent_run_result.summary
-
-
-async def test_pr_resolver_continuation_obeys_deadline_and_cancellation(
-    tmp_path: Path,
-) -> None:
-    binding = _binding()
-    workspace = tmp_path / "workspace"
-    continuation_started = asyncio.Event()
-    release = asyncio.Event()
-    calls = 0
-
-    async def _send_turn(
-        request: SendCodexManagedSessionTurnRequest,
-    ) -> CodexManagedSessionTurnResponse:
-        nonlocal calls
-        calls += 1
-        if calls > 1:
-            continuation_started.set()
-            await release.wait()
-        return _turn_response(
-            session_id=request.session_id,
-            session_epoch=request.session_epoch,
-            container_id=request.container_id,
-            thread_id=request.thread_id,
-        )
-
-    adapter = _terminal_contract_test_adapter(tmp_path, send_turn=_send_turn)
-    with pytest.raises(CodexSessionRunFailedError) as deadline_exc:
-        await adapter.start(
-            _pr_resolver_request(binding, workspace, timeout_seconds=0.01)
-        )
-    assert deadline_exc.value.agent_run_result.metadata[
-        "terminalContractRecoveryOutcome"
-    ] == (
-        "deadline_exhausted"
-    )
-
-    calls = 0
-    continuation_started.clear()
-    task = asyncio.create_task(adapter.start(_pr_resolver_request(binding, workspace)))
-    await continuation_started.wait()
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        _ = await task
 
 def _fake_profiles(profiles: list[dict[str, Any]]):
     async def _fetcher(*, runtime_id: str):
@@ -526,6 +344,8 @@ def _session_handle(
     container_id: str,
     thread_id: str,
     status: str = "ready",
+    supports_turn_runtime_selection: bool = True,
+    active_turn_id: str | None = None,
 ) -> CodexManagedSessionHandle:
     return CodexManagedSessionHandle(
         sessionState={
@@ -533,11 +353,20 @@ def _session_handle(
             "sessionEpoch": session_epoch,
             "containerId": container_id,
             "threadId": thread_id,
-            "activeTurnId": None,
+            "activeTurnId": active_turn_id,
         },
         status=status,
         imageRef="ghcr.io/moonladderstudios/moonmind:latest",
         controlUrl=f"docker-exec://{container_id}",
+        metadata=(
+            {
+                "turnRuntimeSelectionContract": (
+                    CODEX_TURN_RUNTIME_SELECTION_CONTRACT
+                )
+            }
+            if supports_turn_runtime_selection
+            else {}
+        ),
     )
 
 def _turn_response(
@@ -682,6 +511,7 @@ async def test_start_launches_missing_workflow_scoped_session_and_persists_resul
         slot_releaser=_async_noop,
         cooldown_reporter=_async_noop,
         workflow_id="wf-agent-run-1",
+        task_workflow_id="wf-user-1",
         runtime_id="codex_cli",
         run_store=run_store,
         load_session_snapshot=_load_snapshot,
@@ -701,6 +531,14 @@ async def test_start_launches_missing_workflow_scoped_session_and_persists_resul
     )
 
     request = _request(binding, workspace_path=str(workspace_path))
+    request.step_execution = AgentRuntimeStepExecutionLaunch(
+        workflowId="wf-user-1",
+        runId="run-user-1",
+        logicalStepId="queue-github-issues",
+        executionOrdinal=1,
+        stepExecutionId="wf-user-1:run-user-1:queue-github-issues:execution:1",
+        runtimeContextPolicy="fresh_agent_run",
+    )
     request.parameters["metadata"] = {
         "moonmind": {
             "latestContextPackRef": "artifacts/context/rag-context-abc123.json",
@@ -711,6 +549,7 @@ async def test_start_launches_missing_workflow_scoped_session_and_persists_resul
             "sessionContinuityCacheStatus": "advisory_only",
         }
     }
+    request.parameters["requiredCapabilities"] = ["execution.fanout"]
 
     handle = await adapter.start(request)
     status = await adapter.status(handle.run_id)
@@ -734,6 +573,7 @@ async def test_start_launches_missing_workflow_scoped_session_and_persists_resul
         == DEFAULT_CODEX_TURN_COMPLETION_TIMEOUT_SECONDS
     )
     assert launch_request["workspaceSpec"] == {"workspacePath": str(workspace_path)}
+    assert launch_request["requiredCapabilities"] == ["execution.fanout"]
     assert launch_request["metadata"]["latestContextPackRef"] == "artifacts/context/rag-context-abc123.json"
     assert launch_request["metadata"]["retrievalDurabilityAuthority"] == "artifact_ref"
     assert send_turn_calls[0].instructions.startswith("artifact:instructions")
@@ -747,6 +587,9 @@ async def test_start_launches_missing_workflow_scoped_session_and_persists_resul
     assert persisted_record.workflow_id == "wf-agent-run-1"
     assert persisted_record.runtime_id == "codex_cli"
     assert persisted_record.status == "completed"
+    assert persisted_record.owner_run_id == "run-user-1"
+    assert persisted_record.logical_step_id == "queue-github-issues"
+    assert persisted_record.execution_ordinal == 1
     assert persisted_record.workspace_path == str(workspace_path)
     assert persisted_record.stdout_artifact_ref == "artifact:stdout"
     assert persisted_record.stderr_artifact_ref == "artifact:stderr"
@@ -949,10 +792,10 @@ async def test_start_prepares_turn_instructions_after_cold_session_launch(
 
     async def _prepare_after_launch(payload: dict[str, Any]) -> str:
         assert payload["workspacePath"] == str(workspace_path)
-        if payload.get("skipSkillMaterialization") is True:
+        if payload.get("metadataOnly") is True:
             call_order.append("preflight")
             assert not (workspace_path / ".launch-complete").exists()
-            return "metadata preflight\n\nManaged Codex CLI note:"
+            return {"durableRetrievalMetadata": {}}
         call_order.append("prepare")
         assert (workspace_path / ".launch-complete").is_file()
         return "prepared after launch\n\nManaged Codex CLI note:"
@@ -1457,6 +1300,7 @@ async def test_start_passes_oauth_profile_auth_target_to_launch_session(
                     "runtime_materialization_mode": "oauth_home",
                     "volume_ref": "codex_auth_volume",
                     "volume_mount_path": "/home/app/.codex-auth",
+                    "max_parallel_runs": 1,
                 }
             ]
         ),
@@ -1834,9 +1678,9 @@ async def test_start_fails_jira_pr_verify_when_issue_body_unavailable(
     assert persisted_record is not None
     assert persisted_record.status == "failed"
     assert persisted_record.failure_class == "execution_error"
-    assert len(bridge_payloads) == 1
-    assert bridge_payloads[0]["terminalStatus"] == "failed"
-    assert bridge_payloads[0]["turnResponse"]["status"] == "completed"
+    assert [item["phase"] for item in bridge_payloads] == ["started", "terminal"]
+    assert bridge_payloads[1]["terminalStatus"] == "failed"
+    assert bridge_payloads[1]["turnResponse"]["status"] == "completed"
 
 async def test_jira_verify_blocker_summary_detects_comment_posting_failure() -> None:
     summary = _jira_skill_blocker_summary(
@@ -1851,6 +1695,63 @@ async def test_jira_verify_blocker_summary_detects_comment_posting_failure() -> 
     )
 
     assert summary == "jira.add_comment failed with HTTP 403: policy denied"
+
+
+@pytest.mark.asyncio
+async def test_direct_bridge_publishes_typed_active_observations_separately() -> None:
+    payloads: list[dict[str, Any]] = []
+
+    async def publish(payload: dict[str, Any]) -> None:
+        payloads.append(payload)
+
+    adapter = object.__new__(CodexSessionAdapter)
+    adapter._publish_bridge_events = publish
+    binding = CodexManagedSessionBinding(
+        workflowId="workflow-3418",
+        agentRunId="run-3418",
+        sessionId="session-3418",
+        sessionEpoch=1,
+        runtimeId="codex_cli",
+        executionProfileRef="codex-default",
+    )
+    request = _request(binding, workspace_path="/tmp/workspace-3418")
+    request.parameters["communication"] = {"mode": "omnigent_bridge"}
+    response = _turn_response(
+        session_id=binding.session_id,
+        session_epoch=1,
+        container_id="container-1",
+        thread_id="thread-1",
+        assistant_text="done",
+    ).model_copy(
+        update={
+            "metadata": {
+                "observabilityEvents": [
+                    {
+                        "kind": "tool_call_started",
+                        "turnId": "turn-1",
+                        "metadata": {"sourceEventId": "source-1"},
+                    }
+                ]
+            }
+        }
+    )
+
+    await adapter._publish_direct_codex_bridge_active(
+        request=request,
+        binding=binding,
+        locator=CodexManagedSessionLocator(
+            sessionId=binding.session_id,
+            sessionEpoch=1,
+            containerId="container-1",
+            threadId="thread-1",
+        ),
+        turn_response=response,
+    )
+
+    assert len(payloads) == 1
+    assert payloads[0]["phase"] == "active"
+    assert payloads[0]["turnId"] == response.turn_id
+    assert payloads[0]["observations"][0]["kind"] == "tool_call_started"
 
 async def test_jira_verify_blocker_summary_detects_auth_error_code() -> None:
     summary = _jira_skill_blocker_summary(
@@ -2057,10 +1958,10 @@ async def test_start_raises_when_send_turn_returns_failed_status(tmp_path: Path)
     assert str(excinfo.value) == expected_reason
     assert summary_calls == []
     assert len(publication_calls) == 1
-    assert len(bridge_payloads) == 1
-    assert bridge_payloads[0]["terminalStatus"] == "failed"
-    assert bridge_payloads[0]["summary"]["latestSummaryRef"] == "artifact:session-summary"
-    assert bridge_payloads[0]["turnResponse"]["status"] == "failed"
+    assert [item["phase"] for item in bridge_payloads] == ["started", "terminal"]
+    assert bridge_payloads[1]["terminalStatus"] == "failed"
+    assert bridge_payloads[1]["summary"]["latestSummaryRef"] == "artifact:session-summary"
+    assert bridge_payloads[1]["turnResponse"]["status"] == "failed"
     persisted_record = run_store.load(binding.agent_run_id)
     assert persisted_record is not None
     assert persisted_record.status == "failed"
@@ -2604,7 +2505,7 @@ async def test_start_recovers_after_second_empty_assistant_clear(
     ]
 
 
-async def test_start_does_not_clear_session_for_codex_no_credits_failure(
+async def test_start_does_not_clear_session_for_codex_usage_limit_failure(
     tmp_path: Path,
 ) -> None:
     binding = _binding()
@@ -2631,7 +2532,7 @@ async def test_start_does_not_clear_session_for_codex_no_credits_failure(
     async def _send_turn(request: Any) -> CodexManagedSessionTurnResponse:
         send_turn_calls.append(request)
         metadata = {
-            "reason": _CODEX_PROVIDER_CREDITS_EXHAUSTED_REASON,
+            "reason": _CODEX_PROVIDER_USAGE_LIMIT_REACHED_REASON,
             "failureClass": "integration_error",
         }
         _raise_activity_error_from_application_error(
@@ -3832,6 +3733,7 @@ async def test_start_populates_launch_metadata_from_prepared_turn_request(
         prepare_calls.append(bool(payload.get("skipSkillMaterialization")))
         return {
             "instructions": "Injected context instruction\n\nManaged Codex CLI note:",
+            "activeSkillsDir": "/work/runtime/skills_active/snapshot-1",
             "durableRetrievalMetadata": {
                 "latestContextPackRef": "artifacts/context/rag-context-prepared.json",
                 "retrievedContextArtifactPath": "artifacts/context/rag-context-prepared.json",
@@ -3903,8 +3805,12 @@ async def test_start_populates_launch_metadata_from_prepared_turn_request(
     await adapter.start(request)
 
     assert len(launch_calls) == 1
-    assert prepare_calls == [True, False]
+    assert prepare_calls == [False, False]
     launch_request = launch_calls[0]["request"]
+    assert (
+        launch_request["environment"]["MOONMIND_ACTIVE_SKILLS_DIR"]
+        == "/work/runtime/skills_active/snapshot-1"
+    )
     assert (
         launch_request["metadata"]["latestContextPackRef"]
         == "artifacts/context/rag-context-prepared.json"
@@ -3961,6 +3867,7 @@ async def test_start_reuses_existing_workflow_scoped_session_without_launching(
 ) -> None:
     binding = _binding()
     session_status_calls: list[Any] = []
+    send_turn_calls: list[SendCodexManagedSessionTurnRequest] = []
     control_calls: list[dict[str, Any]] = []
 
     async def _load_snapshot(_workflow_id: str) -> CodexManagedSessionSnapshot:
@@ -3982,7 +3889,10 @@ async def test_start_reuses_existing_workflow_scoped_session_without_launching(
             thread_id="thread-existing",
         )
 
-    async def _send_turn(_request: Any) -> CodexManagedSessionTurnResponse:
+    async def _send_turn(
+        request: SendCodexManagedSessionTurnRequest,
+    ) -> CodexManagedSessionTurnResponse:
+        send_turn_calls.append(request)
         return _turn_response(
             session_id=binding.session_id,
             session_epoch=binding.session_epoch,
@@ -4035,17 +3945,173 @@ async def test_start_reuses_existing_workflow_scoped_session_without_launching(
         session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
     )
 
-    handle = await adapter.start(_request(binding))
+    request = _request(binding)
+    request.step_execution = AgentRuntimeStepExecutionLaunch(
+        workflowId="wf-user-1",
+        runId="run-user-1",
+        logicalStepId="queue-github-issues",
+        executionOrdinal=2,
+        stepExecutionId="wf-user-1:run-user-1:queue-github-issues:execution:2",
+        runtimeContextPolicy="reuse_session_same_epoch",
+    )
+    request.parameters["_moonmindActiveSkillsDir"] = (
+        "/work/runtime/skills_active/snapshot-retry"
+    )
+    request.parameters["model"] = "gpt-5.3-codex-spark"
+    request.parameters["effort"] = "xhigh"
+
+    handle = await adapter.start(request)
 
     assert handle.metadata["containerId"] == "container-existing"
     assert len(session_status_calls) == 1
     assert session_status_calls[0].container_id == "container-existing"
     assert session_status_calls[0].thread_id == "thread-existing"
+    assert send_turn_calls[0].environment == {
+        "MOONMIND_ACTIVE_SKILLS_DIR": "/work/runtime/skills_active/snapshot-retry",
+        "MOONMIND_STEP_EXECUTION_ID": (
+            "wf-user-1:run-user-1:queue-github-issues:execution:2"
+        ),
+    }
+    assert send_turn_calls[0].model == "gpt-5.3-codex-spark"
+    assert send_turn_calls[0].effort == "xhigh"
+    assert request.parameters["_moonmindActiveSkillsDir"] == (
+        "/work/runtime/skills_active/snapshot-retry"
+    )
     assert control_calls[0] == {
         "action": "resume_session",
         "containerId": "container-existing",
         "threadId": "thread-existing",
     }
+
+
+async def test_start_replaces_reused_session_without_runtime_selection_contract(
+    tmp_path: Path,
+) -> None:
+    binding = _binding()
+    launch_calls: list[dict[str, Any]] = []
+    send_turn_calls: list[SendCodexManagedSessionTurnRequest] = []
+
+    async def _load_snapshot(_workflow_id: str) -> CodexManagedSessionSnapshot:
+        return _snapshot(
+            binding=binding,
+            container_id="container-pre-contract",
+            thread_id="thread-pre-contract",
+        )
+
+    async def _session_status(_request: Any) -> CodexManagedSessionHandle:
+        return _session_handle(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch,
+            container_id="container-pre-contract",
+            thread_id="thread-pre-contract",
+            supports_turn_runtime_selection=False,
+        )
+
+    async def _launch_session(request: dict[str, Any]) -> CodexManagedSessionHandle:
+        launch_calls.append(request)
+        return _session_handle(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch,
+            container_id="container-current",
+            thread_id=f"thread:{binding.session_id}:1",
+        )
+
+    async def _send_turn(
+        request: SendCodexManagedSessionTurnRequest,
+    ) -> CodexManagedSessionTurnResponse:
+        send_turn_calls.append(request)
+        return _turn_response(
+            session_id=request.session_id,
+            session_epoch=request.session_epoch,
+            container_id=request.container_id,
+            thread_id=request.thread_id,
+        )
+
+    async def _fetch_summary(
+        request: FetchCodexManagedSessionSummaryRequest,
+    ) -> CodexManagedSessionSummary:
+        return _summary(
+            session_id=request.session_id,
+            session_epoch=request.session_epoch,
+            container_id=request.container_id,
+            thread_id=request.thread_id,
+        )
+
+    async def _publish_artifacts(
+        request: PublishCodexManagedSessionArtifactsRequest,
+    ) -> CodexManagedSessionArtifactsPublication:
+        return _publication(
+            session_id=request.session_id,
+            session_epoch=request.session_epoch,
+            container_id=request.container_id,
+            thread_id=request.thread_id,
+        )
+
+    adapter = CodexSessionAdapter(
+        profile_fetcher=_fake_profiles(
+            [{"profile_id": "codex-default", "credential_source": "secret_ref"}]
+        ),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-agent-run-1",
+        runtime_id="codex_cli",
+        run_store=ManagedRunStore(tmp_path / "managed_runs"),
+        load_session_snapshot=_load_snapshot,
+        launch_session=_launch_session,
+        session_status=_session_status,
+        prepare_turn_instructions=_prepare_turn_instructions,
+        send_turn=_send_turn,
+        interrupt_turn=_async_noop,
+        clear_remote_session=_async_noop,
+        terminate_remote_session=_async_noop,
+        fetch_remote_summary=_fetch_summary,
+        publish_remote_artifacts=_publish_artifacts,
+        attach_runtime_handles=_async_noop,
+        apply_session_control_action=_async_noop,
+        workspace_root=str(tmp_path / "agent_jobs"),
+        session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
+    )
+    request = _request(binding)
+    request.parameters.update(
+        {"model": "gpt-5.3-codex-spark", "effort": "xhigh"}
+    )
+
+    handle = await adapter.start(request)
+
+    assert handle.status == "completed"
+    assert len(launch_calls) == 1
+    assert launch_calls[0]["request"]["replaceExisting"] is True
+    assert send_turn_calls[0].container_id == "container-current"
+    assert send_turn_calls[0].model == "gpt-5.3-codex-spark"
+    assert send_turn_calls[0].effort == "xhigh"
+
+
+async def test_start_rejects_active_session_without_runtime_selection_contract(
+) -> None:
+    binding = _binding()
+    request = _request(binding)
+    request.parameters.update(
+        {"model": "gpt-5.3-codex-spark", "effort": "xhigh"}
+    )
+    handle = _session_handle(
+        session_id=binding.session_id,
+        session_epoch=binding.session_epoch,
+        container_id="container-pre-contract",
+        thread_id="thread-pre-contract",
+        status="busy",
+        supports_turn_runtime_selection=False,
+        active_turn_id="turn-active",
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="cannot replace an active managed Codex session",
+    ):
+        CodexSessionAdapter._requires_runtime_selection_cutover(
+            request=request,
+            handle=handle,
+        )
 
 
 async def test_start_retries_existing_session_status_after_locator_mismatch(
@@ -4161,8 +4227,10 @@ async def test_start_retries_existing_session_status_after_locator_mismatch(
         "threadId": "thread-cleared",
     }
 
+@pytest.mark.parametrize("replacement_enabled", [False, True])
 async def test_start_relaunches_session_when_refreshed_locator_still_mismatches(
     tmp_path: Path,
+    replacement_enabled: bool,
 ) -> None:
     binding = _binding().model_copy(update={"session_epoch": 7})
     stale_snapshot_binding = binding.model_copy(update={"session_epoch": 6})
@@ -4262,6 +4330,7 @@ async def test_start_relaunches_session_when_refreshed_locator_still_mismatches(
         apply_session_control_action=_apply_control_action,
         workspace_root=str(tmp_path / "agent_jobs"),
         session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
+        replace_existing_on_resume_mismatch=replacement_enabled,
     )
 
     handle = await adapter.start(_request(binding))
@@ -4277,6 +4346,10 @@ async def test_start_relaunches_session_when_refreshed_locator_still_mismatches(
     launch_request = launch_calls[0]["request"]
     assert launch_request["sessionEpoch"] == 7
     assert launch_request["threadId"] == f"thread:{binding.session_id}:7"
+    if replacement_enabled:
+        assert launch_request["replaceExisting"] is True
+    else:
+        assert "replaceExisting" not in launch_request
     assert send_turn_calls[0].container_id == "container-fresh"
     assert send_turn_calls[0].thread_id == "thread-fresh"
     assert attach_calls == [

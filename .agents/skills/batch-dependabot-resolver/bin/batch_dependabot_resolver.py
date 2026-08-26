@@ -27,15 +27,20 @@ from typing import Any
 from urllib.parse import quote
 
 import httpx
-from moonmind.workflows.executions.runtime_defaults import normalize_runtime_id
-from moonmind.workflows.executions.execution_contract import resolve_publish_mode_for_skill
 
 logger = logging.getLogger(__name__)
 
 API_EXECUTIONS_ENDPOINT = "/api/executions"
 IDEMPOTENCY_KEY_MAX_LENGTH = 128
 TERMINAL_FAILURE_STATES = {"failed", "canceled", "terminated"}
-DEFAULT_TITLE_REGEX = r"^Bump .+ from \S+ to \S+(?: in /.+)?$"
+DEFAULT_TITLE_REGEX = (
+    r"^(?!.* from .* from )(?!.* to .* to )"
+    r"(?:Bump|[A-Za-z][A-Za-z0-9_-]*\(deps(?:-dev)?\): bump) "
+    r".+ from \S+ to \S+(?: in /.+)?$"
+)
+LIKELY_VERSION_BUMP_TITLE_REGEX = re.compile(
+    r"\bbump\s+.+\s+from\s+\S+\s+to\s+\S+", re.IGNORECASE
+)
 DEPENDABOT_BRANCH_PREFIX = "dependabot/"
 
 # Friendly package-manager names (as an operator would type them) mapped to the
@@ -288,6 +293,12 @@ def _title_matches(title: str | None, pattern: str) -> bool:
         raise RuntimeError(f"invalid titleRegex {pattern!r}: {exc}") from exc
 
 
+def _looks_like_version_bump_title(title: Any) -> bool:
+    """Return whether a rejected title still resembles one version bump."""
+
+    return bool(LIKELY_VERSION_BUMP_TITLE_REGEX.search(str(title or "").strip()))
+
+
 def _branch_package_manager(branch: str | None) -> str | None:
     parts = str(branch or "").strip().split("/")
     if len(parts) >= 3 and parts[0].lower() == "dependabot" and parts[1]:
@@ -399,7 +410,10 @@ def _runtime_text(value: Any) -> str | None:
 def _runtime_modes_match(left: str | None, right: str | None) -> bool:
     if not left or not right:
         return False
-    return normalize_runtime_id(left) == normalize_runtime_id(right)
+    # Runtime identifiers are canonical internal identities.  The portable
+    # helper compares them exactly instead of importing MoonMind's application
+    # package (or maintaining an alias table of its own).
+    return _normalize_runtime_mode(left) == _normalize_runtime_mode(right)
 
 
 def _load_parent_runtime_selection(
@@ -569,6 +583,8 @@ def _resolve_artifacts_dir(
         return spool_path
 
     for candidate in _repo_context_candidates(task_context_path):
+        if not candidate.is_file():
+            continue
         artifacts_dir = _artifacts_dir_from_task_context_path(candidate)
         if artifacts_dir is not None:
             return artifacts_dir
@@ -594,7 +610,6 @@ def _build_queue_request(
     max_attempts: int,
     inherit_runtime_from_caller: bool = False,
 ) -> dict[str, Any]:
-    publish_mode = resolve_publish_mode_for_skill("pr-resolver", "auto")
     runtime_payload: dict[str, Any] = {}
     if runtime.mode:
         runtime_payload["mode"] = runtime.mode
@@ -625,7 +640,7 @@ def _build_queue_request(
                 "startingBranch": branch,
                 "branch": branch,
             },
-            "publish": {"mode": publish_mode},
+            "publish": {"mode": "auto"},
         },
     }
 
@@ -684,7 +699,15 @@ def _build_request_records(
             include_security_updates=args.include_security_updates,
         )
         if reason is not None:
-            skipped.append({"pr": number, "branch": branch, "reason": reason})
+            skipped_entry = {"pr": number, "branch": branch, "reason": reason}
+            if (
+                reason == "title-mismatch"
+                and args.title_regex == DEFAULT_TITLE_REGEX
+                and _looks_like_version_bump_title(pr.get("title"))
+            ):
+                skipped_entry["title"] = str(pr.get("title") or "").strip()
+                skipped_entry["likelyVersionBump"] = True
+            skipped.append(skipped_entry)
             continue
         matched.append((number, branch, _extract_head_sha(pr)))
 
@@ -733,6 +756,26 @@ def _read_worker_token() -> str | None:
     return None
 
 
+def _read_execution_fanout_token() -> str | None:
+    token_file = str(
+        os.getenv("MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE", "")
+    ).strip()
+    if token_file:
+        path = Path(token_file)
+        if not path.is_file():
+            raise RuntimeError(
+                "execution fan-out capability file is unavailable: " + token_file
+            )
+        token = path.read_text(encoding="utf-8").strip()
+        if not token:
+            raise RuntimeError("execution fan-out capability file is empty")
+        return token
+    token = str(
+        os.getenv("MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN", "")
+    ).strip()
+    return token or None
+
+
 async def _submit_jobs_via_http(
     queue_requests: list[JobSubmission],
     *,
@@ -744,6 +787,10 @@ async def _submit_jobs_via_http(
     created: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
     headers: dict[str, str] = {"Content-Type": "application/json"}
+    fanout_token = _read_execution_fanout_token()
+    if fanout_token:
+        headers["Authorization"] = f"Bearer {fanout_token}"
+        headers["X-MoonMind-Execution-Fanout"] = "v1"
     if worker_token:
         headers["X-MoonMind-Worker-Token"] = worker_token
     task_workflow_id = _task_workflow_id_from_env()
@@ -887,7 +934,12 @@ def _would_queue_records(queue_requests: list[JobSubmission]) -> list[dict[str, 
 
 def _write_artifacts(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2))
+    temporary = path.with_name(f".{path.name}.{os.urandom(6).hex()}.tmp")
+    try:
+        temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _write_run_artifacts(artifacts_dir: Path, payload: dict[str, Any]) -> None:
@@ -895,12 +947,16 @@ def _write_run_artifacts(artifacts_dir: Path, payload: dict[str, Any]) -> None:
 
     ``skill_outcome.json`` with ``status: "no_op"`` is written only when the run
     queued zero executions, hit no submission errors, and was not a dry run —
-    i.e. a deliberate "no matching Dependabot PRs" outcome.
+    i.e. a deliberate "no matching Dependabot PRs" outcome. A likely version-bump
+    title rejected by the default matcher is filter-contract drift, not a no-op.
     """
 
     _write_artifacts(artifacts_dir / "batch_dependabot_resolver_result.json", payload)
     errors = payload.get("errors") or []
     created = int(payload.get("created") or 0)
+    title_contract_drift_prs = (
+        (payload.get("diagnostics") or {}).get("titleContractDriftPrs") or []
+    )
     if errors:
         _write_artifacts(
             artifacts_dir / "skill_outcome.json",
@@ -912,6 +968,20 @@ def _write_run_artifacts(artifacts_dir: Path, payload: dict[str, Any]) -> None:
                     "requested": payload.get("requested"),
                     "created": created,
                     "errors": errors,
+                },
+            },
+        )
+    elif title_contract_drift_prs:
+        _write_artifacts(
+            artifacts_dir / "skill_outcome.json",
+            {
+                "schema_version": 1,
+                "status": "partial" if created else "failed",
+                "reason": "dependabot_title_contract_drift",
+                "evidence": {
+                    "requested": payload.get("requested"),
+                    "created": created,
+                    "titleContractDriftPrs": title_contract_drift_prs,
                 },
             },
         )
@@ -972,7 +1042,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--title-regex",
         default=DEFAULT_TITLE_REGEX,
-        help="Version-bump title matcher (default: Bump <dep> from <old> to <new>).",
+        help=(
+            "Version-bump title matcher (default: Bump <dep> from <old> to <new> "
+            "or <type>(deps[-dev]): bump <dep> from <old> to <new>)."
+        ),
     )
     parser.add_argument(
         "--include-security-updates",
@@ -1011,6 +1084,25 @@ async def main(argv: list[str] | None = None) -> int:
     if args.state.strip() != "open":
         print(f"warning: non-open state requested: {args.state}")
     runtime = _resolve_runtime_selection(args)
+    artifacts_dir = _resolve_artifacts_dir(args.artifacts_dir, args.task_context_path)
+    execution_ref = _runtime_text(os.getenv("MOONMIND_STEP_EXECUTION_ID"))
+    if execution_ref is None:
+        execution_ref = f"local:batch-dependabot-resolver:{repo}"
+    _write_artifacts(
+        artifacts_dir / "batch_dependabot_resolver_result.json",
+        {
+            "schemaVersion": "moonmind.batch-dependabot-resolver-result.v1",
+            "contractId": "batch_dependabot_resolver_fanout.v1",
+            "executionRef": execution_ref,
+            "status": "running",
+            "requested": 0,
+            "created": 0,
+            "queued": [],
+            "wouldQueue": [],
+            "skipped": [],
+            "errors": [],
+        },
+    )
 
     open_prs = _run_pr_list(repo=repo, state=args.state)
     queue_requests, skipped, matched_count = _build_request_records(
@@ -1025,7 +1117,32 @@ async def main(argv: list[str] | None = None) -> int:
         created, errors = await _submit_jobs(queue_requests)
         would_queue = []
 
+    title_contract_drift_prs = [
+        item.get("pr")
+        for item in skipped
+        if item.get("reason") == "title-mismatch"
+        and item.get("likelyVersionBump") is True
+    ]
+    failure_code: str | None = None
+    if errors:
+        status = "partial_failure" if created else "failed"
+        failure_code = "CHILD_WORKFLOW_QUEUE_FAILED"
+    elif title_contract_drift_prs:
+        status = "partial_failure" if created else "failed"
+        failure_code = "DEPENDABOT_TITLE_CONTRACT_DRIFT"
+    elif args.dry_run:
+        status = "dry_run"
+    elif created:
+        status = "queued"
+    else:
+        status = "no_op"
+
     payload = {
+        "schemaVersion": "moonmind.batch-dependabot-resolver-result.v1",
+        "contractId": "batch_dependabot_resolver_fanout.v1",
+        "executionRef": execution_ref,
+        "status": status,
+        "failureCode": failure_code,
         "timestamp": datetime.now(UTC).isoformat(),
         "actor": os.getenv("GITHUB_ACTOR") or os.getenv("USER") or "unknown",
         "repository": repo,
@@ -1042,6 +1159,9 @@ async def main(argv: list[str] | None = None) -> int:
             "model": runtime.model,
             "effort": runtime.effort,
             "executionProfileRef": runtime.provider_profile,
+            "inheritance": (
+                "caller" if _task_workflow_id_from_env() is not None else None
+            ),
         },
         "requested": len(open_prs),
         "matched": matched_count,
@@ -1051,10 +1171,16 @@ async def main(argv: list[str] | None = None) -> int:
         "skipped": skipped,
         "errors": errors,
     }
-    if not args.dry_run and payload["created"] == 0:
+    payload["diagnostics"] = {
+        "titleContractDriftPrs": title_contract_drift_prs,
+    }
+    if title_contract_drift_prs:
+        payload["message"] = (
+            "Dependabot version-bump titles did not match the default title contract."
+        )
+    elif not args.dry_run and payload["created"] == 0:
         payload["message"] = "No matching Dependabot PRs were queued."
 
-    artifacts_dir = _resolve_artifacts_dir(args.artifacts_dir, args.task_context_path)
     _write_run_artifacts(artifacts_dir, payload)
 
     print(json.dumps(payload, indent=2))
@@ -1063,7 +1189,7 @@ async def main(argv: list[str] | None = None) -> int:
         f"would_queue={len(would_queue)} skipped={len(skipped)} "
         f"errors={len(errors)} repo={repo} dry_run={bool(args.dry_run)}"
     )
-    if errors:
+    if errors or title_contract_drift_prs:
         return 1
     return 0
 

@@ -68,6 +68,63 @@ describe('chat session observability projection for MM-1013', () => {
     ]);
   });
 
+  it('projects failed-launch lifecycle evidence into concise operator status blocks', () => {
+    const state = projectChatSessionBlocks([
+      row(1, 'lifecycle.profile_readiness', '', { status: 'ready' }),
+      row(2, 'lifecycle.credential_preflight', '', {
+        status: 'failed',
+        code: 'oauth_generation_mismatch',
+        summary: 'Credential generation did not match the mounted volume.',
+        remediationAction: 'validate_codex_oauth',
+        diagnosticsRef: 'artifact://launch/diagnostics',
+        metadata: { providerProfileId: 'codex', hostLeaseRef: 'host-lease-1' },
+      }),
+      row(3, 'lifecycle.terminal', '', {
+        status: 'failed',
+        metadata: { cleanupCompleted: true, leaseReleased: true, workflowId: 'workflow-1' },
+      }),
+    ]);
+
+    expect(state.blocks.map((block) => [block.kind, block.text])).toEqual([
+      ['system', 'profile readiness: ready'],
+      ['error', 'credential preflight: failed · Reason: oauth_generation_mismatch · Credential generation did not match the mounted volume. · Profile: codex · Host lease: host-lease-1 · Recommended action: validate codex oauth'],
+      ['error', 'terminal: failed · Workflow: workflow-1 · Cleanup: completed · Profile lease: released'],
+    ]);
+    expect(state.blocks[1]?.metadata?.diagnosticsRef).toBe('artifact://launch/diagnostics');
+  });
+
+  it('maps runtime-neutral resource, diagnostics, control, and terminal vocabulary', () => {
+    const cases: Array<[string, string]> = [
+      ['resource_available', 'resource'],
+      ['changed_file', 'resource'],
+      ['diagnostics_available', 'diagnostic'],
+      ['retention_gap', 'diagnostic'],
+      ['elicitation_requested', 'control'],
+      ['session_cancelled', 'failure'],
+      ['session_timed_out', 'failure'],
+      ['run_completed', 'completion'],
+    ];
+
+    expect(cases.map(([kind]) => mapObservabilityEventToChatSessionEvent(row(1, kind, kind)).type))
+      .toEqual(cases.map(([, type]) => type));
+  });
+
+  it('renders execution-critical future schema events as incompatibilities', () => {
+    const event = mapObservabilityEventToChatSessionEvent(
+      row(1, 'future_required_event', 'Upgrade Workflow Chat to inspect this event.', {
+        schemaVersion: 2,
+        executionCritical: true,
+      }),
+    );
+    const state = reduceChatSessionEvents(createChatSessionState(), [event]);
+
+    expect(event.type).toBe('incompatible_schema');
+    expect(state.blocks[0]).toMatchObject({
+      kind: 'error',
+      text: 'Upgrade Workflow Chat to inspect this event.',
+    });
+  });
+
   it('accumulates assistant deltas and dedupes a final assistant message', () => {
     const state = projectChatSessionBlocks([
       row(1, 'assistant_message_delta', 'hel', { responseId: 'resp-1', turnIndex: 0 }),
@@ -88,6 +145,28 @@ describe('chat session observability projection for MM-1013', () => {
       sequenceStart: 1,
       sequenceEnd: 3,
     });
+  });
+
+  it('projects direct-compat and Omnigent bridge journeys through the same chat path', () => {
+    const journey = (source: 'codex_direct_compat' | 'omnigent') => [
+      row(1, 'assistant_message_delta', 'working', { source, responseId: 'response-1' }),
+      row(2, 'tool_call_started', 'Running tests', { source, callId: 'tool-1', toolName: 'pytest' }),
+      row(3, 'tool_call_completed', 'passed', { source, callId: 'tool-1' }),
+      row(4, 'approval_requested', 'Approval required.', { source, requestId: 'approval-1' }),
+      row(5, 'resource_available', 'Summary published.', { source, artifactRef: 'artifact://summary/1' }),
+      row(6, 'assistant_message_completed', 'working', { source, responseId: 'response-1' }),
+      row(7, 'turn_completed', 'Complete.', { source, responseId: 'response-1' }),
+    ];
+
+    const direct = projectChatSessionBlocks(journey('codex_direct_compat'));
+    const omnigent = projectChatSessionBlocks(journey('omnigent'));
+
+    expect(direct.blocks.map(({ kind, text }) => ({ kind, text }))).toEqual(
+      omnigent.blocks.map(({ kind, text }) => ({ kind, text })),
+    );
+    expect(direct.blocks.map((block) => block.kind)).toEqual([
+      'assistant', 'tool', 'approval', 'system', 'status',
+    ]);
   });
 
   it('pairs tool calls and results by callId and ignores duplicate call/result rows', () => {

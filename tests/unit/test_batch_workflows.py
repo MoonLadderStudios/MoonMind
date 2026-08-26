@@ -7,7 +7,15 @@ and unsupported-target skips.
 
 from __future__ import annotations
 
+import json
+import os
 import runpy
+import shutil
+import subprocess
+import sys
+import threading
+import urllib.error
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +40,81 @@ def _load_module() -> dict[str, Any]:
             / "batch_workflows.py"
         )
     )
+
+
+def test_http_error_body_read_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _load_module()
+    read_sizes: list[int | None] = []
+
+    class BoundedHTTPError(urllib.error.HTTPError):
+        def read(self, amt: int | None = None) -> bytes:
+            read_sizes.append(amt)
+            return b"invalid response: \xff"
+
+    def raise_http_error(*_args: object, **_kwargs: object) -> None:
+        raise BoundedHTTPError(
+            "https://moonmind.invalid/api/executions", 503, "unavailable", {}, None
+        )
+
+    submit = module["_submit_jobs_via_http"]
+    monkeypatch.setattr(submit.__globals__["urllib"].request, "urlopen", raise_http_error)
+    submission = module["ChildSubmission"](
+        queue_request={"type": "run", "payload": {}},
+        provider="jira",
+        ref="MM-1",
+    )
+
+    created, errors = submit(
+        [submission], moonmind_url="https://moonmind.invalid", worker_token=None
+    )
+
+    assert created == []
+    assert read_sizes == [65536]
+    assert "invalid response" in errors[0]["error"]
+
+
+def test_http_submission_forwards_scoped_execution_fanout_bearer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_module()
+    captured_headers: dict[str, str] = {}
+
+    class _Response:
+        def __enter__(self) -> "_Response":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps({"workflowId": "mm:child"}).encode("utf-8")
+
+    def _urlopen(request: Any, **_kwargs: Any) -> _Response:
+        captured_headers.update(dict(request.header_items()))
+        return _Response()
+
+    monkeypatch.setenv(
+        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN", "fanout-test-capability"
+    )
+    monkeypatch.setattr(
+        module["_submit_jobs_via_http"].__globals__["urllib"].request,
+        "urlopen",
+        _urlopen,
+    )
+    submission = module["ChildSubmission"](
+        queue_request={"type": "workflow", "payload": {}},
+        provider="jira",
+        ref="MM-1",
+    )
+
+    created, errors = module["_submit_jobs_via_http"](
+        [submission], moonmind_url="http://api:8000", worker_token=None
+    )
+
+    assert errors == []
+    assert created[0]["workflowId"] == "mm:child"
+    assert captured_headers["Authorization"] == "Bearer fanout-test-capability"
+    assert captured_headers["X-moonmind-execution-fanout"] == "v1"
 
 
 _JIRA_TARGET: dict[str, Any] = {
@@ -62,6 +145,167 @@ _GITHUB_TARGET: dict[str, Any] = {
     },
     "repository": "MoonLadderStudios/MoonMind",
 }
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("1-1", (1, 1)),
+        ("3370-3425", (3370, 3425)),
+    ],
+)
+def test_parse_github_issue_range(value, expected):
+    module = _load_module()
+
+    assert module["parse_github_issue_range"](value) == expected
+
+
+@pytest.mark.parametrize("value", ["", "1", "1..2", "0-2", "3-2"])
+def test_parse_github_issue_range_rejects_invalid_search_criteria(value):
+    module = _load_module()
+
+    with pytest.raises(ValueError):
+        module["parse_github_issue_range"](value)
+
+
+def test_resolve_github_issue_range_excludes_non_open_issues_and_missing_numbers():
+    module = _load_module()
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        assert kwargs == {
+            "capture_output": True,
+            "text": True,
+            "timeout": 60,
+            "check": False,
+        }
+        return subprocess.CompletedProcess(
+            command,
+            1,
+            stdout=json.dumps(
+                {
+                    "data": {
+                        "repository": {
+                            "issue40": {
+                                "number": 40,
+                                "title": "Existing issue",
+                                "body": "Body",
+                                "url": "https://github.com/acme/widgets/issues/40",
+                                "state": "OPEN",
+                                "labels": {"nodes": [{"name": "bug"}]},
+                            },
+                            # GraphQL issue(number:) returns null for both a pull
+                            # request number and a number that does not exist.
+                            "issue41": None,
+                            "issue42": None,
+                            "issue43": {
+                                "number": 43,
+                                "title": "Closed issue",
+                                "body": "Already completed",
+                                "url": "https://github.com/acme/widgets/issues/43",
+                                "state": "CLOSED",
+                                "labels": {"nodes": [{"name": "done"}]},
+                            },
+                            "issue44": {
+                                "number": 44,
+                                "title": "Issue with unusable state",
+                                "body": "Provider response is incomplete",
+                                "url": "https://github.com/acme/widgets/issues/44",
+                                "state": "",
+                                "labels": {"nodes": []},
+                            },
+                        }
+                    },
+                    "errors": [
+                        {
+                            "type": "NOT_FOUND",
+                            "path": ["repository", "issue41"],
+                            "message": (
+                                "Could not resolve to an Issue with the number of 41."
+                            ),
+                        },
+                        {
+                            "type": "NOT_FOUND",
+                            "path": ["repository", "issue42"],
+                            "message": (
+                                "Could not resolve to an Issue with the number of 42."
+                            ),
+                        },
+                    ],
+                }
+            ),
+            stderr="gh: some issues were not found",
+        )
+
+    targets = module["resolve_github_issue_range"](
+        "acme/widgets",
+        "40-44",
+        run_command=fake_run,
+    )
+
+    assert [target["ref"] for target in targets] == ["acme/widgets#40"]
+    assert targets[0]["githubIssue"] == {
+        "repository": "acme/widgets",
+        "number": 40,
+        "title": "Existing issue",
+        "body": "Body",
+        "url": "https://github.com/acme/widgets/issues/40",
+        "state": "open",
+        "labels": ["bug"],
+    }
+    assert len(calls) == 1
+    query_arg = next(arg for arg in calls[0] if arg.startswith("query="))
+    assert "issue40: issue(number: 40)" in query_arg
+    assert "issue41: issue(number: 41)" in query_arg
+    assert "issue42: issue(number: 42)" in query_arg
+    assert "issue43: issue(number: 43)" in query_arg
+    assert "issue44: issue(number: 44)" in query_arg
+    assert "-F" not in calls[0]
+    assert calls[0].count("-f") == 3
+    assert "owner=acme" in calls[0]
+    assert "name=widgets" in calls[0]
+
+
+def test_resolve_github_issue_range_rejects_unbounded_scan_before_querying():
+    module = _load_module()
+    called = False
+
+    def unexpected_run(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("GitHub must not be queried for an oversized range")
+
+    with pytest.raises(
+        module["BatchInputError"],
+        match="may span no more than 1000 numbers",
+    ):
+        module["resolve_github_issue_range"](
+            "acme/widgets",
+            "1-1001",
+            run_command=unexpected_run,
+        )
+
+    assert called is False
+
+
+def test_parse_args_accepts_github_range_without_targets():
+    module = _load_module()
+
+    args = module["_parse_args"](
+        [
+            "--github-issue-range",
+            "3370-3425",
+            "--github-repository",
+            "MoonLadderStudios/MoonMind",
+            "--run-ref",
+            "preset:github-issue-implement",
+        ]
+    )
+
+    assert args.targets is None
+    assert args.github_issue_range == "3370-3425"
+    assert args.github_repository == "MoonLadderStudios/MoonMind"
 
 
 def _jira_config(module, **overrides):
@@ -143,6 +387,22 @@ def test_bind_child_inputs_jira_implement_preset_auto_binds_issue_object_and_key
     assert inputs["constraints"] == "Be careful"
     assert inputs["run_verify"] is False
     assert "verification_mode" not in inputs
+
+
+def test_bind_child_inputs_jira_orchestrate_auto_binds_issue_object_and_key():
+    module = _load_module()
+    inputs = module["bind_child_inputs"](
+        _JIRA_TARGET, "preset", "jira-orchestrate", "Keep it focused", run_verify=False
+    )
+    assert inputs == {
+        "jira_issue": _JIRA_TARGET["jiraIssue"],
+        "jira_issue_key": "THOR-123",
+        "constraints": "Keep it focused",
+        "run_verify": False,
+    }
+    assert module["child_goal_for_target"](
+        _JIRA_TARGET, "preset", "jira-orchestrate"
+    ) == "Orchestrate Jira issue THOR-123."
 
 
 def test_bind_child_inputs_github_auto_binds_issue_object_and_ref():
@@ -347,6 +607,52 @@ def test_build_child_request_authors_selected_preset_as_global_template():
     assert "batchTargetPreset" not in request["payload"]["task"]
 
 
+def test_build_jira_orchestrate_child_preserves_none_publish_and_runtime():
+    module = _load_module()
+    request = module["build_child_request"](
+        _JIRA_TARGET,
+        config=_jira_config(
+            module, target_kind="preset", target_slug="jira-orchestrate"
+        ),
+        runtime=module["RuntimeSelection"](mode="codex_cli"),
+        batch_scope="run-1",
+        inherit_runtime_from_caller=True,
+    )
+    payload = request["payload"]
+    assert payload["task"]["taskTemplate"] == {
+        "slug": "jira-orchestrate",
+        "scope": "global",
+    }
+    assert payload["task"]["publish"] == {"mode": "none"}
+    assert payload["runtimeInheritance"] == "caller"
+    assert payload["requiredCapabilities"] == ["git", "jira", "gh"]
+
+
+def test_supported_run_refs_cover_provider_preset_options_and_bindings():
+    import yaml
+
+    module = _load_module()
+    repo_root = Path(__file__).resolve().parents[2]
+    for filename, provider in (
+        ("batch-workflows.yaml", "jira"),
+        ("batch-github-workflows.yaml", "github"),
+    ):
+        manifest = yaml.safe_load(
+            (
+                repo_root / "api_service" / "data" / "presets" / filename
+            ).read_text()
+        )
+        options = manifest["annotations"]["inputSchema"]["properties"]["run_ref"]["enum"]
+        legacy_options = next(
+            item for item in manifest["inputs"] if item["name"] == "run_ref"
+        )["options"]
+        assert options == legacy_options
+        assert set(options) == set(manifest["annotations"]["bindings"])
+        for run_ref in options:
+            kind, slug = run_ref.split(":", 1)
+            assert (provider, kind, slug) in module["SUPPORTED_RUN_REFS"]
+
+
 def test_parse_args_accepts_run_ref_without_preset_version(tmp_path):
     module = _load_module()
     targets = tmp_path / "targets.json"
@@ -520,3 +826,234 @@ def test_batch_workflows_parent_is_side_effect_only_publish():
         resolve_publish_mode_for_skill("batch-workflows", "auto")
     with pytest.raises(WorkflowContractError):
         resolve_publish_mode_for_skill("batch-workflows", "pr")
+
+
+def test_materialized_snapshot_queues_five_targets_from_external_repo(tmp_path):
+    """The active snapshot wins even when the target repo owns conflicting skills."""
+    repo_root = Path(__file__).resolve().parents[2]
+    snapshot = tmp_path / "skills_active"
+    shutil.copytree(repo_root / ".agents" / "skills" / "batch-workflows", snapshot / "batch-workflows")
+    shutil.copytree(repo_root / ".agents" / "skills" / "_shared", snapshot / "_shared")
+    external_repo = tmp_path / "external-repo"
+    (external_repo / ".agents" / "skills" / "batch-workflows" / "bin").mkdir(parents=True)
+    (external_repo / ".agents" / "skills" / "batch-workflows" / "bin" / "batch_workflows.py").write_text(
+        "raise SystemExit('repository-owned helper executed')\n", encoding="utf-8"
+    )
+    trap = tmp_path / "import-trap"
+    trap.mkdir()
+    for name in ("moonmind.py", "api_service.py"):
+        (trap / name).write_text("raise AssertionError('service graph imported')\n", encoding="utf-8")
+    targets = [
+        {"provider": "jira", "ref": f"THOR-{number}", "jiraIssue": {"key": f"THOR-{number}"}, "repository": "acme/widgets"}
+        for number in range(705, 710)
+    ]
+    (external_repo / "targets.json").write_text(json.dumps(targets), encoding="utf-8")
+
+    posts: list[dict[str, Any]] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            length = int(self.headers["Content-Length"])
+            posts.append(json.loads(self.rfile.read(length)))
+            body = json.dumps({"workflowId": f"child-{len(posts)}"}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            return None
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    env = {
+        **os.environ,
+        "PYTHONPATH": str(trap),
+        "MOONMIND_URL": f"http://127.0.0.1:{server.server_port}",
+        "MOONMIND_STEP_EXECUTION_ID": "step-external-1",
+        "MOONMIND_ACTIVE_SKILLS_DIR": str(snapshot),
+    }
+    try:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(snapshot / "batch-workflows" / "bin" / "batch_workflows.py"),
+                "--targets", "targets.json", "--run-ref", "skill:jira-verify",
+                "--publish-mode", "none", "--artifacts-dir", str(external_repo / "artifacts"),
+            ],
+            cwd=external_repo,
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=20,
+            check=False,
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+    assert completed.returncode == 0, completed.stderr
+    assert len(posts) == 5
+    keys = [post["payload"]["idempotencyKey"] for post in posts]
+    assert len(set(keys)) == 5
+    evidence = json.loads((external_repo / "artifacts" / "batch-workflows-result.json").read_text())
+    assert evidence["executionRef"] == "step-external-1"
+    assert evidence["created"] == 5
+    assert [item["ref"] for item in evidence["queued"]] == [f"THOR-{n}" for n in range(705, 710)]
+
+
+def test_helper_records_preflight_failure_without_targets_or_queueing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_module()
+    spool = tmp_path / "spool"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MOONMIND_STEP_EXECUTION_ID", "step-invalid-range")
+    monkeypatch.setenv("MOONMIND_SESSION_ARTIFACT_SPOOL_PATH", str(spool))
+    monkeypatch.delenv("MOONMIND_URL", raising=False)
+
+    return_code = module["main"](
+        [
+            "--targets",
+            "artifacts/batch-workflows-targets.json",
+            "--run-ref",
+            "preset:github-issue-implement",
+            "--preflight-error",
+            "Range 3370-3425 contains 56 issues; maximum is 25.",
+            "--requested-count",
+            "56",
+        ]
+    )
+
+    assert return_code == 2
+    assert not (tmp_path / "artifacts/batch-workflows-targets.json").exists()
+    evidence = json.loads((spool / "batch-workflows-result.json").read_text())
+    assert evidence["executionRef"] == "step-invalid-range"
+    assert evidence["status"] == "failed"
+    assert evidence["requested"] == 56
+    assert evidence["created"] == 0
+    assert evidence["queued"] == []
+    assert evidence["failure"]["code"] == "BATCH_FANOUT_INPUT_INVALID"
+
+
+def test_helper_preserves_preflight_classification_for_negative_requested_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_module()
+    spool = tmp_path / "spool"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MOONMIND_STEP_EXECUTION_ID", "step-negative-count")
+    monkeypatch.setenv("MOONMIND_SESSION_ARTIFACT_SPOOL_PATH", str(spool))
+
+    return_code = module["main"](
+        [
+            "--targets",
+            "artifacts/batch-workflows-targets.json",
+            "--run-ref",
+            "preset:github-issue-implement",
+            "--preflight-error",
+            "Invalid range.",
+            "--requested-count",
+            "-1",
+        ]
+    )
+
+    evidence = json.loads((spool / "batch-workflows-result.json").read_text())
+    assert return_code == 2
+    assert evidence["status"] == "failed"
+    assert evidence["requested"] == 0
+    assert evidence["failure"] == {
+        "code": "BATCH_FANOUT_INPUT_INVALID",
+        "message": "--requested-count must be zero or greater",
+    }
+
+
+def test_materialized_helper_failure_matrix_preserves_authoritative_evidence(tmp_path):
+    """Every preflight/transport failure replaces stale evidence and retains children."""
+    repo_root = Path(__file__).resolve().parents[2]
+    snapshot = tmp_path / "skills_active"
+    shutil.copytree(repo_root / ".agents" / "skills" / "batch-workflows", snapshot / "batch-workflows")
+    shutil.copytree(repo_root / ".agents" / "skills" / "_shared", snapshot / "_shared")
+    workspace = tmp_path / "external-repo"
+    workspace.mkdir()
+    artifacts = workspace / "artifacts"
+    result_path = artifacts / "batch-workflows-result.json"
+    helper = snapshot / "batch-workflows" / "bin" / "batch_workflows.py"
+    targets = [
+        {"provider": "jira", "ref": f"THOR-{number}", "jiraIssue": {"key": f"THOR-{number}"}}
+        for number in range(705, 710)
+    ]
+    targets_path = workspace / "targets.json"
+    targets_path.write_text(json.dumps(targets), encoding="utf-8")
+
+    def run(*, url: str, execution_ref: str | None = "step-matrix"):
+        env = {**os.environ, "MOONMIND_URL": url, "MOONMIND_ACTIVE_SKILLS_DIR": str(snapshot)}
+        if execution_ref is None:
+            env.pop("MOONMIND_STEP_EXECUTION_ID", None)
+        else:
+            env["MOONMIND_STEP_EXECUTION_ID"] = execution_ref
+        return subprocess.run(
+            [sys.executable, str(helper), "--targets", str(targets_path), "--run-ref", "skill:jira-verify", "--publish-mode", "none", "--artifacts-dir", str(artifacts)],
+            cwd=workspace, env=env, text=True, capture_output=True, timeout=20, check=False,
+        )
+
+    artifacts.mkdir()
+    result_path.write_text(json.dumps({"status": "queued", "executionRef": "stale"}), encoding="utf-8")
+    missing_identity = run(url="http://127.0.0.1:1", execution_ref=None)
+    assert missing_identity.returncode == 1
+    evidence = json.loads(result_path.read_text())
+    assert evidence["status"] == "failed"
+    assert evidence["executionRef"] is None
+    assert evidence["queued"] == []
+
+    targets_path.write_text("{malformed", encoding="utf-8")
+    malformed = run(url="http://127.0.0.1:1")
+    assert malformed.returncode == 1
+    assert json.loads(result_path.read_text())["status"] == "failed"
+    targets_path.write_text(json.dumps(targets), encoding="utf-8")
+
+    unavailable = run(url="http://127.0.0.1:1")
+    assert unavailable.returncode == 1
+    unavailable_evidence = json.loads(result_path.read_text())
+    assert unavailable_evidence["status"] == "failed"
+    assert unavailable_evidence["created"] == 0
+    assert len(unavailable_evidence["errors"]) == 5
+
+    posts = 0
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            nonlocal posts
+            posts += 1
+            length = int(self.headers["Content-Length"])
+            self.rfile.read(length)
+            if posts > 2:
+                self.send_error(503, "injected partial failure")
+                return
+            body = json.dumps({"workflowId": f"child-{posts}"}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            return None
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        partial = run(url=f"http://127.0.0.1:{server.server_port}")
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+    assert partial.returncode == 1
+    partial_evidence = json.loads(result_path.read_text())
+    assert partial_evidence["status"] == "partial_failure"
+    assert partial_evidence["created"] == 2
+    assert [item["workflowId"] for item in partial_evidence["queued"]] == ["child-1", "child-2"]
+    assert len(partial_evidence["errors"]) == 3
+    assert "injected partial failure" in partial_evidence["errors"][0]["error"]
+    assert partial_evidence["executionRef"] == "step-matrix"

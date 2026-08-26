@@ -1,0 +1,7 @@
+{
+  "parentState": "failed",
+  "failureClass": "user_error",
+  "failureCode": "BATCH_FANOUT_INPUT_INVALID",
+  "retryable": false,
+  "missingEvidence": []
+}

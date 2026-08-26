@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -215,6 +216,40 @@ class RagQdrantClient:
         if not must:
             return None
         return qmodels.Filter(must=must)
+
+    def collection_freshness_at(
+        self, collection_name: str, *, sample_limit: int = 64
+    ) -> datetime | None:
+        """Return the newest payload timestamp from one bounded sample page.
+
+        Used to apply an overlay freshness policy on the retrieval hot path, so
+        it samples a single page instead of scrolling the whole collection.
+        """
+        if sample_limit <= 0 or not hasattr(self._client, "scroll"):
+            return None
+        try:
+            points, _ = self._client.scroll(
+                collection_name=collection_name,
+                limit=sample_limit,
+                with_payload=True,
+                with_vectors=False,
+            )
+        except Exception:
+            logger.debug(
+                "Unable to sample freshness for collection %s",
+                collection_name,
+                exc_info=True,
+            )
+            return None
+        latest: datetime | None = None
+        for point in points or ():
+            payload = getattr(point, "payload", None) or {}
+            if not isinstance(payload, Mapping):
+                continue
+            timestamp, _source = self._payload_freshness(payload)
+            if timestamp is not None and (latest is None or timestamp > latest):
+                latest = timestamp
+        return latest
 
     def _collection_freshness(
         self, *, collection_name: str, limit: int
@@ -489,6 +524,17 @@ class RagQdrantClient:
         canonical_points: Iterable[qmodels.ScoredPoint],
         trust_overrides: Optional[Mapping[str, str]] = None,
     ) -> List[ContextItem]:
+        def legacy_node(payload: MutableMapping[str, Any]) -> Mapping[str, Any]:
+            """Decode persisted LlamaIndex nodes during the legacy collection cutover."""
+            raw = payload.get("_node_content")
+            if not isinstance(raw, str) or not raw.strip():
+                return {}
+            try:
+                decoded = json.loads(raw)
+            except (TypeError, ValueError):
+                return {}
+            return decoded if isinstance(decoded, Mapping) else {}
+
         def resolve_source(payload: MutableMapping[str, Any]) -> str:
             for key in ("source", "path", "file_path", "document_path"):
                 value = payload.get(key)
@@ -500,6 +546,13 @@ class RagQdrantClient:
                     value = metadata.get(key)
                     if isinstance(value, str) and value.strip():
                         return value
+            legacy = legacy_node(payload)
+            metadata = legacy.get("metadata")
+            if isinstance(metadata, Mapping):
+                for key in ("source", "path", "file_path", "document_path"):
+                    value = metadata.get(key)
+                    if isinstance(value, str) and value.strip():
+                        return value
             return str(payload.get("id") or payload.get("point_id") or "unknown")
 
         def resolve_text(payload: MutableMapping[str, Any]) -> str:
@@ -507,6 +560,9 @@ class RagQdrantClient:
                 value = payload.get(key)
                 if isinstance(value, str) and value.strip():
                     return value
+            value = legacy_node(payload).get("text")
+            if isinstance(value, str) and value.strip():
+                return value
             return ""
 
         def to_item(point: qmodels.ScoredPoint, default_trust: str) -> ContextItem:

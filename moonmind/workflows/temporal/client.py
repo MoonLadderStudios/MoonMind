@@ -15,12 +15,17 @@ from temporalio.common import (
     SearchAttributeKey,
     SearchAttributePair,
     TypedSearchAttributes,
+    WorkflowIDReusePolicy,
 )
 from temporalio.exceptions import WorkflowAlreadyStartedError
 
 from api_service.db.models import TemporalExecutionRecord
 from moonmind.config.settings import settings
 from moonmind.schemas.manifest_ingest_models import ManifestNodeModel, RequestedByModel
+from moonmind.schemas.container_job_models import (
+    ContainerJobWorkflowInput,
+    container_job_workflow_id,
+)
 from moonmind.workflows.temporal.workers import (
     WORKFLOW_FLEET,
     TemporalWorkerTopology,
@@ -31,6 +36,7 @@ from moonmind.workflows.temporal.hard_switch_cutover import (
     resolve_user_workflow_start_contract,
 )
 from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CONVERTER
+from moonmind.observability import temporal_tracing_interceptors
 
 if TYPE_CHECKING:
     from moonmind.workflows.temporal.service import TemporalExecutionService
@@ -58,6 +64,8 @@ MANAGED_RUNTIME_WORKSPACE_CLEANUP_SCHEDULE_ID = (
 MANAGED_RUNTIME_WORKSPACE_CLEANUP_WORKFLOW_ID_BASE = (
     "mm-operational:managed-runtime-workspace-cleanup"
 )
+OMNIGENT_OAUTH_HOST_JANITOR_SCHEDULE_ID = "omnigent-oauth-host-janitor"
+OMNIGENT_OAUTH_HOST_JANITOR_WORKFLOW_ID_BASE = "omnigent-oauth-host-janitor-run"
 ALLOW_LIVE_TEMPORAL_IN_TESTS_ENV = "MOONMIND_ALLOW_LIVE_TEMPORAL_IN_TESTS"
 _WORKFLOW_UPDATE_ACCEPTED_TIMEOUT = timedelta(seconds=10)
 _SINGLE_VALUE_KEYWORD_LIST_SEARCH_ATTRIBUTES = frozenset(
@@ -271,6 +279,7 @@ async def get_temporal_client(address: str, namespace: str) -> Client:
         address,
         namespace=namespace,
         data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER,
+        interceptors=temporal_tracing_interceptors(),
     )
 
 async def fetch_workflow_execution(
@@ -323,6 +332,7 @@ class TemporalClientAdapter:
                     settings.temporal.address,
                     namespace=settings.temporal.namespace,
                     data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER,
+                    interceptors=temporal_tracing_interceptors(),
                 )
             return self._client
 
@@ -360,6 +370,7 @@ class TemporalClientAdapter:
         search_attributes: Mapping[str, Any] | None = None,
         start_delay: timedelta | None = None,
         task_queue: str | None = None,
+        id_reuse_policy: WorkflowIDReusePolicy | None = None,
     ) -> WorkflowStartResult:
         """Start a new Temporal workflow.
 
@@ -397,6 +408,8 @@ class TemporalClientAdapter:
         }
         if start_delay is not None:
             start_kwargs["start_delay"] = start_delay
+        if id_reuse_policy is not None:
+            start_kwargs["id_reuse_policy"] = id_reuse_policy
         try:
             handle = await client.start_workflow(
                 workflow_type,
@@ -412,6 +425,28 @@ class TemporalClientAdapter:
                 workflow_id=err.workflow_id,
                 run_id=err.run_id,
             )
+
+    async def start_container_job(
+        self, request: ContainerJobWorkflowInput | Mapping[str, Any]
+    ) -> WorkflowStartResult:
+        """Start or attach to one asynchronous ``MoonMind.ContainerJob``."""
+
+        model = (
+            request
+            if isinstance(request, ContainerJobWorkflowInput)
+            else ContainerJobWorkflowInput.model_validate(request)
+        )
+        return await self.start_workflow(
+            workflow_type="MoonMind.ContainerJob",
+            workflow_id=container_job_workflow_id(model.job_id),
+            input_args=model.model_dump(mode="json", by_alias=True),
+            id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
+        )
+
+    async def signal_container_job_cancel(self, job_id: str) -> None:
+        """Signal the canonical container-job workflow to stop."""
+        handle = await self.get_workflow_handle(container_job_workflow_id(job_id))
+        await handle.signal("cancel")
 
     async def get_workflow_handle(self, workflow_id: str) -> Any:
         """Get a handle to an existing workflow execution."""
@@ -632,8 +667,7 @@ class TemporalClientAdapter:
         )
         try:
             handle = client.get_schedule_handle(MANAGED_SESSION_RECONCILE_SCHEDULE_ID)
-            async def _replace_schedule(input: Any) -> ScheduleUpdate:  # noqa: A002
-                del input
+            async def _replace_schedule(_: Any) -> ScheduleUpdate:
                 return ScheduleUpdate(schedule=schedule)
 
             await handle.update(_replace_schedule)
@@ -661,15 +695,11 @@ class TemporalClientAdapter:
     async def ensure_managed_runtime_workspace_cleanup_schedule(
         self,
         *,
-        cron_expression: str = "0 3 * * *",
+        cron_expression: str = "0 * * * *",
         timezone: str = "UTC",
-        enabled: bool | None = False,
+        enabled: bool = True,
     ) -> str:
-        """Create or replace the retained managed-runtime cleanup Schedule.
-
-        Pass ``enabled=None`` to preserve an existing schedule's paused state
-        while still creating a missing schedule as disabled.
-        """
+        """Create or replace the recurring deployment-storage Schedule."""
 
         from temporalio.client import (
             Schedule,
@@ -698,9 +728,9 @@ class TemporalClientAdapter:
                             "mm_state": ["scheduled"],
                         }
                     ),
-                    static_summary="Managed runtime workspace cleanup",
+                    static_summary="Deployment storage maintenance",
                     static_details=(
-                        "Recurring dry-run retained-state janitor for managed runtime files"
+                        "Recurring bounded workspace, artifact, and Docker storage maintenance"
                     ),
                 ),
                 spec=build_schedule_spec(
@@ -714,30 +744,20 @@ class TemporalClientAdapter:
                 ),
                 state=build_schedule_state(
                     enabled=schedule_enabled,
-                    note="Managed runtime retained-state workspace cleanup",
+                    note="Deployment storage maintenance",
                 ),
             )
 
-        schedule = _build_schedule(
-            schedule_enabled=False if enabled is None else enabled
-        )
+        schedule = _build_schedule(schedule_enabled=enabled)
         try:
             handle = client.get_schedule_handle(
                 MANAGED_RUNTIME_WORKSPACE_CLEANUP_SCHEDULE_ID
             )
 
             async def _replace_schedule(input: Any) -> ScheduleUpdate:  # noqa: A002
-                schedule_enabled = enabled
-                if schedule_enabled is None:
-                    existing_schedule = input.description.schedule
-                    existing_paused = (
-                        existing_schedule.state.paused
-                        if existing_schedule.state
-                        else True
-                    )
-                    schedule_enabled = not existing_paused
+                del input
                 return ScheduleUpdate(
-                    schedule=_build_schedule(schedule_enabled=schedule_enabled)
+                    schedule=_build_schedule(schedule_enabled=enabled)
                 )
 
             await handle.update(_replace_schedule)
@@ -760,6 +780,73 @@ class TemporalClientAdapter:
             raise ScheduleOperationError(
                 "Failed to create managed runtime workspace cleanup schedule: "
                 f"{create_exc}"
+            ) from create_exc
+
+    async def ensure_omnigent_oauth_host_janitor_schedule(
+        self,
+        *,
+        cron_expression: str = "*/5 * * * *",
+        timezone: str = "UTC",
+        enabled: bool = True,
+    ) -> str:
+        """Create or replace the profile-bound OAuth host janitor schedule."""
+
+        from temporalio.client import Schedule, ScheduleActionStartWorkflow, ScheduleUpdate
+        from moonmind.workflows.temporal.schedule_errors import ScheduleOperationError
+        from moonmind.workflows.temporal.schedule_mapping import (
+            build_schedule_policy,
+            build_schedule_spec,
+            build_schedule_state,
+        )
+
+        client = await self.get_client()
+
+        def _schedule() -> Schedule:
+            return Schedule(
+                action=ScheduleActionStartWorkflow(
+                    "MoonMind.OmnigentOAuthHostJanitor",
+                    {},
+                    id=OMNIGENT_OAUTH_HOST_JANITOR_WORKFLOW_ID_BASE,
+                    task_queue=self._get_task_queue(),
+                    typed_search_attributes=_build_typed_search_attributes(
+                        {"mm_entry": ["operational"], "mm_state": ["scheduled"]}
+                    ),
+                    static_summary="Omnigent OAuth host janitor",
+                    static_details="Reconcile profile-bound OAuth host leases",
+                ),
+                spec=build_schedule_spec(
+                    cron=cron_expression, timezone=timezone, jitter_seconds=0
+                ),
+                policy=build_schedule_policy(overlap_mode="skip", catchup_mode="last"),
+                state=build_schedule_state(
+                    enabled=enabled, note="Omnigent OAuth host cleanup"
+                ),
+            )
+
+        try:
+            handle = client.get_schedule_handle(OMNIGENT_OAUTH_HOST_JANITOR_SCHEDULE_ID)
+
+            async def _replace(input: Any) -> ScheduleUpdate:  # noqa: A002
+                del input
+                return ScheduleUpdate(schedule=_schedule())
+
+            await handle.update(_replace)
+            return OMNIGENT_OAUTH_HOST_JANITOR_SCHEDULE_ID
+        except Exception as update_exc:
+            if not _is_rpc_status(update_exc, "NOT_FOUND") and "not found" not in str(
+                update_exc
+            ).lower():
+                raise ScheduleOperationError(
+                    f"Failed to update Omnigent OAuth host janitor schedule: {update_exc}"
+                ) from update_exc
+        try:
+            handle = await client.create_schedule(
+                OMNIGENT_OAUTH_HOST_JANITOR_SCHEDULE_ID, _schedule()
+            )
+            return handle.id
+        except Exception as create_exc:
+            raise ScheduleOperationError(
+                f"Failed to create Omnigent OAuth host janitor schedule: {create_exc}"
             ) from create_exc
 
     async def create_schedule(

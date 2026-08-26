@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import json
 import logging
 import os
 import re
@@ -7,30 +9,55 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from temporalio import workflow, activity
 from temporalio.exceptions import ApplicationError, CancelledError
-from temporalio.workflow import ActivityCancellationType
+from temporalio.workflow import (
+    ActivityCancellationType,
+    ChildWorkflowCancellationType,
+)
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
+    from pydantic import ValidationError
+
     from moonmind.schemas.agent_runtime_models import (
+        AUTO_RUNTIME_SENTINEL,
+        MANAGED_PROCESS_LOST_DURING_RECONCILIATION,
         AgentExecutionRequest,
         AgentRunHandle,
         AgentRunResult,
         AgentRunStatus as AgentRunStatusModel,
+        ExecutionBudget,
+        ExecutionBudgetVerdict,
         ProfileSelector,
+        evaluate_execution_budget,
+        resolve_execution_budget,
         _MAX_SUMMARY_CHARS,
     )
     from moonmind.schemas.managed_session_models import (
         CodexManagedSessionBinding,
+        CodexManagedSessionSnapshot,
         CodexManagedSessionWorkflowInput,
+        SendCodexManagedSessionTurnRequest,
+        build_codex_managed_session_turn_environment,
         canonical_managed_session_runtime_id,
+    )
+    from moonmind.schemas.omnigent_session_models import (
+        OMNIGENT_SESSION_FEATURE_GENERATION,
+        OmnigentSessionAdmissionDecision,
+        OmnigentSessionAdmissionRequest,
+        OmnigentSessionSignal,
+        OmnigentSessionWorkflowInput,
     )
     from moonmind.schemas.temporal_activity_models import (
         AgentRuntimeCancelInput,
         AgentRuntimeFetchResultInput,
         AgentRuntimeStatusInput,
+        AgentRuntimeTerminalCheckpointInput,
         ExternalAgentRunInput,
     )
     from moonmind.schemas.temporal_payload_policy import compact_temporal_ref_metadata
+    from moonmind.workflows.temporal.agent_result_payloads import (
+        compact_agent_run_result_payload_for_workflow_history,
+    )
     from moonmind.workflows.adapters.agent_adapter import AgentAdapter
     from moonmind.workflows.adapters.managed_agent_adapter import (
         ManagedAgentAdapter,
@@ -56,6 +83,9 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.workflows.temporal.workflows.provider_profile_manager import (
         workflow_id_for_runtime,
     )
+    from moonmind.workflows.temporal.workflows.omnigent_session import (
+        omnigent_session_workflow_id,
+    )
     from moonmind.workflows.temporal.typed_execution import execute_typed_activity
     from moonmind.workflows.provider_failures import (
         build_provider_failure_event,
@@ -64,6 +94,78 @@ with workflow.unsafe.imports_passed_through():
         provider_failure_event_from_metadata,
         provider_failure_event_requires_cooldown,
         resolve_provider_cooldown_seconds,
+    )
+    from moonmind.workflows.executions.runtime_capabilities import (
+        resolve_runtime_execution_capabilities,
+    )
+
+TERMINAL_CONTRACT_CONTINUATION_PATCH_ID = "agent-run-terminal-contract-continuation-v1"
+TERMINAL_CONTRACT_FRESH_PROCESS_CONTINUATION_PATCH_ID = (
+    "agent-run-terminal-contract-fresh-process-continuation-v1"
+)
+TERMINAL_CONTRACT_CHECKPOINT_ON_FAILURE_PATCH_ID = (
+    "agent-run-terminal-contract-checkpoint-on-failure-v1"
+)
+TERMINAL_CONTRACT_RUNTIME_FAILURE_AUTHORITY_PATCH_ID = (
+    "agent-run-terminal-contract-runtime-failure-authority-v1"
+)
+MANAGED_PROCESS_LOSS_RECOVERY_PATCH_ID = (
+    "agent-run-managed-process-loss-recovery-v1"
+)
+CODEX_TURN_RUNTIME_SELECTION_PATCH_ID = (
+    "agent-run-codex-turn-runtime-selection-v1"
+)
+PR_RESOLVER_OWNED_CONTINUATION_PATCH_ID = "agent-run-pr-resolver-owned-continuation-v1"
+PR_RESOLVER_CONTINUATION_OBSERVABILITY_PATCH_ID = (
+    "agent-run-pr-resolver-continuation-observability-v1"
+)
+RESOLVED_RUNTIME_DISPATCH_PATCH_ID = "agent-run-resolved-runtime-dispatch-v1"
+PARENT_EXECUTION_ARTIFACT_HANDOFF_PATCH_ID = (
+    "agent-run-parent-execution-artifact-handoff-v1"
+)
+TERMINAL_EVIDENCE_CONTROL_QUEUE_PATCH_ID = (
+    "agent-run-terminal-evidence-control-queue-v1"
+)
+_MAX_TERMINAL_CONTRACT_CONTINUATIONS = 2
+_MAX_MANAGED_PROCESS_LOSS_RECOVERIES = 1
+_RETRYABLE_TERMINAL_CONTRACT_FAILURE_CODES = frozenset(
+    {
+        "INCOMPLETE_TERMINAL_CONTRACT",
+        "INVALID_TERMINAL_EVIDENCE",
+        "MALFORMED_TERMINAL_EVIDENCE",
+        "STALE_TERMINAL_EVIDENCE",
+        "missing_terminal_evidence",
+    }
+)
+
+
+def _terminal_contract_continuation_instruction(missing: list[str]) -> str:
+    evidence = ", ".join(f"`{path}`" for path in missing)
+    return (
+        "The selected skill has not satisfied its terminal contract. "
+        f"Missing required evidence: {evidence or 'valid terminal evidence'}. "
+        "Resume the still-running work from durable state and do not declare "
+        "completion until the terminal result contract is satisfied."
+    )
+
+
+def _terminal_contract_fresh_process_instruction(missing: list[str]) -> str:
+    return (
+        _terminal_contract_continuation_instruction(missing)
+        + " The prior one-shot process exited, so continue in this replacement "
+        "process using the existing authoritative workspace. Finish all work in "
+        "this process; do not schedule a wake-up or other deferred callback."
+    )
+
+
+def _managed_process_loss_recovery_instruction() -> str:
+    return (
+        "The prior managed process was lost when its worker restarted before "
+        "MoonMind received authoritative terminal evidence. Continue in this "
+        "replacement process using the existing authoritative workspace. "
+        "Inspect the workspace and remotely visible side effects first, and "
+        "reuse completed work instead of duplicating it. Finish all remaining "
+        "work in this process; do not schedule a wake-up or deferred callback."
     )
 
 # Map canonical AgentRunState literals to workflow-usable status constants.
@@ -122,168 +224,35 @@ def _setdefault_compact_ref_metadata(
         metadata.setdefault(key, compact_value)
 
 
-def _compact_workflow_text(value: Any, *, max_chars: int = 700) -> str | None:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    if not text:
-        return None
-    if len(text) > max_chars:
-        return text[: max_chars - 3].rstrip() + "..."
-    return text
-
-
-def _compact_workflow_scalar(value: Any) -> Any:
-    if isinstance(value, str):
-        return _compact_workflow_text(value)
-    if value is None or isinstance(value, (bool, int, float)):
-        return value
-    return None
-
-
-def _compact_workflow_text_list(
-    value: Any,
-    *,
-    max_items: int = 20,
-    max_chars: int = 400,
-) -> list[str]:
-    if not isinstance(value, (list, tuple)):
-        return []
-    compact: list[str] = []
-    for item in value:
-        text = _compact_workflow_text(item, max_chars=max_chars)
-        if text:
-            compact.append(text)
-        if len(compact) >= max_items:
-            break
-    return compact
-
-
-def _compact_workflow_text_mapping(value: Any) -> dict[str, str]:
-    if not isinstance(value, Mapping):
-        return {}
-    compact: dict[str, str] = {}
-    for raw_key, raw_value in value.items():
-        key = _compact_workflow_text(str(raw_key), max_chars=120)
-        text = _compact_workflow_text(raw_value, max_chars=400)
-        if key and text:
-            compact[key] = text
-        if len(compact) >= 20:
-            break
-    return compact
-
-
-def _compact_moonspec_verify_for_workflow_history(
-    value: Mapping[str, Any],
-) -> dict[str, Any]:
-    compact: dict[str, Any] = {}
-    scalar_keys = (
-        "schemaVersion",
-        "verdict",
-        "gateVerdict",
-        "gate_verdict",
-        "moonSpecVerdict",
-        "moonspecVerdict",
-        "verificationVerdict",
-        "verification_verdict",
-        "confidence",
-        "recommendedNextAction",
-        "recommended_next_action",
-        "targetLogicalStepId",
-        "target_logical_step_id",
-        "workspacePolicyRecommendation",
-        "workspace_policy_recommendation",
-        "recoverableInCurrentRuntime",
-        "recoverable_in_current_runtime",
-        "invalid",
-        "degraded",
-        "remainingWorkRef",
-        "remaining_work_ref",
-        "diagnosticsRef",
-        "diagnostics_ref",
-        "verificationReportRef",
-        "verification_report_ref",
-        "reportRef",
-        "report_ref",
-        "gateResultRef",
-        "gate_result_ref",
-        "artifactRef",
-        "artifact_ref",
-    )
-    for key in scalar_keys:
-        field_value = _compact_workflow_scalar(value.get(key))
-        if field_value is not None:
-            compact[key] = field_value
-
-    for key in ("feedback", "summary", "message", "downgradeReason"):
-        text = _compact_workflow_text(value.get(key), max_chars=900)
-        if text:
-            compact[key] = text
-
-    for key in ("invalidatedRefs", "invalidated_refs"):
-        refs = _compact_workflow_text_list(value.get(key))
-        if refs:
-            compact[key] = refs
-            break
-    for key in ("blockingEvidenceRefs", "blocking_evidence_refs"):
-        refs = _compact_workflow_text_list(value.get(key))
-        if refs:
-            compact[key] = refs
-            break
-
-    validated_refs = _compact_workflow_text_mapping(
-        value.get("validatedRefs") or value.get("validated_refs")
-    )
-    if validated_refs:
-        compact["validatedRefs"] = validated_refs
-
-    contract_violations = _compact_workflow_text_list(
-        value.get("contractViolations") or value.get("contract_violations"),
-        max_items=10,
-        max_chars=700,
-    )
-    if contract_violations:
-        compact["contractViolations"] = contract_violations
-
-    return compact
-
-
-def _compact_agent_run_result_payload_for_workflow_history(
-    payload: Mapping[str, Any],
-) -> dict[str, Any]:
-    compact_payload = dict(payload)
-    metadata = compact_payload.get("metadata")
-    if not isinstance(metadata, Mapping):
-        return compact_payload
-
-    compact_metadata = dict(metadata)
-    for key in (
-        "moonSpecVerify",
-        "moonspecVerify",
-        "moonspec_verify",
-        "verificationResult",
-        "verification_result",
-    ):
-        value = compact_metadata.get(key)
-        if isinstance(value, Mapping):
-            compact_metadata[key] = _compact_moonspec_verify_for_workflow_history(
-                value
-            )
-    compact_payload["metadata"] = compact_metadata
-    return compact_payload
-
-
-# Default workflow-level execution timeouts
-DEFAULT_MANAGED_TIMEOUT_SECONDS = 3600      # 1 hour
-DEFAULT_EXTERNAL_TIMEOUT_SECONDS = 21600    # 6 hours
 _CALLBACK_KEY_SAFE_PATTERN = re.compile(r"[^A-Za-z0-9_.-]+")
 
 STREAMING_EXTERNAL_HEARTBEAT_TIMEOUT = timedelta(seconds=120)
+OMNIGENT_PROFILE_BOUND_EXECUTION_PATCH_ID = (
+    "agent-run-omnigent-profile-bound-execution-v1"
+)
+OMNIGENT_SESSION_SUPERVISOR_PATCH_ID = (
+    "agent-run-omnigent-session-supervisor-v1"
+)
+OMNIGENT_SESSION_ADMISSION_PATCH_ID = (
+    "agent-run-omnigent-session-admission-v1"
+)
+OMNIGENT_COMPACT_RESOLVE_INTENT_PATCH_ID = (
+    "agent-run-omnigent-compact-resolve-intent-v1"
+)
+OMNIGENT_EXECUTION_PLAN_ADMISSION_PATCH_ID = (
+    "agent-run-omnigent-execution-plan-admission-v1"
+)
 MANAGED_STATUS_ACTIVITY_PATCH_ID = "agent-run-managed-status-activity-v1"
+MANAGED_STATUS_ROLLOUT_TOLERANCE_PATCH_ID = (
+    "agent-run-managed-status-rollout-tolerance-v1"
+)
 PROVIDER_PROFILE_MANAGER_ID_PATCH = "provider-profile-manager-id-v1"
 MANAGED_TASK_WORKFLOW_BINDING_PATCH_ID = "agent-run-managed-task-workflow-binding-v1"
 MANAGED_SESSION_FETCH_RESULT_ACTIVITY_PATCH_ID = (
     "agent-run-managed-session-fetch-result-activity-v1"
+)
+TERMINAL_CHECKPOINT_PUBLICATION_PATCH_ID = (
+    "agent-run-terminal-checkpoint-publication-v1"
 )
 STORY_BREAKDOWN_ARTIFACT_HANDOFF_PATCH_ID = (
     "agent-run-story-breakdown-artifact-handoff-v1"
@@ -301,6 +270,13 @@ PR_RESOLVER_MERGE_GATE_OWNERSHIP_PATCH_ID = (
     "agent-run-pr-resolver-merge-gate-ownership-v1"
 )
 MANAGER_SLOT_WAIT_INSPECTION_PATCH_ID = "agent-run-slot-wait-manager-inspection-v1"
+PRESERVE_DURABLE_SLOT_REQUEST_ON_AMBIGUOUS_INSPECTION_PATCH_ID = (
+    "agent-run-preserve-slot-request-on-ambiguous-inspection-v1"
+)
+NON_DESTRUCTIVE_SLOT_WAIT_RECOVERY_PATCH_ID = (
+    "agent-run-non-destructive-slot-wait-recovery-v1"
+)
+ACCURATE_SLOT_WAIT_REASON_PATCH_ID = "agent-run-accurate-slot-wait-reason-v1"
 SLOT_HANDOFF_PATCH_ID = "agent-run-slot-handoff-v1"
 SYNC_PROFILES_BEFORE_SLOT_REQUEST_PATCH_ID = (
     "agent-run-sync-profiles-before-slot-request-v1"
@@ -313,6 +289,12 @@ STICKY_PINNED_PROFILE_COOLDOWN_RETRY_PATCH_ID = (
 )
 RUNTIME_SELECTION_PROFILE_CLEAR_PATCH_ID = (
     "agent-run-runtime-selection-profile-clear-v1"
+)
+RUNTIME_SELECTION_SESSION_REBIND_PATCH_ID = (
+    "agent-run-runtime-selection-session-rebind-v1"
+)
+AWAITING_SLOT_RUNTIME_PROFILE_EDIT_PATCH_ID = (
+    "agent-run-awaiting-slot-runtime-profile-edit-v1"
 )
 AGENT_RUN_RESILIENCY_POLICY_PATCH_ID = "agent-run-resiliency-policy-v1"
 AGENT_RUN_CLAUDE_NO_PROGRESS_POLICY_PATCH_ID = (
@@ -333,6 +315,25 @@ AGENT_RUN_MANAGED_NO_PROGRESS_RECONCILIATION_PATCH_ID = (
 )
 AGENT_RUN_MANAGED_NO_PROGRESS_CANCEL_FETCH_PATCH_ID = (
     "agent-run-managed-no-progress-cancel-fetch-v1"
+)
+# Publishes the workflow's effective execution budget into the launch request's
+# ``timeoutPolicy`` so the managed process supervisor enforces the same deadline
+# (MoonLadderStudios/MoonMind#3685 review). In-flight runs started before this
+# patch keep the launch payload they already dispatched.
+AGENT_RUN_SHARED_EXECUTION_BUDGET_PATCH_ID = (
+    "agent-run-shared-execution-budget-v1"
+)
+# Makes the execution budget progress-aware. Elapsed wall-clock alone is not
+# evidence that a run is stuck: a one-shot runtime such as ``claude -p`` emits
+# nothing until its turn completes, so the flat budget terminated runs that were
+# actively working — MoonLadderStudios/MoonMind#3771 discarded an hour of
+# uncommitted work from a run that wrote files three seconds before the kill, and
+# reported it as "no observable progress". With this patch the base budget only
+# ends a run whose observed progress has gone stale; a progressing run continues
+# to the budget's hard ceiling. In-flight runs keep the flat deadline they were
+# started with so their recorded decisions replay unchanged.
+AGENT_RUN_PROGRESS_AWARE_EXECUTION_BUDGET_PATCH_ID = (
+    "agent-run-progress-aware-execution-budget-v1"
 )
 MANAGED_SESSION_START_AFTER_SLOT_PATCH_ID = (
     "agent-run-managed-session-start-after-slot-v1"
@@ -357,15 +358,18 @@ MANAGED_SESSION_PR_PUBLISH_BASE_BRANCH_PATCH_ID = (
 MANAGED_SESSION_BRIDGE_EVENTS_ACTIVITY_PATCH_ID = (
     "agent-run-managed-session-bridge-events-activity-v1"
 )
+MANAGED_SESSION_REPLACE_ON_LOCATOR_MISMATCH_PATCH_ID = (
+    "agent-run-managed-session-replace-on-locator-mismatch-v1"
+)
 
 # Module-level activity catalog — deterministic, safe for Temporal replay.
 # Mirrors the pattern used by MoonMind.UserWorkflow (run.py:50).
 DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
 
-# How long to wait for a slot_assigned signal before assuming the manager is
-# stuck (e.g. nondeterminism error) and resetting it.
+# How long to wait for a slot_assigned signal before inspecting manager health
+# and performing bounded, non-destructive recovery.
 _SLOT_WAIT_TIMEOUT_SECONDS = 120
-_SLOT_WAIT_MAX_RESETS = 3
+_SLOT_WAIT_MAX_RECOVERY_ATTEMPTS = 3
 _DEFAULT_NO_PROGRESS_TIMEOUT_SECONDS = 1800
 _CLAUDE_CODE_NO_PROGRESS_TIMEOUT_SECONDS = 2400
 _CLAUDE_CODE_NO_PROGRESS_GRACE_SECONDS = 900
@@ -559,10 +563,105 @@ async def external_adapter_execution_style(agent_id: str) -> str:
 @workflow.defn(name="MoonMind.AgentRun")
 class MoonMindAgentRun:
     @staticmethod
+    def _workflow_patch_enabled(patch_id: str) -> bool:
+        try:
+            return bool(workflow.patched(patch_id))
+        except Exception as exc:
+            if exc.__class__.__name__ == "_NotInWorkflowEventLoopError":
+                return False
+            raise
+
+    @staticmethod
     def _workflow_child_task_queue() -> str:
         if workflow.patched(AGENT_RUN_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH):
             return settings.temporal.user_workflow_v2_task_queue
         return WORKFLOW_TASK_QUEUE
+
+    @staticmethod
+    def _omnigent_owner_identities(
+        request: AgentExecutionRequest,
+    ) -> tuple[str, str]:
+        """Resolve the immutable owning Workflow and Step Execution identities."""
+
+        if request.step_execution is not None:
+            return (
+                request.step_execution.workflow_id,
+                request.step_execution.step_execution_id,
+            )
+        parent = workflow.info().parent
+        owner_workflow_id = (
+            str(parent.workflow_id or "").strip()
+            if parent is not None
+            else ""
+        )
+        if not owner_workflow_id:
+            owner_workflow_id = request.correlation_id
+        # Older direct AgentRun callers do not have a Step Execution envelope.
+        # Their immutable request idempotency key is the canonical fallback.
+        return owner_workflow_id, request.idempotency_key
+
+    @staticmethod
+    def _omnigent_resolve_intent_payload(
+        request: AgentExecutionRequest,
+        *,
+        workflow_id: str,
+        step_execution_id: str,
+        agent_run_id: str,
+        admitted_feature_generation: str,
+        compact_plan_authority: bool,
+    ) -> dict[str, Any]:
+        """Build the replay-versioned AgentRun-to-Activity handoff.
+
+        Histories created before the compact contract must continue to emit the
+        request body recorded in their Activity command. New plan-bound runs
+        carry only immutable plan/task refs and digests; the Activity reloads
+        authored input from the artifact system.
+        """
+
+        payload: dict[str, Any] = {
+            "workflowId": workflow_id,
+            "stepExecutionId": step_execution_id,
+            "agentRunId": agent_run_id,
+            "admittedFeatureGeneration": admitted_feature_generation,
+        }
+        if compact_plan_authority:
+            binding = request.omnigent_execution_plan
+            if binding is None:
+                raise ValueError(
+                    "compact Omnigent intent handoff requires persisted plan authority"
+                )
+            payload["omnigentExecutionPlan"] = binding.model_dump(
+                mode="json", by_alias=True
+            )
+            if request.step_execution is not None:
+                payload["logicalStepId"] = request.step_execution.logical_step_id
+            execution_instruction = str(request.instruction_ref or "").strip()
+            if execution_instruction:
+                payload["executionInstructionRef"] = execution_instruction
+                payload["executionInstructionDigest"] = (
+                    "sha256:"
+                    + hashlib.sha256(execution_instruction.encode("utf-8")).hexdigest()
+                )
+            execution_input_refs = [
+                str(item).strip()
+                for item in request.input_refs
+                if str(item).strip()
+            ]
+            if execution_input_refs:
+                payload["executionInputRefs"] = execution_input_refs
+                encoded_refs = json.dumps(
+                    execution_input_refs,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+                payload["executionInputRefsDigest"] = (
+                    "sha256:" + hashlib.sha256(encoded_refs).hexdigest()
+                )
+        else:
+            payload["request"] = request.model_dump(
+                mode="json", by_alias=True, exclude_none=True
+            )
+        return payload
 
     def _get_logger(self) -> logging.LoggerAdapter | logging.Logger:
         try:
@@ -600,6 +699,7 @@ class MoonMindAgentRun:
         self.agent_kind: str | None = None
         self._assigned_profile_id: str | None = None
         self._external_agent_id: str | None = None
+        self._omnigent_session_workflow_id: str | None = None
         # Auto-answer state (Jules question auto-answer, spec 094)
         self._answered_activity_ids: set[str] = set()
         self._auto_answer_count: int = 0
@@ -610,8 +710,11 @@ class MoonMindAgentRun:
         self._skip_default_profile_pin_once: bool = False
         self._provider_cooldown_retry_counts: dict[str, int] = {}
         self._terminal_result_payload_compacted_for_history: bool = False
+        self._terminal_contract_fresh_process_history: list[dict[str, Any]] = []
+        self._managed_process_loss_recovery_history: list[dict[str, Any]] = []
         self.runtime_selection_updated_event = asyncio.Event()
         self._pending_runtime_selection_update: dict[str, Any] | None = None
+        self._managed_session_detached_for_runtime_selection: bool = False
         self._paused: bool = False
 
     @staticmethod
@@ -735,6 +838,17 @@ class MoonMindAgentRun:
         """Execute an activity using the module-level catalog for routing."""
         route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(activity_name)
         kwargs = self._execute_kwargs_for_route(route)
+        if (
+            activity_name == "agent_runtime.evaluate_terminal_evidence"
+            and not self._workflow_patch_enabled(
+                TERMINAL_EVIDENCE_CONTROL_QUEUE_PATCH_ID
+            )
+        ):
+            # Preserve the exact command emitted by histories created before
+            # terminal evaluation moved to its starvation-resistant control
+            # lane. New histories record the patch marker and use the catalog's
+            # isolated queue; old histories replay against the former queue.
+            kwargs["task_queue"] = settings.temporal.activity_agent_runtime_task_queue
         kwargs.update(overrides)
         kwargs.setdefault(
             "summary",
@@ -956,6 +1070,69 @@ class MoonMindAgentRun:
             f"runtime={runtime_id}; {intent}; missing_condition=capacity_or_cooldown."
         )
 
+    def _build_manager_slot_waiting_reason(
+        self,
+        *,
+        runtime_id: str,
+        request: AgentExecutionRequest,
+        manager_state: Mapping[str, Any],
+    ) -> str:
+        """Describe the manager-owned condition that is blocking slot assignment."""
+
+        intent = self._provider_slot_intent_summary(request)
+        queue_position = manager_state.get("requester_queue_position")
+        queue_suffix = (
+            f"; queue_position={queue_position}"
+            if isinstance(queue_position, int) and queue_position > 0
+            else ""
+        )
+        profile = manager_state.get("requested_profile")
+        if not isinstance(profile, Mapping):
+            return (
+                "Waiting in MoonMind provider profile queue; "
+                f"runtime={runtime_id}; {intent}; missing_condition=manager_queue"
+                f"{queue_suffix}."
+            )
+
+        profile_id = str(profile.get("profile_id") or "").strip()
+        profile_suffix = f"; profile={profile_id}" if profile_id else ""
+        slots_in_use = profile.get("current_leases_count")
+        max_parallel_runs = profile.get("max_parallel_runs")
+        if profile.get("enabled") is False or profile.get("launch_ready") is False:
+            return (
+                "Waiting for provider profile readiness; "
+                f"runtime={runtime_id}; {intent}{profile_suffix}; "
+                f"missing_condition=profile_not_launch_ready{queue_suffix}."
+            )
+
+        cooldown_until = str(profile.get("cooldown_until") or "").strip()
+        if cooldown_until:
+            return (
+                "Waiting for provider cooldown to expire; "
+                f"runtime={runtime_id}; {intent}{profile_suffix}; "
+                f"missing_condition=provider_cooldown; cooldown_until={cooldown_until}"
+                f"{queue_suffix}."
+            )
+
+        if (
+            isinstance(slots_in_use, int)
+            and isinstance(max_parallel_runs, int)
+            and slots_in_use >= max_parallel_runs
+        ):
+            return (
+                "Waiting for MoonMind provider profile slot; "
+                f"runtime={runtime_id}; {intent}{profile_suffix}; "
+                "missing_condition=moonmind_slot_capacity; "
+                f"slots_in_use={slots_in_use}; max_parallel_runs={max_parallel_runs}"
+                f"{queue_suffix}."
+            )
+
+        return (
+            "Waiting in MoonMind provider profile queue; "
+            f"runtime={runtime_id}; {intent}{profile_suffix}; "
+            f"missing_condition=manager_queue{queue_suffix}."
+        )
+
     @staticmethod
     def _resiliency_policy_for_request(
         request: AgentExecutionRequest,
@@ -1016,6 +1193,31 @@ class MoonMindAgentRun:
             "retryPolicy": "managed_runtime_polling_with_profile_cooldown",
         }
 
+    def _refresh_selection_after_slot_assignment(
+        self,
+        request: AgentExecutionRequest,
+        *,
+        use_extended_claude_no_progress_window: bool,
+    ) -> dict[str, Any]:
+        """Refresh launch metadata and policy from the assigned selection."""
+
+        if request.step_execution is not None:
+            runtime_selection = dict(request.step_execution.runtime_selection or {})
+            runtime_selection["runtimeId"] = request.agent_id
+            if request.execution_profile_ref:
+                runtime_selection["executionProfileRef"] = (
+                    request.execution_profile_ref
+                )
+            else:
+                runtime_selection.pop("executionProfileRef", None)
+            request.step_execution.runtime_selection = runtime_selection
+        return self._resiliency_policy_for_request(
+            request,
+            use_extended_claude_no_progress_window=(
+                use_extended_claude_no_progress_window
+            ),
+        )
+
     @staticmethod
     def _status_progress_signature(status_obj: AgentRunStatusModel) -> tuple[Any, ...]:
         metadata = status_obj.metadata if isinstance(status_obj.metadata, Mapping) else {}
@@ -1064,6 +1266,167 @@ class MoonMindAgentRun:
         return max(0, int(policy.get("noProgressGraceSeconds") or 0))
 
     @staticmethod
+    def _effective_deadline_seconds(
+        *,
+        budget: ExecutionBudget,
+        elapsed_seconds: float,
+        idle_progress_seconds: float | None,
+    ) -> float:
+        """Seconds-from-start at which the run must stop, given current progress.
+
+        Below the base window this is the base window. Once the base window has
+        elapsed while progress is still fresh, the deadline rolls forward to the
+        moment progress *would* go stale, capped at the hard ceiling.
+
+        Every remaining-time computation in the poll loop derives from this, so a
+        run that has earned an extension is not cut short by a poll wait or a
+        status-activity budget that still believes the base window is the end.
+        It agrees with :func:`evaluate_execution_budget` by construction: that
+        function returns a non-``continue`` verdict exactly when ``elapsed_seconds``
+        has reached the deadline this returns.
+        """
+
+        if idle_progress_seconds is None:
+            return float(budget.base_seconds)
+        goes_stale_at = (
+            elapsed_seconds - idle_progress_seconds + budget.progress_stall_seconds
+        )
+        return float(
+            min(budget.max_seconds, max(budget.base_seconds, goes_stale_at))
+        )
+
+    @staticmethod
+    def _publish_execution_budget(
+        *,
+        request: AgentExecutionRequest,
+        budget: ExecutionBudget,
+        progress_aware: bool,
+    ) -> None:
+        """Republish the resolved budget into the request the launcher receives.
+
+        The supervisor must extend and terminate on the same numbers the workflow
+        enforces, so the whole budget travels — not just the base window.
+        Publishing only the base window would let the process be killed at the
+        base budget even though the workflow had granted an extension.
+
+        The *mode* travels too. A history that predates the progress-aware patch
+        keeps its flat deadline, and the launch activity re-resolves the budget
+        from this policy on every launch and retry — including retries that run
+        after the progress-aware deployment. Publishing only the base window
+        there would let the activity derive a progress-aware ceiling the workflow
+        never granted: the workflow would time out at the base window and release
+        the provider slot while the supervisor carried the process on to that
+        derived ceiling, leaving untracked work running against a profile already
+        handed to another run. Publishing the flat budget explicitly keeps the
+        two deadlines the same boundary.
+
+        Adding keys keeps the launch payload backward-compatible: a worker that
+        does not read them resolves the same defaults from the base window.
+        """
+
+        published: dict[str, Any] = {
+            **(request.timeout_policy or {}),
+            "timeout_seconds": budget.base_seconds,
+        }
+        published.update(
+            (budget if progress_aware else budget.as_flat()).as_timeout_policy()
+        )
+        request.timeout_policy = published
+
+    @staticmethod
+    def _budget_idle_progress_seconds(
+        *,
+        progress_aware: bool,
+        last_progress_at: datetime | None,
+        now: datetime,
+    ) -> float | None:
+        """How long ago progress was last observed, or ``None`` if never.
+
+        ``None`` is not evidence of health — it makes the budget behave exactly
+        as the old flat deadline did. Only positively observed progress buys an
+        extension, and a run replaying from before the progress-aware patch never
+        observes any.
+        """
+
+        if not progress_aware or last_progress_at is None:
+            return None
+        return max(0.0, (now - last_progress_at).total_seconds())
+
+    @classmethod
+    def _budget_deadline_for(
+        cls,
+        *,
+        budget: ExecutionBudget,
+        progress_aware: bool,
+        elapsed_seconds: float,
+        idle_progress_seconds: float | None,
+    ) -> float:
+        """Seconds-from-start the run may currently reach.
+
+        Every remaining-time computation in the poll loop derives from this, so a
+        run that earned an extension is not cut short by a poll wait or a status
+        budget that still believes the base window is the end.
+        """
+
+        if not progress_aware:
+            return float(budget.base_seconds)
+        return cls._effective_deadline_seconds(
+            budget=budget,
+            elapsed_seconds=elapsed_seconds,
+            idle_progress_seconds=idle_progress_seconds,
+        )
+
+    @staticmethod
+    def _budget_verdict_for(
+        *,
+        budget: ExecutionBudget,
+        progress_aware: bool,
+        elapsed_seconds: float,
+        idle_progress_seconds: float | None,
+    ) -> ExecutionBudgetVerdict:
+        """Whether the execution budget still permits the run to continue."""
+
+        if not progress_aware:
+            return (
+                "continue"
+                if elapsed_seconds < budget.base_seconds
+                else "expired_no_progress"
+            )
+        return evaluate_execution_budget(
+            budget=budget,
+            elapsed_seconds=elapsed_seconds,
+            idle_progress_seconds=idle_progress_seconds,
+        )
+
+    @staticmethod
+    def _budget_expiry_detail_for(
+        *,
+        budget: ExecutionBudget,
+        progress_aware: bool,
+        verdict: ExecutionBudgetVerdict,
+    ) -> str:
+        """Operator-facing reason the budget ended the run.
+
+        A run that was extended for observed progress and then hit the ceiling is
+        never described as having made no progress: the two outcomes call for
+        different operator responses (raise the ceiling versus investigate a
+        wedged runtime).
+        """
+
+        if verdict == "expired_max_budget":
+            return (
+                "was still making progress but reached its maximum execution "
+                f"budget of {budget.max_seconds}s"
+            )
+        if progress_aware:
+            return (
+                "made no observable progress for "
+                f"{budget.progress_stall_seconds}s and exceeded its "
+                "execution budget"
+            )
+        return "made no observable progress and exceeded its execution budget"
+
+    @staticmethod
     def _result_requires_provider_cooldown(result: AgentRunResult | None) -> bool:
         if result is None:
             return False
@@ -1108,6 +1471,8 @@ class MoonMindAgentRun:
         timeout_seconds: float,
         detail: str,
         elapsed_seconds: float | None = None,
+        budget: ExecutionBudget | None = None,
+        verdict: ExecutionBudgetVerdict | None = None,
     ) -> AgentRunResult:
         """Build a failed result for an agent-run timeout with an actionable summary.
 
@@ -1135,6 +1500,22 @@ class MoonMindAgentRun:
         }
         if elapsed_seconds is not None:
             metadata["elapsedSeconds"] = int(elapsed_seconds)
+        if budget is not None:
+            # Record the budget the decision was made against so an operator can
+            # tell "raise the ceiling" from "the runtime went quiet" without
+            # reconstructing it from logs.
+            metadata["executionBudget"] = {
+                "baseSeconds": budget.base_seconds,
+                "maxSeconds": budget.max_seconds,
+                "progressStallSeconds": budget.progress_stall_seconds,
+            }
+            metadata["budgetExtendedForProgress"] = (
+                elapsed_seconds is not None
+                and elapsed_seconds >= budget.base_seconds
+                and verdict == "expired_max_budget"
+            )
+        if verdict is not None:
+            metadata["budgetVerdict"] = verdict
         return AgentRunResult(
             summary=summary,
             failure_class="execution_error",
@@ -1193,6 +1574,7 @@ class MoonMindAgentRun:
         *,
         request: AgentExecutionRequest,
         result: AgentRunResult | None,
+        include_parent_execution: bool = False,
     ) -> AgentRunResult | None:
         if result is None:
             return result
@@ -1200,6 +1582,15 @@ class MoonMindAgentRun:
         metadata = dict(result.metadata or {})
         metadata.setdefault("childWorkflowId", workflow.info().workflow_id)
         metadata.setdefault("childRunId", workflow.info().run_id)
+        if include_parent_execution and request.step_execution is not None:
+            metadata.setdefault(
+                "parentWorkflowId",
+                request.step_execution.workflow_id,
+            )
+            metadata.setdefault(
+                "parentRunId",
+                request.step_execution.run_id,
+            )
         self._record_provider_native_pr_metadata(
             request=request,
             metadata=metadata,
@@ -1208,6 +1599,7 @@ class MoonMindAgentRun:
             workspace_spec = dict(request.workspace_spec)
             metadata.setdefault("workspaceSpec", workspace_spec)
             for key in (
+                "workspaceLocator",
                 "workspacePath",
                 "workspaceRootRef",
                 "workspaceRoot",
@@ -1244,6 +1636,48 @@ class MoonMindAgentRun:
         if agent_run_id:
             metadata.setdefault("agentRunId", agent_run_id)
 
+        if request.agent_kind == "managed":
+            runtime_id = (
+                request.managed_session.runtime_id
+                if request.managed_session is not None
+                else request.agent_id
+            )
+            capabilities = resolve_runtime_execution_capabilities(runtime_id)
+            metadata["agentKind"] = request.agent_kind
+            metadata["agentId"] = capabilities.runtime_id
+            metadata["runtimeCapabilities"] = capabilities.model_dump(
+                by_alias=True,
+                mode="json",
+            )
+            if (
+                capabilities.workspace_authority == "managed_runtime"
+                and agent_run_id
+            ):
+                metadata["workspaceLocator"] = {
+                    "kind": "managed_runtime",
+                    "runtimeId": capabilities.runtime_id,
+                    "agentRunId": agent_run_id,
+                    "relativePath": "repo",
+                }
+                for legacy_path_key in (
+                    "workspacePath",
+                    "workspace_path",
+                    "workspaceRoot",
+                    "workspace_root",
+                ):
+                    metadata.pop(legacy_path_key, None)
+                nested_workspace_spec = metadata.get("workspaceSpec")
+                if isinstance(nested_workspace_spec, Mapping):
+                    sanitized_workspace_spec = dict(nested_workspace_spec)
+                    for legacy_path_key in (
+                        "workspacePath",
+                        "workspace_path",
+                        "workspaceRoot",
+                        "workspace_root",
+                    ):
+                        sanitized_workspace_spec.pop(legacy_path_key, None)
+                    metadata["workspaceSpec"] = sanitized_workspace_spec
+
         request_params = (
             request.parameters if isinstance(request.parameters, Mapping) else {}
         )
@@ -1275,6 +1709,11 @@ class MoonMindAgentRun:
             value = request_params.get(key)
             if isinstance(value, str) and value.strip():
                 metadata["assessment_artifact_path"] = value.strip()
+                break
+        for key in ("brief_artifact_path", "briefArtifactPath"):
+            value = request_params.get(key)
+            if isinstance(value, str) and value.strip():
+                metadata["brief_artifact_path"] = value.strip()
                 break
         request_metadata = request_params.get("metadata")
         request_moonmind = (
@@ -1430,7 +1869,27 @@ class MoonMindAgentRun:
         self.final_result = self._enrich_result_metadata(
             request=request,
             result=result,
+            include_parent_execution=workflow.patched(
+                PARENT_EXECUTION_ARTIFACT_HANDOFF_PATCH_ID
+            ),
         )
+        publish_payload = self.final_result.model_dump(mode="json", by_alias=True)
+        try:
+            self.final_result = AgentRunResult(**publish_payload)
+        except ValueError:
+            compacted_payload = (
+                compact_agent_run_result_payload_for_workflow_history(
+                    publish_payload
+                )
+            )
+            if compacted_payload == publish_payload:
+                raise
+            # Validate before scheduling the typed activity. Pydantic model_copy
+            # intentionally skips validation, so metadata accumulated across
+            # fetch-result, terminal-evidence, and workflow enrichment can exceed
+            # the AgentRunResult boundary even though every individual producer
+            # returned a valid result.
+            self.final_result = AgentRunResult(**compacted_payload)
         enriched_result = await self._execute_routed_activity(
             "agent_runtime.publish_artifacts",
             self.final_result,
@@ -1448,7 +1907,7 @@ class MoonMindAgentRun:
                 self.final_result = AgentRunResult(**enriched_result)
             except ValueError:
                 compacted_result = (
-                    _compact_agent_run_result_payload_for_workflow_history(
+                    compact_agent_run_result_payload_for_workflow_history(
                         enriched_result
                     )
                 )
@@ -1664,6 +2123,8 @@ class MoonMindAgentRun:
     ) -> AgentExecutionRequest:
         if request.managed_session is not None:
             return request
+        if self._managed_session_detached_for_runtime_selection:
+            return request
         if not workflow.patched(MANAGED_SESSION_START_AFTER_SLOT_PATCH_ID):
             return request
         intent = self._deferred_managed_session_intent(request)
@@ -1830,6 +2291,34 @@ class MoonMindAgentRun:
                 activity_input["prResolverMergeGateOwned"] = (
                     _request_pr_resolver_merge_gate_owned(request)
                 )
+        terminal_checkpoint_patch_active = workflow.patched(
+            TERMINAL_CHECKPOINT_PUBLICATION_PATCH_ID
+        )
+        workspace_spec = (
+            request.workspace_spec if isinstance(request.workspace_spec, Mapping) else {}
+        )
+        checkpoint_policy = (
+            params.get("checkpointPolicy")
+            if isinstance(params.get("checkpointPolicy"), Mapping)
+            else {}
+        )
+        if terminal_checkpoint_patch_active:
+            activity_input["terminalCheckpointPublicationEnabled"] = bool(
+                checkpoint_policy.get("publishOnGracefulFailure", True)
+            )
+            activity_input["noRemoteWrites"] = bool(
+                params.get("noRemoteWrites") or workspace_spec.get("noRemoteWrites")
+            )
+            activity_input["readOnly"] = bool(
+                params.get("readOnly") or workspace_spec.get("readOnly")
+            )
+            activity_input["dryRun"] = bool(params.get("dryRun"))
+            activity_input["workspaceAuthoritative"] = not bool(
+                workspace_spec.get("authorityLost")
+            )
+            activity_input["terminalCheckpointCapabilitySupported"] = not bool(
+                workspace_spec.get("terminalCheckpointPublicationUnsupported")
+            )
         return AgentRuntimeFetchResultInput.model_validate(activity_input)
 
     async def _fetch_managed_result(
@@ -1900,6 +2389,630 @@ class MoonMindAgentRun:
             pr_resolver_merge_gate_owned=pr_resolver_merge_gate_owned,
         )
 
+    async def _evaluate_terminal_contract(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        result: AgentRunResult,
+    ) -> AgentRunResult:
+        """Enforce terminal evidence at the runtime-neutral AgentRun boundary."""
+        if request.terminal_contract is None:
+            return result
+        try:
+            runtime_failure_authority_enabled = workflow.patched(
+                TERMINAL_CONTRACT_RUNTIME_FAILURE_AUTHORITY_PATCH_ID
+            )
+        except Exception as exc:
+            if type(exc).__name__ != "_NotInWorkflowEventLoopError":
+                raise
+            runtime_failure_authority_enabled = True
+        if runtime_failure_authority_enabled and result.failure_class is not None:
+            return result
+        workspace_path = str(
+            (result.metadata or {}).get("workspacePath")
+            or (request.workspace_spec or {}).get("workspacePath")
+            or ""
+        ).strip()
+        workspace_locator = (request.workspace_spec or {}).get("workspaceLocator")
+        workspace_owner_workflow_id = (
+            request.step_execution.workflow_id
+            if request.step_execution is not None
+            else request.correlation_id
+        )
+        workspace_owner_step_execution_id = (
+            request.step_execution.step_execution_id
+            if request.step_execution is not None
+            else request.idempotency_key
+        )
+
+        async def _evaluate(candidate: AgentRunResult) -> AgentRunResult:
+            evaluation_input = {
+                "runId": (
+                    request.managed_session.agent_run_id
+                    if request.managed_session is not None
+                    else str(self.run_id or "")
+                ),
+                "workspacePath": workspace_path,
+                "workspaceLocator": (
+                    dict(workspace_locator)
+                    if isinstance(workspace_locator, Mapping)
+                    else None
+                ),
+                "workspaceOwnerWorkflowId": workspace_owner_workflow_id,
+                "workspaceOwnerStepExecutionId": workspace_owner_step_execution_id,
+                "artifactSpoolPath": (
+                    os.path.join(
+                        _MANAGED_RUNTIME_STORE_ROOT,
+                        request.managed_session.agent_run_id,
+                        "artifacts",
+                    )
+                    if request.managed_session is not None
+                    else ""
+                ),
+                "terminalContract": request.terminal_contract.model_dump(
+                    mode="json", by_alias=True
+                ),
+                "result": candidate.model_dump(mode="json", by_alias=True),
+            }
+            if request.terminal_contract.contract_id == "auto_publish_terminal.v1":
+                selected_skill = _request_selected_skill(request)
+                if selected_skill:
+                    evaluation_input["selectedSkill"] = selected_skill
+            payload = await self._execute_routed_activity(
+                "agent_runtime.evaluate_terminal_evidence",
+                evaluation_input,
+                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+            )
+            return (
+                AgentRunResult.model_validate(payload)
+                if isinstance(payload, Mapping)
+                else payload
+            )
+
+        evaluated = await _evaluate(result)
+        try:
+            continuation_enabled = workflow.patched(
+                TERMINAL_CONTRACT_CONTINUATION_PATCH_ID
+            )
+        except Exception as exc:
+            # Direct activity-boundary tests execute this helper outside a
+            # Temporal workflow event loop.
+            if type(exc).__name__ != "_NotInWorkflowEventLoopError":
+                raise
+            continuation_enabled = True
+        if not continuation_enabled:
+            return evaluated
+        try:
+            owned_continuation_enabled = workflow.patched(
+                PR_RESOLVER_OWNED_CONTINUATION_PATCH_ID
+            )
+        except Exception as exc:
+            if type(exc).__name__ != "_NotInWorkflowEventLoopError":
+                raise
+            owned_continuation_enabled = True
+        continuation_authority = request.terminal_continuation_authority
+        synthetic_reenter_gate_failure = (
+            evaluated.failure_class == "execution_error"
+            and evaluated.provider_error_code == "PR_RESOLVER_REENTER_GATE"
+        )
+        if (
+            owned_continuation_enabled
+            and (evaluated.metadata or {}).get("terminalContractOutcome")
+            == "continuation_requested"
+            and continuation_authority is not None
+            and continuation_authority.allows(
+                gate_type="merge_automation", action="reenter_gate"
+            )
+            and synthetic_reenter_gate_failure
+        ):
+            metadata = dict(evaluated.metadata or {})
+            metrics = dict(evaluated.metrics or {})
+            continuation = metadata.get("gatedContinuation")
+            continuation = continuation if isinstance(continuation, Mapping) else {}
+            observability_enabled = workflow.patched(
+                PR_RESOLVER_CONTINUATION_OBSERVABILITY_PATCH_ID
+            )
+            if observability_enabled:
+                metrics.update(
+                    {
+                        "continuation_requested": 1,
+                        "continuation_accepted": 1,
+                    }
+                )
+            metadata.update(
+                {
+                    "terminalContractRecoveryOutcome": "durable_parent_handoff",
+                    "terminalContractContinuationCount": 0,
+                    "gateType": continuation_authority.gate_type,
+                    "gateAction": "reenter_gate",
+                    "gateOwnerWorkflowId": continuation_authority.owner_workflow_id,
+                    "gateOwnerRunId": continuation_authority.owner_run_id,
+                    "gateOwnerWorkflowType": continuation_authority.owner_workflow_type,
+                }
+            )
+            if observability_enabled:
+                metadata.update(
+                    {
+                        "continuationReason": continuation.get("reason"),
+                        "continuationNotBefore": continuation.get("notBefore"),
+                        "continuationRetryAfterSeconds": continuation.get(
+                            "retryAfterSeconds"
+                        ),
+                        "continuationTimingSource": (
+                            "skill_not_before"
+                            if continuation.get("notBefore")
+                            else (
+                                "skill_retry_after"
+                                if continuation.get("retryAfterSeconds") is not None
+                                else "legacy_fallback"
+                            )
+                        ),
+                    }
+                )
+            return evaluated.model_copy(
+                update={
+                    "failure_class": None,
+                    "provider_error_code": None,
+                    "retry_recommendation": None,
+                    "metadata": metadata,
+                    "metrics": metrics,
+                }
+            )
+        if (
+            (evaluated.metadata or {}).get("terminalContractOutcome")
+            == "continuation_requested"
+        ):
+            metadata = dict(evaluated.metadata or {})
+            metrics = dict(evaluated.metrics or {})
+            rejection = (
+                "continuation_rejected_failure_provenance"
+                if continuation_authority is not None
+                else "continuation_rejected_unowned"
+            )
+            if workflow.patched(PR_RESOLVER_CONTINUATION_OBSERVABILITY_PATCH_ID):
+                metrics["continuation_requested"] = 1
+                metrics[
+                    "continuation_rejected_schema"
+                    if continuation_authority is not None
+                    else "continuation_rejected_ownership"
+                ] = 1
+            metadata.update(
+                {
+                    "terminalContractRecoveryOutcome": rejection,
+                    "terminalContractContinuationCount": 0,
+                }
+            )
+            return evaluated.model_copy(
+                update={"metadata": metadata, "metrics": metrics}
+            )
+        if evaluated.failure_class is None:
+            return evaluated
+
+        runtime_id = (
+            request.managed_session.runtime_id
+            if request.managed_session is not None
+            else self._managed_runtime_id(request.agent_id)
+        )
+        capabilities = resolve_runtime_execution_capabilities(runtime_id)
+        history: list[dict[str, Any]] = []
+        if not capabilities.supports_same_session_continuation:
+            metadata = dict(evaluated.metadata or {})
+            try:
+                fresh_process_enabled = workflow.patched(
+                    TERMINAL_CONTRACT_FRESH_PROCESS_CONTINUATION_PATCH_ID
+                )
+            except Exception as exc:
+                if type(exc).__name__ != "_NotInWorkflowEventLoopError":
+                    raise
+                fresh_process_enabled = True
+            failure_code = str(
+                metadata.get("failureCode")
+                or evaluated.provider_error_code
+                or ""
+            ).strip()
+            retryable = bool(metadata.get("terminalContractRetryable")) or (
+                failure_code in _RETRYABLE_TERMINAL_CONTRACT_FAILURE_CODES
+            )
+            metadata.update(
+                {
+                    "terminalContractRecoveryOutcome": (
+                        "fresh_process_available"
+                        if fresh_process_enabled
+                        and request.agent_kind == "managed"
+                        and self.run_id
+                        and retryable
+                        else "continuation_unsupported"
+                    ),
+                    "terminalContractContinuationCount": 0,
+                    "runtimeCapabilityDigest": capabilities.capability_digest,
+                }
+            )
+            return evaluated.model_copy(update={"metadata": metadata})
+
+        # Same-session continuation is currently exposed by the managed-session
+        # activity boundary. Capability policy and retry ownership remain here in
+        # AgentRun; adapters only translate an individual runtime turn.
+        if request.managed_session is None:
+            metadata = dict(evaluated.metadata or {})
+            metadata.update(
+                {
+                    "terminalContractRecoveryOutcome": "continuation_boundary_unavailable",
+                    "terminalContractContinuationCount": 0,
+                    "runtimeCapabilityDigest": capabilities.capability_digest,
+                }
+            )
+            return evaluated.model_copy(update={"metadata": metadata})
+
+        for continuation in range(1, _MAX_TERMINAL_CONTRACT_CONTINUATIONS + 1):
+            missing = [
+                str(item)
+                for item in (evaluated.metadata or {}).get(
+                    "terminalContractMissingEvidence", []
+                )
+            ]
+            snapshot_request = request.managed_session.model_dump(
+                mode="json", by_alias=True
+            )
+            snapshot = await self._execute_routed_activity(
+                "agent_runtime.load_session_snapshot",
+                snapshot_request,
+                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+            )
+            if runtime_failure_authority_enabled:
+                authoritative_snapshot = CodexManagedSessionSnapshot.model_validate(
+                    snapshot
+                )
+                session_id = authoritative_snapshot.binding.session_id
+                session_epoch = authoritative_snapshot.binding.session_epoch
+                container_id = authoritative_snapshot.container_id
+                thread_id = authoritative_snapshot.thread_id
+            else:
+                epoch_value = snapshot.get("sessionEpoch")
+                session_id = request.managed_session.session_id
+                session_epoch = int(
+                    epoch_value
+                    if epoch_value is not None
+                    else request.managed_session.session_epoch
+                )
+                container_id = snapshot.get("containerId")
+                thread_id = snapshot.get("threadId")
+            runtime_selection_patch_enabled = workflow.patched(
+                CODEX_TURN_RUNTIME_SELECTION_PATCH_ID
+            )
+            runtime_selection: dict[str, Any] = {}
+            if runtime_selection_patch_enabled:
+                runtime_selection = {
+                    "model": request.parameters.get("model"),
+                    "effort": request.parameters.get("effort"),
+                }
+            turn_request = SendCodexManagedSessionTurnRequest(
+                sessionId=session_id,
+                sessionEpoch=session_epoch,
+                containerId=container_id,
+                threadId=thread_id,
+                instructions=_terminal_contract_continuation_instruction(missing),
+                reason="incomplete_terminal_contract",
+                requestId=(
+                    f"{request.idempotency_key}:terminal-contract:{continuation}"
+                ),
+                environment=build_codex_managed_session_turn_environment(
+                    active_skills_dir=str(
+                        request.parameters.get("_moonmindActiveSkillsDir") or ""
+                    ),
+                    step_execution_id=(
+                        request.step_execution.step_execution_id
+                        if request.step_execution is not None
+                        else None
+                    ),
+                ),
+                **runtime_selection,
+            )
+            turn_activity_payload: object = turn_request
+            if not runtime_selection_patch_enabled:
+                # Preserve the byte-level payload shape already recorded by
+                # pre-selection histories. The Pydantic converter includes
+                # optional defaults unless they are explicitly excluded.
+                turn_activity_payload = turn_request.model_dump(
+                    mode="json",
+                    by_alias=True,
+                    exclude={"model", "effort"},
+                )
+            history.append(
+                {"continuation": continuation, "reason": "missing_terminal_evidence", "outcome": "requested"}
+            )
+            try:
+                await self._execute_routed_activity(
+                    "agent_runtime.send_turn",
+                    turn_activity_payload,
+                    cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                )
+            except Exception:
+                history[-1]["outcome"] = "provider_failure"
+                break
+            refreshed = await self._fetch_managed_result(
+                request=request,
+                adapter=None,  # activity-backed managed-session fetch ignores the adapter
+                uses_codex_session_adapter=True,
+                use_managed_status_activity=True,
+            )
+            evaluated = await _evaluate(refreshed)
+            history[-1]["outcome"] = (
+                "recovered" if evaluated.failure_class is None else "incomplete"
+            )
+            if evaluated.failure_class is None:
+                break
+
+        metadata = dict(evaluated.metadata or {})
+        metadata.update(
+            {
+                "terminalContractContinuationCount": len(history),
+                "terminalContractContinuationHistory": history,
+                "terminalContractRecoveryOutcome": (
+                    "recovered"
+                    if evaluated.failure_class is None
+                    else history[-1]["outcome"] if history else "exhausted"
+                ),
+                "runtimeCapabilityDigest": capabilities.capability_digest,
+            }
+        )
+        return evaluated.model_copy(update={"metadata": metadata})
+
+    def _managed_process_loss_recovery_request(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        result: AgentRunResult,
+    ) -> AgentExecutionRequest | None:
+        """Build one bounded replacement after startup reconciliation loses a PID."""
+
+        if (
+            request.agent_kind != "managed"
+            or request.managed_session is not None
+            or not self.run_id
+            or result.failure_class != "system_error"
+            or result.provider_error_code
+            != MANAGED_PROCESS_LOST_DURING_RECONCILIATION
+            or len(self._managed_process_loss_recovery_history)
+            >= _MAX_MANAGED_PROCESS_LOSS_RECOVERIES
+        ):
+            return None
+
+        runtime_id = self._managed_runtime_id(request.agent_id)
+        capabilities = resolve_runtime_execution_capabilities(runtime_id)
+        if capabilities.workspace_authority != "managed_runtime":
+            return None
+
+        attempt = len(self._managed_process_loss_recovery_history) + 1
+        self._managed_process_loss_recovery_history.append(
+            {
+                "attempt": attempt,
+                "mode": "fresh_process",
+                "reason": "process_lost_during_reconciliation",
+                "outcome": "requested",
+            }
+        )
+        workspace_spec = dict(request.workspace_spec or {})
+        workspace_spec["workspaceLocator"] = {
+            "kind": "managed_runtime",
+            "runtimeId": capabilities.runtime_id,
+            "agentRunId": self.run_id,
+            "relativePath": "repo",
+        }
+        instruction = str(request.instruction_ref or "").rstrip()
+        recovery_instruction = _managed_process_loss_recovery_instruction()
+        if instruction:
+            instruction = f"{instruction}\n\n{recovery_instruction}"
+        else:
+            instruction = recovery_instruction
+        return request.model_copy(
+            update={
+                "instruction_ref": instruction,
+                "workspace_spec": workspace_spec,
+            }
+        )
+
+    def _with_managed_process_loss_recovery_history(
+        self,
+        result: AgentRunResult,
+    ) -> AgentRunResult:
+        if not self._managed_process_loss_recovery_history:
+            return result
+
+        history = [
+            dict(item) for item in self._managed_process_loss_recovery_history
+        ]
+        if history[-1]["outcome"] == "requested":
+            if result.failure_class is None:
+                history[-1]["outcome"] = "recovered"
+                self._managed_process_loss_recovery_history[-1]["outcome"] = (
+                    "recovered"
+                )
+            elif (
+                result.provider_error_code
+                == MANAGED_PROCESS_LOST_DURING_RECONCILIATION
+            ):
+                history[-1]["outcome"] = "process_lost_again"
+            else:
+                history[-1]["outcome"] = "replacement_failed"
+
+        recovery_outcome = history[-1]["outcome"]
+        if (
+            recovery_outcome == "process_lost_again"
+            and len(history) >= _MAX_MANAGED_PROCESS_LOSS_RECOVERIES
+        ):
+            recovery_outcome = "exhausted"
+
+        metadata = dict(result.metadata or {})
+        metadata.update(
+            {
+                "managedProcessLossRecoveryCount": len(history),
+                "managedProcessLossRecoveryHistory": history,
+                "managedProcessLossRecoveryOutcome": recovery_outcome,
+            }
+        )
+        return result.model_copy(update={"metadata": metadata})
+
+    def _fresh_process_terminal_contract_request(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        result: AgentRunResult,
+    ) -> AgentExecutionRequest | None:
+        """Build one bounded replacement process over the same workspace."""
+
+        metadata = result.metadata if isinstance(result.metadata, Mapping) else {}
+        if (
+            request.agent_kind != "managed"
+            or request.managed_session is not None
+            or not self.run_id
+            or metadata.get("terminalContractRecoveryOutcome")
+            != "fresh_process_available"
+            or len(self._terminal_contract_fresh_process_history)
+            >= _MAX_TERMINAL_CONTRACT_CONTINUATIONS
+        ):
+            return None
+
+        runtime_id = self._managed_runtime_id(request.agent_id)
+        capabilities = resolve_runtime_execution_capabilities(runtime_id)
+        if capabilities.workspace_authority != "managed_runtime":
+            return None
+
+        missing = [
+            str(item)
+            for item in metadata.get("terminalContractMissingEvidence", [])
+        ]
+        attempt = len(self._terminal_contract_fresh_process_history) + 1
+        self._terminal_contract_fresh_process_history.append(
+            {
+                "continuation": attempt,
+                "mode": "fresh_process",
+                "reason": "missing_terminal_evidence",
+                "outcome": "requested",
+            }
+        )
+        workspace_spec = dict(request.workspace_spec or {})
+        workspace_spec["workspaceLocator"] = {
+            "kind": "managed_runtime",
+            "runtimeId": capabilities.runtime_id,
+            "agentRunId": self.run_id,
+            "relativePath": "repo",
+        }
+        instruction = str(request.instruction_ref or "").rstrip()
+        continuation_instruction = _terminal_contract_fresh_process_instruction(
+            missing
+        )
+        if instruction:
+            instruction = f"{instruction}\n\n{continuation_instruction}"
+        else:
+            instruction = continuation_instruction
+        return request.model_copy(
+            update={
+                "instruction_ref": instruction,
+                "workspace_spec": workspace_spec,
+            }
+        )
+
+    def _with_fresh_process_terminal_contract_history(
+        self,
+        result: AgentRunResult,
+    ) -> AgentRunResult:
+        if not self._terminal_contract_fresh_process_history:
+            return result
+        history = [dict(item) for item in self._terminal_contract_fresh_process_history]
+        if history[-1]["outcome"] == "requested":
+            history[-1]["outcome"] = (
+                "recovered" if result.failure_class is None else "incomplete"
+            )
+            self._terminal_contract_fresh_process_history[-1]["outcome"] = history[-1][
+                "outcome"
+            ]
+        metadata = dict(result.metadata or {})
+        metadata.update(
+            {
+                "terminalContractContinuationCount": len(history),
+                "terminalContractContinuationHistory": history,
+                "terminalContractRecoveryOutcome": (
+                    "recovered"
+                    if result.failure_class is None
+                    else (
+                        "exhausted"
+                        if len(history) >= _MAX_TERMINAL_CONTRACT_CONTINUATIONS
+                        else metadata.get("terminalContractRecoveryOutcome")
+                    )
+                ),
+            }
+        )
+        return result.model_copy(update={"metadata": metadata})
+
+    async def _publish_terminal_contract_failure_checkpoint(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        result: AgentRunResult,
+    ) -> AgentRunResult:
+        """Preserve authoritative work after terminal-evidence retries exhaust."""
+
+        if (
+            request.agent_kind != "managed"
+            or not self.run_id
+            or (result.metadata or {}).get("terminalContractSatisfied") is not False
+            or result.failure_class
+            not in {"user_error", "execution_error", "integration_error", "timed_out"}
+        ):
+            return result
+        fetch_input = self._build_managed_fetch_result_activity_input(request)
+        if (
+            fetch_input.publish_mode == "none"
+            or not fetch_input.terminal_checkpoint_publication_enabled
+        ):
+            return result
+        metadata = dict(result.metadata or {})
+        existing = metadata.get("terminalPublication")
+        existing = existing if isinstance(existing, Mapping) else {}
+        try:
+            publication = await self._execute_routed_activity(
+                "agent_runtime.publish_terminal_checkpoint",
+                AgentRuntimeTerminalCheckpointInput(
+                    runId=self.run_id,
+                    agentId=request.agent_id,
+                    failureClass=result.failure_class,
+                    targetBranch=fetch_input.target_branch,
+                    existingBranch=existing.get("branchName"),
+                    existingHeadSha=existing.get("headSha"),
+                    existingPrUrl=existing.get("prUrl"),
+                    publicationEnabled=(
+                        fetch_input.terminal_checkpoint_publication_enabled
+                    ),
+                    noRemoteWrites=fetch_input.no_remote_writes,
+                    readOnly=fetch_input.read_only,
+                    dryRun=fetch_input.dry_run,
+                    workspaceAuthoritative=fetch_input.workspace_authoritative,
+                    runtimeCapabilitySupported=(
+                        fetch_input.terminal_checkpoint_capability_supported
+                    ),
+                    idempotencyKey=(
+                        f"terminal-contract-checkpoint-v1:{self.run_id}"
+                    ),
+                ),
+                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+            )
+        except Exception as exc:
+            metadata["terminalPublication"] = {
+                "intent": "terminal_checkpoint",
+                "status": "failed",
+                "reasonCode": "terminal_checkpoint_activity_failed",
+                "attempted": True,
+                "errorType": type(exc).__name__,
+            }
+            return result.model_copy(update={"metadata": metadata})
+        publication_payload = (
+            publication.model_dump(mode="json", by_alias=True, exclude_none=True)
+            if hasattr(publication, "model_dump")
+            else dict(publication)
+        )
+        metadata["terminalPublication"] = publication_payload
+        return result.model_copy(update={"metadata": metadata})
+
     async def _poll_managed_status(
         self,
         *,
@@ -1907,10 +3020,16 @@ class MoonMindAgentRun:
         adapter: AgentAdapter,
         uses_codex_session_adapter: bool,
         use_managed_status_activity: bool,
+        remaining_budget_seconds: float | None = None,
     ) -> AgentRunStatusModel:
         if uses_codex_session_adapter:
             return await adapter.status(self.run_id)
         if use_managed_status_activity:
+            schedule_to_close_override = (
+                self._managed_status_schedule_to_close_override(
+                    remaining_budget_seconds=remaining_budget_seconds,
+                )
+            )
             status_payload = await self._execute_routed_activity(
                 "agent_runtime.status",
                 AgentRuntimeStatusInput(
@@ -1918,6 +3037,11 @@ class MoonMindAgentRun:
                     agentId=request.agent_id,
                 ),
                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                **(
+                    {"schedule_to_close_timeout": schedule_to_close_override}
+                    if schedule_to_close_override is not None
+                    else {}
+                ),
             )
             return self._coerce_managed_status_payload(
                 status_payload=status_payload,
@@ -1932,6 +3056,27 @@ class MoonMindAgentRun:
             agentKind="managed",
             agentId=request.agent_id,
             status=RunStatus.running,
+        )
+
+    @staticmethod
+    def _managed_status_schedule_to_close_override(
+        *,
+        remaining_budget_seconds: float | None = None,
+    ) -> timedelta | None:
+        """Bound status queueing without changing legacy activity commands."""
+
+        if not workflow.patched(MANAGED_STATUS_ROLLOUT_TOLERANCE_PATCH_ID):
+            return timedelta(seconds=180)
+        if remaining_budget_seconds is None:
+            return None
+        configured_seconds = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+            "agent_runtime.status"
+        ).timeouts.schedule_to_close_seconds
+        return timedelta(
+            seconds=min(
+                float(configured_seconds),
+                max(0.001, float(remaining_budget_seconds)),
+            )
         )
 
     async def _reconcile_managed_no_progress(
@@ -1993,11 +3138,24 @@ class MoonMindAgentRun:
             if completed or self.completion_event.is_set():
                 return self.final_result
 
+            remaining_status_budget = min(
+                (deadline - workflow.now()).total_seconds(),
+                timeout_seconds
+                - (workflow.now() - overall_start).total_seconds(),
+            )
+            if (
+                use_managed_status_activity
+                and not uses_codex_session_adapter
+                and workflow.patched(MANAGED_STATUS_ROLLOUT_TOLERANCE_PATCH_ID)
+                and remaining_status_budget <= 0
+            ):
+                return None
             status_obj = await self._poll_managed_status(
                 request=request,
                 adapter=adapter,
                 uses_codex_session_adapter=uses_codex_session_adapter,
                 use_managed_status_activity=use_managed_status_activity,
+                remaining_budget_seconds=remaining_status_budget,
             )
 
     async def _cancel_managed_no_progress_and_fetch_cooldown_result(
@@ -2065,11 +3223,20 @@ class MoonMindAgentRun:
                     return self.final_result
                 return None
 
+            remaining_status_budget = (deadline - workflow.now()).total_seconds()
+            if (
+                use_managed_status_activity
+                and not uses_codex_session_adapter
+                and workflow.patched(MANAGED_STATUS_ROLLOUT_TOLERANCE_PATCH_ID)
+                and remaining_status_budget <= 0
+            ):
+                return None
             status_obj = await self._poll_managed_status(
                 request=request,
                 adapter=adapter,
                 uses_codex_session_adapter=uses_codex_session_adapter,
                 use_managed_status_activity=use_managed_status_activity,
+                remaining_budget_seconds=remaining_status_budget,
             )
             self.run_status = status_obj.status
             if status_obj.status in _TERMINAL_RUN_STATUSES:
@@ -2112,6 +3279,11 @@ class MoonMindAgentRun:
         signal_payload = {
             "requester_workflow_id": workflow.info().workflow_id,
             "runtime_id": runtime_id,
+            "purpose": "execution_direct",
+            "metadata": {
+                "workflowId": workflow.info().workflow_id,
+                "ownerIsWorkflow": True,
+            },
         }
         if request_priority is not None:
             signal_payload["priority"] = request_priority
@@ -2194,20 +3366,57 @@ class MoonMindAgentRun:
         *,
         runtime_id: str,
         requester_workflow_id: str,
+        execution_profile_ref: str | None = None,
     ) -> dict[str, Any]:
         """Fetch a compact manager-health snapshot before resetting it."""
 
+        payload = {
+            "runtime_id": runtime_id,
+            "requester_workflow_id": requester_workflow_id,
+        }
+        if execution_profile_ref is not None:
+            payload["execution_profile_ref"] = execution_profile_ref
         result = await self._execute_routed_activity(
             "provider_profile.manager_state",
-            {
-                "runtime_id": runtime_id,
-                "requester_workflow_id": requester_workflow_id,
-            },
+            payload,
             cancellation_type=ActivityCancellationType.TRY_CANCEL,
         )
         if isinstance(result, dict):
             return result
         return {"running": False, "error": "invalid_manager_state_payload"}
+
+    async def _inspected_provider_slot_waiting_reason(
+        self,
+        *,
+        manager_id: str,
+        runtime_id: str,
+        request: AgentExecutionRequest,
+    ) -> str:
+        waiting_reason = self._build_provider_slot_waiting_reason(
+            runtime_id=runtime_id,
+            request=request,
+        )
+        try:
+            manager_state = await self._manager_state_for_slot_wait(
+                runtime_id=runtime_id,
+                requester_workflow_id=workflow.info().workflow_id,
+                execution_profile_ref=request.execution_profile_ref,
+            )
+            if manager_state.get("running") is True:
+                waiting_reason = self._build_manager_slot_waiting_reason(
+                    runtime_id=runtime_id,
+                    request=request,
+                    manager_state=manager_state,
+                )
+        except CancelledError:
+            raise
+        except Exception as exc:
+            self._get_logger().warning(
+                "Auth profile manager %s state inspection failed while building the slot wait reason; using generic reason: %s",
+                manager_id,
+                exc,
+            )
+        return waiting_reason
 
     async def _reset_and_request_slot(
         self,
@@ -2219,17 +3428,47 @@ class MoonMindAgentRun:
         request_priority: int | None = None,
         request_queue_metadata: dict[str, Any] | None = None,
     ) -> workflow.ExternalWorkflowHandle:
-        """Terminate a stuck manager, start a fresh one, and re-request a slot.
+        """Run the replay-only legacy recovery command and re-request a slot.
 
-        Called when the slot wait times out, indicating the manager may have a
-        nondeterminism error or other unrecoverable workflow task failure.
+        The activity type is retained for histories that already scheduled it,
+        but its implementation is non-destructive.
         """
         self._get_logger().warning(
-            "Slot wait timed out — resetting ProviderProfileManager %s",
+            "Slot wait timed out — invoking legacy non-destructive ProviderProfileManager recovery for %s",
             manager_id,
         )
         await self._execute_routed_activity(
             "provider_profile.reset_manager",
+            {"runtime_id": runtime_id},
+            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+        )
+        return await self._ensure_manager_and_signal(
+            manager_id,
+            runtime_id,
+            request_slot=True,
+            execution_profile_ref=execution_profile_ref,
+            profile_selector=profile_selector,
+            request_priority=request_priority,
+            request_queue_metadata=request_queue_metadata,
+        )
+
+    async def _recover_and_request_slot(
+        self,
+        manager_id: str,
+        runtime_id: str,
+        *,
+        execution_profile_ref: str | None = None,
+        profile_selector: dict | None = None,
+        request_priority: int | None = None,
+        request_queue_metadata: dict[str, Any] | None = None,
+    ) -> workflow.ExternalWorkflowHandle:
+        """Ensure the singleton exists and re-request without revoking leases."""
+        self._get_logger().warning(
+            "Slot wait timed out — ensuring ProviderProfileManager %s without resetting lease authority",
+            manager_id,
+        )
+        await self._execute_routed_activity(
+            "provider_profile.ensure_manager",
             {"runtime_id": runtime_id},
             cancellation_type=ActivityCancellationType.TRY_CANCEL,
         )
@@ -2467,6 +3706,29 @@ class MoonMindAgentRun:
             runtime_payload.pop(key, None)
 
     @staticmethod
+    def _drop_runtime_model_fields(runtime_payload: dict[str, Any]) -> None:
+        for key in (
+            "model",
+            "requestedModel",
+            "requested_model",
+            "resolvedModel",
+            "resolved_model",
+            "modelTier",
+            "model_tier",
+            "tierFallback",
+            "tier_fallback",
+            "tierPreview",
+            "modelTierResolution",
+            "modelSource",
+        ):
+            runtime_payload.pop(key, None)
+
+    @staticmethod
+    def _drop_runtime_effort_fields(runtime_payload: dict[str, Any]) -> None:
+        for key in ("effort", "requestedEffort", "requested_effort"):
+            runtime_payload.pop(key, None)
+
+    @staticmethod
     def _has_runtime_profile_field(runtime_payload: Mapping[str, Any]) -> bool:
         return any(
             key in runtime_payload
@@ -2542,13 +3804,20 @@ class MoonMindAgentRun:
         self,
         request: AgentExecutionRequest,
         payload: Mapping[str, Any],
+        *,
+        refresh_derived_selection: bool = False,
     ) -> None:
         previous_runtime_id = self._managed_runtime_id(request.agent_id)
         params = dict(request.parameters or {})
         parameters_patch = payload.get("parametersPatch")
+        editable_runtime_payload_keys = {"task", "authoredTaskInput"}
+        if refresh_derived_selection:
+            editable_runtime_payload_keys.add("authoredWorkflowInput")
         if isinstance(parameters_patch, Mapping):
             for key, value in parameters_patch.items():
-                if key in {"task", "authoredTaskInput"} and isinstance(value, Mapping):
+                if key in editable_runtime_payload_keys and isinstance(
+                    value, Mapping
+                ):
                     existing_payload = self._mapping_copy(params.get(key))
                     runtime_patch = value.get("runtime")
                     if isinstance(runtime_patch, Mapping):
@@ -2568,8 +3837,22 @@ class MoonMindAgentRun:
         task_runtime = self._mapping_copy(task_payload.get("runtime"))
         authored_payload = self._mapping_copy(params.get("authoredTaskInput"))
         authored_runtime = self._mapping_copy(authored_payload.get("runtime"))
+        authored_workflow_payload = (
+            self._mapping_copy(params.get("authoredWorkflowInput"))
+            if refresh_derived_selection
+            else {}
+        )
+        authored_workflow_runtime = self._mapping_copy(
+            authored_workflow_payload.get("runtime")
+        )
         workflow_payload = self._mapping_copy(params.get("workflow"))
         workflow_runtime = self._mapping_copy(workflow_payload.get("runtime"))
+
+        previous_profile_ref = request.execution_profile_ref
+        previous_selector_payload = request.profile_selector.model_dump(
+            by_alias=True,
+            exclude_none=True,
+        )
 
         profile_id = str(payload.get("executionProfileRef") or "").strip()
         explicit_profile_selection_update = self._has_profile_selection_update(
@@ -2585,6 +3868,7 @@ class MoonMindAgentRun:
             params["requestedModel"] = model
             task_runtime["model"] = model
             authored_runtime["model"] = model
+            authored_workflow_runtime["model"] = model
             workflow_runtime["model"] = model
 
         effort = str(payload.get("effort") or "").strip()
@@ -2592,6 +3876,7 @@ class MoonMindAgentRun:
             params["effort"] = effort
             task_runtime["effort"] = effort
             authored_runtime["effort"] = effort
+            authored_workflow_runtime["effort"] = effort
             workflow_runtime["effort"] = effort
 
         target_runtime = str(payload.get("targetRuntime") or "").strip()
@@ -2600,6 +3885,7 @@ class MoonMindAgentRun:
             params["targetRuntime"] = target_runtime
             task_runtime["mode"] = target_runtime
             authored_runtime["mode"] = target_runtime
+            authored_workflow_runtime["mode"] = target_runtime
             workflow_runtime["mode"] = target_runtime
         current_runtime_id = self._managed_runtime_id(request.agent_id)
         runtime_changed = current_runtime_id != previous_runtime_id
@@ -2619,18 +3905,21 @@ class MoonMindAgentRun:
             params["profileId"] = profile_id
             task_runtime["profileId"] = profile_id
             authored_runtime["profileId"] = profile_id
+            authored_workflow_runtime["profileId"] = profile_id
             workflow_runtime["profileId"] = profile_id
         elif runtime_changed:
             request.execution_profile_ref = None
             self._drop_runtime_profile_fields(params)
             self._drop_runtime_profile_fields(task_runtime)
             self._drop_runtime_profile_fields(authored_runtime)
+            self._drop_runtime_profile_fields(authored_workflow_runtime)
             self._drop_runtime_profile_fields(workflow_runtime)
         elif explicit_profile_selection_update:
             request.execution_profile_ref = None
             self._drop_runtime_profile_fields(params)
             self._drop_runtime_profile_fields(task_runtime)
             self._drop_runtime_profile_fields(authored_runtime)
+            self._drop_runtime_profile_fields(authored_workflow_runtime)
             self._drop_runtime_profile_fields(workflow_runtime)
 
         profile_selector_payload = payload.get("profileSelector")
@@ -2685,6 +3974,7 @@ class MoonMindAgentRun:
             params["profileSelector"] = selector_params
             task_runtime["profileSelector"] = selector_params
             authored_runtime["profileSelector"] = selector_params
+            authored_workflow_runtime["profileSelector"] = selector_params
             workflow_runtime["profileSelector"] = selector_params
         elif profile_id:
             request.profile_selector = ProfileSelector()
@@ -2694,6 +3984,8 @@ class MoonMindAgentRun:
             task_runtime.pop("profile_selector", None)
             authored_runtime.pop("profileSelector", None)
             authored_runtime.pop("profile_selector", None)
+            authored_workflow_runtime.pop("profileSelector", None)
+            authored_workflow_runtime.pop("profile_selector", None)
             workflow_runtime.pop("profileSelector", None)
             workflow_runtime.pop("profile_selector", None)
         elif runtime_changed or explicit_profile_selection_update:
@@ -2701,7 +3993,67 @@ class MoonMindAgentRun:
             self._drop_runtime_profile_selector_fields(params)
             self._drop_runtime_profile_selector_fields(task_runtime)
             self._drop_runtime_profile_selector_fields(authored_runtime)
+            self._drop_runtime_profile_selector_fields(authored_workflow_runtime)
             self._drop_runtime_profile_selector_fields(workflow_runtime)
+
+        runtime_or_profile_changed = False
+        if refresh_derived_selection:
+            current_selector_payload = request.profile_selector.model_dump(
+                by_alias=True,
+                exclude_none=True,
+            )
+            profile_selection_changed = (
+                request.execution_profile_ref != previous_profile_ref
+                or current_selector_payload != previous_selector_payload
+            )
+            runtime_or_profile_changed = runtime_changed or profile_selection_changed
+            requested_model_tier = None
+            if isinstance(parameters_patch, Mapping):
+                tier_sources: list[Mapping[str, Any]] = [parameters_patch]
+                runtime_patch = parameters_patch.get("runtime")
+                if isinstance(runtime_patch, Mapping):
+                    tier_sources.append(runtime_patch)
+                for container_key in (
+                    "task",
+                    "authoredTaskInput",
+                    "authoredWorkflowInput",
+                    "workflow",
+                ):
+                    container_patch = parameters_patch.get(container_key)
+                    nested_runtime_patch = (
+                        container_patch.get("runtime")
+                        if isinstance(container_patch, Mapping)
+                        else None
+                    )
+                    if isinstance(nested_runtime_patch, Mapping):
+                        tier_sources.append(nested_runtime_patch)
+                for tier_source in tier_sources:
+                    for tier_key in ("modelTier", "model_tier"):
+                        tier_value = tier_source.get(tier_key)
+                        if tier_value not in (None, ""):
+                            requested_model_tier = tier_value
+            if (
+                runtime_or_profile_changed
+                and not model
+                and requested_model_tier is None
+            ):
+                for runtime_payload in (
+                    params,
+                    task_runtime,
+                    authored_runtime,
+                    authored_workflow_runtime,
+                    workflow_runtime,
+                ):
+                    self._drop_runtime_model_fields(runtime_payload)
+            if runtime_or_profile_changed and not effort:
+                for runtime_payload in (
+                    params,
+                    task_runtime,
+                    authored_runtime,
+                    authored_workflow_runtime,
+                    workflow_runtime,
+                ):
+                    self._drop_runtime_effort_fields(runtime_payload)
 
         if task_runtime or "runtime" in task_payload:
             task_payload["runtime"] = task_runtime
@@ -2709,10 +4061,143 @@ class MoonMindAgentRun:
         if authored_runtime or "runtime" in authored_payload:
             authored_payload["runtime"] = authored_runtime
             params["authoredTaskInput"] = authored_payload
+        if refresh_derived_selection and (
+            authored_workflow_runtime or "runtime" in authored_workflow_payload
+        ):
+            authored_workflow_payload["runtime"] = authored_workflow_runtime
+            params["authoredWorkflowInput"] = authored_workflow_payload
         if workflow_runtime or "runtime" in workflow_payload:
             workflow_payload["runtime"] = workflow_runtime
             params["workflow"] = workflow_payload
         request.parameters = params
+
+        if refresh_derived_selection and request.step_execution is not None:
+            runtime_selection = dict(request.step_execution.runtime_selection or {})
+            runtime_selection["runtimeId"] = request.agent_id
+            if request.execution_profile_ref:
+                runtime_selection["executionProfileRef"] = (
+                    request.execution_profile_ref
+                )
+            else:
+                runtime_selection.pop("executionProfileRef", None)
+            if model:
+                runtime_selection["model"] = model
+            elif runtime_or_profile_changed:
+                runtime_selection.pop("model", None)
+            if effort:
+                runtime_selection["effort"] = effort
+            elif runtime_or_profile_changed:
+                runtime_selection.pop("effort", None)
+            request.step_execution.runtime_selection = runtime_selection
+
+    def _synchronize_runtime_selection_authority(
+        self,
+        request: AgentExecutionRequest,
+    ) -> None:
+        """Keep session and step runtime evidence aligned with the launch request.
+
+        Runtime-selection edits are accepted while an AgentRun waits for a
+        provider slot. A retried step can already carry the workflow-scoped
+        managed-session binding from its previous execution, so changing the
+        runtime or credential profile must detach an incompatible binding before
+        any activity re-validates the request. The adapter-visible Step Execution
+        projection is updated at the same boundary so it never claims the old
+        runtime, profile, model, or effort after the executable request has
+        changed.
+        """
+
+        runtime_id = self._managed_runtime_id(request.agent_id)
+        managed_session_runtime_id = canonical_managed_session_runtime_id(
+            request.agent_id
+        )
+        selected_profile_id = str(request.execution_profile_ref or "").strip()
+        bound_profile_id = str(
+            (
+                request.managed_session.execution_profile_ref
+                if request.managed_session is not None
+                else ""
+            )
+            or ""
+        ).strip()
+        detached_managed_session = False
+        if (
+            request.managed_session is not None
+            and (
+                request.managed_session.runtime_id != managed_session_runtime_id
+                or (
+                    selected_profile_id
+                    and bound_profile_id
+                    and bound_profile_id != selected_profile_id
+                )
+            )
+        ):
+            request.managed_session = None
+            detached_managed_session = True
+            self._managed_session_detached_for_runtime_selection = True
+
+        step_execution = request.step_execution
+        if step_execution is not None:
+            runtime_selection = dict(step_execution.runtime_selection or {})
+            runtime_selection["runtimeId"] = runtime_id
+            runtime_selection["agentKind"] = request.agent_kind
+
+            parameters = (
+                request.parameters
+                if isinstance(request.parameters, Mapping)
+                else {}
+            )
+            for key, parameter_keys in (
+                ("model", ("model", "requestedModel")),
+                ("effort", ("effort",)),
+            ):
+                value = next(
+                    (
+                        parameters.get(parameter_key)
+                        for parameter_key in parameter_keys
+                        if parameters.get(parameter_key) is not None
+                    ),
+                    None,
+                )
+                if value is None and any(
+                    parameter_key in parameters
+                    for parameter_key in parameter_keys
+                ):
+                    runtime_selection.pop(key, None)
+                elif value is not None:
+                    runtime_selection[key] = value
+            if request.execution_profile_ref:
+                runtime_selection["executionProfileRef"] = (
+                    request.execution_profile_ref
+                )
+            else:
+                runtime_selection.pop("executionProfileRef", None)
+
+            step_update: dict[str, Any] = {
+                "runtime_selection": runtime_selection,
+            }
+            if detached_managed_session:
+                step_update["runtime_session_reset"] = None
+            request.step_execution = step_execution.model_copy(update=step_update)
+
+        # Assignment validation is intentionally not enabled on the canonical
+        # Pydantic model. Re-validate the complete payload here, immediately
+        # before it can cross an Activity boundary, to catch any future partial
+        # runtime-selection mutation at its orchestration source.
+        try:
+            AgentExecutionRequest.model_validate(
+                request.model_dump(mode="json", by_alias=True)
+            )
+        except ValidationError as exc:
+            issue_summary = ", ".join(
+                f"{'.'.join(str(part) for part in issue['loc'])}:{issue['type']}"
+                for issue in exc.errors(include_input=False)
+            )
+            raise ApplicationError(
+                "Runtime selection produced an invalid AgentExecutionRequest "
+                f"({exc.error_count()} validation error(s): {issue_summary}).",
+                type="InvalidRuntimeSelection",
+                non_retryable=True,
+            ) from exc
 
     def _validate_synced_profile_selection(
         self,
@@ -2768,7 +4253,15 @@ class MoonMindAgentRun:
         )
         assigned_profile_id = self._assigned_profile_id
         if payload:
-            self._apply_runtime_selection_update(request, payload)
+            self._apply_runtime_selection_update(
+                request,
+                payload,
+                refresh_derived_selection=workflow.patched(
+                    AWAITING_SLOT_RUNTIME_PROFILE_EDIT_PATCH_ID
+                ),
+            )
+            if workflow.patched(RUNTIME_SELECTION_SESSION_REBIND_PATCH_ID):
+                self._synchronize_runtime_selection_authority(request)
         runtime_id = self._managed_runtime_id(request.agent_id)
         manager_id = self._manager_workflow_id(runtime_id)
         selector_payload = request.profile_selector.model_dump(
@@ -3036,19 +4529,110 @@ class MoonMindAgentRun:
     @workflow.run
     async def run(self, request: AgentExecutionRequest) -> AgentRunResult:
         self.agent_kind = request.agent_kind
+        # Keep historical ``agentId: auto`` payloads decodable so existing
+        # AgentRun histories can replay. Reject the planning sentinel only at
+        # the versioned live-dispatch boundary for newly started workflows.
+        if (
+            workflow.patched(RESOLVED_RUNTIME_DISPATCH_PATCH_ID)
+            and request.agent_id.strip().lower() == AUTO_RUNTIME_SENTINEL
+        ):
+            raise ApplicationError(
+                "agentId must name the resolved agent runtime; "
+                f"{AUTO_RUNTIME_SENTINEL!r} is a planning-time selection sentinel",
+                non_retryable=True,
+            )
 
-        timeout_seconds = (
-            DEFAULT_EXTERNAL_TIMEOUT_SECONDS
-            if request.agent_kind == "external"
-            else DEFAULT_MANAGED_TIMEOUT_SECONDS
+        # One shared timeout authority for the run: the workflow execution budget
+        # and the managed process supervisor's kill deadline resolve from the
+        # same value, so an explicitly requested larger budget is honored at both
+        # boundaries instead of the process being killed at the launch default.
+        execution_budget = resolve_execution_budget(
+            agent_kind=request.agent_kind,
+            timeout_policy=request.timeout_policy,
         )
-        if request.timeout_policy and "timeout_seconds" in request.timeout_policy:
-            timeout_seconds = request.timeout_policy["timeout_seconds"]
+        timeout_seconds = execution_budget.base_seconds
+        # Progress-awareness is a decision change, so it is versioned. Runs
+        # started before this patch keep the flat deadline they recorded.
+        progress_aware_budget = workflow.patched(
+            AGENT_RUN_PROGRESS_AWARE_EXECUTION_BUDGET_PATCH_ID
+        )
+        if workflow.patched(AGENT_RUN_SHARED_EXECUTION_BUDGET_PATCH_ID):
+            self._publish_execution_budget(
+                request=request,
+                budget=execution_budget,
+                progress_aware=progress_aware_budget,
+            )
 
         # Loop for handling 429 cooldown & profile swaps safely within the timeout boundary
         overall_start = workflow.now()
+        # Progress evidence for the progress-aware execution budget. ``None``
+        # means no progress has been observed for this run yet, which the budget
+        # treats exactly as the old flat deadline: only positively observed
+        # progress buys an extension. Progress is defined by the same status
+        # signature the no-progress watchdog uses, so there is one notion of
+        # progress in the workflow rather than two that can disagree.
+        last_progress_at: datetime | None = None
+
+        def _budget_state() -> tuple[float, ExecutionBudgetVerdict, float]:
+            """Read the clock once and derive ``(elapsed, verdict, deadline)``.
+
+            One read per evaluation keeps elapsed and idle-progress measured from
+            the same instant — deriving them from two separate ``workflow.now()``
+            calls would let the verdict and the deadline disagree about where the
+            run currently is. It also keeps the loop's clock-read count where it
+            was before the budget became progress-aware.
+            """
+
+            now = workflow.now()
+            elapsed_now = (now - overall_start).total_seconds()
+            idle_now = self._budget_idle_progress_seconds(
+                progress_aware=progress_aware_budget,
+                last_progress_at=last_progress_at,
+                now=now,
+            )
+            return (
+                elapsed_now,
+                self._budget_verdict_for(
+                    budget=execution_budget,
+                    progress_aware=progress_aware_budget,
+                    elapsed_seconds=elapsed_now,
+                    idle_progress_seconds=idle_now,
+                ),
+                self._budget_deadline_for(
+                    budget=execution_budget,
+                    progress_aware=progress_aware_budget,
+                    elapsed_seconds=elapsed_now,
+                    idle_progress_seconds=idle_now,
+                ),
+            )
+
+        def _budget_remaining_seconds() -> float:
+            """Seconds the run may still execute under its current budget."""
+
+            elapsed_now, _, deadline_now = _budget_state()
+            return deadline_now - elapsed_now
+
+        def _budget_expiry_detail(verdict: ExecutionBudgetVerdict) -> str:
+            return self._budget_expiry_detail_for(
+                budget=execution_budget,
+                progress_aware=progress_aware_budget,
+                verdict=verdict,
+            )
+
         use_managed_status_activity = workflow.patched(
             MANAGED_STATUS_ACTIVITY_PATCH_ID
+        )
+        use_omnigent_session_supervisor = workflow.patched(
+            OMNIGENT_SESSION_SUPERVISOR_PATCH_ID
+        )
+        use_omnigent_session_admission = workflow.patched(
+            OMNIGENT_SESSION_ADMISSION_PATCH_ID
+        )
+        use_compact_omnigent_resolve_intent = workflow.patched(
+            OMNIGENT_COMPACT_RESOLVE_INTENT_PATCH_ID
+        )
+        use_omnigent_execution_plan_admission = workflow.patched(
+            OMNIGENT_EXECUTION_PLAN_ADMISSION_PATCH_ID
         )
         requested_execution_profile_ref = request.execution_profile_ref
         resiliency_policy: Mapping[str, Any] = {}
@@ -3076,19 +4660,27 @@ class MoonMindAgentRun:
                 )
                 uses_codex_session_adapter = self._uses_codex_session_adapter(request)
                 parent_info = workflow.info().parent
-                elapsed = (workflow.now() - overall_start).total_seconds()
-                if elapsed >= timeout_seconds:
+                (
+                    elapsed,
+                    pre_dispatch_verdict,
+                    pre_dispatch_deadline,
+                ) = _budget_state()
+                if pre_dispatch_verdict != "continue":
                     self.run_status = RunStatus.timed_out
                     return await self._publish_terminal_result_with_compacted_replay_cleanup(
                         request=request,
                         result=self._timed_out_result(
                             request=request,
-                            timeout_seconds=timeout_seconds,
+                            timeout_seconds=pre_dispatch_deadline,
                             elapsed_seconds=elapsed,
                             detail=(
                                 "exceeded its execution budget before dispatching "
                                 "a turn"
                             ),
+                            budget=(
+                                execution_budget if progress_aware_budget else None
+                            ),
+                            verdict=pre_dispatch_verdict,
                         ),
                     )
 
@@ -3176,8 +4768,8 @@ class MoonMindAgentRun:
                     # Wait for a provider-profile slot.
                     # Awaiting time does not count against the execution timeout;
                     # overall_start is reset once the slot is acquired.
-                    # If the manager is stuck (e.g. nondeterminism error), the
-                    # wait will time out and we reset the manager automatically.
+                    # If the manager appears unavailable, bounded recovery
+                    # ensures/re-requests it without terminating lease authority.
                     #
                     # NOTE: The slot_assigned signal may have arrived during
                     # _sync_manager_profiles (the activity gives the manager
@@ -3186,7 +4778,6 @@ class MoonMindAgentRun:
                     # the parent sees awaiting_slot→launching in the same
                     # workflow task and the "queued" state is never visible.
                     if not self.slot_assigned_event.is_set():
-                        self.run_status = RunStatus.awaiting_slot
                         waiting_reason = (
                             self._awaiting_slot_reason_override
                             or self._build_provider_slot_waiting_reason(
@@ -3194,20 +4785,63 @@ class MoonMindAgentRun:
                                 request=request,
                             )
                         )
+                        if (
+                            self._awaiting_slot_reason_override is None
+                            and workflow.patched(ACCURATE_SLOT_WAIT_REASON_PATCH_ID)
+                        ):
+                            waiting_reason = (
+                                await self._inspected_provider_slot_waiting_reason(
+                                    manager_id=manager_id,
+                                    runtime_id=runtime_id,
+                                    request=request,
+                                )
+                            )
                         self._awaiting_slot_reason_override = None
-                        await self._signal_parent_child_state_changed(
-                            parent_info,
-                            "awaiting_slot",
-                            waiting_reason,
-                        )
+                        # The inspection activity creates a workflow-task boundary;
+                        # the manager can assign the slot while it runs.
+                        if (
+                            not self.slot_assigned_event.is_set()
+                            and not self.runtime_selection_updated_event.is_set()
+                        ):
+                            self.run_status = RunStatus.awaiting_slot
+                            await self._signal_parent_child_state_changed(
+                                parent_info,
+                                "awaiting_slot",
+                                waiting_reason,
+                            )
 
                     if workflow.patched("agent_run_slot_wait_retry_v1"):
-                        slot_resets = 0
+                        slot_recovery_attempts = 0
+                        refresh_waiting_reason = False
                         while (
                             not self.slot_assigned_event.is_set()
                             or self.runtime_selection_updated_event.is_set()
                         ):
                             try:
+                                if (
+                                    not self.slot_assigned_event.is_set()
+                                    and refresh_waiting_reason
+                                    and not self.runtime_selection_updated_event.is_set()
+                                    and workflow.patched(
+                                        ACCURATE_SLOT_WAIT_REASON_PATCH_ID
+                                    )
+                                ):
+                                    waiting_reason = await self._inspected_provider_slot_waiting_reason(
+                                        manager_id=manager_id,
+                                        runtime_id=runtime_id,
+                                        request=request,
+                                    )
+                                    if (
+                                        not self.slot_assigned_event.is_set()
+                                        and not self.runtime_selection_updated_event.is_set()
+                                    ):
+                                        self.run_status = RunStatus.awaiting_slot
+                                        await self._signal_parent_child_state_changed(
+                                            parent_info,
+                                            "awaiting_slot",
+                                            waiting_reason,
+                                        )
+                                        refresh_waiting_reason = False
                                 if self.runtime_selection_updated_event.is_set():
                                     (
                                         manager_handle,
@@ -3221,6 +4855,7 @@ class MoonMindAgentRun:
                                     requested_execution_profile_ref = (
                                         request.execution_profile_ref
                                     )
+                                    refresh_waiting_reason = True
                                     continue
                                 slot_wait_timeout_seconds = (
                                     self._slot_wait_timeout_override_seconds
@@ -3244,17 +4879,24 @@ class MoonMindAgentRun:
                                     requested_execution_profile_ref = (
                                         request.execution_profile_ref
                                     )
+                                    refresh_waiting_reason = True
                                     continue
                             except TimeoutError:
-                                if slot_resets >= _SLOT_WAIT_MAX_RESETS:
+                                if (
+                                    slot_recovery_attempts
+                                    >= _SLOT_WAIT_MAX_RECOVERY_ATTEMPTS
+                                ):
                                     raise ApplicationError(
-                                        f"Auth profile slot not assigned after {_SLOT_WAIT_MAX_RESETS} manager resets for runtime_id='{runtime_id}'",
+                                        f"Auth profile slot not assigned after {_SLOT_WAIT_MAX_RECOVERY_ATTEMPTS} manager recovery attempts for runtime_id='{runtime_id}'",
                                         type="SlotAcquisitionTimeout",
                                         non_retryable=True,
                                     )
                                 selector_payload = request.profile_selector.model_dump(
                                     by_alias=True,
                                     exclude_none=True,
+                                )
+                                preserve_durable_slot_request = workflow.patched(
+                                    PRESERVE_DURABLE_SLOT_REQUEST_ON_AMBIGUOUS_INSPECTION_PATCH_ID
                                 )
                                 if workflow.patched(MANAGER_SLOT_WAIT_INSPECTION_PATCH_ID):
                                     try:
@@ -3266,12 +4908,25 @@ class MoonMindAgentRun:
                                         raise
                                     except Exception as exc:
                                         self._get_logger().warning(
-                                            "Auth profile manager %s state inspection failed while %s waits for a slot; falling back to reset path: %s",
+                                            "Auth profile manager %s state inspection failed while %s waits for a slot; preserving the durable slot request: %s",
                                             manager_id,
                                             workflow.info().workflow_id,
                                             exc,
                                         )
+                                        if preserve_durable_slot_request:
+                                            continue
                                         manager_state = {"running": False}
+                                    if (
+                                        preserve_durable_slot_request
+                                        and manager_state.get("inspection_succeeded")
+                                        is False
+                                    ):
+                                        self._get_logger().warning(
+                                            "Auth profile manager %s inspection was inconclusive while %s waits for a slot; preserving the durable slot request without ensure or duplicate signal",
+                                            manager_id,
+                                            workflow.info().workflow_id,
+                                        )
+                                        continue
                                     if manager_state.get("running") is True:
                                         if manager_state.get("requester_pending") is True:
                                             self._get_logger().warning(
@@ -3309,20 +4964,36 @@ class MoonMindAgentRun:
                                         )
                                         continue
                                 self.slot_assigned_event.clear()
-                                manager_handle = await self._reset_and_request_slot(
-                                    manager_id,
-                                    runtime_id,
-                                    execution_profile_ref=request.execution_profile_ref,
-                                    profile_selector=selector_payload,
-                                    request_priority=self._request_priority(request),
-                                    request_queue_metadata=self._request_queue_metadata(request),
-                                )
+                                if workflow.patched(
+                                    NON_DESTRUCTIVE_SLOT_WAIT_RECOVERY_PATCH_ID
+                                ):
+                                    manager_handle = (
+                                        await self._recover_and_request_slot(
+                                            manager_id,
+                                            runtime_id,
+                                            execution_profile_ref=request.execution_profile_ref,
+                                            profile_selector=selector_payload,
+                                            request_priority=self._request_priority(request),
+                                            request_queue_metadata=self._request_queue_metadata(request),
+                                        )
+                                    )
+                                else:
+                                    # Replay compatibility for histories that
+                                    # already scheduled the legacy activity.
+                                    manager_handle = await self._reset_and_request_slot(
+                                        manager_id,
+                                        runtime_id,
+                                        execution_profile_ref=request.execution_profile_ref,
+                                        profile_selector=selector_payload,
+                                        request_priority=self._request_priority(request),
+                                        request_queue_metadata=self._request_queue_metadata(request),
+                                    )
                                 await self._sync_manager_profiles(
                                     manager_id=manager_id,
                                     manager_handle=manager_handle,
                                     runtime_id=runtime_id,
                                 )
-                                slot_resets += 1
+                                slot_recovery_attempts += 1
                     else:
                         while not self.slot_assigned_event.is_set():
                             await workflow.wait_condition(
@@ -3349,6 +5020,32 @@ class MoonMindAgentRun:
                             args=["launching", f"Slot acquired for {runtime_id}"]
                         )
                     request.execution_profile_ref = self._assigned_profile_id
+                    if workflow.patched(
+                        AWAITING_SLOT_RUNTIME_PROFILE_EDIT_PATCH_ID
+                    ):
+                        if workflow.patched(AGENT_RUN_RESILIENCY_POLICY_PATCH_ID):
+                            use_extended_claude_no_progress_window = True
+                            if (
+                                self._managed_runtime_id(request.agent_id)
+                                == "claude_code"
+                            ):
+                                use_extended_claude_no_progress_window = (
+                                    workflow.patched(
+                                        AGENT_RUN_CLAUDE_NO_PROGRESS_POLICY_PATCH_ID
+                                    )
+                                )
+                            resiliency_policy = (
+                                self._refresh_selection_after_slot_assignment(
+                                    request,
+                                    use_extended_claude_no_progress_window=(
+                                        use_extended_claude_no_progress_window
+                                    ),
+                                )
+                            )
+                    if workflow.patched(
+                        RUNTIME_SELECTION_SESSION_REBIND_PATCH_ID
+                    ):
+                        self._synchronize_runtime_selection_authority(request)
 
                     # Notify parent of the assigned profile so it can release the slot
                     # if this child exits in a terminal state (fallback for cancelled
@@ -3399,6 +5096,11 @@ class MoonMindAgentRun:
                             "requester_workflow_id": wf_id,
                             "runtime_id": kw.get("runtime_id", runtime_id),
                             "priority": self._request_priority(request),
+                            "purpose": "execution_direct",
+                            "metadata": {
+                                "workflowId": wf_id,
+                                "ownerIsWorkflow": True,
+                            },
                         }
                         payload.update(self._request_queue_metadata(request))
                         if workflow.patched(SLOT_HANDOFF_PATCH_ID):
@@ -3466,6 +5168,9 @@ class MoonMindAgentRun:
                         use_publish_bridge_events_activity = workflow.patched(
                             MANAGED_SESSION_BRIDGE_EVENTS_ACTIVITY_PATCH_ID
                         )
+                        replace_existing_on_resume_mismatch = workflow.patched(
+                            MANAGED_SESSION_REPLACE_ON_LOCATOR_MISMATCH_PATCH_ID
+                        )
                         if request.managed_session is None:
                             raise ApplicationError(
                                 "managedSession is required for Codex session-backed runs",
@@ -3531,9 +5236,14 @@ class MoonMindAgentRun:
                             )
 
                         async def _send_turn(request_payload: Any) -> Any:
+                            # Evaluated at dispatch time so a turn that starts
+                            # after the base window — because the run earned an
+                            # extension for observed progress — gets the extended
+                            # deadline rather than a negative budget.
+                            _, _, turn_deadline = _budget_state()
                             return await self._send_turn_within_budget(
                                 request_payload,
-                                timeout_seconds=timeout_seconds,
+                                timeout_seconds=turn_deadline,
                                 overall_start=overall_start,
                             )
 
@@ -3614,6 +5324,9 @@ class MoonMindAgentRun:
                             launch_context_builder=_launch_context_builder,
                             defer_turn_instructions_until_session_launch=(
                                 defer_turn_instructions_until_session_launch
+                            ),
+                            replace_existing_on_resume_mismatch=(
+                                replace_existing_on_resume_mismatch
                             ),
                         )
                     else:
@@ -3697,25 +5410,252 @@ class MoonMindAgentRun:
                     self._external_agent_id = validated_id
 
                     if execution_style == "streaming_gateway":
-                        stc_seconds = min(
-                            max(int(timeout_seconds), 60),
-                            86400,
+                        plan_bound_session = (
+                            validated_id == "omnigent"
+                            and request.omnigent_execution_plan is not None
                         )
-                        act_name = f"integration.{validated_id}.execute"
-                        result_payload = await self._execute_routed_activity(
-                            act_name,
-                            request,
-                            start_to_close_timeout=timedelta(seconds=stc_seconds),
-                            schedule_to_close_timeout=timedelta(seconds=stc_seconds),
-                            heartbeat_timeout=STREAMING_EXTERNAL_HEARTBEAT_TIMEOUT,
-                            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                        session_admitted = (
+                            use_omnigent_session_supervisor or plan_bound_session
                         )
-                        self.final_result = (
-                            AgentRunResult(**result_payload)
-                            if isinstance(result_payload, dict)
-                            else result_payload
+                        recorded_plan_realizer: str | None = None
+                        admitted_feature_generation = (
+                            OMNIGENT_SESSION_FEATURE_GENERATION
                         )
-                        self.run_status = RunStatus.completed
+                        if (
+                            validated_id == "omnigent"
+                            and request.execution_profile_ref
+                            and session_admitted
+                            and (
+                                use_omnigent_session_admission
+                                or plan_bound_session
+                            )
+                        ):
+                            owner_workflow_id, step_execution_id = (
+                                self._omnigent_owner_identities(request)
+                            )
+                            admission_payload = await self._execute_routed_activity(
+                                "omnigent.evaluate_session_admission",
+                                OmnigentSessionAdmissionRequest(
+                                    workflowId=owner_workflow_id,
+                                    stepExecutionId=step_execution_id,
+                                    agentRunId=workflow.info().workflow_id,
+                                    executionProfileRef=(
+                                        request.execution_profile_ref
+                                    ),
+                                    omnigentExecutionPlan=(
+                                        request.omnigent_execution_plan
+                                    ),
+                                    executionPlanRef=(
+                                        str(
+                                            (request.parameters or {}).get(
+                                                "executionPlanRef"
+                                            )
+                                            or ""
+                                        ).strip()
+                                        or None
+                                        if use_omnigent_execution_plan_admission
+                                        else None
+                                    ),
+                                ).model_dump(mode="json", by_alias=True),
+                                cancellation_type=(
+                                    ActivityCancellationType.TRY_CANCEL
+                                ),
+                            )
+                            admission = (
+                                admission_payload
+                                if isinstance(
+                                    admission_payload,
+                                    OmnigentSessionAdmissionDecision,
+                                )
+                                else OmnigentSessionAdmissionDecision.model_validate(
+                                    admission_payload
+                                )
+                            )
+                            session_admitted = admission.admitted
+                            admitted_feature_generation = (
+                                admission.admitted_feature_generation
+                            )
+                            recorded_plan_realizer = (
+                                admission.execution_realizer_ref
+                            )
+                            if (
+                                plan_bound_session
+                                and not recorded_plan_realizer
+                            ):
+                                raise ValueError(
+                                    "plan-bound admission omitted execution realizer authority"
+                                )
+                            if recorded_plan_realizer == "codex-profile-bound@1":
+                                # Codex remains on its recorded coordinator;
+                                # the generic session supervisor must never
+                                # become an implicit replacement realizer.
+                                session_admitted = False
+                            elif (
+                                plan_bound_session
+                                and recorded_plan_realizer
+                                != "generic-omnigent-host@1"
+                            ):
+                                raise ValueError(
+                                    "plan realizer does not own the Omnigent "
+                                    "session-supervisor path"
+                                )
+                        if (
+                            validated_id == "omnigent"
+                            and request.execution_profile_ref
+                            and session_admitted
+                        ):
+                            owner_workflow_id, step_execution_id = (
+                                self._omnigent_owner_identities(request)
+                            )
+                            resolved_input = await self._execute_routed_activity(
+                                "omnigent.resolve_intent",
+                                self._omnigent_resolve_intent_payload(
+                                    request,
+                                    workflow_id=owner_workflow_id,
+                                    step_execution_id=step_execution_id,
+                                    agent_run_id=workflow.info().workflow_id,
+                                    admitted_feature_generation=(
+                                        admitted_feature_generation
+                                    ),
+                                    compact_plan_authority=(
+                                        use_compact_omnigent_resolve_intent
+                                        and plan_bound_session
+                                    ),
+                                ),
+                                cancellation_type=(
+                                    ActivityCancellationType.TRY_CANCEL
+                                ),
+                            )
+                            session_input = (
+                                resolved_input
+                                if isinstance(
+                                    resolved_input,
+                                    OmnigentSessionWorkflowInput,
+                                )
+                                else OmnigentSessionWorkflowInput.model_validate(
+                                    resolved_input
+                                )
+                            )
+                            self._omnigent_session_workflow_id = (
+                                omnigent_session_workflow_id(
+                                    session_input.session_id
+                                )
+                            )
+                            session_handle = await workflow.start_child_workflow(
+                                "MoonMind.OmnigentSession",
+                                session_input,
+                                id=self._omnigent_session_workflow_id,
+                                task_queue=self._workflow_child_task_queue(),
+                                parent_close_policy=(
+                                    workflow.ParentClosePolicy.ABANDON
+                                ),
+                                cancellation_type=(
+                                    ChildWorkflowCancellationType.ABANDON
+                                ),
+                                static_summary=(
+                                    "Durable Omnigent session supervisor"
+                                ),
+                            )
+                            try:
+                                session_result = await asyncio.shield(
+                                    session_handle
+                                )
+                            except (CancelledError, asyncio.CancelledError):
+                                # Cancellation is durable session intent, not
+                                # authority to tear down the child. Keep the
+                                # same session workflow alive, signal its typed
+                                # cancellation contract, and wait for its
+                                # ordered harvest/cleanup/release result.
+                                async def _cancel_and_wait_for_session() -> Any:
+                                    await session_handle.signal(
+                                        "cancel_or_interrupt_requested",
+                                        OmnigentSessionSignal(
+                                            requestId=(
+                                                f"{session_input.session_id}:"
+                                                "agent-run-cancel"
+                                            ),
+                                            reasonCode="agent_run_cancelled",
+                                        ),
+                                    )
+                                    return await session_handle
+
+                                cancellation_task = asyncio.create_task(
+                                    _cancel_and_wait_for_session()
+                                )
+                                try:
+                                    session_result = await asyncio.shield(
+                                        cancellation_task
+                                    )
+                                except (CancelledError, asyncio.CancelledError):
+                                    session_result = await cancellation_task
+                            self.final_result = (
+                                session_result
+                                if isinstance(session_result, AgentRunResult)
+                                else AgentRunResult.model_validate(session_result)
+                            )
+                            self.run_status = (
+                                RunStatus.completed
+                                if self.final_result.failure_class is None
+                                else RunStatus.failed
+                            )
+                        else:
+                            # Historical sessions retain their recorded lane.
+                            # New plan-bound Codex work also uses the one-
+                            # activity dispatcher because that boundary invokes
+                            # the exact recorded realizer from the persisted
+                            # plan instead of the generic supervisor.
+                            # ScheduleToClose is the only deadline this lane
+                            # has. The workflow is blocked awaiting the activity
+                            # for its whole duration, so it cannot observe
+                            # provider progress or re-evaluate the budget, and
+                            # the activity's heartbeat is emitted independently
+                            # of semantic progress. Sizing this to the
+                            # progress-aware ceiling would therefore let a run
+                            # that never makes progress hold its provider slot
+                            # for the full ceiling with no boundary able to stop
+                            # it — four times its base window for the managed
+                            # default. Only a lane that can actually observe
+                            # progress may spend the extension, so this one stops
+                            # at the base window the workflow enforces.
+                            stc_seconds = min(
+                                max(int(timeout_seconds), 60),
+                                86400,
+                            )
+                            act_name = f"integration.{validated_id}.execute"
+                            if (
+                                recorded_plan_realizer
+                                != "codex-profile-bound@1"
+                                and validated_id == "omnigent"
+                                and request.execution_profile_ref
+                                and workflow.patched(
+                                    OMNIGENT_PROFILE_BOUND_EXECUTION_PATCH_ID
+                                )
+                            ):
+                                act_name = (
+                                    "integration.omnigent.profile_bound_execute"
+                                )
+                            result_payload = await self._execute_routed_activity(
+                                act_name,
+                                request,
+                                start_to_close_timeout=timedelta(
+                                    seconds=stc_seconds
+                                ),
+                                schedule_to_close_timeout=timedelta(
+                                    seconds=stc_seconds
+                                ),
+                                heartbeat_timeout=(
+                                    STREAMING_EXTERNAL_HEARTBEAT_TIMEOUT
+                                ),
+                                cancellation_type=(
+                                    ActivityCancellationType.TRY_CANCEL
+                                ),
+                            )
+                            self.final_result = (
+                                AgentRunResult(**result_payload)
+                                if isinstance(result_payload, dict)
+                                else result_payload
+                            )
+                            self.run_status = RunStatus.completed
                         adapter = None
                         skip_poll_and_fetch = True
                     else:
@@ -3767,6 +5707,14 @@ class MoonMindAgentRun:
                 if not skip_poll_and_fetch:
                     last_progress_signature: tuple[Any, ...] | None = None
                     stagnant_poll_count = 0
+                    # A budget verdict reached without polling status once more
+                    # is a verdict about stale evidence. The bounded wait below
+                    # can consume the entire known remaining budget, and the
+                    # supervisor progress that landed during that wait would then
+                    # never be read. Reconcile once against fresh status before
+                    # the verdict is accepted; a reconciliation that observes
+                    # progress rearms for the next boundary.
+                    budget_reconciled = False
                     while True:
                         if (
                             request.agent_kind == "external"
@@ -3786,7 +5734,7 @@ class MoonMindAgentRun:
                                 )
                             self.run_status = RunStatus.running
 
-                        remaining_timeout = timeout_seconds - (workflow.now() - overall_start).total_seconds()
+                        remaining_timeout = _budget_remaining_seconds()
                         if remaining_timeout <= 0:
                             break
 
@@ -3816,23 +5764,54 @@ class MoonMindAgentRun:
                                 fallback_agent_id=request.agent_id,
                             )
                         else:
+                            remaining_status_budget = _budget_remaining_seconds()
+                            if (
+                                use_managed_status_activity
+                                and not uses_codex_session_adapter
+                                and workflow.patched(
+                                    MANAGED_STATUS_ROLLOUT_TOLERANCE_PATCH_ID
+                                )
+                                and remaining_status_budget <= 0
+                            ):
+                                if not progress_aware_budget or budget_reconciled:
+                                    break
+                                # Final bounded reconciliation: the budget looks
+                                # spent, but the last wait may have hidden a
+                                # supervisor progress advance that extends it.
+                                # ``None`` gives this one poll the activity's
+                                # configured window instead of the exhausted
+                                # budget, so it can actually return.
+                                budget_reconciled = True
+                                remaining_status_budget = None
                             status_obj = await self._poll_managed_status(
                                 request=request,
                                 adapter=adapter,
                                 uses_codex_session_adapter=uses_codex_session_adapter,
                                 use_managed_status_activity=use_managed_status_activity,
+                                remaining_budget_seconds=remaining_status_budget,
                             )
 
                         self.run_status = status_obj.status
+                        # One progress observation feeds both the no-progress
+                        # watchdog and the execution budget, so the two can never
+                        # disagree about whether this run is making progress.
+                        progress_signature = self._status_progress_signature(
+                            status_obj
+                        )
+                        progress_observed = (
+                            progress_signature != last_progress_signature
+                        )
+                        last_progress_signature = progress_signature
+                        if progress_observed:
+                            last_progress_at = workflow.now()
+                            # Fresh progress rearms the final reconciliation for
+                            # the next budget boundary this run reaches.
+                            budget_reconciled = False
                         if workflow.patched(AGENT_RUN_RESILIENCY_POLICY_PATCH_ID):
-                            progress_signature = self._status_progress_signature(
-                                status_obj
-                            )
-                            if progress_signature == last_progress_signature:
-                                stagnant_poll_count += 1
-                            else:
-                                last_progress_signature = progress_signature
+                            if progress_observed:
                                 stagnant_poll_count = 0
+                            else:
+                                stagnant_poll_count += 1
                             max_stagnant_polls = self._max_no_progress_polls(
                                 policy=resiliency_policy,
                                 poll_interval=poll_interval,
@@ -4025,9 +6004,8 @@ class MoonMindAgentRun:
                         if status_obj.status in _TERMINAL_RUN_STATUSES:
                             break
 
-                elapsed = (workflow.now() - overall_start).total_seconds()
-
-                if elapsed >= timeout_seconds and not self.completion_event.is_set():
+                elapsed, terminal_verdict, terminal_deadline = _budget_state()
+                if terminal_verdict != "continue" and not self.completion_event.is_set():
                     self.run_status = RunStatus.timed_out
                     if manager_handle and request.execution_profile_ref:
                         await manager_handle.signal(
@@ -4041,12 +6019,13 @@ class MoonMindAgentRun:
                         request=request,
                         result=self._timed_out_result(
                             request=request,
-                            timeout_seconds=timeout_seconds,
+                            timeout_seconds=terminal_deadline,
                             elapsed_seconds=elapsed,
-                            detail=(
-                                "made no observable progress and exceeded its "
-                                "execution budget"
+                            detail=_budget_expiry_detail(terminal_verdict),
+                            budget=(
+                                execution_budget if progress_aware_budget else None
                             ),
+                            verdict=terminal_verdict,
                         ),
                     )
 
@@ -4156,6 +6135,89 @@ class MoonMindAgentRun:
                                         },
                                     }
                                 )
+
+                if self.final_result is not None:
+                    if workflow.patched(
+                        MANAGED_PROCESS_LOSS_RECOVERY_PATCH_ID
+                    ):
+                        self.final_result = (
+                            self._with_managed_process_loss_recovery_history(
+                                self.final_result
+                            )
+                        )
+                        recovery_request = (
+                            self._managed_process_loss_recovery_request(
+                                request=request,
+                                result=self.final_result,
+                            )
+                        )
+                        if recovery_request is not None:
+                            active_profile_id = str(
+                                request.execution_profile_ref
+                                or self._assigned_profile_id
+                                or ""
+                            ).strip()
+                            if manager_handle and active_profile_id:
+                                await manager_handle.signal(
+                                    "release_slot",
+                                    self._release_slot_payload(
+                                        profile_id=active_profile_id,
+                                        request=request,
+                                    ),
+                                )
+                            request = recovery_request
+                            self.completion_event.clear()
+                            self.final_result = None
+                            self._assigned_profile_id = None
+                            self.run_status = RunStatus.launching
+                            continue
+                    self.final_result = await self._evaluate_terminal_contract(
+                        request=request,
+                        result=self.final_result,
+                    )
+                    if workflow.patched(
+                        TERMINAL_CONTRACT_FRESH_PROCESS_CONTINUATION_PATCH_ID
+                    ):
+                        self.final_result = (
+                            self._with_fresh_process_terminal_contract_history(
+                                self.final_result
+                            )
+                        )
+                        continuation_request = (
+                            self._fresh_process_terminal_contract_request(
+                                request=request,
+                                result=self.final_result,
+                            )
+                        )
+                        if continuation_request is not None:
+                            active_profile_id = str(
+                                request.execution_profile_ref
+                                or self._assigned_profile_id
+                                or ""
+                            ).strip()
+                            if manager_handle and active_profile_id:
+                                await manager_handle.signal(
+                                    "release_slot",
+                                    self._release_slot_payload(
+                                        profile_id=active_profile_id,
+                                        request=request,
+                                    ),
+                                )
+                            request = continuation_request
+                            self.completion_event.clear()
+                            self.final_result = None
+                            self._assigned_profile_id = None
+                            self.run_status = RunStatus.launching
+                            continue
+                    if workflow.patched(
+                        TERMINAL_CONTRACT_CHECKPOINT_ON_FAILURE_PATCH_ID
+                    ):
+                        self.final_result = (
+                            await self._publish_terminal_contract_failure_checkpoint(
+                                request=request,
+                                result=self.final_result,
+                            )
+                        )
 
                 # Prefer the canonical structured provider failure event for the
                 # cooldown decision when present; fall back to text-marker codes.
@@ -4325,6 +6387,9 @@ class MoonMindAgentRun:
                 self.final_result = self._enrich_result_metadata(
                     request=request,
                     result=self.final_result,
+                    include_parent_execution=workflow.patched(
+                        PARENT_EXECUTION_ARTIFACT_HANDOFF_PATCH_ID
+                    ),
                 )
                 if (
                     workflow.patched(AGENT_RUN_RESILIENCY_POLICY_PATCH_ID)
@@ -4374,7 +6439,7 @@ class MoonMindAgentRun:
                 ),
             )
 
-        except CancelledError:
+        except (CancelledError, asyncio.CancelledError):
             tasks = []
 
             if request.agent_kind == "managed" and getattr(request, "execution_profile_ref", None):
@@ -4401,7 +6466,11 @@ class MoonMindAgentRun:
             if self.run_id is not None and self.agent_kind is not None:
                 async def _cancel_agent():
                     try:
-                        if self.agent_kind == "external" and self._external_agent_id is not None:
+                        if (
+                            self.agent_kind == "external"
+                            and self._external_agent_id is not None
+                            and self._omnigent_session_workflow_id is None
+                        ):
                             # Route external cancel through integration activity.
                             act_name = f"integration.{self._external_agent_id}.cancel"
                             await self._execute_routed_activity(
@@ -4410,7 +6479,7 @@ class MoonMindAgentRun:
                                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
 
                             )
-                        else:
+                        elif self._omnigent_session_workflow_id is None:
                             await self._execute_routed_activity(
                                 "agent_runtime.cancel",
                                 AgentRuntimeCancelInput(

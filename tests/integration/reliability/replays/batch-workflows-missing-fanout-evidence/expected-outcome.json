@@ -1,0 +1,8 @@
+{
+  "parentState": "failed",
+  "finishOutcomeCode": "FAILED",
+  "closeStatus": "failed",
+  "failureClass": "execution_error",
+  "failureCode": "INCOMPLETE_TERMINAL_CONTRACT",
+  "missingEvidence": ["artifacts/batch-workflows-result.json"]
+}

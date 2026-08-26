@@ -1,0 +1,9 @@
+{
+  "incidentWorkflowId": "mm:e96347f3-a5ea-427a-ba09-c6d5c17535a1",
+  "incidentRunId": "019fd344-bf68-77eb-9ddb-960280cee696",
+  "failedChildWorkflowId": "mm:e96347f3-a5ea-427a-ba09-c6d5c17535a1:agent:node-1",
+  "failedChildRunId": "019fd344-c6ae-751b-95f4-2330d7dfc699",
+  "failureShape": "the on-demand host command placed /usr/bin/env -u arguments before the image, so Docker parsed OPENAI_API_KEY as the container user",
+  "boundary": "Docker run options to container entrypoint arguments",
+  "hostImageRef": "registry.example/omnigent-host@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+}

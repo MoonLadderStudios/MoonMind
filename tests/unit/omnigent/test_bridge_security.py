@@ -162,7 +162,7 @@ def test_sanitize_proxy_headers_drops_moonmind_internal_auth_headers() -> None:
         }
     )
 
-    assert forwarded == {"Accept": "application/json", "X-Trace-Id": "trace-1"}
+    assert forwarded == {}
 
 
 def test_sanitize_proxy_headers_drops_sensitive_by_fragment() -> None:
@@ -179,11 +179,11 @@ def test_sanitize_proxy_headers_drops_sensitive_by_fragment() -> None:
 
 def test_sanitize_proxy_headers_honors_explicit_allowlist() -> None:
     forwarded = sanitize_proxy_headers(
-        {"Authorization": "Bearer configured", "Cookie": "c=1"},
-        allowed_upstream_headers=["authorization"],
+        {"X-Trace-Id": "trace-1", "Content-Length": "2"},
+        allowed_upstream_headers=["x-trace-id", "content-length"],
     )
 
-    assert forwarded == {"Authorization": "Bearer configured"}
+    assert forwarded == {"X-Trace-Id": "trace-1"}
 
 
 # --- raw-event redaction (§16 rule 5) -------------------------------------------

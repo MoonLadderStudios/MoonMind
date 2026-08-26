@@ -1,0 +1,22 @@
+{
+  "incidentWorkflowId": "mm:1b5eacdb-ecf5-5acc-9f27-77f3881c7934",
+  "failureShapeId": "managed-session-stale-state-write",
+  "boundary": "direct managed-session runtime state publication after concurrent clear",
+  "escapedFailure": {
+    "message": "sessionEpoch does not match the active managed session",
+    "cause": "an observer loaded epoch 1, clear_session durably advanced to epoch 2, then the observer atomically overwrote the state file with epoch 1"
+  },
+  "locatorBeforeClear": {
+    "sessionId": "sess-1",
+    "sessionEpoch": 1,
+    "containerId": "ctr-1",
+    "threadId": "logical-thread-1"
+  },
+  "clearRequest": {
+    "sessionId": "sess-1",
+    "sessionEpoch": 1,
+    "containerId": "ctr-1",
+    "threadId": "logical-thread-1",
+    "newThreadId": "logical-thread-2"
+  }
+}

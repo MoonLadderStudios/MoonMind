@@ -8,6 +8,7 @@ import {
   getSessionCapabilityRefetchInterval,
   getSessionProjectionRefetchInterval,
   normalizeObservabilityEvent,
+  parseObservabilityEventsResponse,
   WORKFLOW_SIDEBAR_ANIMATED_RESTART_MS,
   WORKFLOW_SIDEBAR_ROUTE_ICON_ANIMATION_MS,
   WorkflowDetailEntrypoint,
@@ -15,6 +16,68 @@ import {
   workflowDetailQueryOptions,
   workflowEvidenceStaleTime,
 } from './workflow-detail';
+
+describe('bridge projection response contract', () => {
+  it('fails visibly for an unknown page schema version', () => {
+    expect(() =>
+      parseObservabilityEventsResponse({
+        schemaVersion: 'moonmind.bridge-session-events-page.v2',
+        bridgeSessionId: 'brs-1',
+        items: [],
+        after: 0,
+        nextCursor: null,
+        hasMore: false,
+        terminal: false,
+        latestSequence: 0,
+      }),
+    ).toThrow();
+  });
+
+  it('preserves bridge pagination metadata for page draining', () => {
+    expect(
+      parseObservabilityEventsResponse({
+        schemaVersion: 'moonmind.bridge-session-events-page.v1',
+        bridgeSessionId: 'brs-1',
+        items: [],
+        after: 0,
+        nextCursor: '100',
+        hasMore: true,
+        terminal: false,
+        latestSequence: 101,
+      }),
+    ).toMatchObject({ nextCursor: '100', hasMore: true });
+  });
+
+  it('preserves the authoritative terminal envelope', () => {
+    expect(parseObservabilityEventsResponse({
+      schemaVersion: 'moonmind.bridge-session-events-page.v1',
+      bridgeSessionId: 'brs-failed',
+      items: [],
+      after: 0,
+      nextCursor: null,
+      hasMore: false,
+      terminal: true,
+      latestSequence: 0,
+      terminalEnvelope: {
+        schemaVersion: 'moonmind.bridge-session-terminal.v1',
+        status: 'failed',
+        failureClass: 'configuration_error',
+        failureCode: 'profile_missing',
+        summary: 'Provider profile is unavailable.',
+        diagnosticsRef: 'artifact:diagnostics',
+        cleanupState: 'completed',
+      },
+    })).toMatchObject({
+      terminal: true,
+      terminalEnvelope: {
+        status: 'failed',
+        failureClass: 'configuration_error',
+        failureCode: 'profile_missing',
+        diagnosticsRef: 'artifact:diagnostics',
+      },
+    });
+  });
+});
 import {
   taskCompareHref,
   taskEditForRerunHref,
@@ -38,6 +101,7 @@ type MockVirtuosoProps<Row = MockVirtuosoRow> = {
   computeItemKey?: (index: number, row: Row) => string;
   itemContent: (index: number, row: Row) => ReactNode;
   initialItemCount?: number;
+  followOutput?: (atBottom: boolean) => 'smooth' | false;
 };
 
 const { virtuosoPropsSpy } = vi.hoisted(() => ({
@@ -364,6 +428,7 @@ describe('Workflow Detail Entrypoint', () => {
 
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
     virtuosoPropsSpy.mockClear();
     window.history.pushState({}, 'Test', '/workflows/test-123/steps?source=temporal');
     window.sessionStorage.clear();
@@ -432,6 +497,21 @@ describe('Workflow Detail Entrypoint', () => {
         return Promise.resolve({
           ok: true,
           json: async () => stepsSnapshot,
+        } as Response);
+      }
+      if (url.includes('/chat-binding')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            chatBindingId: 'cb-test',
+            workflowId: 'test-123',
+            chatUrl: '/omnigent-ui/workflow-chat/cb-test?embedded=1',
+            apiBase: '/api/workflow-chat-bindings/cb-test/omnigent',
+            state: 'available',
+            readOnly: false,
+            capabilities: { sendMessage: true },
+          }),
         } as Response);
       }
       if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
@@ -559,6 +639,255 @@ describe('Workflow Detail Entrypoint', () => {
       } as Response);
     });
   }
+
+  it('shows the persisted Omnigent plan and fenced runtime binding authority', async () => {
+    window.history.pushState(
+      {},
+      'Omnigent authority test',
+      '/workflows/test-123/overview?source=temporal',
+    );
+    const planRef = `omnigent-execution-plan:sha256:${'a'.repeat(64)}`;
+    const bindingRef = `omnigent-runtime-binding:sha256:${'b'.repeat(64)}`;
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          taskId: 'test-123',
+          workflowId: 'test-123',
+          namespace: 'default',
+          runId: '02-run',
+          source: 'temporal',
+          workflowType: 'MoonMind.UserWorkflow',
+          title: 'OpenCode plan-bound run',
+          summary: 'Using persisted authority.',
+          status: 'running',
+          state: 'executing',
+          rawState: 'executing',
+          temporalStatus: 'running',
+          targetRuntime: 'omnigent',
+          createdAt: '2026-04-09T00:00:00Z',
+          updatedAt: '2026-04-09T00:00:04Z',
+          omnigentExecutionPlan: {
+            planRef,
+            planDigest: `sha256:${'a'.repeat(64)}`,
+            planArtifactRef: 'art_plan_1',
+          },
+          omnigentRuntimeBinding: {
+            runtimeBindingRef: bindingRef,
+            revision: 3,
+            fencingGeneration: 1,
+            state: 'session_bound',
+          },
+          actions: {},
+        }),
+      } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+
+    expect(await screen.findByText('Omnigent authority')).toBeTruthy();
+    expect(screen.getByText(planRef)).toBeTruthy();
+    expect(screen.getByText(bindingRef)).toBeTruthy();
+    expect(
+      screen.getByText(
+        (_content, node) =>
+          node?.tagName === 'DD' &&
+          node.textContent?.includes('revision 3 · generation 1 · session bound') === true,
+      ),
+    ).toBeTruthy();
+  });
+
+  it('explains terminal quality-gate outcomes without claiming a failed step', async () => {
+    window.history.pushState(
+      {},
+      'Test',
+      '/workflows/test-123/overview?source=temporal',
+    );
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => latestStepsSnapshot,
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          taskId: 'test-123',
+          workflowId: 'test-123',
+          namespace: 'default',
+          runId: '02-run',
+          source: 'temporal',
+          workflowType: 'MoonMind.UserWorkflow',
+          title: 'Quality gate stopped run',
+          summary: 'Remaining work is preserved.',
+          status: 'failed',
+          state: 'failed',
+          rawState: 'failed',
+          temporalStatus: 'failed',
+          createdAt: '2026-04-09T00:00:00Z',
+          updatedAt: '2026-04-09T00:00:04Z',
+          actions: {
+            canFullRetry: true,
+            actionEvidence: {
+              fullRetry: {
+                candidateRef: 'artifact://workspace/final',
+                remainingWorkRef: 'artifact://remaining/final',
+              },
+            },
+          },
+          finishSummary: {
+            finishOutcome: { code: 'FAILED', stage: 'finalizing' },
+            controlStop: {
+              kind: 'workflow_gate',
+              verdict: 'ADDITIONAL_WORK_NEEDED',
+              reasonCode: 'semantic_no_progress_exhausted',
+              remainingWorkRef: 'artifact://remaining/final',
+              workspaceHeadRef: 'artifact://workspace/final',
+              publicationFeasible: false,
+              publicationAttempted: false,
+            },
+          },
+        }),
+      } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
+
+    expect(
+      await screen.findByRole('heading', { name: 'Quality gate stopped this workflow' }),
+    ).toBeTruthy();
+    expect(screen.getByText('ADDITIONAL_WORK_NEEDED')).toBeTruthy();
+    expect(screen.getByText('artifact://remaining/final')).toBeTruthy();
+    expect(screen.getByText(/No failed Step Execution was fabricated/)).toBeTruthy();
+  });
+
+  it('submits an explicit operator-selected budget from the authorized grant', async () => {
+    window.history.pushState(
+      {},
+      'Continuation budget test',
+      '/workflows/test-123/overview?source=temporal',
+    );
+    const execution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      runId: '02-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      title: 'Quality gate stopped run',
+      summary: 'Remaining work is preserved.',
+      status: 'failed',
+      state: 'failed',
+      rawState: 'failed',
+      temporalStatus: 'failed',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      actions: {
+        canContinueRemediation: true,
+        actionEvidence: {
+          continueRemediation: {
+            controlStopId: 'verify:control-stop:6',
+            candidateRef: 'artifact://workspace/final',
+            remainingWorkRef: 'artifact://remaining/final',
+            sourceBudget: {
+              maxAttempts: 6,
+              consumedAttempts: 6,
+              exhaustedDimension: 'remediation_attempts',
+            },
+            continuationBudget: {
+              grantId: 'grant-authorized',
+              maxAttempts: 4,
+              maxConsecutiveNoProgressAttempts: 2,
+            },
+            destinationWorkflowId: 'control-stop-continuation-linked',
+            restorationEvidenceRef: 'artifact://restore/evidence',
+            hostSessionLifecycle: {
+              activityCleanupCompleted: true,
+              omnigentSessionId: 'session-7',
+            },
+          },
+        },
+      },
+      finishSummary: {
+        finishOutcome: { code: 'FAILED', stage: 'finalizing' },
+        controlStop: {
+          kind: 'workflow_gate',
+          controlStopId: 'verify:control-stop:6',
+          verdict: 'ADDITIONAL_WORK_NEEDED',
+          reasonCode: 'remediation_budget_exhausted',
+          remainingWorkRef: 'artifact://remaining/final',
+          workspaceHeadRef: 'artifact://workspace/final',
+          publicationFeasible: false,
+          publicationAttempted: false,
+        },
+      },
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/actions/continue-remediation') && init?.method === 'POST') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            destinationWorkflowId: 'control-stop-continuation-linked',
+          }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => execution,
+      } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
+
+    expect(await screen.findByText('4 attempts · 2 consecutive no-progress')).toBeTruthy();
+    expect(screen.getByText('6 / 6 · remediation attempts')).toBeTruthy();
+    expect(screen.getByText('artifact://restore/evidence')).toBeTruthy();
+    fireEvent.change(
+      screen.getByRole('spinbutton', { name: 'Continuation maximum attempts' }),
+      { target: { value: '3' } },
+    );
+    fireEvent.change(
+      screen.getByRole('spinbutton', {
+        name: 'Continuation consecutive no-progress attempts',
+      }),
+      { target: { value: '1' } },
+    );
+    const menu = await openWorkflowActionsMenu('Continue remediation');
+    fireEvent.click(
+      within(menu).getByRole('menuitem', { name: 'Continue remediation' }),
+    );
+
+    await waitFor(() => {
+      const post = fetchSpy.mock.calls.find(
+        ([url, init]) =>
+          String(url).endsWith('/actions/continue-remediation') &&
+          init?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      expect(JSON.parse(String(post?.[1]?.body))).toEqual({
+        proposedContinuationBudget: {
+          maxAttempts: 3,
+          maxConsecutiveNoProgressAttempts: 1,
+        },
+      });
+    });
+  });
 
   function mockWorkflowWorkspaceFetchesWithSelectedOutsideList() {
     const selectedExecution = {
@@ -745,6 +1074,60 @@ describe('Workflow Detail Entrypoint', () => {
       '/workflows/test-456?source=temporal',
     );
     expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBe('/api/executions?source=temporal&pageSize=25');
+  });
+
+  it('renders the workflow detail header status pill with motion enabled for an executing run', async () => {
+    window.history.pushState({}, 'Header Pill Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    await screen.findByRole('heading', { name: 'Workflow Detail' });
+    await waitFor(() => {
+      expect(document.querySelector('.toolbar-identity-row [data-effect="shimmer-sweep"]')).toBeTruthy();
+    });
+
+    const pill = document.querySelector<HTMLElement>('.toolbar-identity-row [data-effect="shimmer-sweep"]');
+    expect(pill?.dataset.state).toBe('executing');
+    expect(pill?.className).toContain('status-running');
+    expect(pill?.className).toContain('is-executing');
+    expect(pill?.getAttribute('aria-label')).toBe('Executing');
+    expect(pill?.querySelector('.status-letter-wave')?.getAttribute('data-label')).toBe('Executing');
+    expect(pill?.querySelector('.status-letter-wave')?.getAttribute('aria-hidden')).toBe('true');
+  });
+
+  it('canonicalizes a raw running header status to the executing shimmer treatment', async () => {
+    window.history.pushState({}, 'Header Alias Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches();
+    const workspaceFetch = fetchSpy.getMockImplementation();
+    if (!workspaceFetch) {
+      throw new Error('Expected mockWorkflowWorkspaceFetches() to configure fetchSpy');
+    }
+    fetchSpy.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const response = (await workspaceFetch(input, init)) as Response;
+      const url = String(input);
+      if (url.includes('/executions/test-123') && !url.includes('/steps')) {
+        const execution = await response.json();
+        return {
+          ok: true,
+          json: async () => ({ ...execution, rawState: 'running', state: 'completed' }),
+        } as Response;
+      }
+      return response;
+    });
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    await screen.findByRole('heading', { name: 'Workflow Detail' });
+    await waitFor(() => {
+      expect(document.querySelector('.toolbar-identity-row [data-effect="shimmer-sweep"]')).toBeTruthy();
+    });
+
+    const pill = document.querySelector<HTMLElement>('.toolbar-identity-row [data-effect="shimmer-sweep"]');
+    expect(pill?.dataset.state).toBe('executing');
+    expect(pill?.getAttribute('aria-label')).toBe('Executing');
   });
 
   it('MM-1133 keeps the workspace sidebar list cache isolated from the workflow table cache', async () => {
@@ -1374,10 +1757,10 @@ describe('Workflow Detail Entrypoint', () => {
 
     const dashboardCss = await readDashboardCss();
     expect(dashboardCss).toMatch(
-      /\.workflow-workspace-shell\s*\{[^}]*grid-template-columns:\s*\[rail-start\] minmax\(0,\s*1fr\)\s*\[content-start\] min\(var\(--mm-content-max\),\s*calc\(100% - 2rem\)\)\s*\[content-end\] minmax\(0,\s*1fr\);/,
+      /\.workflow-workspace-shell,\s*\.collection-workspace--edge-rail\s*\{[^}]*grid-template-columns:\s*\[rail-start\] minmax\(0,\s*1fr\)\s*\[content-start\] min\(var\(--mm-content-max\),\s*calc\(100% - 2rem\)\)\s*\[content-end\] minmax\(0,\s*1fr\);/,
     );
     expect(dashboardCss).toMatch(
-      /@media \(max-width:\s*114rem\) and \(min-width:\s*768px\)\s*\{[\s\S]*\.workflow-workspace-shell\[data-sidebar-collapsed="true"\]\s*\{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\);/,
+      /@media \(max-width:\s*114rem\) and \(min-width:\s*768px\)\s*\{[\s\S]*\.workflow-workspace-shell\[data-sidebar-collapsed="true"\],\s*\.collection-workspace--edge-rail\[data-sidebar-collapsed="true"\]\s*\{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\);/,
     );
     expect(dashboardCss).toMatch(
       /@media \(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*\.workflow-workspace-shell,[\s\S]*\.workflow-workspace-detail[\s\S]*transition:\s*none !important;[\s\S]*animation:\s*none !important;[\s\S]*transform:\s*none !important;/,
@@ -1701,6 +2084,10 @@ describe('Workflow Detail Entrypoint', () => {
 
     renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
 
+    fireEvent.change(await screen.findByLabelText('Provider profile'), { target: { value: 'profile-oauth-2' } });
+    fireEvent.change(screen.getByLabelText('Execution profile / launch policy'), { target: { value: 'omnigent-isolated' } });
+    fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'gpt-5.6-sol' } });
+    fireEvent.change(screen.getByLabelText('Effort'), { target: { value: 'high' } });
     fireEvent.click(await screen.findByRole('button', { name: 'Create branch from checkpoint' }));
 
     await waitFor(() => {
@@ -1714,6 +2101,10 @@ describe('Workflow Detail Entrypoint', () => {
       expect(body.workspacePolicy).toBe('apply_previous_execution_diff_to_clean_baseline');
       expect(body.runtimeContextPolicy).toBe('fresh_agent_run');
       expect(body.publishMode).toBe('none');
+      expect(body.providerProfileRef).toBe('profile-oauth-2');
+      expect(body.executionProfileRef).toBe('omnigent-isolated');
+      expect(body.model).toBe('gpt-5.6-sol');
+      expect(body.effort).toBe('high');
       expect(body.instructions.text).toContain('bounded alternative implementation');
       expect(body.idempotencyKey).toMatch(/^dashboard:create:test-123:apply:1:/);
     });
@@ -2098,6 +2489,14 @@ describe('Workflow Detail Entrypoint', () => {
               checkpointRef: 'artifact://checkpoint/before',
               sourceWorkflowId: 'wf-source',
               sourceRunId: 'run-source',
+              sessionRecoverable: false,
+              liveReattachReason: 'host_lease_expired',
+              workspaceRecoverable: true,
+              branchCreationAvailable: false,
+              branchCreationReason: 'capacity_unavailable',
+              checkpointValidationStatus: 'valid',
+              requiredProfileRef: 'profile://codex',
+              authoritativeWorkspaceCheckpointKind: 'worktree_archive',
               operatorGuidance: 'resume',
               evidence: [
                 {
@@ -2134,6 +2533,13 @@ describe('Workflow Detail Entrypoint', () => {
     expect(await screen.findByRole('heading', { name: 'Recovery evidence' })).toBeTruthy();
     expect(screen.getByText(/Resume from checkpoint is the default recovery action/)).toBeTruthy();
     expect(screen.getByText('artifact://checkpoint/before')).toBeTruthy();
+    expect(screen.getByText('Session reattach:').parentElement?.textContent).toContain('unavailable');
+    expect(screen.getByText('Session reattach:').parentElement?.textContent).toContain('host lease expired');
+    expect(screen.getByText('Workspace restore:').parentElement?.textContent).toContain('supported');
+    expect(screen.getByText('Checkpoint branch:').parentElement?.textContent).toContain('capacity unavailable');
+    expect(screen.getByText('Checkpoint validation:').parentElement?.textContent).toContain('valid');
+    expect(screen.getByText('Required profile:').parentElement?.textContent).toContain('profile://codex');
+    expect(screen.getByText('Authoritative workspace checkpoint:').parentElement?.textContent).toContain('worktree archive');
     expect(fetchSpy).toHaveBeenCalledWith(
       '/api/executions/test-123/steps/apply/step-executions/2?source=temporal',
       { credentials: 'include' },
@@ -3781,13 +4187,14 @@ describe('Workflow Detail Entrypoint', () => {
 
     await screen.findByText('Planning detail task');
     const toolbarStatus = document.querySelector<HTMLElement>('.toolbar-identity-row span.status');
-    expect(toolbarStatus?.dataset.effect).toBeUndefined();
+    expect(toolbarStatus?.dataset.effect).toBe('shimmer-sweep');
+    expect(toolbarStatus?.dataset.state).toBe('planning');
     expect(toolbarStatus?.className).toContain('status-planning');
+    expect(toolbarStatus?.className).toContain('is-planning');
     expect(toolbarStatus?.className).not.toContain('status-running');
-    expect(toolbarStatus?.className).not.toContain('is-planning');
-    expect(toolbarStatus?.dataset.shimmerLabel).toBeUndefined();
-    expect(toolbarStatus?.getAttribute('aria-label')).toBeNull();
-    expect(toolbarStatus?.querySelector('.status-letter-wave')).toBeNull();
+    expect(toolbarStatus?.dataset.shimmerLabel).toBe('Planning');
+    expect(toolbarStatus?.getAttribute('aria-label')).toBe('Planning');
+    expect(toolbarStatus?.querySelector('.status-letter-wave')?.getAttribute('data-label')).toBe('Planning');
     expect(toolbarStatus?.textContent).toBe('Planning');
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-489');
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-490');
@@ -6173,8 +6580,61 @@ describe('Workflow Detail Entrypoint', () => {
                 activeLockScope: 'target_execution',
                 activeLockHolder: 'mm:remediation-1',
                 latestActionSummary: 'Proposed session interrupt',
+                deliveryStatus: 'applied',
+                verificationOutcome: 'verified_resolved',
                 resolution: null,
                 contextArtifactRef: 'art_context',
+                selectedSteps: ['run-tests'],
+                currentTargetState: 'awaiting_external',
+                authoredContract: {
+                  instructions: 'Repair the selected failed test step.',
+                  runtime: { mode: 'omnigent' },
+                  remediation: { authorityMode: 'approval_gated' },
+                },
+                selectedStepEvidence: [
+                  { logicalStepId: 'run-tests', checkpointRef: 'artifact://checkpoints/inbound' },
+                ],
+                contextGeneratedAt: '2026-04-22T00:00:02Z',
+                contextEvidenceAvailability: [
+                  { class: 'step_ledger', status: 'available', bounded: true, freshness: 'source_reported' },
+                ],
+                contextBoundedness: { rawLogBodiesIncluded: false, maxTailLines: 2000 },
+                diagnosisHints: ['Test runner state diverged after restart.'],
+                latestActionRequest: {
+                  actionKind: 'session.interrupt',
+                  riskTier: 'high',
+                  idempotencyKey: 'action-3623',
+                  expectedTargetState: 'awaiting_external',
+                },
+                latestActionResult: {
+                  actionKind: 'session.interrupt',
+                  status: 'applied',
+                  beforeStateRef: 'artifact://before',
+                  afterStateRef: 'artifact://after',
+                },
+                lifecycleSummary: {
+                  repair: { repairOutcome: 'repaired' },
+                  prevention: { status: 'reviewable_change_created', pullRequestUrl: 'https://github.com/example/pull/1' },
+                  lockRelease: 'released',
+                  unresolvedOperatorWork: 'Review prevention PR.',
+                },
+                lifecycleArtifacts: [
+                  {
+                    artifactRef: 'art_summary',
+                    artifactType: 'remediation.summary',
+                    status: 'complete',
+                    freshness: 'durable',
+                    bounded: true,
+                    metadata: {},
+                  },
+                ],
+                operatorControls: {
+                  canCancel: true,
+                  canTakeOver: true,
+                  canResume: false,
+                  paused: false,
+                  disabledReasons: {},
+                },
                 checkpointBranches: [
                   {
                     workflowId: 'test-123',
@@ -6182,9 +6642,82 @@ describe('Workflow Detail Entrypoint', () => {
                     branchTurnId: 'cbt-remediation-inbound',
                     checkpointRef: 'artifact://checkpoints/inbound',
                     contextArtifactRef: 'art_context',
+                    rootCheckpointRef: 'artifact://workspace/C0',
+                    rootWorkspaceDigest: 'sha256:root',
+                    headCheckpointRef: 'artifact://workspace/C2',
+                    headWorkspaceDigest: 'sha256:candidate-two',
+                    headAttemptOrdinal: 2,
+                    headVersion: 3,
+                    headStatus: 'verified_incomplete',
+                    branchState: 'running',
+                    logicalStepId: 'run-tests',
+                    gitBaseBranch: 'main',
+                    gitWorkBranch: 'remediation/test-123',
+                    currentHeadCommit: 'abc123',
+                    pullRequestUrl: 'https://github.com/example/pull/1',
+                    publishStatus: 'published',
+                    instructionRef: 'art_branch_instructions',
+                    outputArtifacts: { result: 'art_branch_output' },
+                    comparisonArtifacts: { comparison: 'art_branch_comparison' },
+                    turns: [
+                      {
+                        branchTurnId: 'cbt-remediation-inbound-1',
+                        status: 'completed',
+                        createdStepExecutionId: 'repair:execution:1',
+                        runtimeAgentRunId: 'agent-run-inbound-1',
+                        providerSessionId: 'provider-session-inbound-1',
+                        instructionRef: 'artifact://instructions/inbound-1',
+                        instructionDigest: 'sha256:instructions-inbound-1',
+                        sourceCheckpointRef: 'artifact://workspace/C0',
+                        contextBundleRef: 'artifact://context/inbound-1',
+                        stepExecutionManifestRef: 'artifact://manifest/inbound-1',
+                        startedAt: '2026-04-22T00:00:02Z',
+                        completedAt: '2026-04-22T00:00:03Z',
+                        createdAt: '2026-04-22T00:00:01Z',
+                        updatedAt: '2026-04-22T00:00:03Z',
+                        outputArtifacts: { result: 'art_turn_inbound_1_output' },
+                        comparisonArtifacts: {},
+                      },
+                      {
+                        branchTurnId: 'cbt-remediation-inbound-2',
+                        parentTurnId: 'cbt-remediation-inbound-1',
+                        status: 'running',
+                        createdStepExecutionId: 'repair:execution:2',
+                        runtimeAgentRunId: 'agent-run-inbound-2',
+                        providerSessionId: 'provider-session-inbound-2',
+                        instructionRef: 'artifact://instructions/inbound-2',
+                        instructionDigest: 'sha256:instructions-inbound-2',
+                        sourceCheckpointRef: 'artifact://workspace/C1',
+                        startedAt: '2026-04-22T00:00:04Z',
+                        createdAt: '2026-04-22T00:00:04Z',
+                        updatedAt: '2026-04-22T00:00:04Z',
+                        outputArtifacts: {},
+                        comparisonArtifacts: { comparison: 'art_turn_inbound_2_comparison' },
+                      },
+                    ],
+                    latestVerificationVerdict: 'ADDITIONAL_WORK_NEEDED',
+                    remainingWorkRef: 'artifact://verification/V2#remainingWork',
+                    nextActionBaseline: {
+                      checkpointRef: 'artifact://workspace/C2',
+                      workspaceDigest: 'sha256:candidate-two',
+                      headVersion: 3,
+                    },
                   },
                 ],
-                approvalState: { requestId: 'approval-1', decision: 'pending', canDecide: true },
+                approvalState: {
+                  requestId: 'approval-1',
+                  actionKind: 'session.interrupt',
+                  riskTier: 'high',
+                  preconditions: 'Pinned target is current.',
+                  blastRadius: 'One managed session.',
+                  decision: 'pending',
+                  canDecide: true,
+                  requestingActor: 'operator:requester-3620',
+                  expectedTargetState: 'awaiting external session',
+                  checkpointRef: 'artifact://checkpoint/approval-3620',
+                  policyRef: 'omnigent-policy-3620@7',
+                  expiresAt: '2099-04-22T01:00:00Z',
+                },
                 createdAt: '2026-04-22T00:00:02Z',
                 updatedAt: '2026-04-22T00:00:03Z',
               },
@@ -6213,6 +6746,19 @@ describe('Workflow Detail Entrypoint', () => {
                     branchId: 'cbr-remediation-outbound',
                     branchTurnId: 'cbt-remediation-outbound',
                     checkpointRef: 'artifact://checkpoints/outbound',
+                    turns: [
+                      {
+                        branchTurnId: 'cbt-remediation-outbound-1',
+                        status: 'created',
+                        instructionRef: 'artifact://instructions/outbound-1',
+                        instructionDigest: 'sha256:instructions-outbound-1',
+                        sourceCheckpointRef: 'artifact://checkpoints/outbound',
+                        createdAt: '2026-04-22T00:00:05Z',
+                        updatedAt: '2026-04-22T00:00:05Z',
+                        outputArtifacts: { result: 'art_turn_outbound_1_output' },
+                        comparisonArtifacts: {},
+                      },
+                    ],
                   },
                 ],
                 approvalState: null,
@@ -6258,6 +6804,9 @@ describe('Workflow Detail Entrypoint', () => {
           }),
         } as Response);
       }
+      if (url.includes('/executions/mm%3Aremediation-1/signal') && init?.method === 'POST') {
+        return Promise.resolve({ ok: true, json: async () => ({ accepted: true }) } as Response);
+      }
       return Promise.resolve({
         ok: true,
         json: async () => mockExecution,
@@ -6275,12 +6824,51 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getAllByText('mm:target-1').length).toBeGreaterThan(0);
     expect(screen.getByText('cbr-remediation-inbound')).toBeTruthy();
     expect(screen.getByText('cbr-remediation-outbound')).toBeTruthy();
+    expect(screen.getByText('verified incomplete')).toBeTruthy();
+    expect(screen.getByText('2 / 3')).toBeTruthy();
+    expect(screen.getByText('artifact://workspace/C2 @ v3')).toBeTruthy();
+    expect(screen.getByText('artifact://verification/V2#remainingWork')).toBeTruthy();
+    expect(screen.getByText('operator:requester-3620')).toBeTruthy();
+    expect(screen.getByText('awaiting external session')).toBeTruthy();
+    expect(screen.getByText('artifact://checkpoint/approval-3620')).toBeTruthy();
+    expect(screen.getByText('omnigent-policy-3620@7')).toBeTruthy();
+    expect(screen.getByText('Authored remediation contract')).toBeTruthy();
+    expect(screen.getByText('Latest action request and authority decision')).toBeTruthy();
+    expect(screen.getByText('Repair, prevention, cleanup, and unresolved work')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'art_summary' }).getAttribute('href')).toBe(
+      '/api/artifacts/art_summary/download',
+    );
+    expect(screen.getByText('Test runner state diverged after restart.')).toBeTruthy();
+    expect(screen.getAllByText('remediation/test-123').length).toBeGreaterThan(0);
+    const inboundTurns = screen.getByRole('list', {
+      name: 'Checkpoint Branch turns for cbr-remediation-inbound',
+    });
+    expect(within(inboundTurns).getAllByRole('listitem')).toHaveLength(2);
+    expect(within(inboundTurns).getAllByText('cbt-remediation-inbound-1').length).toBeGreaterThan(0);
+    expect(within(inboundTurns).getByText('cbt-remediation-inbound-2')).toBeTruthy();
+    expect(screen.getByText('agent-run-inbound-2')).toBeTruthy();
+    expect(screen.getByText('provider-session-inbound-2')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'art_turn_inbound_2_comparison' }).getAttribute('href')).toBe(
+      '/api/artifacts/art_turn_inbound_2_comparison/download',
+    );
+    const outboundTurns = screen.getByRole('list', {
+      name: 'Checkpoint Branch turns for cbr-remediation-outbound',
+    });
+    expect(within(outboundTurns).getAllByRole('listitem')).toHaveLength(1);
+    expect(within(outboundTurns).getByText('cbt-remediation-outbound-1')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'art_branch_output' }).getAttribute('href')).toBe(
+      '/api/artifacts/art_branch_output/download',
+    );
+    expect(screen.getByRole('button', { name: 'Take over and pause' })).toBeTruthy();
     expect(await screen.findByRole('heading', { name: 'Remediation Evidence' })).toBeTruthy();
     expect(screen.getByText('Context')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Open Evidence' }).getAttribute('href')).toBe(
       '/api/artifacts/art_context/download',
     );
 
+    fireEvent.change(screen.getByLabelText(/Decision rationale/), {
+      target: { value: 'Pinned evidence reviewed.' },
+    });
     fireEvent.click(screen.getByRole('button', { name: 'Approve remediation action' }));
 
     await waitFor(() => {
@@ -6292,6 +6880,21 @@ describe('Workflow Detail Entrypoint', () => {
       expect(approvalCall).toBeTruthy();
       expect(JSON.parse(String(approvalCall?.[1]?.body))).toEqual({
         decision: 'approved',
+        comment: 'Pinned evidence reviewed.',
+      });
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Take over and pause' }));
+    await waitFor(() => {
+      const takeoverCall = fetchSpy.mock.calls.find(
+        ([url, init]) =>
+          String(url) === '/api/executions/mm%3Aremediation-1/signal' &&
+          init?.method === 'POST',
+      );
+      expect(takeoverCall).toBeTruthy();
+      expect(JSON.parse(String(takeoverCall?.[1]?.body))).toMatchObject({
+        signalName: 'Pause',
+        payload: { reason: 'operator_takeover' },
       });
     });
 
@@ -6382,6 +6985,11 @@ describe('Workflow Detail Entrypoint', () => {
 
     expect(await screen.findByText('Remediation create preview')).toBeTruthy();
     expect(screen.getByText(/Evidence preview: step ledger, diagnostics, and 2000 log lines/)).toBeTruthy();
+    expect((
+      within(screen.getByLabelText('Remediation authority')).getByRole('option', {
+        name: 'Administrator automatic (release gated)',
+      }) as HTMLOptionElement
+    ).disabled).toBe(true);
 
     fireEvent.change(screen.getByLabelText('Remediation mode'), {
       target: { value: 'snapshot' },
@@ -6881,6 +7489,21 @@ describe('Workflow Detail Entrypoint', () => {
                 baseRef: 'origin/main',
                 commitCount: 0,
                 pullRequestUrl: 'https://github.com/MoonLadderStudios/MoonMind/pull/456',
+                remediationLoop: {
+                  loopId: 'issue-implementation-remediation',
+                  status: 'verification_pending',
+                  attemptOrdinal: 1,
+                  hardMaxAttempts: 6,
+                  workspaceHeadRef: 'artifact://workspace/C1',
+                  latestVerdict: 'ADDITIONAL_WORK_NEEDED',
+                  continuationReason: 'remaining_work_admitted',
+                  continueAsNewCount: 0,
+                  materializedAttempts: [{
+                    attempt: 1,
+                    remediationStatus: 'completed',
+                    verificationStatus: 'ready',
+                  }],
+                },
               },
               lastStep: {
                 summary: 'Files edited in this run: none',
@@ -6911,9 +7534,96 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getByText('Run Summary')).toBeTruthy();
       expect(screen.getByText('feature/no-op')).toBeTruthy();
       expect(screen.getByText('origin/main')).toBeTruthy();
+      expect(screen.getByText('Remediation Loop')).toBeTruthy();
+      expect(screen.getByText('1 of 6')).toBeTruthy();
+      expect(screen.getByText('artifact://workspace/C1')).toBeTruthy();
+      expect(screen.getByText(/Attempt 1: remediation completed; verification ready/)).toBeTruthy();
       expect(screen.getByRole('link', { name: 'https://github.com/MoonLadderStudios/MoonMind/pull/456' })).toBeTruthy();
       expect(screen.getAllByText(/no publishable diff was produced/).length).toBeGreaterThan(0);
     });
+  });
+
+  it('renders remediation trends, budgets, evidence, and exact stop dimension', async () => {
+    window.history.pushState({}, 'Remediation Test', '/workflows/remediation/overview?source=temporal');
+    const execution = {
+      taskId: 'remediation',
+      workflowId: 'remediation',
+      namespace: 'default',
+      runId: 'run-1',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      title: 'Remediation run',
+      summary: 'Stopped on contract repair budget',
+      status: 'failed',
+      state: 'failed',
+      rawState: 'failed',
+      temporalStatus: 'failed',
+      closeStatus: 'FAILED',
+      summaryArtifactRef: 'art-remediation-summary',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:03Z',
+      actions: {},
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts/art-remediation-summary/download')) {
+        return Promise.resolve({
+          ok: true,
+          text: async () => JSON.stringify({
+            publishContext: {
+              boundedStoryLoop: {
+                continuationDecision: {
+                  continueLoop: false,
+                  reason: 'contract_repair_budget_exhausted',
+                  budget: {
+                    maxAttempts: 6,
+                    providerBudget: 4,
+                    tokenBudget: 1000,
+                    costBudget: 50,
+                    maxElapsedSeconds: 600,
+                    consumed: {
+                      attempts: 3,
+                      consecutiveNoProgressAttempts: 1,
+                      provider: 2,
+                      tokens: 500,
+                      cost: 20,
+                      elapsedSeconds: 300,
+                    },
+                  },
+                  gate: {
+                    progressVector: {
+                      classification: 'meaningful_progress',
+                      unresolvedGapScore: 5,
+                      priorUnresolvedGapScore: 8,
+                      requiredChecks: { passed: 7, failed: 1, not_run: 2 },
+                      priorRequiredChecks: { passed: 5, failed: 2, not_run: 3 },
+                      repeatedFailureSignatures: ['sha256:failure'],
+                      relevantDiffDigest: 'sha256:diff',
+                      gaps: [{ status: 'unresolved' }, { status: 'resolved' }],
+                    },
+                  },
+                },
+              },
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => execution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+
+    await waitFor(() => expect(screen.getByRole('region', { name: 'Remediation progress and budgets' })).toBeTruthy());
+    const region = screen.getByRole('region', { name: 'Remediation progress and budgets' });
+    expect(within(region).getByText('1 unresolved · score 5 (-3)')).toBeTruthy();
+    expect(within(region).getByText('Passed 7 (+2) · Failed 1 · Not run 2')).toBeTruthy();
+    expect(within(region).getByText('3 / 3')).toBeTruthy();
+    expect(within(region).getByText('Repeated failure signatures').closest('div')?.textContent).toContain('1');
+    expect(within(region).getByText('sha256:diff')).toBeTruthy();
+    expect(within(region).getByText('contract repair budget exhausted')).toBeTruthy();
   });
 
   it('renders auto publish mode and evidence with Auto labels', async () => {
@@ -7721,7 +8431,8 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     await waitFor(() => {
-      expect(screen.getByText('Encoded task')).toBeTruthy();
+      // The title renders in both the detail header and the native chat context bar.
+      expect(screen.getAllByText('Encoded task').length).toBeGreaterThan(0);
       expect(screen.getByText('Workflow mm:test-123')).toBeTruthy();
     });
 
@@ -7762,7 +8473,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders bridge session events before managed-runtime missing copy', async () => {
-    window.history.pushState({}, 'Bridge Chat Test', '/workflows/test-123/chat?source=temporal');
+    window.history.pushState({}, 'Bridge Chat Test', '/workflows/test-123/debug?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -7790,6 +8501,19 @@ describe('Workflow Detail Entrypoint', () => {
             bridgeSessionId: 'brs-1',
             workflowId: 'test-123',
             status: 'completed',
+            initialRetrieval: {
+              state: 'degraded',
+              contextPackRef: 'artifact://context/pack.json',
+              resultCount: 2,
+              truncated: true,
+              reason: 'gateway unavailable',
+              collections: ['canonical', 'workspace-overlay'],
+              scope: { repository: 'org/repo', run: 'run-1' },
+              budgets: { tokens: 500, latency_ms: 1000 },
+              contextPackDigest: 'sha256:pack',
+              firstMessageDigest: 'sha256:message',
+              firstMessageConsumedContextRef: true,
+            },
           }),
         } as Response);
       }
@@ -7797,8 +8521,9 @@ describe('Workflow Detail Entrypoint', () => {
         return Promise.resolve({
           ok: true,
           json: async () => ({
+            schemaVersion: 'moonmind.bridge-session-events-page.v1',
             bridgeSessionId: 'brs-1',
-            events: [
+            items: [
               {
                 sequence: 1,
                 timestamp: '2026-07-09T00:00:10Z',
@@ -7809,7 +8534,16 @@ describe('Workflow Detail Entrypoint', () => {
                 metadata: { responseId: 'resp-1', source: 'omnigent_bridge' },
               },
             ],
-            truncated: false,
+            after: 0,
+            nextCursor: '1',
+            hasMore: false,
+            terminal: true,
+            latestSequence: 1,
+            retentionGap: null,
+            terminalEnvelope: {
+              schemaVersion: 'moonmind.bridge-session-terminal.v1',
+              status: 'completed',
+            },
           }),
         } as Response);
       }
@@ -7825,9 +8559,398 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getAllByText('Bridge assistant output').length).toBeGreaterThan(0);
     });
     expect(screen.queryByText(/managed runtime observability record was created/i)).toBeNull();
+    expect(screen.getByTestId('omnigent-initial-retrieval').textContent).toContain(
+      'Initial context: degraded · 2 sources · truncated · gateway unavailable',
+    );
+    expect(screen.getByTestId('omnigent-initial-retrieval').textContent).toContain('Collections: canonical, workspace-overlay');
+    expect(screen.getByTestId('omnigent-initial-retrieval').textContent).toContain('Context consumed: yes');
+    expect(screen.queryByRole('link', { name: 'Open ContextPack artifact' })).toBeNull();
+    expect(screen.getByTestId('omnigent-initial-retrieval').textContent).toContain(
+      'ContextPack artifact: artifact://context/pack.json',
+    );
     expect(
       fetchSpy.mock.calls.some(([url]) => String(url).includes('/agent-runs/')),
     ).toBe(false);
+  });
+
+  it.each([
+    ['direct Codex compatibility', 'codex_direct_compat'],
+    ['Omnigent', 'omnigent_bridge'],
+  ])('projects an active %s journey through shared history, SSE, chat, and resources', async (_label, source) => {
+    window.history.pushState({}, 'Bridge parity journey', '/workflows/test-123/debug?source=temporal');
+    const priorEventSource = window.EventSource;
+    window.EventSource = MockEventSource as unknown as typeof EventSource;
+    const bridgeSessionId = `brs-parity-${source}`;
+    const execution = {
+      taskId: 'test-123', workflowId: 'test-123', namespace: 'default', source: 'temporal',
+      temporalRunId: 'parity-run', runId: 'parity-run', title: 'Active parity journey',
+      summary: 'Streaming', status: 'running', state: 'executing', rawState: 'running',
+      createdAt: '2026-07-09T00:00:00Z', updatedAt: '2026-07-09T00:00:10Z', actions: {},
+    };
+    const event = (sequence: number, kind: string, text: string, metadata: Record<string, unknown> = {}) => ({
+      sequence, timestamp: `2026-07-09T00:00:${String(sequence).padStart(2, '0')}Z`,
+      stream: 'stdout' as const, kind, text, sessionId: bridgeSessionId,
+      metadata: { source, directSessionId: source === 'codex_direct_compat' ? 'sess-direct' : undefined, ...metadata },
+    });
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/omnigent/bridge-sessions/resolve')) return Promise.resolve({ ok: true, json: async () => ({
+        bridgeSessionId, workflowId: 'test-123', status: 'running', providerSessionRef: `${source}-provider`,
+        capabilities: {},
+      }) } as Response);
+      if (url.includes(`/${bridgeSessionId}/events`)) return Promise.resolve({ ok: true, json: async () => ({
+        schemaVersion: 'moonmind.bridge-session-events-page.v1', bridgeSessionId,
+        items: [
+          event(1, 'assistant_message', 'Shared assistant progress'),
+          event(2, 'tool_started', 'Running tests', { toolName: 'shell' }),
+          event(3, 'approval_requested', 'Approval requested', { elicitationId: 'approval-1' }),
+        ],
+        after: 0, nextCursor: '3', hasMore: false, terminal: false, latestSequence: 3,
+      }) } as Response);
+      if (url.includes(`/${bridgeSessionId}/resources`)) return Promise.resolve({ ok: true, json: async () => ({
+        schemaVersion: 'moonmind.omnigent.resource_projection.v1', bridgeSessionId, completeness: 'harvesting',
+        groups: [{ groupKey: 'artifacts', title: 'Artifacts', resources: [{
+          label: 'test-results.txt', artifactRef: 'artifact:test-results', status: 'available',
+          previewAvailable: true, downloadAvailable: true, sourceEventSequence: 2,
+        }] }],
+      }) } as Response);
+      if (url.includes('/artifacts')) return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      return Promise.resolve({ ok: true, json: async () => execution } as Response);
+    });
+
+    try {
+      renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+      expect((await screen.findAllByText('Shared assistant progress')).length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/Running tests/).length).toBeGreaterThan(0);
+      expect(screen.getByText('test-results.txt')).toBeTruthy();
+      expect(screen.getByRole('link', { name: 'Open test-results.txt' })).toBeTruthy();
+      await waitForEventSourceInstance();
+      const stream = MockEventSource.instances.at(-1)!;
+      expect(stream.url).toContain(`/${bridgeSessionId}/stream`);
+      act(() => stream.triggerMessage(event(4, 'assistant_message', 'Shared live delta')));
+      expect((await screen.findAllByText('Shared live delta')).length).toBeGreaterThan(0);
+      expect(screen.getByTestId('chat-session-viewer')).toBeTruthy();
+    } finally {
+      window.EventSource = priorEventSource;
+    }
+  });
+
+  it('renders an understandable failed-before-stream lifecycle with zero provider events', async () => {
+    window.history.pushState({}, 'Failed Launch Chat', '/workflows/test-123/debug?source=temporal');
+    const mockExecution = {
+      taskId: 'test-123', workflowId: 'test-123', namespace: 'default',
+      temporalRunId: 'failed-launch-run', runId: 'failed-launch-run', source: 'temporal',
+      title: 'Failed launch', summary: 'Launch stopped before provider streaming.',
+      status: 'failed', state: 'failed', rawState: 'failed',
+      closedAt: '2026-07-09T00:00:30Z', createdAt: '2026-07-09T00:00:00Z',
+      updatedAt: '2026-07-09T00:00:30Z', actions: {},
+    };
+    const lifecycleItem = (
+      sequence: number,
+      stage: string,
+      status: string,
+      metadata: Record<string, unknown> = {},
+    ) => ({
+      sequence,
+      timestamp: `2026-07-09T00:00:${String(sequence).padStart(2, '0')}Z`,
+      stream: 'stdout',
+      text: '',
+      kind: `lifecycle_${stage}`,
+      sessionId: 'brs-failed-launch',
+      metadata: { status, ...metadata },
+    });
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/omnigent/bridge-sessions/resolve')) {
+        return Promise.resolve({ ok: true, json: async () => ({
+          bridgeSessionId: 'brs-failed-launch', workflowId: 'test-123', status: 'failed',
+        }) } as Response);
+      }
+      if (url.includes('/omnigent/bridge-sessions/brs-failed-launch/events')) {
+        return Promise.resolve({ ok: true, json: async () => ({
+          schemaVersion: 'moonmind.bridge-session-events-page.v1',
+          bridgeSessionId: 'brs-failed-launch',
+          items: [
+            lifecycleItem(1, 'profile_readiness', 'ready'),
+            lifecycleItem(2, 'credential_preflight', 'failed', {
+              code: 'oauth_generation_mismatch',
+              summary: 'Credential generation did not match the mounted volume.',
+              failureClass: 'configuration_error',
+              remediationAction: 'validate_codex_oauth',
+              diagnosticsRef: 'artifact://launch/diagnostics',
+              metadata: {
+                providerProfileId: 'codex', hostLeaseRef: 'host-lease-1',
+                workflowId: 'test-123', stepExecutionId: 'step-1',
+              },
+            }),
+            lifecycleItem(3, 'host_cleanup', 'completed', {
+              metadata: { cleanupCompleted: true, hostLeaseReleased: true },
+            }),
+            lifecycleItem(4, 'terminal', 'failed', {
+              metadata: { cleanupCompleted: true, leaseReleased: true, workflowId: 'test-123' },
+            }),
+          ],
+          after: 0, nextCursor: '4', hasMore: false, terminal: true,
+          latestSequence: 4, retentionGap: null,
+          terminalEnvelope: { schemaVersion: 'moonmind.bridge-session-terminal.v1', status: 'failed' },
+        }) } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+
+    await waitFor(() => expect(screen.getAllByText(/credential preflight: failed/i).length).toBeGreaterThan(0));
+    expect(screen.getAllByText(/profile readiness: ready/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Reason: oauth_generation_mismatch/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Profile: codex/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Host lease: host-lease-1/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Cleanup: completed/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Profile lease: released/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Recommended action: validate codex oauth/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/terminal: failed/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Open diagnostics').length).toBeGreaterThan(0);
+    expect(screen.queryByText(/managed runtime observability record was created/i)).toBeNull();
+    expect(screen.queryByText('Bridge assistant output')).toBeNull();
+  });
+
+  it('shows an authorization error instead of resource preview or download actions', async () => {
+    window.history.pushState({}, 'Bridge Authorization Test', '/workflows/test-123/debug?source=temporal');
+    const execution = {
+      taskId: 'test-123', workflowId: 'test-123', namespace: 'default',
+      temporalRunId: 'auth-run', runId: 'auth-run', source: 'temporal',
+      title: 'Protected bridge task', summary: 'Protected evidence',
+      status: 'completed', state: 'completed', rawState: 'completed',
+      closedAt: '2026-07-09T00:00:30Z', createdAt: '2026-07-09T00:00:00Z',
+      updatedAt: '2026-07-09T00:00:30Z', actions: {},
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/omnigent/bridge-sessions/resolve')) {
+        return Promise.resolve({ ok: true, json: async () => ({ bridgeSessionId: 'brs-auth', workflowId: 'test-123', status: 'completed' }) } as Response);
+      }
+      if (url.includes('/omnigent/bridge-sessions/brs-auth/events')) {
+        return Promise.resolve({ ok: true, json: async () => ({
+          schemaVersion: 'moonmind.bridge-session-events-page.v1', bridgeSessionId: 'brs-auth',
+          items: [], after: 0, nextCursor: null, hasMore: false, terminal: true,
+          latestSequence: 0, retentionGap: null, terminalEnvelope: null,
+        }) } as Response);
+      }
+      if (url.includes('/omnigent/bridge-sessions/brs-auth/resources')) {
+        return Promise.resolve({ ok: false, status: 403 } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => execution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+
+    expect(await screen.findByText('You do not have permission to view observability for this run.')).toBeTruthy();
+    expect(screen.queryByRole('link', { name: /^Open .*\.py$/ })).toBeNull();
+    expect(screen.queryByRole('link', { name: /^Download .*\.py$/ })).toBeNull();
+  });
+
+  it('renders bridge terminal failure evidence even without provider deltas', async () => {
+    window.history.pushState({}, 'Bridge Failure Test', '/workflows/test-123/debug?source=temporal');
+    const mockExecution = {
+      taskId: 'test-123', workflowId: 'test-123', source: 'temporal', namespace: 'default',
+      title: 'Bridge failure', summary: 'Failed before streaming',
+      createdAt: '2026-07-09T00:00:00Z', updatedAt: '2026-07-09T00:00:30Z',
+      status: 'failed', state: 'failed', rawState: 'failed', actions: {},
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/omnigent/bridge-sessions/resolve')) {
+        return Promise.resolve({ ok: true, json: async () => ({ bridgeSessionId: 'brs-failed', status: 'failed' }) } as Response);
+      }
+      if (url.includes('/omnigent/bridge-sessions/brs-failed/events')) {
+        return Promise.resolve({ ok: true, json: async () => ({
+          schemaVersion: 'moonmind.bridge-session-events-page.v1', bridgeSessionId: 'brs-failed',
+          items: [], after: 0, nextCursor: null, hasMore: false, terminal: true, latestSequence: 0,
+          terminalEnvelope: {
+            schemaVersion: 'moonmind.bridge-session-terminal.v1', status: 'failed',
+            failureClass: 'configuration_error', failureCode: 'profile_missing',
+            summary: 'Provider profile is unavailable.', diagnosticsRef: 'artifact:diagnostics',
+            initialSnapshotRef: 'artifact:initial', rawEventsRef: 'artifact:raw',
+            externalStateRef: 'artifact:external', cleanupState: 'completed',
+            leaseReleaseState: 'released', evidenceIncompleteReason: null,
+          },
+        }) } as Response);
+      }
+      if (url.includes('/artifacts')) return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+
+    await waitFor(() => expect(screen.getAllByText(/Provider profile is unavailable/).length).toBeGreaterThan(0));
+    expect(screen.getAllByText(/Failure class: configuration_error/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Reason: profile_missing/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Cleanup: completed/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Lease release: released/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/verify the provider profile, credentials, and execution authorization/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('link', { name: 'Open initial snapshot' }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('link', { name: 'Open raw events' }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('link', { name: 'Open external state' }).length).toBeGreaterThan(0);
+    expect(screen.getByTestId('chat-session-blocks')).toBeTruthy();
+  });
+
+  it('demotes the bridge projection to a read-only diagnostic surface with no composer or session controls on the Debug diagnostics route (MoonLadderStudios/MoonMind#3640)', async () => {
+    window.history.pushState({}, 'Bridge Read-Only Test', '/workflows/test-123/debug?source=temporal');
+    const priorEventSource = window.EventSource;
+    window.EventSource = MockEventSource as unknown as typeof EventSource;
+    const mockExecution = {
+      taskId: 'test-123', workflowId: 'test-123', source: 'temporal', namespace: 'default',
+      title: 'Bridge controls', summary: 'Running', createdAt: '2026-07-09T00:00:00Z',
+      updatedAt: '2026-07-09T00:00:30Z', status: 'running', state: 'executing', rawState: 'running', actions: {},
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/omnigent/bridge-sessions/resolve')) return Promise.resolve({ ok: true, json: async () => ({
+        bridgeSessionId: 'brs-controls', status: 'running', providerSessionRef: 'provider-session',
+        capabilities: { sendFollowUp: true, interruptTurn: true, clearSession: true, cancelSession: true, stop: true, resolveElicitation: true, terminalCleanup: true },
+      }) } as Response);
+      if (url.includes('/omnigent/bridge-sessions/brs-controls/events')) return Promise.resolve({ ok: true, json: async () => ({
+        schemaVersion: 'moonmind.bridge-session-events-page.v1', bridgeSessionId: 'brs-controls',
+        items: [
+          { sequence: 1, timestamp: '2026-07-09T00:00:01Z', stream: 'stdout', text: 'Bridge assistant output', kind: 'assistant_message', sessionId: 'brs-controls', metadata: { responseId: 'resp-1' } },
+          { sequence: 2, timestamp: '2026-07-09T00:00:02Z', stream: 'session', kind: 'approval_requested', text: 'Allow the provider action?', metadata: { elicitationId: 'el-pending' } },
+        ],
+        after: 0, nextCursor: '2', hasMore: false, terminal: false, latestSequence: 2,
+      }) } as Response);
+      if (url.includes('/artifacts')) return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    try {
+      // Even with a fully advertised capability set and actions enabled, the Debug
+      // diagnostics route mounts only the read-only diagnostic surface. The native
+      // Omnigent application on the Chat route owns the single interactive composer
+      // and session controls.
+      renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
+
+      // Durable evidence still renders under the clearly labeled diagnostic surface.
+      expect(await screen.findByTestId('workflow-chat-diagnostics')).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Diagnostic event history' })).toBeTruthy();
+      expect((await screen.findAllByText('Bridge assistant output')).length).toBeGreaterThan(0);
+
+      // None of the demoted mutation affordances mount on the Debug diagnostics route.
+      expect(screen.queryByLabelText('Follow-up message')).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Send follow-up' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Interrupt turn' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Clear session' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Cancel session' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Stop session' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Remove owned session' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+      expect(screen.queryByRole('region', { name: 'Bridge session controls' })).toBeNull();
+      expect(screen.queryByRole('region', { name: 'Pending operator request el-pending' })).toBeNull();
+
+      // The demoted custom composer never posts to the legacy bridge-control endpoint.
+      expect(fetchSpy.mock.calls.some(([url]) =>
+        String(url).includes('/omnigent/v1/sessions/provider-session/events'))).toBe(false);
+    } finally {
+      window.EventSource = priorEventSource;
+    }
+  });
+
+  it('preserves bridge runtime identity, compatibility diagnostics, and resolved-approval evidence read-only without exposing session controls (MoonLadderStudios/MoonMind#3640)', async () => {
+    window.history.pushState({}, 'Bridge Intervention Test', '/workflows/test-123/debug?source=temporal');
+    const priorEventSource = window.EventSource;
+    window.EventSource = MockEventSource as unknown as typeof EventSource;
+    const mockExecution = { taskId: 'test-123', workflowId: 'test-123', source: 'temporal', namespace: 'default', title: 'Bridge interventions', summary: 'Running', createdAt: '2026-07-09T00:00:00Z', updatedAt: '2026-07-09T00:00:30Z', status: 'running', state: 'executing', rawState: 'running', actions: {} };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/bridge-sessions/resolve')) return Promise.resolve({ ok: true, json: async () => ({
+        bridgeSessionId: 'brs-interventions', status: 'running', providerSessionRef: 'provider-session',
+        compatibilityProfile: 'omnigent.embedded.v1',
+        providerProfileId: 'codex-profile', executionProfileRef: 'codex-default@2', launchPolicyRef: 'restricted@3',
+        hostMode: 'on_demand_docker', effectiveLaunchSnapshotRef: 'omnigent-launch:sha256:safe-ref',
+        hostLeaseRef: 'host-lease-1', credentialGeneration: 4,
+        compatibilityDiagnostics: {
+          bridgeMode: 'embedded_omnigent_compatible_server',
+          authProfile: 'upstream_runner_tunnel',
+          evidenceRef: 'artifact://embedded-mode-row',
+          evidenceFresh: true,
+          lifecycleState: 'running',
+          supportedCapabilities: ['resolveElicitation', 'stop'],
+        },
+        workflowId: 'test-123', runId: 'run-1', stepExecutionId: 'step-1', agentRunId: 'agent-run-1',
+        firstMessageState: 'first_message_posted', omnigentHostRef: 'host-1', omnigentRunnerRef: 'runner-1',
+        capabilities: { resolveElicitation: true, clearSession: true, cancelSession: true, stop: true, terminalCleanup: true },
+      }) } as Response);
+      if (url.includes('/bridge-sessions/brs-interventions/events')) return Promise.resolve({ ok: true, json: async () => ({
+        schemaVersion: 'moonmind.bridge-session-events-page.v1', bridgeSessionId: 'brs-interventions',
+        items: [
+          { sequence: 1, timestamp: '2026-07-09T00:00:01Z', stream: 'session', kind: 'approval_requested', text: 'Allow the provider action?', metadata: { elicitationId: 'el-pending' } },
+          { sequence: 2, timestamp: '2026-07-09T00:00:02Z', stream: 'session', kind: 'approval_requested', text: 'Previously resolved request.', metadata: { elicitationId: 'el-resolved' } },
+          { sequence: 3, timestamp: '2026-07-09T00:00:03Z', stream: 'session', kind: 'approval_resolved', text: 'Previously approved by operator.', metadata: { elicitationId: 'el-resolved' } },
+        ], after: 0, nextCursor: '3', hasMore: false, terminal: false, latestSequence: 3,
+      }) } as Response);
+      if (url.includes('/omnigent/v1/sessions/provider-session/')) return Promise.resolve({ ok: true, json: async () => ({ ok: true }) } as Response);
+      if (url.includes('/artifacts')) return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+    try {
+      renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
+      // Read-only runtime identity and compatibility diagnostics are preserved under
+      // the demoted diagnostic surface. Wait on durable event content before asserting.
+      expect((await screen.findAllByText('Previously approved by operator.')).length).toBeGreaterThan(0);
+      const identity = screen.getByRole('region', { name: 'Omnigent runtime identity' });
+      expect(identity.textContent).toContain('Codex via Omnigent');
+      expect(identity.textContent).toContain('codex-profile');
+      expect(identity.textContent).toContain('omnigent-launch:sha256:safe-ref');
+      const compatibility = screen.getByRole('region', { name: 'Omnigent compatibility diagnostics' });
+      expect(compatibility.textContent).toContain('embedded_omnigent_compatible_server');
+      expect(compatibility.textContent).toContain('artifact://embedded-mode-row');
+
+      // Even with a fully advertised capability set, no interactive session controls or
+      // pending-approval affordances mount on the Debug diagnostics route.
+      expect(screen.queryByRole('region', { name: 'Pending operator request el-pending' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Clear session' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Cancel session' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Stop session' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Remove owned session' })).toBeNull();
+
+      // No control request reaches the legacy bridge-control endpoints.
+      expect(fetchSpy.mock.calls.some(([url]) =>
+        String(url).includes('/omnigent/v1/sessions/provider-session/'))).toBe(false);
+    } finally {
+      window.EventSource = priorEventSource;
+    }
+  });
+
+  it('does not expose bridge elicitation, clear, or cancel actions unless advertised', async () => {
+    window.history.pushState({}, 'Bridge Denied Intervention Test', '/workflows/test-123/debug?source=temporal');
+    const priorEventSource = window.EventSource;
+    window.EventSource = MockEventSource as unknown as typeof EventSource;
+    const mockExecution = { taskId: 'test-123', workflowId: 'test-123', source: 'temporal', namespace: 'default', title: 'Bridge interventions', summary: 'Running', createdAt: '2026-07-09T00:00:00Z', updatedAt: '2026-07-09T00:00:30Z', status: 'running', state: 'executing', rawState: 'running', actions: {} };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/bridge-sessions/resolve')) return Promise.resolve({ ok: true, json: async () => ({ bridgeSessionId: 'brs-denied', status: 'running', providerSessionRef: 'provider-session', capabilities: {} }) } as Response);
+      if (url.includes('/bridge-sessions/brs-denied/events')) return Promise.resolve({ ok: true, json: async () => ({ schemaVersion: 'moonmind.bridge-session-events-page.v1', bridgeSessionId: 'brs-denied', items: [{ sequence: 1, timestamp: '2026-07-09T00:00:01Z', stream: 'session', kind: 'approval_requested', text: 'Request without capability.', metadata: { elicitationId: 'el-denied' } }], after: 0, nextCursor: '1', hasMore: false, terminal: false, latestSequence: 1 }) } as Response);
+      if (url.includes('/artifacts')) return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+    try {
+      renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+      expect((await screen.findAllByText('Request without capability.')).length).toBeGreaterThan(0);
+      expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Clear session' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Cancel session' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Stop session' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Remove owned session' })).toBeNull();
+    } finally {
+      window.EventSource = priorEventSource;
+    }
   });
 
   it('renders artifact download link using explicit downloadUrl when present', async () => {
@@ -8926,7 +10049,7 @@ describe('Workflow Detail Entrypoint', () => {
       }
       if (url.includes('/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control')) {
         const action = JSON.parse(String(init?.body || '{}')).action;
-        if (action === 'send_follow_up') {
+        if (action === 'continue_same_session') {
           return new Promise((resolve) => {
             resolveFollowUpControl = resolve;
           });
@@ -8989,7 +10112,7 @@ describe('Workflow Detail Entrypoint', () => {
     const summaryCallsBeforeControl = fetchSpy.mock.calls.filter(([input]) =>
       String(input).includes('/observability-summary'),
     ).length;
-    fireEvent.click(screen.getByRole('button', { name: 'Send follow-up' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue session' }));
 
     const pendingMessages = await screen.findByLabelText('Pending session messages');
     const optimisticBubble = within(pendingMessages).getByText('Continue with the existing session.');
@@ -9004,10 +10127,7 @@ describe('Workflow Detail Entrypoint', () => {
         '/api/agent-runs/wf-task-1/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control',
         expect.objectContaining({
           method: 'POST',
-          body: JSON.stringify({
-            action: 'send_follow_up',
-            message: 'Continue with the existing session.',
-          }),
+          body: expect.stringContaining('"action":"continue_same_session"'),
         }),
       );
     });
@@ -9017,7 +10137,7 @@ describe('Workflow Detail Entrypoint', () => {
       resolveFollowUpControl?.({
         ok: true,
         json: async () => ({
-          action: 'send_follow_up',
+          action: 'continue_same_session',
           projection: {
             agent_run_id: 'wf-task-1',
             session_id: 'sess:wf-task-1:codex_cli',
@@ -9052,9 +10172,7 @@ describe('Workflow Detail Entrypoint', () => {
         '/api/agent-runs/wf-task-1/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control',
         expect.objectContaining({
           method: 'POST',
-          body: JSON.stringify({
-            action: 'clear_session',
-          }),
+          body: expect.stringContaining('"action":"clear_session"'),
         }),
       );
     });
@@ -9149,7 +10267,7 @@ describe('Workflow Detail Entrypoint', () => {
     fireEvent.change(await screen.findByLabelText('Follow-up message'), {
       target: { value: 'Try the next turn.' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Send follow-up' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue session' }));
 
     const pendingMessages = await screen.findByLabelText('Pending session messages');
     expect(within(pendingMessages).getByText('Try the next turn.')).toBeTruthy();
@@ -9269,9 +10387,7 @@ describe('Workflow Detail Entrypoint', () => {
         '/api/agent-runs/wf-task-1/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control',
         expect.objectContaining({
           method: 'POST',
-          body: JSON.stringify({
-            action: 'interrupt_turn',
-          }),
+          body: expect.stringContaining('"action":"interrupt_turn"'),
         }),
       );
     });
@@ -9283,155 +10399,10 @@ describe('Workflow Detail Entrypoint', () => {
         '/api/agent-runs/wf-task-1/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control',
         expect.objectContaining({
           method: 'POST',
-          body: JSON.stringify({
-            action: 'cancel_session',
-          }),
+          body: expect.stringContaining('"action":"cancel_session"'),
         }),
       );
     });
-  });
-
-  it('handles Escape as a supported stop action and exposes disabled reasons for compact chat controls', async () => {
-    window.history.pushState({}, 'Test', '/workflows/test-123?source=temporal');
-    const codexPayload: BootPayload = {
-      ...mockPayload,
-      initialData: {
-        dashboardConfig: {
-          features: {
-            temporalDashboard: { actionsEnabled: true },
-            logStreamingEnabled: true,
-            liveLogsSessionTimelineEnabled: true,
-          },
-        },
-      },
-    };
-    const mockExecution = {
-      taskId: 'test-123',
-      workflowId: 'test-123',
-      namespace: 'default',
-      temporalRunId: '01-run',
-      runId: '01-run',
-      source: 'temporal',
-      title: 'Codex session task',
-      summary: 'Session-backed work',
-      status: 'running',
-      state: 'executing',
-      rawState: 'executing',
-      targetRuntime: 'codex_cli',
-      agentRunId: 'wf-task-1',
-      createdAt: '2026-03-28T00:00:00Z',
-      updatedAt: '2026-03-28T00:00:02Z',
-      actions: {},
-    };
-    let capabilities = {
-      sendFollowUp: false,
-      clearSession: false,
-      interruptTurn: true,
-      cancelSession: true,
-    };
-
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.includes('/observability-summary')) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            summary: {
-              status: 'running',
-              supportsLiveStreaming: false,
-              liveStreamStatus: 'unavailable',
-              sessionSnapshot: {
-                sessionId: 'sess:wf-task-1:codex_cli',
-                sessionEpoch: 1,
-                containerId: 'ctr-1',
-                threadId: 'thread-1',
-                activeTurnId: 'turn-1',
-              },
-              interventionCapabilities: capabilities,
-            },
-          }),
-        } as Response);
-      }
-      if (url.includes('/observability/events')) {
-        return Promise.resolve({ ok: true, json: async () => ({ events: [], truncated: false }) } as Response);
-      }
-      if (url.includes('/logs/merged')) {
-        return Promise.resolve({ ok: true, text: async () => '' } as unknown as Response);
-      }
-      if (url.includes('/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control')) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            action: JSON.parse(String(init?.body || '{}')).action,
-            projection: {
-              agent_run_id: 'wf-task-1',
-              session_id: 'sess:wf-task-1:codex_cli',
-              session_epoch: 1,
-              grouped_artifacts: [],
-              latest_summary_ref: null,
-              latest_checkpoint_ref: null,
-              latest_control_event_ref: { artifact_id: 'art-control' },
-              latest_reset_boundary_ref: null,
-            },
-          }),
-        } as Response);
-      }
-      if (url.includes('/artifact-sessions/sess%3Awf-task-1%3Acodex_cli')) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            agent_run_id: 'wf-task-1',
-            session_id: 'sess:wf-task-1:codex_cli',
-            session_epoch: 1,
-            grouped_artifacts: [],
-            latest_summary_ref: null,
-            latest_checkpoint_ref: null,
-            latest_control_event_ref: null,
-            latest_reset_boundary_ref: null,
-          }),
-        } as Response);
-      }
-      if (url.includes('/artifacts')) {
-        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
-      }
-      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
-    });
-
-    renderWithClient(<WorkflowDetailPage payload={codexPayload} />);
-
-    const followUp = await screen.findByLabelText('Follow-up message');
-    expect((screen.getByRole('button', { name: 'Send follow-up' }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getAllByText('Follow-up is not supported for this session.').length).toBeGreaterThan(0);
-    expect((screen.getByRole('button', { name: 'Clear / Reset' }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText('Clear / Reset is not supported for this session.')).toBeTruthy();
-
-    fireEvent.keyDown(followUp, { key: 'Escape' });
-    await waitFor(() => {
-      expect(fetchSpy).toHaveBeenCalledWith(
-        '/api/agent-runs/wf-task-1/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control',
-        expect.objectContaining({
-          method: 'POST',
-          body: JSON.stringify({ action: 'interrupt_turn' }),
-        }),
-      );
-    });
-
-    fetchSpy.mockClear();
-    capabilities = {
-      sendFollowUp: false,
-      clearSession: false,
-      interruptTurn: false,
-      cancelSession: false,
-    };
-    cleanup();
-    renderWithClient(<WorkflowDetailPage payload={codexPayload} />);
-    fireEvent.keyDown(await screen.findByLabelText('Follow-up message'), { key: 'Escape' });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(fetchSpy.mock.calls.some(([url]) => String(url).includes('/control'))).toBe(false);
-    expect((screen.getByRole('button', { name: 'Interrupt turn' }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText('Interrupt turn is not supported for this session.')).toBeTruthy();
-    expect((screen.getByRole('button', { name: 'Cancel session' }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText('Cancel session is not supported for this session.')).toBeTruthy();
   });
 
   it('keeps polling session continuity until a projection or terminal state exists', () => {
@@ -9605,6 +10576,7 @@ describe('LiveLogsPanel', () => {
   let originalScrollIntoViewDescriptor: PropertyDescriptor | undefined;
 
   beforeEach(() => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
     window.history.pushState({}, 'Test', '/workflows/wf-1/steps?source=temporal');
     window.sessionStorage.clear();
     fetchSpy = vi.spyOn(window, 'fetch');
@@ -9811,7 +10783,7 @@ describe('LiveLogsPanel', () => {
     }
   });
 
-  it('sticks the chat transcript to the bottom while allowing scroll escape', async () => {
+  it('uses Virtuoso follow-output to stick at the bottom while allowing scroll escape', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/observability-summary')) {
@@ -9846,10 +10818,7 @@ describe('LiveLogsPanel', () => {
     renderWithClient(<WorkflowDetailPage payload={sessionTimelinePayload} />);
     fireEvent.click(await screen.findByText('Live Logs'));
 
-    const blockList = await screen.findByTestId('chat-session-blocks');
-    Object.defineProperty(blockList, 'clientHeight', { configurable: true, value: 100 });
-    Object.defineProperty(blockList, 'scrollHeight', { configurable: true, value: 300 });
-    blockList.scrollTop = 200;
+    await screen.findByTestId('chat-session-blocks');
 
     await waitForEventSourceInstance();
     const es = MockEventSource.instances.at(-1)!;
@@ -9864,10 +10833,9 @@ describe('LiveLogsPanel', () => {
     );
 
     await waitFor(() => expect(screen.getByText('Live assistant update.')).toBeTruthy());
-    await waitFor(() => expect(blockList.scrollTop).toBe(300));
-
-    blockList.scrollTop = 0;
-    fireEvent.scroll(blockList);
+    const followOutput = virtuosoPropsSpy.mock.calls.at(-1)?.[0].followOutput;
+    expect(followOutput?.(true)).toBe('smooth');
+    expect(followOutput?.(false)).toBe(false);
     act(() =>
       es.triggerLogChunk({
         sequence: 3,
@@ -9878,7 +10846,7 @@ describe('LiveLogsPanel', () => {
     );
 
     await waitFor(() => expect(screen.getByText('Second live update.')).toBeTruthy());
-    expect(blockList.scrollTop).toBe(0);
+    expect(virtuosoPropsSpy.mock.calls.at(-1)?.[0].followOutput?.(false)).toBe(false);
   });
 
   it('does not create EventSource for ended runs', async () => {
@@ -10812,7 +11780,7 @@ describe('LiveLogsPanel', () => {
       }
       if (url.includes('/artifact-sessions/') && url.includes('/control')) {
         const action = JSON.parse(String(init?.body || '{}')).action;
-        if (action === 'send_follow_up') {
+        if (action === 'continue_same_session') {
           return new Promise((resolve) => {
             resolveFollowUpControl = resolve;
           });
@@ -10905,7 +11873,7 @@ describe('LiveLogsPanel', () => {
     fireEvent.change(await screen.findByLabelText('Follow-up message'), {
       target: { value: 'Continue with the MM-1032 session.' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Send follow-up' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue session' }));
     await waitFor(() => {
       expect(
         within(screen.getByLabelText('Pending session messages')).getByText(
@@ -10916,10 +11884,7 @@ describe('LiveLogsPanel', () => {
         '/api/agent-runs/agent-run-mm-1032/artifact-sessions/sess%3Aagent-run-mm-1032%3Acodex_cli/control',
         expect.objectContaining({
           method: 'POST',
-          body: JSON.stringify({
-            action: 'send_follow_up',
-            message: 'Continue with the MM-1032 session.',
-          }),
+          body: expect.stringContaining('"action":"continue_same_session"'),
         }),
       );
     });
@@ -10927,7 +11892,7 @@ describe('LiveLogsPanel', () => {
       resolveFollowUpControl?.({
         ok: true,
         json: async () => ({
-          action: 'send_follow_up',
+          action: 'continue_same_session',
           projection: {
             agent_run_id: 'agent-run-mm-1032',
             session_id: sessionId,
@@ -10948,7 +11913,7 @@ describe('LiveLogsPanel', () => {
         '/api/agent-runs/agent-run-mm-1032/artifact-sessions/sess%3Aagent-run-mm-1032%3Acodex_cli/control',
         expect.objectContaining({
           method: 'POST',
-          body: JSON.stringify({ action: 'clear_session' }),
+          body: expect.stringContaining('"action":"clear_session"'),
         }),
       );
     });

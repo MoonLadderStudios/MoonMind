@@ -395,6 +395,34 @@ Bindings should be limited to a safe deterministic expression language. They sho
 
 Bindings must not execute arbitrary code.
 
+## Workflow-Level Publish Policy
+
+A preset may declare workflow-level publish policy through its `workflowPublish`
+annotation. Expansion attaches it to the expanded workflow payload as
+`workflow.publish`, so a preset can own the publish mode and any parent-owned
+publish behavior such as merge automation without the Create page hard-coding it.
+
+`workflowPublish` uses the same deterministic binding expressions as steps, so
+operator-facing controls stay declarative:
+
+```yaml
+annotations:
+  workflowPublish:
+    mode: none
+    mergeAutomation:
+      enabled: true
+      mergeMethod: "{{ inputs.merge_method }}"
+      reviewLoop:
+        enabled: true
+        provider: "{{ inputs.review_provider }}"
+        maxCycles: "{{ inputs.max_review_cycles }}"
+```
+
+An explicitly submitted `workflow.publish` payload always wins over the preset
+annotation. Workflow-level publish policy is still validated by the same publish
+and merge-automation contracts as a manually authored submission; a preset cannot
+grant publish rights that a submitted payload could not.
+
 ## Nested Presets
 
 A preset may include child preset steps. Parent presets must explicitly map inputs into child presets.

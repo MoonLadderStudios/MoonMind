@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import json
 import os
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+
+import pytest
 
 from moonmind.schemas.agent_runtime_models import ManagedRunRecord
 from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
 from moonmind.workflows.temporal.runtime.cleanup import (
     DockerReferenceState,
     ManagedRuntimeCleanupConfig,
+    ManagedRuntimeCleanupDecision,
     ManagedRuntimeWorkspaceJanitor,
 )
 from moonmind.workflows.temporal.runtime.managed_session_store import (
@@ -19,6 +24,7 @@ from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 NOW = datetime(2026, 6, 27, 12, 0, tzinfo=UTC)
 OLD = NOW - timedelta(days=45)
 RECENT = NOW - timedelta(days=1)
+_LEGACY_AGENT_RUN_KEY = "task" + "RunId"
 
 
 def _config(root: Path, *, dry_run: bool = True) -> ManagedRuntimeCleanupConfig:
@@ -189,7 +195,11 @@ def test_mm_949_filesystem_workspace_without_records_is_ambiguous(
     assert workspace_decision.reason == "no durable owner records reference candidate"
 
 
-def test_mm_949_corrupt_owner_record_fails_closed(tmp_path: Path) -> None:
+def test_mm_949_corrupt_owner_record_fails_closed_without_blocking_the_pass(
+    tmp_path: Path,
+) -> None:
+    """An unreadable record must not hide every other candidate from cleanup."""
+
     root = tmp_path / "agent_jobs"
     run_root = root / "run-1"
     _touch_old(run_root)
@@ -200,10 +210,209 @@ def test_mm_949_corrupt_owner_record_fails_closed(tmp_path: Path) -> None:
 
     result = _janitor(root, run_store, session_store, dry_run=False).run()
 
-    assert result.decisions == ()
     assert result.errors
-    assert result.errors[0].startswith("unreadable_store:")
-    assert run_root.exists()
+    assert result.errors[0].startswith("unreadable_owner_record: corrupt.json")
+    assert result.unreadable_owner_records == 1
+    # The unreadable record names no paths, so it is reported and retained
+    # rather than deleted on a guess.
+    corrupt_decision = next(
+        d for d in result.decisions if d.path == str(corrupt)
+    )
+    assert corrupt_decision.classification == "skipped_ambiguous_owner"
+    assert corrupt.exists()
+    # The unrelated readable workspace is still reclaimed.
+    workspace_decision = next(
+        d for d in result.decisions if d.path == str(run_root)
+    )
+    assert workspace_decision.classification == "deleted"
+    assert not run_root.exists()
+
+
+def test_disabled_cleanup_reports_actual_unreadable_record_count(tmp_path: Path) -> None:
+    root = tmp_path / "agent_jobs"
+    run_store, session_store = _stores(root)
+    records = root / "managed_runs"
+    records.mkdir(parents=True, exist_ok=True)
+    for index in range(25):
+        (records / f"corrupt-{index}.json").write_text("{not json", encoding="utf-8")
+
+    result = ManagedRuntimeWorkspaceJanitor(
+        run_store=run_store,
+        session_store=session_store,
+        config=replace(_config(root), enabled=False),
+        now=lambda: NOW,
+    ).run()
+
+    assert result.unreadable_owner_records == 25
+    assert len(result.errors) == 21
+
+
+def test_legacy_schema_owner_record_protects_only_the_paths_it_names(
+    tmp_path: Path,
+) -> None:
+    """Replay the pre-cutover session record that silently killed the janitor."""
+
+    root = tmp_path / "agent_jobs"
+    legacy_root = root / "mm:legacy"
+    other_root = root / "run-1"
+    _touch_old(legacy_root / "repo")
+    _touch_old(legacy_root)
+    _touch_old(other_root)
+    run_store, session_store = _stores(root)
+    run_store.save(_run("run-1", "completed", root=root))
+    # Written before the agent-run identifier rename: valid JSON, no longer a
+    # valid CodexManagedSessionRecord. Construct the historical key so the
+    # terminology gate continues to reject it from current contracts.
+    legacy = root / "managed_sessions" / "sess:mm:legacy:codex_cli.json"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text(
+        json.dumps(
+            {
+                "sessionId": "sess:mm:legacy:codex_cli",
+                "sessionEpoch": 1,
+                _LEGACY_AGENT_RUN_KEY: "resolver:pr:1878:head:55",
+                "runtimeId": "codex_cli",
+                "status": "terminated",
+                "workspacePath": str(legacy_root / "repo"),
+                "updatedAt": "2026-05-01T22:54:16.290526Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _janitor(root, run_store, session_store, dry_run=False).run()
+
+    assert result.unreadable_owner_records == 1
+    assert result.skipped_unreadable_owner >= 1
+    legacy_decision = next(
+        d for d in result.decisions if d.path == str(legacy_root)
+    )
+    assert legacy_decision.classification == "protected_unreadable_owner"
+    assert legacy_decision.reason == "owner record is unreadable"
+    assert legacy_root.exists()
+    # The record file itself is retained while it still names a live path.
+    legacy_record_decision = next(
+        d for d in result.decisions if d.path == str(legacy)
+    )
+    assert legacy_record_decision.classification == "protected_unreadable_owner"
+    assert legacy.exists()
+    # Reclamation of unrelated state proceeds.
+    assert not other_root.exists()
+
+
+def test_orphaned_legacy_owner_record_is_deleted_once_its_paths_are_gone(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "agent_jobs"
+    run_store, session_store = _stores(root)
+    legacy = root / "managed_sessions" / "sess:mm:orphan:codex_cli.json"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text(
+        json.dumps(
+            {
+                "sessionId": "sess:mm:orphan:codex_cli",
+                _LEGACY_AGENT_RUN_KEY: "resolver:pr:1878:head:55",
+                "status": "terminated",
+                "workspacePath": str(root / "mm:orphan" / "repo"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    old_epoch = OLD.timestamp()
+    os.utime(legacy, (old_epoch, old_epoch))
+
+    result = _janitor(root, run_store, session_store, dry_run=False).run()
+
+    decision = next(d for d in result.decisions if d.path == str(legacy))
+    assert decision.classification == "deleted"
+    assert decision.reason == "deleted orphan unreadable record"
+    assert not legacy.exists()
+    assert result.deleted_record_files == 1
+
+
+def test_unreadable_owner_record_is_retained_when_record_cleanup_is_disabled(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "agent_jobs"
+    run_store, session_store = _stores(root)
+    legacy = root / "managed_sessions" / "sess:mm:orphan:codex_cli.json"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text(
+        json.dumps(
+            {
+                "sessionId": "sess:mm:orphan:codex_cli",
+                "workspacePath": str(root / "mm:orphan" / "repo"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    os.utime(legacy, (OLD.timestamp(), OLD.timestamp()))
+
+    result = ManagedRuntimeWorkspaceJanitor(
+        run_store=run_store,
+        session_store=session_store,
+        config=replace(_config(root, dry_run=False), record_retention=None),
+        docker_reference_provider=DockerReferenceState,
+        now=lambda: NOW,
+    ).run()
+
+    decision = next(d for d in result.decisions if d.path == str(legacy))
+    assert decision.classification == "protected_recent"
+    assert decision.reason == "record retention disabled"
+    assert legacy.exists()
+
+
+def test_unreadable_owner_record_protects_raw_artifact_references(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "agent_jobs"
+    artifact_dir = root / "artifacts" / "mm:legacy"
+    _touch_old(artifact_dir)
+    run_store, session_store = _stores(root)
+    legacy = root / "managed_sessions" / "sess:mm:legacy:codex_cli.json"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text(
+        json.dumps(
+            {
+                "sessionId": "sess:mm:legacy:codex_cli",
+                "stdoutArtifactRef": "mm:legacy/stdout.log",
+                "diagnosticsRef": "mm:legacy/diagnostics.json",
+                "latestCheckpointRef": "mm:legacy/checkpoint.tgz",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _janitor(root, run_store, session_store, dry_run=False).run()
+
+    decision = next(d for d in result.decisions if d.path == str(artifact_dir))
+    assert decision.classification == "protected_unreadable_owner"
+    assert artifact_dir.exists()
+
+
+def test_unreadable_owner_record_is_retained_in_dry_run(tmp_path: Path) -> None:
+    root = tmp_path / "agent_jobs"
+    run_store, session_store = _stores(root)
+    legacy = root / "managed_sessions" / "sess:mm:orphan:codex_cli.json"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text(
+        json.dumps(
+            {
+                "sessionId": "sess:mm:orphan:codex_cli",
+                _LEGACY_AGENT_RUN_KEY: "resolver:pr:1878",
+                "workspacePath": str(root / "mm:orphan" / "repo"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    old_epoch = OLD.timestamp()
+    os.utime(legacy, (old_epoch, old_epoch))
+
+    result = _janitor(root, run_store, session_store).run()
+
+    decision = next(d for d in result.decisions if d.path == str(legacy))
+    assert decision.classification == "eligible"
+    assert legacy.exists()
 
 
 def test_mm_949_recent_filesystem_timestamp_prevents_deletion(tmp_path: Path) -> None:
@@ -272,6 +481,49 @@ def test_mm_949_live_docker_reference_prevents_deletion(tmp_path: Path) -> None:
     assert workspace_decision.reason == "live Docker reference"
 
 
+def test_shared_runtime_root_mount_does_not_protect_every_child(tmp_path: Path) -> None:
+    root = tmp_path / "agent_jobs"
+    run_root = root / "run-1"
+    _touch_old(run_root)
+    run_store, session_store = _stores(root)
+    run_store.save(_run("run-1", "completed", root=root))
+
+    result = _janitor(
+        root,
+        run_store,
+        session_store,
+        docker_state=DockerReferenceState(active_mount_paths=frozenset({str(root)})),
+    ).run()
+
+    workspace_decision = next(d for d in result.decisions if d.kind == "workspace")
+    assert workspace_decision.classification == "eligible"
+    assert workspace_decision.reason == "dry-run would delete"
+
+
+def test_matching_docker_owner_reference_protects_child_of_shared_mount(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "agent_jobs"
+    run_root = root / "run-1"
+    _touch_old(run_root)
+    run_store, session_store = _stores(root)
+    run_store.save(_run("run-1", "completed", root=root))
+
+    result = _janitor(
+        root,
+        run_store,
+        session_store,
+        docker_state=DockerReferenceState(
+            active_container_refs=frozenset({"mm:run-1"}),
+            active_mount_paths=frozenset({str(root)}),
+        ),
+    ).run()
+
+    workspace_decision = next(d for d in result.decisions if d.kind == "workspace")
+    assert workspace_decision.classification == "protected_active"
+    assert workspace_decision.reason == "live Docker reference"
+
+
 def test_mm_949_final_rescan_rechecks_live_docker_reference(tmp_path: Path) -> None:
     root = tmp_path / "agent_jobs"
     run_root = root / "run-1"
@@ -299,6 +551,44 @@ def test_mm_949_final_rescan_rechecks_live_docker_reference(tmp_path: Path) -> N
     assert workspace_decision.classification == "protected_active"
     assert workspace_decision.reason == "failed rescan before delete"
     assert run_root.exists()
+
+
+def test_mm_949_final_rescan_rechecks_filesystem_recency(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from moonmind.workflows.temporal.runtime import cleanup
+
+    root = tmp_path / "agent_jobs"
+    run_root = root / "run-1"
+    _touch_old(run_root)
+    run_store, session_store = _stores(root)
+    run_store.save(_run("run-1", "completed", root=root))
+
+    def touch_during_size_walk(path: Path, **_kwargs: object) -> int:
+        os.utime(path, (RECENT.timestamp(), RECENT.timestamp()))
+        return 0
+
+    monkeypatch.setattr(cleanup, "_path_size", touch_during_size_walk)
+    result = _janitor(root, run_store, session_store, dry_run=False).run()
+
+    workspace_decision = next(d for d in result.decisions if d.kind == "workspace")
+    assert workspace_decision.classification == "protected_active"
+    assert workspace_decision.reason == "failed rescan before delete"
+    assert run_root.exists()
+
+
+def test_mm_949_stale_janitor_lock_is_recovered(tmp_path: Path) -> None:
+    root = tmp_path / "agent_jobs"
+    lock_path = root / ".janitor.lock"
+    lock_path.parent.mkdir(parents=True)
+    lock_path.write_text("stale-owner", encoding="utf-8")
+    os.utime(lock_path, (OLD.timestamp(), OLD.timestamp()))
+    run_store, session_store = _stores(root)
+
+    result = _janitor(root, run_store, session_store).run()
+
+    assert result.errors == ()
+    assert not lock_path.exists()
 
 
 def test_mm_949_cleanup_emits_progress_during_filesystem_walk(
@@ -360,7 +650,11 @@ def test_mm_949_enabled_delete_uses_rescan_and_deletes_records_after_retention(
     assert session_store.load("sess-1") is None
 
 
-def test_mm_951_delete_budget_exhaustion_is_visible(tmp_path: Path) -> None:
+def test_mm_951_delete_budget_exhaustion_skips_size_walk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from moonmind.workflows.temporal.runtime import cleanup
+
     root = tmp_path / "agent_jobs"
     run_root = root / "run-1"
     _touch_old(run_root)
@@ -381,6 +675,13 @@ def test_mm_951_delete_budget_exhaustion_is_visible(tmp_path: Path) -> None:
         artifact_root=config.artifact_root,
     )
 
+    monkeypatch.setattr(
+        cleanup,
+        "_path_size",
+        lambda *_args, **_kwargs: pytest.fail(
+            "path budget must be checked before recursive size walks"
+        ),
+    )
     result = ManagedRuntimeWorkspaceJanitor(
         run_store=run_store,
         session_store=session_store,
@@ -392,7 +693,67 @@ def test_mm_951_delete_budget_exhaustion_is_visible(tmp_path: Path) -> None:
     assert workspace_decision.classification == "budget_exhausted"
     assert result.delete_budget_exhausted == 1
     assert result.metrics["resource.workspace.budget_exhausted"] == 1
+    assert workspace_decision.estimated_bytes == 0
     assert run_root.exists()
+
+
+def test_mm_949_temporal_result_uses_bounded_samples(tmp_path: Path) -> None:
+    root = tmp_path / "agent_jobs"
+    run_store, session_store = _stores(root)
+    for index in range(100):
+        run_id = f"run-{index:03d}"
+        _touch_old(root / run_id)
+        run_store.save(_run(run_id, "completed", root=root))
+
+    result = _janitor(root, run_store, session_store).run()
+    payload = result.to_dict()
+
+    assert len(result.decisions) > 20
+    assert "decisions" not in payload
+    assert len(payload["candidateSamples"]) == 20
+    assert len(json.dumps(payload)) < 20_000
+
+    error_payload = replace(
+        result,
+        errors=tuple(f"cleanup error {index}" for index in range(100)),
+    ).to_dict()
+    assert len(error_payload["errors"]) == 21
+    assert error_payload["errors"][-1] == "80 additional cleanup errors"
+
+
+def test_mm_949_cleanup_summary_only_bounds_errors_at_temporal_projection(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "agent_jobs"
+    run_store, session_store = _stores(root)
+    janitor = ManagedRuntimeWorkspaceJanitor(
+        run_store=run_store,
+        session_store=session_store,
+        config=_config(root),
+        now=lambda: NOW,
+    )
+    decisions = tuple(
+        ManagedRuntimeCleanupDecision(
+            kind="workspace",
+            path=f"store:workspaces/run-{index:03d}",
+            ownership_root=None,
+            classification="error",
+            reason=f"cleanup error {index}",
+        )
+        for index in range(100)
+    )
+
+    result = janitor._summarize(
+        decisions,
+        scanned_run_records=0,
+        scanned_session_records=0,
+        errors=(),
+    )
+    payload = result.to_dict()
+
+    assert len(result.errors) == 100
+    assert len(payload["errors"]) == 21
+    assert payload["errors"][-1] == "80 additional cleanup errors"
 
 
 def test_mm_949_config_from_env_normalizes_artifact_root_and_caps() -> None:
@@ -423,3 +784,46 @@ def test_mm_949_config_from_env_normalizes_artifact_root_and_caps() -> None:
     assert config.max_delete_paths == 3
     assert config.max_delete_bytes == 19
     assert config.lock_path == root / "lock"
+
+
+def test_managed_runtime_cleanup_config_has_operational_defaults() -> None:
+    direct = ManagedRuntimeCleanupConfig()
+    from_empty_env = ManagedRuntimeCleanupConfig.from_env({})
+
+    for config in (direct, from_empty_env):
+        assert config.enabled is True
+        assert config.dry_run is False
+        assert config.workspace_retention == timedelta(days=10)
+        assert config.artifact_retention == timedelta(days=90)
+        assert config.record_retention is None
+        assert config.grace == timedelta(hours=1)
+        assert config.max_delete_paths == 100
+        assert config.max_delete_bytes is None
+        assert config.runtime_store_root == Path("/work/agent_jobs")
+        assert config.artifact_root == Path("/work/agent_jobs/artifacts")
+
+
+@pytest.mark.parametrize("value", ["", "0", "false", "FALSE", "no", "off"])
+def test_managed_runtime_cleanup_false_boolean_overrides(value: str) -> None:
+    enabled = ManagedRuntimeCleanupConfig.from_env(
+        {"MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED": value}
+    )
+    dry_run = ManagedRuntimeCleanupConfig.from_env(
+        {"MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN": value}
+    )
+
+    assert enabled.enabled is False
+    assert dry_run.dry_run is False
+
+
+@pytest.mark.parametrize("value", ["1", "true", "TRUE", "yes", "on"])
+def test_managed_runtime_cleanup_true_boolean_overrides(value: str) -> None:
+    enabled = ManagedRuntimeCleanupConfig.from_env(
+        {"MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED": value}
+    )
+    dry_run = ManagedRuntimeCleanupConfig.from_env(
+        {"MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN": value}
+    )
+
+    assert enabled.enabled is True
+    assert dry_run.dry_run is True
