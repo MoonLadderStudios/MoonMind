@@ -81,6 +81,8 @@ def _evaluate_auto_publish_evidence(
             "autoPublishExecutionRef": evidence.execution_ref,
             "autoPublishStatus": evidence.status,
             "autoPublishAction": evidence.action,
+            "autoPublishMerged": evidence.merged,
+            "autoPublishRemoteVerified": evidence.remote_verified,
         }
     )
     if expected_skill_id and evidence.skill_id != expected_skill_id:
@@ -343,6 +345,40 @@ def evaluate_terminal_evidence(
                     publish_evaluation.missing_evidence,
                     {**metadata, **publish_evaluation.metadata},
                 )
+            # Carry the publication facts forward without letting the inner
+            # auto-publish contract identity overwrite this contract's own.
+            publish_metadata = publish_evaluation.metadata
+            metadata = {
+                **metadata,
+                **{
+                    key: value
+                    for key, value in publish_metadata.items()
+                    if key.startswith("autoPublish")
+                },
+            }
+            if disposition == "review_clean":
+                # The generic auto-publish validator accepts any verified
+                # publication, including a merge. `review_clean` is the fix_only
+                # terminal that explicitly withholds merge authority, so it must
+                # additionally prove the irreversible side effect never
+                # happened: no merge in the publish evidence and no merge in the
+                # resolver result. `parse_auto_publish_evidence` already refuses
+                # any unverified remote head above, and the Skill owns the
+                # remote half of the proof — its `review_clean` publish path
+                # reads the live PR state and writes blocked evidence when the
+                # PR turns out to be merged.
+                if (
+                    publish_metadata.get("autoPublishMerged") is not False
+                    or publish_metadata.get("autoPublishAction") == "merge"
+                ):
+                    return _failure("UNAUTHORIZED_MERGE_EVIDENCE", metadata=metadata)
+                result_status = str(payload.get("status") or "").strip()
+                merge_outcome = str(payload.get("merge_outcome") or "").strip()
+                if result_status == "merged" or merge_outcome in {
+                    "merged",
+                    "auto_merge_enabled",
+                }:
+                    return _failure("UNAUTHORIZED_MERGE_EVIDENCE", metadata=metadata)
             return _success(metadata)
         if disposition == "reenter_gate":
             continuation = payload.get("gatedContinuation")

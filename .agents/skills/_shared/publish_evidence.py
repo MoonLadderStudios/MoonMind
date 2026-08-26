@@ -213,6 +213,29 @@ def _verify_pr_merged(pr_url: str) -> tuple[dict[str, Any], list[str]]:
     ]
 
 
+def _verify_pr_unmerged(pr_selector: str) -> list[str]:
+    """Prove the PR is still open before claiming a no-merge terminal success.
+
+    `review_clean` asserts that the resolver finished *without* the merge side
+    effect. Local artifacts cannot prove that, so the remote PR state is the
+    authoritative evidence.
+    """
+
+    selector = _text(pr_selector)
+    if not selector:
+        raise PublishEvidenceError(
+            "a PR selector is required for review_clean publish evidence"
+        )
+    command = ["gh", "pr", "view", selector, "--json", "state,mergedAt,mergeCommit,url"]
+    payload = _run_json(command)
+    state = _text(payload.get("state")).upper()
+    if not state:
+        raise PublishEvidenceError("PR state is unavailable")
+    if state == "MERGED" or _text(payload.get("mergedAt")) or payload.get("mergeCommit"):
+        raise PublishEvidenceError("PR is merged; review_clean cannot be claimed")
+    return ["gh pr view <pr-url> --json state,mergedAt,mergeCommit,url"]
+
+
 def _evidence_payload(
     *,
     skill_id: str,
@@ -540,6 +563,12 @@ def _resolver_head(result: Mapping[str, Any], snapshot: Mapping[str, Any]) -> st
     return head or _local_head_optional()
 
 
+# Stage token both orchestration paths record for a remediation attempt
+# (`pr_resolve_orchestrate.py` and `pr_resolve_full.py`). The publish artifact
+# claims a push only when this exact stage appears in the result history.
+PR_RESOLVER_REMEDIATION_STAGE = "full_remediation"
+
+
 def _pr_resolver_remediated(result: Mapping[str, Any]) -> bool:
     """Return True when this resolver run ran a remediation (and so pushed)."""
 
@@ -547,7 +576,8 @@ def _pr_resolver_remediated(result: Mapping[str, Any]) -> bool:
     if not isinstance(history, list):
         return False
     return any(
-        isinstance(entry, Mapping) and _text(entry.get("stage")) == "full"
+        isinstance(entry, Mapping)
+        and _text(entry.get("stage")) == PR_RESOLVER_REMEDIATION_STAGE
         for entry in history
     )
 
@@ -625,6 +655,18 @@ def from_pr_resolver_result(
                 repo=repo,
                 branch=branch,
                 reason="remote_verification_unavailable",
+                artifacts_dir=artifacts_dir,
+            )
+        try:
+            commands = commands + _verify_pr_unmerged(
+                pr_url or _resolver_pr_selector(result, snapshot)
+            )
+        except PublishEvidenceError:
+            return write_blocked(
+                skill_id="pr-resolver",
+                repo=repo,
+                branch=branch,
+                reason="unmerged_pr_verification_unavailable",
                 artifacts_dir=artifacts_dir,
             )
         pushed = _pr_resolver_remediated(result)

@@ -525,6 +525,13 @@ MERGE_AUTOMATION_FAILURE_STATUSES = frozenset({"blocked", "failed", "expired"})
 MERGE_AUTOMATION_RESOLVER_SUCCESS_DISPOSITIONS = frozenset(
     {"merged", "already_merged", MERGE_AUTOMATION_REVIEW_CLEAN_STATUS}
 )
+MERGE_AUTOMATION_DEFAULT_FINISH_MODE = "merge"
+# Supported finish modes, mirroring `MergeAutomationFinishMode`. Only an omitted
+# value takes the default; every other unsupported value fails validation
+# instead of silently inheriting merge authority.
+MERGE_AUTOMATION_FINISH_MODES = frozenset(
+    {MERGE_AUTOMATION_DEFAULT_FINISH_MODE, "fix_only"}
+)
 MERGE_AUTOMATION_CANCELED_STATUS = "canceled"
 MERGE_AUTOMATION_TERMINAL_STATUSES = (
     MERGE_AUTOMATION_SUCCESS_STATUSES
@@ -17742,6 +17749,27 @@ class MoonMindRunWorkflow:
                 return True
         return False
 
+    def _normalize_finish_mode(self, value: Any) -> str:
+        """Return a supported finish mode or fail validation.
+
+        Only an omitted (or blank) value inherits the ``merge`` default. A typo
+        such as ``fix-only``, or a malformed non-string, must never be silently
+        widened into merge authority for an irreversible side effect.
+        """
+
+        candidate = self._coerce_text(value, max_chars=20)
+        if candidate is None and (value is None or isinstance(value, str)):
+            return MERGE_AUTOMATION_DEFAULT_FINISH_MODE
+        if candidate in MERGE_AUTOMATION_FINISH_MODES:
+            return candidate
+        raise exceptions.ApplicationError(
+            "Unsupported merge automation finishMode "
+            f"{candidate if candidate is not None else type(value).__name__!r}; "
+            f"expected one of {sorted(MERGE_AUTOMATION_FINISH_MODES)}.",
+            type="UNSUPPORTED_MERGE_AUTOMATION_FINISH_MODE",
+            non_retryable=True,
+        )
+
     def _merge_automation_request(
         self,
         parameters: Mapping[str, Any],
@@ -17844,14 +17872,8 @@ class MoonMindRunWorkflow:
                     max_chars=20,
                 )
                 or "squash",
-                "finishMode": (
-                    "fix_only"
-                    if self._coerce_text(
-                        candidate.get("finishMode") or candidate.get("finish_mode"),
-                        max_chars=20,
-                    )
-                    == "fix_only"
-                    else "merge"
+                "finishMode": self._normalize_finish_mode(
+                    candidate.get("finishMode") or candidate.get("finish_mode")
                 ),
                 "jiraIssueKey": effective_jira_issue_key,
                 "postMergeJira": post_merge_jira,

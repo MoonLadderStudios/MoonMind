@@ -327,3 +327,108 @@ def test_orchestration_returns_review_clean_as_a_terminal_success(
     assert result["merge_outcome"] == "skipped"
     assert result["mergeAutomationDisposition"] == "review_clean"
     assert result["next_step"] == "done"
+
+
+# ---------------------------------------------------------------------------
+# exit codes
+# ---------------------------------------------------------------------------
+
+
+def test_review_clean_is_a_zero_exit_success(contract_module) -> None:
+    """`review_clean` is a documented terminal success, so it exits zero.
+
+    Shells, CI runners, and portable hosts read any nonzero exit as a failed
+    command. The outcome is distinguished through the result JSON instead.
+    """
+
+    assert contract_module["EXIT_CODE_REVIEW_CLEAN"] == 0
+    assert contract_module["EXIT_CODE_MERGED"] == 0
+    assert contract_module["EXIT_CODE_BLOCKED"] != 0
+    assert contract_module["EXIT_CODE_ATTEMPTS_EXHAUSTED"] != 0
+    assert contract_module["EXIT_CODE_FAILED"] != 0
+
+
+def test_fix_only_finalize_exits_zero_without_strict_exit_codes(
+    finalize_module, tmp_path, monkeypatch
+) -> None:
+    """Direct (non-strict) use must not report failure for a clean review."""
+
+    main = finalize_module["main"]
+    snapshot = _mergeable_snapshot()
+
+    def _write_snapshot(
+        _snapshot_script: Path,
+        _pr: str | None,
+        snapshot_path: Path,
+        **_review_kwargs: Any,
+    ) -> None:
+        snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+        snapshot_path.write_text(json.dumps(snapshot), encoding="utf-8")
+
+    monkeypatch.setitem(main.__globals__, "_run_snapshot", _write_snapshot)
+    monkeypatch.setitem(
+        main.__globals__,
+        "_merge_pr",
+        lambda *_args: pytest.fail("fix_only must never merge"),
+    )
+    monkeypatch.delenv("PR_RESOLVER_FINISH_MODE", raising=False)
+
+    result_path = tmp_path / "result.json"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "pr_resolve_finalize.py",
+            "--pr",
+            "350",
+            "--snapshot-path",
+            str(tmp_path / "snapshot.json"),
+            "--result-path",
+            str(result_path),
+            "--review-provider",
+            "codex",
+            "--require-fresh-review",
+            "--finish-mode",
+            "fix_only",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        main()
+
+    assert int(excinfo.value.code) == 0
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    # The result JSON, not the exit code, carries the terminal distinction.
+    assert payload["status"] == "review_clean"
+    assert payload["merge_outcome"] == "skipped"
+    assert payload["mergeAutomationDisposition"] == "review_clean"
+
+
+def test_orchestration_exits_zero_for_review_clean(orchestrate_module) -> None:
+    run_orchestration = orchestrate_module["run_orchestration"]
+
+    def finalize_runner(_attempt: int) -> dict[str, Any]:
+        return {
+            "status": "review_clean",
+            "merge_outcome": "skipped",
+            "final_reason": "finish_mode_fix_only",
+            "mergeAutomationDisposition": "review_clean",
+        }
+
+    result, exit_code = run_orchestration(
+        finalize_runner=finalize_runner,
+        full_runner=lambda *_args: pytest.fail(
+            "review_clean must not escalate to remediation"
+        ),
+        sleep_fn=lambda _seconds: None,
+        monotonic_fn=lambda: 0.0,
+        finalize_max_retries=2,
+        fix_max_iterations=1,
+        min_attempts_before_exhausted=1,
+        base_sleep_seconds=0,
+        max_sleep_seconds=0,
+        max_elapsed_seconds=600,
+        merge_not_ready_grace_retries=0,
+    )
+
+    assert exit_code == 0
+    assert result["mergeAutomationDisposition"] == "review_clean"

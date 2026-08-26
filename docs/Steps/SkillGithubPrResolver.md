@@ -111,7 +111,7 @@ free-form instructions.
 | `mergeMethod`         | enum        | `squash` | `merge`|`squash`|`rebase`                                                                                            |
 | `reviewProvider`      | string      |     `""` | Provider-neutral automated reviewer that must review every head SHA (for example `codex`). Empty or `none` disables the loop. |
 | `requireFreshReview`  | bool        |  `false` | Refuse to merge a head SHA that has no fresh review from `reviewProvider`.                                             |
-| `finishMode`          | enum        |  `merge` | `merge` merges once the gate opens; `fix_only` stops at the same open gate and reports `review_clean`. |
+| `finishMode`          | enum        |  `merge` | `merge` merges once the gate opens; `fix_only` stops at the same open gate and reports `review_clean`. Only an omitted value takes the default; any other unsupported value fails validation instead of inheriting merge authority. |
 | `maxIterations`             | int         |        5 | Guardrail to avoid loops (re-evaluate after each fix).                                                                            |
 | `finalizeMaxRetries`        | int         |       60 | Total retries allowed for the orchestration process, including both finalize-only waits and full remediation cycles.              |
 | `finalizeBackoffSeconds`    | int         |       30 | Base sleep for finalize-only retries. The orchestrator uses exponential backoff and caps each sleep at `finalizeMaxSleepSeconds`. |
@@ -172,7 +172,11 @@ was not granted merge authority. It narrows the side effect only: every gate,
 blocker, remediation, and evidence rule is unchanged, so an unresolved blocker
 still produces `manual_review`, `reenter_gate`, `request_review`, or `failed`. Its
 terminal evidence is the usual `artifacts/publish_result.json` with
-`merged = false` and the branch head verified on the remote.
+`merged = false` and the branch head verified on the remote, plus a live check
+that the pull request is still unmerged. Evidence that reports a merge — or that
+cannot verify the remote — is rejected as `UNAUTHORIZED_MERGE_EVIDENCE` or
+published as blocked instead of closing the run successfully. Being a terminal
+success, `review_clean` exits `0`; the result JSON carries the distinction.
 
 The canonical workflow terminal dispositions are `merged`, `already_merged`,
 `review_clean`, `manual_review`, and `failed`. Intermediate waits and remediation

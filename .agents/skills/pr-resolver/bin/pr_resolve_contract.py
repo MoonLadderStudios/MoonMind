@@ -43,7 +43,11 @@ EXIT_CODE_MERGED = 0
 EXIT_CODE_BLOCKED = 2
 EXIT_CODE_ATTEMPTS_EXHAUSTED = 3
 EXIT_CODE_FAILED = 4
-EXIT_CODE_REVIEW_CLEAN = 5
+# `review_clean` is a documented terminal success, so it exits zero like
+# `merged`. Shells, CI runners, and portable hosts read any nonzero exit as a
+# failed command; the terminal outcome is distinguished by `status` and
+# `mergeAutomationDisposition` in the result JSON, not by the exit code.
+EXIT_CODE_REVIEW_CLEAN = 0
 
 # Finish modes. "merge" is the full resolver contract: the run is not complete
 # until the PR is merged. "fix_only" stops at the merge gate: the resolver keeps

@@ -255,6 +255,13 @@ comment into success — those still produce `blocked`, `failed`, or
 configured; the resolver child request derives its merge authority from it, and
 the merge method stays a separate fixed detail of the finish pass.
 
+Only an **omitted** `finishMode` takes the `merge` default. Any other value that
+is not exactly `merge` or `fix_only` — a typo such as `fix-only`, a differently
+cased `Merge`, or a non-string — fails validation with
+`UNSUPPORTED_MERGE_AUTOMATION_FINISH_MODE` before a resolver child is started.
+Widening an unrecognized value into `merge` would silently grant authority for an
+irreversible side effect that the caller never requested.
+
 Because `fix_only` performs no merge, no post-merge Jira or GitHub completion is
 owed and none is attempted.
 
@@ -810,6 +817,23 @@ was not granted merge authority. Its terminal evidence is the same
 `artifacts/publish_result.json` contract the merge dispositions use, with
 `merged = false` and the branch head verified on the remote. A resolver run with
 merge authority must never return it.
+
+Because `review_clean` is a claim that an irreversible side effect did *not*
+happen, it is validated against disposition-specific invariants rather than the
+generic auto-publish rules alone. Terminal evidence is rejected with
+`UNAUTHORIZED_MERGE_EVIDENCE` unless the publish artifact reports
+`merged = false` and a non-`merge` action, and the resolver result itself claims
+no merge outcome. (An unverified remote head is already rejected upstream as
+`MALFORMED_TERMINAL_EVIDENCE` by the shared auto-publish parser.) The Skill
+supplies the authoritative remote half of that proof: its `review_clean` publish
+path reads the live PR state and writes blocked evidence
+(`unmerged_pr_verification_unavailable`) when the PR turns out to be merged or
+its state cannot be read.
+
+`review_clean` is a terminal **success**, so `pr_resolve_finalize.py` and
+`pr_resolve_orchestrate.py` exit `0` for it, exactly as they do for `merged`. The
+outcome is distinguished through `status` and `mergeAutomationDisposition` in the
+result JSON, never through the process exit code.
 
 For `reenter_gate`, a successful resolver child result means the child satisfied
 its durable handoff contract; it does not mean the pull request merged. The

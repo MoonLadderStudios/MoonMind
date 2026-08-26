@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from temporalio.exceptions import ApplicationError
 
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 
@@ -284,3 +285,81 @@ def test_merge_finish_mode_still_requires_a_merged_pull_request() -> None:
         )
         == "merge automation requested but PR was not merged"
     )
+
+
+def _finish_mode_parameters(finish_mode: object) -> dict[str, object]:
+    return {
+        "publishMode": "none",
+        "task": {
+            "publish": {
+                "mergeAutomation": {
+                    "enabled": True,
+                    "mergeMethod": "squash",
+                    "finishMode": finish_mode,
+                }
+            }
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "finish_mode",
+    ["fix-only", "fixonly", "FIX_ONLY", "Merge", "auto", "none", "no_merge"],
+)
+def test_unsupported_finish_mode_is_rejected_instead_of_granting_merge(
+    finish_mode: str,
+) -> None:
+    """An unsupported value must never be widened into merge authority.
+
+    Silently coercing a typo such as `fix-only` to `merge` hands the resolver
+    permission to perform an irreversible merge that the caller never asked for.
+    """
+
+    workflow = MoonMindRunWorkflow()
+
+    with pytest.raises(ApplicationError) as excinfo:
+        workflow._merge_automation_request(_finish_mode_parameters(finish_mode))
+
+    assert excinfo.value.type == "UNSUPPORTED_MERGE_AUTOMATION_FINISH_MODE"
+    assert excinfo.value.non_retryable is True
+
+
+@pytest.mark.parametrize("finish_mode", [None, "", "   "])
+def test_omitted_finish_mode_keeps_the_merge_default(finish_mode: object) -> None:
+    """The default survives only for an omitted value, not for a bad one."""
+
+    workflow = MoonMindRunWorkflow()
+
+    request = workflow._merge_automation_request(_finish_mode_parameters(finish_mode))
+
+    assert request is not None
+    assert request["finishMode"] == "merge"
+
+
+@pytest.mark.parametrize("finish_mode", [17, True, ["fix_only"], {"mode": "fix_only"}])
+def test_malformed_finish_mode_is_rejected(finish_mode: object) -> None:
+    """A non-string payload is malformed input, not an omitted value."""
+
+    workflow = MoonMindRunWorkflow()
+
+    with pytest.raises(ApplicationError) as excinfo:
+        workflow._merge_automation_request(_finish_mode_parameters(finish_mode))
+
+    assert excinfo.value.type == "UNSUPPORTED_MERGE_AUTOMATION_FINISH_MODE"
+
+
+def test_unsupported_finish_mode_never_reaches_the_merge_gate_payload() -> None:
+    """Validation must fail before the child gate is handed merge authority."""
+
+    workflow = MoonMindRunWorkflow()
+    workflow._repo = "MoonLadderStudios/MoonMind"
+    workflow._publish_context["branch"] = "feature"
+
+    with pytest.raises(ApplicationError):
+        workflow._build_merge_gate_start_payload(
+            parameters=_finish_mode_parameters("fix-only"),
+            pull_request_url="https://github.com/MoonLadderStudios/MoonMind/pull/350",
+            head_sha="abc123",
+            parent_workflow_id="mm:parent",
+            parent_run_id="run-1",
+        )

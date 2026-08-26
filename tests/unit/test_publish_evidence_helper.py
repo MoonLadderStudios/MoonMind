@@ -599,12 +599,22 @@ def _review_clean_workspace(tmp_path: Path, *, attempt_history: list[dict[str, A
     return result_path, snapshot_path
 
 
-def _fake_head_verification(helper_module: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def _fake_head_verification(
+    helper_module: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    pr_state: str = "OPEN",
+    merged_at: str | None = None,
+) -> None:
     def fake_run(cmd: list[str], **_: object) -> SimpleNamespace:
         if cmd == ["git", "rev-parse", "HEAD"]:
             return _completed("abc123\n")
         if cmd == ["git", "ls-remote", "origin", "refs/heads/feature"]:
             return _completed("abc123\trefs/heads/feature\n")
+        if cmd[:4] == ["gh", "pr", "view", "https://github.com/o/r/pull/1"]:
+            return _completed(
+                json.dumps({"state": pr_state, "mergedAt": merged_at})
+            )
         raise AssertionError(cmd)
 
     monkeypatch.setattr(helper_module.subprocess, "run", fake_run)
@@ -654,7 +664,11 @@ def test_from_pr_resolver_result_review_clean_after_remediation_reports_a_push(
         tmp_path,
         attempt_history=[
             {"stage": "finalize", "status": "blocked", "timestamp": "2026-08-25T00:00:00Z"},
-            {"stage": "full", "status": "ready_for_finalize", "timestamp": "2026-08-25T00:01:00Z"},
+            {
+                "stage": "full_remediation",
+                "status": "ready_for_finalize",
+                "timestamp": "2026-08-25T00:01:00Z",
+            },
         ],
     )
     _fake_head_verification(helper_module, monkeypatch)
@@ -679,3 +693,82 @@ def test_from_pr_resolver_result_review_clean_after_remediation_reports_a_push(
     assert evidence.action == "push"
     assert evidence.pushed is True
     assert evidence.merged is False
+
+
+def test_from_pr_resolver_result_review_clean_blocks_a_merged_pr(
+    helper_module: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """`review_clean` claims no merge happened; prove it against the remote.
+
+    A verified branch head says nothing about the pull request, so a fix_only
+    run that merged anyway would otherwise publish a clean no-merge artifact.
+    """
+
+    monkeypatch.chdir(tmp_path)
+    result_path, snapshot_path = _review_clean_workspace(
+        tmp_path,
+        attempt_history=[
+            {
+                "stage": "full_remediation",
+                "status": "ready_for_finalize",
+                "timestamp": "2026-08-25T00:01:00Z",
+            }
+        ],
+    )
+    _fake_head_verification(
+        helper_module,
+        monkeypatch,
+        pr_state="MERGED",
+        merged_at="2026-08-25T00:02:00Z",
+    )
+
+    helper_module.main(
+        [
+            "from-pr-resolver-result",
+            "--result",
+            str(result_path),
+            "--snapshot",
+            str(snapshot_path),
+        ]
+    )
+
+    payload = _payload(tmp_path / "artifacts" / "publish_result.json")
+    assert payload["status"] == "blocked"
+    assert payload["blockedReason"] == "unmerged_pr_verification_unavailable"
+    assert payload["merged"] is False
+
+
+def test_from_pr_resolver_result_review_clean_blocks_unreadable_pr_state(
+    helper_module: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    result_path, snapshot_path = _review_clean_workspace(tmp_path, attempt_history=[])
+
+    def fake_run(cmd: list[str], **_: object) -> SimpleNamespace:
+        if cmd == ["git", "rev-parse", "HEAD"]:
+            return _completed("abc123\n")
+        if cmd == ["git", "ls-remote", "origin", "refs/heads/feature"]:
+            return _completed("abc123\trefs/heads/feature\n")
+        if cmd[:3] == ["gh", "pr", "view"]:
+            return _completed("", returncode=1)
+        raise AssertionError(cmd)
+
+    monkeypatch.setattr(helper_module.subprocess, "run", fake_run)
+
+    helper_module.main(
+        [
+            "from-pr-resolver-result",
+            "--result",
+            str(result_path),
+            "--snapshot",
+            str(snapshot_path),
+        ]
+    )
+
+    payload = _payload(tmp_path / "artifacts" / "publish_result.json")
+    assert payload["status"] == "blocked"
+    assert payload["blockedReason"] == "unmerged_pr_verification_unavailable"
