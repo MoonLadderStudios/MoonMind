@@ -224,11 +224,10 @@ Two consequences follow, and both are load-bearing:
   pull request — directly, or by enabling the review loop. Routing on
   `publishMode = "pr"` alone would strand an adopt-an-existing-PR run on the
   default queue, where the gate never starts.
-- **Workflow-level publish policy is re-resolved server-side.** Clients expand
-  and edit preset *steps*, but the `workflowPublish` annotation — including the
-  merge-automation gate a review-and-merge preset owns — is resolved again from
-  the stored template at submission time. A client that drops or rewrites it
-  cannot disable the gate on the way in.
+- **The gate travels in workflow-level publish policy, not in the steps.** A
+  preset declares it under the `workflowPublish` annotation, which preset
+  expansion renders against the same validated inputs the steps use. The steps
+  themselves carry no merge-automation configuration.
 
 A run that publishes nothing and enables no merge automation is unaffected: it
 keeps the default queue and starts no gate.

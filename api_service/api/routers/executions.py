@@ -8830,102 +8830,6 @@ def _apply_goal_schedule_metadata(
         task_payload["taskTemplate"]["presetDigest"] = preset_digest
 
 
-async def _apply_preset_workflow_publish(
-    *,
-    task_payload: dict[str, Any],
-    request_payload: Mapping[str, Any],
-    session: Any,
-    user: Any,
-) -> None:
-    """Re-apply an applied preset's workflow-level publish policy server-side.
-
-    Clients expand and edit preset *steps*, but workflow-level publish policy is
-    resolved again from the stored template at submission time.
-
-    A client that omits ``publish`` entirely gets the template's policy. A client
-    that sends its own ``publish`` keeps it, except for the merge-automation
-    gate: when the stored template declares one, that block is restored. The
-    gate decides whether MoonMind may push, request reviews, and merge on the
-    operator's behalf, so it is not a field a submission may quietly rewrite.
-    """
-
-    applied_templates = task_payload.get("appliedStepTemplates")
-    applied_template = (
-        applied_templates[0]
-        if isinstance(applied_templates, list)
-        and applied_templates
-        and isinstance(applied_templates[0], Mapping)
-        else None
-    )
-    if applied_template is None:
-        return
-    template_payload = dict(task_payload.get("taskTemplate") or {})
-    slug = str(
-        applied_template.get("slug") or template_payload.get("slug") or ""
-    ).strip()
-    if not slug:
-        return
-
-    from api_service.services.presets.catalog import (
-        PresetCatalogService,
-        PresetNotFoundError,
-        PresetValidationError,
-    )
-
-    template_scope, template_scope_ref = resolve_template_scope_for_user(
-        user=user,
-        scope=str(
-            applied_template.get("scope") or template_payload.get("scope") or "global"
-        ),
-        scope_ref=(
-            applied_template.get("scopeRef")
-            or template_payload.get("scopeRef")
-            or template_payload.get("scope_ref")
-        ),
-        write=False,
-    )
-    context: dict[str, Any] = {}
-    repository = repository_name_from_value(request_payload.get("repository"))
-    if repository:
-        context["repository"] = repository
-        context["repo"] = repository
-    try:
-        workflow_publish = await PresetCatalogService(
-            session
-        ).resolve_workflow_publish(
-            slug=slug,
-            scope=template_scope,
-            scope_ref=template_scope_ref,
-            inputs=(
-                dict(applied_template.get("inputs"))
-                if isinstance(applied_template.get("inputs"), Mapping)
-                else {}
-            ),
-            context=context,
-        )
-    except PresetNotFoundError:
-        return
-    except PresetValidationError as exc:
-        raise _invalid_workflow_request(str(exc)) from exc
-    if not isinstance(workflow_publish, Mapping) or not workflow_publish:
-        return
-
-    submitted_publish = task_payload.get("publish")
-    if not isinstance(submitted_publish, Mapping):
-        task_payload["publish"] = dict(workflow_publish)
-        return
-
-    template_gate = workflow_publish.get("mergeAutomation") or workflow_publish.get(
-        "merge_automation"
-    )
-    if not isinstance(template_gate, Mapping):
-        return
-    merged_publish = dict(submitted_publish)
-    merged_publish.pop("merge_automation", None)
-    merged_publish["mergeAutomation"] = dict(template_gate)
-    task_payload["publish"] = merged_publish
-
-
 async def _expand_goal_preset_for_workflow_submission(
     *,
     task_payload: dict[str, Any],
@@ -10839,12 +10743,6 @@ async def _create_execution_from_workflow_request(
 
     if session is not None:
         await _expand_goal_preset_for_workflow_submission(
-            task_payload=task_payload,
-            request_payload=payload,
-            session=session,
-            user=user,
-        )
-        await _apply_preset_workflow_publish(
             task_payload=task_payload,
             request_payload=payload,
             session=session,
