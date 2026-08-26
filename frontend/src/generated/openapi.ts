@@ -8298,6 +8298,7 @@ export interface components {
             resolverChildWorkflowIds?: string[];
             /** Resolverchildren */
             resolverChildren?: components["schemas"]["ExecutionMergeAutomationResolverChildModel"][];
+            reviewLoop?: components["schemas"]["ExecutionMergeAutomationReviewLoopModel"] | null;
         } & {
             [key: string]: unknown;
         };
@@ -8314,6 +8315,57 @@ export interface components {
             status?: string | null;
             /** Detailhref */
             detailHref?: string | null;
+        };
+        /**
+         * ExecutionMergeAutomationReviewCycleModel
+         * @description One operator-visible automated review cycle.
+         */
+        ExecutionMergeAutomationReviewCycleModel: {
+            /** Cycle */
+            cycle?: number | null;
+            /** Provider */
+            provider?: string | null;
+            /** Headsha */
+            headSha?: string | null;
+            /** Requestcommentid */
+            requestCommentId?: number | null;
+            /** Requestedat */
+            requestedAt?: string | null;
+            /** Completionkind */
+            completionKind?: string | null;
+            /** Completedat */
+            completedAt?: string | null;
+            /** Status */
+            status?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ExecutionMergeAutomationReviewLoopModel
+         * @description Automated review loop progress for an execution.
+         */
+        ExecutionMergeAutomationReviewLoopModel: {
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled: boolean;
+            /** Provider */
+            provider?: string | null;
+            /** Cycles */
+            cycles?: number | null;
+            /** Maxcycles */
+            maxCycles?: number | null;
+            /** Noprogresscycles */
+            noProgressCycles?: number | null;
+            /** Activerequest */
+            activeRequest?: {
+                [key: string]: unknown;
+            } | null;
+            /** Cyclerecords */
+            cycleRecords?: components["schemas"]["ExecutionMergeAutomationReviewCycleModel"][];
+        } & {
+            [key: string]: unknown;
         };
         /**
          * ExecutionMetricsCostModel
