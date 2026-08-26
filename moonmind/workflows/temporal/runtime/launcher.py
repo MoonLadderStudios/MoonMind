@@ -25,7 +25,7 @@ from moonmind.schemas.agent_runtime_models import (
     ManagedRunRecord,
     ManagedRuntimeProfile,
     TERMINAL_AGENT_RUN_STATES,
-    resolve_execution_timeout_seconds,
+    resolve_execution_budget,
 )
 from moonmind.security.execution_fanout_capabilities import (
     EXECUTION_FANOUT_REQUIRED_CAPABILITY,
@@ -85,6 +85,14 @@ LoreRepositoryReadinessAdapter = Callable[
 ]
 
 _LIVE_LOG_SPOOL_FILENAME = "live_streams.spool"
+# Launch preparation that happens after the fan-out capability is minted but
+# before the supervised process exists — GitHub broker setup, recursive workspace
+# ownership changes, runtime trust preparation, process creation — consumes token
+# lifetime without consuming any execution budget, because the supervisor only
+# starts measuring the ceiling once launch returns. Without this allowance a slow
+# workspace ``chown`` can strand an otherwise legal run without container or tool
+# authority before it reaches its ceiling.
+_EXECUTION_FANOUT_LAUNCH_GRACE_SECONDS = 900
 _MODEL_TIER_DIAGNOSTIC_STRING_LIMIT = 1024
 _MODEL_TIER_DIAGNOSTIC_FIELDS = (
     "providerProfileId",
@@ -993,9 +1001,18 @@ class ManagedRuntimeLauncher:
                 session_id=run_id,
                 runtime_id=normalized_runtime_id,
                 source_kind="managed_process",
-                lifetime_seconds=resolve_execution_timeout_seconds(
-                    agent_kind=request.agent_kind,
-                    timeout_policy=request.timeout_policy,
+                # Size the capability to the budget's hard ceiling, not the base
+                # window: a run that keeps making progress outlives the base
+                # budget, and a token minted for the base window would strand it
+                # without fanout authority partway through. The bounded launch
+                # grace covers the preparation still ahead of the process that
+                # the execution budget does not yet count.
+                lifetime_seconds=(
+                    resolve_execution_budget(
+                        agent_kind=request.agent_kind,
+                        timeout_policy=request.timeout_policy,
+                    ).max_seconds
+                    + _EXECUTION_FANOUT_LAUNCH_GRACE_SECONDS
                 ),
             )
         )

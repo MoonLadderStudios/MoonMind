@@ -7,6 +7,7 @@ import logging
 import os
 import signal
 import shutil
+import time
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from temporalio import activity
@@ -23,10 +24,14 @@ CompletionCallback = Callable[[dict[str, Any]], Awaitable[None]]
 
 from moonmind.schemas.agent_runtime_models import (
     MANAGED_PROCESS_LOST_DURING_RECONCILIATION,
+    ExecutionBudget,
+    ExecutionBudgetVerdict,
     ManagedRunRecord,
+    evaluate_execution_budget,
 )
 
 from .log_streamer import RuntimeLogStreamer
+from .process_activity import ProcessActivityProbe
 from .store import ManagedRunStore
 from .strategies import get_strategy
 from .strategies.base import ManagedRuntimeExitResult
@@ -62,12 +67,20 @@ class ManagedRunSupervisor:
         *,
         run_id: str,
         process: asyncio.subprocess.Process,
-        timeout_seconds: int = 3600,
+        budget: ExecutionBudget,
         exit_code_path: str | None = None,
         cleanup_paths: list[str] | None = None,
         deferred_cleanup_paths: list[str] | None = None,
     ) -> ManagedRunRecord:
-        """Supervise a process and track heartbeat, completion, and cleanup."""
+        """Supervise a process and track heartbeat, completion, and cleanup.
+
+        ``budget`` is the run's progress-aware execution budget, resolved by the
+        caller from the same ``timeoutPolicy`` the AgentRun workflow published, so
+        the supervisor's kill deadline and the workflow's cannot diverge. The
+        process is terminated when the budget's base window elapses *and*
+        progress has gone stale, or when its hard ceiling is reached — never on
+        elapsed wall-clock alone.
+        """
         self._active_processes[run_id] = process
         registered_paths: list[str] = list(cleanup_paths or [])
         if exit_code_path:
@@ -80,6 +93,12 @@ class ManagedRunSupervisor:
         )
         self._store.update_status(run_id, "running")
         start_time = datetime.now(tz=UTC)
+        # Wall-clock ``start_time`` is the run's evidence; the budget's intervals
+        # are measured from this monotonic anchor instead. A host clock step
+        # forward would otherwise terminate a healthy run as over-budget, and a
+        # step backward would let it run past the ceiling the AgentRun workflow
+        # is enforcing — the two deadlines must stay the same boundary.
+        start_monotonic = time.monotonic()
 
         try:
             # Resolve strategy output parser for this runtime
@@ -105,6 +124,21 @@ class ManagedRunSupervisor:
             # actively-working run is falsely escalated to intervention.
             output_offset = 0
             latest_observed_progress_at: datetime | None = None
+            # Monotonic counterpart of ``latest_observed_progress_at``. Progress
+            # evidence is persisted as wall-clock because it must line up with
+            # file mtimes and operator timelines, but staleness is judged from a
+            # monotonic anchor so a clock adjustment cannot manufacture or erase
+            # an idle window. The anchor only ever moves forward: nothing but
+            # observed progress may reduce measured idle time.
+            latest_progress_monotonic: float | None = None
+            # Runtime-neutral activity evidence. Output and workspace mutation
+            # both go quiet during legitimate work (a buffered one-shot CLI, or a
+            # test run that only writes ignored directories), while a wedged
+            # process consumes no CPU at all. Progress is the newest of all three
+            # signals so no single blind spot can strand a healthy run.
+            activity_probe = ProcessActivityProbe(session_pid=process.pid)
+            budget_verdict: ExecutionBudgetVerdict = "continue"
+            budget_extended = False
             first_stdout_seen = False
             first_stderr_seen = False
             stderr_buffer = ""
@@ -112,7 +146,9 @@ class ManagedRunSupervisor:
             warning_dedup_announced: set[str] = set()
             progress_probe_warning_logged = False
             progress_timeout_seconds = (
-                strategy.progress_stall_timeout_seconds(timeout_seconds=timeout_seconds)
+                strategy.progress_stall_timeout_seconds(
+                    timeout_seconds=budget.base_seconds
+                )
                 if strategy is not None
                 else None
             )
@@ -233,6 +269,12 @@ class ManagedRunSupervisor:
             async def _latest_progress_at() -> datetime:
                 nonlocal progress_probe_warning_logged
                 latest = last_output_seen_at
+                activity_at = await asyncio.to_thread(
+                    activity_probe.sample,
+                    datetime.now(tz=UTC),
+                )
+                if activity_at is not None:
+                    latest = max(latest, activity_at)
                 if (
                     strategy is None
                     or record is None
@@ -266,7 +308,8 @@ class ManagedRunSupervisor:
 
             async def _emit_no_output_annotation(now: datetime) -> None:
                 nonlocal last_no_output_annotation_at, stalled_no_progress, stalled_progress_reason
-                nonlocal latest_observed_progress_at
+                nonlocal latest_observed_progress_at, latest_progress_monotonic
+                sampled_at_monotonic = time.monotonic()
                 latest_progress_at = await _latest_progress_at()
                 # Cache the supervisor's authoritative progress signal so the
                 # heartbeat loop can persist it to the run store. This runs on
@@ -277,6 +320,17 @@ class ManagedRunSupervisor:
                     0.0,
                     (now - latest_progress_at).total_seconds(),
                 )
+                # Anchor this observation on the monotonic clock at the age it
+                # had when sampled, so the budget measures staleness by elapsed
+                # monotonic time rather than by comparing two wall-clock reads.
+                observed_progress_monotonic = (
+                    sampled_at_monotonic - idle_progress_seconds
+                )
+                if (
+                    latest_progress_monotonic is None
+                    or observed_progress_monotonic > latest_progress_monotonic
+                ):
+                    latest_progress_monotonic = observed_progress_monotonic
                 if (
                     progress_timeout_seconds is not None
                     and not stalled_progress_detected.is_set()
@@ -320,6 +374,47 @@ class ManagedRunSupervisor:
                 )
                 last_no_output_annotation_at = now
 
+            def budget_elapsed_seconds() -> float:
+                """Real elapsed run time, for messages that must not understate it."""
+                return time.monotonic() - start_monotonic
+
+            def _idle_progress_seconds(now_monotonic: float) -> float | None:
+                # ``None`` means no progress has ever been observed for this run.
+                # That is not evidence of health, so the budget treats it exactly
+                # as it did before progress-awareness: terminate at the base
+                # window. Only positively observed progress buys an extension.
+                if latest_progress_monotonic is None:
+                    return None
+                return max(0.0, now_monotonic - latest_progress_monotonic)
+
+            def _on_budget_extended(
+                elapsed_seconds: float,
+                idle_seconds: float | None,
+            ) -> None:
+                nonlocal budget_extended
+                if budget_extended:
+                    return
+                budget_extended = True
+                _record_annotation(
+                    annotation_type="execution_budget_extended_for_progress",
+                    text=(
+                        "Supervisor: base execution budget of "
+                        f"{budget.base_seconds}s elapsed while progress was still "
+                        "observable; continuing until progress goes stale or the "
+                        f"{budget.max_seconds}s ceiling is reached."
+                    ),
+                    reason="progress_observed",
+                    metadata={
+                        "base_seconds": budget.base_seconds,
+                        "max_seconds": budget.max_seconds,
+                        "progress_stall_seconds": budget.progress_stall_seconds,
+                        "elapsed_seconds": int(elapsed_seconds),
+                        "idle_progress_seconds": (
+                            int(idle_seconds) if idle_seconds is not None else None
+                        ),
+                    },
+                )
+
             def _progress_snapshot() -> tuple[datetime | None, int | None]:
                 # Snapshot of observed output progress for the heartbeat store
                 # update. ``latest_observed_progress_at`` is refreshed every
@@ -342,12 +437,15 @@ class ManagedRunSupervisor:
             # block indefinitely — a deadlock.  Concurrent streaming also means
             # output is captured as it is produced, enabling true live output.
             heartbeat_task = asyncio.create_task(
-                self._heartbeat_and_wait_with_timeout(
+                self._heartbeat_and_wait_within_budget(
                     run_id,
                     process,
-                    timeout_seconds,
+                    budget,
+                    monotonic_started_at=start_monotonic,
+                    idle_progress_seconds=_idle_progress_seconds,
                     no_output_callback=_emit_no_output_annotation,
                     progress_snapshot=_progress_snapshot,
+                    on_budget_extended=_on_budget_extended,
                 )
             )
             stream_task = asyncio.create_task(
@@ -377,7 +475,8 @@ class ManagedRunSupervisor:
                         trigger=stalled_progress_detected,
                     )
                 )
-            process_exit_code, timed_out = await heartbeat_task
+            process_exit_code, budget_verdict = await heartbeat_task
+            timed_out = budget_verdict != "continue"
             # Descendants can inherit the managed process pipes after the CLI
             # exits. Terminate the owned group before waiting for EOF so those
             # inherited descriptors cannot keep stream collection alive.
@@ -428,8 +527,18 @@ class ManagedRunSupervisor:
             if timed_out_by_supervisor:
                 _record_annotation(
                     annotation_type="termination_requested_timeout",
-                    text="Supervisor: process termination requested after timeout.",
+                    text=(
+                        "Supervisor: process termination requested after "
+                        f"{self._budget_expiry_text(budget, budget_verdict, budget_elapsed_seconds())}."
+                    ),
                     reason="timeout",
+                    metadata={
+                        "budget_verdict": budget_verdict,
+                        "base_seconds": budget.base_seconds,
+                        "max_seconds": budget.max_seconds,
+                        "progress_stall_seconds": budget.progress_stall_seconds,
+                        "budget_extended_for_progress": budget_extended,
+                    },
                 )
             if live_rate_limit_requested:
                 _record_annotation(
@@ -497,7 +606,8 @@ class ManagedRunSupervisor:
                         error_message += f": {parsed_output.error_messages[0]}"
             elif status == "timed_out":
                 error_message = (
-                    f"Process timed out after {timeout_seconds}s"
+                    "Process timed out after "
+                    f"{self._budget_expiry_text(budget, budget_verdict, budget_elapsed_seconds())}"
                 )
             if status == "completed":
                 _record_annotation(
@@ -604,28 +714,111 @@ class ManagedRunSupervisor:
                 exc_info=True,
             )
 
-    async def _heartbeat_and_wait(
+    @staticmethod
+    def _budget_expiry_text(
+        budget: ExecutionBudget,
+        verdict: ExecutionBudgetVerdict,
+        elapsed_seconds: float,
+    ) -> str:
+        """Describe *why* the budget ended the run, not merely that it did.
+
+        A run terminated at the hard ceiling and one terminated for going quiet
+        need different operator responses (raise the ceiling versus investigate a
+        wedged runtime), so the two are never collapsed into one message. The
+        elapsed time is the real one — a run that earned an extension and then
+        went quiet ran longer than its base window, and saying otherwise would
+        send the operator looking for the wrong thing.
+        """
+
+        if verdict == "expired_max_budget":
+            return (
+                f"{int(elapsed_seconds)}s, reaching the maximum execution budget "
+                f"of {budget.max_seconds}s (progress no longer extends the run "
+                "past this ceiling)"
+            )
+        return (
+            f"{int(elapsed_seconds)}s with no observable progress for "
+            f"{budget.progress_stall_seconds}s "
+            f"(base execution budget {budget.base_seconds}s)"
+        )
+
+    async def _heartbeat_and_wait_within_budget(
         self,
         run_id: str,
         process: asyncio.subprocess.Process,
+        budget: ExecutionBudget,
+        *,
+        monotonic_started_at: float,
+        idle_progress_seconds: Callable[[float], float | None],
         no_output_callback: Callable[[datetime], Awaitable[None]] | None = None,
         progress_snapshot: Callable[[], tuple[datetime | None, int | None]]
         | None = None,
-    ) -> int:
-        """Send heartbeats while waiting for the process to complete.
+        on_budget_extended: Callable[[float, float | None], None] | None = None,
+    ) -> tuple[int | None, ExecutionBudgetVerdict]:
+        """Heartbeat while waiting, enforcing the progress-aware budget.
 
-        Each heartbeat also persists observed output progress
-        (``last_log_at``/``last_log_offset``) when ``progress_snapshot`` is
-        supplied, so the workflow-level no-progress watchdog can distinguish a
-        live, working run from a genuinely stuck one. ``last_heartbeat_at`` is
-        pure process liveness and is intentionally ignored by that watchdog.
+        Returns ``(exit_code, verdict)``. A ``continue`` verdict means the process
+        exited on its own and ``exit_code`` is authoritative; any other verdict
+        means the budget ended the run and ``exit_code`` is ``None``.
+
+        This replaces a flat ``asyncio.wait_for(timeout_seconds)``. That deadline
+        could not see progress, so it killed runs that were actively working —
+        the whole point of the budget is that elapsed wall-clock alone is not
+        evidence of a stuck run. The budget is re-evaluated on the fast tick
+        rather than only per heartbeat so the ceiling is still enforced promptly.
+
+        Elapsed and idle intervals are measured monotonically. A host clock step
+        must not be able to terminate a healthy run as over-budget, nor let a
+        wedged one outlive the AgentRun workflow's deadline for the same run.
+
+        The cached progress timestamp is only refreshed once per heartbeat, so a
+        stall verdict computed from it can be a whole heartbeat interval stale.
+        Before ending a run for lack of progress this samples current CPU and
+        workspace activity and re-decides: a process that resumed work seconds
+        before its stall boundary must not be killed for activity the supervisor
+        simply had not looked for yet. The ceiling is exempt — no amount of
+        observed progress extends a run past ``max_seconds``.
+
+        On expiry the process is terminated immediately so the concurrent
+        streaming task observes EOF and completes, allowing the caller's gather
+        to unblock. Without this it would block forever on EOF that never comes.
         """
         loop = asyncio.get_running_loop()
         next_heartbeat_at = loop.time() + HEARTBEAT_INTERVAL
         while True:
             if process.returncode is not None:
-                return process.returncode
+                return process.returncode, "continue"
             await asyncio.sleep(0.1)
+
+            now_monotonic = time.monotonic()
+            elapsed = now_monotonic - monotonic_started_at
+            idle_seconds = idle_progress_seconds(now_monotonic)
+            verdict = evaluate_execution_budget(
+                budget=budget,
+                elapsed_seconds=elapsed,
+                idle_progress_seconds=idle_seconds,
+            )
+            if verdict != "continue":
+                refreshed_for_expiry = False
+                if verdict == "expired_no_progress" and no_output_callback is not None:
+                    await no_output_callback(datetime.now(tz=UTC))
+                    refreshed_for_expiry = True
+                    now_monotonic = time.monotonic()
+                    elapsed = now_monotonic - monotonic_started_at
+                    idle_seconds = idle_progress_seconds(now_monotonic)
+                    verdict = evaluate_execution_budget(
+                        budget=budget,
+                        elapsed_seconds=elapsed,
+                        idle_progress_seconds=idle_seconds,
+                    )
+                if verdict != "continue":
+                    await self._terminate_process(process)
+                    if no_output_callback is not None and not refreshed_for_expiry:
+                        await no_output_callback(datetime.now(tz=UTC))
+                    return None, verdict
+            if elapsed >= budget.base_seconds and on_budget_extended is not None:
+                on_budget_extended(elapsed, idle_seconds)
+
             if loop.time() < next_heartbeat_at:
                 continue
             next_heartbeat_at = loop.time() + HEARTBEAT_INTERVAL
@@ -649,45 +842,6 @@ class ManagedRunSupervisor:
                 last_heartbeat_at=datetime.now(tz=UTC),
                 **progress_fields,
             )
-
-    async def _heartbeat_and_wait_with_timeout(
-        self,
-        run_id: str,
-        process: asyncio.subprocess.Process,
-        timeout_seconds: int,
-        no_output_callback: Callable[[datetime], Awaitable[None]] | None = None,
-        progress_snapshot: Callable[[], tuple[datetime | None, int | None]]
-        | None = None,
-    ) -> tuple[int | None, bool]:
-        """Wrap _heartbeat_and_wait with a total timeout.
-
-        Returns ``(exit_code, timed_out)`` so callers can unpack both
-        the process exit code and the timeout flag from a single awaitable,
-        making it composable with ``asyncio.gather()``.
-
-        On timeout, the process is terminated immediately so that any
-        concurrent streaming task observes EOF and exits promptly.
-        Without this, ``asyncio.gather()`` would block indefinitely on
-        the stream task waiting for EOF that never arrives.
-        """
-        try:
-            exit_code = await asyncio.wait_for(
-                self._heartbeat_and_wait(
-                    run_id,
-                    process,
-                    no_output_callback=no_output_callback,
-                    progress_snapshot=progress_snapshot,
-                ),
-                timeout=timeout_seconds,
-            )
-            return exit_code, False
-        except asyncio.TimeoutError:
-            # Terminate the process so the concurrent streaming task sees EOF
-            # and can complete, allowing asyncio.gather() to unblock.
-            await self._terminate_process(process)
-            if no_output_callback is not None:
-                await no_output_callback(datetime.now(tz=UTC))
-            return None, True
 
     async def cancel(self, run_id: str) -> None:
         """Cancel a running managed process: terminate -> wait -> kill."""
