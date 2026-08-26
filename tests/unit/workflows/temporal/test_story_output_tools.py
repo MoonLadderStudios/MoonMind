@@ -1619,11 +1619,7 @@ async def test_create_github_issues_from_reconciled_story_breakdown():
     request = service.create_issue_requests[0]
     assert request["repo"] == "MoonLadderStudios/MoonMind"
     assert request["title"] == "Create GitHub issue story output"
-    assert request["labels"] == [
-        "moonmind",
-        "MM-1068",
-        "moonmind-workflow-mm-1068-run",
-    ]
+    assert request["labels"] == ["moonmind", "MM-1068"]
     assert "Source Document: docs/Workflows/SkillAndPlanContracts.md" in request["body"]
     assert "Source Title: MM-1063: Update Presets" in request["body"]
     assert "Source Sections:" in request["body"]
@@ -1631,6 +1627,29 @@ async def test_create_github_issues_from_reconciled_story_breakdown():
     assert "DESIGN-REQ-014" in request["body"]
     assert "One issue is created." in request["body"]
     assert request["github_token"] is None
+
+
+@pytest.mark.asyncio
+async def test_create_github_issues_does_not_synthesize_workflow_label():
+    service = _FakeGitHubService()
+
+    result = await create_github_issues_from_stories(
+        {
+            "repository": "MoonLadderStudios/Tactics",
+            "workflowId": "mm:04cd8f17-f248-42d2-874e-d1bbf8dc039a",
+            "stories": [
+                {
+                    "id": "STORY-001",
+                    "summary": "Authorize the deterministic background catalog",
+                    "description": "Create the remaining implementation story.",
+                }
+            ],
+        },
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert service.create_issue_requests[0]["labels"] == []
 
 
 @pytest.mark.asyncio
