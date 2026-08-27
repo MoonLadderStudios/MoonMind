@@ -1039,7 +1039,9 @@ async def test_step_runtime_inherits_task_profile_default_model() -> None:
     )
     session = SimpleNamespace(
         get=AsyncMock(
-            return_value=SimpleNamespace(default_model="codex-profile-default")
+            return_value=SimpleNamespace(
+                runtime_id="codex_cli", default_model="codex-profile-default"
+            )
         )
     )
 
@@ -6954,6 +6956,7 @@ def test_create_task_shaped_execution_accepts_provider_profile_alias() -> None:
     app.dependency_overrides[get_async_session] = lambda: SimpleNamespace(
         get=AsyncMock(
             return_value=SimpleNamespace(
+                runtime_id="codex_cli",
                 default_model="gpt-5-codex",
             )
         )
@@ -6998,6 +7001,7 @@ def test_create_task_shaped_execution_resolves_model_tier_against_profile() -> N
         get=AsyncMock(
             return_value=SimpleNamespace(
                 profile_id="codex-provider-profile",
+                runtime_id="codex_cli",
                 default_model=None,
                 default_effort=None,
                 model_tiers=[
@@ -7064,6 +7068,7 @@ def test_create_task_shaped_execution_records_tier_preview_mismatch() -> None:
         get=AsyncMock(
             return_value=SimpleNamespace(
                 profile_id="codex-provider-profile",
+                runtime_id="codex_cli",
                 default_model="legacy-default",
                 default_model_tier=1,
                 model_tiers=[
@@ -7144,6 +7149,7 @@ def test_create_task_shaped_execution_rejects_strict_unavailable_model_tier() ->
         get=AsyncMock(
             return_value=SimpleNamespace(
                 profile_id="codex-provider-profile",
+                runtime_id="codex_cli",
                 default_model=None,
                 default_effort=None,
                 model_tiers=[
@@ -17605,7 +17611,9 @@ async def test_mm3788_step_runtime_selection_accepts_owned_profile() -> None:
 
 
 @asynccontextmanager
-async def _mm3788_raw_branch_context(tmp_path, *, db_name: str):
+async def _mm3788_raw_branch_context(
+    tmp_path, *, db_name: str, profile_runtime_id: str = "codex_cli"
+):
     """Yield a real service over real persistence with one seeded profile."""
 
     original_backend = settings.workflow.temporal_artifact_backend
@@ -17622,7 +17630,7 @@ async def _mm3788_raw_branch_context(tmp_path, *, db_name: str):
             session.add(
                 ManagedAgentProviderProfile(
                     profile_id="codex_minimax_team",
-                    runtime_id="codex_cli",
+                    runtime_id=profile_runtime_id,
                     provider_id="minimax",
                 )
             )
@@ -17758,6 +17766,140 @@ async def test_mm3788_raw_create_branch_keeps_the_omnigent_product_boundary(
 
         assert exc_info.value.status_code == 422
         assert exc_info.value.detail["code"] == "omnigent_product_boundary_required"
+        service._client_adapter.start_workflow.assert_not_awaited()
+
+
+def _mm3788_conflicting_runtime_request(
+    *, target_runtime: str, nested_runtime_mode: str, profile_id: str
+) -> dict[str, Any]:
+    """A raw body whose two runtime fields disagree.
+
+    The worker resolves ``workflow.runtime.mode`` before the payload-level
+    ``targetRuntime``, so this is the shape that decides which runtime actually
+    executes the task.
+    """
+
+    return {
+        "workflowType": "MoonMind.UserWorkflow",
+        "title": "MM-3788 conflicting runtime fields",
+        "initialParameters": {
+            "targetRuntime": target_runtime,
+            "profileId": profile_id,
+            "workflow": {
+                "instructions": "Launch with an explicit provider profile.",
+                "runtime": {
+                    "mode": nested_runtime_mode,
+                    "providerProfileRef": profile_id,
+                },
+            },
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_mm3788_raw_create_branch_honors_the_runtime_block_over_target_runtime(
+    tmp_path,
+) -> None:
+    """The guard resolves the runtime the worker resolves, not the other field.
+
+    ``targetRuntime`` names the profile's own runtime, so reading it first would
+    approve the pair; the worker then executes the task as ``claude_code`` with a
+    Codex-owned profile.
+    """
+
+    async with _mm3788_raw_branch_context(
+        tmp_path, db_name="mm3788_raw_conflict"
+    ) as (session, service, user):
+        with pytest.raises(HTTPException) as exc_info:
+            await _mm3788_post_raw_execution(
+                service=service,
+                session=session,
+                user=user,
+                payload=_mm3788_conflicting_runtime_request(
+                    target_runtime="codex_cli",
+                    nested_runtime_mode="claude_code",
+                    profile_id="codex_minimax_team",
+                ),
+            )
+
+        assert exc_info.value.status_code == 409
+        detail = exc_info.value.detail
+        assert detail["code"] == "provider_profile_runtime_mismatch"
+        assert detail["profileRuntime"] == "codex_cli"
+        # The runtime the worker would have executed, not the payload-level one.
+        assert detail["selectedRuntime"] == "claude_code"
+        service._client_adapter.start_workflow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_mm3788_raw_create_branch_rejects_a_nested_omnigent_runtime_conflict(
+    tmp_path,
+) -> None:
+    """A nested ``omnigent`` mode does not waive the other authored runtime.
+
+    Deferring to the Omnigent facade is only safe when the payload names nothing
+    else; here ``targetRuntime`` still names a managed runtime that the Omnigent
+    selection service never sees.
+    """
+
+    async with _mm3788_raw_branch_context(
+        tmp_path, db_name="mm3788_raw_nested_omnigent"
+    ) as (session, service, user):
+        with pytest.raises(HTTPException) as exc_info:
+            await _mm3788_post_raw_execution(
+                service=service,
+                session=session,
+                user=user,
+                payload=_mm3788_conflicting_runtime_request(
+                    target_runtime="claude_code",
+                    nested_runtime_mode="omnigent",
+                    profile_id="codex_minimax_team",
+                ),
+            )
+
+        assert exc_info.value.status_code == 409
+        detail = exc_info.value.detail
+        assert detail["code"] == "provider_profile_runtime_mismatch"
+        assert detail["profileRuntime"] == "codex_cli"
+        assert detail["selectedRuntime"] == "claude_code"
+        service._client_adapter.start_workflow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_mm3788_raw_create_branch_rejects_a_profile_with_no_runtime_owner(
+    tmp_path,
+) -> None:
+    """A whitespace ``runtime_id`` is ambiguous authority, not a free pass.
+
+    ``ProviderProfileCreate.runtime_id`` accepts a blank string, so this row is
+    reachable through the provider-profile API. Treating it as "nothing to
+    compare" would let it launch under every runtime.
+    """
+
+    async with _mm3788_raw_branch_context(
+        tmp_path,
+        db_name="mm3788_raw_unowned",
+        profile_runtime_id="   ",
+    ) as (session, service, user):
+        with pytest.raises(HTTPException) as exc_info:
+            await _mm3788_post_raw_execution(
+                service=service,
+                session=session,
+                user=user,
+                payload=_mm3788_raw_execution_request(
+                    target_runtime="codex_cli", profile_id="codex_minimax_team"
+                ),
+            )
+
+        assert exc_info.value.status_code == 409
+        detail = exc_info.value.detail
+        assert detail["code"] == "provider_profile_runtime_mismatch"
+        assert detail["profileRuntime"] == ""
+        assert detail["selectedRuntime"] == "codex_cli"
+        assert detail["message"] == (
+            "Provider Profile 'codex_minimax_team' does not declare an owning "
+            "runtime and cannot be used with runtime 'codex_cli'."
+        )
         service._client_adapter.start_workflow.assert_not_awaited()
 
 

@@ -359,18 +359,36 @@ async def resolve_agent_profile_snapshot(
         if compatible_provider is not None:
             # A Provider Profile stays owned by its managed runtime even when it
             # launches through Omnigent, so the requested profile must be one the
-            # harness can actually materialize for that runtime. This is the same
-            # capability boundary the execution-readiness projection uses to build
+            # selected harness can actually materialize under every launch policy
+            # the profile allows. Proving only that *some* materializer exists for
+            # the pair would accept a profile the readiness projection excludes:
+            # `codex-oauth-home@1` is registered for `codex_cli/openai` but is not
+            # accepted by the `pi-native` harness. This is the same capability
+            # boundary the readiness projection uses to build
             # `compatibleProviderProfiles`, not a second compatibility source.
+            from moonmind.omnigent.harness_platform.host_classes import (
+                get_launch_policy,
+            )
             from moonmind.omnigent.harness_platform.materializers import (
                 materializer_ref_for_provider,
+                validate_binding_materializer,
             )
 
+            harness_selection = document.get("harness") or {}
             try:
-                materializer_ref_for_provider(
+                materializer_ref = materializer_ref_for_provider(
                     compatible_provider.runtime_id,
                     compatible_provider.provider_id,
                 )
+                for policy_ref in document.get("allowedLaunchPolicyRefs") or ():
+                    validate_binding_materializer(
+                        materializer_ref=materializer_ref,
+                        harness_implementation_ref=str(
+                            harness_selection.get("implementationRef") or ""
+                        ),
+                        harness_id=str(harness_selection.get("id") or "") or None,
+                        host_mode=get_launch_policy(policy_ref).hostMode,
+                    )
             except HarnessPlatformError as exc:
                 raise HTTPException(
                     status.HTTP_409_CONFLICT,

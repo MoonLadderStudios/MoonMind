@@ -1099,8 +1099,12 @@ runtime and the selected execution target; it must never look for
   target's `providerRuntime` and its declared provider requirements.
 - A generic (v2) Agent Profile uses the compatibility or readiness result that
   declares the allowed Provider Profiles. A profile is compatible only when the
-  harness can materialize credentials for that profile's
-  `(runtime_id, provider_id)` pair; being globally enabled is never sufficient.
+  materializer registered for that profile's `(runtime_id, provider_id)` pair is
+  accepted by the *selected* harness under every launch policy the Agent Profile
+  allows; being globally enabled, or merely having some registered materializer,
+  is never sufficient. This is the same capability boundary the readiness
+  projection applies when it builds `compatibleProviderProfiles`, so an API
+  client cannot submit a pair the UI reports as incompatible.
 - An unavailable historical profile may still render while editing an existing
   workflow, but requires replacement before submission.
 
@@ -1125,6 +1129,20 @@ cannot be used with runtime 'codex_cli'.
 The rule is expressed once as a typed contract at the shared authoring
 boundary — `api_service/services/provider_profile_runtime.py` — rather than
 copied per router, so a new authoring path cannot silently omit it.
+
+Two states are ambiguous rather than exempt, and both are rejected:
+
+- A profile whose `runtime_id` is blank or whitespace-only names no owning
+  runtime. Accepting it would make it launchable under every runtime, which is
+  precisely the state this invariant exists to prevent.
+- A payload whose runtime fields disagree — for example a payload-level
+  `targetRuntime` beside a different `workflow.runtime.mode` — has no single
+  authored target. The effective runtime is resolved with the precedence the
+  worker itself applies (`workflow.runtime.mode` first), and the pair is
+  validated against *every* runtime the payload names, so a second field cannot
+  decide the launch after the boundary approved the pair for a different
+  runtime. Deferring to the Omnigent facade requires an unambiguous Omnigent
+  selection.
 
 Its primary placement is the authority handoff every launch converges on,
 `TemporalExecutionService.create_execution`. Direct execution submission (both

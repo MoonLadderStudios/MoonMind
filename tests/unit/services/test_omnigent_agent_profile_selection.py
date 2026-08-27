@@ -826,9 +826,12 @@ _MM3788_V2_DOCUMENT = {
 class _GenericV2Session(_Session):
     """Session exposing a generic (v2) Agent Profile version."""
 
-    def __init__(self, *, provider_runtime_id: str) -> None:
+    def __init__(
+        self, *, provider_runtime_id: str, harness_id: str = "codex-native"
+    ) -> None:
         super().__init__()
         self.version.document = copy.deepcopy(_MM3788_V2_DOCUMENT)
+        self.version.document["harness"]["id"] = harness_id
         self.provider = SimpleNamespace(
             profile_id="mm3788-openai-profile",
             enabled=True,
@@ -892,3 +895,31 @@ async def test_mm3788_generic_v2_selection_accepts_a_compatible_runtime_profile(
 
     assert snapshot["providerProfileRef"] == "mm3788-openai-profile"
     assert isinstance(session.added[0], OmnigentAgentProfileUsage)
+
+
+@pytest.mark.asyncio
+async def test_mm3788_generic_v2_selection_rejects_a_harness_the_materializer_refuses() -> None:
+    """A registered materializer is not proof of harness compatibility.
+
+    ``codex-oauth-home@1`` exists for ``codex_cli/openai``, so a lookup that only
+    proves registration accepts this pair. The readiness projection excludes it:
+    the materializer does not accept the ``pi-native`` harness, so the UI never
+    offers the profile for this execution target.
+    """
+
+    session = _GenericV2Session(
+        provider_runtime_id="codex_cli", harness_id="pi-native"
+    )
+
+    with pytest.raises(HTTPException) as caught:
+        await resolve_agent_profile_snapshot(
+            session,
+            selection=_mm3788_v2_selection(),
+            consumer_type="workflow",
+            consumer_id="mm3788-workflow-harness-reject",
+            user=SimpleNamespace(id=uuid4(), is_superuser=True),
+        )
+
+    assert caught.value.status_code == 409
+    assert "mm3788-openai-profile" in caught.value.detail
+    assert session.added == []

@@ -24,7 +24,7 @@ accepts a pair the runtime-scoped selectors would never offer.
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from typing import Any, Mapping, NamedTuple
 
 from api_service.db.models import ManagedAgentProviderProfile
 from moonmind.workflows.executions.runtime_defaults import normalize_runtime_id
@@ -60,9 +60,17 @@ class ProviderProfileRuntimeMismatchError(ValueError):
         selected_runtime: str,
     ) -> None:
         super().__init__(
-            f"Provider Profile {profile_id!r} belongs to runtime "
-            f"{profile_runtime!r} and cannot be used with runtime "
-            f"{selected_runtime!r}."
+            (
+                f"Provider Profile {profile_id!r} belongs to runtime "
+                f"{profile_runtime!r} and cannot be used with runtime "
+                f"{selected_runtime!r}."
+            )
+            if profile_runtime
+            else (
+                f"Provider Profile {profile_id!r} does not declare an owning "
+                f"runtime and cannot be used with runtime "
+                f"{selected_runtime!r}."
+            )
         )
         self.profile_id = profile_id
         self.profile_runtime = profile_runtime
@@ -98,9 +106,15 @@ def require_provider_profile_runtime(
     """Reject a Provider Profile that is not owned by the selected runtime.
 
     Canonical runtime IDs decide the comparison, so a legacy spelling such as
-    ``codex`` is compared as ``codex_cli``. With no profile, no effective
-    runtime, or an unset ``runtime_id`` there is nothing to compare, and the
-    ``omnigent`` facade defers to the Omnigent selection service.
+    ``codex`` is compared as ``codex_cli``. With no profile or no effective
+    runtime there is nothing to compare, and the ``omnigent`` facade defers to
+    the Omnigent selection service.
+
+    A profile that names no owning runtime is rejected rather than accepted for
+    every runtime. ``runtime_id`` is the field that decides credential
+    materialization and launch strategy, so a blank or whitespace-only value is
+    the ambiguous state this invariant exists to keep out of a launch, not a
+    reason to skip the check.
     """
 
     if profile is None or not selected_runtime:
@@ -110,7 +124,13 @@ def require_provider_profile_runtime(
         return
     raw_profile_runtime = str(getattr(profile, "runtime_id", "") or "").strip()
     if not raw_profile_runtime:
-        return
+        # ``normalize_runtime_id`` substitutes the deployment default for an
+        # empty value, so the unset owner is reported verbatim instead.
+        raise ProviderProfileRuntimeMismatchError(
+            profile_id=profile_id,
+            profile_runtime="",
+            selected_runtime=canonical_runtime,
+        )
     profile_runtime = normalize_runtime_id(raw_profile_runtime)
     if profile_runtime == canonical_runtime:
         return
@@ -196,16 +216,36 @@ def _task_payload(source: Mapping[str, Any]) -> Mapping[str, Any] | None:
     return None
 
 
+class LaunchTargetProfileSelection(NamedTuple):
+    """The runtime/profile selection an authored launch target carries."""
+
+    #: Every distinct canonical runtime the payload names, most authoritative
+    #: first. ``runtime_ids[0]`` is the runtime the worker resolves.
+    runtime_ids: tuple[str, ...]
+    #: The Provider Profile the payload names, if any.
+    profile_id: str | None
+
+
 def resolve_launch_target_profile_selection(
     target: Any,
-) -> tuple[str | None, str | None]:
-    """Return ``(canonical_runtime, profile_id)`` authored in a launch target.
+) -> LaunchTargetProfileSelection:
+    """Return the runtime/profile selection authored in a launch target.
 
-    Mirrors the layered lookup the executions router applies to the same
-    workflow-start payload shape: the runtime block wins over the task block,
-    which wins over the initial parameters, which win over the target envelope.
-    Nested Omnigent Agent Profile selections are deliberately not consulted —
-    they name an Agent Profile, not a Provider Profile.
+    Runtimes are read in the precedence the worker itself applies to the same
+    canonical payload — the runtime block's ``mode`` wins over the task block's
+    ``targetRuntime``, which wins over the initial parameters, which win over
+    the target envelope. Reading these fields in any other order lets a raw
+    submission with conflicting runtime fields satisfy this boundary for one
+    runtime and then execute as another.
+
+    Every distinct runtime the payload names is returned, not only the winner,
+    because a payload that names more than one has no unambiguous authored
+    target: the invariant has to hold for each of them before launch.
+
+    The Provider Profile lookup keeps the layered order the executions router
+    applies to the same workflow-start payload shape. Nested Omnigent Agent
+    Profile selections are deliberately not consulted — they name an Agent
+    Profile, not a Provider Profile.
     """
 
     target_map: Mapping[str, Any] = target if isinstance(target, Mapping) else {}
@@ -223,14 +263,22 @@ def resolve_launch_target_profile_selection(
             runtime_payload = candidate
             break
 
-    raw_runtime = (
-        parameters.get("targetRuntime")
-        or target_map.get("targetRuntime")
-        or runtime_payload.get("mode")
-    )
-    runtime_id: str | None = None
-    if str(raw_runtime or "").strip():
-        runtime_id = normalize_runtime_id(raw_runtime)
+    runtime_ids: list[str] = []
+    for source, key in (
+        (runtime_payload, "mode"),
+        (task_payload, "targetRuntime"),
+        (task_payload, "target_runtime"),
+        (parameters, "targetRuntime"),
+        (parameters, "target_runtime"),
+        (target_map, "targetRuntime"),
+        (target_map, "target_runtime"),
+    ):
+        raw_runtime = source.get(key)
+        if not str(raw_runtime or "").strip():
+            continue
+        canonical_runtime = normalize_runtime_id(raw_runtime)
+        if canonical_runtime not in runtime_ids:
+            runtime_ids.append(canonical_runtime)
 
     profile_id: str | None = None
     for source in (runtime_payload, task_payload, parameters, target_map):
@@ -238,7 +286,10 @@ def resolve_launch_target_profile_selection(
         if profile_id:
             break
 
-    return runtime_id, profile_id
+    return LaunchTargetProfileSelection(
+        runtime_ids=tuple(runtime_ids),
+        profile_id=profile_id,
+    )
 
 
 async def require_launch_target_provider_profile_runtime(
@@ -255,19 +306,25 @@ async def require_launch_target_provider_profile_runtime(
     A named profile that does not exist is left to the launch path that
     resolves it: this boundary owns the runtime relationship, and an absent row
     carries no runtime to compare.
+
+    A payload that names conflicting runtimes is checked against every one of
+    them. Validating only the winner would let a second authored field decide
+    the launch after this boundary approved the pair for a different runtime.
     """
 
-    runtime_id, profile_id = resolve_launch_target_profile_selection(target)
-    if not runtime_id or not profile_id:
+    selection = resolve_launch_target_profile_selection(target)
+    profile_id = selection.profile_id
+    if not selection.runtime_ids or not profile_id:
         return
-    if runtime_id == OMNIGENT_RUNTIME_ID:
+    if all(runtime == OMNIGENT_RUNTIME_ID for runtime in selection.runtime_ids):
         return
     profile = await _load_owned_provider_profile(
         session=session,
         profile_id=profile_id,
     )
-    require_provider_profile_runtime(
-        profile=profile,
-        profile_id=profile_id,
-        selected_runtime=runtime_id,
-    )
+    for runtime_id in selection.runtime_ids:
+        require_provider_profile_runtime(
+            profile=profile,
+            profile_id=profile_id,
+            selected_runtime=runtime_id,
+        )

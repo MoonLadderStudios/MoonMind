@@ -8102,6 +8102,17 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         providerProfilesQuery.isPlaceholderData ||
         providerProfilesQuery.isFetching;
 
+  // A settled failure of any request that supplies the runtime's profiles is a
+  // load failure, not an empty result. For Omnigent the list comes from the
+  // readiness projections, so the ordinary profile request can succeed while
+  // the user still has no profiles to choose from.
+  const providerProfilesLoadFailedForRuntime =
+    providerProfilesQuery.isError ||
+    (runtime === "omnigent" &&
+      (omnigentCatalogQuery.isError ||
+        (selectedProfileIsGenericV2 &&
+          omnigentExecutionReadinessQuery.isError)));
+
   const providerOptions = [...activeProviderProfiles]
     .sort((left, right) => {
       const leftDefault = Boolean(left.is_default);
@@ -13693,7 +13704,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             </div>
           ) : providerProfilesUnresolvedForRuntime ? null : (
             <div id="queue-provider-profile-wrap">
-              {providerProfilesQuery.isError ? (
+              {providerProfilesLoadFailedForRuntime ? (
                 <p className="small" role="alert" id="queue-auth-profile-hint">
                   Failed to load provider profiles.
                 </p>
