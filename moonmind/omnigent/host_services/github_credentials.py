@@ -15,7 +15,7 @@ from moonmind.omnigent.host_services.docker_backend import DockerCommandBackend
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
 _SAFE_VOLUME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$")
-_TARGET_PATH = "/home/app/.cache/moonmind-xdg"
+_TARGET_PATH = "/home/app/.cache/moonmind-gh"
 
 
 def github_repository_from_request(request: AgentExecutionRequest) -> str:
@@ -132,13 +132,13 @@ class OmnigentGithubCredentialService:
                 code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
             )
         script = (
-            "set -eu; umask 077; mkdir -p /config/gh; "
+            "set -eu; umask 077; mkdir -p /config; "
             "printf 'github.com:\\n    user: x-access-token\\n    oauth_token: ' "
-            "> /config/gh/hosts.yml; "
-            "cat >> /config/gh/hosts.yml; "
-            "printf '\\n    git_protocol: https\\n' >> /config/gh/hosts.yml; "
+            "> /config/hosts.yml; "
+            "cat >> /config/hosts.yml; "
+            "printf '\\n    git_protocol: https\\n' >> /config/hosts.yml; "
             "chown -R \"$1:$2\" /config; "
-            "chmod 0700 /config /config/gh; chmod 0600 /config/gh/hosts.yml"
+            "chmod 0700 /config; chmod 0600 /config/hosts.yml"
         )
         try:
             await self._backend.run(

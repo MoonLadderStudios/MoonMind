@@ -757,7 +757,7 @@ async def test_github_credential_projection_transports_secret_only_on_stdin(
     assert github_repository_from_request(request) == "MoonLadderStudios/Tactics"
     assert attachment is not None
     assert attachment["accessMode"] == "read-only"
-    assert attachment["targetPath"] == "/home/app/.cache/moonmind-xdg"
+    assert attachment["targetPath"] == "/home/app/.cache/moonmind-gh"
     inspectable = json.dumps(
         {
             "calls": [argv for argv, _kwargs in backend.calls],

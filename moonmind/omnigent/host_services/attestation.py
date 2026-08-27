@@ -395,8 +395,8 @@ class DockerOmnigentHostAttestor:
             verify_github_config_script = (
                 'test "$(stat -c %u:%g "$1")" = "$2:$3"; '
                 'test "$(stat -c %a "$1")" = 700; '
-                'test "$(stat -c %u:%g "$1/gh/hosts.yml")" = "$2:$3"; '
-                'test "$(stat -c %a "$1/gh/hosts.yml")" = 600'
+                'test "$(stat -c %u:%g "$1/hosts.yml")" = "$2:$3"; '
+                'test "$(stat -c %a "$1/hosts.yml")" = 600'
             )
             code, _out, _err = await self._backend.run(
                 [

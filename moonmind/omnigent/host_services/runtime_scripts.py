@@ -38,10 +38,10 @@ _GITHUB_RUNTIME_ENV = {
     "GIT_CONFIG_COUNT": "1",
     "GIT_CONFIG_KEY_0": "credential.https://github.com.helper",
     "GIT_CONFIG_VALUE_0": "!/opt/moonmind-tools/bin/gh auth git-credential",
+    "GH_CONFIG_DIR": "/home/app/.cache/moonmind-gh",
     "GH_PROMPT_DISABLED": "1",
     "GH_NO_UPDATE_NOTIFIER": "1",
     "GH_NO_EXTENSION_UPDATE_NOTIFIER": "1",
-    "XDG_CONFIG_HOME": "/home/app/.cache/moonmind-xdg",
 }
 
 
@@ -114,7 +114,7 @@ class OmnigentRuntimeScriptService:
         if github_credential_attachment is not None:
             if (
                 str(github_credential_attachment.get("targetPath") or "")
-                != _GITHUB_RUNTIME_ENV["XDG_CONFIG_HOME"]
+                != _GITHUB_RUNTIME_ENV["GH_CONFIG_DIR"]
             ):
                 raise ValueError("GitHub credential attachment target is unsupported")
             environment.update(_GITHUB_RUNTIME_ENV)
