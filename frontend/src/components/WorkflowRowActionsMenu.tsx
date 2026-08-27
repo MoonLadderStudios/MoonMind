@@ -78,6 +78,10 @@ const KEBAB_ICON = (
   </svg>
 );
 
+// Actions promoted out of the overflow menu onto the row itself. Everything
+// not listed here stays behind the kebab.
+const INLINE_ACTION_IDS = new Set(['cancel', 'rerun', 'create-remediation-task']);
+
 const ACTION_AVAILABILITY_PENDING_REASON = 'Checking availability…';
 const DEFAULT_WORKFLOW_ACTION_ERROR = 'The workflow action could not be completed.';
 
@@ -162,13 +166,13 @@ export function WorkflowRowActionsMenu({
 }: WorkflowRowActionsMenuProps) {
   const queryClient = useQueryClient();
   const toast = useDashboardToast();
-  const [hasOpened, setHasOpened] = useState(false);
+  const [hasIntent, setHasIntent] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [activeDialog, setActiveDialog] = useState<RowActionDialogKind | null>(null);
 
   const detailQuery = useQuery({
     queryKey: ['workflow-row-actions-detail', workflowId],
-    enabled: actionsEnabled && hasOpened && Boolean(workflowId),
+    enabled: actionsEnabled && hasIntent && Boolean(workflowId),
     staleTime: 5000,
     queryFn: async () => {
       const response = await fetch(
@@ -180,6 +184,22 @@ export function WorkflowRowActionsMenu({
       return RowActionsExecutionSchema.parse(await response.json());
     },
   });
+
+  // The row detail endpoint performs a Temporal sync, so it must never fire
+  // for every visible row on mount. Arm it on the first sign the operator is
+  // reaching for this row, and refresh it whenever they return to a row whose
+  // cached capabilities have gone stale.
+  const armActions = useCallback(() => {
+    if (!actionsEnabled || !workflowId) return;
+    if (!hasIntent) {
+      setHasIntent(true);
+      return;
+    }
+    // Hover, focus and menu-open all arm the same row, so ignore repeat
+    // signals while a request is already in flight.
+    if (detailQuery.isFetching) return;
+    if (detailQuery.isStale) void detailQuery.refetch();
+  }, [actionsEnabled, workflowId, hasIntent, detailQuery]);
 
   const execution: RowActionsExecution | undefined = detailQuery.data;
   const actions = execution?.actions;
@@ -385,6 +405,7 @@ export function WorkflowRowActionsMenu({
       selectedRecoveryStepEligible: false,
       selectedRecoveryStepDisabledReason: null,
       canCreateRemediation: actionAvailabilityPending ? true : canCreateRemediation,
+      keepRemediationVisible: true,
       handlers: {
         onRename: () => {
           setActionError(null);
@@ -507,6 +528,8 @@ export function WorkflowRowActionsMenu({
     : detailQuery.isError
       ? 'Unable to load workflow actions.'
       : 'No workflow actions are currently available.';
+  const inlineItems = items.filter((item) => INLINE_ACTION_IDS.has(item.id));
+  const menuItems = items.filter((item) => !INLINE_ACTION_IDS.has(item.id));
   const subject = workflowSubject;
   const closeDialog = () => {
     setActiveDialog(null);
@@ -530,18 +553,38 @@ export function WorkflowRowActionsMenu({
   };
 
   return (
-    <div className="workflow-row-actions">
-      <WorkflowActionsMenu
-        items={items}
-        triggerContent={KEBAB_ICON}
-        triggerAriaLabel="Actions"
-        triggerClassName="secondary td-workflow-actions-trigger td-workflow-actions-trigger-compact"
-        menuAriaLabel="Actions"
-        emptyMessage={emptyMessage}
-        onOpenChange={(open) => {
-          if (open) setHasOpened(true);
-        }}
-      />
+    <div
+      className="workflow-row-actions"
+      onMouseEnter={armActions}
+      onFocus={armActions}
+    >
+      <div className="workflow-row-actions-controls">
+        {inlineItems.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            className={`secondary workflow-row-actions-inline-button${
+              item.danger ? ' workflow-row-actions-inline-button--danger' : ''
+            }`}
+            disabled={Boolean(item.disabledReason)}
+            title={item.disabledReason || undefined}
+            onClick={item.onSelect}
+          >
+            {item.label}
+          </button>
+        ))}
+        <WorkflowActionsMenu
+          items={menuItems}
+          triggerContent={KEBAB_ICON}
+          triggerAriaLabel="More actions"
+          triggerClassName="secondary td-workflow-actions-trigger td-workflow-actions-trigger-compact"
+          menuAriaLabel="More actions"
+          emptyMessage={emptyMessage}
+          onOpenChange={(open) => {
+            if (open) armActions();
+          }}
+        />
+      </div>
       <DashboardActionDialog
         open={activeDialog === 'rename'}
         title="Rename workflow"

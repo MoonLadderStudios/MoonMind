@@ -9027,6 +9027,36 @@ button.workflow-workspace-sidebar-row:active {
   align-items: flex-start;
 }
 
+.workflow-row-actions-controls {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: nowrap;
+}
+
+.workflow-row-actions-inline-button {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  height: 2rem;
+  padding: 0 0.6rem;
+  border-radius: 0.45rem;
+  font-size: 0.78rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.workflow-row-actions-inline-button--danger {
+  border-color: rgb(var(--mm-danger) / 0.5);
+  color: rgb(var(--mm-danger));
+}
+
+.workflow-row-actions-inline-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .td-workflow-actions-trigger-compact {
   min-width: 0;
   display: inline-flex;

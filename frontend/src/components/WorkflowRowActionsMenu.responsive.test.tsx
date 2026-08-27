@@ -143,7 +143,7 @@ describe('WorkflowRowActionsMenu card markup', () => {
       </div>,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
 
     // The mobile media query targets `.queue-card-actions .td-workflow-actions-popover`,
     // so the rendered popover must actually live under that ancestor chain.

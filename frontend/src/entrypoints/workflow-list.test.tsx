@@ -2467,7 +2467,7 @@ describe('Workflows Entrypoint', () => {
 
     await screen.findAllByText('Example task');
     expect(screen.queryByRole('columnheader', { name: 'Actions' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Actions' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'More actions' })).toBeNull();
   });
 
   it('renders a per-row Actions menu trigger when workflow actions are enabled', async () => {
@@ -2485,7 +2485,7 @@ describe('Workflows Entrypoint', () => {
 
     await screen.findAllByText('Example task');
     expect(screen.getByRole('columnheader', { name: 'Actions' })).toBeTruthy();
-    const triggers = screen.getAllByRole('button', { name: 'Actions' });
+    const triggers = screen.getAllByRole('button', { name: 'More actions' });
     expect(triggers.length).toBeGreaterThanOrEqual(1);
 
     // Opening the menu lazily fetches the workflow's action capabilities.

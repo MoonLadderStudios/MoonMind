@@ -113,6 +113,12 @@ export type WorkflowActionMenuBuilderParams = {
   /** Display-ready reason for an ineligible selected recovery step. */
   selectedRecoveryStepDisabledReason: string | null;
   canCreateRemediation: boolean;
+  /**
+   * Keep Remediate rendered (disabled, with a reason) even when the target
+   * is not eligible. The workflow list promotes it to a row button, where a
+   * button that appears and disappears per row makes the table ragged.
+   */
+  keepRemediationVisible?: boolean;
   handlers: WorkflowActionHandlers;
 };
 
@@ -142,6 +148,7 @@ export function buildWorkflowActionMenuItems(
     selectedRecoveryStepEligible,
     selectedRecoveryStepDisabledReason,
     canCreateRemediation,
+    keepRemediationVisible = false,
     handlers,
   } = params;
 
@@ -254,7 +261,9 @@ export function buildWorkflowActionMenuItems(
     id: 'create-remediation-task',
     label: 'Remediate',
     available: canCreateRemediation,
-    disabledReason: null,
+    disabledReason: keepRemediationVisible
+      ? 'Available for failed, stuck, or intervention-required workflows.'
+      : null,
     onSelect: handlers.onCreateRemediation,
   });
   addButton({
