@@ -100,9 +100,28 @@ class BootstrapController:
             raise ValueError(
                 "OpenCode is not configured yet; submit the API key first"
             )
+        from api_service.db.models import ManagedAgentProviderProfile
+
+        async with self._session_factory() as session:
+            provider_profile = await session.get(
+                ManagedAgentProviderProfile,
+                str(record.provider_profile_ref),
+            )
+        if provider_profile is None:
+            raise ValueError(
+                "the persisted OpenCode Provider Profile no longer exists"
+            )
+        desired_updates: dict[str, Any] = {}
+        current_model = str(provider_profile.default_model or "").strip()
+        if current_model:
+            desired_updates["model_display_name"] = current_model
+        current_effort = str(provider_profile.default_effort or "").strip()
+        if current_effort:
+            desired_updates["effort"] = validate_effort(current_effort)
         record = record.model_copy(
             update={
                 "state": BootstrapState.resolving_images,
+                "desired": record.desired.model_copy(update=desired_updates),
                 "revision": int(record.revision) + 1,
                 "updated_at": datetime.now(UTC),
             }

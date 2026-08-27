@@ -7,6 +7,7 @@ import json
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -14,6 +15,12 @@ from api_service.services.omnigent_agent_profile_selection import (
     default_launch_policy_ref,
 )
 from moonmind.omnigent.bootstrap.controller import BootstrapController
+from moonmind.omnigent.bootstrap.models import (
+    BootstrapDesired,
+    BootstrapRecord,
+    BootstrapState,
+)
+from moonmind.omnigent.bootstrap.opencode import resolve_model_by_display
 from moonmind.omnigent.harness_platform.catalog import create_catalog_snapshot
 
 _SERVER_IMAGE_REF = "ghcr.io/example/omnigent-server@sha256:" + "a" * 64
@@ -244,3 +251,59 @@ async def test_qualification_rejects_a_profile_without_a_launch_policy(
 
     with pytest.raises(ValueError, match="no allowed launch policy"):
         await _qualify(qualification_boundary)
+
+
+def test_model_resolution_accepts_a_qualified_opencode_model_before_live_validation() -> None:
+    resolved = resolve_model_by_display("opencode-go/gpt-5.6-luna")
+
+    assert resolved == {
+        "displayName": "opencode-go/gpt-5.6-luna",
+        "providerModelId": "gpt-5.6-luna",
+        "qualifiedId": "opencode-go/gpt-5.6-luna",
+    }
+
+
+@pytest.mark.asyncio
+async def test_requalification_uses_the_current_provider_profile_model(
+    monkeypatch,
+) -> None:
+    """Retry must not requalify a stale bootstrap-time model selection."""
+
+    import moonmind.omnigent.bootstrap.controller as controller_module
+
+    stored = BootstrapRecord(
+        state=BootstrapState.failed,
+        desired=BootstrapDesired(
+            modelDisplayName="Muse Spark 1.2 Contributor",
+            effort="xhigh",
+            acceptContributorDataUse=True,
+        ),
+        providerProfileRef="opencode-go-default",
+    )
+    provider_profile = SimpleNamespace(
+        default_model="opencode-go/gpt-5.6-luna",
+        default_effort="high",
+    )
+
+    @asynccontextmanager
+    async def _session_scope():
+        yield SimpleNamespace(get=AsyncMock(return_value=provider_profile))
+
+    reconciled: list[BootstrapRecord] = []
+
+    async def _reconcile(*, record, api_key, principal):
+        assert api_key is None
+        assert principal is None
+        reconciled.append(record)
+        return record
+
+    monkeypatch.setattr(controller_module, "load_bootstrap_record", lambda: stored)
+    monkeypatch.setattr(controller_module, "save_bootstrap_record", lambda _record: None)
+    controller = BootstrapController(session_factory=lambda: _session_scope())
+    monkeypatch.setattr(controller, "_reconcile", _reconcile)
+
+    result = await controller.requalify()
+
+    assert reconciled == [result]
+    assert result.desired.model_display_name == "opencode-go/gpt-5.6-luna"
+    assert result.desired.effort == "high"

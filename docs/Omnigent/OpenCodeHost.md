@@ -245,6 +245,10 @@ credential is already stored, so recovery never needs the API key again:
 POST /api/omnigent/bootstrap/opencode/retry
 ```
 
+Retry refreshes the desired model and effort from the current Provider Profile
+before qualification. Bootstrap-time model intent is not reused after an
+operator changes those Provider Profile defaults.
+
 ## Exact-host attestation (issue §8)
 
 Before runner/session creation, the exact host is verified:
