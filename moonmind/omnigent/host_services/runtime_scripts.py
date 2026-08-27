@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
+_RUNTIME_BIN_DIR = "/home/app/.omnigent/moonmind/bin"
+_RUNTIME_CONTEXT_DIR = "/home/app/.omnigent/moonmind/runtime-context"
+
 _OPENCODE_RUNTIME_ENV = {
     # MoonMind qualifies the exact pinned image + credential + model before
     # launch. Re-fetching mutable catalog data inside every session duplicates
@@ -36,7 +39,7 @@ _OPENCODE_PROXY_ENV_NAMES = frozenset(
 _GITHUB_RUNTIME_ENV = {
     "GIT_CONFIG_COUNT": "1",
     "GIT_CONFIG_KEY_0": "credential.https://github.com.helper",
-    "GIT_CONFIG_VALUE_0": "!/home/app/.local/bin/gh auth git-credential",
+    "GIT_CONFIG_VALUE_0": f"!{_RUNTIME_BIN_DIR}/gh auth git-credential",
     "GH_CONFIG_DIR": "/home/app/.config/gh",
     "GH_PROMPT_DISABLED": "1",
     "GH_NO_UPDATE_NOTIFIER": "1",
@@ -69,13 +72,20 @@ class OmnigentRuntimeScriptService:
             "MOONMIND_ACTIVE_SKILLS_DIR": str(skill_attachment["targetPath"]),
             "MOONMIND_STEP_EXECUTION_ID": step_execution_id,
         }
+        staging_dir = "/run/mm-credentials/opencode"
+        opencode_data = "/home/app/.local/share/opencode"
+        has_opencode_materializer = any(
+            str(attachment.get("targetPath") or "").rstrip("/") == staging_dir
+            for handle in credential_handles
+            for attachment in handle.get("attachments", [])
+        )
         tool_bins = [
             str(item["targetPath"]).rstrip("/") + "/bin"
             for item in tool_attachments
             if item.get("targetPath")
         ]
-        if github_credential_attachment is not None:
-            tool_bins.insert(0, "/home/app/.local/bin")
+        if has_opencode_materializer or github_credential_attachment is not None:
+            tool_bins.insert(0, _RUNTIME_BIN_DIR)
         # Always include the Omnigent venv so `docker exec` probes (attestation,
         # version checks) resolve the omnigent binary without a full PATH.
         environment["PATH"] = ":".join(
@@ -105,16 +115,9 @@ class OmnigentRuntimeScriptService:
         # Stage harness credentials from read-only volumes into the writable
         # tmpfs home. OpenCode needs to create repos/, cache/ etc. inside its
         # data directory, which a read-only credential mount would block.
-        staging_dir = "/run/mm-credentials/opencode"
-        opencode_data = "/home/app/.local/share/opencode"
-        runtime_context_dir = "/home/app/.moonmind/runtime-context"
-        opencode_context_wrapper = "/home/app/.local/bin/moonmind-opencode-context"
-        opencode_wrapper = "/home/app/.local/bin/opencode"
-        has_opencode_materializer = any(
-            str(attachment.get("targetPath") or "").rstrip("/") == staging_dir
-            for handle in credential_handles
-            for attachment in handle.get("attachments", [])
-        )
+        runtime_context_dir = _RUNTIME_CONTEXT_DIR
+        opencode_context_wrapper = f"{_RUNTIME_BIN_DIR}/moonmind-opencode-context"
+        opencode_wrapper = f"{_RUNTIME_BIN_DIR}/opencode"
         if has_opencode_materializer:
             environment.update(_OPENCODE_RUNTIME_ENV)
         if github_credential_attachment is not None:
@@ -155,7 +158,9 @@ class OmnigentRuntimeScriptService:
             + opencode_data
             + " "
             + runtime_context_dir
-            + " /home/app/.local/bin; "
+            + " "
+            + _RUNTIME_BIN_DIR
+            + "; "
             "cp "
             '"' + staging_dir + '/auth.json" '
             + opencode_data + "/auth.json; "
@@ -182,7 +187,9 @@ class OmnigentRuntimeScriptService:
             "'  export GH_NO_EXTENSION_UPDATE_NOTIFIER=1' "
             "'  export GIT_CONFIG_COUNT=1' "
             "'  export GIT_CONFIG_KEY_0=credential.https://github.com.helper' "
-            "'  export GIT_CONFIG_VALUE_0=\"!/home/app/.local/bin/gh auth git-credential\"' "
+            "'  export GIT_CONFIG_VALUE_0=\"!"
+            + _RUNTIME_BIN_DIR
+            + "/gh auth git-credential\"' "
             "'fi' 'exec \"$@\"' > "
             + opencode_context_wrapper
             + "; "
@@ -203,12 +210,12 @@ class OmnigentRuntimeScriptService:
             "/home/app/.config/gh/hosts.yml; "
             "chmod 0700 /home/app/.config/gh; "
             "chmod 0600 /home/app/.config/gh/hosts.yml; "
-            "mkdir -p /home/app/.local/bin; "
+            "mkdir -p " + _RUNTIME_BIN_DIR + "; "
             "printf '%s\\n' '#!/bin/sh' "
             "'export GH_CONFIG_DIR=/home/app/.config/gh' "
             "'exec /opt/moonmind-tools/bin/gh \"$@\"' "
-            "> /home/app/.local/bin/gh; "
-            "chmod 0700 /home/app/.local/bin/gh; fi; "
+            "> " + _RUNTIME_BIN_DIR + "/gh; "
+            "chmod 0700 " + _RUNTIME_BIN_DIR + "/gh; fi; "
             'if [ -n "${MOONMIND_OMNIGENT_CONTROL_CREDENTIAL_FILE:-}" ]; then '
             'test -r "$MOONMIND_OMNIGENT_CONTROL_CREDENTIAL_FILE"; '
             'OMNIGENT_API_TOKEN=$(cat "$MOONMIND_OMNIGENT_CONTROL_CREDENTIAL_FILE"); '

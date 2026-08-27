@@ -47,10 +47,10 @@ def test_opencode_materializer_pins_deterministic_server_startup_environment():
         environment["MOONMIND_STEP_EXECUTION_ID"]
         == "workflow:run:node-1:execution:1"
     )
-    assert "> /home/app/.local/bin/moonmind-opencode-context" in script
-    assert "> /home/app/.local/bin/opencode" in script
+    assert "> /home/app/.omnigent/moonmind/bin/moonmind-opencode-context" in script
+    assert "> /home/app/.omnigent/moonmind/bin/opencode" in script
     assert (
-        'exec /home/app/.local/bin/moonmind-opencode-context '
+        'exec /home/app/.omnigent/moonmind/bin/moonmind-opencode-context '
         '/usr/local/bin/opencode "$@"'
     ) in script
     assert "MOONMIND_STEP_EXECUTION_ID=$(cat" in script
@@ -91,9 +91,9 @@ def test_github_projection_exposes_only_non_secret_cli_environment():
     assert environment["GIT_CONFIG_COUNT"] == "1"
     assert environment["GIT_CONFIG_KEY_0"] == "credential.https://github.com.helper"
     assert environment["GIT_CONFIG_VALUE_0"] == (
-        "!/home/app/.local/bin/gh auth git-credential"
+        "!/home/app/.omnigent/moonmind/bin/gh auth git-credential"
     )
-    assert environment["PATH"].startswith("/home/app/.local/bin:")
+    assert environment["PATH"].startswith("/home/app/.omnigent/moonmind/bin:")
     passthrough = set(environment["OMNIGENT_RUNNER_ENV_PASSTHROUGH"].split(","))
     proxy_names = {
         "HTTP_PROXY",
@@ -114,6 +114,6 @@ def test_github_projection_exposes_only_non_secret_cli_environment():
     assert not any("TOKEN" in name or "SECRET" in name for name in environment)
     assert "cp /run/mm-credentials/github/hosts.yml" in _script
     assert "/home/app/.config/gh/hosts.yml" in _script
-    assert "> /home/app/.local/bin/gh" in _script
+    assert "> /home/app/.omnigent/moonmind/bin/gh" in _script
     assert "export GH_CONFIG_DIR=/home/app/.config/gh" in _script
     assert "GIT_CONFIG_VALUE_0" in _script

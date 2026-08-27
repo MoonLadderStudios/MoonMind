@@ -159,7 +159,8 @@ async def _run_exact_host_opencode_command(
         "bridge_dir=Path('/tmp/moonmind-opencode-attestation'), "
         "auth_secret='moonmind-attestation'); "
         "result = subprocess.run("
-        "['/home/app/.local/bin/moonmind-opencode-context', *sys.argv[1:]], "
+        "['/home/app/.omnigent/moonmind/bin/moonmind-opencode-context', "
+        "*sys.argv[1:]], "
         "env=env, text=True, capture_output=True); "
         "sys.stdout.write(result.stdout); sys.stderr.write(result.stderr); "
         "raise SystemExit(result.returncode)"
@@ -597,7 +598,9 @@ class DockerOmnigentHostAttestor:
                             HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED
                         ),
                     )
-            expected_helper = "!/home/app/.local/bin/gh auth git-credential"
+            expected_helper = (
+                "!/home/app/.omnigent/moonmind/bin/gh auth git-credential"
+            )
             code, observed, _err = await self._backend.run(
                 [
                     "docker",
