@@ -25,7 +25,10 @@ from moonmind.omnigent.secret_resolution import (
     ScopedSecretBundle,
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
-from moonmind.security.egress import OMNIGENT_EGRESS_NETWORK_REF
+from moonmind.security.egress import (
+    OMNIGENT_EGRESS_NETWORK_REF,
+    omnigent_proxy_env,
+)
 
 
 def _models(value: Any) -> set[str]:
@@ -60,6 +63,60 @@ def _validated_models(value: Any) -> list[str]:
             code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
         )
     return models
+
+
+def _model_probe_argv(
+    *, image_ref: str, credential_source: str, credential_target: str
+) -> list[str]:
+    """Build the exact pinned-runtime catalog probe command.
+
+    The credential materializer deliberately mounts a read-only staging
+    directory. OpenCode reads ``auth.json`` from its writable data directory,
+    so validation must perform the same staging step as the real host before
+    invoking catalog discovery.
+    """
+
+    argv = [
+        "docker",
+        "run",
+        "--rm",
+        "--network",
+        OMNIGENT_EGRESS_NETWORK_REF,
+        "--read-only",
+        "--user",
+        "1000:1000",
+        "--tmpfs",
+        "/home/app:rw,uid=1000,gid=1000,mode=0700",
+        "--tmpfs",
+        "/tmp:rw,uid=1000,gid=1000,mode=1777",
+        "--mount",
+        (f"type=volume,src={credential_source}," f"dst={credential_target},readonly"),
+        "--env",
+        "HOME=/home/app",
+    ]
+    for item in omnigent_proxy_env():
+        argv.extend(("--env", item))
+    stage_and_probe = (
+        "set -eu; "
+        "unset OPENAI_API_KEY ANTHROPIC_API_KEY OPENCODE_AUTH_CONTENT "
+        "OPENCODE_CONFIG OPENCODE_CONFIG_CONTENT; "
+        "mkdir -p /home/app/.local/share/opencode; "
+        'cp "$1/auth.json" /home/app/.local/share/opencode/auth.json; '
+        "chmod 0600 /home/app/.local/share/opencode/auth.json; "
+        "exec opencode models --refresh"
+    )
+    argv.extend(
+        (
+            "--entrypoint",
+            "/bin/sh",
+            image_ref,
+            "-ceu",
+            stage_and_probe,
+            "--",
+            credential_target,
+        )
+    )
+    return argv
 
 
 class OpenCodeProviderRuntimeValidationService:
@@ -149,30 +206,11 @@ class OpenCodeProviderRuntimeValidationService:
                 )
             )
             attachment = handle.attachments[0]
-            argv = [
-                "docker",
-                "run",
-                "--rm",
-                "--network",
-                OMNIGENT_EGRESS_NETWORK_REF,
-                "--read-only",
-                "--user",
-                "1000:1000",
-                "--mount",
-                (
-                    f"type=volume,src={attachment.sourceRef},"
-                    f"dst={attachment.targetPath},readonly"
-                ),
-                "--entrypoint",
-                "/bin/sh",
-                self._image_ref,
-                "-ceu",
-                (
-                    "unset OPENAI_API_KEY ANTHROPIC_API_KEY OPENCODE_AUTH_CONTENT "
-                    "OPENCODE_CONFIG OPENCODE_CONFIG_CONTENT; "
-                    "opencode models 2>&1 | head -n 500"
-                ),
-            ]
+            argv = _model_probe_argv(
+                image_ref=self._image_ref,
+                credential_source=attachment.sourceRef,
+                credential_target=attachment.targetPath,
+            )
             code, stdout, _stderr = await self._backend.run(argv, timeout_seconds=120)
             if code != 0 and "Unable to find image" in _stderr.decode(
                 "utf-8", errors="replace"
@@ -259,4 +297,8 @@ class OpenCodeProviderRuntimeValidationService:
                         raise
 
 
-__all__ = ["OpenCodeProviderRuntimeValidationService", "_validated_models"]
+__all__ = [
+    "OpenCodeProviderRuntimeValidationService",
+    "_model_probe_argv",
+    "_validated_models",
+]

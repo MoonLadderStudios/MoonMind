@@ -133,7 +133,7 @@ Validation (Settings → Validate):
 
 1. Acquire a temporary Provider Profile maintenance lease
 2. Materialize the proposed key through `opencode-auth-json@1` into a disposable Docker volume
-3. Launch the digest-pinned OpenCode host image and query its model options through Omnigent
+3. Launch the digest-pinned OpenCode host image on restricted egress, stage the read-only credential into OpenCode's writable data directory exactly as the production host does, and query the refreshed CLI model catalog
 4. Require at least one `opencode-go/<model-id>` result
 5. Delete the validation host and credential volume, then release the maintenance lease
 6. Persist only normalized model metadata, image/runtime identity, and validation evidence
