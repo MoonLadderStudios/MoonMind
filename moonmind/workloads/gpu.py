@@ -71,12 +71,17 @@ _NON_GPU_LAUNCH_FAILURE_PATTERNS: tuple[str, ...] = (
 # vendor/runtime diagnostic string, never a product or repository condition.
 # Every pattern is specific enough that a container which started and then wrote
 # GPU-shaped text to stderr cannot be mistaken for a refused device request.
+#
+# Precedence is most-specific-first, because the vendor stack reports a device
+# failure *through* its own tooling: a host with the runtime installed but no
+# usable device emits both the generic ``nvidia-container-cli`` prefix and a
+# specific device diagnostic. Matching the generic prefix first would direct an
+# operator toward repairing a runtime that is already working instead of toward
+# device capacity, so the bare vendor-stack prefixes are the last resort.
 _GPU_LAUNCH_FAILURE_PATTERNS: tuple[tuple[GpuLaunchFailureReason, tuple[str, ...]], ...] = (
     (
         "nvidia_runtime_unavailable",
         (
-            "nvidia-container-cli",
-            "nvidia-container-runtime",
             "unknown or invalid runtime name: nvidia",
             "unknown runtime specified nvidia",
         ),
@@ -105,6 +110,16 @@ _GPU_LAUNCH_FAILURE_PATTERNS: tuple[tuple[GpuLaunchFailureReason, tuple[str, ...
             "capabilities: [[gpu]]",
         ),
     ),
+    (
+        # Last resort: the installed vendor stack reported something no specific
+        # signature above recognized, so the runtime itself is the only evidence
+        # available.
+        "nvidia_runtime_unavailable",
+        (
+            "nvidia-container-cli",
+            "nvidia-container-runtime",
+        ),
+    ),
 )
 
 _DIGEST_PATTERN = re.compile(r"sha256:[0-9a-f]{64}")
@@ -114,11 +129,18 @@ def gpu_device_request_args(gpu: WorkloadGpuRequest) -> list[str]:
     """Return the Docker device-request arguments for a generic GPU request.
 
     ``count: "all"`` yields ``--gpus all``; a numeric count yields
-    ``--gpus <count>``. The vendor is validated by the request contract, so no
-    vendor branching happens here.
+    ``--gpus <count>``. Declared driver capabilities are appended as Docker's
+    own quoted ``capabilities=`` device-request field, whose value is itself
+    comma-separated and therefore must stay quoted inside the option's CSV
+    syntax. The vendor is validated by the request contract, so no vendor
+    branching happens here.
     """
 
-    return [GPU_DEVICE_REQUEST_FLAG, gpu.device_request_value]
+    value = gpu.device_request_value
+    if gpu.capabilities:
+        capabilities = ",".join(gpu.capabilities)
+        value = f'count={value},"capabilities={capabilities}"'
+    return [GPU_DEVICE_REQUEST_FLAG, value]
 
 
 class GpuLaunchFailure(BaseModel):
@@ -134,25 +156,24 @@ class GpuLaunchFailure(BaseModel):
     exit_code: int | None = Field(None, alias="exitCode")
 
 
-def classify_gpu_launch_failure(
+def gpu_launch_refusal(
     *,
     gpu: WorkloadGpuRequest | None,
-    exit_code: int | None,
     stderr: str,
+    exit_code: int | None = None,
 ) -> GpuLaunchFailure | None:
-    """Classify a failed run as a GPU device-request refusal, or not.
+    """Classify a launch-phase failure as a GPU device-request refusal, or not.
 
-    A refusal is recognized only when Docker itself refused to run the
-    container — ``exit_code`` equals :data:`DOCKER_LAUNCH_FAILURE_EXIT_CODE` —
-    *and* stderr carries a specific vendor/runtime diagnostic. Returns ``None``
-    when no GPU was requested, when the run succeeded or was cancelled, when the
-    diagnostic names a non-GPU launch failure such as an unreachable Docker
-    daemon, and when the container started and exited nonzero on its own, which
-    stays an ordinary process exit failure even if the workload wrote
-    GPU-shaped text to stderr.
+    This is the single authority for recognizing a refused device request:
+    stderr must carry a specific vendor/runtime diagnostic. Callers whose launch
+    phase is already its own command — an explicit container create or start —
+    use it directly, because such a failure cannot be an application exit.
+    Returns ``None`` when no GPU was requested, when there is no diagnostic, and
+    when the diagnostic names a non-GPU launch failure such as an unreachable
+    Docker daemon.
     """
 
-    if gpu is None or exit_code != DOCKER_LAUNCH_FAILURE_EXIT_CODE:
+    if gpu is None:
         return None
     haystack = str(stderr or "").lower()
     if not haystack:
@@ -163,6 +184,27 @@ def classify_gpu_launch_failure(
         if any(pattern.lower() in haystack for pattern in patterns):
             return GpuLaunchFailure(reason=reason, exitCode=exit_code)
     return None
+
+
+def classify_gpu_launch_failure(
+    *,
+    gpu: WorkloadGpuRequest | None,
+    exit_code: int | None,
+    stderr: str,
+) -> GpuLaunchFailure | None:
+    """Classify a failed one-shot run as a GPU device-request refusal, or not.
+
+    One ``docker run`` merges the launch phase with the application's own exit,
+    so a refusal is recognized only when Docker itself refused to run the
+    container — ``exit_code`` equals :data:`DOCKER_LAUNCH_FAILURE_EXIT_CODE` —
+    and :func:`gpu_launch_refusal` then recognizes the diagnostic. A container
+    that started and exited nonzero on its own stays an ordinary process exit
+    failure even if the workload wrote GPU-shaped text to stderr.
+    """
+
+    if exit_code != DOCKER_LAUNCH_FAILURE_EXIT_CODE:
+        return None
+    return gpu_launch_refusal(gpu=gpu, stderr=stderr, exit_code=exit_code)
 
 
 def gpu_launch_observations(
@@ -177,7 +219,10 @@ def gpu_launch_observations(
         return None
     failure = classify_gpu_launch_failure(gpu=gpu, exit_code=exit_code, stderr=stderr)
     return {
-        "request": gpu.model_dump(mode="json", by_alias=True),
+        # ``exclude_none`` keeps the observation compact and keeps an omitted
+        # optional request field absent, so evidence recorded for one semantic
+        # request stays byte-identical as the request contract grows.
+        "request": gpu.model_dump(mode="json", by_alias=True, exclude_none=True),
         "deviceRequestArgs": gpu_device_request_args(gpu),
         "launchFailure": (
             failure.model_dump(mode="json", by_alias=True)
@@ -335,7 +380,7 @@ def verified_gpu_observations(
             "qualification records require realized GPU device-request evidence"
         )
     realized_request = observations.get("request")
-    expected_request = gpu.model_dump(mode="json", by_alias=True)
+    expected_request = gpu.model_dump(mode="json", by_alias=True, exclude_none=True)
     if realized_request != expected_request:
         raise ValueError(
             "qualification evidence realized a different GPU request than the "
@@ -442,6 +487,7 @@ __all__ = [
     "classify_gpu_launch_failure",
     "gpu_device_request_args",
     "gpu_launch_observations",
+    "gpu_launch_refusal",
     "moonmind_revision",
     "parse_image_digest",
     "verified_gpu_observations",

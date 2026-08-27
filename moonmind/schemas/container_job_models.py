@@ -10,7 +10,12 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from moonmind.schemas.workload_models import WorkloadGpuRequest
+from moonmind.schemas.workload_models import (
+    WorkloadGpuCapability,
+    WorkloadGpuRequest,
+    WorkloadGpuRequestError,
+    WorkloadGpuVendor,
+)
 from moonmind.schemas.workspace_locator_models import (
     ExternalStateLocator,
     ManagedWorkspaceLocator,
@@ -125,6 +130,15 @@ class ContainerJobFailureClass(StrEnum):
     REGISTRY_AUTH_FAILED = "registry_auth_failed"
     CREDENTIAL_CLEANUP_FAILED = "credential_cleanup_failed"
     RESOURCE_LIMIT_EXCEEDED = "resource_limit_exceeded"
+    # Generic accelerator/GPU resource outcomes (#3779). Every value describes a
+    # resource-request decision the service made; none names a vendor product,
+    # an application, or a framework.
+    GPU_REQUEST_INVALID = "gpu_request_invalid"
+    GPU_VENDOR_UNSUPPORTED = "gpu_vendor_unsupported"
+    GPU_COUNT_UNSUPPORTED = "gpu_count_unsupported"
+    GPU_BACKEND_UNSUPPORTED = "gpu_backend_unsupported"
+    GPU_RUNTIME_UNAVAILABLE = "gpu_runtime_unavailable"
+    GPU_RESOURCE_UNAVAILABLE = "gpu_resource_unavailable"
 
 
 class AuxiliaryOutcomeState(StrEnum):
@@ -526,6 +540,170 @@ class ImageObservation(ContractModel):
     build_duration_ms: int | None = Field(None, alias="buildDurationMs", ge=0)
 
 
+class GpuObservation(ContractModel):
+    """Bounded, non-sensitive observation of one resolved GPU resource request.
+
+    It records the caller's semantic request, whether the selected backend
+    reported support for it, whether the container was launched carrying it, and
+    the stable generic classification when it was refused. It deliberately
+    carries no Docker device-request structure, flag, device path, endpoint,
+    driver version, or ownership label, so it is safe to persist, to project to
+    the caller, and to cross Temporal workflow history.
+    """
+
+    vendor: WorkloadGpuVendor
+    count: int | Literal["all"]
+    capabilities: tuple[WorkloadGpuCapability, ...] | None = None
+    backend_supported: bool | None = Field(None, alias="backendSupported")
+    launched: bool = False
+    failure_class: ContainerJobFailureClass | None = Field(None, alias="failureClass")
+
+
+#: Stable generic classifications that describe a GPU resource decision. A
+#: terminal outcome carrying one of these is a GPU refusal; anything else is an
+#: ordinary image, workspace, launch, execution, timeout, or cleanup failure.
+GPU_FAILURE_CLASSES: frozenset[ContainerJobFailureClass] = frozenset(
+    {
+        ContainerJobFailureClass.GPU_REQUEST_INVALID,
+        ContainerJobFailureClass.GPU_VENDOR_UNSUPPORTED,
+        ContainerJobFailureClass.GPU_COUNT_UNSUPPORTED,
+        ContainerJobFailureClass.GPU_BACKEND_UNSUPPORTED,
+        ContainerJobFailureClass.GPU_RUNTIME_UNAVAILABLE,
+        ContainerJobFailureClass.GPU_RESOURCE_UNAVAILABLE,
+    }
+)
+
+
+#: Stable classifications a trusted backend can only reach *after* it reported
+#: backend support for the request: the daemon accepted the vendor and the
+#: device-request API, and only then refused the actual runtime or device when
+#: the container was created or started. The class is therefore itself the
+#: support evidence, so the observation survives an activity that raised before
+#: it could return the support report it had already obtained.
+GPU_BACKEND_SUPPORTED_FAILURE_CLASSES: frozenset[ContainerJobFailureClass] = frozenset(
+    {
+        ContainerJobFailureClass.GPU_RUNTIME_UNAVAILABLE,
+        ContainerJobFailureClass.GPU_RESOURCE_UNAVAILABLE,
+    }
+)
+
+
+def gpu_observation(
+    gpu: WorkloadGpuRequest | None,
+    *,
+    backend_supported: bool | None = None,
+    launched: bool = False,
+) -> GpuObservation | None:
+    """Return the backend's observation of ``gpu``, or ``None`` when CPU-only."""
+
+    if gpu is None:
+        return None
+    return GpuObservation(
+        vendor=gpu.vendor,
+        count=gpu.count,
+        capabilities=gpu.capabilities,
+        backendSupported=backend_supported,
+        launched=launched,
+    )
+
+
+def terminal_gpu_observation(
+    *,
+    gpu: WorkloadGpuRequest | None,
+    observed: GpuObservation | None,
+    failure_class: ContainerJobFailureClass | None,
+) -> GpuObservation | None:
+    """Return the terminal GPU observation for one job, or ``None`` when CPU-only.
+
+    The submitted request is always the identity: only the resolved
+    support/launch evidence is taken from ``observed``, so a job that failed
+    before the backend reported anything still projects what it requested. A
+    non-GPU terminal class is dropped here because it belongs to the terminal
+    outcome, not to the GPU resource decision.
+
+    A refusal the backend can only reach after it reported support carries that
+    support evidence itself: the activity that obtained the report raised before
+    it could return one, so the durable status would otherwise contradict
+    evidence that was actually obtained at the backend boundary.
+    """
+
+    if gpu is None:
+        return None
+    gpu_failure_class = (
+        failure_class if failure_class in GPU_FAILURE_CLASSES else None
+    )
+    observed_support = observed.backend_supported if observed is not None else None
+    if (
+        observed_support is None
+        and gpu_failure_class in GPU_BACKEND_SUPPORTED_FAILURE_CLASSES
+    ):
+        observed_support = True
+    return GpuObservation(
+        vendor=gpu.vendor,
+        count=gpu.count,
+        capabilities=gpu.capabilities,
+        backendSupported=observed_support,
+        launched=bool(observed.launched) if observed is not None else False,
+        failureClass=gpu_failure_class,
+    )
+
+
+_GPU_REQUEST_FAILURE_CLASSES: dict[str, ContainerJobFailureClass] = {
+    "gpu_request_invalid": ContainerJobFailureClass.GPU_REQUEST_INVALID,
+    "gpu_vendor_unsupported": ContainerJobFailureClass.GPU_VENDOR_UNSUPPORTED,
+    "gpu_count_unsupported": ContainerJobFailureClass.GPU_COUNT_UNSUPPORTED,
+}
+
+
+def _gpu_request_failure_class(exc: BaseException) -> ContainerJobFailureClass | None:
+    """Map one typed GPU request refusal to its stable failure class."""
+
+    if isinstance(exc, WorkloadGpuRequestError):
+        return _GPU_REQUEST_FAILURE_CLASSES.get(exc.gpu_failure)
+    return None
+
+
+def gpu_failure_class_from_validation_error(
+    exc: BaseException,
+) -> ContainerJobFailureClass | None:
+    """Recover the stable GPU classification from a rejected submission.
+
+    The GPU request contract raises a typed refusal that pydantic preserves in
+    its validation-error context, so the reason is read from that typed value
+    rather than re-derived from an error string. A structural rejection inside
+    the ``gpu`` field -- an unknown field or a wrong JSON type, which pydantic
+    refuses before any validator runs -- classifies as an invalid GPU request.
+    """
+
+    for current in _exception_chain(exc):
+        direct = _gpu_request_failure_class(current)
+        if direct is not None:
+            return direct
+        errors = getattr(current, "errors", None)
+        if not callable(errors):
+            continue
+        try:
+            line_errors = list(errors())
+        except TypeError:
+            continue
+        structural: ContainerJobFailureClass | None = None
+        for line_error in line_errors:
+            if not isinstance(line_error, dict):
+                continue
+            context = line_error.get("ctx")
+            nested = context.get("error") if isinstance(context, dict) else None
+            if isinstance(nested, BaseException):
+                typed = _gpu_request_failure_class(nested)
+                if typed is not None:
+                    return typed
+            location = line_error.get("loc") or ()
+            if "gpu" in tuple(str(part) for part in location):
+                structural = ContainerJobFailureClass.GPU_REQUEST_INVALID
+        if structural is not None:
+            return structural
+    return None
+
+
 class TerminalOutcome(ContractModel):
     exit_code: int | None = Field(None, alias="exitCode")
     failure_class: ContainerJobFailureClass | None = Field(None, alias="failureClass")
@@ -545,6 +723,9 @@ class ContainerJobStatus(TemporalContractModel):
     backend_ref: str | None = Field(None, alias="backendRef", max_length=255)
     image: ImageObservation | None = None
     authorization: RegistryAuthorization | None = None
+    # Absent for every CPU-only job; present whenever the caller requested a
+    # GPU resource, including a job refused before the container started.
+    gpu: GpuObservation | None = None
     terminal: TerminalOutcome | None = None
     publication: AuxiliaryOutcome = Field(default_factory=lambda: AuxiliaryOutcome(state="not_attempted"))
     cleanup: AuxiliaryOutcome = Field(default_factory=lambda: AuxiliaryOutcome(state="not_attempted"))
@@ -732,6 +913,7 @@ class ContainerJobActivityRequest(TemporalContractModel):
     image_observation: ImageObservation | None = Field(
         None, alias="imageObservation"
     )
+    gpu_observation: GpuObservation | None = Field(None, alias="gpuObservation")
     container_ref: str | None = Field(None, alias="containerRef", max_length=1024)
     egress_attestation_ref: str | None = Field(
         None, alias="egressAttestationRef", max_length=1024
@@ -784,6 +966,7 @@ class ContainerJobActivityResult(TemporalContractModel):
     image_observation: ImageObservation | None = Field(
         None, alias="imageObservation"
     )
+    gpu_observation: GpuObservation | None = Field(None, alias="gpuObservation")
     container_ref: str | None = Field(None, alias="containerRef", max_length=1024)
     running: bool | None = None
     terminal_state: ContainerJobState | None = Field(None, alias="terminalState")

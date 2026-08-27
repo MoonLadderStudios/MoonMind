@@ -18,8 +18,10 @@ from moonmind.schemas.container_job_models import (
     MAX_ARTIFACT_PAGE_ENTRIES,
     MAX_LOG_PAGE_ENTRIES,
     ContainerJobCancelRequest,
+    ContainerJobFailureClass,
     ContainerJobLogQuery,
     ContainerJobSubmitRequest,
+    gpu_failure_class_from_validation_error,
 )
 from moonmind.mcp.tool_registry import (
     ToolArgumentsValidationError,
@@ -46,6 +48,40 @@ class ContainerJobToolError(RuntimeError):
         self.http_status = http_status
 
 
+#: Stable caller-facing messages for a refused GPU resource request. The
+#: rejected value itself is never echoed back to the caller.
+_GPU_REQUEST_MESSAGES: dict[ContainerJobFailureClass, str] = {
+    ContainerJobFailureClass.GPU_VENDOR_UNSUPPORTED: (
+        "Container-job GPU vendor is not supported."
+    ),
+    ContainerJobFailureClass.GPU_COUNT_UNSUPPORTED: (
+        "Container-job GPU device count is not supported."
+    ),
+    ContainerJobFailureClass.GPU_REQUEST_INVALID: (
+        "Container-job GPU resource request is invalid."
+    ),
+}
+
+
+def classify_gpu_request_error(exc: BaseException) -> ContainerJobToolError | None:
+    """Return the stable GPU classification for a refused submission, if any.
+
+    A GPU resource request is refused before execution with the same stable
+    class over every transport, so a caller can distinguish an unsupported
+    vendor, an unsupported device count, and a malformed request from an
+    unrelated invalid submission.
+    """
+
+    failure_class = gpu_failure_class_from_validation_error(exc)
+    if failure_class is None:
+        return None
+    return ContainerJobToolError(
+        code=failure_class.value,
+        message=_GPU_REQUEST_MESSAGES[failure_class],
+        http_status=422,
+    )
+
+
 def classify_container_job_error(exc: Exception) -> ContainerJobToolError:
     """Map a service/validation error to a stable transport-neutral classification."""
 
@@ -60,7 +96,7 @@ def classify_container_job_error(exc: Exception) -> ContainerJobToolError:
     if isinstance(exc, ContainerJobToolError):
         return exc
     if isinstance(exc, (ValidationError, ToolArgumentsValidationError, ValueError)):
-        return ContainerJobToolError(
+        return classify_gpu_request_error(exc) or ContainerJobToolError(
             code="invalid_request",
             message="Container-job request validation failed.",
             http_status=422,
@@ -323,4 +359,5 @@ __all__ = [
     "ContainerJobToolError",
     "ContainerJobToolRegistry",
     "classify_container_job_error",
+    "classify_gpu_request_error",
 ]
