@@ -5,6 +5,22 @@ from __future__ import annotations
 from typing import Any
 
 
+_OPENCODE_RUNTIME_ENV = {
+    # MoonMind qualifies the exact pinned image + credential + model before
+    # launch. Re-fetching mutable catalog data inside every session duplicates
+    # that authority and can block ``opencode serve`` before its loopback API is
+    # ready. The compiled catalog remains available to the pinned binary.
+    "OPENCODE_DISABLE_MODELS_FETCH": "1",
+    # Omnigent supplies its policy bridge as an explicit configured plugin.
+    # OpenCode's unrelated built-in auth plugins are not part of this host
+    # class and add another unbounded initialization surface.
+    "OPENCODE_DISABLE_DEFAULT_PLUGINS": "1",
+    # The host image is digest-pinned; an in-session updater must not mutate or
+    # delay that runtime after its deployment qualification has passed.
+    "OPENCODE_DISABLE_AUTOUPDATE": "1",
+}
+
+
 class OmnigentRuntimeScriptService:
     def build_entrypoint(
         self,
@@ -63,6 +79,16 @@ class OmnigentRuntimeScriptService:
         # data directory, which a read-only credential mount would block.
         staging_dir = "/run/mm-credentials/opencode"
         opencode_data = "/home/app/.local/share/opencode"
+        has_opencode_materializer = any(
+            str(attachment.get("targetPath") or "").rstrip("/") == staging_dir
+            for handle in credential_handles
+            for attachment in handle.get("attachments", [])
+        )
+        if has_opencode_materializer:
+            environment.update(_OPENCODE_RUNTIME_ENV)
+            environment["OMNIGENT_RUNNER_ENV_PASSTHROUGH"] = ",".join(
+                sorted(_OPENCODE_RUNTIME_ENV)
+            )
         script = (
             "set -eu; "
             "unset OPENAI_API_KEY ANTHROPIC_API_KEY OPENCODE_AUTH_CONTENT "

@@ -544,7 +544,7 @@ def test_sandbox_worker_compose_egress_is_restricted_for_mm_785():
         "." + "".join(parts)
         for parts in [
             ("github", ".com"),
-            ("models", ".opencode", ".ai"),
+            ("opencode", ".ai"),
             ("openai", ".com"),
             ("registry", ".npmjs", ".org"),
         ]
