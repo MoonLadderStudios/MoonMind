@@ -23,6 +23,7 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.utils.logging import scrub_github_tokens
 
 TERMINAL_BLOCKER_KINDS = {
+    "automated_review_request_failed",
     "pull_request_closed",
     "stale_revision",
     "policy_denied",
@@ -31,6 +32,7 @@ BASE_KNOWN_BLOCKER_KINDS = {
     "checks_running",
     "checks_failed",
     "automated_review_pending",
+    "automated_review_request_failed",
     "jira_status_pending",
     "pull_request_closed",
     "stale_revision",

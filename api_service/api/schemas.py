@@ -603,6 +603,7 @@ class PresetExpandResponseSchema(BaseModel):
     )
     capabilities: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    publish: Optional[dict[str, Any]] = None
     checkpoint_branching: dict[str, Any] = Field(
         default_factory=dict, alias="checkpointBranching"
     )

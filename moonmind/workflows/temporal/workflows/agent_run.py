@@ -2491,7 +2491,12 @@ class MoonMindAgentRun:
                 raise
             owned_continuation_enabled = True
         continuation_authority = request.terminal_continuation_authority
-        synthetic_reenter_gate_failure = (
+        metadata = dict(evaluated.metadata or {})
+        continuation = metadata.get("gatedContinuation")
+        continuation = continuation if isinstance(continuation, Mapping) else {}
+        continuation_gate_type = str(continuation.get("gateType") or "").strip()
+        continuation_action = str(continuation.get("action") or "").strip()
+        synthetic_continuation_failure = (
             evaluated.failure_class == "execution_error"
             and evaluated.provider_error_code == "PR_RESOLVER_REENTER_GATE"
         )
@@ -2501,14 +2506,12 @@ class MoonMindAgentRun:
             == "continuation_requested"
             and continuation_authority is not None
             and continuation_authority.allows(
-                gate_type="merge_automation", action="reenter_gate"
+                gate_type=continuation_gate_type,
+                action=continuation_action,
             )
-            and synthetic_reenter_gate_failure
+            and synthetic_continuation_failure
         ):
-            metadata = dict(evaluated.metadata or {})
             metrics = dict(evaluated.metrics or {})
-            continuation = metadata.get("gatedContinuation")
-            continuation = continuation if isinstance(continuation, Mapping) else {}
             observability_enabled = workflow.patched(
                 PR_RESOLVER_CONTINUATION_OBSERVABILITY_PATCH_ID
             )
@@ -2524,7 +2527,7 @@ class MoonMindAgentRun:
                     "terminalContractRecoveryOutcome": "durable_parent_handoff",
                     "terminalContractContinuationCount": 0,
                     "gateType": continuation_authority.gate_type,
-                    "gateAction": "reenter_gate",
+                    "gateAction": continuation_action,
                     "gateOwnerWorkflowId": continuation_authority.owner_workflow_id,
                     "gateOwnerRunId": continuation_authority.owner_run_id,
                     "gateOwnerWorkflowType": continuation_authority.owner_workflow_type,
