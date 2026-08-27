@@ -308,6 +308,26 @@ def _builtin_opencode_agent(inventory: list[Any]) -> tuple[str, str] | None:
     return upstream_id, upstream_version
 
 
+def _preserve_builtin_opencode_model(
+    document: dict[str, Any], active_document: dict[str, Any]
+) -> dict[str, Any]:
+    """Keep the bootstrap-qualified model across equivalent catalog refreshes.
+
+    The one-action OpenCode bootstrap binds the deployment's qualified model
+    into this built-in profile. Catalog synchronization owns the live harness
+    and source bindings, but must not replace that model authority with the
+    model-empty seed document and invalidate freshly published execution
+    evidence.
+    """
+
+    active_model = active_document.get("model")
+    if not isinstance(active_model, dict) or not active_model:
+        return document
+    preserved = dict(document)
+    preserved["model"] = dict(active_model)
+    return preserved
+
+
 async def ensure_builtin_opencode_agent_profile(
     *, session: AsyncSession, catalog: Any
 ) -> dict[str, Any] | None:
@@ -432,6 +452,9 @@ async def ensure_builtin_opencode_agent_profile(
             None,
         )
         if active is not None:
+            document = _preserve_builtin_opencode_model(
+                document, dict(active.document or {})
+            )
             harness_document = (active.document or {}).get("harness") or {}
             bound_ref = harness_document.get("catalogRef")
             if isinstance(bound_ref, str):
