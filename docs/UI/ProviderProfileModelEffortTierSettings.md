@@ -262,7 +262,7 @@ A profile with no usable `model_tiers` response is displayed as one compatibilit
 ```yaml
 label: Default
 model: default_model
- effort: default_effort
+effort: default_effort
 ```
 
 If both legacy values are null, the summary reads:
