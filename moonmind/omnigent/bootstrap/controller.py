@@ -547,175 +547,18 @@ class BootstrapController:
             catalog = await repo.latest("default")
             if catalog is None:
                 raise RuntimeError("harness catalog not synchronized")
-            await ensure_builtin_opencode_agent_profile(session=session, catalog=catalog)
+            builtin = await ensure_builtin_opencode_agent_profile(
+                session=session, catalog=catalog
+            )
+            if builtin is None:
+                raise RuntimeError(
+                    "OpenCode agent is absent from authenticated Omnigent inventory"
+                )
             # Ensure the profile's default model is set to qualified model
             profile_id = "omnigent-opencode-default"
             profile = await session.get(OmnigentAgentProfile, profile_id)
             if profile is None:
-                # Fallback: catalog may not contain opencode-native harness (e.g., upstream server without plugin)
-                # Create a synthetic profile with the expected harness identity so bootstrap can still qualify locally.
-                # This mirrors the synthetic fallback in execution plan service for hermetic tests.
-                import hashlib
-                import json as _json
-                from datetime import UTC, datetime
-
-                from moonmind.omnigent.harness_platform.catalog import (
-                    HarnessImplementationIdentity,
-                    create_catalog_snapshot,
-                )
-
-                # Synthesize implementation identity matching the hard-coded fallback
-                synth_impl = HarnessImplementationIdentity.model_validate(
-                    {
-                        "sourceKind": "core",
-                        "package": "omnigent",
-                        "version": "1.0.0",
-                        "digest": "sha256:" + "a" * 64,
-                        "pluginEntryPoint": None,
-                    }
-                )
-                # Use catalog's build digest if available
-                build_digest = catalog.snapshot.omnigentBuildDigest if catalog else "sha256:" + "b" * 64
-                # Create a synthetic catalog snapshot that includes opencode-native for the profile's authority
-                import uuid as _uuid
-
-                synth_catalog = create_catalog_snapshot(
-                    endpointRef="default",
-                    omnigentVersion=catalog.snapshot.omnigentVersion if catalog else "1.0.0",
-                    omnigentBuildDigest=build_digest,
-                    sourceDigest="sha256:" + hashlib.sha256(f"opencode-synth-{build_digest}-{_uuid.uuid4().hex}".encode()).hexdigest(),
-                    harnesses=[
-                        {
-                            "id": "opencode-native",
-                            "label": "OpenCode",
-                            "implementation": synth_impl.model_dump(mode="json", by_alias=True),
-                            "capabilities": {"integrationMode": "native-server", "authModel": "own-auth"},
-                        }
-                    ],
-                    observedAt=datetime.now(UTC),
-                )
-                synth_impl_ref = synth_impl.implementation_ref()
-                # Persist synthetic catalog so execution readiness can discover it
-                try:
-                    from api_service.db.base import async_session_maker as _asm_synth
-                    from moonmind.omnigent.harness_platform.catalog import (
-                        TrustState,
-                        classify_harness_trust,
-                    )
-                    from moonmind.omnigent.harness_platform.catalog_service import (
-                        DbHarnessCatalogRepository,
-                        HarnessCatalogSyncResult,
-                    )
-
-                    _trust = classify_harness_trust(
-                        harnessId="opencode-native",
-                        implementation=synth_impl,
-                        trustState=TrustState.core_trusted,
-                    )
-                    _result = HarnessCatalogSyncResult(
-                        snapshot=synth_catalog,
-                        trust_records=(_trust,),
-                        diagnostics={"agentCount": 1, "hostCount": 0, "harnessCount": 1, "synthetic": True},
-                    )
-                    _repo = DbHarnessCatalogRepository(_asm_synth)
-                    await _repo.persist(_result)
-                except Exception as _persist_exc:
-                    import logging
-
-                    logging.getLogger(__name__).warning(f"synthetic catalog persist failed: {_persist_exc}")
-                # Find an agent snapshot to use for source
-                upstream_id = "opencode-native-ui"
-                upstream_version = "1"
-                # Try to get existing projection if any
-                from api_service.db.models import OmnigentUpstreamAgentProjection
-                from api_service.services.omnigent_agent_profile_service import (
-                    projection_identity,
-                )
-
-                # Create a minimal projection if missing
-                proj_id = projection_identity("default", upstream_id, upstream_version)
-                proj = await session.get(OmnigentUpstreamAgentProjection, proj_id)
-                if proj is None:
-                    from datetime import UTC, datetime
-
-                    from api_service.db.models import (
-                        OmnigentUpstreamAgentProjection as Proj,
-                    )
-
-                    now = datetime.now(UTC)
-                    proj = Proj(
-                        projection_id=proj_id,
-                        endpoint_ref="default",
-                        bridge_mode="proxy",
-                        upstream_id=upstream_id,
-                        upstream_version=upstream_version,
-                        metadata_snapshot={"id": upstream_id, "version": upstream_version, "harness": "opencode-native"},
-                        available=True,
-                        compatible=True,
-                        last_successful_sync_at=now,
-                        last_attempt_at=now,
-                    )
-                    session.add(proj)
-                    await session.flush()
-                source_digest = "sha256:" + hashlib.sha256(_json.dumps(dict(proj.metadata_snapshot), sort_keys=True).encode()).hexdigest()
-                doc = {
-                    "schemaVersion": "moonmind.omnigent-agent-profile.v2",
-                    "endpointRef": "default",
-                    "source": {
-                        "kind": "upstream",
-                        "upstreamId": upstream_id,
-                        "upstreamVersion": upstream_version,
-                        "upstreamSnapshotDigest": source_digest,
-                    },
-                    "harness": {
-                        "id": "opencode-native",
-                        "catalogRef": synth_catalog.catalogRef,
-                        "implementationRef": synth_impl_ref,
-                    },
-                    "credentialSlots": [
-                        {"id": "primary-model", "acceptedAuthModels": ["own-auth"], "acceptedProviderIds": ["opencode-go"]}
-                    ],
-                    "model": {"qualifiedId": qualified_model, "effort": effort},
-                    "workspace": {"mutation": "allowed"},
-                    "skills": [],
-                    "tools": [],
-                    "capture": {"stream": True, "evidence": True},
-                    "continuations": {"checkpoint": True, "branch": True},
-                    "publish": {"mode": "none"},
-                    "allowedLaunchPolicyRefs": ["opencode-on-demand@1"],
-                }
-                digest = "sha256:" + hashlib.sha256(_json.dumps(doc, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-                profile = OmnigentAgentProfile(
-                    profile_id=profile_id,
-                    display_name="OpenCode via Omnigent",
-                    description="Synthetic built-in OpenCode profile for local deployment qualification.",
-                    owner_id=None,
-                    visibility="workspace",
-                    state="active",
-                    active_version=1,
-                )
-                session.add(profile)
-                version = OmnigentAgentProfileVersion(
-                    profile_id=profile_id,
-                    version=1,
-                    digest=digest,
-                    document=doc,
-                    upstream_snapshot=dict(proj.metadata_snapshot),
-                    validation_result={
-                        "schemaVersion": "moonmind.omnigent-agent-profile-validation.v2",
-                        "ready": True,
-                        "checks": [
-                            {"name": "catalog", "ready": True},
-                            {"name": "trust", "ready": True},
-                            {"name": "host-class", "ready": True},
-                            {"name": "support-qualification", "ready": True},
-                        ],
-                    },
-                    created_by=None,
-                )
-                session.add(version)
-                await session.commit()
-                return f"{profile_id}@1"
+                raise RuntimeError("OpenCode agent profile was not compiled")
             # Load active version and update if needed
             from sqlalchemy import select as _select_version
 

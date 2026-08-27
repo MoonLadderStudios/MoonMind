@@ -1119,6 +1119,17 @@ def test_omnigent_shared_postgres_compose_topology_for_mm_970():
     assert "omnigent-data:/data" in omnigent_service["volumes"]
     assert "omnigent-data" in compose["volumes"]
 
+    agent_init = services["omnigent-agent-init"]
+    assert agent_init["restart"] == "no"
+    assert agent_init["depends_on"]["omnigent-db-init"]["condition"] == (
+        "service_completed_successfully"
+    )
+    assert "omnigent-data:/data" in agent_init["volumes"]
+    assert (
+        omnigent_service["depends_on"]["omnigent-agent-init"]["condition"]
+        == "service_completed_successfully"
+    )
+
     omnigent_env = _env_map(omnigent_service["environment"])
     assert omnigent_service["image"] == (
         "${OMNIGENT_IMAGE_REF:-${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}:"

@@ -287,6 +287,27 @@ class BundleImportCreate(BaseModel):
     version: int | None = Field(None, ge=1)
 
 
+def _builtin_opencode_agent(inventory: list[Any]) -> tuple[str, str] | None:
+    """Resolve the registered OpenCode template by name to its live identity."""
+
+    agent = next(
+        (
+            item
+            for item in inventory
+            if isinstance(item, dict)
+            and str(item.get("name") or "").strip() == "opencode-native-ui"
+        ),
+        None,
+    )
+    upstream_id = str(
+        (agent or {}).get("id") or (agent or {}).get("agent_id") or ""
+    ).strip()
+    upstream_version = str((agent or {}).get("version") or "").strip()
+    if not upstream_id or not upstream_version:
+        return None
+    return upstream_id, upstream_version
+
+
 async def ensure_builtin_opencode_agent_profile(
     *, session: AsyncSession, catalog: Any
 ) -> dict[str, Any] | None:
@@ -319,32 +340,20 @@ async def ensure_builtin_opencode_agent_profile(
         TrustState.plugin_approved,
     }:
         return None
-    agent = next(
-        (
-            item
-            for item in catalog.diagnostics.get("agents", [])
-            if isinstance(item, dict)
-            and str(item.get("id") or item.get("agent_id") or "")
-            == "opencode-native-ui"
-        ),
-        None,
-    )
-    upstream_version = str((agent or {}).get("version") or "").strip()
-    if not upstream_version:
+    inventory = list(catalog.diagnostics.get("agents", []))
+    agent_identity = _builtin_opencode_agent(inventory)
+    if agent_identity is None:
         return None
+    upstream_id, upstream_version = agent_identity
     await synchronize_upstream_inventory(
         session,
         endpoint_ref="default",
         bridge_mode="proxy",
-        inventory=[
-            item
-            for item in catalog.diagnostics.get("agents", [])
-            if isinstance(item, dict)
-        ],
+        inventory=[item for item in inventory if isinstance(item, dict)],
     )
     projection = await session.get(
         OmnigentUpstreamAgentProjection,
-        projection_identity("default", "opencode-native-ui", upstream_version),
+        projection_identity("default", upstream_id, upstream_version),
     )
     if projection is None:
         return None
@@ -365,7 +374,7 @@ async def ensure_builtin_opencode_agent_profile(
             "endpointRef": "default",
             "source": {
                 "kind": "upstream",
-                "upstreamId": "opencode-native-ui",
+                "upstreamId": upstream_id,
                 "upstreamVersion": upstream_version,
                 "upstreamSnapshotDigest": _digest(dict(projection.metadata_snapshot)),
             },

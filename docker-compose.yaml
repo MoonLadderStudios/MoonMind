@@ -1274,6 +1274,28 @@ services:
       - control-plane-network
     restart: "no"
 
+  omnigent-agent-init:
+    image: ${OMNIGENT_IMAGE_REF:-${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}:${OMNIGENT_IMAGE_TAG:-latest}}
+    environment:
+      - DATABASE_URL=postgresql://${OMNIGENT_POSTGRES_USER:-omnigent}:${OMNIGENT_POSTGRES_PASSWORD:-omnigent}@postgres:5432/${OMNIGENT_POSTGRES_DB:-omnigent}
+      - ARTIFACT_DIR=${OMNIGENT_ARTIFACT_DIR:-/data/artifacts}
+    command:
+      - python
+      - /opt/moonmind/register_omnigent_agent.py
+      - /opt/moonmind/agents/opencode-native-ui
+    volumes:
+      - omnigent-data:/data
+      - ./tools/register_omnigent_agent.py:/opt/moonmind/register_omnigent_agent.py:ro
+      - ./services/omnigent/agents/opencode-native-ui:/opt/moonmind/agents/opencode-native-ui:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      omnigent-db-init:
+        condition: service_completed_successfully
+    networks:
+      - control-plane-network
+    restart: "no"
+
   omnigent:
     image: ${OMNIGENT_IMAGE_REF:-${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}:${OMNIGENT_IMAGE_TAG:-latest}}
     env_file:
@@ -1322,6 +1344,8 @@ services:
       postgres:
         condition: service_healthy
       omnigent-db-init:
+        condition: service_completed_successfully
+      omnigent-agent-init:
         condition: service_completed_successfully
     networks:
       - control-plane-network

@@ -564,6 +564,23 @@ def test_omnigent_compose_uses_shared_postgres_for_mm_970():
     assert _has_volume_mount(omnigent_service, "omnigent-data", "/data")
     assert "omnigent-data" in compose_data.get("volumes", {})
 
+    agent_init = services.get("omnigent-agent-init")
+    assert isinstance(agent_init, dict)
+    assert agent_init["restart"] == "no"
+    assert agent_init["depends_on"]["omnigent-db-init"]["condition"] == (
+        "service_completed_successfully"
+    )
+    assert _has_volume_mount(agent_init, "omnigent-data", "/data")
+    assert _has_volume_mount(
+        agent_init,
+        "./services/omnigent/agents/opencode-native-ui",
+        "/opt/moonmind/agents/opencode-native-ui",
+    )
+    assert (
+        omnigent_service["depends_on"]["omnigent-agent-init"]["condition"]
+        == "service_completed_successfully"
+    )
+
     omnigent_env = _env_map(omnigent_service.get("environment"))
     assert omnigent_service["image"] == (
         "${OMNIGENT_IMAGE_REF:-${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}:"
