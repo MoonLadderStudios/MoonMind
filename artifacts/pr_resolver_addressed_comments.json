@@ -1,47 +1,27 @@
 [
   {
-    "id": 3869810844,
-    "disposition": "not-applicable",
-    "rationale": "Alembic's script loader reads the module-level 'revision' attribute by name; it is the migration contract, not dead code. 54 of 61 migrations in api_service/migrations/versions use the identical pattern."
-  },
-  {
-    "id": 3869810851,
-    "disposition": "not-applicable",
-    "rationale": "'down_revision' is read by Alembic to build the migration graph (tools/check_alembic_graph.py depends on it). Removing it would break the single-head gate."
-  },
-  {
-    "id": 3869810860,
-    "disposition": "not-applicable",
-    "rationale": "'branch_labels' is part of Alembic's required revision-script contract and is read by the framework, not by this module."
-  },
-  {
-    "id": 3869810874,
-    "disposition": "not-applicable",
-    "rationale": "'depends_on' is part of Alembic's required revision-script contract and is read by the framework, not by this module."
-  },
-  {
-    "id": 3869810887,
+    "id": 3869137341,
     "disposition": "addressed",
-    "rationale": "Confirmed 'datetime' and 'timezone' had no use in tests/unit/api/test_container_job_gpu_transport.py; removed the import."
+    "rationale": "Moved the phased rollout sequencing out of the canonical doc: deleted section 24 Rollout Guidance, renumbered Decision Summary to 24, created docs/tmp/ProviderProfileTierSettingsRollout.md with the sequencing, and added an Implementation tracking pointer so the canonical file keeps only declarative requirements and acceptance criteria."
   },
   {
-    "id": 3869824196,
+    "id": 3869137347,
     "disposition": "addressed",
-    "rationale": "The GPU support probe's 'docker version' failure now raises a fixed caller-safe message ('container backend endpoint is unreachable'); the redacted daemon diagnostic goes only to trusted backend logs. Added tests/unit/workflows/temporal/test_container_job_gpu_resources.py::test_unreachable_endpoint_never_echoes_the_daemon_diagnostic."
+    "rationale": "Bound capability lookup to the selected profile: section 12.1 now specifies GET /api/v1/provider-profiles/{profile_id}/capabilities (with the runtime/provider query form reserved for advisory create-form drafts), section 12.2 adds profile_id plus an evidence block (source, credential_generation, image_ref, observed_at, stale) that the option sets are bound to, and rules 10-12 in 12.3 plus 12.4 require refetch and no new values when the profile evidence identity does not match."
   },
   {
-    "id": 3869824202,
+    "id": 3869137351,
     "disposition": "addressed",
-    "rationale": "terminal_gpu_observation now resolves backendSupported=True for the new GPU_BACKEND_SUPPORTED_FAILURE_CLASSES (gpu_runtime_unavailable, gpu_resource_unavailable), which a backend can only reach after the pre-create support report succeeded, so the durable status no longer contradicts evidence obtained at the backend boundary. Covered by test_a_refusal_reports_support_only_when_the_backend_established_it and an added assertion in test_refusal_before_create_still_projects_the_requested_resource."
+    "rationale": "Section 4.4 now states that Runtime default requires a null tier model/effort to resolve directly to the runtime default with no profile-level compatibility field in between, names removal of that step as a prerequisite owned by ProviderProfileModelEffortTiers.md, and requires the inherited value and effective preview to come from backend-reported resolution and to name a non-runtime source instead of showing Runtime default. The concrete resolver and test removals are sequenced in docs/tmp/ProviderProfileTierSettingsRollout.md Phase 2."
   },
   {
-    "id": 3869824210,
+    "id": 3869137354,
     "disposition": "addressed",
-    "rationale": "_GPU_LAUNCH_FAILURE_PATTERNS is now matched most-specific-first: the bare 'nvidia-container-cli'/'nvidia-container-runtime' prefixes moved to a last-resort entry, so a working runtime with no usable device classifies as gpu_device_unavailable -> gpu_resource_unavailable. Updated the codified expectation in test_gpu_container_qualification.py and added a canonical-backend case using RUNTIME_PRESENT_DEVICE_UNAVAILABLE_STDERR."
+    "rationale": "Section 15.2 is now Tier-only persistence: no client-side derivation, no compatibility period, and one cohesive removal of default_model/default_effort from the read and write contracts, the launch-time compatibility step, and the remaining callers, fixtures, and tests. Documented that no persisted-history cutover is required because runs persist resolved values at launch. Reconciled sections 3.3, 5, 6.3, 14.2 (14.3 removed), 18.1, 22.1, 22.5, 23.14, and the Decision Summary."
   },
   {
-    "id": 5038517424,
+    "id": 5037699927,
     "disposition": "not-applicable",
-    "rationale": "Codex review summary body; informational only, its three suggestions are tracked as the individual review comments above."
+    "rationale": "Codex review summary body with no actionable request; its individual findings are tracked as the four review comments above."
   }
 ]
