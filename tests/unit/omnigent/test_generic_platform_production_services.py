@@ -49,6 +49,7 @@ from moonmind.omnigent.host_leases import InMemoryOmnigentHostLeaseRepository
 from moonmind.omnigent.host_services.attestation import (
     _assert_exact_omnigent_build,
     _attest_workspace_mount,
+    _read_exact_host_model_options,
 )
 from moonmind.omnigent.host_services.mounted_tools import OmnigentMountedToolService
 from moonmind.omnigent.host_services.workspace import OmnigentWorkspaceMaterializer
@@ -116,6 +117,115 @@ def test_exact_host_attestation_enforces_workspace_access_mode() -> None:
             ],
             attachment,
         )
+
+
+@pytest.mark.asyncio
+async def test_opencode_exact_host_model_options_use_portable_cli_helper() -> None:
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    class Backend:
+        async def run(self, argv, **kwargs):
+            calls.append((list(argv), dict(kwargs)))
+            return (
+                0,
+                json.dumps(
+                    {
+                        "models": [
+                            {
+                                "id": "opencode-go/muse-spark-1.2-contributor",
+                                "providerID": "opencode-go",
+                            }
+                        ]
+                    }
+                ),
+                "",
+            )
+
+    class Client:
+        async def get_host_model_options(self, *_args):
+            raise AssertionError("OpenCode must not use the unsupported host tunnel")
+
+    result, source = await _read_exact_host_model_options(
+        backend=Backend(),
+        client=Client(),
+        container_name="mm-host-opencode",
+        omnigent_host_id="host-opencode",
+        harness_id="opencode-native",
+    )
+
+    assert result["models"][0]["id"] == "opencode-go/muse-spark-1.2-contributor"
+    assert source == "exact-host-opencode-cli"
+    argv, kwargs = calls[0]
+    assert argv[:4] == [
+        "docker",
+        "exec",
+        "mm-host-opencode",
+        "/opt/venv/bin/python",
+    ]
+    assert "list_opencode_cli_model_options" in argv[-1]
+    assert kwargs == {"timeout_seconds": 45.0, "check": False}
+
+
+@pytest.mark.asyncio
+async def test_non_opencode_exact_host_model_options_use_tunnel() -> None:
+    class Backend:
+        async def run(self, *_args, **_kwargs):
+            raise AssertionError("non-OpenCode harnesses must use the host tunnel")
+
+    class Client:
+        async def get_host_model_options(self, host_id, harness_id):
+            assert (host_id, harness_id) == ("host-pi", "pi-native")
+            return {"models": [{"id": "anthropic/claude-sonnet-4-6"}]}
+
+    result, source = await _read_exact_host_model_options(
+        backend=Backend(),
+        client=Client(),
+        container_name="mm-host-pi",
+        omnigent_host_id="host-pi",
+        harness_id="pi-native",
+    )
+
+    assert result == {"models": [{"id": "anthropic/claude-sonnet-4-6"}]}
+    assert source == "omnigent-host-tunnel"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("return_value", "expected_message"),
+    [
+        (
+            (1, "", "provider diagnostic containing sensitive context"),
+            "exact host OpenCode model catalog probe failed",
+        ),
+        (
+            (0, "not-json", ""),
+            "exact host OpenCode model catalog probe returned invalid JSON",
+        ),
+        (
+            (0, '{"models": {}}', ""),
+            "exact host OpenCode model catalog probe returned an invalid catalog",
+        ),
+    ],
+)
+async def test_opencode_exact_host_model_options_fail_closed_without_diagnostics(
+    return_value: tuple[int, str, str], expected_message: str
+) -> None:
+    class Backend:
+        async def run(self, *_args, **_kwargs):
+            return return_value
+
+    with pytest.raises(HarnessPlatformError) as exc:
+        await _read_exact_host_model_options(
+            backend=Backend(),
+            client=object(),
+            container_name="mm-host-opencode",
+            omnigent_host_id="host-opencode",
+            harness_id="opencode-native",
+        )
+
+    assert str(exc.value) == expected_message
+    assert exc.value.code == HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE
+    assert "sensitive context" not in str(exc.value)
 
 
 def test_planning_model_evidence_is_bound_to_generation_and_host_image() -> None:
@@ -316,9 +426,7 @@ async def test_planned_host_resolver_uses_exact_launch_artifact() -> None:
         {
             "id": "opencode-native",
             "label": "OpenCode",
-            "implementation": implementation.model_dump(
-                mode="json", by_alias=True
-            ),
+            "implementation": implementation.model_dump(mode="json", by_alias=True),
             "capabilities": {
                 "integrationMode": "native-server",
                 "authModel": "own-auth",
@@ -376,13 +484,10 @@ async def test_planned_host_resolver_uses_exact_launch_artifact() -> None:
     }
     canonical = json.dumps(launch, sort_keys=True, separators=(",", ":"))
     launch["snapshotRef"] = (
-        "omnigent-launch:sha256:"
-        + hashlib.sha256(canonical.encode()).hexdigest()
+        "omnigent-launch:sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
     )
     raw = json.dumps(launch, sort_keys=True, separators=(",", ":")).encode()
-    payload = _plan("opencode-go/model").payload.model_dump(
-        mode="json", by_alias=True
-    )
+    payload = _plan("opencode-go/model").payload.model_dump(mode="json", by_alias=True)
     payload.update(
         {
             "harnessImplementationRef": implementation.implementation_ref(),
@@ -1010,19 +1115,16 @@ async def test_generic_realizer_persists_authority_and_releases_provider_last() 
             "stream": False,
             "evidence": False,
         }
-        authorization = request.parameters["omnigent"][
-            "_moonmindProfileAuthorization"
-        ]
-        assert authorization["executionPlanRef"] == request.parameters[
-            "executionPlanRef"
-        ]
-        assert authorization["runtimeBindingRef"] == request.parameters[
-            "runtimeBindingRef"
-        ]
-        assert authorization["providerProfileId"] == "opencode-go-primary"
-        assert authorization["providerLeaseRef"] == (
-            "provider-profile-lease:lease-1"
+        authorization = request.parameters["omnigent"]["_moonmindProfileAuthorization"]
+        assert (
+            authorization["executionPlanRef"] == request.parameters["executionPlanRef"]
         )
+        assert (
+            authorization["runtimeBindingRef"]
+            == request.parameters["runtimeBindingRef"]
+        )
+        assert authorization["providerProfileId"] == "opencode-go-primary"
+        assert authorization["providerLeaseRef"] == ("provider-profile-lease:lease-1")
         assert authorization["credentialGeneration"] == 4
         assert authorization["hostBindingRef"]
         assert authorization["hostLeaseRef"]
@@ -1061,20 +1163,17 @@ async def test_generic_realizer_persists_authority_and_releases_provider_last() 
     result = await realizer.execute(_request(), _plan("opencode-go/model"))
 
     assert result.summary == "done"
-    assert result.metadata["executionPlanRef"] == _plan(
-        "opencode-go/model"
-    ).planRef
+    assert result.metadata["executionPlanRef"] == _plan("opencode-go/model").planRef
     assert result.metadata["runtimeBindingRef"].startswith(
         "omnigent-runtime-binding:sha256:"
     )
-    assert result.metadata["supportCombinationIdentity"][
-        "supportCombinationKey"
-    ] == _plan("opencode-go/model").payload.supportCombinationKey
+    assert (
+        result.metadata["supportCombinationIdentity"]["supportCombinationKey"]
+        == _plan("opencode-go/model").payload.supportCombinationKey
+    )
     assert events[-1] == "command-settled:applied"
     assert events.index("command-claimed") < events.index("provider-acquired")
-    assert events.index("provider-released") < events.index(
-        "command-settled:applied"
-    )
+    assert events.index("provider-released") < events.index("command-settled:applied")
     assert events.index("host-cleaned") < events.index("credentials-cleaned")
     assert events.index("credentials-cleaned") < events.index("provider-released")
     assert host_leases.heartbeat_count >= 1

@@ -39,6 +39,70 @@ def _model_ids(value: Any) -> set[str]:
     return found
 
 
+async def _read_exact_host_model_options(
+    *,
+    backend: DockerCommandBackend,
+    client: Any,
+    container_name: str,
+    omnigent_host_id: str,
+    harness_id: str,
+) -> tuple[Any, str]:
+    """Read model options from the exact host through its supported substrate.
+
+    Omnigent's host tunnel does not expose pre-launch model options for
+    ``opencode-native``. The upstream package does expose one portable catalog
+    helper, and the selected host already owns the exact image, environment,
+    egress policy, and materialized credential that helper must inspect. Run
+    that helper inside the host instead of turning the tunnel's honest
+    unsupported-harness response into a generic HTTP 502.
+    """
+
+    if harness_id != "opencode-native":
+        return (
+            await client.get_host_model_options(omnigent_host_id, harness_id),
+            "omnigent-host-tunnel",
+        )
+
+    probe = (
+        "import json; "
+        "from omnigent.opencode_native_app_server import "
+        "list_opencode_cli_model_options; "
+        "print(json.dumps({'models': list_opencode_cli_model_options()}))"
+    )
+    code, stdout, _stderr = await backend.run(
+        [
+            "docker",
+            "exec",
+            container_name,
+            "/opt/venv/bin/python",
+            "-c",
+            probe,
+        ],
+        timeout_seconds=45.0,
+        check=False,
+    )
+    if code != 0:
+        # Provider CLI diagnostics can include credential-sensitive context.
+        # Exact-host evidence needs only the typed failure, never raw output.
+        raise HarnessPlatformError(
+            "exact host OpenCode model catalog probe failed",
+            code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,
+        )
+    try:
+        payload = json.loads(stdout)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise HarnessPlatformError(
+            "exact host OpenCode model catalog probe returned invalid JSON",
+            code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,
+        ) from exc
+    if not isinstance(payload, dict) or not isinstance(payload.get("models"), list):
+        raise HarnessPlatformError(
+            "exact host OpenCode model catalog probe returned an invalid catalog",
+            code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,
+        )
+    return payload, "exact-host-opencode-cli"
+
+
 def _assert_exact_omnigent_build(
     image: dict[str, Any], expected_build_digest: str
 ) -> None:
@@ -61,8 +125,7 @@ def _attest_workspace_mount(
             for mount in mounts
             if str(mount.get("Name") or mount.get("Source") or "")
             == str(attachment["sourceRef"])
-            and str(mount.get("Destination") or "")
-            == str(attachment["targetPath"])
+            and str(mount.get("Destination") or "") == str(attachment["targetPath"])
         ),
         None,
     )
@@ -150,11 +213,17 @@ class DockerOmnigentHostAttestor:
                 code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
             )
         _code, omnigent_version, _err = await self._backend.run(
-            ["docker", "exec", launch_result["containerName"],
-             "/opt/venv/bin/omnigent", "--version"],
+            [
+                "docker",
+                "exec",
+                launch_result["containerName"],
+                "/opt/venv/bin/omnigent",
+                "--version",
+            ],
             failure_code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
         )
         import logging
+
         logging.getLogger(__name__).info(
             "omnigent --version probe: expected=%r got=%r",
             host_class.omnigentVersion,
@@ -392,8 +461,12 @@ class DockerOmnigentHostAttestor:
                 "exact host restricted-egress attachment could not be attested",
                 code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
             ) from exc
-        model_options = await self._client.get_host_model_options(
-            host_id, plan.payload.harnessId
+        model_options, model_options_source = await _read_exact_host_model_options(
+            backend=self._backend,
+            client=self._client,
+            container_name=launch_result["containerName"],
+            omnigent_host_id=host_id,
+            harness_id=plan.payload.harnessId,
         )
         selected_model = plan.payload.modelConfig.qualifiedId
         if selected_model not in _model_ids(model_options):
@@ -444,6 +517,7 @@ class DockerOmnigentHostAttestor:
                 "harnessId": plan.payload.harnessId,
                 "selectedModel": selected_model,
                 "availableModels": sorted(_model_ids(model_options)),
+                "source": model_options_source,
             },
             link_type="evidence.model_options",
         )
@@ -456,4 +530,4 @@ class DockerOmnigentHostAttestor:
         }
 
 
-__all__ = ["DockerOmnigentHostAttestor"]
+__all__ = ["DockerOmnigentHostAttestor", "_read_exact_host_model_options"]

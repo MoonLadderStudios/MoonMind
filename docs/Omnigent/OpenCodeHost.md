@@ -256,7 +256,15 @@ enforced network/egress policy active
 selected model available to credential
 ```
 
-Readiness by harness name alone is insufficient.
+The selected-model check runs Omnigent's portable
+`list_opencode_cli_model_options` helper inside the exact digest-pinned host,
+after the fenced credential generation has been materialized and the restricted
+egress attachment has been verified. The stock Omnigent host tunnel does not
+currently expose pre-launch model options for `opencode-native`; using the
+upstream helper directly keeps the attestation live and credential-bound without
+duplicating OpenCode catalog semantics in MoonMind. Other harnesses continue to
+use the normal host `model-options` tunnel. Readiness by harness name alone is
+insufficient.
 
 ## Deployment configuration
 
