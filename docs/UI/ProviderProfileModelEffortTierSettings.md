@@ -705,6 +705,8 @@ Illustrative response:
 }
 ```
 
+`version` is an opaque option-catalog identity. It changes whenever the option sets or the `evidence` identity behind them change, so a client can detect that the choices it authored against are stale without interpreting the string.
+
 `model.options` and `effort.options` are the catalog observed for the reported `evidence` identity. A response with `evidence.source = profile_catalog_evidence` is valid only for the named `profile_id`, credential generation, and image ref; it is never reused for another profile that happens to share a runtime and provider.
 
 The example values are illustrative. The backend response, not this document, is the current source of truth.
@@ -716,7 +718,7 @@ The example values are illustrative. The backend response, not this document, is
 3. An existing value missing from the catalog remains visible.
 4. A deprecated existing value remains round-trippable until the user changes it or backend policy rejects it.
 5. A removed or unavailable value is shown with an actionable warning.
-6. Capability version is submitted as optional advisory metadata or used with a preview request to detect stale choices.
+6. The response `version` and its `evidence` identity are submitted as optional advisory metadata, or used with a preview request, to detect stale choices.
 7. The write endpoint still validates everything.
 8. The frontend must not infer effort support from provider name.
 9. The frontend must not infer model options from runtime name.
@@ -763,7 +765,7 @@ export type ProviderProfileTierEditorDraft = {
   tiers: ProviderProfileTierDraft[];
   defaultTierClientId: string;
   sourceProfileUpdatedAt: string | null;
-  capabilityVersion: string | null;
+  optionCatalogVersion: string | null;
   structuralChanges: TierStructuralChange[];
 };
 
@@ -781,6 +783,7 @@ Rules:
 4. On save, `default_model_tier` is computed as the selected tier index plus one.
 5. Server validation paths such as `model_tiers.2.effort` map back to the matching draft card.
 6. Cancel restores the profile response, not a partially normalized local copy.
+7. `optionCatalogVersion` holds the `version` of the capability response the draft was authored against, so a refetch can report that the available choices moved.
 
 ---
 
