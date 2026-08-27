@@ -14,6 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api_service.auth_providers import get_current_user, get_current_user_optional
 from api_service.db.base import get_async_session
 from api_service.db.models import User
+from api_service.services.provider_profile_runtime import (
+    ProviderProfileRuntimeMismatchError,
+)
 from moonmind.schemas.workflow_proposal_models import (
     WorkflowProposalCreateRequest,
     WorkflowProposalDismissRequest,
@@ -568,6 +571,15 @@ async def promote_proposal(
             idempotency_key=f"proposal-promote-{proposal_id}",
         )
 
+    except ProviderProfileRuntimeMismatchError as exc:
+        # Promotion is a launch-authoring boundary. The shared
+        # runtime-ownership invariant runs before the proposal is marked
+        # promoted, and every authoring path returns the identical 409
+        # contract.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=exc.detail,
+        ) from exc
     except WorkflowProposalStatusError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -649,6 +661,15 @@ async def provider_decision(
             )
         else:
             proposal = await service.get_proposal(proposal_id)
+    except ProviderProfileRuntimeMismatchError as exc:
+        # Promotion is a launch-authoring boundary. The shared
+        # runtime-ownership invariant runs before the proposal is marked
+        # promoted, and every authoring path returns the identical 409
+        # contract.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=exc.detail,
+        ) from exc
     except WorkflowProposalStatusError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -779,6 +800,15 @@ async def github_provider_decision(
             )
         else:
             proposal = await service.get_proposal(proposal_id)
+    except ProviderProfileRuntimeMismatchError as exc:
+        # Promotion is a launch-authoring boundary. The shared
+        # runtime-ownership invariant runs before the proposal is marked
+        # promoted, and every authoring path returns the identical 409
+        # contract.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=exc.detail,
+        ) from exc
     except WorkflowProposalStatusError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

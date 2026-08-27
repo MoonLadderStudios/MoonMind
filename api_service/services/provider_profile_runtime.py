@@ -8,11 +8,18 @@ multi-runtime object.
 
 This module owns the single typed contract for that relationship so every
 launch-authoring boundary enforces the same rule before persisting or launching
-work: direct execution submission, step authoring, and recurring-schedule
-authoring. Routers map :class:`ProviderProfileRuntimeMismatchError` onto an HTTP
-409 with :attr:`ProviderProfileRuntimeMismatchError.detail`; the payload is
-identical across authoring paths so an alternate client cannot find a boundary
-that accepts a pair the runtime-scoped selectors would never offer.
+work. The primary placement is the shared authority handoff every launch
+converges on — :meth:`TemporalExecutionService.create_execution` — which covers
+direct submission, proposal promotion, rerun, continuation, manifest ingest, and
+deployment operations from one call site. Boundaries that durably persist a
+launch target *before* reaching that handoff enforce it themselves as well:
+recurring-schedule authoring (the stored target is what a later schedule action
+launches) and proposal promotion (the proposal is marked promoted before the
+execution is created). Routers map
+:class:`ProviderProfileRuntimeMismatchError` onto an HTTP 409 with
+:attr:`ProviderProfileRuntimeMismatchError.detail`; the payload is identical
+across authoring paths so an alternate client cannot find a boundary that
+accepts a pair the runtime-scoped selectors would never offer.
 """
 
 from __future__ import annotations
@@ -112,6 +119,31 @@ def require_provider_profile_runtime(
         profile_runtime=profile_runtime,
         selected_runtime=canonical_runtime,
     )
+
+
+async def _load_owned_provider_profile(
+    *,
+    session: Any,
+    profile_id: str,
+) -> ManagedAgentProviderProfile | None:
+    """Return the persisted Provider Profile row named by *profile_id*.
+
+    The lookup is typed on purpose. Only a real
+    :class:`~api_service.db.models.ManagedAgentProviderProfile` row carries an
+    authoritative ``runtime_id``; anything else the session hands back names no
+    runtime to compare, so it is treated as "no profile" rather than as a
+    mismatch. Callers that need to distinguish "profile does not exist" from
+    "profile is not runtime-owned" use
+    :func:`load_provider_profile_for_runtime` instead.
+    """
+
+    session_get = getattr(session, "get", None)
+    if session is None or not callable(session_get):
+        return None
+    profile = await session_get(ManagedAgentProviderProfile, profile_id)
+    if not isinstance(profile, ManagedAgentProviderProfile):
+        return None
+    return profile
 
 
 async def load_provider_profile_for_runtime(
@@ -230,10 +262,10 @@ async def require_launch_target_provider_profile_runtime(
         return
     if runtime_id == OMNIGENT_RUNTIME_ID:
         return
-    session_get = getattr(session, "get", None)
-    if session is None or not callable(session_get):
-        return
-    profile = await session_get(ManagedAgentProviderProfile, profile_id)
+    profile = await _load_owned_provider_profile(
+        session=session,
+        profile_id=profile_id,
+    )
     require_provider_profile_runtime(
         profile=profile,
         profile_id=profile_id,

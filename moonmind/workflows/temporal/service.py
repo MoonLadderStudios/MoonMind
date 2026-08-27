@@ -43,6 +43,9 @@ from api_service.db.models import (
     WorkflowCheckpointBranchOperation,
     WorkflowCheckpointBranchTurn,
 )
+from api_service.services.provider_profile_runtime import (
+    require_launch_target_provider_profile_runtime,
+)
 from moonmind.config.settings import settings
 from moonmind.security import scan_outbound_text
 from moonmind.statuses.compat import (
@@ -1934,6 +1937,20 @@ class TemporalExecutionService:
                     f"{first_error.path}: {first_error.message}"
                 )
             initial_parameters = skill_validation.parameters
+
+        # Provider Profiles are runtime-owned launch contracts, so the
+        # runtime/profile pair has to be valid at the boundary every
+        # launch-authoring caller converges on — direct submission, proposal
+        # promotion, rerun, continuation, checkpoint branching, manifest ingest,
+        # and deployment operations all reach a launch through here. Enforcing
+        # the shared invariant once at this handoff keeps an alternate client
+        # from finding a route that accepts a pair the runtime-scoped selectors
+        # would never offer, and keeps a mismatched profile from silently
+        # deciding the launch strategy later in the runtime launcher.
+        await require_launch_target_provider_profile_runtime(
+            session=self._session,
+            target={"initialParameters": initial_parameters},
+        )
 
         if workflow_type_enum is TemporalWorkflowType.MANIFEST_INGEST:
             if not manifest_artifact_ref:

@@ -1,4 +1,5 @@
 import hashlib
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -6,14 +7,22 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import sessionmaker
 
+from api_service.db.models import Base, ManagedAgentProviderProfile
+from api_service.services.provider_profile_runtime import (
+    ProviderProfileRuntimeMismatchError,
+)
 from moonmind.config.settings import settings
 from moonmind.utils.logging import SecretRedactor
 from moonmind.workflows.proposals.models import (
+    WorkflowProposal,
     WorkflowProposalOriginSource,
     WorkflowProposalReviewPriority,
     WorkflowProposalStatus,
 )
+from moonmind.workflows.proposals.repositories import WorkflowProposalRepository
 from moonmind.workflows.proposals.service import (
     WorkflowProposalService,
     WorkflowProposalStatusError,
@@ -2428,3 +2437,163 @@ async def test_record_provider_decision_event_does_not_push_rejected_event_to_pr
     assert result.reason == "action_not_allowed"
     # Rejected/unverified decisions are never pushed to the provider issue.
     assert delivery.calls == []
+
+
+# ---------------------------------------------------------------------------
+# MoonLadderStudios/MoonMind#3788 — a promotion durably marks the proposal
+# PROMOTED before the execution is created, and the runtimeMode override rewrites
+# the target runtime while leaving the authored Provider Profile ref untouched.
+# The shared runtime-ownership invariant therefore runs on the final payload
+# before that state transition, against real persistence.
+# ---------------------------------------------------------------------------
+
+
+@asynccontextmanager
+async def _mm3788_proposals_db(tmp_path: Path):
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/mm3788_proposals.db"
+    engine = create_async_engine(db_url, future=True)
+    session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with session_factory() as session:
+            yield session
+    finally:
+        await engine.dispose()
+
+
+def _mm3788_proposal_row(*, target_runtime: str, profile_id: str) -> WorkflowProposal:
+    return WorkflowProposal(
+        id=uuid4(),
+        status=WorkflowProposalStatus.OPEN,
+        title="MM-3788 runtime scoped promotion",
+        summary="Promote with an explicit provider profile.",
+        category="tests",
+        tags=[],
+        repository="Moon/Repo",
+        dedup_key="moon/repo:mm3788",
+        dedup_hash="mm3788",
+        review_priority=WorkflowProposalReviewPriority.NORMAL,
+        origin_source=WorkflowProposalOriginSource.QUEUE,
+        origin_metadata={},
+        provider_metadata={},
+        resolved_policy={},
+        workflow_create_request={
+            "payload": {
+                "repository": "Moon/Repo",
+                "targetRuntime": target_runtime,
+                "workflow": {
+                    "instructions": "Refactor logic",
+                    "runtime": {
+                        "mode": target_runtime,
+                        "providerProfileRef": profile_id,
+                    },
+                },
+            }
+        },
+    )
+
+
+async def _mm3788_promotion_service(
+    session: AsyncSession, *, proposal: WorkflowProposal
+) -> WorkflowProposalService:
+    session.add(
+        ManagedAgentProviderProfile(
+            profile_id="codex_minimax_team",
+            runtime_id="codex_cli",
+            provider_id="minimax",
+        )
+    )
+    session.add(proposal)
+    await session.commit()
+    return WorkflowProposalService(
+        WorkflowProposalRepository(session), redactor=SecretRedactor([], "***")
+    )
+
+
+@pytest.mark.asyncio
+async def test_mm3788_promote_rejects_runtime_override_incompatible_with_the_profile(
+    tmp_path: Path,
+) -> None:
+    async with _mm3788_proposals_db(tmp_path) as session:
+        proposal = _mm3788_proposal_row(
+            target_runtime="codex_cli", profile_id="codex_minimax_team"
+        )
+        service = await _mm3788_promotion_service(session, proposal=proposal)
+
+        with pytest.raises(ProviderProfileRuntimeMismatchError) as excinfo:
+            await service.promote_proposal(
+                proposal_id=proposal.id,
+                promoted_by_user_id=uuid4(),
+                runtime_mode_override="claude_code",
+            )
+
+        assert excinfo.value.detail == {
+            "code": "provider_profile_runtime_mismatch",
+            "message": (
+                "Provider Profile 'codex_minimax_team' belongs to runtime "
+                "'codex_cli' and cannot be used with runtime 'claude_code'."
+            ),
+            "profileId": "codex_minimax_team",
+            "profileRuntime": "codex_cli",
+            "selectedRuntime": "claude_code",
+        }
+
+        # The proposal is still promotable: the rejected override must not leave
+        # it in a terminal state with no execution behind it.
+        stored = await session.get(WorkflowProposal, proposal.id)
+        assert stored is not None
+        assert stored.status is WorkflowProposalStatus.OPEN
+        assert stored.promoted_at is None
+        assert stored.promoted_by_user_id is None
+        events = stored.provider_metadata.get("observabilityEvents") or []
+        assert events[-1]["reason"] == "provider_profile_runtime_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_mm3788_promote_accepts_runtime_override_that_owns_the_profile(
+    tmp_path: Path,
+) -> None:
+    async with _mm3788_proposals_db(tmp_path) as session:
+        proposal = _mm3788_proposal_row(
+            target_runtime="claude_code", profile_id="codex_minimax_team"
+        )
+        service = await _mm3788_promotion_service(session, proposal=proposal)
+
+        updated, final_request = await service.promote_proposal(
+            proposal_id=proposal.id,
+            promoted_by_user_id=uuid4(),
+            runtime_mode_override="codex_cli",
+        )
+
+        assert updated.status is WorkflowProposalStatus.PROMOTED
+        payload = final_request["payload"]
+        assert payload["targetRuntime"] == "codex"
+        assert payload["workflow"]["runtime"]["mode"] == "codex"
+        assert (
+            payload["workflow"]["runtime"]["providerProfileRef"]
+            == "codex_minimax_team"
+        )
+
+
+@pytest.mark.asyncio
+async def test_mm3788_promote_rejects_stored_pair_without_a_runtime_override(
+    tmp_path: Path,
+) -> None:
+    """An authored mismatch is rejected even with no promotion-time override."""
+
+    async with _mm3788_proposals_db(tmp_path) as session:
+        proposal = _mm3788_proposal_row(
+            target_runtime="claude_code", profile_id="codex_minimax_team"
+        )
+        service = await _mm3788_promotion_service(session, proposal=proposal)
+
+        with pytest.raises(ProviderProfileRuntimeMismatchError):
+            await service.promote_proposal(
+                proposal_id=proposal.id,
+                promoted_by_user_id=uuid4(),
+            )
+
+        stored = await session.get(WorkflowProposal, proposal.id)
+        assert stored is not None
+        assert stored.status is WorkflowProposalStatus.OPEN

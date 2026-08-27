@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+from contextlib import asynccontextmanager
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -16,6 +17,7 @@ from uuid import uuid4
 import pytest
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from temporalio.api.enums.v1 import IndexedValueType
@@ -66,6 +68,7 @@ from moonmind.omnigent.bridge_store import (
 )
 from api_service.db.models import (
     Base,
+    ManagedAgentProviderProfile,
     MoonMindWorkflowState,
     TemporalExecutionCloseStatus,
     TemporalArtifact,
@@ -17455,3 +17458,169 @@ async def test_mm3788_step_runtime_selection_accepts_owned_profile() -> None:
 
     assert steps[0]["runtime"]["mode"] == "claude_code"
     assert steps[0]["runtime"]["profileId"] == "claude_minimax_team"
+
+
+# ---------------------------------------------------------------------------
+# MoonLadderStudios/MoonMind#3788 — the raw ``CreateExecutionRequest`` branch of
+# POST /api/executions is the alternate-client shape (the dashboard always sends
+# the ``type``/``payload`` envelope). It reaches a launch through the same
+# TemporalExecutionService.create_execution handoff, so the shared
+# runtime-ownership invariant has to reject a mismatched pair there too.
+# ---------------------------------------------------------------------------
+
+
+@asynccontextmanager
+async def _mm3788_raw_branch_context(tmp_path, *, db_name: str):
+    """Yield a real service over real persistence with one seeded profile."""
+
+    original_backend = settings.workflow.temporal_artifact_backend
+    original_root = settings.workflow.temporal_artifact_root
+    settings.workflow.temporal_artifact_backend = "local_fs"
+    settings.workflow.temporal_artifact_root = str(tmp_path / "artifacts")
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/{db_name}.db"
+    engine = create_async_engine(db_url, future=True)
+    session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with session_factory() as session:
+            session.add(
+                ManagedAgentProviderProfile(
+                    profile_id="codex_minimax_team",
+                    runtime_id="codex_cli",
+                    provider_id="minimax",
+                )
+            )
+            await session.commit()
+            service = TemporalExecutionService(session)
+            service._client_adapter.start_workflow = AsyncMock(
+                return_value=SimpleNamespace(run_id="run-mm3788-raw")
+            )
+            user = SimpleNamespace(
+                id=uuid4(),
+                email="mm3788@example.com",
+                is_active=True,
+                is_superuser=True,
+                roles=[],
+            )
+            yield session, service, user
+    finally:
+        await engine.dispose()
+        settings.workflow.temporal_artifact_backend = original_backend
+        settings.workflow.temporal_artifact_root = original_root
+
+
+def _mm3788_raw_execution_request(
+    *, target_runtime: str, profile_id: str
+) -> dict[str, Any]:
+    """A raw CreateExecutionRequest body — no ``type``/``payload`` envelope."""
+
+    return {
+        "workflowType": "MoonMind.UserWorkflow",
+        "title": "MM-3788 raw branch launch",
+        "initialParameters": {
+            "targetRuntime": target_runtime,
+            "profileId": profile_id,
+            "workflow": {
+                "instructions": "Launch with an explicit provider profile.",
+                "runtime": {
+                    "mode": target_runtime,
+                    "providerProfileRef": profile_id,
+                },
+            },
+        },
+    }
+
+
+async def _mm3788_post_raw_execution(
+    *, service: TemporalExecutionService, session: AsyncSession, user, payload
+):
+    return await executions_module.create_execution(
+        payload=payload,
+        service=service,
+        session=session,
+        user=user,
+        _submit_enabled=None,
+        principal_context={},
+        authorization=None,
+        execution_fanout=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_mm3788_raw_create_branch_rejects_profile_from_another_runtime(
+    tmp_path,
+) -> None:
+    async with _mm3788_raw_branch_context(
+        tmp_path, db_name="mm3788_raw_reject"
+    ) as (session, service, user):
+        with pytest.raises(HTTPException) as exc_info:
+            await _mm3788_post_raw_execution(
+                service=service,
+                session=session,
+                user=user,
+                payload=_mm3788_raw_execution_request(
+                    target_runtime="claude_code", profile_id="codex_minimax_team"
+                ),
+            )
+
+        assert exc_info.value.status_code == 409
+        detail = exc_info.value.detail
+        # The 409 contract is identical to every other authoring boundary.
+        assert detail["code"] == "provider_profile_runtime_mismatch"
+        assert detail["profileId"] == "codex_minimax_team"
+        assert detail["profileRuntime"] == "codex_cli"
+        assert detail["selectedRuntime"] == "claude_code"
+        # Nothing launched and nothing persisted.
+        service._client_adapter.start_workflow.assert_not_awaited()
+        records = (
+            await session.execute(select(TemporalExecutionCanonicalRecord))
+        ).scalars().all()
+        assert records == []
+
+
+@pytest.mark.asyncio
+async def test_mm3788_raw_create_branch_accepts_profile_owned_by_the_runtime(
+    tmp_path,
+) -> None:
+    async with _mm3788_raw_branch_context(
+        tmp_path, db_name="mm3788_raw_accept"
+    ) as (session, service, user):
+        response = await _mm3788_post_raw_execution(
+            service=service,
+            session=session,
+            user=user,
+            payload=_mm3788_raw_execution_request(
+                target_runtime="codex_cli", profile_id="codex_minimax_team"
+            ),
+        )
+
+        assert response.workflow_id.startswith("mm:")
+        stored = await session.get(
+            TemporalExecutionCanonicalRecord, response.workflow_id
+        )
+        assert stored is not None
+
+
+@pytest.mark.asyncio
+async def test_mm3788_raw_create_branch_keeps_the_omnigent_product_boundary(
+    tmp_path,
+) -> None:
+    """Omnigent is a facade: the raw branch still owns its own 422, not a 409."""
+
+    async with _mm3788_raw_branch_context(
+        tmp_path, db_name="mm3788_raw_omnigent"
+    ) as (session, service, user):
+        with pytest.raises(HTTPException) as exc_info:
+            await _mm3788_post_raw_execution(
+                service=service,
+                session=session,
+                user=user,
+                payload=_mm3788_raw_execution_request(
+                    target_runtime="omnigent", profile_id="codex_minimax_team"
+                ),
+            )
+
+        assert exc_info.value.status_code == 422
+        assert exc_info.value.detail["code"] == "omnigent_product_boundary_required"
+        service._client_adapter.start_workflow.assert_not_awaited()

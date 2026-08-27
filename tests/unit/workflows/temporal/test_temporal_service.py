@@ -19,6 +19,7 @@ from temporalio.client import WorkflowExecutionDescription, WorkflowExecutionSta
 
 from api_service.db.models import (
     Base,
+    ManagedAgentProviderProfile,
     MoonMindWorkflowState,
     SettingsOverride,
     TemporalArtifact,
@@ -42,6 +43,9 @@ from api_service.db.models import (
 from api_service.services.checkpoint_branch_service import (
     CheckpointBranchService,
     build_branch_turn_launch_idempotency_key,
+)
+from api_service.services.provider_profile_runtime import (
+    ProviderProfileRuntimeMismatchError,
 )
 from moonmind.config.settings import settings
 from moonmind.workflows.temporal.service import (
@@ -8155,3 +8159,227 @@ async def test_failed_poll_marks_integration_error_summary(tmp_path):
 
         assert failed.memo["error_category"] == "integration_error"
         assert failed.awaiting_external is False
+
+
+# ---------------------------------------------------------------------------
+# MoonLadderStudios/MoonMind#3788 — every launch-authoring caller converges on
+# TemporalExecutionService.create_execution, so the runtime-ownership invariant
+# for Provider Profiles is enforced once at that shared authority handoff rather
+# than once per router.
+# ---------------------------------------------------------------------------
+
+
+def _mm3788_initial_parameters(
+    *, target_runtime: str, profile_id: str
+) -> dict[str, object]:
+    return {
+        "targetRuntime": target_runtime,
+        "workflow": {
+            "title": "MM-3788 runtime scoped launch",
+            "instructions": "Launch with an explicit provider profile.",
+            "runtime": {
+                "mode": target_runtime,
+                "providerProfileRef": profile_id,
+            },
+        },
+    }
+
+
+async def _mm3788_seed_profile(
+    session: AsyncSession, *, profile_id: str, runtime_id: str
+) -> None:
+    session.add(
+        ManagedAgentProviderProfile(
+            profile_id=profile_id,
+            runtime_id=runtime_id,
+            provider_id="minimax",
+        )
+    )
+    await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_mm3788_create_execution_rejects_provider_profile_from_another_runtime(
+    tmp_path,
+):
+    async with temporal_db(tmp_path) as session:
+        await _mm3788_seed_profile(
+            session, profile_id="codex_minimax_team", runtime_id="codex_cli"
+        )
+        service = TemporalExecutionService(session)
+        service._client_adapter.start_workflow = AsyncMock(
+            return_value=SimpleNamespace(run_id="run-mm3788")
+        )
+
+        with pytest.raises(ProviderProfileRuntimeMismatchError) as excinfo:
+            await service.create_execution(
+                workflow_type="MoonMind.UserWorkflow",
+                owner_id=uuid4(),
+                title="MM-3788 mismatched pair",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters=_mm3788_initial_parameters(
+                    target_runtime="claude_code", profile_id="codex_minimax_team"
+                ),
+                idempotency_key="mm3788-mismatch",
+            )
+
+        assert excinfo.value.detail == {
+            "code": "provider_profile_runtime_mismatch",
+            "message": (
+                "Provider Profile 'codex_minimax_team' belongs to runtime "
+                "'codex_cli' and cannot be used with runtime 'claude_code'."
+            ),
+            "profileId": "codex_minimax_team",
+            "profileRuntime": "codex_cli",
+            "selectedRuntime": "claude_code",
+        }
+        # The mismatched pair never reaches Temporal or the execution store.
+        service._client_adapter.start_workflow.assert_not_awaited()
+        records = (
+            await session.execute(select(TemporalExecutionCanonicalRecord))
+        ).scalars().all()
+        assert records == []
+
+
+@pytest.mark.asyncio
+async def test_mm3788_create_execution_rejects_profile_id_named_in_initial_parameters(
+    tmp_path,
+):
+    """The alternate-client shape: ``profileId`` alongside ``targetRuntime``."""
+
+    async with temporal_db(tmp_path) as session:
+        await _mm3788_seed_profile(
+            session, profile_id="codex_minimax_team", runtime_id="codex_cli"
+        )
+        service = TemporalExecutionService(session)
+        service._client_adapter.start_workflow = AsyncMock(
+            return_value=SimpleNamespace(run_id="run-mm3788")
+        )
+
+        with pytest.raises(ProviderProfileRuntimeMismatchError) as excinfo:
+            await service.create_execution(
+                workflow_type="MoonMind.UserWorkflow",
+                owner_id=uuid4(),
+                title="MM-3788 flat profileId",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={
+                    "targetRuntime": "claude_code",
+                    "profileId": "codex_minimax_team",
+                    "workflow": {"instructions": "Do the work."},
+                },
+                idempotency_key="mm3788-flat-profile-id",
+            )
+
+        assert excinfo.value.detail["selectedRuntime"] == "claude_code"
+        assert excinfo.value.detail["profileRuntime"] == "codex_cli"
+        records = (
+            await session.execute(select(TemporalExecutionCanonicalRecord))
+        ).scalars().all()
+        assert records == []
+
+
+@pytest.mark.asyncio
+async def test_mm3788_create_execution_accepts_provider_profile_owned_by_the_runtime(
+    tmp_path,
+):
+    async with temporal_db(tmp_path) as session:
+        await _mm3788_seed_profile(
+            session, profile_id="codex_minimax_team", runtime_id="codex_cli"
+        )
+        service = TemporalExecutionService(session)
+        service._client_adapter.start_workflow = AsyncMock(
+            return_value=SimpleNamespace(run_id="run-mm3788")
+        )
+
+        record = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="MM-3788 owned pair",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters=_mm3788_initial_parameters(
+                target_runtime="codex_cli", profile_id="codex_minimax_team"
+            ),
+            idempotency_key="mm3788-owned",
+        )
+
+        assert record.workflow_id.startswith("mm:")
+        stored = await session.get(
+            TemporalExecutionCanonicalRecord, record.workflow_id
+        )
+        assert stored is not None
+
+
+@pytest.mark.asyncio
+async def test_mm3788_create_execution_defers_omnigent_targets_to_omnigent_selection(
+    tmp_path,
+):
+    """``omnigent`` is a facade, not a Provider Profile owner."""
+
+    async with temporal_db(tmp_path) as session:
+        await _mm3788_seed_profile(
+            session, profile_id="codex_minimax_team", runtime_id="codex_cli"
+        )
+        service = TemporalExecutionService(session)
+        service._client_adapter.start_workflow = AsyncMock(
+            return_value=SimpleNamespace(run_id="run-mm3788")
+        )
+
+        record = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="MM-3788 omnigent facade",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters=_mm3788_initial_parameters(
+                target_runtime="omnigent", profile_id="codex_minimax_team"
+            ),
+            idempotency_key="mm3788-omnigent",
+        )
+
+        stored = await session.get(
+            TemporalExecutionCanonicalRecord, record.workflow_id
+        )
+        assert stored is not None
+
+
+@pytest.mark.asyncio
+async def test_mm3788_create_execution_ignores_a_profile_ref_with_no_stored_row(
+    tmp_path,
+):
+    """An unknown ref carries no runtime; profile resolution owns that error."""
+
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        service._client_adapter.start_workflow = AsyncMock(
+            return_value=SimpleNamespace(run_id="run-mm3788")
+        )
+
+        record = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="MM-3788 unknown profile ref",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters=_mm3788_initial_parameters(
+                target_runtime="claude_code", profile_id="never_configured"
+            ),
+            idempotency_key="mm3788-unknown-ref",
+        )
+
+        stored = await session.get(
+            TemporalExecutionCanonicalRecord, record.workflow_id
+        )
+        assert stored is not None

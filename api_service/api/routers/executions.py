@@ -11459,6 +11459,14 @@ async def _create_execution_from_workflow_request(
             scheduled_for=scheduled_for_dt,
             _workflow_id=reserved_workflow_id,
         )
+    except ProviderProfileRuntimeMismatchError as exc:
+        # Provider Profiles are runtime-owned: the shared invariant is
+        # enforced at TemporalExecutionService.create_execution, and every
+        # authoring path surfaces the identical 409 contract.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=exc.detail,
+        ) from exc
     except TemporalExecutionValidationError as exc:
         message = str(exc)
         raise HTTPException(
@@ -13657,6 +13665,14 @@ async def create_execution(
                 "code": "invalid_execution_request",
                 "message": str(exc),
             },
+        ) from exc
+    except ProviderProfileRuntimeMismatchError as exc:
+        # Provider Profiles are runtime-owned: the shared invariant is
+        # enforced at TemporalExecutionService.create_execution, and every
+        # authoring path surfaces the identical 409 contract.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=exc.detail,
         ) from exc
     except TemporalExecutionValidationError as exc:
         raise HTTPException(
@@ -17269,6 +17285,14 @@ async def continue_in_new_workflow(
             integration=None,
             _workflow_id=reserved_workflow_id,
         )
+    except ProviderProfileRuntimeMismatchError as exc:
+        # Provider Profiles are runtime-owned: the shared invariant is
+        # enforced at TemporalExecutionService.create_execution, and every
+        # authoring path surfaces the identical 409 contract.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=exc.detail,
+        ) from exc
     except TemporalExecutionValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -18112,6 +18136,14 @@ async def rerun_execution(
             integration=None,
             _workflow_id=reserved_workflow_id,
         )
+    except ProviderProfileRuntimeMismatchError as exc:
+        # Provider Profiles are runtime-owned: the shared invariant is
+        # enforced at TemporalExecutionService.create_execution, and every
+        # authoring path surfaces the identical 409 contract.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=exc.detail,
+        ) from exc
     except TemporalExecutionValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
