@@ -33,5 +33,10 @@
     "id": 5045777453,
     "disposition": "not-applicable",
     "rationale": "Codex review summary body describing how the automated reviewer works; carries no actionable request of its own."
+  },
+  {
+    "id": 3876132541,
+    "disposition": "addressed",
+    "rationale": "Second CodeQL js/xss-through-dom report (alert 98) for the same img src sink on the new head. Resolving the import target against live steps did not break the flow because the same parsed localId is also written into the steps state through updateStep, so the whole steps array carries the taint. The barrier is now at the sink: the preview source and the lightbox download link pass through sanitizeAttachmentPreviewUrl, a global replace that strips the markup metacharacters (< > \" ') a URL never legitimately carries, in addition to the existing scheme allowlist."
   }
 ]

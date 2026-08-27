@@ -56,6 +56,17 @@ export function isSafeAttachmentPreviewUrl(
   return SAFE_PREVIEW_SCHEMES.has(scheme);
 }
 
+/**
+ * Strips markup metacharacters from a preview source before it reaches an
+ * attribute. A URL never legitimately carries a raw `<`, `>` or quote — they
+ * are what turn an attribute value back into markup — so they are removed
+ * rather than passed through. Real preview sources (a `blob:` object URL, an
+ * artifact download path) never contain them, so this is a no-op in practice.
+ */
+export function sanitizeAttachmentPreviewUrl(url: string): string {
+  return url.replace(/</g, "").replace(/>/g, "").replace(/"/g, "").replace(/'/g, "");
+}
+
 export function isImageAttachment(
   contentType: string | null | undefined,
   filename?: string | null,
@@ -257,7 +268,10 @@ export function AttachmentImagePreview({
   if (!isSafeAttachmentPreviewUrl(previewUrl)) {
     return null;
   }
-  const downloadHref = isSafeAttachmentPreviewUrl(href) ? href : null;
+  const previewSrc = sanitizeAttachmentPreviewUrl(previewUrl);
+  const downloadHref = isSafeAttachmentPreviewUrl(href)
+    ? sanitizeAttachmentPreviewUrl(String(href))
+    : null;
 
   return (
     <>
@@ -271,7 +285,7 @@ export function AttachmentImagePreview({
       >
         <img
           className="attachment-thumbnail-image"
-          src={previewUrl}
+          src={previewSrc}
           alt=""
           aria-hidden="true"
           onError={handleError}
@@ -279,7 +293,7 @@ export function AttachmentImagePreview({
       </button>
       {isOpen ? (
         <AttachmentLightbox
-          src={previewUrl}
+          src={previewSrc}
           filename={filename}
           detail={detail}
           href={downloadHref}

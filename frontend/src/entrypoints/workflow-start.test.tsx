@@ -20514,7 +20514,9 @@ describe("Task Create governed Tool authoring", () => {
       "section",
     ) as HTMLElement;
     expect(await within(step).findByText("wireframe.png")).toBeTruthy();
-    const thumbnail = within(step).getByRole("button", {
+    // The object URL is resolved in an effect, so the thumbnail lands a render
+    // after the chip.
+    const thumbnail = await within(step).findByRole("button", {
       name: "Preview wireframe.png",
     });
     expect(thumbnail.querySelector("img")?.getAttribute("src")).toBe(objectUrl);

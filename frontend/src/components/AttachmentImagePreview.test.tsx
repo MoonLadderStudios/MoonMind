@@ -5,6 +5,7 @@ import {
   AttachmentImagePreview,
   isImageAttachment,
   isSafeAttachmentPreviewUrl,
+  sanitizeAttachmentPreviewUrl,
 } from "./AttachmentImagePreview";
 
 const OBJECT_URL = "blob:mock/preview";
@@ -40,6 +41,19 @@ describe("isSafeAttachmentPreviewUrl", () => {
     // Browsers strip the tab before resolving, so the check must too.
     expect(isSafeAttachmentPreviewUrl("java\tscript:alert(1)")).toBe(false);
     expect(isSafeAttachmentPreviewUrl("data:text/html,<script>")).toBe(false);
+  });
+});
+
+describe("sanitizeAttachmentPreviewUrl", () => {
+  it("leaves real preview sources untouched", () => {
+    expect(sanitizeAttachmentPreviewUrl("/api/artifacts/art-1/download")).toBe(
+      "/api/artifacts/art-1/download",
+    );
+    expect(sanitizeAttachmentPreviewUrl("blob:mock/preview")).toBe("blob:mock/preview");
+  });
+
+  it("strips markup metacharacters that a URL never legitimately carries", () => {
+    expect(sanitizeAttachmentPreviewUrl('/a"><img>/b')).toBe("/aimg/b");
   });
 });
 
