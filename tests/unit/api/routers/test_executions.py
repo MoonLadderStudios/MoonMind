@@ -4796,6 +4796,7 @@ def test_api_execution_compiles_opencode_plan_before_temporal_schedule(
 ) -> None:
     test_client, temporal_service, _user = client
     events: list[str] = []
+    compiled_parameters: dict[str, object] = {}
 
     async def create_execution(**_kwargs):
         events.append("temporal_schedule")
@@ -4844,6 +4845,7 @@ def test_api_execution_compiles_opencode_plan_before_temporal_schedule(
 
     async def compile_plan(**_kwargs):
         events.append("execution_plan")
+        compiled_parameters.update(_kwargs["initial_parameters"])
         return SimpleNamespace(
             binding=plan_binding,
             artifact_refs=("art_profile", "art_skills", "art_opencode_plan"),
@@ -4884,7 +4886,11 @@ def test_api_execution_compiles_opencode_plan_before_temporal_schedule(
                     },
                     "workflow": {
                         "instructions": "Prove OpenCode through the product path.",
-                        "runtime": {"mode": "omnigent"},
+                        "runtime": {
+                            "mode": "omnigent",
+                            "model": "opencode-go/gpt-5.6-luna",
+                            "effort": "xhigh",
+                        },
                     },
                 },
             },
@@ -4892,9 +4898,14 @@ def test_api_execution_compiles_opencode_plan_before_temporal_schedule(
 
     assert response.status_code == 201, response.text
     assert events == ["task_snapshot", "execution_plan", "temporal_schedule"]
+    assert compiled_parameters["model"] == "opencode-go/gpt-5.6-luna"
+    assert compiled_parameters["effort"] == "xhigh"
+    assert compiled_parameters["modelSource"] == "task_override"
     initial_parameters = temporal_service.create_execution.await_args.kwargs[
         "initial_parameters"
     ]
+    assert initial_parameters["model"] == "opencode-go/gpt-5.6-luna"
+    assert initial_parameters["effort"] == "xhigh"
     assert initial_parameters["omnigentExecutionPlan"]["planRef"] == (
         plan_binding.plan_ref
     )
