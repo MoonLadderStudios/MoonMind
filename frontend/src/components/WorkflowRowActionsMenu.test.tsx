@@ -74,6 +74,37 @@ describe('WorkflowRowActionsMenu', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  // The actions column is narrow, so the promoted row actions render as icons.
+  // The action name must survive as the accessible name and the hover tooltip,
+  // otherwise the buttons become unlabeled to screen readers and unidentifiable
+  // to sighted operators.
+  it('renders the promoted row actions as labeled icon-only buttons', () => {
+    const { container } = renderWithClient(
+      <WorkflowRowActionsMenu
+        workflowId="wf-123"
+        apiBase="/api"
+        actionsEnabled
+        taskEditingEnabled
+      />,
+    );
+
+    for (const label of ['Cancel', 'Rerun', 'Remediate']) {
+      const button = screen.getByRole('button', { name: label });
+      expect(button.classList.contains('workflow-row-actions-inline-button')).toBe(true);
+      expect(button.getAttribute('aria-label')).toBe(label);
+      expect(button.getAttribute('title')).toContain(label);
+      expect(button.textContent).toBe('');
+      const icon = button.querySelector('svg.workflow-row-actions-inline-icon');
+      expect(icon).not.toBeNull();
+      expect(icon?.getAttribute('aria-hidden')).toBe('true');
+    }
+
+    // Every promoted control is icon-only; nothing in the row cluster renders
+    // the action name as visible text.
+    const controls = container.querySelector('.workflow-row-actions-controls');
+    expect(controls?.textContent).toBe('');
+  });
+
   // Regression guard: the row detail endpoint runs a Temporal sync, so a
   // Workflows page of 50-100 rows must not fan out one request per row just by
   // rendering. Promoting Cancel/Rerun/Remediate onto the row must not turn the

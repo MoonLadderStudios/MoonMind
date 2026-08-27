@@ -9087,16 +9087,28 @@ button.workflow-workspace-sidebar-row:active {
   flex-wrap: nowrap;
 }
 
+/*
+ * Promoted row actions (Cancel, Rerun, Remediate) are icon-only so the actions
+ * column stays narrow. Match the kebab trigger's square footprint so the whole
+ * cluster reads as one row of equal-sized controls.
+ */
 .workflow-row-actions-inline-button {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   min-width: 0;
+  width: 2rem;
   height: 2rem;
-  padding: 0 0.6rem;
+  padding: 0;
   border-radius: 0.45rem;
-  font-size: 0.78rem;
   line-height: 1;
-  white-space: nowrap;
+}
+
+.workflow-row-actions-inline-icon {
+  display: block;
+  width: 1.05rem;
+  height: 1.05rem;
+  stroke-width: 2;
 }
 
 .workflow-row-actions-inline-button--danger {
