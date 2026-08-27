@@ -146,6 +146,29 @@ def test_finish_summary_compat_boundary_observes_publish_reason_alias_fields(
     assert record.canonical == "no_commit"
 
 
+def _assert_calls_in_order(mock, *expected_calls) -> None:
+    """Assert calls happened in this relative order, ignoring calls between them.
+
+    ``assert_has_calls(any_order=False)`` requires the expected calls to be
+    contiguous, which is stricter than the ordering these tests mean to pin: an
+    unrelated diagnostic call dispatched between two required calls fails the
+    assertion without breaking the invariant.
+    """
+
+    recorded = mock.mock_calls
+    search_from = 0
+    for expected_call in expected_calls:
+        for index in range(search_from, len(recorded)):
+            if recorded[index] == expected_call:
+                search_from = index + 1
+                break
+        else:
+            raise AssertionError(
+                f"Expected {expected_call} after index {search_from}. "
+                f"Recorded calls: {recorded}"
+            )
+
+
 def _valid_user_workflow_parameters() -> dict[str, object]:
     return {"workflow": {"instructions": "Test workflow fixture."}}
 
@@ -6462,16 +6485,14 @@ async def test_cancel_execution_best_effort_terminates_workflow_scoped_codex_ses
             graceful=True,
         )
 
-        mock_client_adapter.assert_has_calls(
-            [
-                call.cancel_workflow(created.workflow_id),
-                call.update_workflow(
-                    f"{created.workflow_id}:session:codex_cli",
-                    "TerminateSession",
-                    {"reason": "stop"},
-                ),
-            ],
-            any_order=False,
+        _assert_calls_in_order(
+            mock_client_adapter,
+            call.cancel_workflow(created.workflow_id),
+            call.update_workflow(
+                f"{created.workflow_id}:session:codex_cli",
+                "TerminateSession",
+                {"reason": "stop"},
+            ),
         )
 
 
@@ -6665,16 +6686,14 @@ async def test_cancel_execution_prefers_direct_session_record_load_for_codex_tas
             graceful=True,
         )
 
-        mock_client_adapter.assert_has_calls(
-            [
-                call.cancel_workflow(created.workflow_id),
-                call.update_workflow(
-                    f"{created.workflow_id}:session:codex_cli",
-                    "TerminateSession",
-                    {"reason": "stop"},
-                ),
-            ],
-            any_order=False,
+        _assert_calls_in_order(
+            mock_client_adapter,
+            call.cancel_workflow(created.workflow_id),
+            call.update_workflow(
+                f"{created.workflow_id}:session:codex_cli",
+                "TerminateSession",
+                {"reason": "stop"},
+            ),
         )
 
 @pytest.mark.asyncio
@@ -6727,16 +6746,14 @@ async def test_cancel_execution_ignores_best_effort_session_terminate_failure(
             graceful=True,
         )
 
-        mock_client_adapter.assert_has_calls(
-            [
-                call.cancel_workflow(created.workflow_id),
-                call.update_workflow(
-                    f"{created.workflow_id}:session:codex_cli",
-                    "TerminateSession",
-                    {"reason": "stop"},
-                ),
-            ],
-            any_order=False,
+        _assert_calls_in_order(
+            mock_client_adapter,
+            call.cancel_workflow(created.workflow_id),
+            call.update_workflow(
+                f"{created.workflow_id}:session:codex_cli",
+                "TerminateSession",
+                {"reason": "stop"},
+            ),
         )
         mock_client_adapter.cancel_workflow.assert_awaited_once_with(
             created.workflow_id

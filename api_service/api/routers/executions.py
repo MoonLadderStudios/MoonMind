@@ -214,6 +214,7 @@ from moonmind.workflows.checkpoint_branches import (
     CheckpointBranchGitBindingError,
 )
 from moonmind.workflows.temporal import (
+    TemporalExecutionCancelUndeliverableError,
     TemporalExecutionNotFoundError,
     TemporalExecutionRecoveryCheckpointError,
     TemporalExecutionService,
@@ -18115,12 +18116,36 @@ async def cancel_execution(
     )
 
     request = payload or CancelExecutionRequest()
-    record = await service.cancel_execution(
-        workflow_id=workflow_id,
-        reason=request.reason,
-        graceful=request.graceful,
-        action=request.action,
-    )
+    try:
+        record = await service.cancel_execution(
+            workflow_id=workflow_id,
+            reason=request.reason,
+            graceful=request.graceful,
+            action=request.action,
+        )
+    except TemporalExecutionCancelUndeliverableError as exc:
+        # The request reached Temporal but the execution cannot act on it. That
+        # is an operator-actionable conflict, not a retryable failure: returning
+        # success would report a cancel that never happens, and the next
+        # projection refresh would silently restore the live Temporal state.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "cancel_rejected",
+                "message": str(exc),
+            },
+        ) from exc
+    except TemporalExecutionValidationError as exc:
+        # Reaching Temporal failed. The request may well succeed on a retry, so
+        # answer with a retryable status instead of a conflict clients treat as
+        # permanent.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "cancel_unavailable",
+                "message": str(exc),
+            },
+        ) from exc
     canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
     if alias_used:
         _mark_execution_alias_usage(

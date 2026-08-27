@@ -117,6 +117,7 @@ from moonmind.workflows.temporal.remediation_tools import (
     RemediationTargetHealthSnapshot,
 )
 from moonmind.workflows.temporal.service import (
+    TemporalExecutionCancelUndeliverableError,
     TemporalExecutionError,
     TemporalExecutionListResult,
     TemporalExecutionNotFoundError,
@@ -204,6 +205,7 @@ __all__ = [
     "TemporalArtifactService",
     "TemporalArtifactStateError",
     "TemporalArtifactValidationError",
+    "TemporalExecutionCancelUndeliverableError",
     "TemporalExecutionError",
     "TemporalExecutionListResult",
     "TemporalExecutionNotFoundError",
