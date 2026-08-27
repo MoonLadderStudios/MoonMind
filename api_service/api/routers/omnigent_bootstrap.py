@@ -119,12 +119,11 @@ async def retry_bootstrap(
     session: AsyncSession = Depends(get_async_session),
     current_user: User = Depends(get_current_user()),
 ) -> dict[str, Any]:
-    """Re-qualify the deployment and republish exact execution evidence.
+    """Re-qualify the deployment's current default support combination.
 
-    Deployment evidence admits exactly one support combination, so an Agent
-    Profile, image, or catalog change invalidates it and launches then fail
-    admission. The Provider Profile already owns the credential, so recovery
-    never asks the operator to re-enter the API key.
+    Provider and Agent Profile defaults select the model, effort, and launch
+    policy. The Provider Profile already owns the credential, which is checked
+    for launch readiness and revalidated against the pinned runtime.
     """
     _require_bootstrap_permission(current_user)
     from api_service.db.base import async_session_maker

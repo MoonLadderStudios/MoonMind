@@ -89,10 +89,10 @@ class BootstrapController:
     async def requalify(self) -> BootstrapRecord:
         """Re-run qualification and republish evidence from persisted state.
 
-        Deployment evidence admits exactly one support combination, so an Agent
-        Profile, image, or catalog change invalidates it and every launch then
-        fails admission. The provider credential is already persisted, so this
-        recovery path never asks the operator to re-enter the API key.
+        Retry qualifies the combination selected by the current Provider and
+        Agent Profile defaults. The provider credential is already persisted,
+        so this path revalidates it against the pinned runtime without asking
+        the operator to re-enter the API key.
         """
 
         record = load_bootstrap_record()
@@ -101,7 +101,51 @@ class BootstrapController:
                 "OpenCode is not configured yet; submit the API key first"
             )
         from api_service.db.models import ManagedAgentProviderProfile
+        from api_service.services.provider_profile_readiness import (
+            provider_profile_launch_ready,
+        )
+        from api_service.services.provider_profile_service import (
+            _managed_secret_statuses_for_profiles,
+        )
 
+        async with self._session_factory() as session:
+            provider_profile = await session.get(
+                ManagedAgentProviderProfile,
+                str(record.provider_profile_ref),
+            )
+            if provider_profile is None:
+                raise ValueError(
+                    "the persisted OpenCode Provider Profile no longer exists"
+                )
+            managed_secret_statuses = await _managed_secret_statuses_for_profiles(
+                session=session,
+                rows=[provider_profile],
+            )
+            if not provider_profile_launch_ready(
+                provider_profile,
+                managed_secret_statuses=managed_secret_statuses,
+            ):
+                raise ValueError(
+                    "the persisted OpenCode Provider Profile is not launch ready; "
+                    "re-enable and reconnect it before requalifying"
+                )
+
+        from moonmind.omnigent.bootstrap.provider_revalidation import (
+            reconcile_opencode_provider_readiness,
+        )
+
+        revalidation = await reconcile_opencode_provider_readiness(
+            session_factory=self._session_factory,
+            allow_enrollment=False,
+        )
+        if not revalidation.ready:
+            raise ValueError(
+                "the persisted OpenCode Provider Profile could not be revalidated "
+                "against the pinned runtime"
+            )
+
+        # Revalidation may have refreshed the credential-scoped catalog. Reload
+        # the row so qualification uses the current authoritative defaults.
         async with self._session_factory() as session:
             provider_profile = await session.get(
                 ManagedAgentProviderProfile,

@@ -322,7 +322,11 @@ def _candidate_qualification_key(candidate: Mapping[str, Any]) -> str | None:
 def _support_identity_drift(
     plan_payload: Any, candidate: Mapping[str, Any]
 ) -> list[str]:
-    """Name the support-identity fields that separate a plan from evidence."""
+    """Name fields that separate a plan from untrusted candidate evidence.
+
+    Candidate values have not passed schema validation, the secret scan, or
+    HMAC verification. Diagnostics therefore expose bounded field names only.
+    """
 
     requested = plan_payload.supportIdentity.model_dump(mode="json", by_alias=True)
     attested = candidate.get("supportIdentity")
@@ -332,10 +336,8 @@ def _support_identity_drift(
     for field in sorted(set(requested) | set(attested)):
         if field in DEPLOYMENT_QUALIFICATION_EXCLUDED_FIELDS:
             continue
-        want = requested.get(field)
-        have = attested.get(field)
-        if want != have:
-            drift.append(f"{field}: requested {want!r} != qualified {have!r}")
+        if requested.get(field) != attested.get(field):
+            drift.append(f"{field} differs")
     return drift
 
 
@@ -344,8 +346,8 @@ def _unqualified_combination_message(
 ) -> str:
     """Explain which exact combination is missing and how to re-qualify.
 
-    Support identity carries only refs and digests, so naming the drifting
-    fields keeps the failure actionable without exposing credentials.
+    Candidates are untrusted until schema, secret, and signature validation,
+    so only bounded field names may appear in this pre-validation diagnostic.
     """
 
     drift: list[str] = []
@@ -356,9 +358,9 @@ def _unqualified_combination_message(
     return (
         "this deployment is not qualified for the requested execution "
         f"combination {plan_payload.supportCombinationKey} ({detail}). "
-        "Re-run deployment qualification "
-        "(POST /api/omnigent/bootstrap/opencode/retry) after changing an "
-        "Agent Profile, image, catalog, model, or required capabilities."
+        "Qualification follows the current Provider and Agent Profile defaults; "
+        "align those defaults with the requested launch policy, model, and effort "
+        "before qualifying the deployment."
     )
 
 

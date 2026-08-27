@@ -14,7 +14,7 @@ import pytest
 from api_service.services.omnigent_agent_profile_selection import (
     default_launch_policy_ref,
 )
-from moonmind.omnigent.bootstrap.controller import BootstrapController
+from moonmind.omnigent.bootstrap import controller as controller_module
 from moonmind.omnigent.bootstrap.models import (
     BootstrapDesired,
     BootstrapRecord,
@@ -193,7 +193,9 @@ def qualification_boundary(monkeypatch, tmp_path):
 
 
 async def _qualify(state) -> dict:
-    controller = BootstrapController(session_factory=state.session_factory)
+    controller = controller_module.BootstrapController(
+        session_factory=state.session_factory
+    )
     return await controller._qualify_and_publish(
         provider_profile_ref="opencode-go-default",
         qualified_model="opencode-go/muse-spark-1.2-contributor",
@@ -269,7 +271,15 @@ async def test_requalification_uses_the_current_provider_profile_model(
 ) -> None:
     """Retry must not requalify a stale bootstrap-time model selection."""
 
-    import moonmind.omnigent.bootstrap.controller as controller_module
+    from api_service.db.models import (
+        ProviderCredentialSource,
+        ProviderProfileAuthState,
+        RuntimeMaterializationMode,
+        SecretStatus,
+    )
+    from moonmind.omnigent.bootstrap.provider_revalidation import (
+        ProviderReconcileOutcome,
+    )
 
     stored = BootstrapRecord(
         state=BootstrapState.failed,
@@ -281,6 +291,16 @@ async def test_requalification_uses_the_current_provider_profile_model(
         providerProfileRef="opencode-go-default",
     )
     provider_profile = SimpleNamespace(
+        enabled=True,
+        auth_state=ProviderProfileAuthState.CONNECTED,
+        disabled_reason=None,
+        max_parallel_runs=1,
+        runtime_id="opencode",
+        credential_source=ProviderCredentialSource.SECRET_REF,
+        runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
+        cooldown_after_429_seconds=0,
+        secret_refs={"opencode_api_key": "db://opencode-go-default-api-key"},
+        command_behavior={},
         default_model="opencode-go/gpt-5.6-luna",
         default_effort="high",
     )
@@ -299,7 +319,18 @@ async def test_requalification_uses_the_current_provider_profile_model(
 
     monkeypatch.setattr(controller_module, "load_bootstrap_record", lambda: stored)
     monkeypatch.setattr(controller_module, "save_bootstrap_record", lambda _record: None)
-    controller = BootstrapController(session_factory=lambda: _session_scope())
+    monkeypatch.setattr(
+        "api_service.services.provider_profile_service._managed_secret_statuses_for_profiles",
+        AsyncMock(return_value={"opencode-go-default-api-key": SecretStatus.ACTIVE.value}),
+    )
+    revalidate = AsyncMock(return_value=ProviderReconcileOutcome(ready=True))
+    monkeypatch.setattr(
+        "moonmind.omnigent.bootstrap.provider_revalidation.reconcile_opencode_provider_readiness",
+        revalidate,
+    )
+    controller = controller_module.BootstrapController(
+        session_factory=lambda: _session_scope()
+    )
     monkeypatch.setattr(controller, "_reconcile", _reconcile)
 
     result = await controller.requalify()
@@ -307,3 +338,150 @@ async def test_requalification_uses_the_current_provider_profile_model(
     assert reconciled == [result]
     assert result.desired.model_display_name == "opencode-go/gpt-5.6-luna"
     assert result.desired.effort == "high"
+    revalidate.assert_awaited_once_with(
+        session_factory=controller._session_factory,
+        allow_enrollment=False,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("enabled", "secret_status"),
+    [
+        (False, "active"),
+        (True, "disabled"),
+        (True, "deleted"),
+    ],
+)
+async def test_requalification_rejects_an_unlaunchable_provider_profile(
+    monkeypatch,
+    enabled: bool,
+    secret_status: str,
+) -> None:
+    """Retry cannot publish evidence normal profile selection would reject."""
+
+    from api_service.db.models import (
+        ProviderCredentialSource,
+        ProviderProfileAuthState,
+        RuntimeMaterializationMode,
+    )
+
+    stored = BootstrapRecord(
+        state=BootstrapState.failed,
+        desired=BootstrapDesired(
+            modelDisplayName="opencode-go/gpt-5.6-luna",
+            effort="high",
+        ),
+        providerProfileRef="opencode-go-default",
+    )
+    provider_profile = SimpleNamespace(
+        enabled=enabled,
+        auth_state=ProviderProfileAuthState.CONNECTED,
+        disabled_reason=None,
+        max_parallel_runs=1,
+        runtime_id="opencode",
+        credential_source=ProviderCredentialSource.SECRET_REF,
+        runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
+        cooldown_after_429_seconds=0,
+        secret_refs={"opencode_api_key": "db://opencode-go-default-api-key"},
+        command_behavior={},
+        default_model="opencode-go/gpt-5.6-luna",
+        default_effort="high",
+    )
+
+    @asynccontextmanager
+    async def _session_scope():
+        yield SimpleNamespace(get=AsyncMock(return_value=provider_profile))
+
+    monkeypatch.setattr(controller_module, "load_bootstrap_record", lambda: stored)
+    monkeypatch.setattr(
+        "api_service.services.provider_profile_service._managed_secret_statuses_for_profiles",
+        AsyncMock(return_value={"opencode-go-default-api-key": secret_status}),
+    )
+    revalidate = AsyncMock()
+    monkeypatch.setattr(
+        "moonmind.omnigent.bootstrap.provider_revalidation.reconcile_opencode_provider_readiness",
+        revalidate,
+    )
+
+    controller = controller_module.BootstrapController(
+        session_factory=lambda: _session_scope()
+    )
+    with pytest.raises(ValueError, match="not launch ready"):
+        await controller.requalify()
+
+    revalidate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_requalification_stops_when_runtime_revalidation_fails(
+    monkeypatch,
+) -> None:
+    """Retry cannot publish after the pinned runtime rejects the credential."""
+
+    from api_service.db.models import (
+        ProviderCredentialSource,
+        ProviderProfileAuthState,
+        RuntimeMaterializationMode,
+        SecretStatus,
+    )
+    from moonmind.omnigent.bootstrap.provider_revalidation import (
+        ProviderReconcileOutcome,
+    )
+
+    stored = BootstrapRecord(
+        state=BootstrapState.failed,
+        desired=BootstrapDesired(
+            modelDisplayName="opencode-go/gpt-5.6-luna",
+            effort="high",
+        ),
+        providerProfileRef="opencode-go-default",
+    )
+    provider_profile = SimpleNamespace(
+        enabled=True,
+        auth_state=ProviderProfileAuthState.CONNECTED,
+        disabled_reason=None,
+        max_parallel_runs=1,
+        runtime_id="opencode",
+        credential_source=ProviderCredentialSource.SECRET_REF,
+        runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
+        cooldown_after_429_seconds=0,
+        secret_refs={"opencode_api_key": "db://opencode-go-default-api-key"},
+        command_behavior={},
+        default_model="opencode-go/gpt-5.6-luna",
+        default_effort="high",
+    )
+
+    @asynccontextmanager
+    async def _session_scope():
+        yield SimpleNamespace(get=AsyncMock(return_value=provider_profile))
+
+    monkeypatch.setattr(controller_module, "load_bootstrap_record", lambda: stored)
+    monkeypatch.setattr(
+        "api_service.services.provider_profile_service._managed_secret_statuses_for_profiles",
+        AsyncMock(
+            return_value={
+                "opencode-go-default-api-key": SecretStatus.ACTIVE.value,
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.bootstrap.provider_revalidation.reconcile_opencode_provider_readiness",
+        AsyncMock(
+            return_value=ProviderReconcileOutcome(
+                ready=False,
+                deferred=("opencode-go-default",),
+            )
+        ),
+    )
+
+    controller = controller_module.BootstrapController(
+        session_factory=lambda: _session_scope()
+    )
+    reconcile = AsyncMock()
+    monkeypatch.setattr(controller, "_reconcile", reconcile)
+
+    with pytest.raises(ValueError, match="could not be revalidated"):
+        await controller.requalify()
+
+    reconcile.assert_not_awaited()

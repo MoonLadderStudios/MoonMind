@@ -964,6 +964,12 @@ async def compile_and_persist_execution_plan(
     mounted_skill_tools = tuple(
         sorted(set(required_capabilities).intersection(deployment_mounted_tool_names()))
     )
+    bridge_capabilities = {
+        "repository.read": True,
+        "repository.write": True,
+        "session.start": True,
+        **{tool_name: True for tool_name in mounted_skill_tools},
+    }
     binding_set = create_binding_set(
         bindingSetId=f"{harness_id}.primary-model",
         version=int(agent_profile_snapshot.get("version") or 1),
@@ -1081,10 +1087,10 @@ async def compile_and_persist_execution_plan(
         or None,
         model_normalized_options=dict(model_mapping.get("settings") or {}),
         workflow_requirements=list(required_capabilities),
-        bridge_capabilities={
-            str(capability): True
-            for capability in required_capabilities
-        },
+        # Capability admission consumes deployment-owned declarations only.
+        # A workflow request can require a capability, but it cannot make that
+        # capability available merely by naming it.
+        bridge_capabilities=bridge_capabilities,
         workspace_intent_ref=_digest_ref(
             "workspace-intent", {"repository": repository, "workspace": workspace}
         ),

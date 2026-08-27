@@ -231,10 +231,12 @@ Two rules keep qualification and admission on one combination:
 - **Per-run request intent is not a qualification dimension.**
   `requiredCapabilitiesDigest` records what one workflow asked for, not what the
   deployment can run, so it is excluded from the qualified combination. Class
-  admission independently refuses unsupported or unknown required capabilities,
-  and it does so before the support key exists. Binding evidence to one
-  capability set would require re-qualifying the deployment for every workflow
-  shape.
+  admission derives support only from trusted catalog, Host Class, launch-policy,
+  materializer, bridge, and deployment-mounted-tool declarations; a workflow
+  cannot declare its own request supported. Admission independently refuses
+  unsupported or unknown required capabilities before the support key exists.
+  Binding evidence to one capability set would require re-qualifying the
+  deployment for every workflow shape.
 
 Everything else stays exact. Changing an Agent Profile, host image, harness
 catalog, model, or effort changes the qualified combination and invalidates the
@@ -245,9 +247,12 @@ credential is already stored, so recovery never needs the API key again:
 POST /api/omnigent/bootstrap/opencode/retry
 ```
 
-Retry refreshes the desired model and effort from the current Provider Profile
-before qualification. Bootstrap-time model intent is not reused after an
-operator changes those Provider Profile defaults.
+Retry checks that the persisted Provider Profile and its managed SecretRefs are
+launch ready, revalidates its credential evidence against the pinned runtime,
+and refreshes the desired model and effort from the current Provider Profile.
+Qualification uses the current Agent Profile's default launch policy. An
+explicit per-run override is not a retry target; align the profile defaults with
+the desired combination before invoking retry.
 
 ## Exact-host attestation (issue §8)
 

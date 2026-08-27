@@ -71,9 +71,9 @@ def compute_class_admission(
         if not declared:
             unknown.append(cap)
             continue
-        # Check if positively supported across required layers
-        # For simplicity: must be True in host_class and (catalog or bridge) and materializer if applicable
-        # We'll check host_class and catalog/bridge
+        # Check only trusted declarations. A capability may be supplied by the
+        # catalog, Host Class, materializer, bridge, or launch policy; the
+        # workflow's requirement is deliberately absent from this evidence.
         host_ok = host_class_capabilities.get(cap, True)  # if not host-specific, ignore
         catalog_ok = catalog_capabilities.get(cap)
         bridge_ok = bridge_capabilities.get(cap)
@@ -89,10 +89,25 @@ def compute_class_admission(
 
         # If any layer explicitly says False or unsupported, then missing
         # catalog/bridge None means unknown already handled; False means unsupported
-        if catalog_ok is False or bridge_ok is False or host_ok is False or materializer_ok is False or policy_ok is False:
+        if (
+            catalog_ok is False
+            or bridge_ok is False
+            or host_ok is False
+            or materializer_ok is False
+            or policy_ok is False
+        ):
             missing.append(cap)
-        elif catalog_ok is None and bridge_ok is None:
-            # Unknown value remains unknown (not coerced)
+        elif not any(
+            value is True
+            for value in (
+                catalog_capabilities.get(cap),
+                host_class_capabilities.get(cap),
+                materializer_capabilities.get(cap),
+                bridge_capabilities.get(cap),
+            )
+        ) and cap not in launch_policy_capabilities:
+            # A name appearing without an explicit positive declaration is not
+            # support evidence.
             unknown.append(cap)
         else:
             satisfied.append(cap)

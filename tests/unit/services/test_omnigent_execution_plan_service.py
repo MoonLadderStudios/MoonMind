@@ -355,15 +355,31 @@ async def test_resolved_skill_capabilities_drive_plan_and_mounted_tools(
         artifacts=_ArtifactService(),
         launch_policy_ref="opencode-on-demand@1",
         plan_store=_PlanStore(object()),
-        extra_parameters={"requiredCapabilities": ["custom-capability"]},
     )
 
     assert result.envelope.payload.resolvedTools["tools"] == ["gh"]
     assert result.envelope.payload.classAdmissionDecision["requiredSatisfied"] == [
-        "custom-capability",
         "gh",
         "git",
     ]
+
+
+@pytest.mark.asyncio
+async def test_workflow_cannot_self_attest_an_unknown_capability(
+    monkeypatch,
+) -> None:
+    """Authored requirements are requests, never bridge support evidence."""
+
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+
+    with pytest.raises(HarnessPlatformError, match="custom-capability"):
+        await _compile_opencode_plan(
+            monkeypatch,
+            artifacts=_ArtifactService(),
+            launch_policy_ref="opencode-on-demand@1",
+            plan_store=_PlanStore(object()),
+            extra_parameters={"requiredCapabilities": ["custom-capability"]},
+        )
 
 
 async def _capture_plan_payload(*, launch_policy_ref: str):
@@ -634,3 +650,45 @@ async def test_deployment_evidence_for_another_model_is_inadmissible(
             plan_store=_PlanStore(None),
         )
     assert "modelConfigDigest" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_untrusted_evidence_values_are_redacted_from_admission_errors(
+    tmp_path, monkeypatch
+) -> None:
+    """Malformed evidence is never reflected into workflow-visible errors."""
+
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "deployment")
+    plan_payload = await _capture_plan_payload(
+        launch_policy_ref=default_launch_policy_ref(
+            _OPENCODE_ALLOWED_LAUNCH_POLICIES
+        )
+    )
+    untrusted_value = "sensitive-candidate-value"
+    candidate_identity = plan_payload.supportIdentity.model_dump(
+        mode="json", by_alias=True
+    )
+    candidate_identity["modelConfigDigest"] = untrusted_value
+    destination = tmp_path / "deployment-execution-evidence.json"
+    destination.write_text(
+        json.dumps({"entries": [{"supportIdentity": candidate_identity}]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(
+        "MOONMIND_OMNIGENT_DEPLOYMENT_EVIDENCE", str(destination)
+    )
+
+    with pytest.raises(ValueError) as excinfo:
+        await _compile_opencode_plan(
+            monkeypatch,
+            artifacts=_ArtifactService(),
+            launch_policy_ref=default_launch_policy_ref(
+                _OPENCODE_ALLOWED_LAUNCH_POLICIES
+            ),
+            plan_store=_PlanStore(None),
+        )
+
+    message = str(excinfo.value)
+    assert "modelConfigDigest differs" in message
+    assert untrusted_value not in message
+    assert "/api/omnigent/bootstrap/opencode/retry" not in message
