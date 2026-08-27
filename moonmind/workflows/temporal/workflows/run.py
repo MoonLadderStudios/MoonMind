@@ -20983,6 +20983,9 @@ class MoonMindRunWorkflow:
             "state": str(self._get_from_result(snapshot, "state") or ""),
             "logsRef": self._get_from_result(snapshot, "logsRef"),
             "artifactsRef": self._get_from_result(snapshot, "artifactsRef"),
+            # Present only when the caller requested a device resource; the
+            # projection is the bounded observation, never a Docker flag.
+            "gpu": self._get_from_result(snapshot, "gpu"),
         }
         if isinstance(terminal, Mapping):
             outputs.update(

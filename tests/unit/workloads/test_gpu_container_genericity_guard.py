@@ -31,6 +31,12 @@ GPU_BEARING_MODULES: tuple[Path, ...] = (
     Path("moonmind/schemas/container_job_models.py"),
     Path("moonmind/config/container_backend_settings.py"),
     Path("moonmind/workflows/temporal/container_job_backend.py"),
+    Path("moonmind/workflows/temporal/workflows/container_job.py"),
+    Path("moonmind/workflows/temporal/worker_runtime.py"),
+    Path("moonmind/mcp/container_job_tool_registry.py"),
+    Path("api_service/services/container_jobs.py"),
+    Path("api_service/api/routers/container_jobs.py"),
+    Path("api_service/db/models.py"),
     Path("moonmind/workloads/docker_launcher.py"),
     Path("moonmind/workloads/registry.py"),
     Path("moonmind/workloads/tool_bridge.py"),
@@ -41,6 +47,8 @@ GPU_BEARING_MODULES: tuple[Path, ...] = (
 QUALIFICATION_FIXTURES: tuple[Path, ...] = (
     Path("tests/unit/workloads/test_gpu_container_qualification.py"),
     Path("tests/unit/workflows/temporal/test_gpu_container_dispatch.py"),
+    Path("tests/unit/workflows/temporal/test_container_job_gpu_resources.py"),
+    Path("tests/unit/api/test_container_job_gpu_transport.py"),
     Path("tests/integration/workloads/test_nvidia_container_qualification_journey.py"),
 )
 

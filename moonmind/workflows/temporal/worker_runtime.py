@@ -2533,6 +2533,12 @@ def _container_job_projection_writer(backend_kind: str, backend_ref: str):
                     "cacheHit": True,
                     "pullLockWaitMs": 0,
                 }
+            if request.gpu_observation is not None:
+                # Only written when the caller requested a GPU resource, so a
+                # CPU-only job never gains a GPU observation.
+                record.gpu_observation_json = request.gpu_observation.model_dump(
+                    mode="json", by_alias=True, exclude_none=True
+                )
             if (
                 request.exit_code is not None
                 or request.failure_class
