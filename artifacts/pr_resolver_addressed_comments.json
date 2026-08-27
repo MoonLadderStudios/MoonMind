@@ -1,27 +1,27 @@
 [
   {
-    "id": 3860739325,
+    "id": 3869137341,
     "disposition": "addressed",
-    "rationale": "run.py now validates finishMode through _normalize_finish_mode: only an omitted value takes the merge default, and any other unsupported value raises a non-retryable UNSUPPORTED_MERGE_AUTOMATION_FINISH_MODE ApplicationError before a resolver child is granted merge authority."
+    "rationale": "Moved the phased rollout sequencing out of the canonical doc: deleted section 24 Rollout Guidance, renumbered Decision Summary to 24, created docs/tmp/ProviderProfileTierSettingsRollout.md with the sequencing, and added an Implementation tracking pointer so the canonical file keeps only declarative requirements and acceptance criteria."
   },
   {
-    "id": 3860739332,
+    "id": 3869137347,
     "disposition": "addressed",
-    "rationale": "terminal_evidence.py now applies disposition-specific invariants for review_clean (merged=false and a non-merge action, plus no merge claim in the resolver result) and fails with UNAUTHORIZED_MERGE_EVIDENCE; the Skill's review_clean publish path adds the authoritative remote check that the PR is still unmerged."
+    "rationale": "Bound capability lookup to the selected profile: section 12.1 now specifies GET /api/v1/provider-profiles/{profile_id}/capabilities (with the runtime/provider query form reserved for advisory create-form drafts), section 12.2 adds profile_id plus an evidence block (source, credential_generation, image_ref, observed_at, stale) that the option sets are bound to, and rules 10-12 in 12.3 plus 12.4 require refetch and no new values when the profile evidence identity does not match."
   },
   {
-    "id": 3860739342,
+    "id": 3869137351,
     "disposition": "addressed",
-    "rationale": "publish_evidence.py now matches the real production stage token full_remediation via PR_RESOLVER_REMEDIATION_STAGE, so a remediated fix_only run publishes verified/push/pushed=true instead of no_op_verified. The existing test that encoded the fictional 'full' token was corrected."
+    "rationale": "Section 4.4 now states that Runtime default requires a null tier model/effort to resolve directly to the runtime default with no profile-level compatibility field in between, names removal of that step as a prerequisite owned by ProviderProfileModelEffortTiers.md, and requires the inherited value and effective preview to come from backend-reported resolution and to name a non-runtime source instead of showing Runtime default. The concrete resolver and test removals are sequenced in docs/tmp/ProviderProfileTierSettingsRollout.md Phase 2."
   },
   {
-    "id": 3860739355,
+    "id": 3869137354,
     "disposition": "addressed",
-    "rationale": "EXIT_CODE_REVIEW_CLEAN is now 0, so pr_resolve_finalize.py and pr_resolve_orchestrate.py exit zero for this documented terminal success with or without --strict-exit-codes; the outcome stays distinguishable through status and mergeAutomationDisposition in the result JSON."
+    "rationale": "Section 15.2 is now Tier-only persistence: no client-side derivation, no compatibility period, and one cohesive removal of default_model/default_effort from the read and write contracts, the launch-time compatibility step, and the remaining callers, fixtures, and tests. Documented that no persisted-history cutover is required because runs persist resolved values at launch. Reconciled sections 3.3, 5, 6.3, 14.2 (14.3 removed), 18.1, 22.1, 22.5, 23.14, and the Decision Summary."
   },
   {
-    "id": 5028028248,
+    "id": 5037699927,
     "disposition": "not-applicable",
-    "rationale": "Codex review header comment with no actionable request; its individual findings are tracked as the four review comments above."
+    "rationale": "Codex review summary body with no actionable request; its individual findings are tracked as the four review comments above."
   }
 ]
