@@ -18,13 +18,25 @@ def _build(*, target_path: str):
 def test_opencode_materializer_pins_deterministic_server_startup_environment():
     _script, environment = _build(target_path="/run/mm-credentials/opencode")
 
-    expected = {
+    expected_flags = {
         "OPENCODE_DISABLE_AUTOUPDATE",
         "OPENCODE_DISABLE_DEFAULT_PLUGINS",
         "OPENCODE_DISABLE_MODELS_FETCH",
     }
-    assert {name for name in expected if environment[name] == "1"} == expected
-    assert set(environment["OMNIGENT_RUNNER_ENV_PASSTHROUGH"].split(",")) == expected
+    expected_proxies = {
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
+    }
+    assert {
+        name for name in expected_flags if environment[name] == "1"
+    } == expected_flags
+    assert set(environment["OMNIGENT_RUNNER_ENV_PASSTHROUGH"].split(",")) == (
+        expected_flags | expected_proxies
+    )
 
 
 def test_non_opencode_materializer_does_not_inject_opencode_runtime_flags():

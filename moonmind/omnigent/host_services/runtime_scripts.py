@@ -20,6 +20,21 @@ _OPENCODE_RUNTIME_ENV = {
     "OPENCODE_DISABLE_AUTOUPDATE": "1",
 }
 
+# The on-demand host receives these values from the sandbox egress boundary.
+# Omnigent deliberately filters the host environment before spawning a runner,
+# so their *names* must survive the host -> runner hop. The OpenCode server then
+# inherits the values through its own restricted environment builder.
+_OPENCODE_PROXY_ENV_NAMES = frozenset(
+    {
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
+    }
+)
+
 
 class OmnigentRuntimeScriptService:
     def build_entrypoint(
@@ -87,7 +102,7 @@ class OmnigentRuntimeScriptService:
         if has_opencode_materializer:
             environment.update(_OPENCODE_RUNTIME_ENV)
             environment["OMNIGENT_RUNNER_ENV_PASSTHROUGH"] = ",".join(
-                sorted(_OPENCODE_RUNTIME_ENV)
+                sorted({*_OPENCODE_RUNTIME_ENV, *_OPENCODE_PROXY_ENV_NAMES})
             )
         script = (
             "set -eu; "
