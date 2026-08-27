@@ -2809,8 +2809,21 @@ class TemporalSandboxActivities:
                 return True
         return False
 
+    @staticmethod
+    def _workspace_archive_excludes(relative: Path) -> bool:
+        return any(part in {".git", "__pycache__"} for part in relative.parts) or (
+            relative.parts[:2]
+            in {
+                (".agents", "skills"),
+                (".gemini", "skills"),
+            }
+        )
+
     def _workspace_has_traversal(self, workspace: Path) -> bool:
         for path in workspace.rglob("*"):
+            relative = path.relative_to(workspace)
+            if self._workspace_archive_excludes(relative):
+                continue
             try:
                 if path.is_symlink():
                     target = path.resolve()
@@ -3092,12 +3105,7 @@ class TemporalSandboxActivities:
         with tarfile.open(fileobj=output, mode="w:gz") as archive:
             for path in sorted(workspace.rglob("*")):
                 relative = path.relative_to(workspace)
-                if any(part in {".git", "__pycache__"} for part in relative.parts):
-                    continue
-                if relative.parts[:2] in {
-                    (".agents", "skills"),
-                    (".gemini", "skills"),
-                }:
+                if self._workspace_archive_excludes(relative):
                     continue
                 if path.is_dir():
                     continue
