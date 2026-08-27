@@ -32,6 +32,21 @@ from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 _OVERRIDABLE_SECTIONS = frozenset({"model", "capture", "rag", "publish"})
 
 
+def default_launch_policy_ref(allowed_launch_policy_refs: Any) -> str:
+    """Return the launch policy admission selects when none is authored.
+
+    Deployment qualification must qualify the same combination admission
+    compiles, so the launch policy is derived from the Agent Profile instead of
+    being restated per call site.
+    """
+
+    for candidate in allowed_launch_policy_refs or ():
+        cleaned = str(candidate or "").strip()
+        if cleaned:
+            return cleaned
+    raise ValueError("agent profile declares no allowed launch policy")
+
+
 def _provider_profile_visibility_filter(user: User | None) -> Any | None:
     """Return the SQL visibility boundary shared by explicit/default selection."""
 
@@ -457,7 +472,9 @@ async def resolve_agent_profile_snapshot(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             "agentProfile.launchPolicyRef is not allowed by the selected profile",
         )
-    launch_policy_ref = requested_launch_policy or allowed_launch_policies[0]
+    launch_policy_ref = requested_launch_policy or default_launch_policy_ref(
+        allowed_launch_policies
+    )
 
     # Generic (v2) profiles do not carry an execution-profile declaration of
     # their own; the launch policy owns that identity. Derive the canonical
@@ -766,6 +783,7 @@ async def refresh_managed_bootstrap_snapshot(
 
 __all__ = [
     "compile_agent_profile_snapshot_parameters",
+    "default_launch_policy_ref",
     "refresh_managed_bootstrap_snapshot",
     "resolve_agent_profile_snapshot",
     "resolve_default_agent_profile_snapshot",

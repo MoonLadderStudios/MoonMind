@@ -41,9 +41,11 @@ def resolve_execution_evidence(
             evidence = load_deployment_evidence(plan_payload, now=now)
             return evidence, "deployment_qualified"
         except Exception as exc:
-            # If policy is either and protected already failed, bubble deployment failure
+            # If policy is either and protected already failed, bubble deployment failure.
+            # The underlying reason is the only actionable part of this failure,
+            # so it travels in the message and not just the exception chain.
             raise ValueError(
-                "no admissible execution evidence for the current policy"
+                f"no admissible execution evidence for the current policy: {exc}"
             ) from exc
     raise ValueError(f"unknown evidence policy: {selected_policy}")
 

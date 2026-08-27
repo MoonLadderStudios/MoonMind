@@ -15,6 +15,43 @@ from moonmind.omnigent.harness_platform.failures import (
 from moonmind.omnigent.host_services.docker_backend import DockerCommandBackend
 
 _SAFE_VOLUME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$")
+_DEFAULT_MANIFEST_PATH = (
+    Path(__file__).resolve().parents[3] / "services/omnigent/tools/manifest.lock.json"
+)
+
+
+def load_mounted_tool_manifest(
+    manifest_path: str | Path | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Load the deployment-owned tool names and pinned metadata."""
+
+    path = Path(manifest_path or _DEFAULT_MANIFEST_PATH).resolve()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        rows = payload["tools"]
+    except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise HarnessPlatformError(
+            "deployment mounted-tool manifest is unavailable",
+            code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+        ) from exc
+    if not isinstance(rows, list):
+        raise HarnessPlatformError(
+            "deployment mounted-tool manifest is malformed",
+            code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+        )
+    return {
+        str(row.get("name") or "").strip().lower(): dict(row)
+        for row in rows
+        if isinstance(row, dict) and str(row.get("name") or "").strip()
+    }
+
+
+def deployment_mounted_tool_names(
+    manifest_path: str | Path | None = None,
+) -> tuple[str, ...]:
+    """Return the executable capability names available to new plans."""
+
+    return tuple(sorted(load_mounted_tool_manifest(manifest_path)))
 
 
 class OmnigentMountedToolService:
@@ -33,11 +70,7 @@ class OmnigentMountedToolService:
         volume_ref: str | None = None,
     ) -> None:
         self._backend = backend
-        self._manifest_path = Path(
-            manifest_path
-            or Path(__file__).resolve().parents[3]
-            / "services/omnigent/tools/manifest.lock.json"
-        ).resolve()
+        self._manifest_path = Path(manifest_path or _DEFAULT_MANIFEST_PATH).resolve()
         self._volume_ref = str(
             volume_ref
             or os.getenv("MOONMIND_OMNIGENT_TOOLS_VOLUME_REF")
@@ -45,24 +78,7 @@ class OmnigentMountedToolService:
         ).strip()
 
     def _manifest(self) -> dict[str, dict[str, Any]]:
-        try:
-            payload = json.loads(self._manifest_path.read_text(encoding="utf-8"))
-            rows = payload["tools"]
-        except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
-            raise HarnessPlatformError(
-                "deployment mounted-tool manifest is unavailable",
-                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
-            ) from exc
-        if not isinstance(rows, list):
-            raise HarnessPlatformError(
-                "deployment mounted-tool manifest is malformed",
-                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
-            )
-        return {
-            str(row.get("name") or "").strip(): dict(row)
-            for row in rows
-            if isinstance(row, dict) and str(row.get("name") or "").strip()
-        }
+        return load_mounted_tool_manifest(self._manifest_path)
 
     async def materialize(self, resolved_tools: dict[str, Any]) -> list[dict[str, Any]]:
         delivery_ref = str(resolved_tools.get("toolDeliveryRef") or "").strip()
@@ -125,4 +141,8 @@ class OmnigentMountedToolService:
         ]
 
 
-__all__ = ["OmnigentMountedToolService"]
+__all__ = [
+    "OmnigentMountedToolService",
+    "deployment_mounted_tool_names",
+    "load_mounted_tool_manifest",
+]

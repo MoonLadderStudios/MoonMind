@@ -112,6 +112,32 @@ def test_upstream_metadata_is_allowlisted_and_bounded():
     assert "nested" not in result
 
 
+def test_builtin_opencode_agent_requires_real_catalog_name_and_uses_live_id():
+    from api_service.api.routers.omnigent_agent_profiles import (
+        _builtin_opencode_agent,
+    )
+
+    assert _builtin_opencode_agent(
+        [
+            {
+                "id": "ag_live123",
+                "name": "opencode-native-ui",
+                "version": 4,
+                "harness": "opencode-native",
+            }
+        ]
+    ) == ("ag_live123", "4")
+    assert _builtin_opencode_agent(
+        [
+            {
+                "id": "opencode-native-ui",
+                "version": 1,
+                "harness": "opencode-native",
+            }
+        ]
+    ) is None
+
+
 @pytest.mark.asyncio
 async def test_synchronize_omnigent_harness_catalog_is_one_canonical_path(
     monkeypatch: pytest.MonkeyPatch,
@@ -221,7 +247,7 @@ async def test_synchronize_omnigent_harness_catalog_propagates_endpoint_failure(
         await service_module.synchronize_omnigent_harness_catalog(session=object())
 
 
-def test_overlay_adds_stable_opencode_identity_when_endpoint_lacks_it():
+def test_overlay_adds_harness_but_never_invents_upstream_agent_identity():
     from datetime import UTC, datetime
 
     from moonmind.omnigent.harness_platform.catalog import (
@@ -268,12 +294,7 @@ def test_overlay_adds_stable_opencode_identity_when_endpoint_lacks_it():
     # The overlay is persisted as the only observation for this sync, so it
     # keeps the authenticated observation time instead of an offset.
     assert merged.snapshot.observedAt == real.snapshot.observedAt
-    agents = merged.diagnostics["agents"]
-    assert {
-        "id": "opencode-native-ui",
-        "version": "1",
-        "harness": "opencode-native",
-    } in agents
+    assert merged.diagnostics["agents"] == []
 
     # Deterministic content: a later observation of unchanged inventory
     # produces the same source digest so profile versions stay stable.
@@ -335,7 +356,7 @@ def test_overlay_skips_when_harness_present_or_support_disabled(
     assert _overlay_synthetic_opencode(empty) is empty
 
 
-def test_overlay_digest_tracks_synthetic_overlay_authority(
+def test_overlay_digest_tracks_synthetic_harness_authority(
     monkeypatch: pytest.MonkeyPatch,
 ):
     """A changed synthetic identity must change the observation source digest."""
@@ -364,11 +385,6 @@ def test_overlay_digest_tracks_synthetic_overlay_authority(
 
     baseline = service_module._overlay_synthetic_opencode(real)
 
-    monkeypatch.setattr(service_module, "_OPENCODE_NATIVE_UI_VERSION", "2")
-    changed_agent = service_module._overlay_synthetic_opencode(real)
-    assert changed_agent.snapshot.sourceDigest != baseline.snapshot.sourceDigest
-
-    monkeypatch.setattr(service_module, "_OPENCODE_NATIVE_UI_VERSION", "1")
     original_row = service_module._synthetic_opencode_harness_row
 
     def _relabelled_row():

@@ -544,7 +544,9 @@ def test_sandbox_worker_compose_egress_is_restricted_for_mm_785():
         "." + "".join(parts)
         for parts in [
             ("github", ".com"),
+            ("opencode", ".ai"),
             ("openai", ".com"),
+            ("registry", ".npmjs", ".org"),
         ]
     }
     assert "http_access deny all" in squid_config
@@ -1118,6 +1120,17 @@ def test_omnigent_shared_postgres_compose_topology_for_mm_970():
     }
     assert "omnigent-data:/data" in omnigent_service["volumes"]
     assert "omnigent-data" in compose["volumes"]
+
+    agent_init = services["omnigent-agent-init"]
+    assert agent_init["restart"] == "no"
+    assert agent_init["depends_on"]["omnigent-db-init"]["condition"] == (
+        "service_completed_successfully"
+    )
+    assert "omnigent-data:/data" in agent_init["volumes"]
+    assert (
+        omnigent_service["depends_on"]["omnigent-agent-init"]["condition"]
+        == "service_completed_successfully"
+    )
 
     omnigent_env = _env_map(omnigent_service["environment"])
     assert omnigent_service["image"] == (

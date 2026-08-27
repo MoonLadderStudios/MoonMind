@@ -11441,6 +11441,14 @@ async def _create_execution_from_workflow_request(
             initial_parameters,
             snapshot=profile_snapshot,
         )
+        # The profile model and effort are defaults for omitted runtime fields.
+        # Preserve explicit authored selections that were already resolved above
+        # so the immutable execution plan and Temporal parameters carry the same
+        # authority.
+        if model_source == "task_override":
+            initial_parameters["model"] = resolved_model
+        if "effort" in runtime_payload:
+            initial_parameters["effort"] = resolved_effort
         selected_provider_profile = await session.get(
             ManagedAgentProviderProfile,
             str(profile_snapshot["providerProfileRef"]),

@@ -63,6 +63,43 @@ def compute_support_combination_key(payload: SupportKeyPayload | dict[str, Any])
     return "omnigent-support:sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
 
 
+# ``requiredCapabilitiesDigest`` records the capabilities one workflow asked
+# for, not what the deployment can run. Class admission already refuses a plan
+# whose required capabilities are unsupported or unknown, and it does so before
+# the support key exists, so a deployment cannot be qualified per capability
+# set without qualifying every workflow shape in advance.
+DEPLOYMENT_QUALIFICATION_EXCLUDED_FIELDS = frozenset({"requiredCapabilitiesDigest"})
+
+
+def compute_deployment_qualification_key(
+    payload: SupportKeyPayload | dict[str, Any],
+) -> str:
+    """Return the deployment-scoped projection of a support combination.
+
+    Deployment qualification proves this deployment can run one exact harness,
+    host, image, realizer, credential, and model combination. It deliberately
+    excludes per-run request variance so an ordinary workflow is admissible
+    without re-qualifying the deployment for every capability set.
+    """
+
+    if isinstance(payload, SupportKeyPayload):
+        data = payload.model_dump(by_alias=True, mode="json")
+    else:
+        data = dict(payload)
+    projected = {
+        key: value
+        for key, value in data.items()
+        if key not in DEPLOYMENT_QUALIFICATION_EXCLUDED_FIELDS
+    }
+    canonical = json.dumps(
+        projected, sort_keys=True, separators=(",", ":"), default=str
+    )
+    return (
+        "omnigent-deployment-qualification:sha256:"
+        + hashlib.sha256(canonical.encode()).hexdigest()
+    )
+
+
 def compute_required_capabilities_digest(capabilities: list[str]) -> str:
     canonical = json.dumps(sorted(capabilities), separators=(",", ":"), default=str)
     return "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()

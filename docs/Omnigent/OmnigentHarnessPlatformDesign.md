@@ -405,6 +405,8 @@ An Omnigent Agent Profile is the reusable MoonMind selection surface. It describ
 
 It does not own credentials, acquired credential generations, raw host authority, or secret material.
 
+The profile model and effort are defaults when a workflow omits those runtime fields. An explicit workflow runtime model or effort remains authoritative through execution-plan compilation; the compiled plan and Temporal parameters must record the same resolved selection.
+
 ### 9.2 Discriminated agent source
 
 An Agent Profile v2 uses exactly one source variant.
@@ -958,7 +960,7 @@ credentialBindings:
     materializerRef: opencode-auth-json@1
 
 hostClassRef: omnigent-native-standard@3
-launchPolicyRef: opencode-on-demand@1
+launchPolicyRef: omnigent-on-demand@1
 executionRealizerRef: generic-omnigent-host@1
 
 model:
@@ -1538,7 +1540,7 @@ model:
   modelConfigDigest: sha256:...
 
 hostClassRef: omnigent-native-standard@3
-launchPolicyRef: opencode-on-demand@1
+launchPolicyRef: omnigent-on-demand@1
 executionRealizerRef: generic-omnigent-host@1
 ```
 

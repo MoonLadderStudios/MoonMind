@@ -98,7 +98,19 @@ def evidence_is_current(profile: Any, *, image_ref: str) -> bool:
         return False
     if generation != int(profile.credential_generation):
         return False
-    return str(evidence.get("imageRef") or "") == image_ref
+    if str(evidence.get("imageRef") or "") != image_ref:
+        return False
+    if not isinstance(evidence.get("runtimeVersions"), dict):
+        return False
+    if str(evidence.get("materializerRef") or "") != "opencode-auth-json@1":
+        return False
+    models = {
+        str(item.get("qualifiedId") or "")
+        for item in evidence.get("models", [])
+        if isinstance(item, dict)
+    }
+    default_model = str(getattr(profile, "default_model", None) or "").strip()
+    return bool(default_model and default_model in models)
 
 
 def _has_enrolled_credential(profile: Any) -> bool:
@@ -152,8 +164,7 @@ async def _opencode_profiles(session_factory: Any) -> list[Any]:
                 await session.execute(
                     select(ManagedAgentProviderProfile).where(
                         ManagedAgentProviderProfile.runtime_id == OPENCODE_RUNTIME_ID,
-                        ManagedAgentProviderProfile.provider_id
-                        == OPENCODE_PROVIDER_ID,
+                        ManagedAgentProviderProfile.provider_id == OPENCODE_PROVIDER_ID,
                     )
                 )
             ).scalars()
@@ -466,8 +477,6 @@ async def _persist_evidence(
             if isinstance(item, dict)
         ]
         profile.model_catalog_evidence_json = evidence
-        if not profile.default_model and models:
-            profile.default_model = models[0]
         behavior = dict(profile.command_behavior or {})
         behavior["runtime_validation"] = {
             "last_validated_at": evidence.get("validatedAt")
@@ -478,8 +487,12 @@ async def _persist_evidence(
         }
         behavior.pop(REVALIDATION_FAILURE_KEY, None)
         profile.command_behavior = behavior
+        launchable = evidence_is_current(
+            profile,
+            image_ref=str(evidence.get("imageRef") or ""),
+        )
         await session.commit()
-        return True
+        return launchable
 
 
 async def _record_revalidation_failure(
@@ -506,10 +519,11 @@ async def _record_revalidation_failure(
         behavior = dict(profile.command_behavior or {})
         previous = behavior.get(REVALIDATION_FAILURE_KEY)
         attempts = 0
-        if isinstance(previous, dict) and str(
-            previous.get("imageRef") or ""
-        ) == image_ref and int(previous.get("credentialGeneration") or 0) == int(
-            profile.credential_generation
+        if (
+            isinstance(previous, dict)
+            and str(previous.get("imageRef") or "") == image_ref
+            and int(previous.get("credentialGeneration") or 0)
+            == int(profile.credential_generation)
         ):
             try:
                 attempts = int(previous.get("attempts") or 0)

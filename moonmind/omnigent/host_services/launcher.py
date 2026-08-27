@@ -26,6 +26,10 @@ class HostLaunchSpec(BaseModel):
         "moonmind.omnigent-host-launch.v1", alias="schemaVersion"
     )
     executionPlanRef: str = Field(alias="executionPlanRef")
+    stepExecutionId: str = Field(
+        alias="stepExecutionId",
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,510}[A-Za-z0-9]$",
+    )
     runtimeBindingId: str = Field(alias="runtimeBindingId")
     hostLeaseRef: str = Field(alias="hostLeaseRef")
     hostLeaseGeneration: int = Field(alias="hostLeaseGeneration", ge=1)
@@ -44,6 +48,9 @@ class HostLaunchSpec(BaseModel):
     )
     credentialAttachments: tuple[dict[str, Any], ...] = Field(
         default_factory=tuple, alias="credentialAttachments"
+    )
+    githubCredentialAttachment: dict[str, Any] | None = Field(
+        None, alias="githubCredentialAttachment"
     )
     controlAttachment: dict[str, Any] | None = Field(None, alias="controlAttachment")
     stateAttachment: dict[str, Any] = Field(alias="stateAttachment")
@@ -219,7 +226,9 @@ class DockerOmnigentHostLauncher:
         script, runtime_environment = self._scripts.build_entrypoint(
             credential_handles=credential_handles,
             skill_attachment=spec.skillAttachment,
+            step_execution_id=spec.stepExecutionId,
             tool_attachments=spec.toolAttachments,
+            github_credential_attachment=spec.githubCredentialAttachment,
             control_attachment=spec.controlAttachment,
         )
         command = [
@@ -284,6 +293,11 @@ class DockerOmnigentHostLauncher:
             spec.skillAttachment,
             *spec.toolAttachments,
             *spec.credentialAttachments,
+            *(
+                [spec.githubCredentialAttachment]
+                if spec.githubCredentialAttachment is not None
+                else []
+            ),
             *([spec.controlAttachment] if spec.controlAttachment is not None else []),
             spec.stateAttachment,
         ]
