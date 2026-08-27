@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-
 _OPENCODE_RUNTIME_ENV = {
     # MoonMind qualifies the exact pinned image + credential + model before
     # launch. Re-fetching mutable catalog data inside every session duplicates
@@ -37,7 +36,7 @@ _OPENCODE_PROXY_ENV_NAMES = frozenset(
 _GITHUB_RUNTIME_ENV = {
     "GIT_CONFIG_COUNT": "1",
     "GIT_CONFIG_KEY_0": "credential.https://github.com.helper",
-    "GIT_CONFIG_VALUE_0": "!/opt/moonmind-tools/bin/gh auth git-credential",
+    "GIT_CONFIG_VALUE_0": "!/home/app/.local/bin/gh auth git-credential",
     "GH_CONFIG_DIR": "/home/app/.config/gh",
     "GH_PROMPT_DISABLED": "1",
     "GH_NO_UPDATE_NOTIFIER": "1",
@@ -73,6 +72,8 @@ class OmnigentRuntimeScriptService:
             for item in tool_attachments
             if item.get("targetPath")
         ]
+        if github_credential_attachment is not None:
+            tool_bins.insert(0, "/home/app/.local/bin")
         # Always include the Omnigent venv so `docker exec` probes (attestation,
         # version checks) resolve the omnigent binary without a full PATH.
         environment["PATH"] = ":".join(
@@ -119,6 +120,7 @@ class OmnigentRuntimeScriptService:
                 raise ValueError("GitHub credential attachment target is unsupported")
             environment.update(_GITHUB_RUNTIME_ENV)
         passthrough_names = {
+            "MOONMIND_ACTIVE_SKILLS_DIR",
             *(_OPENCODE_RUNTIME_ENV if has_opencode_materializer else {}),
             *(_OPENCODE_PROXY_ENV_NAMES if has_opencode_materializer else {}),
             *(
@@ -154,7 +156,13 @@ class OmnigentRuntimeScriptService:
             "cp /run/mm-credentials/github/hosts.yml "
             "/home/app/.config/gh/hosts.yml; "
             "chmod 0700 /home/app/.config/gh; "
-            "chmod 0600 /home/app/.config/gh/hosts.yml; fi; "
+            "chmod 0600 /home/app/.config/gh/hosts.yml; "
+            "mkdir -p /home/app/.local/bin; "
+            "printf '%s\\n' '#!/bin/sh' "
+            "'export GH_CONFIG_DIR=/home/app/.config/gh' "
+            "'exec /opt/moonmind-tools/bin/gh \"$@\"' "
+            "> /home/app/.local/bin/gh; "
+            "chmod 0700 /home/app/.local/bin/gh; fi; "
             'if [ -n "${MOONMIND_OMNIGENT_CONTROL_CREDENTIAL_FILE:-}" ]; then '
             'test -r "$MOONMIND_OMNIGENT_CONTROL_CREDENTIAL_FILE"; '
             'OMNIGENT_API_TOKEN=$(cat "$MOONMIND_OMNIGENT_CONTROL_CREDENTIAL_FILE"); '

@@ -17,6 +17,7 @@ from moonmind.omnigent.host_services.workspace import (
     DaemonCommandRunner,
     resolve_daemon_workspace_root,
 )
+from moonmind.omnigent.settings import OMNIGENT_RUNTIME_ACTIVE_SKILLS_DIR
 from moonmind.workflows.skills.run_projection import (
     load_resolved_skillset,
     materialize_run_skill_snapshot,
@@ -90,7 +91,7 @@ class OmnigentSkillDeliveryService:
         attachment = {
             "kind": "bind",
             "sourceRef": str(daemon_visible),
-            "targetPath": "/opt/moonmind/skills_active",
+            "targetPath": OMNIGENT_RUNTIME_ACTIVE_SKILLS_DIR,
             "accessMode": "read-only",
             "deliveryRef": resolved_skills["skillDeliveryRef"],
             "digest": expected_digest,
