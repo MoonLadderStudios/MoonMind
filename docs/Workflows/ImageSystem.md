@@ -10,7 +10,7 @@ This document defines the canonical desired-state contract for image inputs in M
 
 The system exists to let users:
 
-- attach images to the workflow objective target or to individual steps from the Create page
+- attach images to the workflow objective target or to individual steps from the Create page, by file picker or by dragging files onto the target step
 - store uploaded bytes securely in the Artifact Store
 - submit lightweight artifact references into `MoonMind.UserWorkflow`
 - preserve attachment targeting through create, edit, and rerun flows
@@ -106,7 +106,7 @@ sequenceDiagram
     participant V as Vision Activity
     participant R as Runtime Step Executor
 
-    U->>C: Select images on objective target or step target
+    U->>C: Select or drag images onto objective target or step target
     C->>A: Create artifact upload(s)
     C->>A: Upload image bytes
     C->>A: Complete upload(s)
@@ -369,18 +369,46 @@ Rules:
 
 ---
 
-## 11. UI preview and detail contract
+## 11. UI entry, preview, and detail contract
 
-Workflow detail, edit, and rerun surfaces may preview and download image inputs.
+The Create page accepts images through more than one entry point, and workflow
+detail, edit, and rerun surfaces may preview and download image inputs.
 
-Rules:
+Entry-point rules:
+
+- every entry point binds to an explicit target and funnels into the same
+  draft/attachment pipeline; none may carry its own targeting, dedupe, or
+  policy rules
+- the file picker and dragging files onto a step are equivalent entry points,
+  and both are subject to the same policy content-type check before the file
+  enters the draft
+- a rejected drop reports the same policy message the submit-time validator
+  would report, at the target that rejected it
+- a drag that carries no files must not be intercepted, so text drags into
+  instructions keep native browser behavior
+
+Preview rules:
 
 - previews and downloads go through MoonMind-owned API endpoints
+- image attachments render an inline thumbnail wherever they are listed, and
+  the thumbnail opens the full image; non-image attachments keep a generic icon
+- one preview component serves every surface that lists attachments; no surface
+  keeps a parallel image renderer
+- only a same-origin, `blob:`, `http(s)`, or `image/*` `data:` source may be
+  rendered; any other source falls back to the generic icon
+- the full-image view is modal: focus enters it, Tab stays inside it, and focus
+  returns to the thumbnail when it closes
+- pending local files preview from browser-local object URLs, which must be
+  released when the attachment is removed or its surface unmounts
 - previews are organized by target:
   - objective-scoped
   - step-scoped
 - the UI must not infer target binding from filenames
-- preview failure must not remove access to metadata or download actions
+- preview failure must not remove access to metadata or download actions: a
+  source that fails to load suppresses the thumbnail rather than leaving a
+  broken image that opens another broken image
+- pending files are previewed at the target that owns them, including
+  objective-scoped files that have not been uploaded yet
 - edit and rerun surfaces must distinguish persisted attachments from new local files not yet uploaded
 
 ---

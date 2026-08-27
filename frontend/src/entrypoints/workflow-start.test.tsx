@@ -2092,6 +2092,18 @@ function withImageOnlyAttachmentPolicy(
   };
 }
 
+/** Synthetic `DataTransfer` for the file drag/drop path onto a step. */
+function fileDragEventInit(files: File[]): { dataTransfer: unknown } {
+  return {
+    dataTransfer: {
+      types: ["Files"],
+      files,
+      items: files.map((file) => ({ kind: "file", getAsFile: () => file })),
+      dropEffect: "none",
+    },
+  };
+}
+
 function withDisabledAttachmentPolicy(
   payload: BootPayload = mockPayload,
 ): BootPayload {
@@ -20246,6 +20258,299 @@ describe("Task Create governed Tool authoring", () => {
       );
     });
     clickSpy.mockRestore();
+  });
+
+  it("attaches an image dropped onto a step and previews it as a clickable thumbnail", async () => {
+    const objectUrl = "blob:mock/dropped-screenshot";
+    const createObjectURL = vi.fn(() => objectUrl);
+    const revokeObjectURL = vi.fn();
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      writable: true,
+      value: createObjectURL,
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      writable: true,
+      value: revokeObjectURL,
+    });
+
+    renderWithClient(
+      <WorkflowStartPage payload={withImageOnlyAttachmentPolicy()} />,
+    );
+
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    const screenshot = new File(["png-bytes"], "screenshot.png", {
+      type: "image/png",
+    });
+
+    // Dragging files over the step surfaces the drop affordance...
+    fireEvent.dragEnter(step, fileDragEventInit([screenshot]));
+    fireEvent.dragOver(step, fileDragEventInit([screenshot]));
+    expect(
+      within(step).getByText("Drop image to attach to Step 1"),
+    ).toBeTruthy();
+    expect(step.className).toContain("is-attachment-drop-target");
+
+    // ...and dropping routes through the same pipeline as the file picker.
+    fireEvent.drop(step, fileDragEventInit([screenshot]));
+
+    await waitFor(() => {
+      expect(within(step).getByText("screenshot.png")).toBeTruthy();
+    });
+    expect(within(step).queryByText("Drop image to attach to Step 1")).toBeNull();
+    expect(step.className).not.toContain("is-attachment-drop-target");
+
+    const thumbnail = within(step).getByRole("button", {
+      name: "Preview screenshot.png",
+    });
+    expect(thumbnail.querySelector("img")?.getAttribute("src")).toBe(objectUrl);
+
+    fireEvent.click(thumbnail);
+    const preview = screen.getByRole("dialog", {
+      name: "Preview of screenshot.png",
+    });
+    expect(
+      (within(preview).getByAltText("screenshot.png") as HTMLImageElement).getAttribute(
+        "src",
+      ),
+    ).toBe(objectUrl);
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    // Removing the attachment releases the object URL.
+    fireEvent.click(
+      within(step).getByRole("button", {
+        name: "Remove Step 1 attachment screenshot.png",
+      }),
+    );
+    await waitFor(() => {
+      expect(revokeObjectURL).toHaveBeenCalledWith(objectUrl);
+    });
+  });
+
+  it("rejects dropped files the attachment policy does not allow", async () => {
+    renderWithClient(
+      <WorkflowStartPage payload={withImageOnlyAttachmentPolicy()} />,
+    );
+
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    const notes = new File(["notes"], "notes.txt", { type: "text/plain" });
+    fireEvent.drop(step, fileDragEventInit([notes]));
+
+    expect(
+      await within(step).findByText("Unsupported file type for notes.txt."),
+    ).toBeTruthy();
+    expect(within(step).queryByText("notes.txt")).toBeNull();
+  });
+
+  it("leaves non-file drags to the instructions textarea and clears the affordance on drag leave", async () => {
+    renderWithClient(
+      <WorkflowStartPage payload={withImageOnlyAttachmentPolicy()} />,
+    );
+
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+
+    fireEvent.dragOver(step, {
+      dataTransfer: { types: ["text/plain"], files: [], items: [] },
+    });
+    expect(within(step).queryByText("Drop image to attach to Step 1")).toBeNull();
+
+    const screenshot = new File(["png-bytes"], "screenshot.png", {
+      type: "image/png",
+    });
+    // Entering a child element and leaving it again must not flicker the
+    // affordance off while the pointer is still inside the step.
+    fireEvent.dragEnter(step, fileDragEventInit([screenshot]));
+    fireEvent.dragEnter(step, fileDragEventInit([screenshot]));
+    fireEvent.dragLeave(step, fileDragEventInit([screenshot]));
+    expect(
+      within(step).getByText("Drop image to attach to Step 1"),
+    ).toBeTruthy();
+
+    fireEvent.dragLeave(step, fileDragEventInit([screenshot]));
+    expect(within(step).queryByText("Drop image to attach to Step 1")).toBeNull();
+  });
+
+  it("ignores dropped files when the attachment policy is disabled", async () => {
+    renderWithClient(
+      <WorkflowStartPage payload={withDisabledAttachmentPolicy()} />,
+    );
+
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    const screenshot = new File(["png-bytes"], "screenshot.png", {
+      type: "image/png",
+    });
+
+    fireEvent.dragEnter(step, fileDragEventInit([screenshot]));
+    fireEvent.drop(step, fileDragEventInit([screenshot]));
+
+    expect(within(step).queryByText("Drop image to attach to Step 1")).toBeNull();
+    expect(within(step).queryByText("screenshot.png")).toBeNull();
+  });
+
+  it("previews a pending objective image imported from Jira in the primary step", async () => {
+    const objectUrl = "blob:mock/jira-wireframe";
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      writable: true,
+      value: vi.fn(() => objectUrl),
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      writable: true,
+      value: vi.fn(),
+    });
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const path = url.split("?")[0];
+      if (path === "/api/jira/projects") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: [{ projectKey: "ENG", name: "Engineering" }] }),
+        } as Response);
+      }
+      if (path === "/api/jira/projects/ENG/boards") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [{ id: "42", name: "Delivery", projectKey: "ENG" }],
+          }),
+        } as Response);
+      }
+      if (path === "/api/jira/boards/42/columns") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            board: { id: "42", name: "Delivery", projectKey: "ENG" },
+            columns: [{ id: "doing", name: "Doing", count: 1 }],
+          }),
+        } as Response);
+      }
+      if (path === "/api/jira/boards/42/issues") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            boardId: "42",
+            columns: [{ id: "doing", name: "Doing", count: 1 }],
+            itemsByColumn: {
+              doing: [
+                {
+                  issueKey: "ENG-202",
+                  summary: "Build browser shell",
+                  issueType: "Story",
+                  statusName: "In Progress",
+                  assignee: "Grace",
+                  updatedAt: "2026-04-11T19:30:00Z",
+                },
+              ],
+            },
+          }),
+        } as Response);
+      }
+      if (path === "/api/jira/issues/ENG-202") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            issueKey: "ENG-202",
+            summary: "Build browser shell",
+            issueType: "Story",
+            column: { id: "doing", name: "Doing" },
+            status: { id: "3", name: "In Progress" },
+            descriptionText: "Let operators browse Jira stories.",
+            recommendedImports: {
+              presetInstructions: "ENG-202: Build browser shell",
+              stepInstructions: "Complete Jira issue ENG-202",
+            },
+            attachments: [
+              {
+                id: "img-1",
+                filename: "wireframe.png",
+                contentType: "image/png",
+                sizeBytes: 10,
+                downloadUrl: "/api/jira/attachments/wireframe.png",
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (path === "/api/jira/attachments/wireframe.png") {
+        return Promise.resolve({
+          ok: true,
+          blob: async () => new Blob(["fake image"], { type: "image/png" }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
+    });
+
+    renderWithClient(
+      <WorkflowStartPage payload={withAttachmentPolicy(withJiraIntegration())} />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Browse Jira issues for Step 1 instructions",
+      }),
+    );
+    fireEvent.change(await screen.findByLabelText("Import target"), {
+      target: { value: "preset-attachments" },
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+
+    // An objective-scoped image is visible on the primary step before it is
+    // persisted, exactly like a pending step-scoped image.
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    expect(await within(step).findByText("wireframe.png")).toBeTruthy();
+    // The object URL is resolved in an effect, so the thumbnail lands a render
+    // after the chip.
+    const thumbnail = await within(step).findByRole("button", {
+      name: "Preview wireframe.png",
+    });
+    expect(thumbnail.querySelector("img")?.getAttribute("src")).toBe(objectUrl);
+
+    fireEvent.click(
+      within(step).getByRole("button", {
+        name: "Remove objective attachment wireframe.png",
+      }),
+    );
+    await waitFor(() => {
+      expect(within(step).queryByText("wireframe.png")).toBeNull();
+    });
+  });
+
+  it("rejects picker selections the attachment policy does not allow", async () => {
+    renderWithClient(
+      <WorkflowStartPage payload={withImageOnlyAttachmentPolicy()} />,
+    );
+
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    // Overriding the picker's `accept` filter must not smuggle a file past the
+    // policy check the identical drop already applies.
+    fireEvent.change(await screen.findByLabelText("Step 1 image file picker"), {
+      target: {
+        files: [new File(["notes"], "notes.txt", { type: "text/plain" })],
+      },
+    });
+
+    expect(
+      await within(step).findByText("Unsupported file type for notes.txt."),
+    ).toBeTruthy();
+    expect(within(step).queryByText("notes.txt")).toBeNull();
   });
 
   it("omits image actions from the Add to step menu when attachments are disabled", async () => {
