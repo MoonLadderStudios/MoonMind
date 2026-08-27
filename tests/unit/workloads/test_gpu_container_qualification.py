@@ -1118,7 +1118,13 @@ async def test_qualification_record_captures_generic_evidence(
     assert payload["requestSchemaVersion"] == GPU_CONTAINER_REQUEST_SCHEMA_VERSION
     assert payload["imageRef"] == QUALIFICATION_IMAGE
     assert payload["imageDigest"] == "sha256:" + "a" * 64
-    assert payload["gpuRequest"] == {"vendor": "nvidia", "count": 2}
+    # The published record keeps null optional fields, so an omitted
+    # capability request is recorded as explicitly absent.
+    assert payload["gpuRequest"] == {
+        "vendor": "nvidia",
+        "count": 2,
+        "capabilities": None,
+    }
     assert payload["deviceRequestArgs"] == ["--gpus", "2"]
     assert payload["status"] == "succeeded"
     assert payload["exitCode"] == 0
@@ -1168,7 +1174,9 @@ def _executed_workload_metadata(
                 "request": (
                     gpu_request
                     if gpu_request is not None
-                    else gpu.model_dump(mode="json", by_alias=True)
+                    else gpu.model_dump(
+                        mode="json", by_alias=True, exclude_none=True
+                    )
                 ),
                 "deviceRequestArgs": (
                     device_request_args

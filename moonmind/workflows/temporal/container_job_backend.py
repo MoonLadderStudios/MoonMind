@@ -60,7 +60,9 @@ from moonmind.schemas.container_job_models import (
     MAX_LOG_PAGE_ENTRIES,
     RegistryAuthorization,
     ContainerJobFailureClass,
+    GpuObservation,
     ImageObservation,
+    gpu_observation,
 )
 from moonmind.utils.logging import redact_sensitive_text
 from moonmind.workflows.temporal.container_image_acquisition import (
@@ -79,7 +81,11 @@ from moonmind.workflows.temporal.runtime.registry_auth_resolve import (
     resolve_registry_pull_credentials,
 )
 from moonmind.workloads.docker_launcher import structured_container_security_args
-from moonmind.workloads.gpu import gpu_device_request_args
+from moonmind.workloads.gpu import (
+    GpuLaunchFailureReason,
+    gpu_device_request_args,
+    gpu_launch_refusal,
+)
 from moonmind.security.egress import (
     DEFAULT_EGRESS_PROFILE,
     attest_docker_workload_egress,
@@ -90,6 +96,10 @@ from moonmind.security.egress import (
 )
 from moonmind.security.egress_conformance_evidence import (
     serialize_conformance_evidence,
+)
+from moonmind.schemas.workload_models import (
+    WORKLOAD_GPU_VENDORS,
+    WorkloadGpuRequest,
 )
 from moonmind.schemas.workspace_locator_models import (
     ExternalStateLocator,
@@ -165,6 +175,22 @@ _FORBIDDEN_MOUNT_SOURCES = (
     "/var/lib/docker",
 )
 _MIN_VOLUME_SUBPATH_DOCKER_MAJOR = 26
+# Docker Engine 19.03 introduced the device-request API that realizes a typed
+# GPU resource. An older daemon accepts the ordinary container request but has
+# no way to attach the requested devices, so a GPU job is refused before start
+# rather than silently executed on a less-capable substrate.
+_MIN_DEVICE_REQUEST_DOCKER_MAJOR = 19
+# Generic mapping from the shared launch-refusal classifier's vendor/runtime
+# reason to the canonical container-job failure class. The classifier owns the
+# diagnostic evidence; this table only names the stable service-level outcome.
+_GPU_LAUNCH_FAILURE_CLASSES: dict[
+    GpuLaunchFailureReason, ContainerJobFailureClass
+] = {
+    "nvidia_runtime_unavailable": ContainerJobFailureClass.GPU_RUNTIME_UNAVAILABLE,
+    "gpu_device_unavailable": ContainerJobFailureClass.GPU_RESOURCE_UNAVAILABLE,
+    "device_request_unsupported": ContainerJobFailureClass.GPU_BACKEND_UNSUPPORTED,
+    "gpu_device_request_rejected": ContainerJobFailureClass.GPU_BACKEND_UNSUPPORTED,
+}
 _MIB = 1024 * 1024
 _AUTO_ACTIVE_MEMORY_FRACTION = 0.70
 _CAPACITY_LOCK_WAIT_SECONDS = 45.0
@@ -652,10 +678,73 @@ class DockerContainerJobBackend:
             requested_devices = gpu.count
             if requested_devices == "all" or requested_devices > ceilings.max_gpu_count:
                 raise ContainerJobBackendError(
-                    ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED,
+                    ContainerJobFailureClass.GPU_COUNT_UNSUPPORTED,
                     f"gpu.count={requested_devices} exceeds the deployment ceiling "
                     f"{ceilings.max_gpu_count} and cannot be raised by a caller",
                 )
+
+    async def _report_gpu_support(
+        self, gpu: WorkloadGpuRequest
+    ) -> GpuObservation:
+        """Return the selected daemon's support report for one GPU request.
+
+        Reports before the container starts, so an unsupported vendor or a
+        daemon without the device-request API is refused with a stable generic
+        class instead of running the caller's workload without the resource it
+        asked for. Runtime and device availability are not observable without a
+        launch; the daemon's own refusal is classified at create/start instead.
+        """
+
+        if gpu.vendor not in WORKLOAD_GPU_VENDORS:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.GPU_VENDOR_UNSUPPORTED,
+                f"gpu.vendor={gpu.vendor} is not realizable by the selected "
+                "container backend",
+            )
+        code, stdout, stderr = await self._runner(
+            ("version", "--format", "{{.Server.Version}}")
+        )
+        if code:
+            detail = stderr.decode(errors="replace").strip()[:500]
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.INFRASTRUCTURE,
+                f"container backend endpoint is unreachable: {detail}",
+            )
+        server_version = stdout.decode(errors="replace").strip()
+        major_version = _docker_major_version(server_version)
+        if major_version is None or major_version < _MIN_DEVICE_REQUEST_DOCKER_MAJOR:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.GPU_BACKEND_UNSUPPORTED,
+                "selected container backend does not support device requests; "
+                f"daemon reported {server_version or 'unknown'}",
+            )
+        return gpu_observation(gpu, backend_supported=True)
+
+    def _reject_gpu_launch_refusal(
+        self, gpu: WorkloadGpuRequest | None, *, stderr: bytes, exit_code: int
+    ) -> None:
+        """Raise the stable GPU class when the daemon refused the device request.
+
+        The shared launch classifier is the single authority for what counts as a
+        refused device request, so the canonical backend and the unrestricted
+        launcher agree on the evidence. Container create and start are their own
+        commands here, so such a failure is never an application exit. The daemon
+        diagnostic itself is never echoed: it can name trusted host paths and
+        endpoints.
+        """
+
+        failure = gpu_launch_refusal(
+            gpu=gpu,
+            stderr=stderr.decode(errors="replace"),
+            exit_code=exit_code,
+        )
+        if failure is None:
+            return
+        raise ContainerJobBackendError(
+            _GPU_LAUNCH_FAILURE_CLASSES[failure.reason],
+            "selected container backend refused the requested GPU resource "
+            f"({failure.reason})",
+        )
 
     def _capacity_lock_key(self) -> str:
         raw = f"{self._backend_ref}\ncontainer-job-active-memory".encode()
@@ -1697,6 +1786,14 @@ class DockerContainerJobBackend:
             containerRef=name,
             running=running,
             diagnosticsRef=diagnostics_ref,
+            # An owned container that exists is stronger evidence than a
+            # capability report: the daemon already accepted this job's device
+            # request, and a running container already carries it.
+            gpuObservation=gpu_observation(
+                request.request.spec.resources.gpu,
+                backend_supported=True,
+                launched=running,
+            ),
         )
 
     async def _recover_launch_attestation(
@@ -1827,6 +1924,14 @@ class DockerContainerJobBackend:
             raise RuntimeError("resolved workspace and image are required")
         self._enforce_resource_ceilings(request)
         spec = request.request.spec
+        # Report the selected daemon's support for a caller-requested GPU
+        # resource before anything is created, so an unsupported request never
+        # reaches the caller's workload.
+        resolved_gpu = (
+            await self._report_gpu_support(spec.resources.gpu)
+            if spec.resources.gpu is not None
+            else None
+        )
         name = self._name(request)
         if spec.network_mode not in {"none", "bridge"}:
             raise RuntimeError("network mode must be 'none' or policy-approved 'bridge'")
@@ -1979,8 +2084,14 @@ class DockerContainerJobBackend:
         args.append(request.resolved_image_ref)
         args.extend(spec.entrypoint[1:])
         args.extend(spec.command)
-        code, _, _ = await self._runner(args)
+        code, _, create_stderr = await self._runner(args)
         if code:
+            # A refused device request is reported with its stable generic class
+            # before the ordinary launch failure, so a caller can tell an
+            # unavailable GPU resource from an unusable workspace.
+            self._reject_gpu_launch_refusal(
+                spec.resources.gpu, stderr=create_stderr, exit_code=code
+            )
             # Docker mount errors echo the trusted host source. Keep it out of
             # workflow history and caller-visible terminal diagnostics.
             raise RuntimeError("docker create failed for the resolved workspace")
@@ -2005,17 +2116,28 @@ class DockerContainerJobBackend:
             containerRef=name,
             diagnosticsRef=egress_evidence_ref,
             resolvedCacheRefs=tuple(resolved_cache_refs),
+            gpuObservation=resolved_gpu,
         )
 
     async def start_container(self, request: ContainerJobActivityRequest):
         container_name = request.container_ref or self._name(request)
+        requested_gpu = request.request.spec.resources.gpu
         started_at = datetime.now(timezone.utc)
         capacity_lease = await self._acquire_capacity_lock()
         try:
             await self._enforce_active_memory_budget(
                 request, container_name=container_name
             )
-            await self._checked("start", container_name)
+            code, _, start_stderr = await self._runner(("start", container_name))
+            if code:
+                # The daemon resolves a device request when the container
+                # starts, so this is where an unavailable GPU runtime or device
+                # is refused. Classify it before the ordinary launch failure.
+                self._reject_gpu_launch_refusal(
+                    requested_gpu, stderr=start_stderr, exit_code=code
+                )
+                detail = start_stderr.decode(errors="replace").strip()[:1000]
+                raise RuntimeError(f"docker start failed: {detail}")
         finally:
             try:
                 await self._capacity_lock.release(capacity_lease)
@@ -2064,6 +2186,9 @@ class DockerContainerJobBackend:
             containerRef=container_name,
             running=True,
             diagnosticsRef=diagnostics_ref,
+            gpuObservation=gpu_observation(
+                requested_gpu, backend_supported=True, launched=True
+            ),
         )
 
     async def observe_container(self, request: ContainerJobActivityRequest):
