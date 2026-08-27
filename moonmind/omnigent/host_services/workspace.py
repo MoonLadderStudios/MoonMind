@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 from pathlib import Path
@@ -12,8 +13,12 @@ from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformFailure,
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+from moonmind.schemas.workspace_locator_models import SandboxWorkspaceLocator
 from moonmind.workflows.temporal.runtime.workspace_locators import (
+    SandboxWorkspaceRecord,
+    SandboxWorkspaceRecordStore,
     daemon_visible_workspace_path,
+    resolve_sandbox_workspace_locator,
 )
 
 _SAFE_VOLUME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$")
@@ -106,23 +111,53 @@ class OmnigentWorkspaceMaterializer:
             candidate = Path(authored).resolve()
             preexisting_authority = True
         elif isinstance(locator, dict):
-            workspace_id = str(locator.get("workspaceId") or "").strip()
-            relative = str(
-                locator.get("relativePath")
-                or ("repo" if workspace_id else "")
-            ).strip()
-            if not relative:
+            try:
+                sandbox_locator = SandboxWorkspaceLocator.model_validate(locator)
+            except ValueError as exc:
                 raise HarnessPlatformError(
-                    "sandbox workspace locator has no durable relative path",
+                    "sandbox workspace locator is invalid",
+                    code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+                ) from exc
+            step_execution = getattr(request, "step_execution", None)
+            owner_workflow_id = str(
+                getattr(step_execution, "workflow_id", None)
+                or getattr(request, "correlation_id", "")
+            ).strip()
+            owner_step_execution_id = str(
+                getattr(step_execution, "step_execution_id", None)
+                or getattr(request, "idempotency_key", "")
+            ).strip()
+            if not owner_workflow_id or not owner_step_execution_id:
+                raise HarnessPlatformError(
+                    "sandbox workspace owner identity is unavailable",
                     code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
                 )
-            # Sandbox workspaces are scoped by their durable workspace id so
-            # concurrent runs never share one checkout directory.
-            candidate = (
-                (self._root / workspace_id / relative)
-                if workspace_id
-                else (self._root / relative)
-            ).resolve()
+            expected_workspace_id = hashlib.sha256(
+                f"{owner_workflow_id}:{owner_step_execution_id}".encode("utf-8")
+            ).hexdigest()[:24]
+            candidate = resolve_sandbox_workspace_locator(
+                sandbox_locator,
+                workspace_root=self._root,
+                expected_workspace_id=expected_workspace_id,
+                must_exist=False,
+            )
+            owner_record = SandboxWorkspaceRecord(
+                workspace_id=sandbox_locator.workspace_id,
+                workflow_id=owner_workflow_id,
+                step_execution_id=owner_step_execution_id,
+                relative_path=sandbox_locator.relative_path,
+            )
+            record_store = SandboxWorkspaceRecordStore(self._root)
+            record_store.ensure(owner_record)
+            resolve_sandbox_workspace_locator(
+                sandbox_locator,
+                workspace_root=self._root,
+                expected_workspace_id=expected_workspace_id,
+                owner_record=owner_record,
+                expected_workflow_id=owner_workflow_id,
+                expected_step_execution_id=owner_step_execution_id,
+                must_exist=False,
+            )
             # Sandbox workspaces are runtime-owned: when the authoritative
             # checkout does not exist yet, this lifecycle materializes it by
             # cloning the requested repository branch with launch-time auth.
