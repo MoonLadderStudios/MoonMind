@@ -49,6 +49,7 @@ from moonmind.omnigent.host_services import (
     DockerOmnigentHostCleanupService,
     DockerOmnigentHostLauncher,
     OmnigentEgressService,
+    OmnigentGithubCredentialService,
     OmnigentHostRegistrationService,
     OmnigentMountedToolService,
     OmnigentRuntimeScriptService,
@@ -240,6 +241,7 @@ def build_generic_omnigent_execution_services(
             artifact_gateway=artifacts,
         ),
         tool_service=OmnigentMountedToolService(backend=docker),
+        github_credential_service=OmnigentGithubCredentialService(docker),
         egress_service=OmnigentEgressService(backend=docker, artifacts=artifacts),
         registration_waiter=OmnigentHostRegistrationService(
             client=client, expected_owner=expected_owner

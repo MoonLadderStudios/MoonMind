@@ -17,6 +17,9 @@ from moonmind.omnigent.harness_platform.host_classes import HostClass, LaunchPol
 from moonmind.omnigent.host_services.attestation import DockerOmnigentHostAttestor
 from moonmind.omnigent.host_services.cleanup import DockerOmnigentHostCleanupService
 from moonmind.omnigent.host_services.egress import OmnigentEgressService
+from moonmind.omnigent.host_services.github_credentials import (
+    OmnigentGithubCredentialService,
+)
 from moonmind.omnigent.host_services.launcher import (
     DockerOmnigentHostLauncher,
     HostLaunchSpec,
@@ -35,6 +38,7 @@ class PreparedHostInputs:
     skill_attachment: dict[str, Any]
     tool_attachments: tuple[dict[str, Any], ...]
     egress_attestation: dict[str, Any]
+    github_credential_attachment: dict[str, Any] | None = None
 
     @property
     def cleanup_refs(self) -> tuple[str, ...]:
@@ -42,6 +46,11 @@ class PreparedHostInputs:
             self.workspace_attachment.get("cleanupRef"),
             self.skill_attachment.get("cleanupRef"),
             *(item.get("cleanupRef") for item in self.tool_attachments),
+            (
+                self.github_credential_attachment.get("cleanupRef")
+                if self.github_credential_attachment is not None
+                else None
+            ),
             self.egress_attestation.get("cleanupRef"),
         ]
         return tuple(str(item) for item in values if item)
@@ -57,6 +66,7 @@ class GenericOmnigentHostRuntime:
         workspace_service: OmnigentWorkspaceMaterializer,
         skill_service: OmnigentSkillDeliveryService,
         tool_service: OmnigentMountedToolService,
+        github_credential_service: OmnigentGithubCredentialService,
         egress_service: OmnigentEgressService,
         registration_waiter: OmnigentHostRegistrationService,
         host_attestor: DockerOmnigentHostAttestor,
@@ -67,6 +77,7 @@ class GenericOmnigentHostRuntime:
             workspace_service,
             skill_service,
             tool_service,
+            github_credential_service,
             egress_service,
             registration_waiter,
             host_attestor,
@@ -81,6 +92,7 @@ class GenericOmnigentHostRuntime:
         self._workspace = workspace_service
         self._skills = skill_service
         self._tools = tool_service
+        self._github_credentials = github_credential_service
         self._egress = egress_service
         self._registration = registration_waiter
         self._attestor = host_attestor
@@ -91,12 +103,15 @@ class GenericOmnigentHostRuntime:
         *,
         request: AgentExecutionRequest,
         plan: OmnigentExecutionPlanEnvelope,
+        host_class: HostClass,
         launch_policy: LaunchPolicy,
         authority_sink: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> PreparedHostInputs:
         workspace = await self._workspace.materialize(
             request,
             mutation=plan.payload.workspaceMutation,
+            runtime_uid=int(host_class.runtime.get("uid", 1000)),
+            runtime_gid=int(host_class.runtime.get("gid", 1000)),
         )
         if authority_sink is not None:
             await authority_sink({"kind": "workspace", **workspace})
@@ -136,6 +151,27 @@ class GenericOmnigentHostRuntime:
         if authority_sink is not None:
             for tool in tools:
                 await authority_sink({"kind": "tool", **tool})
+        anticipated_github = self._github_credentials.anticipated_attachment(
+            plan.payload.resolvedTools,
+            owner_ref=request.idempotency_key,
+        )
+        if anticipated_github is not None and authority_sink is not None:
+            await authority_sink(
+                {"kind": "github_credentials", **anticipated_github}
+            )
+        github_credentials = await self._github_credentials.materialize(
+            request=request,
+            resolved_tools=plan.payload.resolvedTools,
+            owner_ref=request.idempotency_key,
+            writer_image_ref=host_class.imageRef,
+            runtime_uid=int(host_class.runtime.get("uid", 1000)),
+            runtime_gid=int(host_class.runtime.get("gid", 1000)),
+        )
+        if github_credentials != anticipated_github:
+            raise HarnessPlatformError(
+                "GitHub credential materialization changed its anticipated authority",
+                code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+            )
         egress = await self._egress.attest(request=request, launch_policy=launch_policy)
         if authority_sink is not None:
             await authority_sink({"kind": "egress", **egress})
@@ -143,6 +179,7 @@ class GenericOmnigentHostRuntime:
             workspace_attachment=workspace,
             skill_attachment=skills,
             tool_attachments=tools,
+            github_credential_attachment=github_credentials,
             egress_attestation=egress,
         )
 
@@ -195,6 +232,11 @@ class GenericOmnigentHostRuntime:
         spec = HostLaunchSpec.model_validate(
             {
                 "executionPlanRef": plan.planRef,
+                "stepExecutionId": (
+                    request.step_execution.step_execution_id
+                    if request.step_execution is not None
+                    else request.correlation_id
+                ),
                 "runtimeBindingId": runtime_binding_id,
                 "hostLeaseRef": host_lease_ref,
                 "hostLeaseGeneration": host_lease_generation,
@@ -209,6 +251,9 @@ class GenericOmnigentHostRuntime:
                 "workspaceAttachment": prepared.workspace_attachment,
                 "skillAttachment": prepared.skill_attachment,
                 "toolAttachments": list(prepared.tool_attachments),
+                "githubCredentialAttachment": (
+                    prepared.github_credential_attachment
+                ),
                 "credentialAttachments": list(credential_attachments),
                 "controlAttachment": (
                     self._launcher.control_attachment(host_lease_ref)
@@ -311,6 +356,10 @@ class GenericOmnigentHostRuntime:
         # paths, while egress is deployment-owned. Only the run-owned Skill
         # projection is removed here.
         await self._skills.cleanup(prepared.skill_attachment)
+        if prepared.github_credential_attachment is not None:
+            await self._github_credentials.cleanup(
+                prepared.github_credential_attachment
+            )
 
     async def cleanup_authorities(
         self, authorities: tuple[str | dict[str, Any], ...]
@@ -318,6 +367,11 @@ class GenericOmnigentHostRuntime:
         for authority in reversed(authorities):
             if isinstance(authority, dict) and authority.get("kind") == "skills":
                 await self._skills.cleanup(authority)
+            elif (
+                isinstance(authority, dict)
+                and authority.get("kind") == "github_credentials"
+            ):
+                await self._github_credentials.cleanup(authority)
 
 
 __all__ = ["GenericOmnigentHostRuntime", "PreparedHostInputs"]

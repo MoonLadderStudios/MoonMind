@@ -58,6 +58,23 @@ def resolve_model_by_display(
                         "providerModelId": provider_id,
                         "qualifiedId": qid,
                     }
+        qualified = display.strip()
+        provider_prefix, separator, provider_model_id = qualified.partition("/")
+        if (
+            available_models is None
+            and separator
+            and provider_prefix == "opencode-go"
+            and provider_model_id
+        ):
+            # Bootstrap resolves images before live credential-scoped model
+            # validation. Preserve a current Provider Profile's canonical model
+            # identity here; qualification still fails closed if the later live
+            # catalog does not contain it.
+            return {
+                "displayName": qualified,
+                "providerModelId": provider_model_id,
+                "qualifiedId": qualified,
+            }
         raise ValueError(f"Requested model is unavailable for this OpenCode Go account: {display!r}")
     # If catalog available, verify alias exists in catalog
     if available_models is not None:

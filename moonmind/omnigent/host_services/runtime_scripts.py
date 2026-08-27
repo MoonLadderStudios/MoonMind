@@ -4,6 +4,48 @@ from __future__ import annotations
 
 from typing import Any
 
+_RUNTIME_BIN_DIR = "/home/app/.omnigent/moonmind/bin"
+_RUNTIME_CONTEXT_DIR = "/home/app/.omnigent/moonmind/runtime-context"
+
+_OPENCODE_RUNTIME_ENV = {
+    # MoonMind qualifies the exact pinned image + credential + model before
+    # launch. Re-fetching mutable catalog data inside every session duplicates
+    # that authority and can block ``opencode serve`` before its loopback API is
+    # ready. The compiled catalog remains available to the pinned binary.
+    "OPENCODE_DISABLE_MODELS_FETCH": "1",
+    # Omnigent supplies its policy bridge as an explicit configured plugin.
+    # OpenCode's unrelated built-in auth plugins are not part of this host
+    # class and add another unbounded initialization surface.
+    "OPENCODE_DISABLE_DEFAULT_PLUGINS": "1",
+    # The host image is digest-pinned; an in-session updater must not mutate or
+    # delay that runtime after its deployment qualification has passed.
+    "OPENCODE_DISABLE_AUTOUPDATE": "1",
+}
+
+# The on-demand host receives these values from the sandbox egress boundary.
+# Omnigent deliberately filters the host environment before spawning a runner,
+# so their *names* must survive the host -> runner hop. The OpenCode server then
+# inherits the values through its own restricted environment builder.
+_OPENCODE_PROXY_ENV_NAMES = frozenset(
+    {
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
+    }
+)
+_GITHUB_RUNTIME_ENV = {
+    "GIT_CONFIG_COUNT": "1",
+    "GIT_CONFIG_KEY_0": "credential.https://github.com.helper",
+    "GIT_CONFIG_VALUE_0": f"!{_RUNTIME_BIN_DIR}/gh auth git-credential",
+    "GH_CONFIG_DIR": "/home/app/.config/gh",
+    "GH_PROMPT_DISABLED": "1",
+    "GH_NO_UPDATE_NOTIFIER": "1",
+    "GH_NO_EXTENSION_UPDATE_NOTIFIER": "1",
+}
+
 
 class OmnigentRuntimeScriptService:
     def build_entrypoint(
@@ -11,7 +53,9 @@ class OmnigentRuntimeScriptService:
         *,
         credential_handles: list[dict[str, Any]],
         skill_attachment: dict[str, Any],
+        step_execution_id: str,
         tool_attachments: tuple[dict[str, Any], ...] = (),
+        github_credential_attachment: dict[str, Any] | None = None,
         control_attachment: dict[str, Any] | None = None,
     ) -> tuple[str, dict[str, str]]:
         generation_checks: list[str] = []
@@ -26,12 +70,22 @@ class OmnigentRuntimeScriptService:
         environment = {
             "MOONMIND_CREDENTIAL_GENERATION_CHECKS": ",".join(generation_checks),
             "MOONMIND_ACTIVE_SKILLS_DIR": str(skill_attachment["targetPath"]),
+            "MOONMIND_STEP_EXECUTION_ID": step_execution_id,
         }
+        staging_dir = "/run/mm-credentials/opencode"
+        opencode_data = "/home/app/.local/share/opencode"
+        has_opencode_materializer = any(
+            str(attachment.get("targetPath") or "").rstrip("/") == staging_dir
+            for handle in credential_handles
+            for attachment in handle.get("attachments", [])
+        )
         tool_bins = [
             str(item["targetPath"]).rstrip("/") + "/bin"
             for item in tool_attachments
             if item.get("targetPath")
         ]
+        if has_opencode_materializer or github_credential_attachment is not None:
+            tool_bins.insert(0, _RUNTIME_BIN_DIR)
         # Always include the Omnigent venv so `docker exec` probes (attestation,
         # version checks) resolve the omnigent binary without a full PATH.
         environment["PATH"] = ":".join(
@@ -61,8 +115,33 @@ class OmnigentRuntimeScriptService:
         # Stage harness credentials from read-only volumes into the writable
         # tmpfs home. OpenCode needs to create repos/, cache/ etc. inside its
         # data directory, which a read-only credential mount would block.
-        staging_dir = "/run/mm-credentials/opencode"
-        opencode_data = "/home/app/.local/share/opencode"
+        runtime_context_dir = _RUNTIME_CONTEXT_DIR
+        opencode_context_wrapper = f"{_RUNTIME_BIN_DIR}/moonmind-opencode-context"
+        opencode_wrapper = f"{_RUNTIME_BIN_DIR}/opencode"
+        if has_opencode_materializer:
+            environment.update(_OPENCODE_RUNTIME_ENV)
+        if github_credential_attachment is not None:
+            if (
+                str(github_credential_attachment.get("targetPath") or "")
+                != "/run/mm-credentials/github"
+            ):
+                raise ValueError("GitHub credential attachment target is unsupported")
+            environment.update(_GITHUB_RUNTIME_ENV)
+        passthrough_names = {
+            "MOONMIND_ACTIVE_SKILLS_DIR",
+            "MOONMIND_STEP_EXECUTION_ID",
+            *(_OPENCODE_RUNTIME_ENV if has_opencode_materializer else {}),
+            *(_OPENCODE_PROXY_ENV_NAMES if has_opencode_materializer else {}),
+            *(
+                _GITHUB_RUNTIME_ENV
+                if github_credential_attachment is not None
+                else {}
+            ),
+        }
+        if passthrough_names:
+            environment["OMNIGENT_RUNNER_ENV_PASSTHROUGH"] = ",".join(
+                sorted(passthrough_names)
+            )
         script = (
             "set -eu; "
             "unset OPENAI_API_KEY ANTHROPIC_API_KEY OPENCODE_AUTH_CONTENT "
@@ -75,12 +154,68 @@ class OmnigentRuntimeScriptService:
             "if [ -d "
             '"' + staging_dir + '"'
             " ]; then "
-            "mkdir -p " + opencode_data + "; "
+            "mkdir -p "
+            + opencode_data
+            + " "
+            + runtime_context_dir
+            + " "
+            + _RUNTIME_BIN_DIR
+            + "; "
             "cp "
             '"' + staging_dir + '/auth.json" '
             + opencode_data + "/auth.json; "
             "chown 1000:1000 " + opencode_data + "/auth.json; "
-            "chmod 0600 " + opencode_data + "/auth.json; fi; "
+            "chmod 0600 " + opencode_data + "/auth.json; "
+            "printf '%s\\n' \"$MOONMIND_ACTIVE_SKILLS_DIR\" > "
+            + runtime_context_dir
+            + "/active-skills-dir; "
+            "printf '%s\\n' \"$MOONMIND_STEP_EXECUTION_ID\" > "
+            + runtime_context_dir
+            + "/step-execution-id; "
+            "chmod 0600 " + runtime_context_dir + "/*; "
+            "printf '%s\\n' '#!/bin/sh' "
+            "'export MOONMIND_ACTIVE_SKILLS_DIR=$(cat "
+            + runtime_context_dir
+            + "/active-skills-dir)' "
+            "'export MOONMIND_STEP_EXECUTION_ID=$(cat "
+            + runtime_context_dir
+            + "/step-execution-id)' "
+            "'if [ -r /home/app/.config/gh/hosts.yml ]; then' "
+            "'  export GH_CONFIG_DIR=/home/app/.config/gh' "
+            "'  export GH_PROMPT_DISABLED=1' "
+            "'  export GH_NO_UPDATE_NOTIFIER=1' "
+            "'  export GH_NO_EXTENSION_UPDATE_NOTIFIER=1' "
+            "'  export GIT_CONFIG_COUNT=1' "
+            "'  export GIT_CONFIG_KEY_0=credential.https://github.com.helper' "
+            "'  export GIT_CONFIG_VALUE_0=\"!"
+            + _RUNTIME_BIN_DIR
+            + "/gh auth git-credential\"' "
+            "'fi' 'exec \"$@\"' > "
+            + opencode_context_wrapper
+            + "; "
+            "printf '%s\\n' '#!/bin/sh' "
+            "'exec "
+            + opencode_context_wrapper
+            + " /usr/local/bin/opencode \"$@\"' > "
+            + opencode_wrapper
+            + "; "
+            "chmod 0700 "
+            + opencode_context_wrapper
+            + " "
+            + opencode_wrapper
+            + "; fi; "
+            "if [ -d /run/mm-credentials/github ]; then "
+            "mkdir -p /home/app/.config/gh; "
+            "cp /run/mm-credentials/github/hosts.yml "
+            "/home/app/.config/gh/hosts.yml; "
+            "chmod 0700 /home/app/.config/gh; "
+            "chmod 0600 /home/app/.config/gh/hosts.yml; "
+            "mkdir -p " + _RUNTIME_BIN_DIR + "; "
+            "printf '%s\\n' '#!/bin/sh' "
+            "'export GH_CONFIG_DIR=/home/app/.config/gh' "
+            "'exec /opt/moonmind-tools/bin/gh \"$@\"' "
+            "> " + _RUNTIME_BIN_DIR + "/gh; "
+            "chmod 0700 " + _RUNTIME_BIN_DIR + "/gh; fi; "
             'if [ -n "${MOONMIND_OMNIGENT_CONTROL_CREDENTIAL_FILE:-}" ]; then '
             'test -r "$MOONMIND_OMNIGENT_CONTROL_CREDENTIAL_FILE"; '
             'OMNIGENT_API_TOKEN=$(cat "$MOONMIND_OMNIGENT_CONTROL_CREDENTIAL_FILE"); '

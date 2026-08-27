@@ -50,6 +50,8 @@ def _profile(
             "schemaVersion": "moonmind.provider-model-catalog-evidence.v1",
             "models": [{"qualifiedId": "opencode-go/muse-spark-1.2-contributor"}],
             "imageRef": evidence_image,
+            "runtimeVersions": {"opencode": "1.18.11"},
+            "materializerRef": "opencode-auth-json@1",
             "credentialGeneration": (
                 generation if evidence_generation is None else evidence_generation
             ),
@@ -194,6 +196,19 @@ def test_evidence_is_current_requires_generation_and_pinned_image() -> None:
     assert not evidence_is_current(
         _profile(evidence_image=None), image_ref=CURRENT_IMAGE
     )
+
+
+def test_evidence_is_current_rejects_fabricated_or_stale_model_catalogs() -> None:
+    fabricated = _profile(evidence_image=CURRENT_IMAGE)
+    fabricated.model_catalog_evidence_json.pop("runtimeVersions")
+    fabricated.model_catalog_evidence_json.pop("materializerRef")
+    assert not evidence_is_current(fabricated, image_ref=CURRENT_IMAGE)
+
+    rotated = _profile(evidence_image=CURRENT_IMAGE)
+    rotated.model_catalog_evidence_json["models"] = [
+        {"qualifiedId": "opencode-go/gpt-5.6-luna"}
+    ]
+    assert not evidence_is_current(rotated, image_ref=CURRENT_IMAGE)
 
 
 @pytest.mark.asyncio
@@ -373,6 +388,7 @@ async def test_stale_host_image_evidence_is_revalidated_and_refreshed(
             "models": [{"qualifiedId": "opencode-go/muse-spark-1.2-contributor"}],
             "imageRef": image_ref,
             "runtimeVersions": {"opencode": "1.18.11"},
+            "materializerRef": "opencode-auth-json@1",
             "validatedAt": "2026-08-25T01:00:00+00:00",
             "credentialGeneration": profile.credential_generation,
         }
@@ -396,6 +412,38 @@ async def test_stale_host_image_evidence_is_revalidated_and_refreshed(
     assert rows[0].model_catalog_evidence_json["imageRef"] == CURRENT_IMAGE
     assert rows[0].command_behavior["runtime_validation"]["image_ref"] == CURRENT_IMAGE
     assert evidence_is_current(rows[0], image_ref=CURRENT_IMAGE)
+
+
+@pytest.mark.asyncio
+async def test_rotated_default_model_persists_catalog_but_defers_readiness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Catalog rotation must not silently substitute a billing-relevant model."""
+
+    async def validate(profile, image_ref, _lease, _kwargs):
+        return {
+            "schemaVersion": "moonmind.provider-model-catalog-evidence.v1",
+            "models": [{"qualifiedId": "opencode-go/gpt-5.6-luna"}],
+            "imageRef": image_ref,
+            "runtimeVersions": {"opencode": "1.18.11"},
+            "materializerRef": "opencode-auth-json@1",
+            "validatedAt": "2026-08-27T01:00:00+00:00",
+            "credentialGeneration": profile.credential_generation,
+        }
+
+    _install_stubs(monkeypatch, validate=validate)
+    rows = [_profile(evidence_image=PREVIOUS_IMAGE)]
+
+    outcome = await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory(rows), controller=_Controller()
+    )
+
+    assert outcome.ready is False
+    assert outcome.deferred == ("opencode-go-default",)
+    assert rows[0].model_catalog_evidence_json["models"] == [
+        {"qualifiedId": "opencode-go/gpt-5.6-luna"}
+    ]
+    assert not evidence_is_current(rows[0], image_ref=CURRENT_IMAGE)
 
 
 @pytest.mark.asyncio
@@ -577,6 +625,8 @@ async def test_a_successful_refresh_clears_a_recorded_failure(
             "schemaVersion": "moonmind.provider-model-catalog-evidence.v1",
             "models": [{"qualifiedId": "opencode-go/muse-spark-1.2-contributor"}],
             "imageRef": image_ref,
+            "runtimeVersions": {"opencode": "1.18.11"},
+            "materializerRef": "opencode-auth-json@1",
             "validatedAt": "2026-08-25T01:00:00+00:00",
             "credentialGeneration": profile.credential_generation,
         }

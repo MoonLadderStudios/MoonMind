@@ -4005,7 +4005,14 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Retry Bootstrap */
+        /**
+         * Retry Bootstrap
+         * @description Re-qualify the deployment's current default support combination.
+         *
+         *     Provider and Agent Profile defaults select the model, effort, and launch
+         *     policy. The Provider Profile already owns the credential, which is checked
+         *     for launch readiness and revalidated against the pinned runtime.
+         */
         post: operations["retry_bootstrap_api_omnigent_bootstrap_opencode_retry_post"];
         delete?: never;
         options?: never;

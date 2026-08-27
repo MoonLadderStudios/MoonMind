@@ -133,12 +133,17 @@ Validation (Settings → Validate):
 
 1. Acquire a temporary Provider Profile maintenance lease
 2. Materialize the proposed key through `opencode-auth-json@1` into a disposable Docker volume
-3. Launch the digest-pinned OpenCode host image and query its model options through Omnigent
+3. Launch the digest-pinned OpenCode host image on restricted egress, stage the read-only credential into OpenCode's writable data directory exactly as the production host does, and query the refreshed CLI model catalog
 4. Require at least one `opencode-go/<model-id>` result
 5. Delete the validation host and credential volume, then release the maintenance lease
 6. Persist only normalized model metadata, image/runtime identity, and validation evidence
 
-Raw key is never returned after submission.
+An empty provider catalog fails validation; MoonMind never substitutes a
+configured or legacy model as evidence. The selected default must also remain
+present in the observed catalog. If the provider removes it, readiness is
+deferred until an operator selects another observed model, because changing a
+billing-relevant model is not an automatic recovery action. Raw key is never
+returned after submission.
 
 ### Automatic re-validation after a host image change
 
@@ -154,6 +159,9 @@ enabled, connected OpenCode Provider Profile whose evidence no longer matches
 the currently pinned image, using the already-enrolled `opencode_api_key`
 SecretRef. No new credential is requested, no image is substituted, and a
 credential the runtime rejects keeps its previous evidence and stays connected.
+Fresh catalog evidence is retained when the credential remains valid but the
+configured default model has rotated out, while readiness stays deferred rather
+than silently selecting a replacement.
 While a profile is waiting for that pass, Workflow Create reports
 `provider_runtime_revalidation_pending` rather than asking the operator to
 reconnect a profile that is already connected.
@@ -179,7 +187,7 @@ credentialSlots:
     acceptedAuthModels: [own-auth]
     acceptedProviderIds: [opencode, opencode-go]
 hostClassRef: omnigent-opencode@1
-launchPolicyRef: opencode-on-demand@1
+launchPolicyRef: omnigent-on-demand@1
 executionRealizerRef: generic-omnigent-host@1
 model:
   qualifiedId: opencode-go/<model-id>
@@ -206,6 +214,46 @@ parameters:
 
 Planning resolves the Host Class, credential materializer, image, acquired credential generation, and `generic-omnigent-host@1` realizer from durable data. Temporal dispatch does not branch on harness identity.
 
+## Deployment qualification and execution evidence
+
+Deployment qualification proves this deployment can run one exact harness,
+host, image, realizer, credential, and model combination. Admission matches a
+compiled plan against that qualification and refuses anything outside it.
+
+Two rules keep qualification and admission on one combination:
+
+- **Qualification never restates plan inputs.** The launch policy is part of
+  the qualified combination, so qualification derives it from the Agent Profile
+  with the same rule admission uses — the first entry of
+  `allowedLaunchPolicyRefs` when the workflow authors none. A restated ref
+  attests a combination no plan ever compiles: readiness still reports `ready`
+  while every launch fails with `execution evidence unavailable`.
+- **Per-run request intent is not a qualification dimension.**
+  `requiredCapabilitiesDigest` records what one workflow asked for, not what the
+  deployment can run, so it is excluded from the qualified combination. Class
+  admission derives support only from trusted catalog, Host Class, launch-policy,
+  materializer, bridge, and deployment-mounted-tool declarations; a workflow
+  cannot declare its own request supported. Admission independently refuses
+  unsupported or unknown required capabilities before the support key exists.
+  Binding evidence to one capability set would require re-qualifying the
+  deployment for every workflow shape.
+
+Everything else stays exact. Changing an Agent Profile, host image, harness
+catalog, model, or effort changes the qualified combination and invalidates the
+published evidence. Re-qualify from the persisted Provider Profile — the
+credential is already stored, so recovery never needs the API key again:
+
+```
+POST /api/omnigent/bootstrap/opencode/retry
+```
+
+Retry checks that the persisted Provider Profile and its managed SecretRefs are
+launch ready, revalidates its credential evidence against the pinned runtime,
+and refreshes the desired model and effort from the current Provider Profile.
+Qualification uses the current Agent Profile's default launch policy. An
+explicit per-run override is not a retry target; align the profile defaults with
+the desired combination before invoking retry.
+
 ## Exact-host attestation (issue §8)
 
 Before runner/session creation, the exact host is verified:
@@ -225,7 +273,15 @@ enforced network/egress policy active
 selected model available to credential
 ```
 
-Readiness by harness name alone is insufficient.
+The selected-model check runs Omnigent's portable
+`list_opencode_cli_model_options` helper inside the exact digest-pinned host,
+after the fenced credential generation has been materialized and the restricted
+egress attachment has been verified. The stock Omnigent host tunnel does not
+currently expose pre-launch model options for `opencode-native`; using the
+upstream helper directly keeps the attestation live and credential-bound without
+duplicating OpenCode catalog semantics in MoonMind. Other harnesses continue to
+use the normal host `model-options` tunnel. Readiness by harness name alone is
+insufficient.
 
 ## Deployment configuration
 

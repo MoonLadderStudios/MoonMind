@@ -25,7 +25,10 @@ from moonmind.omnigent.secret_resolution import (
     ScopedSecretBundle,
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
-from moonmind.security.egress import OMNIGENT_EGRESS_NETWORK_REF
+from moonmind.security.egress import (
+    OMNIGENT_EGRESS_NETWORK_REF,
+    omnigent_proxy_env,
+)
 
 
 def _models(value: Any) -> set[str]:
@@ -42,6 +45,78 @@ def _models(value: Any) -> set[str]:
         for item in value:
             found.update(_models(item))
     return found
+
+
+def _validated_models(value: Any) -> list[str]:
+    """Return observed OpenCode Go models or reject the validation result.
+
+    A successful CLI exit with no provider models is not evidence that a
+    configured fallback model exists.  Persisting such a fallback lets
+    planning admit a model that the exact host later rejects, so the runtime
+    validation boundary must fail closed here.
+    """
+
+    models = sorted(_models(value))
+    if not models:
+        raise HarnessPlatformError(
+            "pinned OpenCode runtime returned no OpenCode Go models",
+            code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
+        )
+    return models
+
+
+def _model_probe_argv(
+    *, image_ref: str, credential_source: str, credential_target: str
+) -> list[str]:
+    """Build the exact pinned-runtime catalog probe command.
+
+    The credential materializer deliberately mounts a read-only staging
+    directory. OpenCode reads ``auth.json`` from its writable data directory,
+    so validation must perform the same staging step as the real host before
+    invoking catalog discovery.
+    """
+
+    argv = [
+        "docker",
+        "run",
+        "--rm",
+        "--network",
+        OMNIGENT_EGRESS_NETWORK_REF,
+        "--read-only",
+        "--user",
+        "1000:1000",
+        "--tmpfs",
+        "/home/app:rw,uid=1000,gid=1000,mode=0700",
+        "--tmpfs",
+        "/tmp:rw,uid=1000,gid=1000,mode=1777",
+        "--mount",
+        (f"type=volume,src={credential_source}," f"dst={credential_target},readonly"),
+        "--env",
+        "HOME=/home/app",
+    ]
+    for item in omnigent_proxy_env():
+        argv.extend(("--env", item))
+    stage_and_probe = (
+        "set -eu; "
+        "unset OPENAI_API_KEY ANTHROPIC_API_KEY OPENCODE_AUTH_CONTENT "
+        "OPENCODE_CONFIG OPENCODE_CONFIG_CONTENT; "
+        "mkdir -p /home/app/.local/share/opencode; "
+        'cp "$1/auth.json" /home/app/.local/share/opencode/auth.json; '
+        "chmod 0600 /home/app/.local/share/opencode/auth.json; "
+        "exec opencode models --refresh"
+    )
+    argv.extend(
+        (
+            "--entrypoint",
+            "/bin/sh",
+            image_ref,
+            "-ceu",
+            stage_and_probe,
+            "--",
+            credential_target,
+        )
+    )
+    return argv
 
 
 class OpenCodeProviderRuntimeValidationService:
@@ -114,8 +189,7 @@ class OpenCodeProviderRuntimeValidationService:
                 "executionProfileRef": profile.profile_id,
                 "correlationId": f"opencode-validation-{profile.profile_id}",
                 "idempotencyKey": (
-                    f"opencode-validation-{profile.profile_id}-"
-                    f"{generation}"
+                    f"opencode-validation-{profile.profile_id}-" f"{generation}"
                 ),
             }
         )
@@ -132,32 +206,15 @@ class OpenCodeProviderRuntimeValidationService:
                 )
             )
             attachment = handle.attachments[0]
-            argv = [
-                "docker",
-                "run",
-                "--rm",
-                "--network",
-                OMNIGENT_EGRESS_NETWORK_REF,
-                "--read-only",
-                "--user",
-                "1000:1000",
-                "--mount",
-                (
-                    f"type=volume,src={attachment.sourceRef},"
-                    f"dst={attachment.targetPath},readonly"
-                ),
-                "--entrypoint",
-                "/bin/sh",
-                self._image_ref,
-                "-ceu",
-                (
-                    "unset OPENAI_API_KEY ANTHROPIC_API_KEY OPENCODE_AUTH_CONTENT "
-                    "OPENCODE_CONFIG OPENCODE_CONFIG_CONTENT; "
-                    "opencode models 2>&1 | head -n 500"
-                ),
-            ]
+            argv = _model_probe_argv(
+                image_ref=self._image_ref,
+                credential_source=attachment.sourceRef,
+                credential_target=attachment.targetPath,
+            )
             code, stdout, _stderr = await self._backend.run(argv, timeout_seconds=120)
-            if code != 0 and "Unable to find image" in _stderr.decode("utf-8", errors="replace"):
+            if code != 0 and "Unable to find image" in _stderr.decode(
+                "utf-8", errors="replace"
+            ):
                 # Fail closed: never substitute a mutable tag for a digest-pinned image.
                 raise HarnessPlatformError(
                     f"pinned OpenCode image {self._image_ref} not found: {_stderr.decode('utf-8', errors='replace')[:500]}",
@@ -173,24 +230,7 @@ class OpenCodeProviderRuntimeValidationService:
                 parsed: Any = json.loads(text)
             except json.JSONDecodeError:
                 parsed = text
-            models = sorted(_models(parsed))
-            if not models:
-                # Fallback for local dev: when opencode-go provider is not listing models (e.g., region-limited or API key not yet validated via network),
-                # still consider the pinned model as available if the raw output is not an explicit auth error.
-                # Check if output contains any model-like string or is empty due to network
-                import logging
-
-                logger = logging.getLogger(__name__)
-                logger.warning(
-                    f"opencode models returned no opencode-go models, using fallback for {profile.provider_id} with key generation {generation}, raw output preview: {text[:1000]!r}"
-                )
-                # Use the expected qualified model as fallback
-                # Try to get from profile's default model or use the standard muse spark
-                fallback_qualified = getattr(profile, "default_model", None) or "opencode-go/muse-spark-1.2-contributor"
-                if fallback_qualified and fallback_qualified.startswith("opencode-go/"):
-                    models = [fallback_qualified]
-                else:
-                    models = ["opencode-go/muse-spark-1.2-contributor"]
+            models = _validated_models(parsed)
             versions: dict[str, str] = {}
             for binary in ("opencode", "omnigent"):
                 version_code, version_out, _version_err = await self._backend.run(
@@ -206,7 +246,9 @@ class OpenCodeProviderRuntimeValidationService:
                         "--version",
                     ]
                 )
-                if version_code != 0 and "Unable to find image" in _version_err.decode("utf-8", errors="replace"):
+                if version_code != 0 and "Unable to find image" in _version_err.decode(
+                    "utf-8", errors="replace"
+                ):
                     # Fail closed: never substitute a mutable tag for version check.
                     raise HarnessPlatformError(
                         f"pinned image {self._image_ref} not found for {binary} version check: {_version_err.decode('utf-8', errors='replace')[:500]}",
@@ -239,7 +281,12 @@ class OpenCodeProviderRuntimeValidationService:
                 except HarnessPlatformError as _cleanup_exc:
                     # Preserve generation fences: do not force-remove volumes that may belong to another operation
                     msg = str(_cleanup_exc).lower()
-                    if "generation" in msg or "fenced" in msg or "deferred" in msg or "cleanup" in msg:
+                    if (
+                        "generation" in msg
+                        or "fenced" in msg
+                        or "deferred" in msg
+                        or "cleanup" in msg
+                    ):
                         import logging
 
                         logging.getLogger(__name__).warning(
@@ -250,4 +297,8 @@ class OpenCodeProviderRuntimeValidationService:
                         raise
 
 
-__all__ = ["OpenCodeProviderRuntimeValidationService"]
+__all__ = [
+    "OpenCodeProviderRuntimeValidationService",
+    "_model_probe_argv",
+    "_validated_models",
+]

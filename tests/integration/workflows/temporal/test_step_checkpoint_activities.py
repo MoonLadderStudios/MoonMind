@@ -306,6 +306,55 @@ async def test_checkpoint_capture_preserves_internal_symlinks(tmp_path: Path) ->
     assert link_info.linkname == "target.txt"
 
 
+async def test_checkpoint_capture_ignores_traversal_in_excluded_skill_projection(
+    tmp_path: Path,
+) -> None:
+    store = InMemoryArtifactStore()
+    root = _workspace_root(tmp_path)
+    repo = _repo(root)
+    external_snapshot = tmp_path / "resolved-skill-snapshot"
+    external_snapshot.mkdir()
+    (external_snapshot / "SKILL.md").write_text("resolved\n", encoding="utf-8")
+    skill_projection = repo / ".agents" / "skills"
+    skill_projection.mkdir(parents=True)
+    (skill_projection / "_shared").symlink_to(
+        external_snapshot,
+        target_is_directory=True,
+    )
+    sandbox = TemporalSandboxActivities(workspace_root=root, artifact_store=store)
+
+    capture = await sandbox.workspace_capture_checkpoint(
+        {
+            "identity": _identity().model_dump(by_alias=True),
+            "boundary": "after_execution",
+            "kind": "worktree_archive",
+            "workspacePath": str(repo),
+            "artifactNamespace": "checkpoint",
+            "idempotencyKey": "idem-excluded-skill-projection",
+        }
+    )
+
+    assert capture["status"] == "captured"
+    archive_bytes = store.get_bytes(capture["workspace"]["archiveRef"])
+    with tarfile.open(fileobj=BytesIO(archive_bytes), mode="r:gz") as archive:
+        assert not any(name.startswith(".agents/skills") for name in archive.getnames())
+
+    (repo / "unsafe-link").symlink_to(external_snapshot, target_is_directory=True)
+    unsafe = await sandbox.workspace_capture_checkpoint(
+        {
+            "identity": _identity().model_dump(by_alias=True),
+            "boundary": "after_execution",
+            "kind": "worktree_archive",
+            "workspacePath": str(repo),
+            "artifactNamespace": "checkpoint",
+            "idempotencyKey": "idem-included-external-link",
+        }
+    )
+
+    assert unsafe["status"] == "unsafe"
+    assert unsafe["failureCode"] == "unsafe_checkpoint"
+
+
 async def test_git_patch_checkpoint_rejects_unsupported_file_options(
     tmp_path: Path,
 ) -> None:
