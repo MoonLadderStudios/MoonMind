@@ -408,12 +408,27 @@ class BootstrapController:
                         resolver=build_omnigent_secret_resolver(),
                         image_ref=image_ref,
                     )
-                    await svc.validate(
+                    validation_evidence = await svc.validate(
                         profile=prof,
                         lease=guard.lease,
                         candidate_secret=api_key,
                         candidate_generation=candidate_gen,
                     )
+                    validated_models = {
+                        str(item.get("qualifiedId") or "")
+                        for item in validation_evidence.get("models", [])
+                        if isinstance(item, dict)
+                    }
+                    if qualified_model not in validated_models:
+                        from moonmind.omnigent.harness_platform.failures import (
+                            HarnessPlatformError,
+                            HarnessPlatformFailure,
+                        )
+
+                        raise HarnessPlatformError(
+                            f"selected model {qualified_model} is unavailable for the Provider Profile",
+                            code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,
+                        )
                 except Exception as exc:
                     if _is_substrate_unavailable(exc):
                         # Substrate unavailable: degrade to format check but report setup failure, not success
@@ -477,14 +492,11 @@ class BootstrapController:
                 prof.credential_generation = candidate_generation
                 prof.default_model = qualified_model
                 prof.default_effort = effort
-                # Always update model catalog evidence to match current generation and image
-                prof.model_catalog_evidence_json = {
-                    "schemaVersion": "moonmind.provider-model-catalog-evidence.v1",
-                    "models": [{"qualifiedId": qualified_model}],
-                    "imageRef": resolved.opencode_host_image_ref or "",
-                    "validatedAt": validated_at.isoformat(),
-                    "credentialGeneration": candidate_generation,
-                }
+                # Persist the exact credential-scoped catalog returned by the
+                # pinned runtime. Never replace it with the requested model;
+                # that would turn an unverified selection into readiness
+                # evidence and defer the rejection until exact-host launch.
+                prof.model_catalog_evidence_json = validation_evidence
                 await session.commit()
                 return profile_id
         finally:

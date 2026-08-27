@@ -138,7 +138,12 @@ Validation (Settings → Validate):
 5. Delete the validation host and credential volume, then release the maintenance lease
 6. Persist only normalized model metadata, image/runtime identity, and validation evidence
 
-Raw key is never returned after submission.
+An empty provider catalog fails validation; MoonMind never substitutes a
+configured or legacy model as evidence. The selected default must also remain
+present in the observed catalog. If the provider removes it, readiness is
+deferred until an operator selects another observed model, because changing a
+billing-relevant model is not an automatic recovery action. Raw key is never
+returned after submission.
 
 ### Automatic re-validation after a host image change
 
@@ -154,6 +159,9 @@ enabled, connected OpenCode Provider Profile whose evidence no longer matches
 the currently pinned image, using the already-enrolled `opencode_api_key`
 SecretRef. No new credential is requested, no image is substituted, and a
 credential the runtime rejects keeps its previous evidence and stays connected.
+Fresh catalog evidence is retained when the credential remains valid but the
+configured default model has rotated out, while readiness stays deferred rather
+than silently selecting a replacement.
 While a profile is waiting for that pass, Workflow Create reports
 `provider_runtime_revalidation_pending` rather than asking the operator to
 reconnect a profile that is already connected.
