@@ -51,11 +51,11 @@ def test_github_projection_exposes_only_non_secret_cli_environment():
     _script, environment = _build(
         target_path="/run/mm-credentials/opencode",
         github_attachment={
-            "targetPath": "/home/app/.cache/moonmind-gh",
+            "targetPath": "/run/mm-credentials/github",
         },
     )
 
-    assert environment["GH_CONFIG_DIR"] == "/home/app/.cache/moonmind-gh"
+    assert environment["GH_CONFIG_DIR"] == "/home/app/.config/gh"
     assert "XDG_CONFIG_HOME" not in environment
     assert environment["GH_PROMPT_DISABLED"] == "1"
     assert environment["GH_NO_UPDATE_NOTIFIER"] == "1"
@@ -81,3 +81,5 @@ def test_github_projection_exposes_only_non_secret_cli_environment():
         "GIT_CONFIG_VALUE_0",
     } <= passthrough
     assert not any("TOKEN" in name or "SECRET" in name for name in environment)
+    assert "cp /run/mm-credentials/github/hosts.yml" in _script
+    assert "/home/app/.config/gh/hosts.yml" in _script

@@ -15,7 +15,7 @@ from moonmind.omnigent.host_services.docker_backend import DockerCommandBackend
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
 _SAFE_VOLUME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$")
-_TARGET_PATH = "/home/app/.cache/moonmind-gh"
+_TARGET_PATH = "/run/mm-credentials/github"
 
 
 def github_repository_from_request(request: AgentExecutionRequest) -> str:

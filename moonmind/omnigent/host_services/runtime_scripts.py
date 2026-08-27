@@ -38,7 +38,7 @@ _GITHUB_RUNTIME_ENV = {
     "GIT_CONFIG_COUNT": "1",
     "GIT_CONFIG_KEY_0": "credential.https://github.com.helper",
     "GIT_CONFIG_VALUE_0": "!/opt/moonmind-tools/bin/gh auth git-credential",
-    "GH_CONFIG_DIR": "/home/app/.cache/moonmind-gh",
+    "GH_CONFIG_DIR": "/home/app/.config/gh",
     "GH_PROMPT_DISABLED": "1",
     "GH_NO_UPDATE_NOTIFIER": "1",
     "GH_NO_EXTENSION_UPDATE_NOTIFIER": "1",
@@ -114,7 +114,7 @@ class OmnigentRuntimeScriptService:
         if github_credential_attachment is not None:
             if (
                 str(github_credential_attachment.get("targetPath") or "")
-                != _GITHUB_RUNTIME_ENV["GH_CONFIG_DIR"]
+                != "/run/mm-credentials/github"
             ):
                 raise ValueError("GitHub credential attachment target is unsupported")
             environment.update(_GITHUB_RUNTIME_ENV)
@@ -149,6 +149,12 @@ class OmnigentRuntimeScriptService:
             + opencode_data + "/auth.json; "
             "chown 1000:1000 " + opencode_data + "/auth.json; "
             "chmod 0600 " + opencode_data + "/auth.json; fi; "
+            "if [ -d /run/mm-credentials/github ]; then "
+            "mkdir -p /home/app/.config/gh; "
+            "cp /run/mm-credentials/github/hosts.yml "
+            "/home/app/.config/gh/hosts.yml; "
+            "chmod 0700 /home/app/.config/gh; "
+            "chmod 0600 /home/app/.config/gh/hosts.yml; fi; "
             'if [ -n "${MOONMIND_OMNIGENT_CONTROL_CREDENTIAL_FILE:-}" ]; then '
             'test -r "$MOONMIND_OMNIGENT_CONTROL_CREDENTIAL_FILE"; '
             'OMNIGENT_API_TOKEN=$(cat "$MOONMIND_OMNIGENT_CONTROL_CREDENTIAL_FILE"); '
