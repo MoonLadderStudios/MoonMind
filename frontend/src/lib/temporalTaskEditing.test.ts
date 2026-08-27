@@ -299,6 +299,38 @@ describe("buildTemporalSubmissionDraftFromExecution runtime command metadata", (
     });
   });
 
+  it("preserves GitHub orchestration metadata from saved workflow steps", () => {
+    const githubOrchestration = {
+      task: {
+        repository: "MoonLadderStudios/MoonMind",
+        runtime: { mode: "codex_cli" },
+        publish: {
+          mode: "pr",
+          mergeAutomation: { enabled: true },
+        },
+      },
+    };
+    const draft = buildTemporalSubmissionDraftFromExecution({
+      workflowId: "mm:github-orchestration-edit",
+      workflowType: "MoonMind.UserWorkflow",
+      targetRuntime: "codex_cli",
+      inputParameters: {
+        workflow: {
+          instructions: "Create downstream GitHub issue workflows.",
+          steps: [
+            {
+              id: "create-github-workflows",
+              instructions: "Queue one workflow per issue.",
+              githubOrchestration,
+            },
+          ],
+        },
+      },
+    });
+
+    expect(draft.steps[0]?.githubOrchestration).toEqual(githubOrchestration);
+  });
+
   it("reconstructs canonical workflow steps from execution parameters", () => {
     const draft = buildTemporalSubmissionDraftFromExecution({
       workflowId: "mm:canonical-workflow",

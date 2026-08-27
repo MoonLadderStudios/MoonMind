@@ -341,6 +341,7 @@ async def test_requested_review_ignores_older_codex_review(monkeypatch):
             ),
             _get(200, []),
             _get(200, []),
+            _get(200, []),
         ]
     )
 
@@ -398,6 +399,64 @@ async def test_requested_review_accepts_review_for_requested_commit(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_requested_review_follows_pagination_for_requested_commit(monkeypatch):
+    """A requested review can arrive after GitHub's first 100 results."""
+
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    second_page_url = (
+        f"https://api.github.com/repos/{_REPO}/pulls/350/reviews"
+        "?page=2&per_page=100"
+    )
+    first_page = _get(
+        200,
+        [
+            {
+                "id": 1,
+                "state": "COMMENTED",
+                "commit_id": _OLD_HEAD,
+                "submitted_at": "2026-08-24T21:00:00Z",
+                "user": {"login": "chatgpt-codex-connector"},
+            }
+        ],
+        headers={"Link": f'<{second_page_url}>; rel="next"'},
+    )
+    mock_client = _client(
+        get_responses=[
+            *_readiness_prefix(),
+            first_page,
+            _get(
+                200,
+                [
+                    {
+                        "id": 45678,
+                        "state": "COMMENTED",
+                        "commit_id": _HEAD,
+                        "submitted_at": "2026-08-24T22:19:00Z",
+                        "user": {"login": "chatgpt-codex-connector[bot]"},
+                    }
+                ],
+            ),
+        ]
+    )
+
+    with _patch_client(mock_client):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo=_REPO,
+            pr_number=350,
+            head_sha=_HEAD,
+            policy={"checks": "required", "automatedReview": "required"},
+            review_loop_enabled=True,
+            review_request=_ACTIVE_REQUEST,
+        )
+
+    assert result.ready is True
+    assert result.automated_review_complete is True
+    assert result.automated_review_completion_kind == "review"
+    assert result.automated_review_completion_id == 45678
+    assert mock_client.get.await_args_list[4].args == (second_page_url,)
+
+
+@pytest.mark.asyncio
 async def test_requested_review_rejects_review_for_a_different_commit(monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
     mock_client = _client(
@@ -417,6 +476,7 @@ async def test_requested_review_rejects_review_for_a_different_commit(monkeypatc
             ),
             _get(200, []),
             _get(200, []),
+            _get(200, []),
         ]
     )
 
@@ -431,6 +491,78 @@ async def test_requested_review_rejects_review_for_a_different_commit(monkeypatc
         )
 
     assert result.automated_review_complete is False
+
+
+@pytest.mark.asyncio
+async def test_requested_review_surfaces_paginated_provider_usage_failure(monkeypatch):
+    """A provider-authored quota response terminates the request wait."""
+
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    second_page_url = (
+        f"https://api.github.com/repos/{_REPO}/issues/350/comments"
+        "?page=2&per_page=100"
+    )
+    first_page = _get(
+        200,
+        [
+            {
+                "id": 1,
+                "body": "A human mentioned a usage limit.",
+                "created_at": "2026-08-24T22:20:00Z",
+                "user": {"login": "reviewer-a"},
+            }
+        ],
+        headers={"Link": f'<{second_page_url}>; rel="next"'},
+    )
+    mock_client = _client(
+        get_responses=[
+            *_readiness_prefix(),
+            _get(200, []),
+            _get(200, []),
+            _get(200, []),
+            first_page,
+            _get(
+                200,
+                [
+                    {
+                        "id": 99,
+                        "body": (
+                            "You have reached your Codex usage limits for code "
+                            "reviews."
+                        ),
+                        "created_at": "2026-08-24T22:20:01Z",
+                        "user": {
+                            "login": "chatgpt-codex-connector[bot]",
+                            "type": "Bot",
+                        },
+                    }
+                ],
+            ),
+        ]
+    )
+
+    with _patch_client(mock_client):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo=_REPO,
+            pr_number=350,
+            head_sha=_HEAD,
+            policy={"checks": "required", "automatedReview": "required"},
+            review_loop_enabled=True,
+            review_request=_ACTIVE_REQUEST,
+        )
+
+    assert result.ready is False
+    assert result.automated_review_complete is None
+    assert [blocker["kind"] for blocker in result.blockers] == [
+        "automated_review_request_failed"
+    ]
+    assert result.blockers[0]["retryable"] is False
+    assert result.blockers[0]["source"] == "codex"
+    assert result.blockers[0]["providerFailure"]["providerErrorClass"] == (
+        "rate_limit"
+    )
+    assert "Codex usage limits" not in result.blockers[0]["summary"]
+    assert mock_client.get.await_args_list[-1].args == (second_page_url,)
 
 
 @pytest.mark.asyncio

@@ -64,6 +64,33 @@ WorkloadDeviceMode = Literal["none"]
 WorkloadReadinessProbeType = Literal["exec"]
 WorkloadGpuVendor = Literal["nvidia"]
 WORKLOAD_GPU_VENDORS: tuple[WorkloadGpuVendor, ...] = ("nvidia",)
+#: Bounded generic driver capabilities a caller may request for a GPU device.
+#: These are the vendor driver's own published capability names, not MoonMind
+#: vocabulary and not an application type. The declaration order below is the
+#: canonical serialization order, so one semantic request always serializes
+#: identically regardless of how the caller ordered it.
+WorkloadGpuCapability = Literal[
+    "compute",
+    "compat32",
+    "graphics",
+    "utility",
+    "video",
+    "display",
+]
+WORKLOAD_GPU_CAPABILITIES: tuple[WorkloadGpuCapability, ...] = (
+    "compute",
+    "compat32",
+    "graphics",
+    "utility",
+    "video",
+    "display",
+)
+#: Stable reasons a generic GPU resource request is refused at validation.
+WorkloadGpuRequestFailure = Literal[
+    "gpu_request_invalid",
+    "gpu_vendor_unsupported",
+    "gpu_count_unsupported",
+]
 
 def parse_cpu_units(value: str) -> float:
     """Parse a Docker CPU quota-style value for numeric comparison."""
@@ -258,6 +285,20 @@ class UnrestrictedCacheMount(BaseModel):
             raise ValueError("cacheMounts target must be an absolute safe path")
         return self
 
+class WorkloadGpuRequestError(ValueError):
+    """Refused generic GPU resource request carrying its stable failure reason.
+
+    The reason travels with the exception so every transport classifies the same
+    refusal identically instead of re-deriving it from an error string. Pydantic
+    preserves the raised instance in its validation error context, so the reason
+    survives model validation at any nesting depth.
+    """
+
+    def __init__(self, failure: WorkloadGpuRequestFailure, detail: str) -> None:
+        self.gpu_failure: WorkloadGpuRequestFailure = failure
+        super().__init__(detail)
+
+
 def _validate_gpu_count(value: Any) -> None:
     """Reject a device count that only becomes an integer through coercion.
 
@@ -273,21 +314,72 @@ def _validate_gpu_count(value: Any) -> None:
         else isinstance(value, int) and not isinstance(value, bool) and value >= 1
     )
     if not accepted:
-        raise ValueError("gpu.count must be a positive integer or 'all'")
+        raise WorkloadGpuRequestError(
+            "gpu_count_unsupported", "gpu.count must be a positive integer or 'all'"
+        )
+
+
+def _normalized_gpu_capabilities(value: Any) -> tuple[WorkloadGpuCapability, ...]:
+    """Return the bounded, deduplicated, canonically ordered capability list.
+
+    Only the vendor driver's published capability names are accepted. Ordering
+    and duplicates are normalized here so the same semantic request always
+    serializes to the same durable bytes and the same device request.
+    """
+
+    if isinstance(value, str) or not isinstance(value, (list, tuple)):
+        raise WorkloadGpuRequestError(
+            "gpu_request_invalid",
+            "gpu.capabilities must be a list of supported driver capabilities",
+        )
+    requested: set[str] = set()
+    for entry in value:
+        if not isinstance(entry, str):
+            raise WorkloadGpuRequestError(
+                "gpu_request_invalid",
+                "gpu.capabilities entries must be capability names",
+            )
+        capability = entry.strip().lower()
+        if capability not in WORKLOAD_GPU_CAPABILITIES:
+            allowed = ", ".join(WORKLOAD_GPU_CAPABILITIES)
+            raise WorkloadGpuRequestError(
+                "gpu_request_invalid",
+                f"gpu.capabilities entry {entry!r} is not supported; "
+                f"supported capabilities: {allowed}",
+            )
+        requested.add(capability)
+    if not requested:
+        raise WorkloadGpuRequestError(
+            "gpu_request_invalid",
+            "gpu.capabilities must declare at least one supported driver capability",
+        )
+    return tuple(
+        capability
+        for capability in WORKLOAD_GPU_CAPABILITIES
+        if capability in requested
+    )
 
 class WorkloadGpuRequest(BaseModel):
     """Caller-supplied generic GPU resource request for one container.
 
-    This is ordinary request data: the caller names a supported GPU vendor and
-    how many devices the container needs. MoonMind realizes it as the vendor's
-    Docker device request and never infers it from the image, the command, or
-    any repository-specific condition.
+    This is ordinary request data: the caller names a supported GPU vendor, how
+    many devices the container needs, and optionally which of the vendor
+    driver's published capabilities to expose. MoonMind realizes it as the
+    vendor's Docker device request and never infers it from the image, the
+    command, or any repository-specific condition.
+
+    ``capabilities`` is absent by default, which requests the vendor's default
+    device capability set. Declaring it never widens authority: the values are
+    bounded driver capability names, not device paths or Docker options.
     """
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     vendor: WorkloadGpuVendor = Field("nvidia", alias="vendor")
     count: int | Literal["all"] = Field("all", alias="count")
+    capabilities: tuple[WorkloadGpuCapability, ...] | None = Field(
+        None, alias="capabilities"
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -299,13 +391,19 @@ class WorkloadGpuRequest(BaseModel):
             vendor = str(raw_vendor).strip().lower()
             if vendor not in WORKLOAD_GPU_VENDORS:
                 allowed = ", ".join(WORKLOAD_GPU_VENDORS)
-                raise ValueError(
+                raise WorkloadGpuRequestError(
+                    "gpu_vendor_unsupported",
                     f"gpu.vendor {raw_vendor!r} is not supported; "
-                    f"supported vendors: {allowed}"
+                    f"supported vendors: {allowed}",
                 )
         if "count" in value:
             _validate_gpu_count(value["count"])
-        return value
+        raw_capabilities = value.get("capabilities")
+        if raw_capabilities is None:
+            return value
+        normalized = dict(value)
+        normalized["capabilities"] = _normalized_gpu_capabilities(raw_capabilities)
+        return normalized
 
     @property
     def device_request_value(self) -> str:

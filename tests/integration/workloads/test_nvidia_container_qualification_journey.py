@@ -588,3 +588,282 @@ async def test_timeout_targets_only_the_run_owned_container(
     await asyncio.sleep(1)
     assert not _container_present(request.container_name)
     assert _image_present(image)
+
+
+# ---------------------------------------------------------------------------
+# Canonical container-job boundary (MoonLadderStudios/MoonMind#3779)
+# ---------------------------------------------------------------------------
+#
+# The same caller-supplied image, command, and generic GPU resource are run
+# again through the canonical asynchronous container-job backend on the same
+# daemon, so the durable destination is qualified on real hardware rather than
+# only the unrestricted route.
+
+
+CANONICAL_WORKSPACE_REF = "gpu-qualification-workspace"
+CANONICAL_CAPABILITIES = ("compute", "utility")
+
+
+def _canonical_job_id() -> str:
+    return f"container-job:{uuid.uuid4().hex}"
+
+
+def _evidence_publisher(root: Path):
+    """Publish bounded evidence to a local root and return its reference.
+
+    The trusted backend only needs an opaque durable reference; the artifact
+    store is not part of what this journey qualifies.
+    """
+
+    async def publish(request: Any, name: str, payload: bytes) -> str:
+        target = root / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(payload)
+        return str(target)
+
+    return publish
+
+
+def _container_job_backend(
+    workspace_root: Path,
+    *,
+    evidence_root: Path,
+    settings_source: dict[str, str] | None = None,
+):
+    from moonmind.config.container_backend_settings import (
+        resolve_container_backend_settings,
+    )
+    from moonmind.workflows.temporal.container_job_backend import (
+        DockerContainerJobBackend,
+    )
+
+    return DockerContainerJobBackend(
+        workspace_root=workspace_root,
+        settings=resolve_container_backend_settings(settings_source or {}),
+        docker_binary=_docker_binary(),
+        docker_host=_docker_host(),
+        backend_ref="gpu-qualification",
+        evidence_publisher=_evidence_publisher(evidence_root),
+        image_lock_root=evidence_root / "locks",
+    )
+
+
+def _canonical_workspace(workspace_root: Path) -> Path:
+    workspace = workspace_root / CANONICAL_WORKSPACE_REF
+    workspace.mkdir(parents=True, exist_ok=True)
+    return workspace
+
+
+def _canonical_request(
+    *,
+    job_id: str,
+    gpu: dict[str, Any] | None,
+    command: tuple[str, ...],
+    declared_output: bool,
+    timeout_seconds: int | None = None,
+):
+    from moonmind.schemas.container_job_models import ContainerJobActivityRequest
+
+    resources: dict[str, Any] = {"cpuMillis": 2000, "memoryMiB": 2048}
+    if gpu is not None:
+        resources["gpu"] = gpu
+    spec: dict[str, Any] = {
+        "image": _env("MOONMIND_GPU_QUALIFICATION_IMAGE"),
+        "workspaceRef": {
+            "kind": "external_state",
+            "artifactRef": CANONICAL_WORKSPACE_REF,
+        },
+        "command": list(command),
+        "networkMode": "none",
+        "resources": resources,
+        "timeoutSeconds": timeout_seconds
+        or int(_env("MOONMIND_GPU_QUALIFICATION_TIMEOUT") or 600),
+        "environment": [
+            {
+                "name": "MOONMIND_GPU_QUALIFICATION_OUTPUT",
+                "value": f"/workspace/{DECLARED_OUTPUT_PATH}",
+            }
+        ],
+    }
+    if declared_output:
+        spec["outputs"] = [
+            {"name": DECLARED_OUTPUT_CLASS, "relativePath": DECLARED_OUTPUT_PATH}
+        ]
+    return ContainerJobActivityRequest.model_validate(
+        {
+            "jobId": job_id,
+            "ownershipToken": f"{job_id}:v1",
+            "request": {
+                "idempotencyKey": job_id,
+                "source": {"source": "workflow", "workflowId": job_id},
+                "spec": spec,
+            },
+        }
+    )
+
+
+async def _drive_canonical_job(backend: Any, request: Any) -> dict[str, Any]:
+    """Run one canonical job through the same Activity sequence the workflow uses."""
+
+    resolved = await backend.resolve_workspace(request)
+    request.resolved_workspace_ref = resolved.resolved_workspace_ref
+    request.resolved_workspace_volume_name = resolved.resolved_workspace_volume_name
+    request.resolved_workspace_volume_subpath = (
+        resolved.resolved_workspace_volume_subpath
+    )
+    image = await backend.acquire_image(request)
+    request.resolved_image_ref = image.resolved_image_ref
+
+    created = await backend.create_container(request)
+    request.container_ref = created.container_ref
+    request.gpu_observation = created.gpu_observation
+    started = await backend.start_container(request)
+    if started.gpu_observation is not None:
+        request.gpu_observation = started.gpu_observation
+
+    deadline = request.request.spec.timeout_seconds
+    observed = None
+    for _ in range(deadline * 2):
+        observed = await backend.observe_container(request)
+        if observed.terminal_state is not None:
+            break
+        await asyncio.sleep(0.5)
+    assert observed is not None and observed.terminal_state is not None, (
+        "canonical container job did not reach a terminal state"
+    )
+    request.terminal_state = observed.terminal_state
+    request.exit_code = observed.exit_code
+
+    published = await backend.publish_evidence(request)
+    await backend.remove_container(request)
+    cleaned = await backend.cleanup(request)
+    return {
+        "created": created,
+        "started": started,
+        "observed": observed,
+        "published": published,
+        "cleaned": cleaned,
+    }
+
+
+@pytest.mark.asyncio
+async def test_real_nvidia_container_job_completes_through_the_trusted_backend(
+    workspace_root: Path,
+    tmp_path: Path,
+) -> None:
+    """The canonical container-job backend realizes the same GPU request."""
+
+    workspace = _canonical_workspace(workspace_root)
+    job_id = _canonical_job_id()
+    backend = _container_job_backend(workspace_root, evidence_root=tmp_path / "evidence")
+    request = _canonical_request(
+        job_id=job_id,
+        gpu={
+            "vendor": "nvidia",
+            "count": _gpu_count(),
+            "capabilities": list(CANONICAL_CAPABILITIES),
+        },
+        command=_caller_command(Path("/workspace") / DECLARED_OUTPUT_PATH),
+        declared_output=_declares_fixture_output(),
+    )
+
+    outcome = await _drive_canonical_job(backend, request)
+
+    assert outcome["observed"].terminal_state == "succeeded"
+    assert outcome["observed"].exit_code == 0
+
+    # The resolved GPU resource is reported as supported and launched, and the
+    # observation carries the caller's own semantic request.
+    observation = request.gpu_observation
+    assert observation is not None
+    assert observation.backend_supported is True
+    assert observation.launched is True
+    assert observation.count == _gpu_count()
+    assert observation.capabilities == CANONICAL_CAPABILITIES
+    assert observation.failure_class is None
+
+    # Bounded logs and the declared output are collected through the ordinary
+    # evidence plane, with no GPU-specific lifecycle branch.
+    assert outcome["published"].logs_ref
+    logs = Path(outcome["published"].logs_ref).read_text(encoding="utf-8")
+    assert logs.strip()
+    assert "/var/run/docker.sock" not in logs
+    assert "DOCKER_HOST" not in logs
+    if _declares_fixture_output():
+        assert (workspace / DECLARED_OUTPUT_PATH).is_file()
+        assert outcome["published"].artifacts_ref
+        manifest = json.loads(
+            Path(outcome["published"].artifacts_ref).read_text(encoding="utf-8")
+        )
+        collected = {item["name"]: item for item in manifest["artifacts"]}
+        assert collected[DECLARED_OUTPUT_CLASS]["collectionStatus"] == "collected"
+        assert collected[DECLARED_OUTPUT_CLASS]["sha256"]
+
+    # Cleanup removed only the run-owned container; the image survives.
+    assert outcome["cleaned"].cleanup_succeeded is not False
+    assert not _container_present(str(request.container_ref))
+    assert _image_present(_env("MOONMIND_GPU_QUALIFICATION_IMAGE"))
+
+
+@pytest.mark.asyncio
+async def test_canonical_cpu_only_job_on_the_gpu_host_requests_no_device(
+    workspace_root: Path,
+    tmp_path: Path,
+) -> None:
+    """CPU-only canonical behavior is unchanged on a GPU-capable host."""
+
+    _canonical_workspace(workspace_root)
+    backend = _container_job_backend(
+        workspace_root, evidence_root=tmp_path / "evidence-cpu"
+    )
+    request = _canonical_request(
+        job_id=_canonical_job_id(),
+        gpu=None,
+        command=("sh", "-lc", "echo cpu-only-path"),
+        declared_output=False,
+    )
+
+    outcome = await _drive_canonical_job(backend, request)
+
+    assert outcome["observed"].terminal_state == "succeeded"
+    assert outcome["created"].gpu_observation is None
+    assert outcome["started"].gpu_observation is None
+    assert request.gpu_observation is None
+
+
+@pytest.mark.asyncio
+async def test_canonical_device_count_above_the_ceiling_is_refused_before_execution(
+    workspace_root: Path,
+    tmp_path: Path,
+) -> None:
+    """An unsupported device count fails with its stable class, not a workload."""
+
+    from moonmind.schemas.container_job_models import (
+        ContainerJobFailureClass,
+        failure_class_from_exception,
+    )
+
+    _canonical_workspace(workspace_root)
+    backend = _container_job_backend(
+        workspace_root,
+        evidence_root=tmp_path / "evidence-refused",
+        settings_source={"MOONMIND_CONTAINER_BACKEND_MAX_GPU_COUNT": "0"},
+    )
+    request = _canonical_request(
+        job_id=_canonical_job_id(),
+        gpu={"vendor": "nvidia", "count": 1},
+        command=("sh", "-lc", "echo should-not-run"),
+        declared_output=False,
+    )
+    resolved = await backend.resolve_workspace(request)
+    request.resolved_workspace_ref = resolved.resolved_workspace_ref
+    image = await backend.acquire_image(request)
+    request.resolved_image_ref = image.resolved_image_ref
+
+    with pytest.raises(Exception) as exc_info:
+        await backend.create_container(request)
+
+    assert (
+        failure_class_from_exception(exc_info.value)
+        == ContainerJobFailureClass.GPU_COUNT_UNSUPPORTED
+    )

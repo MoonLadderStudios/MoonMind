@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from moonmind.schemas.workload_models import WORKLOAD_GPU_CAPABILITIES
+
 CONTAINER_RUN_JOB_TOOL = "container.run_job"
 CONTAINER_JOB_TOOL_NAMES = frozenset({CONTAINER_RUN_JOB_TOOL})
 
@@ -116,6 +118,16 @@ def build_container_job_tool_definition_payload(*, name: str) -> dict[str, Any]:
                                     {"type": "string", "const": "all"},
                                 ]
                             },
+                            # Bounded vendor driver capability names. Omitted
+                            # requests receive the vendor's default set.
+                            "capabilities": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {
+                                    "type": "string",
+                                    "enum": list(WORKLOAD_GPU_CAPABILITIES),
+                                },
+                            },
                         },
                         "additionalProperties": False,
                     },
@@ -168,6 +180,28 @@ def build_container_job_tool_definition_payload(*, name: str) -> dict[str, Any]:
                     "artifactsRef": {"type": "string"},
                     "exitCode": {"type": "integer"},
                     "failureClass": {"type": "string"},
+                    # Bounded observation of a requested device resource.
+                    # Absent for every CPU-only job.
+                    "gpu": {
+                        "type": "object",
+                        "properties": {
+                            "vendor": {"type": "string"},
+                            "count": {
+                                "oneOf": [
+                                    {"type": "integer"},
+                                    {"type": "string"},
+                                ]
+                            },
+                            "capabilities": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                            "backendSupported": {"type": "boolean"},
+                            "launched": {"type": "boolean"},
+                            "failureClass": {"type": "string"},
+                        },
+                        "additionalProperties": False,
+                    },
                 },
                 "additionalProperties": False,
             }
