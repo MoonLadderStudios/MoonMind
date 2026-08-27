@@ -282,6 +282,8 @@ def test_sandbox_worker_uses_internal_egress_network_for_mm_785():
         for parts in [
             ("github", ".com"),
             ("anthropic", ".com"),
+            ("models", ".opencode", ".ai"),
+            ("registry", ".npmjs", ".org"),
         ]
     }
     assert "http_access deny all" in squid_config
