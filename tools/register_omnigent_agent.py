@@ -12,12 +12,13 @@ def register_agent(agent_source: Path, *, database_url: str, artifact_dir: Path)
     """Execute Omnigent's canonical startup registration entrypoint."""
 
     from omnigent.cli import _preregister_agent
+    from omnigent.db.utils import normalize_database_url
     from omnigent.runtime.agent_cache import AgentCache
     from omnigent.stores.agent_store.sqlalchemy_store import SqlAlchemyAgentStore
     from omnigent.stores.artifact_store.local import LocalArtifactStore
 
     artifact_store = LocalArtifactStore(str(artifact_dir))
-    agent_store = SqlAlchemyAgentStore(database_url)
+    agent_store = SqlAlchemyAgentStore(normalize_database_url(database_url))
     agent_cache = AgentCache(
         artifact_store=artifact_store,
         cache_dir=artifact_dir / ".cache",
