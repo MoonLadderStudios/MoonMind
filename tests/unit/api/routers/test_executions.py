@@ -105,6 +105,7 @@ from moonmind.workflows.temporal.publication_recovery import (
 from moonmind.workflows.temporal.client import WorkflowStartResult
 from moonmind.workflows.temporal.service import ExecutionDependencySummary
 from moonmind.workflows.temporal import (
+    TemporalExecutionCancelUndeliverableError,
     TemporalExecutionNotFoundError,
     TemporalExecutionValidationError,
 )
@@ -11018,11 +11019,13 @@ def test_cancel_execution_rejection_returns_actionable_conflict() -> None:
         service.describe_execution.return_value = _build_execution_record(
             state=MoonMindWorkflowState.AWAITING_SLOT
         )
-        service.cancel_execution.side_effect = TemporalExecutionValidationError(
-            "Graceful cancel cannot be delivered: this execution's workflow task "
-            "has failed 94 consecutive times, so the workflow can no longer "
-            "process a cancellation request. Use Force cancel to terminate it, "
-            "which does not require the workflow to run."
+        service.cancel_execution.side_effect = (
+            TemporalExecutionCancelUndeliverableError(
+                "Cancellation was requested and Temporal will retain it, but this "
+                "execution's workflow task has failed 94 consecutive times, so the "
+                "workflow cannot process it. Use Force cancel to terminate the "
+                "execution now, which does not require the workflow to run."
+            )
         )
 
         response = test_client.post(
@@ -11034,6 +11037,30 @@ def test_cancel_execution_rejection_returns_actionable_conflict() -> None:
         detail = response.json()["detail"]
         assert detail["code"] == "cancel_rejected"
         assert "Force cancel" in detail["message"]
+
+
+def test_cancel_execution_transport_failure_returns_retryable_status() -> None:
+    """A transport failure must not be reported as a permanent conflict.
+
+    Clients treat 409 as a request that can never succeed, so a Temporal outage
+    would leave the execution running with no retry.
+    """
+
+    for test_client, service in _client_with_service():
+        service.describe_execution.return_value = _build_execution_record(
+            state=MoonMindWorkflowState.AWAITING_SLOT
+        )
+        service.cancel_execution.side_effect = TemporalExecutionValidationError(
+            "Temporal cancel failed: connection reset"
+        )
+
+        response = test_client.post(
+            "/api/executions/mm:wf-1/cancel",
+            json={"graceful": True},
+        )
+
+        assert response.status_code == 503
+        assert response.json()["detail"]["code"] == "cancel_unavailable"
 
 
 def test_cancel_execution_authorizes_projection_only_child_target() -> None:
