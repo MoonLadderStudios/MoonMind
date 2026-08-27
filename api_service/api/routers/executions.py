@@ -18554,6 +18554,17 @@ async def recover_execution(
             canonical,
             recovery_target=request,
         )
+    except ProviderProfileRuntimeMismatchError as exc:
+        # A recovery destination inherits the source execution's authored
+        # runtime and Provider Profile. A pair persisted before the shared
+        # invariant existed is rejected at
+        # TemporalExecutionService.create_execution, and this route returns
+        # the identical 409 contract every other launch-authoring path
+        # returns rather than surfacing an unmapped server error.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=exc.detail,
+        ) from exc
     except TemporalExecutionRecoveryCheckpointError as exc:
         reasons = [reason for reason in str(exc).split(",") if reason]
         raise HTTPException(
@@ -18651,6 +18662,17 @@ async def recover_execution_from_failed_step(
             failed_run_recovery_manifest=manifest_payload,
             admitted_checkpoint_resume_decision=admission,
         )
+    except ProviderProfileRuntimeMismatchError as exc:
+        # A recovery destination inherits the source execution's authored
+        # runtime and Provider Profile. A pair persisted before the shared
+        # invariant existed is rejected at
+        # TemporalExecutionService.create_execution, and this route returns
+        # the identical 409 contract every other launch-authoring path
+        # returns rather than surfacing an unmapped server error.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=exc.detail,
+        ) from exc
     except TemporalExecutionRecoveryCheckpointError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -18768,6 +18790,17 @@ async def recover_execution_from_selected_step(
             selected_start_step_id=request.selected_start_step_id,
             admitted_checkpoint_resume_decision=admission,
         )
+    except ProviderProfileRuntimeMismatchError as exc:
+        # A recovery destination inherits the source execution's authored
+        # runtime and Provider Profile. A pair persisted before the shared
+        # invariant existed is rejected at
+        # TemporalExecutionService.create_execution, and this route returns
+        # the identical 409 contract every other launch-authoring path
+        # returns rather than surfacing an unmapped server error.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=exc.detail,
+        ) from exc
     except TemporalExecutionRecoveryCheckpointError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

@@ -8383,3 +8383,82 @@ async def test_mm3788_create_execution_ignores_a_profile_ref_with_no_stored_row(
             TemporalExecutionCanonicalRecord, record.workflow_id
         )
         assert stored is not None
+
+
+@pytest.mark.asyncio
+async def test_mm3788_typed_recovery_rejects_a_pair_persisted_before_the_invariant(
+    tmp_path, mock_client_adapter
+):
+    """A recovery destination inherits the source's authored runtime pair.
+
+    Recovery reaches a launch through the same ``create_execution`` handoff, so
+    a pair that was persisted before the invariant existed — or whose profile
+    was later recreated under another runtime — is rejected there rather than
+    silently launching the profile's runtime instead of the selected one.
+    """
+
+    async with temporal_db(tmp_path) as session:
+        await _mm3788_seed_profile(
+            session, profile_id="codex_minimax_team", runtime_id="codex_cli"
+        )
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        source = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="MM-3788 recovery source",
+            input_artifact_ref="artifact://snapshot/source",
+            plan_artifact_ref="artifact://plan/source",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters=_mm3788_initial_parameters(
+                target_runtime="codex_cli", profile_id="codex_minimax_team"
+            ),
+            idempotency_key=None,
+        )
+        canonical_source = await session.get(
+            TemporalExecutionCanonicalRecord, source.workflow_id
+        )
+        assert canonical_source is not None
+        stored_parameters = dict(canonical_source.parameters or {})
+        workflow_parameters = dict(stored_parameters.get("workflow") or {})
+        workflow_parameters["runtime"] = {
+            "mode": "claude_code",
+            "providerProfileRef": "codex_minimax_team",
+        }
+        stored_parameters["workflow"] = workflow_parameters
+        stored_parameters["targetRuntime"] = "claude_code"
+        canonical_source.parameters = stored_parameters
+        canonical_source.state = MoonMindWorkflowState.FAILED
+        canonical_source.close_status = TemporalExecutionCloseStatus.FAILED
+        canonical_source.artifact_refs = list(canonical_source.artifact_refs or []) + [
+            "artifact://checkpoint/source",
+            "artifact://checkpoint-validation",
+        ]
+        await session.commit()
+
+        target = _typed_failed_step_recovery_target(
+            source_workflow_id=canonical_source.workflow_id,
+            source_run_id=canonical_source.run_id,
+            destination_workflow_id="mm:mm3788-recovery-destination",
+        )
+
+        with pytest.raises(ProviderProfileRuntimeMismatchError) as excinfo:
+            await service.create_typed_recovery_execution(
+                canonical_source, recovery_target=target
+            )
+
+        assert excinfo.value.detail == {
+            "code": "provider_profile_runtime_mismatch",
+            "message": (
+                "Provider Profile 'codex_minimax_team' belongs to runtime "
+                "'codex_cli' and cannot be used with runtime 'claude_code'."
+            ),
+            "profileId": "codex_minimax_team",
+            "profileRuntime": "codex_cli",
+            "selectedRuntime": "claude_code",
+        }
+        # No recovery destination was created behind the rejection.
+        destination = await session.get(
+            TemporalExecutionCanonicalRecord, "mm:mm3788-recovery-destination"
+        )
+        assert destination is None

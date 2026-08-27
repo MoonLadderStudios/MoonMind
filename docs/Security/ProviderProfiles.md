@@ -1135,6 +1135,13 @@ cannot find a submission shape that accepts a pair the runtime-scoped selectors
 would never offer. Routers translate the typed rejection into the same 409
 payload.
 
+A recovery destination — typed recovery, failed-step recovery, and
+selected-step recovery — inherits the source execution's authored runtime and
+Provider Profile, so a pair that was persisted before this rule existed, or
+whose profile was later recreated under another runtime, is rejected at the same
+handoff. Those routes return the identical 409 contract rather than an unmapped
+server error, and the source execution is left untouched.
+
 Boundaries that durably persist a launch target *before* reaching that handoff
 enforce the same contract themselves:
 

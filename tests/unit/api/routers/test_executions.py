@@ -84,6 +84,16 @@ from api_service.db.models import (
     TemporalWorkflowType,
 )
 from api_service.services.recurring_workflows_service import RecurringWorkflowValidationError
+from api_service.services.provider_profile_runtime import (
+    require_launch_target_provider_profile_runtime,
+)
+from moonmind.schemas.workflow_recovery_models import (
+    WorkflowRecoveryTargetModel,
+    deterministic_recovery_creation_key,
+)
+from moonmind.workflows.executions.runtime_capabilities import (
+    resolve_runtime_execution_capabilities,
+)
 from moonmind.config.settings import settings
 from moonmind.security.execution_fanout_capabilities import (
     mint_execution_fanout_capability,
@@ -17624,3 +17634,306 @@ async def test_mm3788_raw_create_branch_keeps_the_omnigent_product_boundary(
         assert exc_info.value.status_code == 422
         assert exc_info.value.detail["code"] == "omnigent_product_boundary_required"
         service._client_adapter.start_workflow.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# MoonLadderStudios/MoonMind#3788 — a recovery destination inherits the source
+# execution's authored runtime and Provider Profile and reaches a launch through
+# the same TemporalExecutionService.create_execution handoff. A pair persisted
+# before the shared invariant existed (or one whose profile was recreated under
+# another runtime) is rejected there, so the recovery routes must surface the
+# identical 409 contract every other launch-authoring path returns instead of an
+# unmapped server error.
+# ---------------------------------------------------------------------------
+
+
+def _mm3788_legacy_recovery_parameters() -> dict[str, Any]:
+    """Source parameters carrying a pair persisted before the invariant."""
+
+    return {
+        "targetRuntime": "claude_code",
+        "workflow": {
+            "instructions": "Recover the failed step.",
+            "runtime": {
+                "mode": "claude_code",
+                "providerProfileRef": "codex_minimax_team",
+            },
+        },
+    }
+
+
+def _mm3788_production_recovery_rejection(tmp_path, *, db_name: str):
+    """Raise the rejection the production contract raises for those params.
+
+    The error identity is not hand-written: the real shared contract resolves a
+    real ``ManagedAgentProviderProfile`` row from real persistence and raises
+    :class:`ProviderProfileRuntimeMismatchError` itself, exactly as it does
+    inside ``TemporalExecutionService.create_execution`` on the recovery path.
+    """
+
+    async def _raise(*_args: Any, **_kwargs: Any):
+        db_url = f"sqlite+aiosqlite:///{tmp_path}/{db_name}.db"
+        engine = create_async_engine(db_url, future=True)
+        session_factory = sessionmaker(
+            engine, class_=AsyncSession, expire_on_commit=False
+        )
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        try:
+            async with session_factory() as session:
+                session.add(
+                    ManagedAgentProviderProfile(
+                        profile_id="codex_minimax_team",
+                        runtime_id="codex_cli",
+                        provider_id="minimax",
+                    )
+                )
+                await session.commit()
+                await require_launch_target_provider_profile_runtime(
+                    session=session,
+                    target={
+                        "initialParameters": _mm3788_legacy_recovery_parameters()
+                    },
+                )
+        finally:
+            await engine.dispose()
+        raise AssertionError(
+            "the shared contract accepted a cross-runtime recovery pair"
+        )
+
+    return _raise
+
+
+def _mm3788_assert_shared_mismatch_detail(detail: dict[str, Any]) -> None:
+    assert detail == {
+        "code": "provider_profile_runtime_mismatch",
+        "message": (
+            "Provider Profile 'codex_minimax_team' belongs to runtime "
+            "'codex_cli' and cannot be used with runtime 'claude_code'."
+        ),
+        "profileId": "codex_minimax_team",
+        "profileRuntime": "codex_cli",
+        "selectedRuntime": "claude_code",
+    }
+
+
+def _mm3788_typed_recovery_target(canonical):
+    checkpoint_digest = "sha256:mm3788-checkpoint"
+    return WorkflowRecoveryTargetModel.model_validate(
+        {
+            "target": {
+                "kind": "failed_step",
+                "logicalStepId": "implement",
+                "sourceStepExecutionId": "step-execution-1",
+            },
+            "source": {
+                "workflowId": canonical.workflow_id,
+                "runId": canonical.run_id,
+                "planRef": "artifact://plan/source",
+                "planDigest": "sha256:plan",
+                "taskInputSnapshotRef": "artifact://snapshot/source",
+            },
+            "checkpoint": {
+                "ref": "artifact://checkpoint/source",
+                "boundary": "before_execution",
+                "kind": "worktree_archive",
+                "digest": checkpoint_digest,
+                "validationRef": "artifact://checkpoint-validation",
+                "sourceWorkspaceRef": "workspace://source",
+            },
+            "continuation": {"phase": "rerun_failed_step"},
+            "capabilitySnapshot": resolve_runtime_execution_capabilities(
+                "omnigent"
+            ).model_dump(by_alias=True, mode="json"),
+            "preservedStepRefs": [],
+            "sideEffectDispositionRef": "artifact://side-effects",
+            "sideEffectSafe": True,
+            "destination": {
+                "workflowId": "mm:mm3788-recovery-destination",
+                "creationKey": deterministic_recovery_creation_key(
+                    canonical.workflow_id,
+                    canonical.run_id,
+                    "failed_step",
+                    checkpoint_digest,
+                    "rerun_failed_step",
+                ),
+                "runtimeId": "omnigent",
+                "executionProfileRef": "provider-profile:primary",
+                "workspaceReservationId": "workspace-reservation:destination",
+            },
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_mm3788_typed_recovery_route_maps_runtime_mismatch_to_409(
+    tmp_path,
+) -> None:
+    mock_service = AsyncMock()
+    canonical = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    canonical.parameters = _mm3788_legacy_recovery_parameters()
+    mock_service.describe_execution.return_value = canonical
+    mock_service.create_typed_recovery_execution.side_effect = (
+        _mm3788_production_recovery_rejection(tmp_path, db_name="mm3788_recover_typed")
+    )
+    user = SimpleNamespace(
+        id=uuid4(),
+        email="mm3788@example.com",
+        is_active=True,
+        is_superuser=True,
+        roles=[],
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await executions_module.recover_execution(
+            workflow_id=canonical.workflow_id,
+            request=_mm3788_typed_recovery_target(canonical),
+            service=mock_service,
+            user=user,
+            _submit_enabled=None,
+        )
+
+    assert exc_info.value.status_code == 409
+    _mm3788_assert_shared_mismatch_detail(exc_info.value.detail)
+    mock_service.create_typed_recovery_execution.assert_awaited_once()
+
+
+def _mm3788_failed_step_recovery_context(canonical):
+    """Artifact + session doubles the failed-step recovery routes hydrate."""
+
+    checkpoint_ref = "artifact://resume-checkpoints/source/checkpoint-v1"
+    canonical.memo = {
+        **canonical.memo,
+        "recovery_checkpoint_ref": checkpoint_ref,
+        "failed_run_recovery_manifest_ref": "artifact://recovery/manifest",
+        "task_input_snapshot_ref": "artifact://snapshot/source",
+    }
+    checkpoint_payload = {
+        "schemaVersion": "v1",
+        "source": {"workflowId": canonical.workflow_id, "runId": canonical.run_id},
+        "taskInputSnapshotRef": "artifact://snapshot/source",
+        "planRef": "artifact://plan/source",
+        "planDigest": "sha256:resume-plan",
+        "failedStep": {"logicalStepId": "implement", "order": 2, "attempt": 1},
+        "preservedSteps": [
+            {
+                "logicalStepId": "plan",
+                "order": 1,
+                "status": "completed",
+                "sourceExecutionOrdinal": 1,
+                "artifacts": {"summary": "artifact://completed/plan"},
+                "stateCheckpointRef": "artifact://workspace/before-implement",
+            }
+        ],
+        "recoveryWorkspace": {
+            "branch": "feature/resume",
+            "commit": "abc123",
+            "checkpointRef": checkpoint_ref,
+            "archiveBytes": 100,
+        },
+    }
+    manifest_payload = _valid_failed_run_recovery_manifest_payload(
+        canonical, checkpoint_ref=checkpoint_ref
+    )
+    artifact_service = SimpleNamespace(
+        read=AsyncMock(
+            side_effect=[
+                (SimpleNamespace(), json.dumps(manifest_payload).encode()),
+                (SimpleNamespace(), json.dumps(checkpoint_payload).encode()),
+            ]
+        )
+    )
+
+    class Session:
+        async def get(self, model, key):
+            return canonical
+
+        async def commit(self):
+            return None
+
+    return artifact_service, Session()
+
+
+def test_mm3788_failed_step_recovery_route_maps_runtime_mismatch_to_409(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "api_service.api.routers.executions._checkpoint_resume_admission_for_request",
+        lambda **_kwargs: SimpleNamespace(admitted=True),
+    )
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    canonical = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    canonical.parameters = _mm3788_legacy_recovery_parameters()
+    mock_service.describe_execution.return_value = canonical
+    mock_service.create_failed_step_recovery_execution.side_effect = (
+        _mm3788_production_recovery_rejection(
+            tmp_path, db_name="mm3788_recover_failed_step"
+        )
+    )
+    artifact_service, session = _mm3788_failed_step_recovery_context(canonical)
+
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    app.dependency_overrides[get_async_session] = lambda: session
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.get_temporal_artifact_service",
+        lambda _session: artifact_service,
+    )
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions/mm:wf-1/recover-from-failed-step",
+            json={"idempotencyKey": "mm3788-resume-1"},
+        )
+
+    assert response.status_code == 409
+    _mm3788_assert_shared_mismatch_detail(response.json()["detail"])
+    mock_service.create_failed_step_recovery_execution.assert_awaited_once()
+
+
+def test_mm3788_selected_step_recovery_route_maps_runtime_mismatch_to_409(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "api_service.api.routers.executions._checkpoint_resume_admission_for_request",
+        lambda **_kwargs: SimpleNamespace(admitted=True),
+    )
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    canonical = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    canonical.parameters = _mm3788_legacy_recovery_parameters()
+    mock_service.describe_execution.return_value = canonical
+    mock_service.create_failed_step_recovery_execution.side_effect = (
+        _mm3788_production_recovery_rejection(
+            tmp_path, db_name="mm3788_recover_selected_step"
+        )
+    )
+    artifact_service, session = _mm3788_failed_step_recovery_context(canonical)
+
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    app.dependency_overrides[get_async_session] = lambda: session
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.get_temporal_artifact_service",
+        lambda _session: artifact_service,
+    )
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions/mm:wf-1/recover-from-selected-step",
+            json={
+                "idempotencyKey": "mm3788-recover-selected-1",
+                "sourceWorkflowId": canonical.workflow_id,
+                "sourceRunId": canonical.run_id,
+                "selectedStartStepId": "plan",
+            },
+        )
+
+    assert response.status_code == 409
+    _mm3788_assert_shared_mismatch_detail(response.json()["detail"])
+    mock_service.create_failed_step_recovery_execution.assert_awaited_once()
