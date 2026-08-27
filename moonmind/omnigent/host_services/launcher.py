@@ -45,6 +45,9 @@ class HostLaunchSpec(BaseModel):
     credentialAttachments: tuple[dict[str, Any], ...] = Field(
         default_factory=tuple, alias="credentialAttachments"
     )
+    githubCredentialAttachment: dict[str, Any] | None = Field(
+        None, alias="githubCredentialAttachment"
+    )
     controlAttachment: dict[str, Any] | None = Field(None, alias="controlAttachment")
     stateAttachment: dict[str, Any] = Field(alias="stateAttachment")
     labels: dict[str, str]
@@ -220,6 +223,7 @@ class DockerOmnigentHostLauncher:
             credential_handles=credential_handles,
             skill_attachment=spec.skillAttachment,
             tool_attachments=spec.toolAttachments,
+            github_credential_attachment=spec.githubCredentialAttachment,
             control_attachment=spec.controlAttachment,
         )
         command = [
@@ -284,6 +288,11 @@ class DockerOmnigentHostLauncher:
             spec.skillAttachment,
             *spec.toolAttachments,
             *spec.credentialAttachments,
+            *(
+                [spec.githubCredentialAttachment]
+                if spec.githubCredentialAttachment is not None
+                else []
+            ),
             *([spec.controlAttachment] if spec.controlAttachment is not None else []),
             spec.stateAttachment,
         ]

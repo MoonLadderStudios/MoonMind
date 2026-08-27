@@ -9,6 +9,10 @@ from types import SimpleNamespace
 
 import pytest
 
+from moonmind.auth.github_credentials import (
+    GitHubCredentialSource,
+    ResolvedGitHubCredential,
+)
 from moonmind.omnigent.credential_materializers import (
     CredentialMaterializationContext,
     CredentialRuntimeHandle,
@@ -50,6 +54,10 @@ from moonmind.omnigent.host_services.attestation import (
     _assert_exact_omnigent_build,
     _attest_workspace_mount,
     _read_exact_host_model_options,
+)
+from moonmind.omnigent.host_services.github_credentials import (
+    OmnigentGithubCredentialService,
+    github_repository_from_request,
 )
 from moonmind.omnigent.host_services.mounted_tools import (
     OmnigentMountedToolService,
@@ -692,6 +700,78 @@ def _request() -> AgentExecutionRequest:
             "parameters": {},
         }
     )
+
+
+@pytest.mark.asyncio
+async def test_github_credential_projection_transports_secret_only_on_stdin(
+    monkeypatch,
+) -> None:
+    secret = "github-secret-that-must-not-be-inspectable"
+
+    async def resolve(*, repo=None):
+        assert repo == "MoonLadderStudios/Tactics"
+        return ResolvedGitHubCredential(
+            token=secret,
+            source=GitHubCredentialSource.DIRECT_ENV,
+            sourceName="GITHUB_TOKEN",
+            repo=repo,
+        )
+
+    monkeypatch.setattr(
+        "moonmind.omnigent.host_services.github_credentials.resolve_github_credential",
+        resolve,
+    )
+
+    class Backend:
+        def __init__(self) -> None:
+            self.calls = []
+
+        async def run(self, argv, **kwargs):
+            self.calls.append((list(argv), dict(kwargs)))
+            if argv[1:3] == ["volume", "inspect"]:
+                owner_ref = "lease-owner-1"
+                return 0, hashlib.sha256(owner_ref.encode()).hexdigest()[:32], ""
+            return 0, "", ""
+
+    request = _request().model_copy(
+        update={
+            "workspace_spec": {
+                "repositoryTarget": {
+                    "provider": "git",
+                    "repository": {"name": "MoonLadderStudios/Tactics"},
+                }
+            }
+        }
+    )
+    backend = Backend()
+    service = OmnigentGithubCredentialService(backend)
+    attachment = await service.materialize(
+        request=request,
+        resolved_tools={"tools": ["gh", "git"]},
+        owner_ref="lease-owner-1",
+        writer_image_ref="ghcr.io/example/opencode@sha256:" + "1" * 64,
+        runtime_uid=1000,
+        runtime_gid=1000,
+    )
+
+    assert github_repository_from_request(request) == "MoonLadderStudios/Tactics"
+    assert attachment is not None
+    assert attachment["accessMode"] == "read-only"
+    assert attachment["targetPath"] == "/home/app/.cache/moonmind-xdg"
+    inspectable = json.dumps(
+        {
+            "calls": [argv for argv, _kwargs in backend.calls],
+            "attachment": attachment,
+        },
+        sort_keys=True,
+    )
+    assert secret not in inspectable
+    stdin_payloads = [
+        kwargs.get("input_bytes")
+        for _argv, kwargs in backend.calls
+        if kwargs.get("input_bytes")
+    ]
+    assert stdin_payloads == [secret.encode()]
 
 
 @pytest.mark.asyncio

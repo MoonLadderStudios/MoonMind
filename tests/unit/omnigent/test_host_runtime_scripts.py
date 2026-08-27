@@ -3,7 +3,7 @@ from moonmind.omnigent.host_services.runtime_scripts import (
 )
 
 
-def _build(*, target_path: str):
+def _build(*, target_path: str, github_attachment=None):
     return OmnigentRuntimeScriptService().build_entrypoint(
         credential_handles=[
             {
@@ -12,6 +12,7 @@ def _build(*, target_path: str):
             }
         ],
         skill_attachment={"targetPath": "/opt/moonmind/skills_active"},
+        github_credential_attachment=github_attachment,
     )
 
 
@@ -44,3 +45,38 @@ def test_non_opencode_materializer_does_not_inject_opencode_runtime_flags():
 
     assert not any(name.startswith("OPENCODE_") for name in environment)
     assert "OMNIGENT_RUNNER_ENV_PASSTHROUGH" not in environment
+
+
+def test_github_projection_exposes_only_non_secret_cli_environment():
+    _script, environment = _build(
+        target_path="/run/mm-credentials/opencode",
+        github_attachment={
+            "targetPath": "/home/app/.cache/moonmind-xdg",
+        },
+    )
+
+    assert environment["XDG_CONFIG_HOME"] == "/home/app/.cache/moonmind-xdg"
+    assert environment["GH_PROMPT_DISABLED"] == "1"
+    assert environment["GH_NO_UPDATE_NOTIFIER"] == "1"
+    assert environment["GH_NO_EXTENSION_UPDATE_NOTIFIER"] == "1"
+    assert environment["GIT_CONFIG_COUNT"] == "1"
+    assert environment["GIT_CONFIG_KEY_0"] == "credential.https://github.com.helper"
+    assert environment["GIT_CONFIG_VALUE_0"].endswith("gh auth git-credential")
+    passthrough = set(environment["OMNIGENT_RUNNER_ENV_PASSTHROUGH"].split(","))
+    proxy_names = {
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
+    }
+    assert set(environment) >= passthrough - proxy_names
+    assert {
+        "GH_PROMPT_DISABLED",
+        "XDG_CONFIG_HOME",
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_KEY_0",
+        "GIT_CONFIG_VALUE_0",
+    } <= passthrough
+    assert not any("TOKEN" in name or "SECRET" in name for name in environment)

@@ -12,6 +12,9 @@ from moonmind.omnigent.harness_platform.failures import (
 )
 from moonmind.omnigent.harness_platform.host_classes import HostClass
 from moonmind.omnigent.host_services.docker_backend import DockerCommandBackend
+from moonmind.omnigent.host_services.github_credentials import (
+    github_repository_from_request,
+)
 from moonmind.omnigent.host_services.launcher import HostLaunchSpec
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.security.egress import (
@@ -368,6 +371,141 @@ class DockerOmnigentHostAttestor:
                 "accessMode": "read-only",
                 "secretValueRecorded": False,
             }
+        github_mount_evidence: dict[str, Any] | None = None
+        if spec.githubCredentialAttachment is not None:
+            github_mount = next(
+                (
+                    mount
+                    for mount in mounts
+                    if str(mount.get("Name") or mount.get("Source") or "")
+                    == str(spec.githubCredentialAttachment["sourceRef"])
+                    and str(mount.get("Destination") or "")
+                    == str(spec.githubCredentialAttachment["targetPath"])
+                ),
+                None,
+            )
+            if github_mount is None or bool(github_mount.get("RW")):
+                raise HarnessPlatformError(
+                    "GitHub credential projection is missing or writable",
+                    code=(
+                        HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED
+                    ),
+                )
+            target = str(spec.githubCredentialAttachment["targetPath"])
+            verify_github_config_script = (
+                'test "$(stat -c %u:%g "$1")" = "$2:$3"; '
+                'test "$(stat -c %a "$1")" = 700; '
+                'test "$(stat -c %u:%g "$1/gh/hosts.yml")" = "$2:$3"; '
+                'test "$(stat -c %a "$1/gh/hosts.yml")" = 600'
+            )
+            code, _out, _err = await self._backend.run(
+                [
+                    "docker",
+                    "exec",
+                    launch_result["containerName"],
+                    "/bin/sh",
+                    "-ceu",
+                    verify_github_config_script,
+                    "--",
+                    target,
+                    str(host_class.runtime.get("uid", 1000)),
+                    str(host_class.runtime.get("gid", 1000)),
+                ],
+                check=False,
+            )
+            if code != 0:
+                raise HarnessPlatformError(
+                    "GitHub credential projection ownership or mode is invalid",
+                    code=(
+                        HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED
+                    ),
+                )
+            code, _out, _err = await self._backend.run(
+                [
+                    "docker",
+                    "exec",
+                    launch_result["containerName"],
+                    "gh",
+                    "auth",
+                    "status",
+                    "--hostname",
+                    "github.com",
+                ],
+                timeout_seconds=30.0,
+                check=False,
+            )
+            if code != 0:
+                raise HarnessPlatformError(
+                    "GitHub CLI authentication failed on the exact host",
+                    code=(
+                        HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED
+                    ),
+                )
+            expected_helper = "!/opt/moonmind-tools/bin/gh auth git-credential"
+            code, observed, _err = await self._backend.run(
+                [
+                    "docker",
+                    "exec",
+                    launch_result["containerName"],
+                    "git",
+                    "config",
+                    "--get-urlmatch",
+                    "credential.helper",
+                    "https://github.com",
+                ],
+                check=False,
+            )
+            if code != 0 or observed.strip() != expected_helper:
+                raise HarnessPlatformError(
+                    "GitHub git credential helper is not active on the exact host",
+                    code=(
+                        HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED
+                    ),
+                )
+            repository = github_repository_from_request(request)
+            repository_authorized: bool | None = None
+            repository_permission: str | None = None
+            if repository:
+                code, observed, _err = await self._backend.run(
+                    [
+                        "docker",
+                        "exec",
+                        launch_result["containerName"],
+                        "gh",
+                        "repo",
+                        "view",
+                        repository,
+                        "--json",
+                        "nameWithOwner,viewerPermission",
+                        "--jq",
+                        "[.nameWithOwner, .viewerPermission] | @tsv",
+                    ],
+                    timeout_seconds=30.0,
+                    check=False,
+                )
+                parts = observed.strip().split("\t", 1)
+                observed_repository = parts[0] if parts else ""
+                repository_permission = parts[1] if len(parts) == 2 else None
+                repository_authorized = code == 0 and (
+                    observed_repository.casefold() == repository.casefold()
+                )
+                if not repository_authorized:
+                    raise HarnessPlatformError(
+                        "GitHub credential cannot access the admitted repository",
+                        code=(
+                            HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED
+                        ),
+                    )
+            github_mount_evidence = {
+                "targetPath": target,
+                "accessMode": "read-only",
+                "authenticated": True,
+                "repository": repository or None,
+                "repositoryAuthorized": repository_authorized,
+                "repositoryPermission": repository_permission,
+                "gitCredentialHelperConfigured": True,
+                "secretValueRecorded": False,
+            }
         credential_mount_evidence: list[dict[str, Any]] = []
         for handle in credential_handles:
             for attachment in handle.get("attachments", []):
@@ -494,6 +632,7 @@ class DockerOmnigentHostAttestor:
             "credentialMounts": credential_mount_evidence,
             "workspaceMount": workspace_mount_evidence,
             "controlCredentialMount": control_mount_evidence,
+            "githubCredentialMount": github_mount_evidence,
             "skillDeliveryRef": spec.skillAttachment.get("deliveryRef"),
             "toolDeliveryRefs": [
                 item.get("toolDeliveryRef") for item in spec.toolAttachments

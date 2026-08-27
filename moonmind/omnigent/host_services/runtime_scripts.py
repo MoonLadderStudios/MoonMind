@@ -34,6 +34,15 @@ _OPENCODE_PROXY_ENV_NAMES = frozenset(
         "no_proxy",
     }
 )
+_GITHUB_RUNTIME_ENV = {
+    "GIT_CONFIG_COUNT": "1",
+    "GIT_CONFIG_KEY_0": "credential.https://github.com.helper",
+    "GIT_CONFIG_VALUE_0": "!/opt/moonmind-tools/bin/gh auth git-credential",
+    "GH_PROMPT_DISABLED": "1",
+    "GH_NO_UPDATE_NOTIFIER": "1",
+    "GH_NO_EXTENSION_UPDATE_NOTIFIER": "1",
+    "XDG_CONFIG_HOME": "/home/app/.cache/moonmind-xdg",
+}
 
 
 class OmnigentRuntimeScriptService:
@@ -43,6 +52,7 @@ class OmnigentRuntimeScriptService:
         credential_handles: list[dict[str, Any]],
         skill_attachment: dict[str, Any],
         tool_attachments: tuple[dict[str, Any], ...] = (),
+        github_credential_attachment: dict[str, Any] | None = None,
         control_attachment: dict[str, Any] | None = None,
     ) -> tuple[str, dict[str, str]]:
         generation_checks: list[str] = []
@@ -101,8 +111,25 @@ class OmnigentRuntimeScriptService:
         )
         if has_opencode_materializer:
             environment.update(_OPENCODE_RUNTIME_ENV)
+        if github_credential_attachment is not None:
+            if (
+                str(github_credential_attachment.get("targetPath") or "")
+                != _GITHUB_RUNTIME_ENV["XDG_CONFIG_HOME"]
+            ):
+                raise ValueError("GitHub credential attachment target is unsupported")
+            environment.update(_GITHUB_RUNTIME_ENV)
+        passthrough_names = {
+            *(_OPENCODE_RUNTIME_ENV if has_opencode_materializer else {}),
+            *(_OPENCODE_PROXY_ENV_NAMES if has_opencode_materializer else {}),
+            *(
+                _GITHUB_RUNTIME_ENV
+                if github_credential_attachment is not None
+                else {}
+            ),
+        }
+        if passthrough_names:
             environment["OMNIGENT_RUNNER_ENV_PASSTHROUGH"] = ",".join(
-                sorted({*_OPENCODE_RUNTIME_ENV, *_OPENCODE_PROXY_ENV_NAMES})
+                sorted(passthrough_names)
             )
         script = (
             "set -eu; "
