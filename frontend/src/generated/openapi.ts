@@ -10633,6 +10633,10 @@ export interface components {
             capabilities?: string[];
             /** Warnings */
             warnings?: string[];
+            /** Publish */
+            publish?: {
+                [key: string]: unknown;
+            } | null;
             /** Checkpointbranching */
             checkpointBranching?: {
                 [key: string]: unknown;

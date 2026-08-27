@@ -572,8 +572,33 @@ async def test_terminal_checkpoint_activity_failure_preserves_primary_result(
     }
 
 
+@pytest.mark.parametrize(
+    ("action", "schema_version", "continuation_fields"),
+    [
+        (
+            "reenter_gate",
+            "gated-continuation/v1",
+            {
+                "reason": "codex_review_grace_wait",
+                "notBefore": "2026-07-12T05:05:49Z",
+            },
+        ),
+        (
+            "request_review",
+            "gated-continuation/v2",
+            {
+                "reason": "fresh_review_required_after_remediation",
+                "provider": "codex",
+                "headSha": "abc1234",
+            },
+        ),
+    ],
+)
 async def test_gate_owned_pr_resolver_continuation_bypasses_runtime_capability(
     monkeypatch: pytest.MonkeyPatch,
+    action: str,
+    schema_version: str,
+    continuation_fields: dict[str, str],
 ) -> None:
     _configure_workflow_runtime(monkeypatch)
     run = MoonMindAgentRun()
@@ -588,7 +613,7 @@ async def test_gate_owned_pr_resolver_continuation_bypasses_runtime_capability(
                 "ownerWorkflowId": "merge-automation:1",
                 "ownerRunId": "owner-run-1",
                 "ownerWorkflowType": "MoonMind.MergeAutomation",
-                "allowedActions": ["reenter_gate"],
+                "allowedActions": [action],
                 "source": "validated_temporal_parent",
             },
         }
@@ -602,10 +627,12 @@ async def test_gate_owned_pr_resolver_continuation_bypasses_runtime_capability(
             "metadata": {
                 "terminalContractOutcome": "continuation_requested",
                 "terminalContractExecutionRef": "exec-1",
-                "mergeAutomationDisposition": "reenter_gate",
+                "mergeAutomationDisposition": action,
                 "gatedContinuation": {
-                    "reason": "codex_review_grace_wait",
-                    "notBefore": "2026-07-12T05:05:49Z",
+                    "schemaVersion": schema_version,
+                    "gateType": "merge_automation",
+                    "action": action,
+                    **continuation_fields,
                 },
             },
         }
@@ -624,11 +651,13 @@ async def test_gate_owned_pr_resolver_continuation_bypasses_runtime_capability(
     assert result.metadata["terminalContractContinuationCount"] == 0
     assert result.metrics["continuation_requested"] == 1
     assert result.metrics["continuation_accepted"] == 1
+    assert result.metadata["gateAction"] == action
     assert "continuation_rejected_schema" not in result.metrics
     assert "continuation_rejected_ownership" not in result.metrics
-    assert result.metadata["continuationReason"] == "codex_review_grace_wait"
-    assert result.metadata["continuationNotBefore"] == "2026-07-12T05:05:49Z"
-    assert result.metadata["continuationTimingSource"] == "skill_not_before"
+    assert result.metadata["continuationReason"] == continuation_fields["reason"]
+    if action == "reenter_gate":
+        assert result.metadata["continuationNotBefore"] == "2026-07-12T05:05:49Z"
+        assert result.metadata["continuationTimingSource"] == "skill_not_before"
 
 
 @pytest.mark.parametrize(

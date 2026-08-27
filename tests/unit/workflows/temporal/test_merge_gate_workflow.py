@@ -5,6 +5,7 @@ from moonmind.workflows.temporal.activity_runtime import _ACTIVITY_HANDLER_ATTRS
 from moonmind.workflows.temporal.workflows import merge_gate
 from moonmind.workflows.temporal.workflows.merge_gate import (
     DEFAULT_RESOLVER_TIMEOUT_SECONDS,
+    TERMINAL_BLOCKER_KINDS,
     build_resolver_run_request,
     classify_readiness,
     deterministic_resolver_idempotency_key,
@@ -51,6 +52,36 @@ def test_classify_readiness_marks_stale_revision_terminal() -> None:
     assert not evidence.ready
     assert evidence.blockers[0].kind == "stale_revision"
     assert evidence.blockers[0].retryable is False
+
+
+def test_classify_readiness_preserves_review_provider_failure_as_terminal() -> None:
+    evidence = classify_readiness(
+        {
+            "headSha": "abc123",
+            "pullRequestOpen": True,
+            "checksComplete": True,
+            "checksPassing": True,
+            "automatedReviewComplete": None,
+            "jiraStatusAllowed": True,
+            "policyAllowed": True,
+            "blockers": [
+                {
+                    "kind": "automated_review_request_failed",
+                    "summary": "Automated review provider usage is unavailable.",
+                    "retryable": False,
+                    "source": "codex",
+                }
+            ],
+        },
+        tracked_head_sha="abc123",
+    )
+
+    assert evidence.ready is False
+    assert [blocker.kind for blocker in evidence.blockers] == [
+        "automated_review_request_failed"
+    ]
+    assert evidence.blockers[0].retryable is False
+    assert "automated_review_request_failed" in TERMINAL_BLOCKER_KINDS
 
 def test_classify_readiness_treats_merged_pr_as_terminal_success_evidence() -> None:
     evidence = classify_readiness(

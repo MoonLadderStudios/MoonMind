@@ -10087,6 +10087,103 @@ def _snapshot_workflow_from_artifact_payload(
     return payload, task
 
 
+async def _exact_rerun_parameters_from_snapshot(
+    *,
+    session: AsyncSession,
+    user: User,
+    record: TemporalExecutionRecord | TemporalExecutionCanonicalRecord,
+) -> dict[str, Any] | None:
+    """Restore exact task authority before a terminal execution is rerun."""
+
+    snapshot_ref = _workflow_input_snapshot_ref_from_memo(
+        dict(getattr(record, "memo", None) or {})
+    )
+    if not snapshot_ref:
+        return None
+    artifact_id = _artifact_id_from_ref(snapshot_ref)
+    if not artifact_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "exact_rerun_snapshot_unavailable",
+                "message": "Exact rerun task input snapshot is invalid.",
+            },
+        )
+    try:
+        artifact_service = get_temporal_artifact_service(session)
+        _artifact, body = await artifact_service.read(
+            artifact_id=artifact_id,
+            principal=str(getattr(user, "id", "") or "system"),
+            allow_restricted_raw=True,
+        )
+        decoded = json.loads(body.decode("utf-8"))
+    except (PermissionError, TemporalArtifactAuthorizationError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "exact_rerun_snapshot_unavailable",
+                "message": "Exact rerun task input snapshot is not authorized.",
+            },
+        ) from exc
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "exact_rerun_snapshot_unavailable",
+                "message": "Exact rerun task input snapshot is malformed.",
+            },
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "exact_rerun_snapshot_unavailable",
+                "message": "Exact rerun task input snapshot could not be read.",
+            },
+        ) from exc
+    if not isinstance(decoded, Mapping):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "exact_rerun_snapshot_unavailable",
+                "message": "Exact rerun task input snapshot is malformed.",
+            },
+        )
+
+    snapshot_payload, snapshot_task = _snapshot_workflow_from_artifact_payload(
+        decoded
+    )
+    if not snapshot_task:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "exact_rerun_snapshot_unavailable",
+                "message": "Exact rerun task input snapshot has no workflow payload.",
+            },
+        )
+
+    parameters = dict(getattr(record, "parameters", None) or {})
+    for key, value in snapshot_payload.items():
+        if value not in (None, [], ""):
+            parameters[key] = value
+    workflow_payload = dict(snapshot_task)
+    workflow_payload["recovery"] = {
+        "kind": "exact_full_rerun",
+        "sourceWorkflowId": record.workflow_id,
+        "sourceRunId": record.run_id,
+    }
+    parameters["workflow"] = workflow_payload
+    instructions = str(snapshot_task.get("instructions") or "").strip()
+    if instructions:
+        parameters["instructions"] = snapshot_task.get("instructions")
+    publish = snapshot_task.get("publish")
+    if isinstance(publish, Mapping):
+        publish_mode = str(publish.get("mode") or "").strip()
+        if publish_mode:
+            parameters["publishMode"] = publish_mode
+    return parameters
+
+
 def _merge_workflow_preserving_artifact_instructions(
     artifact_task: Mapping[str, Any],
     parameter_task: Mapping[str, Any],
@@ -17594,13 +17691,23 @@ async def update_execution(
             },
         )
 
+    effective_parameters_patch = payload.parameters_patch
+    if exact_plan_rerun:
+        exact_snapshot_parameters = await _exact_rerun_parameters_from_snapshot(
+            session=session,
+            user=user,
+            record=record,
+        )
+        if exact_snapshot_parameters is not None:
+            effective_parameters_patch = exact_snapshot_parameters
+
     try:
         update_result = await service.update_execution(
             workflow_id=workflow_id,
             update_name=payload.update_name,
             input_artifact_ref=payload.input_artifact_ref,
             plan_artifact_ref=payload.plan_artifact_ref,
-            parameters_patch=payload.parameters_patch,
+            parameters_patch=effective_parameters_patch,
             title=payload.title,
             new_manifest_artifact_ref=payload.new_manifest_artifact_ref,
             mode=payload.mode,

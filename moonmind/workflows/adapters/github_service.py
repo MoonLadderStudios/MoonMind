@@ -22,6 +22,12 @@ from pr_resolver_core.review_providers import (
     normalize_reviewer_login,
 )
 
+from moonmind.workflows.provider_failures import (
+    PROVIDER_ERROR_CLASS_RATE_LIMIT,
+    ProviderFailureEvent,
+    build_provider_failure_event,
+)
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -2051,14 +2057,20 @@ class GitHubService:
             }
 
         requested_at = _parse_github_timestamp(review_request.get("requestedAt"))
+        reviews: list[Any] = []
+        review_url: str | None = (
+            f"https://api.github.com/repos/{repo}/pulls/{pr_number}/reviews"
+            "?per_page=100"
+        )
         try:
-            response = await client.get(
-                f"https://api.github.com/repos/{repo}/pulls/{pr_number}/reviews"
-                "?per_page=100",
-                headers=headers,
-            )
-            response.raise_for_status()
-            reviews = response.json()
+            while review_url:
+                response = await client.get(review_url, headers=headers)
+                response.raise_for_status()
+                page = response.json()
+                if not isinstance(page, list):
+                    break
+                reviews.extend(page)
+                review_url = response.links.get("next", {}).get("url")
         except httpx.HTTPStatusError as exc:
             return {
                 **pending,
@@ -2090,36 +2102,35 @@ class GitHubService:
                 ],
             }
 
-        if isinstance(reviews, list):
-            for review in reviews:
-                if not isinstance(review, dict):
-                    continue
-                user = review.get("user") if isinstance(review.get("user"), dict) else {}
-                if (
-                    normalize_reviewer_login(user.get("login"))
-                    not in record.reviewer_logins
-                ):
-                    continue
-                submitted_at = _parse_github_timestamp(review.get("submitted_at"))
-                if requested_at is not None and (
-                    submitted_at is None or submitted_at <= requested_at
-                ):
-                    continue
-                commit_id = str(review.get("commit_id") or "").strip()
-                if (
-                    commit_id
-                    and requested_head_sha
-                    and commit_id != requested_head_sha
-                ):
-                    continue
-                return {
-                    "complete": True,
-                    "completionKind": "review",
-                    "completionId": review.get("id"),
-                    "completedAt": str(review.get("submitted_at") or "") or None,
-                    "stale": False,
-                    "blockers": [],
-                }
+        for review in reviews:
+            if not isinstance(review, dict):
+                continue
+            user = review.get("user") if isinstance(review.get("user"), dict) else {}
+            if (
+                normalize_reviewer_login(user.get("login"))
+                not in record.reviewer_logins
+            ):
+                continue
+            submitted_at = _parse_github_timestamp(review.get("submitted_at"))
+            if requested_at is not None and (
+                submitted_at is None or submitted_at <= requested_at
+            ):
+                continue
+            commit_id = str(review.get("commit_id") or "").strip()
+            if (
+                commit_id
+                and requested_head_sha
+                and commit_id != requested_head_sha
+            ):
+                continue
+            return {
+                "complete": True,
+                "completionKind": "review",
+                "completionId": review.get("id"),
+                "completedAt": str(review.get("submitted_at") or "") or None,
+                "stale": False,
+                "blockers": [],
+            }
 
         reaction = await self._find_request_clean_review_reaction(
             client=client,
@@ -2139,7 +2150,95 @@ class GitHubService:
                 "stale": False,
                 "blockers": [],
             }
+
+        provider_failure = await self._find_request_provider_failure(
+            client=client,
+            repo=repo,
+            pr_number=pr_number,
+            headers=headers,
+            provider=record,
+            requested_at=requested_at,
+        )
+        if provider_failure is not None:
+            summary = "Automated review provider failed to process the request."
+            if (
+                provider_failure.provider_error_class
+                == PROVIDER_ERROR_CLASS_RATE_LIMIT
+            ):
+                summary = (
+                    "Automated review provider usage is unavailable because its "
+                    "rate or usage limit was reached; retry after provider quota "
+                    "resets."
+                )
+            return {
+                **pending,
+                "complete": None,
+                "blockers": [
+                    {
+                        "kind": "automated_review_request_failed",
+                        "summary": summary,
+                        "retryable": False,
+                        "source": record.provider,
+                        "providerFailure": provider_failure.to_metadata(),
+                    }
+                ],
+            }
         return pending
+
+    async def _find_request_provider_failure(
+        self,
+        *,
+        client: httpx.AsyncClient,
+        repo: str,
+        pr_number: int,
+        headers: dict[str, str],
+        provider: Any,
+        requested_at: datetime | None,
+    ) -> ProviderFailureEvent | None:
+        """Return a sanitized provider failure posted after this request."""
+
+        comments_url: str | None = (
+            f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments"
+            "?per_page=100"
+        )
+        try:
+            while comments_url:
+                response = await client.get(comments_url, headers=headers)
+                response.raise_for_status()
+                comments = response.json()
+                if not isinstance(comments, list):
+                    return None
+                for comment in comments:
+                    if not isinstance(comment, dict):
+                        continue
+                    user = (
+                        comment.get("user")
+                        if isinstance(comment.get("user"), dict)
+                        else {}
+                    )
+                    if (
+                        normalize_reviewer_login(user.get("login"))
+                        not in provider.reviewer_logins
+                    ):
+                        continue
+                    created_at = _parse_github_timestamp(comment.get("created_at"))
+                    if requested_at is not None and (
+                        created_at is None or created_at <= requested_at
+                    ):
+                        continue
+                    failure = build_provider_failure_event(
+                        reason=comment.get("body")
+                    )
+                    if failure is not None:
+                        return failure
+                comments_url = response.links.get("next", {}).get("url")
+        except (
+            httpx.HTTPStatusError,
+            httpx.TransportError,
+            httpx.TimeoutException,
+        ):
+            return None
+        return None
 
     async def _find_request_clean_review_reaction(
         self,

@@ -525,6 +525,99 @@ def test_pr_resolver_terminal_classifies_reenter_gate_as_continuation(tmp_path: 
     assert result.metadata["terminalContractExecutionRef"] == "step-1"
 
 
+def test_pr_resolver_terminal_classifies_review_request_as_continuation(
+    tmp_path: Path,
+) -> None:
+    result_path = tmp_path / "var/pr_resolver/result.json"
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text(
+        json.dumps(
+            {
+                "mergeAutomationDisposition": "request_review",
+                "executionRef": "step-1",
+                "gatedContinuation": {
+                    "schemaVersion": "gated-continuation/v2",
+                    "gateType": "merge_automation",
+                    "action": "request_review",
+                    "provider": "codex",
+                    "reason": "fresh_review_required_after_remediation",
+                    "executionRef": "step-1",
+                    "headSha": "abc1234",
+                    "progressSignature": "abc1234||",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    contract = {
+        "contractId": "pr_resolver_terminal.v1",
+        "relativePath": "var/pr_resolver/result.json",
+        "expectedSchemaVersion": "moonmind.pr-resolver-result.v1",
+        "executionRef": "step-1",
+    }
+
+    result = evaluate_terminal_evidence(contract, workspace_path=str(tmp_path))
+
+    assert result.outcome == "continuation_requested"
+    assert result.satisfied is False
+    assert result.failure_code is None
+    assert result.metadata["gatedContinuation"]["action"] == "request_review"
+    assert result.metadata["gatedContinuation"]["provider"] == "codex"
+    assert result.metadata["terminalContractExecutionRef"] == "step-1"
+
+
+@pytest.mark.parametrize(
+    "continuation",
+    [
+        None,
+        {
+            "schemaVersion": "gated-continuation/v1",
+            "gateType": "merge_automation",
+            "action": "request_review",
+            "provider": "codex",
+            "reason": "fresh_review_required_after_remediation",
+            "executionRef": "step-1",
+            "headSha": "abc1234",
+        },
+        {
+            "schemaVersion": "gated-continuation/v2",
+            "gateType": "merge_automation",
+            "action": "request_review",
+            "provider": "",
+            "reason": "fresh_review_required_after_remediation",
+            "executionRef": "step-1",
+            "headSha": "abc1234",
+        },
+    ],
+)
+def test_pr_resolver_terminal_rejects_invalid_review_request_continuation(
+    tmp_path: Path,
+    continuation: dict[str, object] | None,
+) -> None:
+    result_path = tmp_path / "var/pr_resolver/result.json"
+    result_path.parent.mkdir(parents=True)
+    payload: dict[str, object] = {
+        "mergeAutomationDisposition": "request_review",
+        "executionRef": "step-1",
+    }
+    if continuation is not None:
+        payload["gatedContinuation"] = continuation
+    result_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = evaluate_terminal_evidence(
+        {
+            "contractId": "pr_resolver_terminal.v1",
+            "relativePath": "var/pr_resolver/result.json",
+            "expectedSchemaVersion": "moonmind.pr-resolver-result.v1",
+            "executionRef": "step-1",
+        },
+        workspace_path=str(tmp_path),
+    )
+
+    assert result.outcome == "terminal_failure"
+    assert result.failure_code == "MALFORMED_TERMINAL_EVIDENCE"
+
+
 def test_pr_resolver_terminal_rejects_stale_execution(tmp_path: Path) -> None:
     result_path = tmp_path / "var/pr_resolver/result.json"
     result_path.parent.mkdir(parents=True)
