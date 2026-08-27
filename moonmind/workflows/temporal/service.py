@@ -325,6 +325,28 @@ def _first_nonempty_text(*values: Any) -> str | None:
     return None
 
 
+def _pending_workflow_task_attempt(description: Any) -> int:
+    """Return the retry attempt of the execution's pending workflow task.
+
+    Temporal reports ``1`` for a workflow task on its first attempt, so anything
+    above that means the previous attempt failed and the server is retrying.
+    An execution with no pending workflow task reports ``0``, which the proto
+    default already yields, and that is also the safe answer for any
+    description shape that cannot be read.
+    """
+
+    raw_description = getattr(description, "raw_description", None)
+    if raw_description is None:
+        return 0
+    pending = getattr(raw_description, "pending_workflow_task", None)
+    if pending is None:
+        return 0
+    try:
+        return int(getattr(pending, "attempt", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _recovery_source_block_from_record(record: TemporalExecutionRecord) -> Mapping[str, Any]:
     parameters = getattr(record, "parameters", None)
     if not isinstance(parameters, Mapping):
@@ -3224,6 +3246,44 @@ class TemporalExecutionService:
         record = await self.describe_execution(correlation.workflow_id)
         return correlation, record
 
+    async def _require_deliverable_graceful_cancellation(self, workflow_id: str) -> None:
+        """Reject a graceful cancel the execution can never process.
+
+        Graceful cancellation is delivered through a workflow task: Temporal
+        accepts the request immediately, but the execution only closes once the
+        workflow itself observes the cancellation. An execution whose workflow
+        task keeps failing — nondeterministic history, an unloadable workflow
+        definition, a missing activity binding — never completes another
+        workflow task, so the request is accepted and then ignored forever while
+        the projection keeps re-deriving the live Temporal state. Accepting that
+        request would report a cancel that cannot happen, so fail fast and name
+        the terminate path, which does not depend on the workflow running.
+        """
+
+        try:
+            description = await self._client_adapter.describe_workflow(workflow_id)
+        except Exception:
+            # Deliverability is a pre-flight check, not the authority for the
+            # operator's command. A describe failure must not block a cancel
+            # that would otherwise be delivered.
+            logger.warning(
+                "Could not verify graceful cancellation deliverability for %s",
+                workflow_id,
+                exc_info=True,
+            )
+            return
+
+        attempt = _pending_workflow_task_attempt(description)
+        if attempt <= 1:
+            return
+
+        raise TemporalExecutionValidationError(
+            "Graceful cancel cannot be delivered: this execution's workflow task "
+            f"has failed {attempt - 1} consecutive times, so the workflow can no "
+            "longer process a cancellation request. Use Force cancel to "
+            "terminate it, which does not require the workflow to run."
+        )
+
     async def cancel_execution(
         self,
         *,
@@ -3256,6 +3316,9 @@ class TemporalExecutionService:
             if isinstance(record, TemporalExecutionCanonicalRecord):
                 return await self._sync_projection_best_effort(record)
             return record
+
+        if graceful:
+            await self._require_deliverable_graceful_cancellation(record.workflow_id)
 
         try:
             if graceful:

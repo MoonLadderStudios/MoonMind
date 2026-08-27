@@ -477,6 +477,50 @@ describe('WorkflowRowActionsMenu', () => {
     });
   });
 
+  // A rejected cancel answers with a structured detail object. Without
+  // unwrapping it the operator reads the raw JSON envelope instead of the
+  // reason the cancel was refused and the force-cancel path that works.
+  it('surfaces a rejected cancel reason from a structured error detail', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/executions/wf-123?source=temporal') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => detailResponse,
+        } as Response);
+      }
+      if (url === '/api/executions/wf-123/cancel') {
+        return Promise.resolve({
+          ok: false,
+          statusText: 'Conflict',
+          text: async () =>
+            JSON.stringify({
+              detail: {
+                code: 'cancel_rejected',
+                message:
+                  'Graceful cancel cannot be delivered: this execution can no longer '
+                  + 'process a cancellation request. Use Force cancel to terminate it.',
+              },
+            }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) } as Response);
+    });
+
+    renderMenu();
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    await waitForActionAvailability();
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
+
+    const viewport = await screen.findByLabelText('Dashboard notifications');
+    const toast = within(viewport).getByRole('alert');
+    expect(within(toast).getByText('Workflow action failed')).toBeTruthy();
+    expect(
+      within(toast).getByText(/Use Force cancel to terminate it\./),
+    ).toBeTruthy();
+    expect(within(toast).queryByText(/cancel_rejected/)).toBeNull();
+  });
+
   it('posts a forced cancel request directly from the row menu', async () => {
     renderMenu();
     fireEvent.click(screen.getByRole('button', { name: 'More actions' }));

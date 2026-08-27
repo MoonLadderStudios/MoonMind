@@ -11006,6 +11006,36 @@ def test_cancel_execution_passes_reject_action_to_service() -> None:
         assert called["reason"] == "Rejected by operator."
         assert response.json()["interventionAudit"][0]["action"] == "reject"
 
+def test_cancel_execution_rejection_returns_actionable_conflict() -> None:
+    """A cancel the execution cannot process must not report success.
+
+    Returning 202 for an undeliverable cancel leaves the operator with no
+    signal at all: the next projection refresh restores the live Temporal
+    state, so the row looks untouched and the command appears to do nothing.
+    """
+
+    for test_client, service in _client_with_service():
+        service.describe_execution.return_value = _build_execution_record(
+            state=MoonMindWorkflowState.AWAITING_SLOT
+        )
+        service.cancel_execution.side_effect = TemporalExecutionValidationError(
+            "Graceful cancel cannot be delivered: this execution's workflow task "
+            "has failed 94 consecutive times, so the workflow can no longer "
+            "process a cancellation request. Use Force cancel to terminate it, "
+            "which does not require the workflow to run."
+        )
+
+        response = test_client.post(
+            "/api/executions/mm:wf-1/cancel",
+            json={"graceful": True},
+        )
+
+        assert response.status_code == 409
+        detail = response.json()["detail"]
+        assert detail["code"] == "cancel_rejected"
+        assert "Force cancel" in detail["message"]
+
+
 def test_cancel_execution_authorizes_projection_only_child_target() -> None:
     for test_client, service in _client_with_service():
         child = _build_execution_record(state=MoonMindWorkflowState.AWAITING_SLOT)
