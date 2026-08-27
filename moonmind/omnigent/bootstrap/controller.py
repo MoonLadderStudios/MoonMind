@@ -84,7 +84,47 @@ class BootstrapController:
             }
         )
         save_bootstrap_record(record)
+        return await self._reconcile(record=record, api_key=key, principal=principal)
 
+    async def requalify(self) -> BootstrapRecord:
+        """Re-run qualification and republish evidence from persisted state.
+
+        Deployment evidence admits exactly one support combination, so an Agent
+        Profile, image, or catalog change invalidates it and every launch then
+        fails admission. The provider credential is already persisted, so this
+        recovery path never asks the operator to re-enter the API key.
+        """
+
+        record = load_bootstrap_record()
+        if record is None or not str(record.provider_profile_ref or "").strip():
+            raise ValueError(
+                "OpenCode is not configured yet; submit the API key first"
+            )
+        record = record.model_copy(
+            update={
+                "state": BootstrapState.resolving_images,
+                "revision": int(record.revision) + 1,
+                "updated_at": datetime.now(UTC),
+            }
+        )
+        save_bootstrap_record(record)
+        return await self._reconcile(record=record, api_key=None, principal=None)
+
+    async def _reconcile(
+        self,
+        *,
+        record: BootstrapRecord,
+        api_key: str | None,
+        principal: Any | None,
+    ) -> BootstrapRecord:
+        """Drive desired state to ready, publishing exact deployment evidence.
+
+        ``api_key`` is ``None`` when reconciling an already-credentialed
+        deployment; the persisted Provider Profile then stays authoritative.
+        """
+
+        display = record.desired.model_display_name
+        eff = record.desired.effort
         try:
             # 1. Resolve images
             record = record.model_copy(update={"state": BootstrapState.resolving_images})
@@ -143,13 +183,20 @@ class BootstrapController:
             # 3. Validate credentials transactionally and create provider profile
             record = record.model_copy(update={"state": BootstrapState.validating_credentials})
             save_bootstrap_record(record)
-            provider_ref = await self._ensure_provider_profile(
-                api_key=key,
-                qualified_model=qualified,
-                effort=eff,
-                resolved=resolved,
-                principal=principal,
-            )
+            if api_key is None:
+                provider_ref = str(record.provider_profile_ref or "").strip()
+                if not provider_ref:
+                    raise RuntimeError(
+                        "no persisted Provider Profile to reconcile against"
+                    )
+            else:
+                provider_ref = await self._ensure_provider_profile(
+                    api_key=api_key,
+                    qualified_model=qualified,
+                    effort=eff,
+                    resolved=resolved,
+                    principal=principal,
+                )
             record = record.model_copy(update={"provider_profile_ref": provider_ref})
             save_bootstrap_record(record)
 
@@ -813,6 +860,9 @@ class BootstrapController:
             raise RuntimeError(f"host class selection failed: {exc}") from exc
 
         # Build support payload using the same planner logic as real workflows to ensure evidence matches
+        from api_service.services.omnigent_agent_profile_selection import (
+            default_launch_policy_ref,
+        )
         from api_service.services.omnigent_execution_plan_service import (
             _build_v2_profile,
         )
@@ -852,6 +902,13 @@ class BootstrapController:
                 "digest": version_row.digest,
                 "version": version_row.version,
             }
+        # The launch policy is part of the support combination key, so
+        # qualification must select it exactly the way API admission does.
+        # Restating a harness-shaped ref here qualifies a combination no plan
+        # ever compiles, and every launch then fails admission.
+        qualified_launch_policy_ref = default_launch_policy_ref(
+            snapshot["document"].get("allowedLaunchPolicyRefs")
+        )
         # Build V2 profile as planner does
         v2_profile = _build_v2_profile(
             snapshot=snapshot,
@@ -888,7 +945,7 @@ class BootstrapController:
             credential_binding_set=dummy_binding,
             host_class_ref=host_class.ref,
             host_class=host_class,
-            launch_policy_ref="opencode-on-demand@1",
+            launch_policy_ref=qualified_launch_policy_ref,
             model_qualified_id=qualified_model,
             model_effort=effort,
             model_route_ref="opencode-go",

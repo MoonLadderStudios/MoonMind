@@ -179,7 +179,7 @@ credentialSlots:
     acceptedAuthModels: [own-auth]
     acceptedProviderIds: [opencode, opencode-go]
 hostClassRef: omnigent-opencode@1
-launchPolicyRef: opencode-on-demand@1
+launchPolicyRef: omnigent-on-demand@1
 executionRealizerRef: generic-omnigent-host@1
 model:
   qualifiedId: opencode-go/<model-id>
@@ -205,6 +205,37 @@ parameters:
 ```
 
 Planning resolves the Host Class, credential materializer, image, acquired credential generation, and `generic-omnigent-host@1` realizer from durable data. Temporal dispatch does not branch on harness identity.
+
+## Deployment qualification and execution evidence
+
+Deployment qualification proves this deployment can run one exact harness,
+host, image, realizer, credential, and model combination. Admission matches a
+compiled plan against that qualification and refuses anything outside it.
+
+Two rules keep qualification and admission on one combination:
+
+- **Qualification never restates plan inputs.** The launch policy is part of
+  the qualified combination, so qualification derives it from the Agent Profile
+  with the same rule admission uses — the first entry of
+  `allowedLaunchPolicyRefs` when the workflow authors none. A restated ref
+  attests a combination no plan ever compiles: readiness still reports `ready`
+  while every launch fails with `execution evidence unavailable`.
+- **Per-run request intent is not a qualification dimension.**
+  `requiredCapabilitiesDigest` records what one workflow asked for, not what the
+  deployment can run, so it is excluded from the qualified combination. Class
+  admission independently refuses unsupported or unknown required capabilities,
+  and it does so before the support key exists. Binding evidence to one
+  capability set would require re-qualifying the deployment for every workflow
+  shape.
+
+Everything else stays exact. Changing an Agent Profile, host image, harness
+catalog, model, or effort changes the qualified combination and invalidates the
+published evidence. Re-qualify from the persisted Provider Profile — the
+credential is already stored, so recovery never needs the API key again:
+
+```
+POST /api/omnigent/bootstrap/opencode/retry
+```
 
 ## Exact-host attestation (issue §8)
 

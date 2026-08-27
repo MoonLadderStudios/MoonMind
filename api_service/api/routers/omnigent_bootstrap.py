@@ -119,18 +119,39 @@ async def retry_bootstrap(
     session: AsyncSession = Depends(get_async_session),
     current_user: User = Depends(get_current_user()),
 ) -> dict[str, Any]:
+    """Re-qualify the deployment and republish exact execution evidence.
+
+    Deployment evidence admits exactly one support combination, so an Agent
+    Profile, image, or catalog change invalidates it and launches then fail
+    admission. The Provider Profile already owns the credential, so recovery
+    never asks the operator to re-enter the API key.
+    """
     _require_bootstrap_permission(current_user)
+    from api_service.db.base import async_session_maker
+    from moonmind.omnigent.bootstrap.controller import BootstrapController
     from moonmind.omnigent.bootstrap.store import load_bootstrap_record
 
     record = load_bootstrap_record()
     if record is None:
         raise HTTPException(status_code=404, detail="no bootstrap state to retry")
-    # Need api key? We don't store it. So retry requires re-providing key.
-    # For now, fail with clear message
-    raise HTTPException(
-        status_code=422,
-        detail="Retry requires re-submitting the API key via POST /opencode",
-    )
+    controller = BootstrapController(session_factory=async_session_maker)
+    try:
+        record = await controller.requalify()
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)[:500]) from exc
+    return {
+        "bootstrapId": record.bootstrap_id,
+        "state": record.state.value,
+        "providerProfileRef": record.provider_profile_ref,
+        "requestedModel": record.desired.model_display_name,
+        "requestedEffort": record.desired.effort,
+        "failure": record.failure,
+        "resolved": record.resolved.model_dump(mode="json", by_alias=True) if record.resolved else None,
+    }
 
 
 @router.get("/readiness")
