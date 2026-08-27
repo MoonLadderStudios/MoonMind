@@ -79,6 +79,12 @@ from api_service.db.models import (
     WorkflowCheckpointBranchTurn,
 )
 from api_service.services.checkpoint_branches import prepare_checkpoint_branch_workspace
+from api_service.services.provider_profile_runtime import (
+    ProviderProfileNotFoundError,
+    ProviderProfileRuntimeMismatchError,
+    load_provider_profile_for_runtime,
+    require_provider_profile_runtime,
+)
 from api_service.services.omnigent_agent_profile_selection import (
     compile_agent_profile_snapshot_parameters,
     refresh_managed_bootstrap_snapshot,
@@ -7811,6 +7817,62 @@ def _resolve_runtime_model_effort(
     return resolved_model, model_source, requested_effort, None
 
 
+def _require_provider_profile_runtime(
+    *,
+    profile: Any,
+    profile_id: str,
+    selected_runtime: str | None,
+) -> None:
+    """Map the shared Provider Profile runtime invariant onto HTTP 409.
+
+    The rule itself lives in
+    :mod:`api_service.services.provider_profile_runtime` so that every
+    launch-authoring boundary — execution submission, step authoring, and
+    recurring-schedule authoring — enforces one contract instead of a copy per
+    router.
+    """
+
+    try:
+        require_provider_profile_runtime(
+            profile=profile,
+            profile_id=profile_id,
+            selected_runtime=selected_runtime,
+        )
+    except ProviderProfileRuntimeMismatchError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=exc.detail,
+        ) from exc
+
+
+async def _load_provider_profile_for_runtime(
+    *,
+    session: Any,
+    profile_id: str,
+    selected_runtime: str | None,
+    not_found_message: str,
+) -> ManagedAgentProviderProfile | None:
+    """Load an explicitly requested Provider Profile for *selected_runtime*.
+
+    The runtime relationship is validated before the caller persists or launches
+    anything, so an incompatible pair can never reach a launch.
+    """
+
+    try:
+        return await load_provider_profile_for_runtime(
+            session=session,
+            profile_id=profile_id,
+            selected_runtime=selected_runtime,
+        )
+    except ProviderProfileNotFoundError as exc:
+        raise _invalid_workflow_request(not_found_message) from exc
+    except ProviderProfileRuntimeMismatchError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=exc.detail,
+        ) from exc
+
+
 async def _load_default_provider_profile_for_runtime(
     *,
     session: Any,
@@ -8728,6 +8790,13 @@ async def _resolve_step_runtime_selections(
                     f"Provider profile not found for inherited task profile on "
                     f"payload.workflow.steps[{index}]: {task_profile_id!r}."
                 )
+            # A step may override the runtime while inheriting the task profile,
+            # so the ownership check runs against the step's effective runtime.
+            _require_provider_profile_runtime(
+                profile=provider_profile,
+                profile_id=effective_profile_id,
+                selected_runtime=canonical_step_runtime,
+            )
 
         (
             resolved_model,
@@ -11143,11 +11212,12 @@ async def _create_execution_from_workflow_request(
     # selection order as the ProviderProfileManager.
     _provider_profile = None
     if raw_profile_id and session is not None:
-        _provider_profile = await session.get(ManagedAgentProviderProfile, raw_profile_id)
-        if _provider_profile is None:
-            raise _invalid_workflow_request(
-                f"Provider profile not found: {raw_profile_id!r}."
-            )
+        _provider_profile = await _load_provider_profile_for_runtime(
+            session=session,
+            profile_id=raw_profile_id,
+            selected_runtime=canonical_target_runtime,
+            not_found_message=f"Provider profile not found: {raw_profile_id!r}.",
+        )
     elif _runtime_model_tier(runtime_payload) is not None:
         _provider_profile = await _load_default_provider_profile_for_runtime(
             session=session,
@@ -11494,6 +11564,14 @@ async def _create_execution_from_workflow_request(
             scheduled_for=scheduled_for_dt,
             _workflow_id=reserved_workflow_id,
         )
+    except ProviderProfileRuntimeMismatchError as exc:
+        # Provider Profiles are runtime-owned: the shared invariant is
+        # enforced at TemporalExecutionService.create_execution, and every
+        # authoring path surfaces the identical 409 contract.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=exc.detail,
+        ) from exc
     except TemporalExecutionValidationError as exc:
         message = str(exc)
         raise HTTPException(
@@ -11839,16 +11917,13 @@ async def _resolve_recurring_runtime_metadata(
         raw_requested_model = str(raw_requested_model)
 
     provider_profile = None
-    session_get = getattr(session, "get", None)
-    if raw_profile_id and callable(session_get):
-        provider_profile = await session_get(
-            ManagedAgentProviderProfile,
-            raw_profile_id,
+    if raw_profile_id:
+        provider_profile = await _load_provider_profile_for_runtime(
+            session=session,
+            profile_id=raw_profile_id,
+            selected_runtime=canonical_target_runtime,
+            not_found_message=f"Provider profile not found: {raw_profile_id!r}.",
         )
-        if provider_profile is None:
-            raise _invalid_workflow_request(
-                f"Provider profile not found: {raw_profile_id!r}."
-            )
     elif _runtime_model_tier(runtime_payload) is not None:
         provider_profile = await _load_default_provider_profile_for_runtime(
             session=session,
@@ -12117,6 +12192,13 @@ async def _handle_recurring_schedule(
             agent_profile_selection=agent_profile_selection,
             actor=user,
         )
+    except ProviderProfileRuntimeMismatchError as exc:
+        # The service re-checks the invariant it owns; keep the 409 contract
+        # identical to the one this router already raises while authoring.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=exc.detail,
+        ) from exc
     except RecurringWorkflowValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -13688,6 +13770,14 @@ async def create_execution(
                 "code": "invalid_execution_request",
                 "message": str(exc),
             },
+        ) from exc
+    except ProviderProfileRuntimeMismatchError as exc:
+        # Provider Profiles are runtime-owned: the shared invariant is
+        # enforced at TemporalExecutionService.create_execution, and every
+        # authoring path surfaces the identical 409 contract.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=exc.detail,
         ) from exc
     except TemporalExecutionValidationError as exc:
         raise HTTPException(
@@ -17300,6 +17390,14 @@ async def continue_in_new_workflow(
             integration=None,
             _workflow_id=reserved_workflow_id,
         )
+    except ProviderProfileRuntimeMismatchError as exc:
+        # Provider Profiles are runtime-owned: the shared invariant is
+        # enforced at TemporalExecutionService.create_execution, and every
+        # authoring path surfaces the identical 409 contract.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=exc.detail,
+        ) from exc
     except TemporalExecutionValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -18153,6 +18251,14 @@ async def rerun_execution(
             integration=None,
             _workflow_id=reserved_workflow_id,
         )
+    except ProviderProfileRuntimeMismatchError as exc:
+        # Provider Profiles are runtime-owned: the shared invariant is
+        # enforced at TemporalExecutionService.create_execution, and every
+        # authoring path surfaces the identical 409 contract.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=exc.detail,
+        ) from exc
     except TemporalExecutionValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -18563,6 +18669,17 @@ async def recover_execution(
             canonical,
             recovery_target=request,
         )
+    except ProviderProfileRuntimeMismatchError as exc:
+        # A recovery destination inherits the source execution's authored
+        # runtime and Provider Profile. A pair persisted before the shared
+        # invariant existed is rejected at
+        # TemporalExecutionService.create_execution, and this route returns
+        # the identical 409 contract every other launch-authoring path
+        # returns rather than surfacing an unmapped server error.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=exc.detail,
+        ) from exc
     except TemporalExecutionRecoveryCheckpointError as exc:
         reasons = [reason for reason in str(exc).split(",") if reason]
         raise HTTPException(
@@ -18660,6 +18777,17 @@ async def recover_execution_from_failed_step(
             failed_run_recovery_manifest=manifest_payload,
             admitted_checkpoint_resume_decision=admission,
         )
+    except ProviderProfileRuntimeMismatchError as exc:
+        # A recovery destination inherits the source execution's authored
+        # runtime and Provider Profile. A pair persisted before the shared
+        # invariant existed is rejected at
+        # TemporalExecutionService.create_execution, and this route returns
+        # the identical 409 contract every other launch-authoring path
+        # returns rather than surfacing an unmapped server error.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=exc.detail,
+        ) from exc
     except TemporalExecutionRecoveryCheckpointError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -18777,6 +18905,17 @@ async def recover_execution_from_selected_step(
             selected_start_step_id=request.selected_start_step_id,
             admitted_checkpoint_resume_decision=admission,
         )
+    except ProviderProfileRuntimeMismatchError as exc:
+        # A recovery destination inherits the source execution's authored
+        # runtime and Provider Profile. A pair persisted before the shared
+        # invariant existed is rejected at
+        # TemporalExecutionService.create_execution, and this route returns
+        # the identical 409 contract every other launch-authoring path
+        # returns rather than surfacing an unmapped server error.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=exc.detail,
+        ) from exc
     except TemporalExecutionRecoveryCheckpointError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

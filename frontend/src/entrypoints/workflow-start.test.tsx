@@ -845,6 +845,48 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     await waitFor(() => expect(readinessRequests).toBe(2));
   });
 
+  it("MoonLadderStudios/MoonMind#3788 reports an Omnigent readiness failure instead of an empty provider-profile state", async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/omnigent/codex-catalog-readiness") {
+        // The readiness projection is the only source of Omnigent-eligible
+        // Provider Profiles, so its failure is what empties the selector.
+        return Promise.resolve({
+          ok: false,
+          status: 503,
+          statusText: "Service Unavailable",
+          json: async () => ({ detail: "readiness unavailable" }),
+        } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        // The ordinary profile request still succeeds, so it cannot be the
+        // query that reports the failure.
+        return Promise.resolve({ ok: true, json: async () => [] } as Response);
+      }
+      if (url === "/api/omnigent/agent-profiles") {
+        return Promise.resolve({ ok: true, json: async () => readyAgentProfiles } as Response);
+      }
+      if (url.startsWith("/api/github/branches")) {
+        return Promise.resolve(defaultBranchOptionsResponse());
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+    });
+
+    renderWorkflowStartPage(omnigentPayload());
+    fireEvent.change(await screen.findByLabelText("Runtime"), {
+      target: { value: "omnigent" },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Failed to load provider profiles.")).toBeTruthy();
+    });
+    // Directing the operator to Settings would hide a transient outage behind a
+    // configuration error.
+    expect(
+      screen.queryByText(/No launch-ready Provider Profiles are configured/),
+    ).toBeNull();
+  });
+
   it("gates a busy Omnigent selection and hides unsupported model authority", async () => {
     const payload = {
       ...mockPayload,
@@ -21306,6 +21348,38 @@ describe("Task Create runtime switch layout stability", () => {
     });
     expect(screen.getByRole("option", { name: /Claude Default/ })).toBeTruthy();
     expect(screen.queryByRole("option", { name: /Codex Default/ })).toBeNull();
+  });
+
+  it("MoonLadderStudios/MoonMind#3788 names the runtime in the empty state when it has no launch-ready profiles", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    await screen.findByLabelText("Provider profile");
+
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Runtime"), {
+        target: { value: "claude_code" },
+      });
+    });
+
+    // The runtime-scoped refetch is still in flight, so the surface must not
+    // yet claim the runtime has no profiles.
+    expect(
+      screen.queryByText(/No launch-ready Provider Profiles are configured/),
+    ).toBeNull();
+
+    await act(async () => {
+      resolveClaudeProfiles?.([]);
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          /No launch-ready Provider Profiles are configured for Claude Code\. Configure one in Settings before starting this workflow\./,
+        ),
+      ).toBeTruthy();
+    });
+    // No selector means no way to submit an incompatible profile.
+    expect(screen.queryByLabelText("Provider profile")).toBeNull();
   });
 
   it("omits task effort when the selected provider profile defines a default effort", async () => {

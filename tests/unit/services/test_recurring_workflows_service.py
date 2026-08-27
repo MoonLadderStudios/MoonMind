@@ -24,6 +24,9 @@ from api_service.db.models import (
     RecurringWorkflowRun,
     RecurringWorkflowRunOutcome,
 )
+from api_service.services.provider_profile_runtime import (
+    ProviderProfileRuntimeMismatchError,
+)
 from api_service.services.recurring_workflows_service import (
     RecurringScheduleRuntimeSummary,
     RecurringWorkflowConflictError,
@@ -1342,3 +1345,292 @@ async def test_runtime_summaries_for_definitions_describes_concurrently(
             service.runtime_summary_for_definition.assert_has_awaits(
                 [call(first), call(second)]
             )
+
+
+# ---------------------------------------------------------------------------
+# MoonLadderStudios/MoonMind#3788 — a recurring schedule persists the target
+# whose initialParameters a later schedule action launches, so the
+# runtime-owned Provider Profile invariant is enforced before that target is
+# stored, not only on the direct execution-submission path.
+# ---------------------------------------------------------------------------
+
+
+def _mm3788_target(
+    *,
+    target_runtime: str,
+    profile_id: str,
+    profile_key: str = "providerProfileRef",
+    in_runtime_block: bool = True,
+) -> dict[str, object]:
+    runtime_block: dict[str, object] = {"mode": target_runtime}
+    initial_parameters: dict[str, object] = {
+        "targetRuntime": target_runtime,
+        "workflow": {
+            "instructions": "Run the nightly resolver.",
+            "runtime": runtime_block,
+        },
+    }
+    if in_runtime_block:
+        runtime_block[profile_key] = profile_id
+    else:
+        initial_parameters[profile_key] = profile_id
+    return {
+        "workflowType": "MoonMind.UserWorkflow",
+        "initialParameters": initial_parameters,
+    }
+
+
+async def _mm3788_create(
+    service: RecurringWorkflowsService,
+    *,
+    target: dict[str, object],
+    owner_user_id,
+    name: str = "MM-3788 schedule",
+) -> RecurringWorkflowDefinition:
+    return await service.create_definition(
+        name=name,
+        description=None,
+        enabled=True,
+        schedule_type="cron",
+        cron="0 6 * * *",
+        timezone="UTC",
+        scope_type="personal",
+        scope_ref=None,
+        owner_user_id=owner_user_id,
+        target=target,
+        policy=None,
+    )
+
+
+async def test_mm3788_create_definition_rejects_provider_profile_from_another_runtime(
+    tmp_path: Path, mock_temporal_adapter
+) -> None:
+    async with recurring_db(tmp_path) as session_maker, session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id="codex_minimax_team",
+                runtime_id="codex_cli",
+                provider_id="minimax",
+            )
+        )
+        await session.flush()
+        service = RecurringWorkflowsService(
+            session, temporal_client_adapter=mock_temporal_adapter
+        )
+
+        with pytest.raises(ProviderProfileRuntimeMismatchError) as excinfo:
+            await _mm3788_create(
+                service,
+                target=_mm3788_target(
+                    target_runtime="claude_code", profile_id="codex_minimax_team"
+                ),
+                owner_user_id=uuid4(),
+            )
+
+        assert excinfo.value.detail == {
+            "code": "provider_profile_runtime_mismatch",
+            "message": (
+                "Provider Profile 'codex_minimax_team' belongs to runtime "
+                "'codex_cli' and cannot be used with runtime 'claude_code'."
+            ),
+            "profileId": "codex_minimax_team",
+            "profileRuntime": "codex_cli",
+            "selectedRuntime": "claude_code",
+        }
+        # Nothing was persisted and no Temporal schedule was created.
+        mock_temporal_adapter.create_schedule.assert_not_awaited()
+        stored = (
+            await session.execute(select(RecurringWorkflowDefinition))
+        ).scalars().all()
+        assert stored == []
+
+
+async def test_mm3788_create_definition_accepts_provider_profile_owned_by_the_runtime(
+    tmp_path: Path, mock_temporal_adapter
+) -> None:
+    async with recurring_db(tmp_path) as session_maker, session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id="claude_minimax_team",
+                runtime_id="claude_code",
+                provider_id="minimax",
+            )
+        )
+        await session.flush()
+        service = RecurringWorkflowsService(
+            session, temporal_client_adapter=mock_temporal_adapter
+        )
+
+        definition = await _mm3788_create(
+            service,
+            target=_mm3788_target(
+                target_runtime="claude_code", profile_id="claude_minimax_team"
+            ),
+            owner_user_id=uuid4(),
+        )
+
+        runtime_block = definition.target["initialParameters"]["workflow"]["runtime"]
+        assert runtime_block["providerProfileRef"] == "claude_minimax_team"
+        mock_temporal_adapter.create_schedule.assert_awaited_once()
+
+
+async def test_mm3788_create_definition_rejects_a_legacy_runtime_alias_mismatch(
+    tmp_path: Path, mock_temporal_adapter
+) -> None:
+    """Canonical runtime IDs decide the comparison, not the authored spelling."""
+
+    async with recurring_db(tmp_path) as session_maker, session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id="claude_minimax_team",
+                runtime_id="claude_code",
+                provider_id="minimax",
+            )
+        )
+        await session.flush()
+        service = RecurringWorkflowsService(
+            session, temporal_client_adapter=mock_temporal_adapter
+        )
+
+        with pytest.raises(ProviderProfileRuntimeMismatchError) as excinfo:
+            await _mm3788_create(
+                service,
+                # ``profileId`` on initialParameters is the alias the raw target
+                # JSON editor produces; ``codex`` normalizes to ``codex_cli``.
+                target=_mm3788_target(
+                    target_runtime="codex",
+                    profile_id="claude_minimax_team",
+                    profile_key="profileId",
+                    in_runtime_block=False,
+                ),
+                owner_user_id=uuid4(),
+            )
+
+        assert excinfo.value.selected_runtime == "codex_cli"
+        assert excinfo.value.profile_runtime == "claude_code"
+        mock_temporal_adapter.create_schedule.assert_not_awaited()
+
+
+async def test_mm3788_create_definition_leaves_omnigent_compatibility_to_selection(
+    tmp_path: Path, mock_temporal_adapter
+) -> None:
+    """``omnigent`` is a facade: the profile stays owned by a managed runtime."""
+
+    async with recurring_db(tmp_path) as session_maker, session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id="codex_minimax_team",
+                runtime_id="codex_cli",
+                provider_id="minimax",
+            )
+        )
+        await session.flush()
+        service = RecurringWorkflowsService(
+            session, temporal_client_adapter=mock_temporal_adapter
+        )
+
+        definition = await _mm3788_create(
+            service,
+            target=_mm3788_target(
+                target_runtime="omnigent", profile_id="codex_minimax_team"
+            ),
+            owner_user_id=uuid4(),
+        )
+
+        assert definition.target["initialParameters"]["targetRuntime"] == "omnigent"
+        mock_temporal_adapter.create_schedule.assert_awaited_once()
+
+
+async def test_mm3788_update_definition_rejects_a_cross_runtime_target(
+    tmp_path: Path, mock_temporal_adapter
+) -> None:
+    async with recurring_db(tmp_path) as session_maker, session_maker() as session:
+        session.add_all(
+            [
+                ManagedAgentProviderProfile(
+                    profile_id="codex_minimax_team",
+                    runtime_id="codex_cli",
+                    provider_id="minimax",
+                ),
+                ManagedAgentProviderProfile(
+                    profile_id="claude_minimax_team",
+                    runtime_id="claude_code",
+                    provider_id="minimax",
+                ),
+            ]
+        )
+        await session.flush()
+        service = RecurringWorkflowsService(
+            session, temporal_client_adapter=mock_temporal_adapter
+        )
+        owned_target = _mm3788_target(
+            target_runtime="claude_code", profile_id="claude_minimax_team"
+        )
+        definition = await _mm3788_create(
+            service, target=owned_target, owner_user_id=uuid4()
+        )
+        definition_id = definition.id
+        stored_target = dict(definition.target)
+
+        with pytest.raises(ProviderProfileRuntimeMismatchError) as excinfo:
+            await service.update_definition(
+                definition,
+                name="Renamed by a rejected edit",
+                target=_mm3788_target(
+                    target_runtime="claude_code", profile_id="codex_minimax_team"
+                ),
+                expected_version=definition.version,
+            )
+
+        assert excinfo.value.detail["profileId"] == "codex_minimax_team"
+        assert excinfo.value.detail["profileRuntime"] == "codex_cli"
+        assert excinfo.value.detail["selectedRuntime"] == "claude_code"
+        mock_temporal_adapter.update_schedule.assert_not_awaited()
+        # The rejected edit left the stored definition untouched.
+        await session.rollback()
+        reloaded = await session.get(
+            RecurringWorkflowDefinition,
+            definition_id,
+            populate_existing=True,
+        )
+        assert reloaded.target == stored_target
+        assert reloaded.name == "MM-3788 schedule"
+
+
+async def test_mm3788_update_definition_accepts_a_target_owned_by_its_runtime(
+    tmp_path: Path, mock_temporal_adapter
+) -> None:
+    async with recurring_db(tmp_path) as session_maker, session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id="claude_minimax_team",
+                runtime_id="claude_code",
+                provider_id="minimax",
+            )
+        )
+        await session.flush()
+        service = RecurringWorkflowsService(
+            session, temporal_client_adapter=mock_temporal_adapter
+        )
+        definition = await _mm3788_create(
+            service,
+            target=_mm3788_target(
+                target_runtime="claude_code", profile_id="claude_minimax_team"
+            ),
+            owner_user_id=uuid4(),
+        )
+
+        updated = await service.update_definition(
+            definition,
+            target=_mm3788_target(
+                target_runtime="claude_code",
+                profile_id="claude_minimax_team",
+                profile_key="profileId",
+                in_runtime_block=False,
+            ),
+            expected_version=definition.version,
+        )
+
+        parameters = updated.target["initialParameters"]
+        assert parameters["profileId"] == "claude_minimax_team"
+        mock_temporal_adapter.update_schedule.assert_awaited_once()

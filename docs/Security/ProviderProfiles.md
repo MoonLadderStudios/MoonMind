@@ -131,6 +131,12 @@ Those cards may be backed by disabled setup-stub Provider Profiles or by a separ
 3. Successful user-initiated setup makes the profile connected and enabled by default.
 4. Failed setup leaves the profile disabled with clear readiness diagnostics.
 
+Settings is also the one administrative exception to runtime-scoped selection.
+It owns an explicit **All runtimes** view of every Provider Profile plus a
+per-runtime filter over that table, while global configuration health stays
+computed from the complete unfiltered collection. See
+[10.5 Runtime-owned selection scope](#105-runtime-owned-selection-scope).
+
 ---
 
 ## 3. Goals
@@ -1032,6 +1038,152 @@ To prevent unintentional cross-provider routing, one or more of the following sh
    - The intended primary provider has higher priority than alternatives.
 
 Disabled setup stubs must never participate in default provider fallback.
+
+### 10.5 Runtime-owned selection scope
+
+> Provider Profiles are runtime-owned launch contracts. A runtime-coupled
+> execution surface must display and accept only profiles compatible with the
+> selected effective runtime. Settings may expose an explicit All-runtimes
+> administrative view.
+
+`runtime_id` is required and stable because the profile owns runtime-specific
+behavior: provider and credential selection, credential materialization,
+environment and file shaping, command behavior, model and effort tiers,
+concurrency and cooldown policy, and default-profile selection for that runtime.
+
+A Provider Profile is therefore never a multi-runtime object. The same upstream
+provider or managed secret is represented by one runtime-specific profile per
+runtime, and those profiles may reference the same managed secret:
+
+```text
+codex_minimax_team
+  runtime_id: codex_cli
+  provider_id: minimax
+  secret_ref: db://MINIMAX_API_KEY
+
+claude_minimax_team
+  runtime_id: claude_code
+  provider_id: minimax
+  secret_ref: db://MINIMAX_API_KEY
+```
+
+#### Execution and workflow-authoring surfaces
+
+For an ordinary managed runtime, a visible profile satisfies:
+
+```text
+visible profile.runtime_id == selected effective runtime
+```
+
+- Execution surfaces do not offer an **All runtimes** option.
+- Surfaces scope the result set server-side with
+  `GET /api/v1/provider-profiles?runtime_id=<canonical runtime>` rather than
+  fetching every profile and filtering only on the client.
+- The query cache key includes the effective runtime, and previous-runtime
+  placeholder data is never selectable, resolvable, or submittable during a
+  runtime-scoped refetch.
+- Changing runtime drops an incompatible selection, then selects the new
+  runtime's launch-ready default profile, or the first eligible profile under
+  the existing deterministic ordering.
+- A runtime with no eligible profile shows a runtime-specific empty state that
+  names the runtime instead of hiding the control.
+
+#### Omnigent compatibility exception
+
+`omnigent` is an orchestration and execution facade, not a Provider Profile
+owner. Omnigent selection is compatibility-based against the underlying managed
+runtime and the selected execution target; it must never look for
+`runtime_id == omnigent`.
+
+- A traditional execution profile filters eligible profiles by the selected
+  target's `providerRuntime` and its declared provider requirements.
+- A generic (v2) Agent Profile uses the compatibility or readiness result that
+  declares the allowed Provider Profiles. A profile is compatible only when the
+  materializer registered for that profile's `(runtime_id, provider_id)` pair is
+  accepted by the *selected* harness under every launch policy the Agent Profile
+  allows; being globally enabled, or merely having some registered materializer,
+  is never sufficient. This is the same capability boundary the readiness
+  projection applies when it builds `compatibleProviderProfiles`, so an API
+  client cannot submit a pair the UI reports as incompatible.
+- An unavailable historical profile may still render while editing an existing
+  workflow, but requires replacement before submission.
+
+#### Server-side correctness boundary
+
+The UI filter alone is not sufficient. Every launch-authoring or submission path
+validates the relationship before persisting or launching, using canonical
+runtime IDs and never inferring compatibility from `provider_id` alone:
+
+```text
+reject when selected_profile.runtime_id != effective_runtime_id
+```
+
+Rejection returns `409 Conflict` with code `provider_profile_runtime_mismatch`,
+identifying both sides of the incompatible pair:
+
+```text
+Provider Profile 'claude_anthropic_oauth' belongs to runtime 'claude_code' and
+cannot be used with runtime 'codex_cli'.
+```
+
+The rule is expressed once as a typed contract at the shared authoring
+boundary — `api_service/services/provider_profile_runtime.py` — rather than
+copied per router, so a new authoring path cannot silently omit it.
+
+Two states are ambiguous rather than exempt, and both are rejected:
+
+- A profile whose `runtime_id` is blank or whitespace-only names no owning
+  runtime. Accepting it would make it launchable under every runtime, which is
+  precisely the state this invariant exists to prevent.
+- A payload whose runtime fields disagree — for example a payload-level
+  `targetRuntime` beside a different `workflow.runtime.mode` — has no single
+  authored target. The effective runtime is resolved with the precedence the
+  worker itself applies (`workflow.runtime.mode` first), and the pair is
+  validated against *every* runtime the payload names, so a second field cannot
+  decide the launch after the boundary approved the pair for a different
+  runtime. Deferring to the Omnigent facade requires an unambiguous Omnigent
+  selection.
+
+Its primary placement is the authority handoff every launch converges on,
+`TemporalExecutionService.create_execution`. Direct execution submission (both
+the task/workflow envelope and the raw request shape), proposal promotion,
+rerun, continuation, checkpoint branching, manifest ingest, and deployment
+operations all reach a launch through that method, so an alternate client
+cannot find a submission shape that accepts a pair the runtime-scoped selectors
+would never offer. Routers translate the typed rejection into the same 409
+payload.
+
+A recovery destination — typed recovery, failed-step recovery, and
+selected-step recovery — inherits the source execution's authored runtime and
+Provider Profile, so a pair that was persisted before this rule existed, or
+whose profile was later recreated under another runtime, is rejected at the same
+handoff. Those routes return the identical 409 contract rather than an unmapped
+server error, and the source execution is left untouched.
+
+Boundaries that durably persist a launch target *before* reaching that handoff
+enforce the same contract themselves:
+
+- A recurring schedule persists the target whose `initialParameters` a later
+  schedule action launches, so its create and update paths validate the pair
+  before the target is stored, not only when a run is started.
+- A proposal promotion marks the proposal `promoted` before the execution is
+  created, and its `runtimeMode` override rewrites `targetRuntime` and
+  `workflow.runtime.mode` while leaving any authored Provider Profile ref
+  untouched. The pair is therefore validated on the final payload before that
+  state transition, so a rejected promotion leaves the proposal promotable
+  rather than terminal with no execution behind it.
+
+Enforcement at the launch handoff matters beyond the API surface: the runtime
+node carries `profileId` into the launcher, which selects the launch strategy
+from the profile's `runtime_id`. A mismatched pair that reached launch would
+silently execute the profile's runtime instead of the selected one — a
+billing-relevant runtime substitution.
+
+For Omnigent submissions the equivalent rejection comes from the Omnigent
+selection boundary when the requested profile falls outside the selected
+execution target's compatibility set. Existing authorization, visibility,
+readiness, capacity, and secret-resolution validation continue to apply
+unchanged.
 
 ---
 

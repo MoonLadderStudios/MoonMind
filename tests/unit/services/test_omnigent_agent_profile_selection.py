@@ -1,5 +1,6 @@
 """Authoring-boundary tests for immutable Omnigent profile snapshots."""
 
+import copy
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -787,3 +788,138 @@ async def test_exact_rerun_preserves_operator_owned_profile_snapshot():
         )
         == parameters
     )
+
+
+# ---------------------------------------------------------------------------
+# MoonLadderStudios/MoonMind#3788 — a Provider Profile launched through Omnigent
+# stays owned by its managed runtime. The generic v2 selection path must reject
+# a profile whose runtime the harness cannot materialize instead of trusting
+# `enabled` and `acceptedProviderIds` alone.
+# ---------------------------------------------------------------------------
+
+_MM3788_V2_DOCUMENT = {
+    "schemaVersion": "moonmind.omnigent-agent-profile.v2",
+    "endpointRef": "default",
+    # A bundle source keeps this fixture focused on runtime compatibility
+    # instead of upstream projection freshness.
+    "source": {
+        "kind": "bundle",
+        "bundleArtifactRef": "artifact://mm3788-bundle",
+        "bundleDigest": "sha256:" + "c" * 64,
+        "importReceiptRef": "omnigent-agent-import:sha256:" + "a" * 64,
+        "importedAgentId": "mm3788-generic-agent",
+        "importedAgentVersion": "1",
+        "importedContentDigest": "sha256:" + "f" * 64,
+    },
+    "harness": {
+        "id": "codex-native",
+        "catalogRef": "omnigent-harness-catalog:sha256:" + "d" * 64,
+        "implementationRef": "omnigent-harness-implementation:sha256:" + "e" * 64,
+    },
+    "credentialSlots": [
+        {"id": "primary-model", "acceptedProviderIds": ["openai"]},
+    ],
+    "allowedLaunchPolicyRefs": ["omnigent-on-demand@1"],
+}
+
+
+class _GenericV2Session(_Session):
+    """Session exposing a generic (v2) Agent Profile version."""
+
+    def __init__(
+        self, *, provider_runtime_id: str, harness_id: str = "codex-native"
+    ) -> None:
+        super().__init__()
+        self.version.document = copy.deepcopy(_MM3788_V2_DOCUMENT)
+        self.version.document["harness"]["id"] = harness_id
+        self.provider = SimpleNamespace(
+            profile_id="mm3788-openai-profile",
+            enabled=True,
+            auth_state=ProviderProfileAuthState.CONNECTED,
+            disabled_reason=None,
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=900,
+            # The runtime under test: it decides credential materialization even
+            # when the launch happens through Omnigent.
+            runtime_id=provider_runtime_id,
+            credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+            runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+            provider_id="openai",
+            volume_ref="codex-oauth",
+            volume_mount_path="/root/.codex",
+            secret_refs={},
+            credential_bindings=[],
+            command_behavior={"auth_readiness": {"launch_ready": True}},
+        )
+
+
+def _mm3788_v2_selection() -> dict:
+    return {
+        "profileId": "team-codex",
+        "version": 2,
+        "providerProfileRef": "mm3788-openai-profile",
+    }
+
+
+@pytest.mark.asyncio
+async def test_mm3788_generic_v2_selection_rejects_profile_from_an_incompatible_runtime() -> None:
+    session = _GenericV2Session(provider_runtime_id="claude_code")
+
+    with pytest.raises(HTTPException) as caught:
+        await resolve_agent_profile_snapshot(
+            session,
+            selection=_mm3788_v2_selection(),
+            consumer_type="workflow",
+            consumer_id="mm3788-workflow-reject",
+            user=SimpleNamespace(id=uuid4(), is_superuser=True),
+        )
+
+    assert caught.value.status_code == 409
+    assert "mm3788-openai-profile" in caught.value.detail
+    assert "claude_code" in caught.value.detail
+    # Nothing is persisted when the pair is rejected.
+    assert session.added == []
+
+
+@pytest.mark.asyncio
+async def test_mm3788_generic_v2_selection_accepts_a_compatible_runtime_profile() -> None:
+    session = _GenericV2Session(provider_runtime_id="codex_cli")
+
+    snapshot = await resolve_agent_profile_snapshot(
+        session,
+        selection=_mm3788_v2_selection(),
+        consumer_type="workflow",
+        consumer_id="mm3788-workflow-accept",
+        user=SimpleNamespace(id=uuid4(), is_superuser=True),
+    )
+
+    assert snapshot["providerProfileRef"] == "mm3788-openai-profile"
+    assert isinstance(session.added[0], OmnigentAgentProfileUsage)
+
+
+@pytest.mark.asyncio
+async def test_mm3788_generic_v2_selection_rejects_a_harness_the_materializer_refuses() -> None:
+    """A registered materializer is not proof of harness compatibility.
+
+    ``codex-oauth-home@1`` exists for ``codex_cli/openai``, so a lookup that only
+    proves registration accepts this pair. The readiness projection excludes it:
+    the materializer does not accept the ``pi-native`` harness, so the UI never
+    offers the profile for this execution target.
+    """
+
+    session = _GenericV2Session(
+        provider_runtime_id="codex_cli", harness_id="pi-native"
+    )
+
+    with pytest.raises(HTTPException) as caught:
+        await resolve_agent_profile_snapshot(
+            session,
+            selection=_mm3788_v2_selection(),
+            consumer_type="workflow",
+            consumer_id="mm3788-workflow-harness-reject",
+            user=SimpleNamespace(id=uuid4(), is_superuser=True),
+        )
+
+    assert caught.value.status_code == 409
+    assert "mm3788-openai-profile" in caught.value.detail
+    assert session.added == []

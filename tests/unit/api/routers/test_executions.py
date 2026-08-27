@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+from contextlib import asynccontextmanager
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -16,6 +17,7 @@ from uuid import uuid4
 import pytest
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from temporalio.api.enums.v1 import IndexedValueType
@@ -44,6 +46,7 @@ from api_service.api.routers.executions import (
     _workflow_input_snapshot_descriptor_from_record,
     _normalize_task_steps,
     _normalize_task_tool,
+    _resolve_recurring_runtime_metadata,
     _resolve_step_runtime_selections,
     _step_execution_detail_payload,
     _detect_optional_temporal_search_attributes,
@@ -65,6 +68,7 @@ from moonmind.omnigent.bridge_store import (
 )
 from api_service.db.models import (
     Base,
+    ManagedAgentProviderProfile,
     MoonMindWorkflowState,
     TemporalExecutionCloseStatus,
     TemporalArtifact,
@@ -80,6 +84,16 @@ from api_service.db.models import (
     TemporalWorkflowType,
 )
 from api_service.services.recurring_workflows_service import RecurringWorkflowValidationError
+from api_service.services.provider_profile_runtime import (
+    require_launch_target_provider_profile_runtime,
+)
+from moonmind.schemas.workflow_recovery_models import (
+    WorkflowRecoveryTargetModel,
+    deterministic_recovery_creation_key,
+)
+from moonmind.workflows.executions.runtime_capabilities import (
+    resolve_runtime_execution_capabilities,
+)
 from moonmind.config.settings import settings
 from moonmind.security.execution_fanout_capabilities import (
     mint_execution_fanout_capability,
@@ -1025,7 +1039,9 @@ async def test_step_runtime_inherits_task_profile_default_model() -> None:
     )
     session = SimpleNamespace(
         get=AsyncMock(
-            return_value=SimpleNamespace(default_model="codex-profile-default")
+            return_value=SimpleNamespace(
+                runtime_id="codex_cli", default_model="codex-profile-default"
+            )
         )
     )
 
@@ -6951,6 +6967,7 @@ def test_create_task_shaped_execution_accepts_provider_profile_alias() -> None:
     app.dependency_overrides[get_async_session] = lambda: SimpleNamespace(
         get=AsyncMock(
             return_value=SimpleNamespace(
+                runtime_id="codex_cli",
                 default_model="gpt-5-codex",
             )
         )
@@ -6995,6 +7012,7 @@ def test_create_task_shaped_execution_resolves_model_tier_against_profile() -> N
         get=AsyncMock(
             return_value=SimpleNamespace(
                 profile_id="codex-provider-profile",
+                runtime_id="codex_cli",
                 default_model=None,
                 default_effort=None,
                 model_tiers=[
@@ -7061,6 +7079,7 @@ def test_create_task_shaped_execution_records_tier_preview_mismatch() -> None:
         get=AsyncMock(
             return_value=SimpleNamespace(
                 profile_id="codex-provider-profile",
+                runtime_id="codex_cli",
                 default_model="legacy-default",
                 default_model_tier=1,
                 model_tiers=[
@@ -7141,6 +7160,7 @@ def test_create_task_shaped_execution_rejects_strict_unavailable_model_tier() ->
         get=AsyncMock(
             return_value=SimpleNamespace(
                 profile_id="codex-provider-profile",
+                runtime_id="codex_cli",
                 default_model=None,
                 default_effort=None,
                 model_tiers=[
@@ -17244,3 +17264,954 @@ def test_chat_binding_unknown_workflow_returns_404(monkeypatch) -> None:
         response = client.get("/api/executions/mm:wf-unknown/chat-binding")
 
     assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# MoonLadderStudios/MoonMind#3788 — Provider Profiles are runtime-owned launch
+# contracts, so every launch-authoring path must reject a runtime/profile pair
+# that the runtime-scoped selectors would never offer.
+# ---------------------------------------------------------------------------
+
+
+def _mm3788_provider_profile(
+    *, profile_id: str, runtime_id: str
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        profile_id=profile_id,
+        runtime_id=runtime_id,
+        provider_id="minimax",
+        default_model=None,
+        default_effort=None,
+        model_tiers=None,
+        default_model_tier=None,
+    )
+
+
+def _mm3788_client(profile: SimpleNamespace) -> Iterator[tuple[TestClient, AsyncMock]]:
+    app = FastAPI()
+    app.include_router(router)
+    service = AsyncMock()
+    service.create_execution.return_value = _build_execution_record()
+    app.dependency_overrides[_get_service] = lambda: service
+
+    class _Session:
+        async def get(self, _model: object, profile_id: str) -> object | None:
+            return profile if profile.profile_id == profile_id else None
+
+        async def scalar(self, _stmt: object) -> object | None:
+            # No Omnigent Agent Profile authority is seeded, so the Omnigent
+            # selection service is the one that rejects an Omnigent submission.
+            return None
+
+    app.dependency_overrides[get_async_session] = lambda: _Session()
+    _override_temporal_client(app)
+    _override_user_dependencies(app, is_superuser=True)
+
+    with TestClient(app) as test_client:
+        yield test_client, service
+
+    app.dependency_overrides.clear()
+
+
+def _mm3788_task_request(*, target_runtime: str, profile_id: str) -> dict[str, Any]:
+    return {
+        "type": "workflow",
+        "payload": {
+            "targetRuntime": target_runtime,
+            "workflow": {
+                "title": "MM-3788 runtime scoped launch",
+                "instructions": "Launch with an explicit provider profile.",
+                "runtime": {
+                    "mode": target_runtime,
+                    "providerProfileRef": profile_id,
+                },
+            },
+        },
+    }
+
+
+def test_mm3788_create_execution_rejects_provider_profile_from_another_runtime() -> None:
+    profile = _mm3788_provider_profile(
+        profile_id="codex_minimax_team", runtime_id="codex_cli"
+    )
+
+    for test_client, service in _mm3788_client(profile):
+        response = test_client.post(
+            "/api/executions",
+            json=_mm3788_task_request(
+                target_runtime="claude_code", profile_id="codex_minimax_team"
+            ),
+        )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["code"] == "provider_profile_runtime_mismatch"
+    # The response must identify both sides of the incompatible pair.
+    assert detail["profileId"] == "codex_minimax_team"
+    assert detail["profileRuntime"] == "codex_cli"
+    assert detail["selectedRuntime"] == "claude_code"
+    assert "codex_minimax_team" in detail["message"]
+    assert "claude_code" in detail["message"]
+    # The check runs before the launch is created.
+    service.create_execution.assert_not_awaited()
+
+
+def test_mm3788_create_execution_accepts_provider_profile_owned_by_selected_runtime() -> None:
+    profile = _mm3788_provider_profile(
+        profile_id="claude_minimax_team", runtime_id="claude_code"
+    )
+
+    for test_client, service in _mm3788_client(profile):
+        response = test_client.post(
+            "/api/executions",
+            json=_mm3788_task_request(
+                target_runtime="claude_code", profile_id="claude_minimax_team"
+            ),
+        )
+
+    assert response.status_code == 201
+    initial_parameters = service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["targetRuntime"] == "claude_code"
+    assert initial_parameters["profileId"] == "claude_minimax_team"
+
+
+def test_mm3788_create_execution_rejects_legacy_runtime_alias_mismatch() -> None:
+    """Canonical runtime IDs decide the comparison, not the submitted spelling."""
+
+    profile = _mm3788_provider_profile(
+        profile_id="claude_minimax_team", runtime_id="claude_code"
+    )
+
+    for test_client, _service in _mm3788_client(profile):
+        response = test_client.post(
+            "/api/executions",
+            json=_mm3788_task_request(
+                target_runtime="codex", profile_id="claude_minimax_team"
+            ),
+        )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["selectedRuntime"] == "codex_cli"
+    assert detail["profileRuntime"] == "claude_code"
+
+
+def test_mm3788_create_execution_leaves_omnigent_compatibility_to_the_selection_service() -> None:
+    """`omnigent` is a facade: the profile stays owned by the managed runtime.
+
+    Runtime ownership is therefore not compared here; Omnigent compatibility is
+    enforced against the selected execution target by
+    ``omnigent_agent_profile_selection``.
+    """
+
+    profile = _mm3788_provider_profile(
+        profile_id="codex_minimax_team", runtime_id="codex_cli"
+    )
+
+    for test_client, service in _mm3788_client(profile):
+        response = test_client.post(
+            "/api/executions",
+            json=_mm3788_task_request(
+                target_runtime="omnigent", profile_id="codex_minimax_team"
+            ),
+        )
+
+    # A `codex_cli` profile under `runtime_id != omnigent` is never a runtime
+    # mismatch: the submission proceeds into the Omnigent selection service,
+    # which owns compatibility against the selected execution target.
+    assert response.status_code == 409
+    assert response.json()["detail"] == "default Omnigent Agent Profile is unavailable"
+    service.create_execution.assert_not_awaited()
+
+
+def test_mm3788_runtime_ownership_check_skips_the_omnigent_facade() -> None:
+    profile = _mm3788_provider_profile(
+        profile_id="codex_minimax_team", runtime_id="codex_cli"
+    )
+
+    executions_module._require_provider_profile_runtime(
+        profile=profile,
+        profile_id=profile.profile_id,
+        selected_runtime="omnigent",
+    )
+
+
+def test_mm3788_runtime_ownership_check_skips_an_unspecified_runtime() -> None:
+    """With no effective runtime in the request there is nothing to compare."""
+
+    profile = _mm3788_provider_profile(
+        profile_id="codex_minimax_team", runtime_id="codex_cli"
+    )
+
+    executions_module._require_provider_profile_runtime(
+        profile=profile,
+        profile_id=profile.profile_id,
+        selected_runtime=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_mm3788_recurring_runtime_metadata_rejects_cross_runtime_profile() -> None:
+    profile = _mm3788_provider_profile(
+        profile_id="codex_minimax_team", runtime_id="codex_cli"
+    )
+    session = SimpleNamespace(get=AsyncMock(return_value=profile))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _resolve_recurring_runtime_metadata(
+            {
+                "workflowType": "MoonMind.UserWorkflow",
+                "initialParameters": {
+                    "targetRuntime": "claude_code",
+                    "workflow": {
+                        "runtime": {
+                            "mode": "claude_code",
+                            "providerProfileRef": "codex_minimax_team",
+                        }
+                    },
+                },
+            },
+            session=session,
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["code"] == "provider_profile_runtime_mismatch"
+    assert exc_info.value.detail["profileRuntime"] == "codex_cli"
+    assert exc_info.value.detail["selectedRuntime"] == "claude_code"
+
+
+@pytest.mark.asyncio
+async def test_mm3788_recurring_runtime_metadata_accepts_owned_profile() -> None:
+    profile = _mm3788_provider_profile(
+        profile_id="claude_minimax_team", runtime_id="claude_code"
+    )
+    session = SimpleNamespace(get=AsyncMock(return_value=profile))
+
+    metadata = await _resolve_recurring_runtime_metadata(
+        {
+            "workflowType": "MoonMind.UserWorkflow",
+            "initialParameters": {
+                "targetRuntime": "claude_code",
+                "workflow": {
+                    "runtime": {
+                        "mode": "claude_code",
+                        "providerProfileRef": "claude_minimax_team",
+                    }
+                },
+            },
+        },
+        session=session,
+    )
+
+    assert metadata["targetRuntime"] == "claude_code"
+    assert metadata["profileId"] == "claude_minimax_team"
+
+
+@pytest.mark.asyncio
+async def test_mm3788_step_runtime_selection_rejects_cross_runtime_profile() -> None:
+    steps = _normalize_task_steps(
+        {
+            "steps": [
+                {
+                    "id": "review",
+                    "instructions": "Review with an incompatible profile.",
+                    "runtime": {
+                        "mode": "claude_code",
+                        "profileId": "codex_minimax_team",
+                    },
+                }
+            ]
+        }
+    )
+    profile = _mm3788_provider_profile(
+        profile_id="codex_minimax_team", runtime_id="codex_cli"
+    )
+    session = SimpleNamespace(get=AsyncMock(return_value=profile))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _resolve_step_runtime_selections(
+            steps=steps,
+            task_runtime={"mode": "codex_cli"},
+            task_target_runtime="codex_cli",
+            task_profile_id=None,
+            session=session,
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["code"] == "provider_profile_runtime_mismatch"
+    assert exc_info.value.detail["profileId"] == "codex_minimax_team"
+    assert exc_info.value.detail["selectedRuntime"] == "claude_code"
+
+
+@pytest.mark.asyncio
+async def test_mm3788_step_runtime_selection_rejects_inherited_cross_runtime_profile() -> None:
+    """A step that overrides the runtime cannot inherit another runtime's profile."""
+
+    steps = _normalize_task_steps(
+        {
+            "steps": [
+                {
+                    "id": "review",
+                    "instructions": "Inherit the task profile under a new runtime.",
+                    "runtime": {"mode": "claude_code"},
+                }
+            ]
+        }
+    )
+    profile = _mm3788_provider_profile(
+        profile_id="codex_minimax_team", runtime_id="codex_cli"
+    )
+    session = SimpleNamespace(get=AsyncMock(return_value=profile))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _resolve_step_runtime_selections(
+            steps=steps,
+            task_runtime={"mode": "codex_cli"},
+            task_target_runtime="codex_cli",
+            task_profile_id="codex_minimax_team",
+            session=session,
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["profileId"] == "codex_minimax_team"
+    assert exc_info.value.detail["selectedRuntime"] == "claude_code"
+
+
+@pytest.mark.asyncio
+async def test_mm3788_step_runtime_selection_accepts_owned_profile() -> None:
+    steps = _normalize_task_steps(
+        {
+            "steps": [
+                {
+                    "id": "review",
+                    "instructions": "Review with the runtime's own profile.",
+                    "runtime": {
+                        "mode": "claude_code",
+                        "profileId": "claude_minimax_team",
+                    },
+                }
+            ]
+        }
+    )
+    profile = _mm3788_provider_profile(
+        profile_id="claude_minimax_team", runtime_id="claude_code"
+    )
+    session = SimpleNamespace(get=AsyncMock(return_value=profile))
+
+    await _resolve_step_runtime_selections(
+        steps=steps,
+        task_runtime={"mode": "codex_cli"},
+        task_target_runtime="codex_cli",
+        task_profile_id=None,
+        session=session,
+    )
+
+    assert steps[0]["runtime"]["mode"] == "claude_code"
+    assert steps[0]["runtime"]["profileId"] == "claude_minimax_team"
+
+
+# ---------------------------------------------------------------------------
+# MoonLadderStudios/MoonMind#3788 — the raw ``CreateExecutionRequest`` branch of
+# POST /api/executions is the alternate-client shape (the dashboard always sends
+# the ``type``/``payload`` envelope). It reaches a launch through the same
+# TemporalExecutionService.create_execution handoff, so the shared
+# runtime-ownership invariant has to reject a mismatched pair there too.
+# ---------------------------------------------------------------------------
+
+
+@asynccontextmanager
+async def _mm3788_raw_branch_context(
+    tmp_path, *, db_name: str, profile_runtime_id: str = "codex_cli"
+):
+    """Yield a real service over real persistence with one seeded profile."""
+
+    original_backend = settings.workflow.temporal_artifact_backend
+    original_root = settings.workflow.temporal_artifact_root
+    settings.workflow.temporal_artifact_backend = "local_fs"
+    settings.workflow.temporal_artifact_root = str(tmp_path / "artifacts")
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/{db_name}.db"
+    engine = create_async_engine(db_url, future=True)
+    session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with session_factory() as session:
+            session.add(
+                ManagedAgentProviderProfile(
+                    profile_id="codex_minimax_team",
+                    runtime_id=profile_runtime_id,
+                    provider_id="minimax",
+                )
+            )
+            await session.commit()
+            service = TemporalExecutionService(session)
+            service._client_adapter.start_workflow = AsyncMock(
+                return_value=SimpleNamespace(run_id="run-mm3788-raw")
+            )
+            user = SimpleNamespace(
+                id=uuid4(),
+                email="mm3788@example.com",
+                is_active=True,
+                is_superuser=True,
+                roles=[],
+            )
+            yield session, service, user
+    finally:
+        await engine.dispose()
+        settings.workflow.temporal_artifact_backend = original_backend
+        settings.workflow.temporal_artifact_root = original_root
+
+
+def _mm3788_raw_execution_request(
+    *, target_runtime: str, profile_id: str
+) -> dict[str, Any]:
+    """A raw CreateExecutionRequest body — no ``type``/``payload`` envelope."""
+
+    return {
+        "workflowType": "MoonMind.UserWorkflow",
+        "title": "MM-3788 raw branch launch",
+        "initialParameters": {
+            "targetRuntime": target_runtime,
+            "profileId": profile_id,
+            "workflow": {
+                "instructions": "Launch with an explicit provider profile.",
+                "runtime": {
+                    "mode": target_runtime,
+                    "providerProfileRef": profile_id,
+                },
+            },
+        },
+    }
+
+
+async def _mm3788_post_raw_execution(
+    *, service: TemporalExecutionService, session: AsyncSession, user, payload
+):
+    return await executions_module.create_execution(
+        payload=payload,
+        service=service,
+        session=session,
+        user=user,
+        _submit_enabled=None,
+        principal_context={},
+        authorization=None,
+        execution_fanout=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_mm3788_raw_create_branch_rejects_profile_from_another_runtime(
+    tmp_path,
+) -> None:
+    async with _mm3788_raw_branch_context(
+        tmp_path, db_name="mm3788_raw_reject"
+    ) as (session, service, user):
+        with pytest.raises(HTTPException) as exc_info:
+            await _mm3788_post_raw_execution(
+                service=service,
+                session=session,
+                user=user,
+                payload=_mm3788_raw_execution_request(
+                    target_runtime="claude_code", profile_id="codex_minimax_team"
+                ),
+            )
+
+        assert exc_info.value.status_code == 409
+        detail = exc_info.value.detail
+        # The 409 contract is identical to every other authoring boundary.
+        assert detail["code"] == "provider_profile_runtime_mismatch"
+        assert detail["profileId"] == "codex_minimax_team"
+        assert detail["profileRuntime"] == "codex_cli"
+        assert detail["selectedRuntime"] == "claude_code"
+        # Nothing launched and nothing persisted.
+        service._client_adapter.start_workflow.assert_not_awaited()
+        records = (
+            await session.execute(select(TemporalExecutionCanonicalRecord))
+        ).scalars().all()
+        assert records == []
+
+
+@pytest.mark.asyncio
+async def test_mm3788_raw_create_branch_accepts_profile_owned_by_the_runtime(
+    tmp_path,
+) -> None:
+    async with _mm3788_raw_branch_context(
+        tmp_path, db_name="mm3788_raw_accept"
+    ) as (session, service, user):
+        response = await _mm3788_post_raw_execution(
+            service=service,
+            session=session,
+            user=user,
+            payload=_mm3788_raw_execution_request(
+                target_runtime="codex_cli", profile_id="codex_minimax_team"
+            ),
+        )
+
+        assert response.workflow_id.startswith("mm:")
+        stored = await session.get(
+            TemporalExecutionCanonicalRecord, response.workflow_id
+        )
+        assert stored is not None
+
+
+@pytest.mark.asyncio
+async def test_mm3788_raw_create_branch_keeps_the_omnigent_product_boundary(
+    tmp_path,
+) -> None:
+    """Omnigent is a facade: the raw branch still owns its own 422, not a 409."""
+
+    async with _mm3788_raw_branch_context(
+        tmp_path, db_name="mm3788_raw_omnigent"
+    ) as (session, service, user):
+        with pytest.raises(HTTPException) as exc_info:
+            await _mm3788_post_raw_execution(
+                service=service,
+                session=session,
+                user=user,
+                payload=_mm3788_raw_execution_request(
+                    target_runtime="omnigent", profile_id="codex_minimax_team"
+                ),
+            )
+
+        assert exc_info.value.status_code == 422
+        assert exc_info.value.detail["code"] == "omnigent_product_boundary_required"
+        service._client_adapter.start_workflow.assert_not_awaited()
+
+
+def _mm3788_conflicting_runtime_request(
+    *, target_runtime: str, nested_runtime_mode: str, profile_id: str
+) -> dict[str, Any]:
+    """A raw body whose two runtime fields disagree.
+
+    The worker resolves ``workflow.runtime.mode`` before the payload-level
+    ``targetRuntime``, so this is the shape that decides which runtime actually
+    executes the task.
+    """
+
+    return {
+        "workflowType": "MoonMind.UserWorkflow",
+        "title": "MM-3788 conflicting runtime fields",
+        "initialParameters": {
+            "targetRuntime": target_runtime,
+            "profileId": profile_id,
+            "workflow": {
+                "instructions": "Launch with an explicit provider profile.",
+                "runtime": {
+                    "mode": nested_runtime_mode,
+                    "providerProfileRef": profile_id,
+                },
+            },
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_mm3788_raw_create_branch_honors_the_runtime_block_over_target_runtime(
+    tmp_path,
+) -> None:
+    """The guard resolves the runtime the worker resolves, not the other field.
+
+    ``targetRuntime`` names the profile's own runtime, so reading it first would
+    approve the pair; the worker then executes the task as ``claude_code`` with a
+    Codex-owned profile.
+    """
+
+    async with _mm3788_raw_branch_context(
+        tmp_path, db_name="mm3788_raw_conflict"
+    ) as (session, service, user):
+        with pytest.raises(HTTPException) as exc_info:
+            await _mm3788_post_raw_execution(
+                service=service,
+                session=session,
+                user=user,
+                payload=_mm3788_conflicting_runtime_request(
+                    target_runtime="codex_cli",
+                    nested_runtime_mode="claude_code",
+                    profile_id="codex_minimax_team",
+                ),
+            )
+
+        assert exc_info.value.status_code == 409
+        detail = exc_info.value.detail
+        assert detail["code"] == "provider_profile_runtime_mismatch"
+        assert detail["profileRuntime"] == "codex_cli"
+        # The runtime the worker would have executed, not the payload-level one.
+        assert detail["selectedRuntime"] == "claude_code"
+        service._client_adapter.start_workflow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_mm3788_raw_create_branch_rejects_a_nested_omnigent_runtime_conflict(
+    tmp_path,
+) -> None:
+    """A nested ``omnigent`` mode does not waive the other authored runtime.
+
+    Deferring to the Omnigent facade is only safe when the payload names nothing
+    else; here ``targetRuntime`` still names a managed runtime that the Omnigent
+    selection service never sees.
+    """
+
+    async with _mm3788_raw_branch_context(
+        tmp_path, db_name="mm3788_raw_nested_omnigent"
+    ) as (session, service, user):
+        with pytest.raises(HTTPException) as exc_info:
+            await _mm3788_post_raw_execution(
+                service=service,
+                session=session,
+                user=user,
+                payload=_mm3788_conflicting_runtime_request(
+                    target_runtime="claude_code",
+                    nested_runtime_mode="omnigent",
+                    profile_id="codex_minimax_team",
+                ),
+            )
+
+        assert exc_info.value.status_code == 409
+        detail = exc_info.value.detail
+        assert detail["code"] == "provider_profile_runtime_mismatch"
+        assert detail["profileRuntime"] == "codex_cli"
+        assert detail["selectedRuntime"] == "claude_code"
+        service._client_adapter.start_workflow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_mm3788_raw_create_branch_rejects_a_profile_with_no_runtime_owner(
+    tmp_path,
+) -> None:
+    """A whitespace ``runtime_id`` is ambiguous authority, not a free pass.
+
+    ``ProviderProfileCreate.runtime_id`` accepts a blank string, so this row is
+    reachable through the provider-profile API. Treating it as "nothing to
+    compare" would let it launch under every runtime.
+    """
+
+    async with _mm3788_raw_branch_context(
+        tmp_path,
+        db_name="mm3788_raw_unowned",
+        profile_runtime_id="   ",
+    ) as (session, service, user):
+        with pytest.raises(HTTPException) as exc_info:
+            await _mm3788_post_raw_execution(
+                service=service,
+                session=session,
+                user=user,
+                payload=_mm3788_raw_execution_request(
+                    target_runtime="codex_cli", profile_id="codex_minimax_team"
+                ),
+            )
+
+        assert exc_info.value.status_code == 409
+        detail = exc_info.value.detail
+        assert detail["code"] == "provider_profile_runtime_mismatch"
+        assert detail["profileRuntime"] == ""
+        assert detail["selectedRuntime"] == "codex_cli"
+        assert detail["message"] == (
+            "Provider Profile 'codex_minimax_team' does not declare an owning "
+            "runtime and cannot be used with runtime 'codex_cli'."
+        )
+        service._client_adapter.start_workflow.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# MoonLadderStudios/MoonMind#3788 — a recovery destination inherits the source
+# execution's authored runtime and Provider Profile and reaches a launch through
+# the same TemporalExecutionService.create_execution handoff. A pair persisted
+# before the shared invariant existed (or one whose profile was recreated under
+# another runtime) is rejected there, so the recovery routes must surface the
+# identical 409 contract every other launch-authoring path returns instead of an
+# unmapped server error.
+# ---------------------------------------------------------------------------
+
+
+def _mm3788_legacy_recovery_parameters() -> dict[str, Any]:
+    """Source parameters carrying a pair persisted before the invariant."""
+
+    return {
+        "targetRuntime": "claude_code",
+        "workflow": {
+            "instructions": "Recover the failed step.",
+            "runtime": {
+                "mode": "claude_code",
+                "providerProfileRef": "codex_minimax_team",
+            },
+        },
+    }
+
+
+def _mm3788_production_recovery_rejection(tmp_path, *, db_name: str):
+    """Raise the rejection the production contract raises for those params.
+
+    The error identity is not hand-written: the real shared contract resolves a
+    real ``ManagedAgentProviderProfile`` row from real persistence and raises
+    :class:`ProviderProfileRuntimeMismatchError` itself, exactly as it does
+    inside ``TemporalExecutionService.create_execution`` on the recovery path.
+    """
+
+    async def _raise(*_args: Any, **_kwargs: Any):
+        db_url = f"sqlite+aiosqlite:///{tmp_path}/{db_name}.db"
+        engine = create_async_engine(db_url, future=True)
+        session_factory = sessionmaker(
+            engine, class_=AsyncSession, expire_on_commit=False
+        )
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        try:
+            async with session_factory() as session:
+                session.add(
+                    ManagedAgentProviderProfile(
+                        profile_id="codex_minimax_team",
+                        runtime_id="codex_cli",
+                        provider_id="minimax",
+                    )
+                )
+                await session.commit()
+                await require_launch_target_provider_profile_runtime(
+                    session=session,
+                    target={
+                        "initialParameters": _mm3788_legacy_recovery_parameters()
+                    },
+                )
+        finally:
+            await engine.dispose()
+        raise AssertionError(
+            "the shared contract accepted a cross-runtime recovery pair"
+        )
+
+    return _raise
+
+
+def _mm3788_assert_shared_mismatch_detail(detail: dict[str, Any]) -> None:
+    assert detail == {
+        "code": "provider_profile_runtime_mismatch",
+        "message": (
+            "Provider Profile 'codex_minimax_team' belongs to runtime "
+            "'codex_cli' and cannot be used with runtime 'claude_code'."
+        ),
+        "profileId": "codex_minimax_team",
+        "profileRuntime": "codex_cli",
+        "selectedRuntime": "claude_code",
+    }
+
+
+def _mm3788_typed_recovery_target(canonical):
+    checkpoint_digest = "sha256:mm3788-checkpoint"
+    return WorkflowRecoveryTargetModel.model_validate(
+        {
+            "target": {
+                "kind": "failed_step",
+                "logicalStepId": "implement",
+                "sourceStepExecutionId": "step-execution-1",
+            },
+            "source": {
+                "workflowId": canonical.workflow_id,
+                "runId": canonical.run_id,
+                "planRef": "artifact://plan/source",
+                "planDigest": "sha256:plan",
+                "taskInputSnapshotRef": "artifact://snapshot/source",
+            },
+            "checkpoint": {
+                "ref": "artifact://checkpoint/source",
+                "boundary": "before_execution",
+                "kind": "worktree_archive",
+                "digest": checkpoint_digest,
+                "validationRef": "artifact://checkpoint-validation",
+                "sourceWorkspaceRef": "workspace://source",
+            },
+            "continuation": {"phase": "rerun_failed_step"},
+            "capabilitySnapshot": resolve_runtime_execution_capabilities(
+                "omnigent"
+            ).model_dump(by_alias=True, mode="json"),
+            "preservedStepRefs": [],
+            "sideEffectDispositionRef": "artifact://side-effects",
+            "sideEffectSafe": True,
+            "destination": {
+                "workflowId": "mm:mm3788-recovery-destination",
+                "creationKey": deterministic_recovery_creation_key(
+                    canonical.workflow_id,
+                    canonical.run_id,
+                    "failed_step",
+                    checkpoint_digest,
+                    "rerun_failed_step",
+                ),
+                "runtimeId": "omnigent",
+                "executionProfileRef": "provider-profile:primary",
+                "workspaceReservationId": "workspace-reservation:destination",
+            },
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_mm3788_typed_recovery_route_maps_runtime_mismatch_to_409(
+    tmp_path,
+) -> None:
+    mock_service = AsyncMock()
+    canonical = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    canonical.parameters = _mm3788_legacy_recovery_parameters()
+    mock_service.describe_execution.return_value = canonical
+    mock_service.create_typed_recovery_execution.side_effect = (
+        _mm3788_production_recovery_rejection(tmp_path, db_name="mm3788_recover_typed")
+    )
+    user = SimpleNamespace(
+        id=uuid4(),
+        email="mm3788@example.com",
+        is_active=True,
+        is_superuser=True,
+        roles=[],
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await executions_module.recover_execution(
+            workflow_id=canonical.workflow_id,
+            request=_mm3788_typed_recovery_target(canonical),
+            service=mock_service,
+            user=user,
+            _submit_enabled=None,
+        )
+
+    assert exc_info.value.status_code == 409
+    _mm3788_assert_shared_mismatch_detail(exc_info.value.detail)
+    mock_service.create_typed_recovery_execution.assert_awaited_once()
+
+
+def _mm3788_failed_step_recovery_context(canonical):
+    """Artifact + session doubles the failed-step recovery routes hydrate."""
+
+    checkpoint_ref = "artifact://resume-checkpoints/source/checkpoint-v1"
+    canonical.memo = {
+        **canonical.memo,
+        "recovery_checkpoint_ref": checkpoint_ref,
+        "failed_run_recovery_manifest_ref": "artifact://recovery/manifest",
+        "task_input_snapshot_ref": "artifact://snapshot/source",
+    }
+    checkpoint_payload = {
+        "schemaVersion": "v1",
+        "source": {"workflowId": canonical.workflow_id, "runId": canonical.run_id},
+        "taskInputSnapshotRef": "artifact://snapshot/source",
+        "planRef": "artifact://plan/source",
+        "planDigest": "sha256:resume-plan",
+        "failedStep": {"logicalStepId": "implement", "order": 2, "attempt": 1},
+        "preservedSteps": [
+            {
+                "logicalStepId": "plan",
+                "order": 1,
+                "status": "completed",
+                "sourceExecutionOrdinal": 1,
+                "artifacts": {"summary": "artifact://completed/plan"},
+                "stateCheckpointRef": "artifact://workspace/before-implement",
+            }
+        ],
+        "recoveryWorkspace": {
+            "branch": "feature/resume",
+            "commit": "abc123",
+            "checkpointRef": checkpoint_ref,
+            "archiveBytes": 100,
+        },
+    }
+    manifest_payload = _valid_failed_run_recovery_manifest_payload(
+        canonical, checkpoint_ref=checkpoint_ref
+    )
+    artifact_service = SimpleNamespace(
+        read=AsyncMock(
+            side_effect=[
+                (SimpleNamespace(), json.dumps(manifest_payload).encode()),
+                (SimpleNamespace(), json.dumps(checkpoint_payload).encode()),
+            ]
+        )
+    )
+
+    class Session:
+        async def get(self, model, key):
+            return canonical
+
+        async def commit(self):
+            return None
+
+    return artifact_service, Session()
+
+
+def test_mm3788_failed_step_recovery_route_maps_runtime_mismatch_to_409(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "api_service.api.routers.executions._checkpoint_resume_admission_for_request",
+        lambda **_kwargs: SimpleNamespace(admitted=True),
+    )
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    canonical = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    canonical.parameters = _mm3788_legacy_recovery_parameters()
+    mock_service.describe_execution.return_value = canonical
+    mock_service.create_failed_step_recovery_execution.side_effect = (
+        _mm3788_production_recovery_rejection(
+            tmp_path, db_name="mm3788_recover_failed_step"
+        )
+    )
+    artifact_service, session = _mm3788_failed_step_recovery_context(canonical)
+
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    app.dependency_overrides[get_async_session] = lambda: session
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.get_temporal_artifact_service",
+        lambda _session: artifact_service,
+    )
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions/mm:wf-1/recover-from-failed-step",
+            json={"idempotencyKey": "mm3788-resume-1"},
+        )
+
+    assert response.status_code == 409
+    _mm3788_assert_shared_mismatch_detail(response.json()["detail"])
+    mock_service.create_failed_step_recovery_execution.assert_awaited_once()
+
+
+def test_mm3788_selected_step_recovery_route_maps_runtime_mismatch_to_409(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "api_service.api.routers.executions._checkpoint_resume_admission_for_request",
+        lambda **_kwargs: SimpleNamespace(admitted=True),
+    )
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    canonical = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    canonical.parameters = _mm3788_legacy_recovery_parameters()
+    mock_service.describe_execution.return_value = canonical
+    mock_service.create_failed_step_recovery_execution.side_effect = (
+        _mm3788_production_recovery_rejection(
+            tmp_path, db_name="mm3788_recover_selected_step"
+        )
+    )
+    artifact_service, session = _mm3788_failed_step_recovery_context(canonical)
+
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    app.dependency_overrides[get_async_session] = lambda: session
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.get_temporal_artifact_service",
+        lambda _session: artifact_service,
+    )
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions/mm:wf-1/recover-from-selected-step",
+            json={
+                "idempotencyKey": "mm3788-recover-selected-1",
+                "sourceWorkflowId": canonical.workflow_id,
+                "sourceRunId": canonical.run_id,
+                "selectedStartStepId": "plan",
+            },
+        )
+
+    assert response.status_code == 409
+    _mm3788_assert_shared_mismatch_detail(response.json()["detail"])
+    mock_service.create_failed_step_recovery_execution.assert_awaited_once()
