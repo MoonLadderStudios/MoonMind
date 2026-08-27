@@ -17316,6 +17316,127 @@ describe("Task Create MM-578 Preset expansion", () => {
     ).toEqual({ mode: "pr", mergeAutomation: { enabled: true } });
   });
 
+  it("preserves GitHub orchestration runtime metadata from preset expansion", async () => {
+    const githubOrchestration = {
+      task: {
+        repository: "MoonLadderStudios/Tactics",
+        runtime: { mode: "codex_cli" },
+        publish: {
+          mode: "pr",
+          mergeAutomation: { enabled: true },
+        },
+      },
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/presets?scope=global")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [
+              {
+                slug: "github-issue-breakdown-implement",
+                scope: "global",
+                title: "GitHub Issue Breakdown and Implement",
+                description: "Create dependent GitHub issue workflows.",
+                latestVersion: "1",
+                version: "1",
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (
+        url.startsWith(
+          "/api/presets/github-issue-breakdown-implement?scope=global",
+        )
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            slug: "github-issue-breakdown-implement",
+            scope: "global",
+            title: "GitHub Issue Breakdown and Implement",
+            description: "Create dependent GitHub issue workflows.",
+            latestVersion: "1",
+            version: "1",
+            inputs: [],
+          }),
+        } as Response);
+      }
+      if (
+        url.startsWith(
+          "/api/presets/github-issue-breakdown-implement:expand?scope=global",
+        )
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            steps: [
+              {
+                id: "tpl:github-issue-breakdown-implement:1:01",
+                title: "Create GitHub issue workflows",
+                instructions: "Create one implementation workflow per issue.",
+                skill: {
+                  id: "story.create_github_issue_implement_workflows",
+                  args: {},
+                },
+                githubOrchestration,
+              },
+            ],
+            appliedTemplate: {
+              slug: "github-issue-breakdown-implement",
+              version: "1",
+            },
+            capabilities: ["git", "gh"],
+            warnings: [],
+          }),
+        } as Response);
+      }
+      return mockMm578PresetFetch(input);
+    });
+
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    fireEvent.change(within(step).getByLabelText("Instructions"), {
+      target: { value: "Break down the GitHub issue and implement each story." },
+    });
+    selectStepType(step, "Preset");
+    const presetSelect = within(step).getByLabelText(
+      "Preset Template",
+    ) as HTMLSelectElement;
+    await waitFor(() => {
+      expect(
+        Array.from(presetSelect.options).some(
+          (option) =>
+            option.value === "global::::github-issue-breakdown-implement",
+        ),
+      ).toBe(true);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::github-issue-breakdown-implement" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const request = latestCreateRequest();
+    const payload = request.payload as Record<string, unknown>;
+    const task = payload.task as Record<string, unknown>;
+    expect(
+      (task.steps as Array<Record<string, unknown>>)[0]
+        ?.githubOrchestration,
+    ).toEqual(githubOrchestration);
+  });
+
   it("does not force none publish mode from stale Jira Breakdown preset provenance", async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
