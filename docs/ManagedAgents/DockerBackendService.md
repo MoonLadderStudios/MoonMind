@@ -2,7 +2,7 @@
 
 - **Status:** Desired state
 - **Owners:** MoonMind Platform
-- **Last updated:** 2026-08-10
+- **Last updated:** 2026-08-27
 - **Document class:** Canonical declarative design
 
 **Related:**
@@ -12,6 +12,7 @@
 - [`../ExternalAgents/ModelContextProtocol.md`](../ExternalAgents/ModelContextProtocol.md)
 - [`../Omnigent/CombinedStackValidationAndRollback.md`](../Omnigent/CombinedStackValidationAndRollback.md)
 - [`../Workflows/SkillAndPlanContracts.md`](../Workflows/SkillAndPlanContracts.md)
+- [`../Workflows/GpuContainerContract.md`](../Workflows/GpuContainerContract.md)
 
 ---
 
@@ -434,7 +435,12 @@ A backend-neutral request is shaped approximately as follows:
   "resources": {
     "cpu": "4",
     "memory": "8g",
-    "shmSize": "1g"
+    "shmSize": "1g",
+    "gpu": {
+      "vendor": "nvidia",
+      "count": "all",
+      "capabilities": ["compute", "utility"]
+    }
   },
   "timeoutSeconds": 3600,
   "pullPolicy": "if-missing",
@@ -451,8 +457,14 @@ plan before execution. The caller does not provide:
 - a daemon-visible host source path;
 - a Dockerfile, build context, build target, or build argument;
 - Docker socket or data-root mounts;
-- privileged mode, host namespaces, or devices;
+- privileged mode, host namespaces, or arbitrary devices;
 - MoonMind ownership-label overrides.
+
+`resources.gpu` is the one typed device resource a caller may request. It names a
+supported vendor, a device count, and optional bounded driver capabilities, and
+is absent for every CPU-only job. It is not device authority: the caller never
+supplies a device path, a runtime socket, a Docker flag, or privileged mode.
+See [GPU Container Contract](../Workflows/GpuContainerContract.md).
 
 MoonMind enriches every request with owner, workflow, run, step, session,
 expiration, idempotency, and resolved-image metadata.
@@ -639,7 +651,9 @@ Structured jobs apply:
 - dropped Linux capabilities;
 - `no-new-privileges`;
 - no host PID, IPC, user, or network namespace;
-- no arbitrary devices;
+- no arbitrary devices, and no device access at all beyond the typed
+  `resources.gpu` resource request, which is realized as the vendor's Docker
+  device request and bounded by a non-overridable deployment device ceiling;
 - no Docker socket, data-root, or host-root mounts;
 - approved workspace, artifact, scratch, and cache mounts only;
 - MoonMind-owned labels;
@@ -976,6 +990,12 @@ repository_scope_mismatch
 registry_auth_failed
 credential_cleanup_failed
 resource_limit_exceeded
+gpu_request_invalid
+gpu_vendor_unsupported
+gpu_count_unsupported
+gpu_backend_unsupported
+gpu_runtime_unavailable
+gpu_resource_unavailable
 container_start_failed
 workload_failed
 workload_timed_out

@@ -5192,6 +5192,14 @@ function ArrowRightIcon() {
   );
 }
 
+function CheckIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M5 12.5 10 17.5 19 7.5" />
+    </svg>
+  );
+}
+
 function BranchIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -14291,6 +14299,12 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                     data-submit-icon="arrow"
                   >
                     <ArrowRightIcon />
+                  </span>
+                  <span
+                    className="queue-submit-primary-arrow-glyph queue-submit-primary-arrow-glyph--check"
+                    data-submit-icon="check"
+                  >
+                    <CheckIcon />
                   </span>
                 </span>
               ) : (

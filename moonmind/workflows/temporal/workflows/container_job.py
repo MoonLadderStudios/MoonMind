@@ -21,6 +21,7 @@ with workflow.unsafe.imports_passed_through():
         TerminalOutcome,
         failure_class_from_exception,
         failure_message_from_exception,
+        terminal_gpu_observation,
     )
     from moonmind.workflows.temporal.activity_catalog import (
         build_default_activity_catalog,
@@ -167,6 +168,9 @@ class MoonMindContainerJobWorkflow:
                     "container_job.reconcile_container", request
                 )
                 request.container_ref = reconciled.container_ref
+                # A reattached container reports its own resolved GPU evidence;
+                # create/start below supersede it for a fresh launch.
+                request.gpu_observation = reconciled.gpu_observation
                 if request.container_ref is None:
                     created = await self._activity(
                         "container_job.create_container", request
@@ -174,6 +178,7 @@ class MoonMindContainerJobWorkflow:
                     request.container_ref = created.container_ref
                     request.egress_attestation_ref = created.diagnostics_ref
                     request.resolved_cache_refs = created.resolved_cache_refs
+                    request.gpu_observation = created.gpu_observation
                 else:
                     # A reconciled container skips create; recover its republished
                     # launch attestation ref so terminal evidence still correlates
@@ -184,6 +189,10 @@ class MoonMindContainerJobWorkflow:
                     started = await self._activity(
                         "container_job.start_container", request
                     )
+                    if started.gpu_observation is not None:
+                        # Launch evidence supersedes the pre-create support
+                        # report for the same requested resource.
+                        request.gpu_observation = started.gpu_observation
                     if started.diagnostics_ref:
                         # The complete row is published only after the actual
                         # workload is running and its endpoint, immutable image,
@@ -255,6 +264,14 @@ class MoonMindContainerJobWorkflow:
         request.exit_code = exit_code
         request.failure_class = failure_class
         request.message = message
+        # A requested GPU resource is always observable, including when the job
+        # was refused before the backend reported anything. CPU-only jobs stay
+        # unchanged: the observation is absent.
+        request.gpu_observation = terminal_gpu_observation(
+            gpu=inp.request.spec.resources.gpu,
+            observed=request.gpu_observation,
+            failure_class=failure_class,
+        )
 
         # Distinguish a workspace-visibility failure as its own status before the
         # terminal FAILED projection so a reader can tell it apart from a launch

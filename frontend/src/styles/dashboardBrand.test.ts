@@ -19,7 +19,9 @@ function cssRoot(): Root {
 function cssRuleBlock(selector: string): string {
   const blocks: string[] = [];
   cssRoot().walkRules((rule: Rule) => {
-    const selectors = rule.selector.split(',').map((item) => item.trim());
+    const selectors = rule.selector
+      .split(',')
+      .map((item) => item.trim().replace(/\s+/g, ' '));
     if (selectors.includes(selector)) {
       blocks.push(rule.nodes.map((node) => `${node.toString()};`).join('\n'));
     }
@@ -42,6 +44,26 @@ describe('dashboard page layout styles', () => {
     expect(clickedSubmit).toContain('background-image: none;');
     expect(clickedSubmit).toContain('border-color: rgb(var(--mm-action-primary));');
     expect(clickedSubmit).toContain('color: rgb(var(--mm-action-primary));');
+  });
+
+  it('morphs the clicked create workflow arrow into a green check', () => {
+    expect(
+      cssRuleBlock(
+        '.queue-submit-primary--icon.queue-submit-primary--arrow-exit .queue-submit-primary-arrow-glyph[data-submit-icon="arrow"]',
+      ),
+    ).toContain('animation: queue-submit-primary-arrow-exit');
+    expect(
+      cssRuleBlock(
+        '.queue-submit-primary--icon.queue-submit-primary--arrow-exit .queue-submit-primary-arrow-glyph[data-submit-icon="check"]',
+      ),
+    ).toContain('animation: queue-submit-primary-check-pop');
+    expect(
+      cssRuleBlock('.queue-submit-primary--icon .queue-submit-primary-arrow-glyph--check'),
+    ).toContain('opacity: 0;');
+    // The check inherits the button's clicked color, which is the green action token.
+    expect(cssRuleBlock('.queue-submit-primary-arrow svg')).toContain(
+      'stroke: currentcolor;',
+    );
   });
 });
 
