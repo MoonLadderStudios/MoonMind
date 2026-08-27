@@ -1,27 +1,37 @@
 [
   {
-    "id": 3869137341,
+    "id": 3875934335,
     "disposition": "addressed",
-    "rationale": "Moved the phased rollout sequencing out of the canonical doc: deleted section 24 Rollout Guidance, renumbered Decision Summary to 24, created docs/tmp/ProviderProfileTierSettingsRollout.md with the sequencing, and added an Implementation tracking pointer so the canonical file keeps only declarative requirements and acceptance criteria."
+    "rationale": "CodeQL js/xss-through-dom at AttachmentImagePreview.tsx:200. The SARIF flow starts at the Jira 'Import target' select value, which jiraTargetFromValue parsed straight into a step localId used as an attachment map key. selectJiraImportTarget now resolves the parsed target back to a live step through resolveJiraImportTarget, so the bound localId comes from the steps state, not from DOM text. The sink is also guarded: isSafeAttachmentPreviewUrl restricts the img src and the lightbox download link to relative, blob:, http(s) and image/* data: sources."
   },
   {
-    "id": 3869137347,
+    "id": 3875970087,
     "disposition": "addressed",
-    "rationale": "Bound capability lookup to the selected profile: section 12.1 now specifies GET /api/v1/provider-profiles/{profile_id}/capabilities (with the runtime/provider query form reserved for advisory create-form drafts), section 12.2 adds profile_id plus an evidence block (source, credential_generation, image_ref, observed_at, stale) that the option sets are bound to, and rules 10-12 in 12.3 plus 12.4 require refetch and no new values when the profile evidence identity does not match."
+    "rationale": "The step file picker called updateStepAttachments directly, so overriding the browser accept filter bypassed the policy content-type check the identical drop applies. handleStepAttachmentDrop is now the single entry point addStepAttachmentFiles, used by both the drop handler and the picker onChange; new test 'rejects picker selections the attachment policy does not allow' pins the parity."
   },
   {
-    "id": 3869137351,
+    "id": 3875970097,
     "disposition": "addressed",
-    "rationale": "Section 4.4 now states that Runtime default requires a null tier model/effort to resolve directly to the runtime default with no profile-level compatibility field in between, names removal of that step as a prerequisite owned by ProviderProfileModelEffortTiers.md, and requires the inherited value and effective preview to come from backend-reported resolution and to name a non-runtime source instead of showing Runtime default. The concrete resolver and test removals are sequenced in docs/tmp/ProviderProfileTierSettingsRollout.md Phase 2."
+    "rationale": "The primary-step context list mapped only persistedObjectiveAttachments, so a Jira image imported into the objective target had no chip or thumbnail until it was persisted. Pending selectedObjectiveAttachmentFiles are now included for the primary step with removeObjectiveAttachment removal (which also refreshes preset reapply state) and the same retry affordance as step files. Covered by 'previews a pending objective image imported from Jira in the primary step'."
   },
   {
-    "id": 3869137354,
+    "id": 3875970100,
     "disposition": "addressed",
-    "rationale": "Section 15.2 is now Tier-only persistence: no client-side derivation, no compatibility period, and one cohesive removal of default_model/default_effort from the read and write contracts, the launch-time compatibility step, and the remaining callers, fixtures, and tests. Documented that no persisted-history cutover is required because runs persist resolved values at launch. Reconciled sections 3.3, 5, 6.3, 14.2 (14.3 removed), 18.1, 22.1, 22.5, 23.14, and the Decision Summary."
+    "rationale": "InputImagesSection in workflow-detail.tsx now renders AttachmentImagePreview instead of the parallel static .queue-attachment-preview image, so the clickable thumbnail/lightbox behaviour is the same wherever attachments are listed. The now-unused .queue-attachment-preview CSS rule was deleted and the detail test asserts the shared thumbnail, its lightbox and the unavailable fallback."
   },
   {
-    "id": 5037699927,
+    "id": 3875970106,
+    "disposition": "addressed",
+    "rationale": "The lightbox now traps Tab. The first/last focus loop that DashboardActionDialog carried inline was extracted to frontend/src/lib/focusTrap.ts (FOCUSABLE_SELECTOR, focusableElementsWithin, trapTabWithin); both modals use it, so the behaviour is defined once. New test 'keeps Tab inside the open lightbox'."
+  },
+  {
+    "id": 3875970113,
+    "disposition": "addressed",
+    "rationale": "AttachmentImagePreview now handles onError on both the thumbnail and the lightbox image: it suppresses itself (so the :has(.attachment-thumbnail) rule stops hiding the generic icon and the chip keeps its metadata/download action), closes any open lightbox, and reports through the new onPreviewError prop, which workflow-detail uses to render its explicit unavailable state. Covered by two new component tests."
+  },
+  {
+    "id": 5045777453,
     "disposition": "not-applicable",
-    "rationale": "Codex review summary body with no actionable request; its individual findings are tracked as the four review comments above."
+    "rationale": "Codex review summary body describing how the automated reviewer works; carries no actionable request of its own."
   }
 ]

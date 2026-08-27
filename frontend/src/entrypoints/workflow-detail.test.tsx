@@ -9095,7 +9095,12 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getAllByText('step-second.jpg').length).toBeGreaterThan(0);
     });
 
-    const objectivePreview = screen.getByAltText('Preview of Objective attachment objective.png');
+    // The detail surface reuses the shared clickable thumbnail rather than a
+    // parallel static renderer.
+    const objectiveThumbnail = screen.getByRole('button', {
+      name: 'Preview objective.png',
+    });
+    const objectivePreview = objectiveThumbnail.querySelector('img') as HTMLImageElement;
     expect(objectivePreview.getAttribute('src')).toBe('/api/artifacts/art-objective/download');
     fireEvent.error(objectivePreview);
 
@@ -9115,6 +9120,15 @@ describe('Workflow Detail Entrypoint', () => {
       '/api/artifacts/art-step/download',
       '/api/artifacts/art-step-second/download',
     ]);
+
+    // A surviving thumbnail still opens the full image in the shared lightbox.
+    fireEvent.click(screen.getByRole('button', { name: 'Preview step.webp' }));
+    const lightbox = screen.getByRole('dialog', { name: 'Preview of step.webp' });
+    expect(
+      (within(lightbox).getByAltText('step.webp') as HTMLImageElement).getAttribute('src'),
+    ).toBe('/api/artifacts/art-step/download');
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 
   it('renders separate Intervention and Observation sections with intervention audit history', async () => {

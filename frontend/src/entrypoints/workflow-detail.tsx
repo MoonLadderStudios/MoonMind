@@ -22,6 +22,7 @@ import {
   WorkflowLifecycleStatusPill,
 } from '../components/ExecutionStatusPill';
 import { resolveWorkflowDisplayStatus } from '../status/workflowStatus';
+import { AttachmentImagePreview } from '../components/AttachmentImagePreview';
 import { DashboardActionDialog } from '../components/DashboardActionDialog';
 import { EntityDetailFrame } from '../components/EntityDetailFrame';
 import { CollectionWorkspace } from '../components/CollectionWorkspace';
@@ -3884,11 +3885,13 @@ function InputImagesSection({
                       </span>
                     </span>
                     {!failed ? (
-                      <img
-                        alt={`Preview of ${group.label} attachment ${filename}`}
-                        className="queue-attachment-preview"
-                        src={href}
-                        onError={() =>
+                      <AttachmentImagePreview
+                        filename={filename}
+                        contentType={artifact.contentType}
+                        href={href}
+                        download={filename}
+                        detail={`${group.label} · ${artifact.contentType || 'image'}, ${artifact.sizeBytes ?? '—'} bytes`}
+                        onPreviewError={() =>
                           setFailedPreviewIds((current) => ({
                             ...current,
                             [artifact.artifactId]: true,

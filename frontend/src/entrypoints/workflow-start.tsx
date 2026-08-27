@@ -1797,6 +1797,28 @@ function jiraTargetFromValue(value: string): JiraImportTarget | null {
   return null;
 }
 
+/**
+ * Rebinds a parsed import target to a step that still exists, so a selection
+ * read from the DOM can only ever name a live step. A stale option (its step was
+ * removed while the browser was open) resolves to null instead of binding an
+ * import to a step id that no longer has a draft.
+ */
+function resolveJiraImportTarget(
+  target: JiraImportTarget,
+  steps: readonly { localId: string }[],
+): JiraImportTarget | null {
+  if (target.kind === "preset") {
+    return target;
+  }
+  const step = steps.find((candidate) => candidate.localId === target.localId);
+  if (!step) {
+    return null;
+  }
+  return target.attachmentsOnly
+    ? { kind: "step", localId: step.localId, attachmentsOnly: true }
+    : { kind: "step", localId: step.localId };
+}
+
 function joinJiraText(parts: Array<string | null | undefined>): string {
   return parts
     .map((part) => String(part || "").trim())
@@ -7628,7 +7650,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   }
 
   function selectJiraImportTarget(value: string) {
-    const target = jiraTargetFromValue(value);
+    const parsed = jiraTargetFromValue(value);
+    if (!parsed) {
+      return;
+    }
+    const target = resolveJiraImportTarget(parsed, steps);
     if (!target) {
       return;
     }
@@ -8046,11 +8072,13 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     });
   }
 
-  // Dropping files onto a step is the same entry point as the file picker: it
-  // funnels into updateStepAttachments so policy counts, dedupe and template
-  // rebinding behave identically. Files the policy would reject at submit are
-  // rejected here instead, with the same wording.
-  function handleStepAttachmentDrop(localId: string, files: File[]) {
+  // The file picker and dropping files onto a step are the same entry point:
+  // both funnel into updateStepAttachments so policy counts, dedupe and
+  // template rebinding behave identically, and both apply the policy
+  // content-type check before the file enters the draft. Files the policy would
+  // reject at submit are rejected here instead, with the same wording, so
+  // overriding the picker's `accept` filter cannot smuggle one in.
+  function addStepAttachmentFiles(localId: string, files: File[]) {
     if (!attachmentPolicy.enabled || files.length === 0) {
       return;
     }
@@ -8125,7 +8153,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         }
         event.preventDefault();
         clearStepAttachmentDropState(localId);
-        handleStepAttachmentDrop(localId, droppedFiles(event.dataTransfer));
+        addStepAttachmentFiles(localId, droppedFiles(event.dataTransfer));
       },
     };
   }
@@ -8149,6 +8177,15 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           : step,
       ),
     );
+  }
+
+  function removeObjectiveAttachment(fileToRemove: File) {
+    clearAttachmentTargetError(attachmentTargetKey("objective"));
+    const nextFiles = selectedObjectiveAttachmentFiles.filter(
+      (file) => file !== fileToRemove,
+    );
+    setSelectedObjectiveAttachmentFiles(nextFiles);
+    updatePresetReapplyStateForObjective(templateFeatureRequest, nextFiles);
   }
 
   function removeStepAttachment(localId: string, fileToRemove: File) {
@@ -12755,6 +12792,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               });
               const stepAttachmentTargetError =
                 attachmentTargetErrors[attachmentTargetKey(step.localId)];
+              const objectiveAttachmentTargetError =
+                attachmentTargetErrors[attachmentTargetKey("objective")];
               const stepContextAttachments: StepContextAttachmentItem[] = [
                 ...(isPrimaryStep
                   ? persistedObjectiveAttachments.map((attachment) => ({
@@ -12773,6 +12812,30 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                         removePersistedObjectiveAttachment(
                           attachment.artifactId,
                         ),
+                    }))
+                  : []),
+                // Objective-scoped files that have not been uploaded yet preview
+                // from the same chip row as step files; a newly imported Jira
+                // screenshot must not wait for persistence to become visible.
+                ...(isPrimaryStep
+                  ? selectedObjectiveAttachmentFiles.map((file) => ({
+                      key: `pending-objective-${file.name}-${file.size}-${file.lastModified}`,
+                      filename: file.name || "attachment",
+                      detail: `${file.type || "application/octet-stream"}, ${formatAttachmentBytes(file.size)}`,
+                      targetLabel: "Objective",
+                      contentType: file.type,
+                      file,
+                      removeLabel: `Remove objective attachment ${file.name}`,
+                      onRemove: () => removeObjectiveAttachment(file),
+                      ...(objectiveAttachmentTargetError
+                        ? {
+                            retryLabel: `Retry upload for objective attachment ${file.name}`,
+                            onRetry: () =>
+                              clearAttachmentTargetError(
+                                attachmentTargetKey("objective"),
+                              ),
+                          }
+                        : {}),
                     }))
                   : []),
                 ...step.inputAttachments.map((attachment) => ({
@@ -13498,7 +13561,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                             index + 1,
                           )}
                           onChange={(event) => {
-                            updateStepAttachments(
+                            addStepAttachmentFiles(
                               step.localId,
                               Array.from(event.currentTarget.files || []),
                             );

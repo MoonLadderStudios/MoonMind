@@ -392,13 +392,23 @@ Preview rules:
 - previews and downloads go through MoonMind-owned API endpoints
 - image attachments render an inline thumbnail wherever they are listed, and
   the thumbnail opens the full image; non-image attachments keep a generic icon
+- one preview component serves every surface that lists attachments; no surface
+  keeps a parallel image renderer
+- only a same-origin, `blob:`, `http(s)`, or `image/*` `data:` source may be
+  rendered; any other source falls back to the generic icon
+- the full-image view is modal: focus enters it, Tab stays inside it, and focus
+  returns to the thumbnail when it closes
 - pending local files preview from browser-local object URLs, which must be
   released when the attachment is removed or its surface unmounts
 - previews are organized by target:
   - objective-scoped
   - step-scoped
 - the UI must not infer target binding from filenames
-- preview failure must not remove access to metadata or download actions
+- preview failure must not remove access to metadata or download actions: a
+  source that fails to load suppresses the thumbnail rather than leaving a
+  broken image that opens another broken image
+- pending files are previewed at the target that owns them, including
+  objective-scoped files that have not been uploaded yet
 - edit and rerun surfaces must distinguish persisted attachments from new local files not yet uploaded
 
 ---

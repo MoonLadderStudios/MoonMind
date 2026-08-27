@@ -6111,13 +6111,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   height: 0.48rem;
 }
 
-.queue-attachment-preview {
-  display: block;
-  max-width: min(100%, 16rem);
-  max-height: 10rem;
-  object-fit: contain;
-}
-
 /* Create workflow page: the routed panel bleeds to the nav's bottom border, so
  * give the page's first heading a little breathing room below that line. */
 .workflow-start-page {

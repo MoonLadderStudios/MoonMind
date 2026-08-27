@@ -4,6 +4,7 @@ import { fireEvent, render, screen } from "../utils/test-utils";
 import {
   AttachmentImagePreview,
   isImageAttachment,
+  isSafeAttachmentPreviewUrl,
 } from "./AttachmentImagePreview";
 
 const OBJECT_URL = "blob:mock/preview";
@@ -18,6 +19,27 @@ describe("isImageAttachment", () => {
     expect(isImageAttachment("", "screenshot.PNG")).toBe(true);
     expect(isImageAttachment(null, "diagram.webp")).toBe(true);
     expect(isImageAttachment(undefined, "notes.txt")).toBe(false);
+  });
+});
+
+describe("isSafeAttachmentPreviewUrl", () => {
+  it("allows the sources the dashboard actually produces", () => {
+    expect(isSafeAttachmentPreviewUrl("/api/artifacts/art-1/download")).toBe(true);
+    expect(isSafeAttachmentPreviewUrl("artifacts/art-1/download")).toBe(true);
+    expect(isSafeAttachmentPreviewUrl("blob:mock/preview")).toBe(true);
+    expect(isSafeAttachmentPreviewUrl("https://storage.example/a.png")).toBe(true);
+    expect(isSafeAttachmentPreviewUrl("data:image/png;base64,AAAA")).toBe(true);
+  });
+
+  it("rejects empty, protocol-relative and executable sources", () => {
+    expect(isSafeAttachmentPreviewUrl("")).toBe(false);
+    expect(isSafeAttachmentPreviewUrl(null)).toBe(false);
+    expect(isSafeAttachmentPreviewUrl("//evil.example/a.png")).toBe(false);
+    expect(isSafeAttachmentPreviewUrl("javascript:alert(1)")).toBe(false);
+    expect(isSafeAttachmentPreviewUrl(" JavaScript:alert(1)")).toBe(false);
+    // Browsers strip the tab before resolving, so the check must too.
+    expect(isSafeAttachmentPreviewUrl("java\tscript:alert(1)")).toBe(false);
+    expect(isSafeAttachmentPreviewUrl("data:text/html,<script>")).toBe(false);
   });
 });
 
@@ -133,6 +155,82 @@ describe("AttachmentImagePreview", () => {
     fireEvent.click(screen.getByRole("button", { name: "Preview screenshot.png" }));
     fireEvent.click(screen.getByAltText("screenshot.png"));
     expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+
+  it("renders no thumbnail for an unsafe preview source", () => {
+    const { container } = render(
+      <AttachmentImagePreview
+        filename="screenshot.png"
+        contentType="image/png"
+        href="javascript:alert(1)"
+      />,
+    );
+
+    expect(container.querySelector(".attachment-thumbnail")).toBeNull();
+  });
+
+  it("suppresses the preview and reports the failure when the source cannot load", () => {
+    const onPreviewError = vi.fn();
+    const { container } = render(
+      <AttachmentImagePreview
+        filename="screenshot.png"
+        contentType="image/png"
+        href="/api/artifacts/art-broken/download"
+        onPreviewError={onPreviewError}
+      />,
+    );
+
+    const thumbnail = screen.getByRole("button", { name: "Preview screenshot.png" });
+    fireEvent.error(thumbnail.querySelector("img") as HTMLImageElement);
+
+    expect(onPreviewError).toHaveBeenCalledTimes(1);
+    // The chip falls back to its generic icon and keeps its metadata actions.
+    expect(container.querySelector(".attachment-thumbnail")).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("closes an open lightbox when its image fails to load", () => {
+    render(
+      <AttachmentImagePreview
+        filename="screenshot.png"
+        contentType="image/png"
+        href="/api/artifacts/art-broken/download"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Preview screenshot.png" }));
+    fireEvent.error(screen.getByAltText("screenshot.png"));
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Preview screenshot.png" }),
+    ).toBeNull();
+  });
+
+  it("keeps Tab inside the open lightbox", () => {
+    render(
+      <AttachmentImagePreview
+        filename="screenshot.png"
+        contentType="image/png"
+        href="/api/artifacts/art-3/download"
+        download="screenshot.png"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Preview screenshot.png" }));
+    const dialog = screen.getByRole("dialog", { name: "Preview of screenshot.png" });
+    const downloadLink = screen.getByRole("link", { name: "Download" });
+    const closeButton = screen.getByRole("button", {
+      name: "Close preview of screenshot.png",
+    });
+
+    // Focus starts on the close button, which is the last focusable control.
+    expect(document.activeElement).toBe(closeButton);
+    fireEvent.keyDown(dialog, { key: "Tab" });
+    expect(document.activeElement).toBe(downloadLink);
+
+    fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(closeButton);
   });
 
   it("returns focus to the thumbnail after the preview closes", () => {

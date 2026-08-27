@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { MouseEvent, ReactElement } from "react";
+import type { KeyboardEvent, MouseEvent, ReactElement } from "react";
 import { createPortal } from "react-dom";
+
+import { trapTabWithin } from "../lib/focusTrap";
 
 export interface AttachmentImagePreviewProps {
   /** Display name of the attachment, used for labels and the lightbox caption. */
@@ -15,6 +17,43 @@ export interface AttachmentImagePreviewProps {
   detail?: string | null | undefined;
   /** Filename applied to the lightbox download link. */
   download?: string | null | undefined;
+  /**
+   * Called when the preview source cannot be rendered. The component suppresses
+   * itself so the surrounding chip keeps its generic icon, metadata and
+   * download action; callers may use this to add an explicit unavailable note.
+   */
+  onPreviewError?: (() => void) | undefined;
+}
+
+const SAFE_PREVIEW_SCHEMES = new Set(["blob:", "http:", "https:"]);
+
+/**
+ * True when `url` may be rendered as an image source. Preview sources are
+ * assembled from configuration and from browser-local object URLs, so an
+ * unexpected scheme (`javascript:`, a non-image `data:` payload) must never
+ * reach an `img` element or the lightbox download link.
+ */
+export function isSafeAttachmentPreviewUrl(
+  url: string | null | undefined,
+): boolean {
+  // Browsers ignore ASCII whitespace and control characters when they resolve a
+  // URL, so the scheme is read from the same stripped form they would see.
+  const candidate = Array.from(String(url || ""))
+    .filter((character) => character.charCodeAt(0) > 0x20)
+    .join("");
+  if (!candidate) {
+    return false;
+  }
+  const scheme = /^[a-z][a-z0-9+.-]*:/i.exec(candidate)?.[0]?.toLowerCase();
+  if (!scheme) {
+    // Relative and root-relative sources resolve against the dashboard origin;
+    // a protocol-relative source does not.
+    return !candidate.startsWith("//");
+  }
+  if (scheme === "data:") {
+    return /^data:image\//i.test(candidate);
+  }
+  return SAFE_PREVIEW_SCHEMES.has(scheme);
 }
 
 export function isImageAttachment(
@@ -68,6 +107,7 @@ interface AttachmentLightboxProps {
   href?: string | null | undefined;
   download?: string | null | undefined;
   onClose: () => void;
+  onError: () => void;
 }
 
 function AttachmentLightbox({
@@ -77,8 +117,10 @@ function AttachmentLightbox({
   href,
   download,
   onClose,
+  onError,
 }: AttachmentLightboxProps): ReactElement | null {
   const closeRef = useRef<HTMLButtonElement | null>(null);
+  const backdropRef = useRef<HTMLDivElement | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
@@ -111,20 +153,33 @@ function AttachmentLightbox({
     [onClose],
   );
 
+  // The lightbox is the active interaction boundary while it is open, so Tab
+  // cycles inside it instead of reaching the form behind the backdrop.
+  const handleTabKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
+    trapTabWithin(backdropRef.current, event);
+  }, []);
+
   if (typeof document === "undefined") {
     return null;
   }
 
   return createPortal(
     <div
+      ref={backdropRef}
       className="attachment-lightbox-backdrop"
       role="dialog"
       aria-modal="true"
       aria-label={`Preview of ${filename}`}
       onClick={handleBackdropClick}
+      onKeyDown={handleTabKeyDown}
     >
       <figure className="attachment-lightbox-panel">
-        <img className="attachment-lightbox-image" src={src} alt={filename} />
+        <img
+          className="attachment-lightbox-image"
+          src={src}
+          alt={filename}
+          onError={onError}
+        />
         <figcaption className="attachment-lightbox-caption">
           <span className="attachment-lightbox-filename">{filename}</span>
           {detail ? (
@@ -158,8 +213,9 @@ function AttachmentLightbox({
 
 /**
  * Small clickable thumbnail for an image attachment. Clicking it opens the full
- * image in a lightbox. Returns `null` when the attachment is not an image or no
- * preview source is available, so callers can fall back to a generic icon.
+ * image in a lightbox. Returns `null` when the attachment is not an image, when
+ * no safe preview source is available, or when the source failed to load, so
+ * callers keep their generic icon, metadata and download action.
  */
 export function AttachmentImagePreview({
   filename,
@@ -168,12 +224,26 @@ export function AttachmentImagePreview({
   href,
   detail,
   download,
+  onPreviewError,
 }: AttachmentImagePreviewProps): ReactElement | null {
   const [isOpen, setIsOpen] = useState<boolean>(false);
+  const [isUnavailable, setIsUnavailable] = useState<boolean>(false);
   const previewUrl = useAttachmentPreviewUrl(file, href);
   const isImage = isImageAttachment(contentType ?? file?.type, filename);
 
   const handleClose = useCallback(() => setIsOpen(false), []);
+
+  // A source that fails once stays suppressed until a different source arrives,
+  // so a broken thumbnail cannot be clicked into a broken lightbox.
+  const handleError = useCallback(() => {
+    setIsUnavailable(true);
+    setIsOpen(false);
+    onPreviewError?.();
+  }, [onPreviewError]);
+
+  useEffect(() => {
+    setIsUnavailable(false);
+  }, [previewUrl]);
 
   useEffect(() => {
     if (!previewUrl && isOpen) {
@@ -181,9 +251,13 @@ export function AttachmentImagePreview({
     }
   }, [isOpen, previewUrl]);
 
-  if (!isImage || !previewUrl) {
+  if (!isImage || isUnavailable || !previewUrl) {
     return null;
   }
+  if (!isSafeAttachmentPreviewUrl(previewUrl)) {
+    return null;
+  }
+  const downloadHref = isSafeAttachmentPreviewUrl(href) ? href : null;
 
   return (
     <>
@@ -200,6 +274,7 @@ export function AttachmentImagePreview({
           src={previewUrl}
           alt=""
           aria-hidden="true"
+          onError={handleError}
         />
       </button>
       {isOpen ? (
@@ -207,9 +282,10 @@ export function AttachmentImagePreview({
           src={previewUrl}
           filename={filename}
           detail={detail}
-          href={href}
+          href={downloadHref}
           download={download}
           onClose={handleClose}
+          onError={handleError}
         />
       ) : null}
     </>

@@ -20398,6 +20398,159 @@ describe("Task Create governed Tool authoring", () => {
     expect(within(step).queryByText("screenshot.png")).toBeNull();
   });
 
+  it("previews a pending objective image imported from Jira in the primary step", async () => {
+    const objectUrl = "blob:mock/jira-wireframe";
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      writable: true,
+      value: vi.fn(() => objectUrl),
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      writable: true,
+      value: vi.fn(),
+    });
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const path = url.split("?")[0];
+      if (path === "/api/jira/projects") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: [{ projectKey: "ENG", name: "Engineering" }] }),
+        } as Response);
+      }
+      if (path === "/api/jira/projects/ENG/boards") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [{ id: "42", name: "Delivery", projectKey: "ENG" }],
+          }),
+        } as Response);
+      }
+      if (path === "/api/jira/boards/42/columns") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            board: { id: "42", name: "Delivery", projectKey: "ENG" },
+            columns: [{ id: "doing", name: "Doing", count: 1 }],
+          }),
+        } as Response);
+      }
+      if (path === "/api/jira/boards/42/issues") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            boardId: "42",
+            columns: [{ id: "doing", name: "Doing", count: 1 }],
+            itemsByColumn: {
+              doing: [
+                {
+                  issueKey: "ENG-202",
+                  summary: "Build browser shell",
+                  issueType: "Story",
+                  statusName: "In Progress",
+                  assignee: "Grace",
+                  updatedAt: "2026-04-11T19:30:00Z",
+                },
+              ],
+            },
+          }),
+        } as Response);
+      }
+      if (path === "/api/jira/issues/ENG-202") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            issueKey: "ENG-202",
+            summary: "Build browser shell",
+            issueType: "Story",
+            column: { id: "doing", name: "Doing" },
+            status: { id: "3", name: "In Progress" },
+            descriptionText: "Let operators browse Jira stories.",
+            recommendedImports: {
+              presetInstructions: "ENG-202: Build browser shell",
+              stepInstructions: "Complete Jira issue ENG-202",
+            },
+            attachments: [
+              {
+                id: "img-1",
+                filename: "wireframe.png",
+                contentType: "image/png",
+                sizeBytes: 10,
+                downloadUrl: "/api/jira/attachments/wireframe.png",
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (path === "/api/jira/attachments/wireframe.png") {
+        return Promise.resolve({
+          ok: true,
+          blob: async () => new Blob(["fake image"], { type: "image/png" }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
+    });
+
+    renderWithClient(
+      <WorkflowStartPage payload={withAttachmentPolicy(withJiraIntegration())} />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Browse Jira issues for Step 1 instructions",
+      }),
+    );
+    fireEvent.change(await screen.findByLabelText("Import target"), {
+      target: { value: "preset-attachments" },
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+
+    // An objective-scoped image is visible on the primary step before it is
+    // persisted, exactly like a pending step-scoped image.
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    expect(await within(step).findByText("wireframe.png")).toBeTruthy();
+    const thumbnail = within(step).getByRole("button", {
+      name: "Preview wireframe.png",
+    });
+    expect(thumbnail.querySelector("img")?.getAttribute("src")).toBe(objectUrl);
+
+    fireEvent.click(
+      within(step).getByRole("button", {
+        name: "Remove objective attachment wireframe.png",
+      }),
+    );
+    await waitFor(() => {
+      expect(within(step).queryByText("wireframe.png")).toBeNull();
+    });
+  });
+
+  it("rejects picker selections the attachment policy does not allow", async () => {
+    renderWithClient(
+      <WorkflowStartPage payload={withImageOnlyAttachmentPolicy()} />,
+    );
+
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    // Overriding the picker's `accept` filter must not smuggle a file past the
+    // policy check the identical drop already applies.
+    fireEvent.change(await screen.findByLabelText("Step 1 image file picker"), {
+      target: {
+        files: [new File(["notes"], "notes.txt", { type: "text/plain" })],
+      },
+    });
+
+    expect(
+      await within(step).findByText("Unsupported file type for notes.txt."),
+    ).toBeTruthy();
+    expect(within(step).queryByText("notes.txt")).toBeNull();
+  });
+
   it("omits image actions from the Add to step menu when attachments are disabled", async () => {
     renderWithClient(
       <WorkflowStartPage payload={withDisabledAttachmentPolicy()} />,

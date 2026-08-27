@@ -8,6 +8,8 @@ import {
   type ReactNode,
 } from 'react';
 
+import { focusableElementsWithin, trapTabWithin } from '../lib/focusTrap';
+
 type DashboardActionDialogProps = {
   open: boolean;
   title: string;
@@ -31,15 +33,6 @@ type DashboardActionDialogProps = {
   onCancel: () => void;
   onConfirm: (value: string) => void;
 };
-
-const FOCUSABLE_SELECTOR = [
-  'a[href]',
-  'button:not([disabled])',
-  'textarea:not([disabled])',
-  'input:not([disabled])',
-  'select:not([disabled])',
-  '[tabindex]:not([tabindex="-1"])',
-].join(',');
 
 export function DashboardActionDialog({
   open,
@@ -81,7 +74,7 @@ export function DashboardActionDialog({
     setTypedConfirmation('');
     setCopyLabel('Copy diagnostics');
     const focusTimer = window.setTimeout(() => {
-      const firstFocusable = dialogRef.current?.querySelector<HTMLElement>(FOCUSABLE_SELECTOR);
+      const [firstFocusable] = focusableElementsWithin(dialogRef.current);
       firstFocusable?.focus();
     }, 0);
     return () => {
@@ -99,29 +92,13 @@ export function DashboardActionDialog({
     : false;
   const confirmDisabled = Boolean(confirmPending || disabledReason || valueMissing || confirmationMissing);
 
-  const focusableElements = () => Array.from(
-    dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR) ?? [],
-  ).filter((element) => !element.hasAttribute('disabled'));
-
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key === 'Escape' && (!destructive || nonDestructiveEscapeClose)) {
       event.preventDefault();
       onCancel();
       return;
     }
-    if (event.key !== 'Tab') return;
-    const elements = focusableElements();
-    if (elements.length === 0) return;
-    const first = elements[0];
-    const last = elements[elements.length - 1];
-    if (!first || !last) return;
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault();
-      first.focus();
-    }
+    trapTabWithin(dialogRef.current, event);
   };
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
