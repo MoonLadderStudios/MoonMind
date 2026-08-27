@@ -13,6 +13,7 @@ from temporalio.api.operatorservice.v1 import AddSearchAttributesRequest
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
+from moonmind.config.settings import settings
 from moonmind.workflows.temporal.activity_catalog import (
     AGENT_RUNTIME_TASK_QUEUE,
     ARTIFACTS_TASK_QUEUE,
@@ -120,6 +121,15 @@ async def _readiness(_payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+@activity.defn(name="merge_automation.request_automated_review")
+async def _request_automated_review(_payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "status": "requested",
+        "requestCommentId": 98765,
+        "requestedAt": "2026-08-26T23:59:00Z",
+    }
+
+
 _terminal_evidence_calls = 0
 
 
@@ -137,15 +147,16 @@ async def _terminal_evidence(payload: dict[str, Any]) -> dict[str, Any]:
                 "terminalContractOutcome": "continuation_requested",
                 "terminalContractEvidencePath": "var/pr_resolver/result.json",
                 "terminalContractExecutionRef": contract["executionRef"],
-                "mergeAutomationDisposition": "reenter_gate",
+                "mergeAutomationDisposition": "request_review",
                 "gatedContinuation": {
-                    "schemaVersion": "gated-continuation/v1",
+                    "schemaVersion": "gated-continuation/v2",
                     "gateType": "merge_automation",
-                    "action": "reenter_gate",
-                    "reason": "codex_review_grace_wait",
-                    "retryAfterSeconds": 2,
+                    "action": "request_review",
+                    "provider": "codex",
+                    "reason": "fresh_review_required_after_remediation",
                     "executionRef": contract["executionRef"],
                     "headSha": "abcdef1",
+                    "progressSignature": "abcdef1||",
                 },
             },
         }
@@ -198,7 +209,7 @@ async def _register_search_attributes(env: WorkflowEnvironment) -> None:
 
 
 @pytest.mark.asyncio
-async def test_real_three_workflow_topology_waits_then_merges() -> None:
+async def test_real_three_workflow_topology_requests_review_then_merges() -> None:
     global _terminal_evidence_calls
     _terminal_evidence_calls = 0
     parent_id = "mm1209-full-topology"
@@ -230,8 +241,15 @@ async def test_real_three_workflow_topology_waits_then_merges() -> None:
             Worker(env.client, task_queue=AGENT_RUNTIME_TASK_QUEUE, activities=common),
             Worker(
                 env.client,
+                task_queue=(
+                    settings.temporal.activity_agent_runtime_control_task_queue
+                ),
+                activities=[_terminal_evidence],
+            ),
+            Worker(
+                env.client,
                 task_queue=INTEGRATIONS_TASK_QUEUE,
-                activities=[_readiness],
+                activities=[_readiness, _request_automated_review],
             ),
             Worker(
                 env.client,
@@ -268,6 +286,11 @@ async def test_real_three_workflow_topology_waits_then_merges() -> None:
                     },
                     "mergeAutomationConfig": {
                         "timeouts": {"fallbackPollSeconds": 2},
+                        "reviewLoop": {
+                            "enabled": True,
+                            "provider": "codex",
+                            "maxCycles": 2,
+                        },
                     },
                     "resolverTemplate": {"targetRuntime": "claude_code"},
                 },
@@ -341,5 +364,6 @@ async def test_real_three_workflow_topology_waits_then_merges() -> None:
         second_result,
     )
     assert result["cycles"] == 2
-    assert result["continuationCounters"]["continuation_wait_completed"] == 1
+    assert result["continuationCounters"]["continuation_cycle_completed"] == 1
+    assert result["reviewLoop"]["cycles"] == 1
     assert _terminal_evidence_calls == 2
