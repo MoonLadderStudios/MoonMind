@@ -21187,6 +21187,38 @@ describe("Task Create runtime switch layout stability", () => {
     expect(screen.queryByRole("option", { name: /Codex Default/ })).toBeNull();
   });
 
+  it("MoonLadderStudios/MoonMind#3788 names the runtime in the empty state when it has no launch-ready profiles", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    await screen.findByLabelText("Provider profile");
+
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Runtime"), {
+        target: { value: "claude_code" },
+      });
+    });
+
+    // The runtime-scoped refetch is still in flight, so the surface must not
+    // yet claim the runtime has no profiles.
+    expect(
+      screen.queryByText(/No launch-ready Provider Profiles are configured/),
+    ).toBeNull();
+
+    await act(async () => {
+      resolveClaudeProfiles?.([]);
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          /No launch-ready Provider Profiles are configured for Claude Code\. Configure one in Settings before starting this workflow\./,
+        ),
+      ).toBeTruthy();
+    });
+    // No selector means no way to submit an incompatible profile.
+    expect(screen.queryByLabelText("Provider profile")).toBeNull();
+  });
+
   it("omits task effort when the selected provider profile defines a default effort", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 

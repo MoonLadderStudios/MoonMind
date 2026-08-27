@@ -131,6 +131,12 @@ Those cards may be backed by disabled setup-stub Provider Profiles or by a separ
 3. Successful user-initiated setup makes the profile connected and enabled by default.
 4. Failed setup leaves the profile disabled with clear readiness diagnostics.
 
+Settings is also the one administrative exception to runtime-scoped selection.
+It owns an explicit **All runtimes** view of every Provider Profile plus a
+per-runtime filter over that table, while global configuration health stays
+computed from the complete unfiltered collection. See
+[10.5 Runtime-owned selection scope](#105-runtime-owned-selection-scope).
+
 ---
 
 ## 3. Goals
@@ -1032,6 +1038,95 @@ To prevent unintentional cross-provider routing, one or more of the following sh
    - The intended primary provider has higher priority than alternatives.
 
 Disabled setup stubs must never participate in default provider fallback.
+
+### 10.5 Runtime-owned selection scope
+
+> Provider Profiles are runtime-owned launch contracts. A runtime-coupled
+> execution surface must display and accept only profiles compatible with the
+> selected effective runtime. Settings may expose an explicit All-runtimes
+> administrative view.
+
+`runtime_id` is required and stable because the profile owns runtime-specific
+behavior: provider and credential selection, credential materialization,
+environment and file shaping, command behavior, model and effort tiers,
+concurrency and cooldown policy, and default-profile selection for that runtime.
+
+A Provider Profile is therefore never a multi-runtime object. The same upstream
+provider or managed secret is represented by one runtime-specific profile per
+runtime, and those profiles may reference the same managed secret:
+
+```text
+codex_minimax_team
+  runtime_id: codex_cli
+  provider_id: minimax
+  secret_ref: db://MINIMAX_API_KEY
+
+claude_minimax_team
+  runtime_id: claude_code
+  provider_id: minimax
+  secret_ref: db://MINIMAX_API_KEY
+```
+
+#### Execution and workflow-authoring surfaces
+
+For an ordinary managed runtime, a visible profile satisfies:
+
+```text
+visible profile.runtime_id == selected effective runtime
+```
+
+- Execution surfaces do not offer an **All runtimes** option.
+- Surfaces scope the result set server-side with
+  `GET /api/v1/provider-profiles?runtime_id=<canonical runtime>` rather than
+  fetching every profile and filtering only on the client.
+- The query cache key includes the effective runtime, and previous-runtime
+  placeholder data is never selectable, resolvable, or submittable during a
+  runtime-scoped refetch.
+- Changing runtime drops an incompatible selection, then selects the new
+  runtime's launch-ready default profile, or the first eligible profile under
+  the existing deterministic ordering.
+- A runtime with no eligible profile shows a runtime-specific empty state that
+  names the runtime instead of hiding the control.
+
+#### Omnigent compatibility exception
+
+`omnigent` is an orchestration and execution facade, not a Provider Profile
+owner. Omnigent selection is compatibility-based against the underlying managed
+runtime and the selected execution target; it must never look for
+`runtime_id == omnigent`.
+
+- A traditional execution profile filters eligible profiles by the selected
+  target's `providerRuntime` and its declared provider requirements.
+- A generic (v2) Agent Profile uses the compatibility or readiness result that
+  declares the allowed Provider Profiles. A profile is compatible only when the
+  harness can materialize credentials for that profile's
+  `(runtime_id, provider_id)` pair; being globally enabled is never sufficient.
+- An unavailable historical profile may still render while editing an existing
+  workflow, but requires replacement before submission.
+
+#### Server-side correctness boundary
+
+The UI filter alone is not sufficient. Every launch-authoring or submission path
+validates the relationship before persisting or launching, using canonical
+runtime IDs and never inferring compatibility from `provider_id` alone:
+
+```text
+reject when selected_profile.runtime_id != effective_runtime_id
+```
+
+Rejection returns `409 Conflict` with code `provider_profile_runtime_mismatch`,
+identifying both sides of the incompatible pair:
+
+```text
+Provider Profile 'claude_anthropic_oauth' belongs to runtime 'claude_code' and
+cannot be used with runtime 'codex_cli'.
+```
+
+For Omnigent submissions the equivalent rejection comes from the Omnigent
+selection boundary when the requested profile falls outside the selected
+execution target's compatibility set. Existing authorization, visibility,
+readiness, capacity, and secret-resolution validation continue to apply
+unchanged.
 
 ---
 

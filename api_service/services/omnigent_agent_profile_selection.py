@@ -27,6 +27,7 @@ from api_service.services.provider_profile_readiness import (
 from api_service.services.provider_profile_service import (
     _managed_secret_statuses_for_profiles,
 )
+from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 
 _OVERRIDABLE_SECTIONS = frozenset({"model", "capture", "rag", "publish"})
 
@@ -355,6 +356,31 @@ async def resolve_agent_profile_snapshot(
             and compatible_provider.provider_id not in accepted_provider_ids
         ):
             compatible_provider = None
+        if compatible_provider is not None:
+            # A Provider Profile stays owned by its managed runtime even when it
+            # launches through Omnigent, so the requested profile must be one the
+            # harness can actually materialize for that runtime. This is the same
+            # capability boundary the execution-readiness projection uses to build
+            # `compatibleProviderProfiles`, not a second compatibility source.
+            from moonmind.omnigent.harness_platform.materializers import (
+                materializer_ref_for_provider,
+            )
+
+            try:
+                materializer_ref_for_provider(
+                    compatible_provider.runtime_id,
+                    compatible_provider.provider_id,
+                )
+            except HarnessPlatformError as exc:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    (
+                        f"selected Provider Profile "
+                        f"{compatible_provider.profile_id!r} belongs to runtime "
+                        f"{compatible_provider.runtime_id!r} and is not "
+                        f"compatible with the selected Omnigent execution target"
+                    ),
+                ) from exc
     else:
         requirements = document["providerRequirements"]
         provider_query = select(ManagedAgentProviderProfile).where(

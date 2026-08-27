@@ -7811,6 +7811,80 @@ def _resolve_runtime_model_effort(
     return resolved_model, model_source, requested_effort, None
 
 
+def _require_provider_profile_runtime(
+    *,
+    profile: Any,
+    profile_id: str,
+    selected_runtime: str | None,
+) -> None:
+    """Reject a Provider Profile that is not owned by the selected runtime.
+
+    Provider Profiles are runtime-owned launch contracts: ``runtime_id`` decides
+    credential materialization, environment and file shaping, command behavior,
+    and model tiers, so the same upstream provider needs one profile per
+    runtime. Enforcing the relationship here keeps alternate clients from
+    bypassing the runtime-scoped selectors in the dashboard.
+
+    ``omnigent`` is an execution facade rather than a Provider Profile owner:
+    the profile it launches stays owned by the underlying managed runtime, and
+    compatibility is enforced against the selected execution target by
+    ``api_service.services.omnigent_agent_profile_selection``.
+    """
+
+    if profile is None or not selected_runtime:
+        return
+    canonical_runtime = normalize_runtime_id(selected_runtime)
+    if canonical_runtime == "omnigent":
+        return
+    raw_profile_runtime = str(getattr(profile, "runtime_id", "") or "").strip()
+    if not raw_profile_runtime:
+        return
+    profile_runtime = normalize_runtime_id(raw_profile_runtime)
+    if profile_runtime == canonical_runtime:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "code": "provider_profile_runtime_mismatch",
+            "message": (
+                f"Provider Profile {profile_id!r} belongs to runtime "
+                f"{profile_runtime!r} and cannot be used with runtime "
+                f"{canonical_runtime!r}."
+            ),
+            "profileId": profile_id,
+            "profileRuntime": profile_runtime,
+            "selectedRuntime": canonical_runtime,
+        },
+    )
+
+
+async def _load_provider_profile_for_runtime(
+    *,
+    session: Any,
+    profile_id: str,
+    selected_runtime: str | None,
+    not_found_message: str,
+) -> ManagedAgentProviderProfile | None:
+    """Load an explicitly requested Provider Profile for *selected_runtime*.
+
+    The runtime relationship is validated before the caller persists or launches
+    anything, so an incompatible pair can never reach a launch.
+    """
+
+    session_get = getattr(session, "get", None)
+    if session is None or not callable(session_get):
+        return None
+    profile = await session_get(ManagedAgentProviderProfile, profile_id)
+    if profile is None:
+        raise _invalid_workflow_request(not_found_message)
+    _require_provider_profile_runtime(
+        profile=profile,
+        profile_id=profile_id,
+        selected_runtime=selected_runtime,
+    )
+    return profile
+
+
 async def _load_default_provider_profile_for_runtime(
     *,
     session: Any,
@@ -8728,6 +8802,13 @@ async def _resolve_step_runtime_selections(
                     f"Provider profile not found for inherited task profile on "
                     f"payload.workflow.steps[{index}]: {task_profile_id!r}."
                 )
+            # A step may override the runtime while inheriting the task profile,
+            # so the ownership check runs against the step's effective runtime.
+            _require_provider_profile_runtime(
+                profile=provider_profile,
+                profile_id=effective_profile_id,
+                selected_runtime=canonical_step_runtime,
+            )
 
         (
             resolved_model,
@@ -11046,11 +11127,12 @@ async def _create_execution_from_workflow_request(
     # selection order as the ProviderProfileManager.
     _provider_profile = None
     if raw_profile_id and session is not None:
-        _provider_profile = await session.get(ManagedAgentProviderProfile, raw_profile_id)
-        if _provider_profile is None:
-            raise _invalid_workflow_request(
-                f"Provider profile not found: {raw_profile_id!r}."
-            )
+        _provider_profile = await _load_provider_profile_for_runtime(
+            session=session,
+            profile_id=raw_profile_id,
+            selected_runtime=canonical_target_runtime,
+            not_found_message=f"Provider profile not found: {raw_profile_id!r}.",
+        )
     elif _runtime_model_tier(runtime_payload) is not None:
         _provider_profile = await _load_default_provider_profile_for_runtime(
             session=session,
@@ -11734,16 +11816,13 @@ async def _resolve_recurring_runtime_metadata(
         raw_requested_model = str(raw_requested_model)
 
     provider_profile = None
-    session_get = getattr(session, "get", None)
-    if raw_profile_id and callable(session_get):
-        provider_profile = await session_get(
-            ManagedAgentProviderProfile,
-            raw_profile_id,
+    if raw_profile_id:
+        provider_profile = await _load_provider_profile_for_runtime(
+            session=session,
+            profile_id=raw_profile_id,
+            selected_runtime=canonical_target_runtime,
+            not_found_message=f"Provider profile not found: {raw_profile_id!r}.",
         )
-        if provider_profile is None:
-            raise _invalid_workflow_request(
-                f"Provider profile not found: {raw_profile_id!r}."
-            )
     elif _runtime_model_tier(runtime_payload) is not None:
         provider_profile = await _load_default_provider_profile_for_runtime(
             session=session,

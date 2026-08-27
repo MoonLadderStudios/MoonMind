@@ -44,6 +44,7 @@ from api_service.api.routers.executions import (
     _workflow_input_snapshot_descriptor_from_record,
     _normalize_task_steps,
     _normalize_task_tool,
+    _resolve_recurring_runtime_metadata,
     _resolve_step_runtime_selections,
     _step_execution_detail_payload,
     _detect_optional_temporal_search_attributes,
@@ -17108,3 +17109,349 @@ def test_chat_binding_unknown_workflow_returns_404(monkeypatch) -> None:
         response = client.get("/api/executions/mm:wf-unknown/chat-binding")
 
     assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# MoonLadderStudios/MoonMind#3788 — Provider Profiles are runtime-owned launch
+# contracts, so every launch-authoring path must reject a runtime/profile pair
+# that the runtime-scoped selectors would never offer.
+# ---------------------------------------------------------------------------
+
+
+def _mm3788_provider_profile(
+    *, profile_id: str, runtime_id: str
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        profile_id=profile_id,
+        runtime_id=runtime_id,
+        provider_id="minimax",
+        default_model=None,
+        default_effort=None,
+        model_tiers=None,
+        default_model_tier=None,
+    )
+
+
+def _mm3788_client(profile: SimpleNamespace) -> Iterator[tuple[TestClient, AsyncMock]]:
+    app = FastAPI()
+    app.include_router(router)
+    service = AsyncMock()
+    service.create_execution.return_value = _build_execution_record()
+    app.dependency_overrides[_get_service] = lambda: service
+
+    class _Session:
+        async def get(self, _model: object, profile_id: str) -> object | None:
+            return profile if profile.profile_id == profile_id else None
+
+        async def scalar(self, _stmt: object) -> object | None:
+            # No Omnigent Agent Profile authority is seeded, so the Omnigent
+            # selection service is the one that rejects an Omnigent submission.
+            return None
+
+    app.dependency_overrides[get_async_session] = lambda: _Session()
+    _override_temporal_client(app)
+    _override_user_dependencies(app, is_superuser=True)
+
+    with TestClient(app) as test_client:
+        yield test_client, service
+
+    app.dependency_overrides.clear()
+
+
+def _mm3788_task_request(*, target_runtime: str, profile_id: str) -> dict[str, Any]:
+    return {
+        "type": "workflow",
+        "payload": {
+            "targetRuntime": target_runtime,
+            "workflow": {
+                "title": "MM-3788 runtime scoped launch",
+                "instructions": "Launch with an explicit provider profile.",
+                "runtime": {
+                    "mode": target_runtime,
+                    "providerProfileRef": profile_id,
+                },
+            },
+        },
+    }
+
+
+def test_mm3788_create_execution_rejects_provider_profile_from_another_runtime() -> None:
+    profile = _mm3788_provider_profile(
+        profile_id="codex_minimax_team", runtime_id="codex_cli"
+    )
+
+    for test_client, service in _mm3788_client(profile):
+        response = test_client.post(
+            "/api/executions",
+            json=_mm3788_task_request(
+                target_runtime="claude_code", profile_id="codex_minimax_team"
+            ),
+        )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["code"] == "provider_profile_runtime_mismatch"
+    # The response must identify both sides of the incompatible pair.
+    assert detail["profileId"] == "codex_minimax_team"
+    assert detail["profileRuntime"] == "codex_cli"
+    assert detail["selectedRuntime"] == "claude_code"
+    assert "codex_minimax_team" in detail["message"]
+    assert "claude_code" in detail["message"]
+    # The check runs before the launch is created.
+    service.create_execution.assert_not_awaited()
+
+
+def test_mm3788_create_execution_accepts_provider_profile_owned_by_selected_runtime() -> None:
+    profile = _mm3788_provider_profile(
+        profile_id="claude_minimax_team", runtime_id="claude_code"
+    )
+
+    for test_client, service in _mm3788_client(profile):
+        response = test_client.post(
+            "/api/executions",
+            json=_mm3788_task_request(
+                target_runtime="claude_code", profile_id="claude_minimax_team"
+            ),
+        )
+
+    assert response.status_code == 201
+    initial_parameters = service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["targetRuntime"] == "claude_code"
+    assert initial_parameters["profileId"] == "claude_minimax_team"
+
+
+def test_mm3788_create_execution_rejects_legacy_runtime_alias_mismatch() -> None:
+    """Canonical runtime IDs decide the comparison, not the submitted spelling."""
+
+    profile = _mm3788_provider_profile(
+        profile_id="claude_minimax_team", runtime_id="claude_code"
+    )
+
+    for test_client, _service in _mm3788_client(profile):
+        response = test_client.post(
+            "/api/executions",
+            json=_mm3788_task_request(
+                target_runtime="codex", profile_id="claude_minimax_team"
+            ),
+        )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["selectedRuntime"] == "codex_cli"
+    assert detail["profileRuntime"] == "claude_code"
+
+
+def test_mm3788_create_execution_leaves_omnigent_compatibility_to_the_selection_service() -> None:
+    """`omnigent` is a facade: the profile stays owned by the managed runtime.
+
+    Runtime ownership is therefore not compared here; Omnigent compatibility is
+    enforced against the selected execution target by
+    ``omnigent_agent_profile_selection``.
+    """
+
+    profile = _mm3788_provider_profile(
+        profile_id="codex_minimax_team", runtime_id="codex_cli"
+    )
+
+    for test_client, service in _mm3788_client(profile):
+        response = test_client.post(
+            "/api/executions",
+            json=_mm3788_task_request(
+                target_runtime="omnigent", profile_id="codex_minimax_team"
+            ),
+        )
+
+    # A `codex_cli` profile under `runtime_id != omnigent` is never a runtime
+    # mismatch: the submission proceeds into the Omnigent selection service,
+    # which owns compatibility against the selected execution target.
+    assert response.status_code == 409
+    assert response.json()["detail"] == "default Omnigent Agent Profile is unavailable"
+    service.create_execution.assert_not_awaited()
+
+
+def test_mm3788_runtime_ownership_check_skips_the_omnigent_facade() -> None:
+    profile = _mm3788_provider_profile(
+        profile_id="codex_minimax_team", runtime_id="codex_cli"
+    )
+
+    executions_module._require_provider_profile_runtime(
+        profile=profile,
+        profile_id=profile.profile_id,
+        selected_runtime="omnigent",
+    )
+
+
+def test_mm3788_runtime_ownership_check_skips_an_unspecified_runtime() -> None:
+    """With no effective runtime in the request there is nothing to compare."""
+
+    profile = _mm3788_provider_profile(
+        profile_id="codex_minimax_team", runtime_id="codex_cli"
+    )
+
+    executions_module._require_provider_profile_runtime(
+        profile=profile,
+        profile_id=profile.profile_id,
+        selected_runtime=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_mm3788_recurring_runtime_metadata_rejects_cross_runtime_profile() -> None:
+    profile = _mm3788_provider_profile(
+        profile_id="codex_minimax_team", runtime_id="codex_cli"
+    )
+    session = SimpleNamespace(get=AsyncMock(return_value=profile))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _resolve_recurring_runtime_metadata(
+            {
+                "workflowType": "MoonMind.UserWorkflow",
+                "initialParameters": {
+                    "targetRuntime": "claude_code",
+                    "workflow": {
+                        "runtime": {
+                            "mode": "claude_code",
+                            "providerProfileRef": "codex_minimax_team",
+                        }
+                    },
+                },
+            },
+            session=session,
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["code"] == "provider_profile_runtime_mismatch"
+    assert exc_info.value.detail["profileRuntime"] == "codex_cli"
+    assert exc_info.value.detail["selectedRuntime"] == "claude_code"
+
+
+@pytest.mark.asyncio
+async def test_mm3788_recurring_runtime_metadata_accepts_owned_profile() -> None:
+    profile = _mm3788_provider_profile(
+        profile_id="claude_minimax_team", runtime_id="claude_code"
+    )
+    session = SimpleNamespace(get=AsyncMock(return_value=profile))
+
+    metadata = await _resolve_recurring_runtime_metadata(
+        {
+            "workflowType": "MoonMind.UserWorkflow",
+            "initialParameters": {
+                "targetRuntime": "claude_code",
+                "workflow": {
+                    "runtime": {
+                        "mode": "claude_code",
+                        "providerProfileRef": "claude_minimax_team",
+                    }
+                },
+            },
+        },
+        session=session,
+    )
+
+    assert metadata["targetRuntime"] == "claude_code"
+    assert metadata["profileId"] == "claude_minimax_team"
+
+
+@pytest.mark.asyncio
+async def test_mm3788_step_runtime_selection_rejects_cross_runtime_profile() -> None:
+    steps = _normalize_task_steps(
+        {
+            "steps": [
+                {
+                    "id": "review",
+                    "instructions": "Review with an incompatible profile.",
+                    "runtime": {
+                        "mode": "claude_code",
+                        "profileId": "codex_minimax_team",
+                    },
+                }
+            ]
+        }
+    )
+    profile = _mm3788_provider_profile(
+        profile_id="codex_minimax_team", runtime_id="codex_cli"
+    )
+    session = SimpleNamespace(get=AsyncMock(return_value=profile))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _resolve_step_runtime_selections(
+            steps=steps,
+            task_runtime={"mode": "codex_cli"},
+            task_target_runtime="codex_cli",
+            task_profile_id=None,
+            session=session,
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["code"] == "provider_profile_runtime_mismatch"
+    assert exc_info.value.detail["profileId"] == "codex_minimax_team"
+    assert exc_info.value.detail["selectedRuntime"] == "claude_code"
+
+
+@pytest.mark.asyncio
+async def test_mm3788_step_runtime_selection_rejects_inherited_cross_runtime_profile() -> None:
+    """A step that overrides the runtime cannot inherit another runtime's profile."""
+
+    steps = _normalize_task_steps(
+        {
+            "steps": [
+                {
+                    "id": "review",
+                    "instructions": "Inherit the task profile under a new runtime.",
+                    "runtime": {"mode": "claude_code"},
+                }
+            ]
+        }
+    )
+    profile = _mm3788_provider_profile(
+        profile_id="codex_minimax_team", runtime_id="codex_cli"
+    )
+    session = SimpleNamespace(get=AsyncMock(return_value=profile))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _resolve_step_runtime_selections(
+            steps=steps,
+            task_runtime={"mode": "codex_cli"},
+            task_target_runtime="codex_cli",
+            task_profile_id="codex_minimax_team",
+            session=session,
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["profileId"] == "codex_minimax_team"
+    assert exc_info.value.detail["selectedRuntime"] == "claude_code"
+
+
+@pytest.mark.asyncio
+async def test_mm3788_step_runtime_selection_accepts_owned_profile() -> None:
+    steps = _normalize_task_steps(
+        {
+            "steps": [
+                {
+                    "id": "review",
+                    "instructions": "Review with the runtime's own profile.",
+                    "runtime": {
+                        "mode": "claude_code",
+                        "profileId": "claude_minimax_team",
+                    },
+                }
+            ]
+        }
+    )
+    profile = _mm3788_provider_profile(
+        profile_id="claude_minimax_team", runtime_id="claude_code"
+    )
+    session = SimpleNamespace(get=AsyncMock(return_value=profile))
+
+    await _resolve_step_runtime_selections(
+        steps=steps,
+        task_runtime={"mode": "codex_cli"},
+        task_target_runtime="codex_cli",
+        task_profile_id=None,
+        session=session,
+    )
+
+    assert steps[0]["runtime"]["mode"] == "claude_code"
+    assert steps[0]["runtime"]["profileId"] == "claude_minimax_team"

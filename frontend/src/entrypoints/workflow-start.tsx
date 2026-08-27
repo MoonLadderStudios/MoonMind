@@ -8077,6 +8077,21 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     [persistedObjectiveAttachments, steps],
   );
 
+  // The Provider Profile block must never claim a runtime has no launch-ready
+  // profiles while its runtime-scoped result set is still resolving. During a
+  // runtime switch `keepPreviousData` holds the previous runtime's profiles, so
+  // placeholder data counts as unresolved too.
+  const providerProfilesUnresolvedForRuntime =
+    runtime === "omnigent"
+      ? omnigentCatalogQuery.isPending ||
+        omnigentCatalogQuery.isFetching ||
+        (selectedProfileIsGenericV2 &&
+          (omnigentExecutionReadinessQuery.isPending ||
+            omnigentExecutionReadinessQuery.isFetching))
+      : providerProfilesQuery.isPending ||
+        providerProfilesQuery.isPlaceholderData ||
+        providerProfilesQuery.isFetching;
+
   const providerOptions = [...activeProviderProfiles]
     .sort((left, right) => {
       const leftDefault = Boolean(left.is_default);
@@ -13658,7 +13673,21 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                 </p>
               ) : null}
             </div>
-          ) : null}
+          ) : providerProfilesUnresolvedForRuntime ? null : (
+            <div id="queue-provider-profile-wrap">
+              {providerProfilesQuery.isError ? (
+                <p className="small" role="alert" id="queue-auth-profile-hint">
+                  Failed to load provider profiles.
+                </p>
+              ) : (
+                <p className="small" role="alert" id="queue-provider-profile-empty">
+                  No launch-ready Provider Profiles are configured for{" "}
+                  {formatRuntimeLabel(providerProfileRuntime)}. Configure one in
+                  Settings before starting this workflow.
+                </p>
+              )}
+            </div>
+          )}
         </div>
 
         {runtime.trim().toLowerCase() === "omnigent" && (omnigentProfiles.length > 0 || Boolean(selectedGenericOmnigentTarget)) ? (

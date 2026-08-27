@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties, type ReactElement } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties, type ReactElement } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { BootPayload } from '../boot/parseBootPayload';
 import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
@@ -11,11 +11,17 @@ import {
   type WorkerPauseConfig,
 } from '../components/settings/OperationsSettingsSection';
 import {
+  ALL_RUNTIMES_FILTER_VALUE,
   PROVIDER_PROFILE_QUERY_KEY,
   ProviderProfilesManager,
   type ProviderProfile,
 } from '../components/settings/ProviderProfilesManager';
 import { resetDashboardPreferences } from '../utils/dashboardPreferences';
+
+// `omnigent` is an execution facade, not a Provider Profile owner: every
+// profile it launches is owned by the underlying managed runtime, so it is
+// never offered as a Provider Profile runtime filter.
+const NON_PROFILE_OWNING_RUNTIMES = new Set(['omnigent']);
 
 function ProvidersKeyIcon() {
   return (
@@ -146,12 +152,27 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
   const queryClient = useQueryClient();
   const [notice, setNotice] = useState<Notice | null>(null);
   const [section, setSection] = useState<SettingsSectionId>(() => readSectionFromLocation());
+  // Settings is the administrative exception to runtime-scoped Provider Profile
+  // selection: it enters on the All-runtimes view and can narrow the table to a
+  // single runtime without narrowing global configuration health.
+  const [providerProfileRuntimeFilter, setProviderProfileRuntimeFilter] = useState<string>(
+    ALL_RUNTIMES_FILTER_VALUE,
+  );
   const workerPauseConfig =
     (payload.initialData as { workerPause?: WorkerPauseConfig } | undefined)?.workerPause ??
     null;
+  const runtimeSystemConfig =
+    (payload.initialData as {
+      runtimeConfig?: {
+        system?: {
+          defaultTaskModelByRuntime?: Record<string, string>;
+          supportedRuntimes?: string[];
+        };
+      };
+    } | undefined)?.runtimeConfig?.system ?? {};
   const defaultTaskModelByRuntime: Record<string, string> =
-    (payload.initialData as { runtimeConfig?: { system?: { defaultTaskModelByRuntime?: Record<string, string> } } } | undefined)
-      ?.runtimeConfig?.system?.defaultTaskModelByRuntime ?? {};
+    runtimeSystemConfig.defaultTaskModelByRuntime ?? {};
+  const supportedRuntimes: string[] = runtimeSystemConfig.supportedRuntimes ?? [];
   const settingsPermissions = new Set(
     ((payload.initialData as { settingsPermissions?: string[] } | undefined)
       ?.settingsPermissions ?? []),
@@ -222,6 +243,33 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
     },
   });
 
+  // The complete collection stays the single source for configuration health so
+  // global counts and diagnostics never follow the table filter.
+  const allProviderProfiles = providerProfiles ?? [];
+  const providerProfileRuntimeOptions = useMemo(() => {
+    const runtimeIds: string[] = [];
+    for (const runtimeId of [
+      ...supportedRuntimes,
+      ...allProviderProfiles.map((profile) => profile.runtime_id ?? ''),
+    ]) {
+      const canonical = String(runtimeId ?? '').trim();
+      if (
+        canonical &&
+        !NON_PROFILE_OWNING_RUNTIMES.has(canonical) &&
+        !runtimeIds.includes(canonical)
+      ) {
+        runtimeIds.push(canonical);
+      }
+    }
+    return runtimeIds;
+  }, [supportedRuntimes, allProviderProfiles]);
+  const visibleProviderProfiles =
+    providerProfileRuntimeFilter === ALL_RUNTIMES_FILTER_VALUE
+      ? allProviderProfiles
+      : allProviderProfiles.filter(
+          (profile) => profile.runtime_id === providerProfileRuntimeFilter,
+        );
+
   const fallbackSection = SETTINGS_SECTIONS[0]!;
   const currentSection =
     SETTINGS_SECTIONS.find((candidate) => candidate.id === section) ?? fallbackSection;
@@ -248,7 +296,7 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
       </header>
 
       <ConfigurationHealthSummary
-        providerProfiles={providerProfiles ?? []}
+        providerProfiles={allProviderProfiles}
         secrets={secretsData?.items ?? []}
         isLoading={areProfilesLoading || areSecretsLoading}
         isError={areProfilesErrored || areSecretsErrored}
@@ -341,12 +389,21 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
             </div>
           ) : (
             <ProviderProfilesManager
-              profiles={providerProfiles ?? []}
+              profiles={visibleProviderProfiles}
               secretSlugs={(secretsData?.items ?? []).map((secret) => secret.slug)}
               onNotice={setNotice}
               queryClient={queryClient}
               defaultTaskModelByRuntime={defaultTaskModelByRuntime}
               canWriteProviderProfiles={canWriteProviderProfiles}
+              selectedRuntimeId={
+                providerProfileRuntimeFilter === ALL_RUNTIMES_FILTER_VALUE
+                  ? undefined
+                  : providerProfileRuntimeFilter
+              }
+              runtimeFilterOptions={providerProfileRuntimeOptions}
+              onSelectRuntimeId={(runtimeId) =>
+                setProviderProfileRuntimeFilter(runtimeId ?? ALL_RUNTIMES_FILTER_VALUE)
+              }
             />
           )}
 
