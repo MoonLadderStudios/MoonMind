@@ -574,6 +574,20 @@ GPU_FAILURE_CLASSES: frozenset[ContainerJobFailureClass] = frozenset(
 )
 
 
+#: Stable classifications a trusted backend can only reach *after* it reported
+#: backend support for the request: the daemon accepted the vendor and the
+#: device-request API, and only then refused the actual runtime or device when
+#: the container was created or started. The class is therefore itself the
+#: support evidence, so the observation survives an activity that raised before
+#: it could return the support report it had already obtained.
+GPU_BACKEND_SUPPORTED_FAILURE_CLASSES: frozenset[ContainerJobFailureClass] = frozenset(
+    {
+        ContainerJobFailureClass.GPU_RUNTIME_UNAVAILABLE,
+        ContainerJobFailureClass.GPU_RESOURCE_UNAVAILABLE,
+    }
+)
+
+
 def gpu_observation(
     gpu: WorkloadGpuRequest | None,
     *,
@@ -606,21 +620,31 @@ def terminal_gpu_observation(
     before the backend reported anything still projects what it requested. A
     non-GPU terminal class is dropped here because it belongs to the terminal
     outcome, not to the GPU resource decision.
+
+    A refusal the backend can only reach after it reported support carries that
+    support evidence itself: the activity that obtained the report raised before
+    it could return one, so the durable status would otherwise contradict
+    evidence that was actually obtained at the backend boundary.
     """
 
     if gpu is None:
         return None
+    gpu_failure_class = (
+        failure_class if failure_class in GPU_FAILURE_CLASSES else None
+    )
+    observed_support = observed.backend_supported if observed is not None else None
+    if (
+        observed_support is None
+        and gpu_failure_class in GPU_BACKEND_SUPPORTED_FAILURE_CLASSES
+    ):
+        observed_support = True
     return GpuObservation(
         vendor=gpu.vendor,
         count=gpu.count,
         capabilities=gpu.capabilities,
-        backendSupported=(
-            observed.backend_supported if observed is not None else None
-        ),
+        backendSupported=observed_support,
         launched=bool(observed.launched) if observed is not None else False,
-        failureClass=(
-            failure_class if failure_class in GPU_FAILURE_CLASSES else None
-        ),
+        failureClass=gpu_failure_class,
     )
 
 

@@ -150,7 +150,11 @@ and projects it as `ContainerJobStatus.gpu`:
 
 The observation is request-identified: it always describes what the caller
 submitted, so a job refused before the backend reported anything still projects
-the resource it asked for. It deliberately carries no Docker device-request
+the resource it asked for. A refusal the backend can only reach after it
+reported support -- `gpu_runtime_unavailable` and `gpu_resource_unavailable`, both
+raised at container create or start -- reports `backendSupported = true`, because
+the class itself is that evidence and the refusal is raised before an
+observation can be returned. It deliberately carries no Docker device-request
 structure, flag, device path, endpoint, driver version, or ownership label, so it
 is safe to persist, to project to the caller, and to cross Temporal workflow
 history. A CPU-only job has no observation at all, and its request, Temporal
@@ -200,6 +204,13 @@ or `gpu_backend_unsupported`:
 | `gpu_device_unavailable` | The runtime is present but exposed no usable device |
 | `device_request_unsupported` | The daemon or client does not understand the device request |
 | `gpu_device_request_rejected` | The daemon refused the device request for another reason |
+
+The diagnostic is matched most-specific-first. The vendor stack reports a device
+failure *through* its own tooling, so a host with a working runtime and no usable
+device names both the generic `nvidia-container-cli` prefix and a specific device
+condition; the specific condition decides the reason, and a bare vendor-stack
+prefix is the last resort. Otherwise an operator would be directed at repairing a
+runtime that already works instead of at device capacity.
 
 A refusal is recognized only from objective launch-refusal evidence: stderr must
 carry a vendor/runtime diagnostic. Where one `docker run` merges the launch phase

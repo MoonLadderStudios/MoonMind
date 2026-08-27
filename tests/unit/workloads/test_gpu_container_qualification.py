@@ -787,11 +787,14 @@ async def test_started_container_writing_gpu_text_is_not_a_device_refusal(
             "nvidia_runtime_unavailable",
         ),
         (
+            # The vendor stack reports a device failure through its own CLI, so
+            # the specific device signature decides the reason, not the generic
+            # ``nvidia-container-cli`` prefix that accompanies it.
             (
                 "nvidia-container-cli: device error: Failed to initialize NVML: "
                 "no devices were found."
             ),
-            "nvidia_runtime_unavailable",
+            "gpu_device_unavailable",
         ),
         (
             "docker: Error response from daemon: detected 0 devices for the request.",

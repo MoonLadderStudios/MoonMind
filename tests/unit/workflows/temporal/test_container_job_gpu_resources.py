@@ -62,6 +62,14 @@ DEVICE_UNAVAILABLE_STDERR = (
     b"docker: Error response from daemon: failed to initialize NVML: "
     b"Unknown Error\n"
 )
+# An installed runtime with no usable device reports the device failure through
+# the vendor's own CLI, so this diagnostic names both the generic CLI prefix and
+# the specific device condition.
+RUNTIME_PRESENT_DEVICE_UNAVAILABLE_STDERR = (
+    b"docker: Error response from daemon: failed to create task: "
+    b"nvidia-container-cli: device error: failed to initialize NVML: "
+    b"no devices were found\n"
+)
 DRIVER_UNSELECTABLE_STDERR = (
     b'docker: Error response from daemon: could not select device driver "" '
     b"with capabilities: [[gpu]]\n"
@@ -419,6 +427,46 @@ async def test_daemon_without_device_request_support_is_refused_before_create(
 
 
 @pytest.mark.asyncio
+async def test_unreachable_endpoint_never_echoes_the_daemon_diagnostic(
+    tmp_path,
+) -> None:
+    """The support probe's caller-visible message is a fixed string.
+
+    ``docker version`` stderr can name the deployment-owned daemon URI, its
+    certificate paths, or credential-bearing connection detail, and this message
+    becomes the durable terminal outcome the status API projects.
+    """
+
+    commands: list[tuple[str, ...]] = []
+    endpoint_detail = (
+        b"Cannot connect to the Docker daemon at "
+        b"tcp://gpu-host.internal:2376 (client cert "
+        b"/etc/docker/certs.d/client.pem)\n"
+    )
+
+    async def runner(args):
+        args = tuple(args)
+        commands.append(args)
+        if args[0] == "version":
+            return 1, b"", endpoint_detail
+        return 0, b"", b""
+
+    backend = _backend(tmp_path, runner)
+
+    with pytest.raises(Exception) as exc_info:
+        await backend.create_container(_activity_request(tmp_path, gpu={"count": 1}))
+
+    assert (
+        failure_class_from_exception(exc_info.value)
+        == ContainerJobFailureClass.INFRASTRUCTURE
+    )
+    message = str(exc_info.value)
+    for secret in ("gpu-host.internal", "2376", "certs.d", "client.pem", "tcp://"):
+        assert secret not in message
+    assert not any(command[0] == "create" for command in commands)
+
+
+@pytest.mark.asyncio
 async def test_device_count_above_the_deployment_ceiling_is_refused(tmp_path) -> None:
     commands: list[tuple[str, ...]] = []
     bounded = resolve_container_backend_settings(
@@ -467,6 +515,12 @@ async def test_backend_refuses_a_vendor_it_cannot_realize(tmp_path) -> None:
         ),
         (
             DEVICE_UNAVAILABLE_STDERR,
+            ContainerJobFailureClass.GPU_RESOURCE_UNAVAILABLE,
+        ),
+        (
+            # A working runtime with no usable device must direct the operator
+            # at device capacity, not at repairing the runtime.
+            RUNTIME_PRESENT_DEVICE_UNAVAILABLE_STDERR,
             ContainerJobFailureClass.GPU_RESOURCE_UNAVAILABLE,
         ),
         (
@@ -674,6 +728,10 @@ async def test_refusal_before_create_still_projects_the_requested_resource(
     assert terminal.gpu_observation is not None
     assert terminal.gpu_observation.count == 4
     assert terminal.gpu_observation.launched is False
+    # The refusal is only reachable after the backend reported support, so the
+    # durable status must not contradict evidence obtained at that boundary even
+    # though the activity raised before it could return an observation.
+    assert terminal.gpu_observation.backend_supported is True
     assert (
         terminal.gpu_observation.failure_class
         == ContainerJobFailureClass.GPU_RUNTIME_UNAVAILABLE
@@ -699,6 +757,35 @@ async def test_cpu_only_job_projects_no_gpu_observation(
     assert all(
         projection.gpu_observation is None for projection in projections
     )
+
+
+@pytest.mark.parametrize(
+    ("failure_class", "expected_support"),
+    [
+        (ContainerJobFailureClass.GPU_RUNTIME_UNAVAILABLE, True),
+        (ContainerJobFailureClass.GPU_RESOURCE_UNAVAILABLE, True),
+        # Reachable from the pre-create support report itself, so support was
+        # never established and must stay unknown.
+        (ContainerJobFailureClass.GPU_BACKEND_UNSUPPORTED, None),
+        (ContainerJobFailureClass.GPU_VENDOR_UNSUPPORTED, None),
+        (ContainerJobFailureClass.GPU_COUNT_UNSUPPORTED, None),
+    ],
+)
+def test_a_refusal_reports_support_only_when_the_backend_established_it(
+    failure_class: ContainerJobFailureClass, expected_support: bool | None
+) -> None:
+    """A refused job's durable status agrees with the evidence it obtained."""
+
+    observation = terminal_gpu_observation(
+        gpu=WorkloadGpuRequest(count=2),
+        observed=None,
+        failure_class=failure_class,
+    )
+
+    assert observation is not None
+    assert observation.backend_supported is expected_support
+    assert observation.launched is False
+    assert observation.failure_class == failure_class
 
 
 def test_an_ordinary_execution_failure_is_not_reported_as_a_gpu_failure() -> None:

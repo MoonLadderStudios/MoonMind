@@ -705,10 +705,21 @@ class DockerContainerJobBackend:
             ("version", "--format", "{{.Server.Version}}")
         )
         if code:
-            detail = stderr.decode(errors="replace").strip()[:500]
+            # This message becomes the caller-visible terminal outcome, and the
+            # daemon's own connection diagnostic can name the deployment-owned
+            # endpoint, its TLS material, or credential-bearing connection
+            # detail. The caller contract stays a fixed string; the redacted
+            # diagnostic goes only to trusted backend logs.
+            logger.warning(
+                "Container-job GPU support probe could not reach the container "
+                "backend endpoint: %s",
+                redact_sensitive_text(
+                    stderr.decode(errors="replace").strip()[:500]
+                ),
+            )
             raise ContainerJobBackendError(
                 ContainerJobFailureClass.INFRASTRUCTURE,
-                f"container backend endpoint is unreachable: {detail}",
+                "container backend endpoint is unreachable",
             )
         server_version = stdout.decode(errors="replace").strip()
         major_version = _docker_major_version(server_version)

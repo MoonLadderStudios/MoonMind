@@ -71,12 +71,17 @@ _NON_GPU_LAUNCH_FAILURE_PATTERNS: tuple[str, ...] = (
 # vendor/runtime diagnostic string, never a product or repository condition.
 # Every pattern is specific enough that a container which started and then wrote
 # GPU-shaped text to stderr cannot be mistaken for a refused device request.
+#
+# Precedence is most-specific-first, because the vendor stack reports a device
+# failure *through* its own tooling: a host with the runtime installed but no
+# usable device emits both the generic ``nvidia-container-cli`` prefix and a
+# specific device diagnostic. Matching the generic prefix first would direct an
+# operator toward repairing a runtime that is already working instead of toward
+# device capacity, so the bare vendor-stack prefixes are the last resort.
 _GPU_LAUNCH_FAILURE_PATTERNS: tuple[tuple[GpuLaunchFailureReason, tuple[str, ...]], ...] = (
     (
         "nvidia_runtime_unavailable",
         (
-            "nvidia-container-cli",
-            "nvidia-container-runtime",
             "unknown or invalid runtime name: nvidia",
             "unknown runtime specified nvidia",
         ),
@@ -103,6 +108,16 @@ _GPU_LAUNCH_FAILURE_PATTERNS: tuple[tuple[GpuLaunchFailureReason, tuple[str, ...
         (
             "could not select device driver",
             "capabilities: [[gpu]]",
+        ),
+    ),
+    (
+        # Last resort: the installed vendor stack reported something no specific
+        # signature above recognized, so the runtime itself is the only evidence
+        # available.
+        "nvidia_runtime_unavailable",
+        (
+            "nvidia-container-cli",
+            "nvidia-container-runtime",
         ),
     ),
 )
