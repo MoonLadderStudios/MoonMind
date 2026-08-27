@@ -1,47 +1,42 @@
 [
   {
-    "id": 3869810844,
-    "disposition": "not-applicable",
-    "rationale": "Alembic's script loader reads the module-level 'revision' attribute by name; it is the migration contract, not dead code. 54 of 61 migrations in api_service/migrations/versions use the identical pattern."
-  },
-  {
-    "id": 3869810851,
-    "disposition": "not-applicable",
-    "rationale": "'down_revision' is read by Alembic to build the migration graph (tools/check_alembic_graph.py depends on it). Removing it would break the single-head gate."
-  },
-  {
-    "id": 3869810860,
-    "disposition": "not-applicable",
-    "rationale": "'branch_labels' is part of Alembic's required revision-script contract and is read by the framework, not by this module."
-  },
-  {
-    "id": 3869810874,
-    "disposition": "not-applicable",
-    "rationale": "'depends_on' is part of Alembic's required revision-script contract and is read by the framework, not by this module."
-  },
-  {
-    "id": 3869810887,
+    "id": 3875934335,
     "disposition": "addressed",
-    "rationale": "Confirmed 'datetime' and 'timezone' had no use in tests/unit/api/test_container_job_gpu_transport.py; removed the import."
+    "rationale": "CodeQL js/xss-through-dom at AttachmentImagePreview.tsx:200. The SARIF flow starts at the Jira 'Import target' select value, which jiraTargetFromValue parsed straight into a step localId used as an attachment map key. selectJiraImportTarget now resolves the parsed target back to a live step through resolveJiraImportTarget, so the bound localId comes from the steps state, not from DOM text. The sink is also guarded: isSafeAttachmentPreviewUrl restricts the img src and the lightbox download link to relative, blob:, http(s) and image/* data: sources."
   },
   {
-    "id": 3869824196,
+    "id": 3875970087,
     "disposition": "addressed",
-    "rationale": "The GPU support probe's 'docker version' failure now raises a fixed caller-safe message ('container backend endpoint is unreachable'); the redacted daemon diagnostic goes only to trusted backend logs. Added tests/unit/workflows/temporal/test_container_job_gpu_resources.py::test_unreachable_endpoint_never_echoes_the_daemon_diagnostic."
+    "rationale": "The step file picker called updateStepAttachments directly, so overriding the browser accept filter bypassed the policy content-type check the identical drop applies. handleStepAttachmentDrop is now the single entry point addStepAttachmentFiles, used by both the drop handler and the picker onChange; new test 'rejects picker selections the attachment policy does not allow' pins the parity."
   },
   {
-    "id": 3869824202,
+    "id": 3875970097,
     "disposition": "addressed",
-    "rationale": "terminal_gpu_observation now resolves backendSupported=True for the new GPU_BACKEND_SUPPORTED_FAILURE_CLASSES (gpu_runtime_unavailable, gpu_resource_unavailable), which a backend can only reach after the pre-create support report succeeded, so the durable status no longer contradicts evidence obtained at the backend boundary. Covered by test_a_refusal_reports_support_only_when_the_backend_established_it and an added assertion in test_refusal_before_create_still_projects_the_requested_resource."
+    "rationale": "The primary-step context list mapped only persistedObjectiveAttachments, so a Jira image imported into the objective target had no chip or thumbnail until it was persisted. Pending selectedObjectiveAttachmentFiles are now included for the primary step with removeObjectiveAttachment removal (which also refreshes preset reapply state) and the same retry affordance as step files. Covered by 'previews a pending objective image imported from Jira in the primary step'."
   },
   {
-    "id": 3869824210,
+    "id": 3875970100,
     "disposition": "addressed",
-    "rationale": "_GPU_LAUNCH_FAILURE_PATTERNS is now matched most-specific-first: the bare 'nvidia-container-cli'/'nvidia-container-runtime' prefixes moved to a last-resort entry, so a working runtime with no usable device classifies as gpu_device_unavailable -> gpu_resource_unavailable. Updated the codified expectation in test_gpu_container_qualification.py and added a canonical-backend case using RUNTIME_PRESENT_DEVICE_UNAVAILABLE_STDERR."
+    "rationale": "InputImagesSection in workflow-detail.tsx now renders AttachmentImagePreview instead of the parallel static .queue-attachment-preview image, so the clickable thumbnail/lightbox behaviour is the same wherever attachments are listed. The now-unused .queue-attachment-preview CSS rule was deleted and the detail test asserts the shared thumbnail, its lightbox and the unavailable fallback."
   },
   {
-    "id": 5038517424,
+    "id": 3875970106,
+    "disposition": "addressed",
+    "rationale": "The lightbox now traps Tab. The first/last focus loop that DashboardActionDialog carried inline was extracted to frontend/src/lib/focusTrap.ts (FOCUSABLE_SELECTOR, focusableElementsWithin, trapTabWithin); both modals use it, so the behaviour is defined once. New test 'keeps Tab inside the open lightbox'."
+  },
+  {
+    "id": 3875970113,
+    "disposition": "addressed",
+    "rationale": "AttachmentImagePreview now handles onError on both the thumbnail and the lightbox image: it suppresses itself (so the :has(.attachment-thumbnail) rule stops hiding the generic icon and the chip keeps its metadata/download action), closes any open lightbox, and reports through the new onPreviewError prop, which workflow-detail uses to render its explicit unavailable state. Covered by two new component tests."
+  },
+  {
+    "id": 5045777453,
     "disposition": "not-applicable",
-    "rationale": "Codex review summary body; informational only, its three suggestions are tracked as the individual review comments above."
+    "rationale": "Codex review summary body describing how the automated reviewer works; carries no actionable request of its own."
+  },
+  {
+    "id": 3876132541,
+    "disposition": "addressed",
+    "rationale": "Second CodeQL js/xss-through-dom report (alert 98) for the same img src sink on the new head. Resolving the import target against live steps did not break the flow because the same parsed localId is also written into the steps state through updateStep, so the whole steps array carries the taint. The barrier is now at the sink: the preview source and the lightbox download link pass through sanitizeAttachmentPreviewUrl, a global replace that strips the markup metacharacters (< > \" ') a URL never legitimately carries, in addition to the existing scheme allowlist."
   }
 ]

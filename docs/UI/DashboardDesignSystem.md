@@ -437,6 +437,7 @@ Rules:
 - labels should read clearly above controls
 - focus uses a visible ring and stronger border light
 - chevrons and affordance icons must be intentional, not tiny afterthoughts
+- a disclosure chevron is an indicator *inside* the field, not a nested control: it carries no background, border, radius, or hover surface of its own in any state, because the field's focus ring and the open list already report interaction. It may change only by rotating to report open state
 - searchable repository or entity fields should read like **combobox/search controls**, not generic selects
 
 Good candidates for leading icons:
