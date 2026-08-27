@@ -2797,6 +2797,10 @@ class TemporalSandboxActivities:
         return [context_ref] if context_ref else []
 
     def _workspace_has_unsafe_skill_projection(self, workspace: Path) -> bool:
+        try:
+            workspace_uid = workspace.lstat().st_uid
+        except OSError:
+            return True
         for relative in (".agents/skills", ".gemini/skills"):
             candidate = workspace / relative
             if not candidate.exists():
@@ -2805,7 +2809,10 @@ class TemporalSandboxActivities:
                 info = candidate.lstat()
             except OSError:
                 continue
-            if info.st_uid == 0 or candidate.is_symlink():
+            # A projection owned by a different principal than the authoritative
+            # workspace is unsafe. UID 0 alone is not evidence of a mismatch:
+            # hermetic CI legitimately creates the whole workspace as root.
+            if info.st_uid != workspace_uid or candidate.is_symlink():
                 return True
         return False
 
