@@ -6836,7 +6836,7 @@ export interface components {
          * ContainerJobFailureClass
          * @enum {string}
          */
-        ContainerJobFailureClass: "validation" | "authorization" | "workspace" | "image" | "image_not_found" | "image_pull_timeout" | "image_pull_auth_failed" | "image_build_not_configured" | "image_build_inputs_unavailable" | "image_build_timeout" | "image_build_failed" | "image_validation_failed" | "image_platform_mismatch" | "image_backend_unavailable" | "launch" | "execution" | "timeout" | "canceled" | "infrastructure" | "temporal_start" | "image_use_denied" | "credential_unresolved" | "repository_scope_mismatch" | "registry_auth_failed" | "credential_cleanup_failed" | "resource_limit_exceeded";
+        ContainerJobFailureClass: "validation" | "authorization" | "workspace" | "image" | "image_not_found" | "image_pull_timeout" | "image_pull_auth_failed" | "image_build_not_configured" | "image_build_inputs_unavailable" | "image_build_timeout" | "image_build_failed" | "image_validation_failed" | "image_platform_mismatch" | "image_backend_unavailable" | "launch" | "execution" | "timeout" | "canceled" | "infrastructure" | "temporal_start" | "image_use_denied" | "credential_unresolved" | "repository_scope_mismatch" | "registry_auth_failed" | "credential_cleanup_failed" | "resource_limit_exceeded" | "gpu_request_invalid" | "gpu_vendor_unsupported" | "gpu_count_unsupported" | "gpu_backend_unsupported" | "gpu_runtime_unavailable" | "gpu_resource_unavailable";
         /** ContainerJobLogEntry */
         ContainerJobLogEntry: {
             /** Sequence */
@@ -6929,6 +6929,7 @@ export interface components {
             backendRef?: string | null;
             image?: components["schemas"]["ImageObservation"] | null;
             authorization?: components["schemas"]["RegistryAuthorization"] | null;
+            gpu?: components["schemas"]["GpuObservation"] | null;
             terminal?: components["schemas"]["TerminalOutcome"] | null;
             publication?: components["schemas"]["AuxiliaryOutcome"];
             cleanup?: components["schemas"]["AuxiliaryOutcome"];
@@ -9223,6 +9224,36 @@ export interface components {
             mode: "indexing" | "publish" | "readiness" | "full_pr_automation";
             /** Basebranch */
             baseBranch?: string | null;
+        };
+        /**
+         * GpuObservation
+         * @description Bounded, non-sensitive observation of one resolved GPU resource request.
+         *
+         *     It records the caller's semantic request, whether the selected backend
+         *     reported support for it, whether the container was launched carrying it, and
+         *     the stable generic classification when it was refused. It deliberately
+         *     carries no Docker device-request structure, flag, device path, endpoint,
+         *     driver version, or ownership label, so it is safe to persist, to project to
+         *     the caller, and to cross Temporal workflow history.
+         */
+        GpuObservation: {
+            /**
+             * Vendor
+             * @constant
+             */
+            vendor: "nvidia";
+            /** Count */
+            count: number | "all";
+            /** Capabilities */
+            capabilities?: ("compute" | "compat32" | "graphics" | "utility" | "video" | "display")[] | null;
+            /** Backendsupported */
+            backendSupported?: boolean | null;
+            /**
+             * Launched
+             * @default false
+             */
+            launched: boolean;
+            failureClass?: components["schemas"]["ContainerJobFailureClass"] | null;
         };
         /**
          * GuidedProfileCreate
@@ -14479,10 +14510,15 @@ export interface components {
          * WorkloadGpuRequest
          * @description Caller-supplied generic GPU resource request for one container.
          *
-         *     This is ordinary request data: the caller names a supported GPU vendor and
-         *     how many devices the container needs. MoonMind realizes it as the vendor's
-         *     Docker device request and never infers it from the image, the command, or
-         *     any repository-specific condition.
+         *     This is ordinary request data: the caller names a supported GPU vendor, how
+         *     many devices the container needs, and optionally which of the vendor
+         *     driver's published capabilities to expose. MoonMind realizes it as the
+         *     vendor's Docker device request and never infers it from the image, the
+         *     command, or any repository-specific condition.
+         *
+         *     ``capabilities`` is absent by default, which requests the vendor's default
+         *     device capability set. Declaring it never widens authority: the values are
+         *     bounded driver capability names, not device paths or Docker options.
          */
         WorkloadGpuRequest: {
             /**
@@ -14496,6 +14532,8 @@ export interface components {
              * @default all
              */
             count: number | "all";
+            /** Capabilities */
+            capabilities?: ("compute" | "compat32" | "graphics" | "utility" | "video" | "display")[] | null;
         };
         /** WorkspaceDefaults */
         WorkspaceDefaults: {

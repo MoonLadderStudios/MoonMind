@@ -162,6 +162,7 @@ export type TemporalSubmissionDraft = {
     annotations?: Record<string, unknown>;
     storyOutput?: Record<string, unknown>;
     jiraOrchestration?: Record<string, unknown>;
+    githubOrchestration?: Record<string, unknown>;
     runtimeCommand?: Record<string, unknown>;
   }>;
   appliedTemplates: Array<{
@@ -561,6 +562,7 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     step.jiraOrchestration,
     step.jira_orchestration,
   );
+  const githubOrchestration = objectValue(step.githubOrchestration);
   const runtimeCommand = firstObjectValue(
     step.runtimeCommand,
     step.runtime_command,
@@ -628,6 +630,9 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     ...(Object.keys(annotations).length > 0 ? { annotations } : {}),
     ...(Object.keys(storyOutput).length > 0 ? { storyOutput } : {}),
     ...(Object.keys(jiraOrchestration).length > 0 ? { jiraOrchestration } : {}),
+    ...(Object.keys(githubOrchestration).length > 0
+      ? { githubOrchestration }
+      : {}),
     ...(Object.keys(runtimeCommand).length > 0 ? { runtimeCommand } : {}),
   };
 
@@ -650,6 +655,7 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     Object.keys(annotations).length > 0 ||
     Object.keys(storyOutput).length > 0 ||
     Object.keys(jiraOrchestration).length > 0 ||
+    Object.keys(githubOrchestration).length > 0 ||
     Object.keys(runtimeCommand).length > 0;
   return hasContent ? result : null;
 }

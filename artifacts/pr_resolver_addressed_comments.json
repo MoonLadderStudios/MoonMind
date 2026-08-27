@@ -1,27 +1,47 @@
 [
   {
-    "id": 3860739325,
-    "disposition": "addressed",
-    "rationale": "run.py now validates finishMode through _normalize_finish_mode: only an omitted value takes the merge default, and any other unsupported value raises a non-retryable UNSUPPORTED_MERGE_AUTOMATION_FINISH_MODE ApplicationError before a resolver child is granted merge authority."
-  },
-  {
-    "id": 3860739332,
-    "disposition": "addressed",
-    "rationale": "terminal_evidence.py now applies disposition-specific invariants for review_clean (merged=false and a non-merge action, plus no merge claim in the resolver result) and fails with UNAUTHORIZED_MERGE_EVIDENCE; the Skill's review_clean publish path adds the authoritative remote check that the PR is still unmerged."
-  },
-  {
-    "id": 3860739342,
-    "disposition": "addressed",
-    "rationale": "publish_evidence.py now matches the real production stage token full_remediation via PR_RESOLVER_REMEDIATION_STAGE, so a remediated fix_only run publishes verified/push/pushed=true instead of no_op_verified. The existing test that encoded the fictional 'full' token was corrected."
-  },
-  {
-    "id": 3860739355,
-    "disposition": "addressed",
-    "rationale": "EXIT_CODE_REVIEW_CLEAN is now 0, so pr_resolve_finalize.py and pr_resolve_orchestrate.py exit zero for this documented terminal success with or without --strict-exit-codes; the outcome stays distinguishable through status and mergeAutomationDisposition in the result JSON."
-  },
-  {
-    "id": 5028028248,
+    "id": 3869810844,
     "disposition": "not-applicable",
-    "rationale": "Codex review header comment with no actionable request; its individual findings are tracked as the four review comments above."
+    "rationale": "Alembic's script loader reads the module-level 'revision' attribute by name; it is the migration contract, not dead code. 54 of 61 migrations in api_service/migrations/versions use the identical pattern."
+  },
+  {
+    "id": 3869810851,
+    "disposition": "not-applicable",
+    "rationale": "'down_revision' is read by Alembic to build the migration graph (tools/check_alembic_graph.py depends on it). Removing it would break the single-head gate."
+  },
+  {
+    "id": 3869810860,
+    "disposition": "not-applicable",
+    "rationale": "'branch_labels' is part of Alembic's required revision-script contract and is read by the framework, not by this module."
+  },
+  {
+    "id": 3869810874,
+    "disposition": "not-applicable",
+    "rationale": "'depends_on' is part of Alembic's required revision-script contract and is read by the framework, not by this module."
+  },
+  {
+    "id": 3869810887,
+    "disposition": "addressed",
+    "rationale": "Confirmed 'datetime' and 'timezone' had no use in tests/unit/api/test_container_job_gpu_transport.py; removed the import."
+  },
+  {
+    "id": 3869824196,
+    "disposition": "addressed",
+    "rationale": "The GPU support probe's 'docker version' failure now raises a fixed caller-safe message ('container backend endpoint is unreachable'); the redacted daemon diagnostic goes only to trusted backend logs. Added tests/unit/workflows/temporal/test_container_job_gpu_resources.py::test_unreachable_endpoint_never_echoes_the_daemon_diagnostic."
+  },
+  {
+    "id": 3869824202,
+    "disposition": "addressed",
+    "rationale": "terminal_gpu_observation now resolves backendSupported=True for the new GPU_BACKEND_SUPPORTED_FAILURE_CLASSES (gpu_runtime_unavailable, gpu_resource_unavailable), which a backend can only reach after the pre-create support report succeeded, so the durable status no longer contradicts evidence obtained at the backend boundary. Covered by test_a_refusal_reports_support_only_when_the_backend_established_it and an added assertion in test_refusal_before_create_still_projects_the_requested_resource."
+  },
+  {
+    "id": 3869824210,
+    "disposition": "addressed",
+    "rationale": "_GPU_LAUNCH_FAILURE_PATTERNS is now matched most-specific-first: the bare 'nvidia-container-cli'/'nvidia-container-runtime' prefixes moved to a last-resort entry, so a working runtime with no usable device classifies as gpu_device_unavailable -> gpu_resource_unavailable. Updated the codified expectation in test_gpu_container_qualification.py and added a canonical-backend case using RUNTIME_PRESENT_DEVICE_UNAVAILABLE_STDERR."
+  },
+  {
+    "id": 5038517424,
+    "disposition": "not-applicable",
+    "rationale": "Codex review summary body; informational only, its three suggestions are tracked as the individual review comments above."
   }
 ]

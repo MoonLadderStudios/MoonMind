@@ -16143,11 +16143,31 @@ describe("Task Create submit arrow animation", () => {
     );
   });
 
-  it("outlines the create button on click while preserving its arrow and shockwave", async () => {
+  it("outlines the create button on click while morphing its arrow into a green check and preserving the shockwave", async () => {
     expect(css).toMatch(
       /\.queue-submit-primary--icon\.queue-submit-primary--arrow-exit\s*\{[^}]*background-color:\s*rgb\(var\(--mm-action-primary\) \/ 0\.12\);[^}]*background-image:\s*none;[^}]*color:\s*rgb\(var\(--mm-action-primary\)\);[^}]*border-color:\s*rgb\(var\(--mm-action-primary\)\);/s,
     );
-    expect(css).not.toContain('data-submit-icon="check"');
+    expect(css).toMatch(
+      /\.queue-submit-primary--icon \.queue-submit-primary-arrow-glyph--check\s*\{[^}]*opacity:\s*0;[^}]*transform:\s*scale\(0\.6\);/s,
+    );
+    expect(css).toMatch(
+      /\.queue-submit-primary--icon\.queue-submit-primary--arrow-exit\s*\.queue-submit-primary-arrow-glyph\[data-submit-icon="arrow"\]\s*\{[^}]*animation:\s*queue-submit-primary-arrow-exit\s+230ms\s+cubic-bezier\(0\.33,\s*0,\s*0\.2,\s*1\)\s+both;/s,
+    );
+    expect(css).toMatch(
+      /\.queue-submit-primary--icon\.queue-submit-primary--arrow-exit\s*\.queue-submit-primary-arrow-glyph\[data-submit-icon="check"\]\s*\{[^}]*animation:\s*queue-submit-primary-check-pop\s+260ms\s+cubic-bezier\(0\.34,\s*1\.56,\s*0\.64,\s*1\)\s+both;/s,
+    );
+    expect(css).toMatch(
+      /@keyframes queue-submit-primary-arrow-exit\s*\{[\s\S]*0%\s*\{[\s\S]*opacity:\s*1;[\s\S]*transform:\s*scale\(1\);[\s\S]*100%\s*\{[\s\S]*opacity:\s*0;[\s\S]*transform:\s*scale\(0\.6\);/,
+    );
+    expect(css).toMatch(
+      /@keyframes queue-submit-primary-check-pop\s*\{[\s\S]*0%\s*\{[\s\S]*opacity:\s*0;[\s\S]*60%\s*\{[\s\S]*transform:\s*scale\(1\.15\);[\s\S]*100%\s*\{[\s\S]*transform:\s*scale\(1\);/,
+    );
+    expect(css).toMatch(
+      /\.queue-submit-primary-arrow svg\s*\{[^}]*stroke:\s*currentcolor;/s,
+    );
+    expect(css).toMatch(
+      /@media \(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*\.queue-submit-primary--icon\.queue-submit-primary--arrow-exit\s*\.queue-submit-primary-arrow-glyph\[data-submit-icon="check"\]\s*\{[\s\S]*opacity:\s*1;[\s\S]*transform:\s*scale\(1\);/,
+    );
     expect(css).toMatch(
       /\.queue-submit-primary--icon\.queue-submit-primary--arrow-exit\s*\{[^}]*background-color:\s*rgb\(var\(--mm-action-primary\) \/ 0\.12\);[^}]*background-image:\s*none;[^}]*border-color:\s*rgb\(var\(--mm-action-primary\)\);/s,
     );
@@ -16175,6 +16195,42 @@ describe("Task Create submit arrow animation", () => {
     expect(css).not.toMatch(
       /\.queue-submit-primary--icon:hover\s*\{[^}]*0 0 0 3px rgb\(var\(--mm-action-primary\) \/ 0\.6\)/s,
     );
+  });
+
+  it("renders both the create arrow and check glyphs so the click can morph between them", async () => {
+    const { unmount } = renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    try {
+      const createButton = await screen.findByRole("button", {
+        name: "Start Workflow",
+      });
+      const arrowWrapper = createButton.querySelector<HTMLElement>(
+        "[data-submit-arrow='right']",
+      );
+      expect(arrowWrapper).not.toBeNull();
+      expect(
+        arrowWrapper?.querySelector("[data-submit-icon='arrow']"),
+      ).not.toBeNull();
+      const check = arrowWrapper?.querySelector<HTMLElement>(
+        "[data-submit-icon='check']",
+      );
+      expect(check).not.toBeNull();
+      expect(check?.classList.contains("queue-submit-primary-arrow-glyph")).toBe(
+        true,
+      );
+      expect(
+        check?.classList.contains("queue-submit-primary-arrow-glyph--check"),
+      ).toBe(true);
+
+      fireEvent.pointerDown(createButton, { button: 0 });
+      await waitFor(() => {
+        expect(
+          createButton.classList.contains("queue-submit-primary--arrow-exit"),
+        ).toBe(true);
+      });
+    } finally {
+      unmount();
+    }
   });
 
   it("keeps the create arrow exited after submit until navigation", async () => {
@@ -17258,6 +17314,127 @@ describe("Task Create MM-578 Preset expansion", () => {
         task?: { publish?: Record<string, unknown> };
       }).task?.publish,
     ).toEqual({ mode: "pr", mergeAutomation: { enabled: true } });
+  });
+
+  it("preserves GitHub orchestration runtime metadata from preset expansion", async () => {
+    const githubOrchestration = {
+      task: {
+        repository: "MoonLadderStudios/Tactics",
+        runtime: { mode: "codex_cli" },
+        publish: {
+          mode: "pr",
+          mergeAutomation: { enabled: true },
+        },
+      },
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/presets?scope=global")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [
+              {
+                slug: "github-issue-breakdown-implement",
+                scope: "global",
+                title: "GitHub Issue Breakdown and Implement",
+                description: "Create dependent GitHub issue workflows.",
+                latestVersion: "1",
+                version: "1",
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (
+        url.startsWith(
+          "/api/presets/github-issue-breakdown-implement?scope=global",
+        )
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            slug: "github-issue-breakdown-implement",
+            scope: "global",
+            title: "GitHub Issue Breakdown and Implement",
+            description: "Create dependent GitHub issue workflows.",
+            latestVersion: "1",
+            version: "1",
+            inputs: [],
+          }),
+        } as Response);
+      }
+      if (
+        url.startsWith(
+          "/api/presets/github-issue-breakdown-implement:expand?scope=global",
+        )
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            steps: [
+              {
+                id: "tpl:github-issue-breakdown-implement:1:01",
+                title: "Create GitHub issue workflows",
+                instructions: "Create one implementation workflow per issue.",
+                skill: {
+                  id: "story.create_github_issue_implement_workflows",
+                  args: {},
+                },
+                githubOrchestration,
+              },
+            ],
+            appliedTemplate: {
+              slug: "github-issue-breakdown-implement",
+              version: "1",
+            },
+            capabilities: ["git", "gh"],
+            warnings: [],
+          }),
+        } as Response);
+      }
+      return mockMm578PresetFetch(input);
+    });
+
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    fireEvent.change(within(step).getByLabelText("Instructions"), {
+      target: { value: "Break down the GitHub issue and implement each story." },
+    });
+    selectStepType(step, "Preset");
+    const presetSelect = within(step).getByLabelText(
+      "Preset Template",
+    ) as HTMLSelectElement;
+    await waitFor(() => {
+      expect(
+        Array.from(presetSelect.options).some(
+          (option) =>
+            option.value === "global::::github-issue-breakdown-implement",
+        ),
+      ).toBe(true);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::github-issue-breakdown-implement" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const request = latestCreateRequest();
+    const payload = request.payload as Record<string, unknown>;
+    const task = payload.task as Record<string, unknown>;
+    expect(
+      (task.steps as Array<Record<string, unknown>>)[0]
+        ?.githubOrchestration,
+    ).toEqual(githubOrchestration);
   });
 
   it("does not force none publish mode from stale Jira Breakdown preset provenance", async () => {

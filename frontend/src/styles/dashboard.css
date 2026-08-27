@@ -6849,6 +6849,11 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     transform 180ms ease-out;
 }
 
+.queue-submit-primary--icon .queue-submit-primary-arrow-glyph--check {
+  opacity: 0;
+  transform: scale(0.6);
+}
+
 .queue-submit-primary--icon:not(.queue-submit-primary--arrow-exit):not(:disabled):not([aria-disabled="true"]):hover
   .queue-submit-primary-arrow
   svg {
@@ -6880,6 +6885,16 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     0 0 16px 1px rgb(var(--mm-action-primary) / 0.68);
 }
 
+.queue-submit-primary--icon.queue-submit-primary--arrow-exit
+  .queue-submit-primary-arrow-glyph[data-submit-icon="arrow"] {
+  animation: queue-submit-primary-arrow-exit 230ms cubic-bezier(0.33, 0, 0.2, 1) both;
+}
+
+.queue-submit-primary--icon.queue-submit-primary--arrow-exit
+  .queue-submit-primary-arrow-glyph[data-submit-icon="check"] {
+  animation: queue-submit-primary-check-pop 260ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
 .queue-submit-primary--icon.queue-submit-primary--arrow-exit {
   background-color: rgb(var(--mm-action-primary) / 0.12);
   background-image: none;
@@ -6899,6 +6914,32 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   }
   100% {
     transform: translateX(0);
+  }
+}
+
+@keyframes queue-submit-primary-arrow-exit {
+  0% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+}
+
+@keyframes queue-submit-primary-check-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.4);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
   }
 }
 
@@ -6958,6 +6999,17 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   .queue-submit-primary--icon .queue-submit-primary-arrow-glyph {
     animation: none !important;
     transition: none !important;
+  }
+
+  .queue-submit-primary--icon.queue-submit-primary--arrow-exit
+    .queue-submit-primary-arrow-glyph[data-submit-icon="arrow"] {
+    opacity: 0;
+  }
+
+  .queue-submit-primary--icon.queue-submit-primary--arrow-exit
+    .queue-submit-primary-arrow-glyph[data-submit-icon="check"] {
+    opacity: 1;
+    transform: scale(1);
   }
 
   .queue-submit-primary-ripple {
@@ -9025,6 +9077,48 @@ button.workflow-workspace-sidebar-row:active {
 
 .queue-card-actions .workflow-row-actions {
   align-items: flex-start;
+}
+
+.workflow-row-actions-controls {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: nowrap;
+}
+
+/*
+ * Promoted row actions (Cancel, Rerun, Remediate) are icon-only so the actions
+ * column stays narrow. Match the kebab trigger's square footprint so the whole
+ * cluster reads as one row of equal-sized controls.
+ */
+.workflow-row-actions-inline-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border-radius: 0.45rem;
+  line-height: 1;
+}
+
+.workflow-row-actions-inline-icon {
+  display: block;
+  width: 1.05rem;
+  height: 1.05rem;
+  stroke-width: 2;
+}
+
+.workflow-row-actions-inline-button--danger {
+  border-color: rgb(var(--mm-danger) / 0.5);
+  color: rgb(var(--mm-danger));
+}
+
+.workflow-row-actions-inline-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .td-workflow-actions-trigger-compact {

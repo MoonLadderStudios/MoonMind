@@ -36,6 +36,10 @@ describe('WorkflowRowActionsMenu', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    // The fetch spy is re-created per test but vi.spyOn reuses the existing
+    // spy, so without a restore every test inherits the previous test's
+    // recorded calls and per-test request-count assertions go order-dependent.
+    vi.restoreAllMocks();
   });
 
   const renderMenu = () =>
@@ -48,6 +52,9 @@ describe('WorkflowRowActionsMenu', () => {
       />,
     );
 
+  const rowButton = (name: string) =>
+    screen.getByRole('button', { name }) as HTMLButtonElement;
+
   const waitForActionAvailability = async (expectedActionName = 'Pause') => {
     await waitFor(() => {
       expect(
@@ -56,18 +63,83 @@ describe('WorkflowRowActionsMenu', () => {
         ),
       ).not.toHaveLength(0);
       expect(screen.getByRole('menuitem', { name: expectedActionName })).toBeTruthy();
-      expect(screen.queryByRole('menuitem', { name: 'Remediate' })).toBeNull();
+      expect(rowButton('Remediate').disabled).toBe(true);
       expect(screen.queryByText('Checking availability…')).toBeNull();
     });
   };
 
-  it('renders an icon trigger labeled "Actions" and does not fetch until opened', () => {
+  it('renders an icon trigger labeled "More actions" and does not fetch on mount', () => {
     renderMenu();
-    expect(screen.getByRole('button', { name: 'Actions' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'More actions' })).toBeTruthy();
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it('lists actions immediately while lazily loading capabilities the first time the menu opens', async () => {
+  // The actions column is narrow, so the promoted row actions render as icons.
+  // The action name must survive as the accessible name and the hover tooltip,
+  // otherwise the buttons become unlabeled to screen readers and unidentifiable
+  // to sighted operators.
+  it('renders the promoted row actions as labeled icon-only buttons', () => {
+    const { container } = renderWithClient(
+      <WorkflowRowActionsMenu
+        workflowId="wf-123"
+        apiBase="/api"
+        actionsEnabled
+        taskEditingEnabled
+      />,
+    );
+
+    for (const label of ['Cancel', 'Rerun', 'Remediate']) {
+      const button = screen.getByRole('button', { name: label });
+      expect(button.classList.contains('workflow-row-actions-inline-button')).toBe(true);
+      expect(button.getAttribute('aria-label')).toBe(label);
+      expect(button.getAttribute('title')).toContain(label);
+      expect(button.textContent).toBe('');
+      const icon = button.querySelector('svg.workflow-row-actions-inline-icon');
+      expect(icon).not.toBeNull();
+      expect(icon?.getAttribute('aria-hidden')).toBe('true');
+    }
+
+    // Every promoted control is icon-only; nothing in the row cluster renders
+    // the action name as visible text.
+    const controls = container.querySelector('.workflow-row-actions-controls');
+    expect(controls?.textContent).toBe('');
+  });
+
+  // Regression guard: the row detail endpoint runs a Temporal sync, so a
+  // Workflows page of 50-100 rows must not fan out one request per row just by
+  // rendering. Promoting Cancel/Rerun/Remediate onto the row must not turn the
+  // lazy detail fetch into an eager one.
+  it('does not fetch row capabilities until the operator reaches for the row', async () => {
+    const { container } = renderMenu();
+    const row = container.querySelector('.workflow-row-actions');
+    expect(row).not.toBeNull();
+    expect(
+      fetchSpy.mock.calls.filter(
+        ([url]) => String(url) === '/api/executions/wf-123?source=temporal',
+      ),
+    ).toHaveLength(0);
+
+    // The promoted buttons are visible immediately, but inert until resolved.
+    // (Rerun is additionally gated behind the task-editing flag, which this
+    // render leaves off, so only Cancel and Remediate are promoted here.)
+    expect(rowButton('Cancel').disabled).toBe(true);
+    expect(rowButton('Remediate').disabled).toBe(true);
+
+    fireEvent.mouseOver(row as Element);
+
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.filter(
+          ([url]) => String(url) === '/api/executions/wf-123?source=temporal',
+        ),
+      ).toHaveLength(1);
+    });
+    await waitFor(() => {
+      expect(rowButton('Cancel').disabled).toBe(false);
+    });
+  });
+
+  it('lists actions immediately while lazily loading capabilities the first time the row is engaged', async () => {
     let resolveDetail: (response: Response) => void = () => {};
     const detailPromise = new Promise<Response>((resolve) => {
       resolveDetail = resolve;
@@ -81,12 +153,12 @@ describe('WorkflowRowActionsMenu', () => {
     });
 
     renderMenu();
-    fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
 
     // While the detail request is in flight, the menu already shows the stable
     // action names and uses a disabled placeholder for workflow-specific state.
     expect(screen.getByRole('menuitem', { name: 'Pause' })).toBeTruthy();
-    expect(screen.getByRole('menuitem', { name: 'Cancel' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy();
     expect(screen.getByRole('menuitem', { name: 'Force cancel' })).toBeTruthy();
     expect(screen.getAllByText('Checking availability…').length).toBeGreaterThan(0);
     expect(screen.queryByText('Loading actions…')).toBeNull();
@@ -98,7 +170,7 @@ describe('WorkflowRowActionsMenu', () => {
 
     expect(await screen.findByRole('menuitem', { name: 'Pause' })).toBeTruthy();
     await waitForActionAvailability();
-    expect(screen.getByRole('menuitem', { name: 'Cancel' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy();
     expect(screen.getByRole('menuitem', { name: 'Force cancel' })).toBeTruthy();
     expect(
       fetchSpy.mock.calls.filter(
@@ -109,7 +181,7 @@ describe('WorkflowRowActionsMenu', () => {
 
   it('requests the lazy detail with the Temporal source so projection reads sync', async () => {
     renderMenu();
-    fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
 
     await screen.findByRole('menuitem', { name: 'Pause' });
     await waitForActionAvailability();
@@ -126,7 +198,7 @@ describe('WorkflowRowActionsMenu', () => {
 
   it('invokes the signal endpoint when a lifecycle action is selected', async () => {
     renderMenu();
-    fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
     await waitForActionAvailability();
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Pause' }));
 
@@ -161,8 +233,8 @@ describe('WorkflowRowActionsMenu', () => {
     });
 
     renderMenu();
-    fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
-    const remediateItem = await screen.findByRole('menuitem', { name: 'Remediate' });
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    const remediateItem = await screen.findByRole('button', { name: 'Remediate' });
     await waitFor(() => expect(remediateItem.getAttribute('aria-disabled')).toBeNull());
     fireEvent.mouseDown(remediateItem);
     fireEvent.click(remediateItem);
@@ -193,7 +265,7 @@ describe('WorkflowRowActionsMenu', () => {
     });
 
     renderMenu();
-    fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
     await waitForActionAvailability('Bypass Dependencies');
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Bypass Dependencies' }));
 
@@ -227,9 +299,9 @@ describe('WorkflowRowActionsMenu', () => {
         taskEditingEnabled
       />,
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
     await waitForActionAvailability();
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Rerun' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Rerun' }));
 
     await waitFor(() => {
       const rerunCall = fetchSpy.mock.calls.find(
@@ -285,9 +357,9 @@ describe('WorkflowRowActionsMenu', () => {
         taskEditingEnabled
       />,
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
     await waitForActionAvailability();
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Rerun' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Rerun' }));
 
     const toast = await screen.findByRole('status');
     const action = within(toast).getByRole('link', { name: 'View workflow' });
@@ -303,9 +375,9 @@ describe('WorkflowRowActionsMenu', () => {
         taskEditingEnabled
       />,
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
     await waitForActionAvailability();
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Rerun' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Rerun' }));
 
     const toast = await screen.findByRole('status');
     fireEvent.click(within(toast).getByRole('button', { name: 'Dismiss Rerun requested' }));
@@ -341,9 +413,9 @@ describe('WorkflowRowActionsMenu', () => {
         taskEditingEnabled
       />,
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
     await waitForActionAvailability();
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Rerun' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Rerun' }));
 
     const viewport = await screen.findByLabelText('Dashboard notifications');
     const toast = within(viewport).getByRole('alert');
@@ -374,9 +446,9 @@ describe('WorkflowRowActionsMenu', () => {
         taskEditingEnabled
       />,
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
     await waitForActionAvailability();
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Rerun' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Rerun' }));
 
     const viewport = await screen.findByLabelText('Dashboard notifications');
     const toast = within(viewport).getByRole('alert');
@@ -386,9 +458,9 @@ describe('WorkflowRowActionsMenu', () => {
 
   it('posts a graceful cancel request directly from the row menu', async () => {
     renderMenu();
-    fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
     await waitForActionAvailability();
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Cancel' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
     expect(screen.queryByRole('dialog')).toBeNull();
 
     await waitFor(() => {
@@ -407,7 +479,7 @@ describe('WorkflowRowActionsMenu', () => {
 
   it('posts a forced cancel request directly from the row menu', async () => {
     renderMenu();
-    fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
     await waitForActionAvailability();
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Force cancel' }));
     expect(screen.queryByRole('dialog')).toBeNull();

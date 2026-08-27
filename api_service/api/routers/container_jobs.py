@@ -22,7 +22,10 @@ from api_service.db.base import get_async_session
 from api_service.db.models import User
 from api_service.services.container_jobs import ContainerJobService
 from moonmind.config.settings import settings
-from moonmind.mcp.container_job_tool_registry import classify_container_job_error
+from moonmind.mcp.container_job_tool_registry import (
+    classify_container_job_error,
+    classify_gpu_request_error,
+)
 from moonmind.schemas.container_job_models import (
     MAX_ARTIFACT_PAGE_ENTRIES,
     MAX_LOG_PAGE_ENTRIES,
@@ -49,13 +52,26 @@ class _RedactedValidationRoute(APIRoute):
         async def redacted_route_handler(request: Request):
             try:
                 return await route_handler(request)
-            except RequestValidationError:
+            except RequestValidationError as exc:
+                # A refused GPU resource request keeps its stable generic class
+                # so an HTTP caller classifies it exactly as an MCP caller does.
+                # Only the class and a fixed message are returned; the rejected
+                # value never leaves the service.
+                normalized = classify_gpu_request_error(exc)
                 return JSONResponse(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                     content={
                         "detail": {
-                            "code": "invalid_request",
-                            "message": "Container-job request validation failed.",
+                            "code": (
+                                normalized.code
+                                if normalized is not None
+                                else "invalid_request"
+                            ),
+                            "message": (
+                                normalized.message
+                                if normalized is not None
+                                else "Container-job request validation failed."
+                            ),
                         }
                     },
                 )

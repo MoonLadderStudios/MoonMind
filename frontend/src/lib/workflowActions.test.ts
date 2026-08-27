@@ -120,6 +120,33 @@ describe('buildWorkflowActionMenuItems', () => {
     expect(withEditing.find((item) => item.id === 'edit-task')?.href).toBe('/tasks/abc/edit');
   });
 
+  it('pins Remediate with a reason only when the caller keeps it visible', () => {
+    // Default (workflow detail menu): an ineligible target drops the item.
+    const collapsed = buildWorkflowActionMenuItems(
+      buildParams({ canCreateRemediation: false }),
+    );
+    expect(collapsed.some((item) => item.id === 'create-remediation-task')).toBe(false);
+
+    // Workflow list rows promote Remediate to a button, so it stays put and
+    // explains itself rather than making the actions column ragged.
+    const pinned = buildWorkflowActionMenuItems(
+      buildParams({ canCreateRemediation: false, keepRemediationVisible: true }),
+    );
+    const remediate = pinned.find((item) => item.id === 'create-remediation-task');
+    expect(remediate).toBeTruthy();
+    expect(remediate?.disabledReason).toBe(
+      'Available for failed, stuck, or intervention-required workflows.',
+    );
+
+    // Eligible targets are unaffected by the flag.
+    const eligible = buildWorkflowActionMenuItems(
+      buildParams({ canCreateRemediation: true, keepRemediationVisible: true }),
+    );
+    expect(
+      eligible.find((item) => item.id === 'create-remediation-task')?.disabledReason,
+    ).toBeUndefined();
+  });
+
   it('exposes admitted control-stop continuation and its disabled reason', () => {
     const handlers = noopHandlers();
     const available = buildWorkflowActionMenuItems(

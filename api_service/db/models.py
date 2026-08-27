@@ -4266,6 +4266,11 @@ class ContainerJobRecord(Base):
     authorization_observation_json: Mapped[Optional[dict[str, Any]]] = mapped_column(
         mutable_json_dict(), nullable=True
     )
+    # Compact generic GPU resource observation. NULL for every CPU-only job
+    # (MoonLadderStudios/MoonMind#3779).
+    gpu_observation_json: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        mutable_json_dict(), nullable=True
+    )
     terminal_outcome_json: Mapped[Optional[dict[str, Any]]] = mapped_column(
         mutable_json_dict(), nullable=True
     )
