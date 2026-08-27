@@ -16143,11 +16143,31 @@ describe("Task Create submit arrow animation", () => {
     );
   });
 
-  it("outlines the create button on click while preserving its arrow and shockwave", async () => {
+  it("outlines the create button on click while morphing its arrow into a green check and preserving the shockwave", async () => {
     expect(css).toMatch(
       /\.queue-submit-primary--icon\.queue-submit-primary--arrow-exit\s*\{[^}]*background-color:\s*rgb\(var\(--mm-action-primary\) \/ 0\.12\);[^}]*background-image:\s*none;[^}]*color:\s*rgb\(var\(--mm-action-primary\)\);[^}]*border-color:\s*rgb\(var\(--mm-action-primary\)\);/s,
     );
-    expect(css).not.toContain('data-submit-icon="check"');
+    expect(css).toMatch(
+      /\.queue-submit-primary--icon \.queue-submit-primary-arrow-glyph--check\s*\{[^}]*opacity:\s*0;[^}]*transform:\s*scale\(0\.6\);/s,
+    );
+    expect(css).toMatch(
+      /\.queue-submit-primary--icon\.queue-submit-primary--arrow-exit\s*\.queue-submit-primary-arrow-glyph\[data-submit-icon="arrow"\]\s*\{[^}]*animation:\s*queue-submit-primary-arrow-exit\s+230ms\s+cubic-bezier\(0\.33,\s*0,\s*0\.2,\s*1\)\s+both;/s,
+    );
+    expect(css).toMatch(
+      /\.queue-submit-primary--icon\.queue-submit-primary--arrow-exit\s*\.queue-submit-primary-arrow-glyph\[data-submit-icon="check"\]\s*\{[^}]*animation:\s*queue-submit-primary-check-pop\s+260ms\s+cubic-bezier\(0\.34,\s*1\.56,\s*0\.64,\s*1\)\s+both;/s,
+    );
+    expect(css).toMatch(
+      /@keyframes queue-submit-primary-arrow-exit\s*\{[\s\S]*0%\s*\{[\s\S]*opacity:\s*1;[\s\S]*transform:\s*scale\(1\);[\s\S]*100%\s*\{[\s\S]*opacity:\s*0;[\s\S]*transform:\s*scale\(0\.6\);/,
+    );
+    expect(css).toMatch(
+      /@keyframes queue-submit-primary-check-pop\s*\{[\s\S]*0%\s*\{[\s\S]*opacity:\s*0;[\s\S]*60%\s*\{[\s\S]*transform:\s*scale\(1\.15\);[\s\S]*100%\s*\{[\s\S]*transform:\s*scale\(1\);/,
+    );
+    expect(css).toMatch(
+      /\.queue-submit-primary-arrow svg\s*\{[^}]*stroke:\s*currentcolor;/s,
+    );
+    expect(css).toMatch(
+      /@media \(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*\.queue-submit-primary--icon\.queue-submit-primary--arrow-exit\s*\.queue-submit-primary-arrow-glyph\[data-submit-icon="check"\]\s*\{[\s\S]*opacity:\s*1;[\s\S]*transform:\s*scale\(1\);/,
+    );
     expect(css).toMatch(
       /\.queue-submit-primary--icon\.queue-submit-primary--arrow-exit\s*\{[^}]*background-color:\s*rgb\(var\(--mm-action-primary\) \/ 0\.12\);[^}]*background-image:\s*none;[^}]*border-color:\s*rgb\(var\(--mm-action-primary\)\);/s,
     );
@@ -16175,6 +16195,42 @@ describe("Task Create submit arrow animation", () => {
     expect(css).not.toMatch(
       /\.queue-submit-primary--icon:hover\s*\{[^}]*0 0 0 3px rgb\(var\(--mm-action-primary\) \/ 0\.6\)/s,
     );
+  });
+
+  it("renders both the create arrow and check glyphs so the click can morph between them", async () => {
+    const { unmount } = renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    try {
+      const createButton = await screen.findByRole("button", {
+        name: "Start Workflow",
+      });
+      const arrowWrapper = createButton.querySelector<HTMLElement>(
+        "[data-submit-arrow='right']",
+      );
+      expect(arrowWrapper).not.toBeNull();
+      expect(
+        arrowWrapper?.querySelector("[data-submit-icon='arrow']"),
+      ).not.toBeNull();
+      const check = arrowWrapper?.querySelector<HTMLElement>(
+        "[data-submit-icon='check']",
+      );
+      expect(check).not.toBeNull();
+      expect(check?.classList.contains("queue-submit-primary-arrow-glyph")).toBe(
+        true,
+      );
+      expect(
+        check?.classList.contains("queue-submit-primary-arrow-glyph--check"),
+      ).toBe(true);
+
+      fireEvent.pointerDown(createButton, { button: 0 });
+      await waitFor(() => {
+        expect(
+          createButton.classList.contains("queue-submit-primary--arrow-exit"),
+        ).toBe(true);
+      });
+    } finally {
+      unmount();
+    }
   });
 
   it("keeps the create arrow exited after submit until navigation", async () => {
