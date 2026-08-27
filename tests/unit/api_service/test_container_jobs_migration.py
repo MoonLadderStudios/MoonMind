@@ -94,3 +94,31 @@ def test_observations_migration_adds_and_drops_columns(monkeypatch) -> None:
             for column in sa.inspect(connection).get_columns("container_jobs")
         }
         assert not (added & columns)
+
+
+def test_gpu_observation_migration_adds_and_drops_column(monkeypatch) -> None:
+    base = importlib.import_module(
+        "api_service.migrations.versions.338_container_jobs_contract"
+    )
+    gpu = importlib.import_module(
+        "api_service.migrations.versions.364_container_job_gpu_observation"
+    )
+    assert gpu.down_revision == "363_merge_automation_reviews"
+    engine = sa.create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        operations = Operations(MigrationContext.configure(connection))
+        monkeypatch.setattr(base, "op", operations)
+        monkeypatch.setattr(gpu, "op", operations)
+        base.upgrade()
+        gpu.upgrade()
+        columns = {
+            column["name"]
+            for column in sa.inspect(connection).get_columns("container_jobs")
+        }
+        assert "gpu_observation_json" in columns
+        gpu.downgrade()
+        columns = {
+            column["name"]
+            for column in sa.inspect(connection).get_columns("container_jobs")
+        }
+        assert "gpu_observation_json" not in columns

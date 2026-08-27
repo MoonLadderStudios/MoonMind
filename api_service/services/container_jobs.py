@@ -45,6 +45,7 @@ from moonmind.schemas.container_job_models import (
     ContainerJobStatus,
     ContainerJobSubmitRequest,
     ContainerJobWorkflowInput,
+    GpuObservation,
     ImageObservation,
     OwnerIdentity,
     RegistryAuthorization,
@@ -185,6 +186,7 @@ class ContainerJobRepository:
         self, *, owner: OwnerIdentity, job_id: str, state: ContainerJobState,
         backend_kind: str | None = None, backend_ref: str | None = None,
         image: ImageObservation | None = None, terminal: TerminalOutcome | None = None,
+        gpu: GpuObservation | None = None,
         publication: AuxiliaryOutcome | None = None, cleanup: AuxiliaryOutcome | None = None,
         logs_ref: str | None = None, artifacts_ref: str | None = None,
     ) -> ContainerJobRecord:
@@ -198,6 +200,8 @@ class ContainerJobRepository:
             record.backend_ref = backend_ref
         if image is not None:
             record.image_observation_json = image.model_dump(mode="json", by_alias=True, exclude_none=True)
+        if gpu is not None:
+            record.gpu_observation_json = gpu.model_dump(mode="json", by_alias=True, exclude_none=True)
         if terminal is not None:
             record.terminal_outcome_json = terminal.model_dump(mode="json", by_alias=True, exclude_none=True)
         if publication is not None:
@@ -322,6 +326,7 @@ class ContainerJobService:
             jobId=record.job_id, state=record.state, backendKind=record.backend_kind,
             backendRef=record.backend_ref, image=record.image_observation_json,
             authorization=record.authorization_observation_json,
+            gpu=record.gpu_observation_json,
             terminal=record.terminal_outcome_json, publication=record.publication_outcome_json,
             cleanup=record.cleanup_outcome_json, logsRef=record.logs_ref,
             artifactsRef=record.artifacts_ref, updatedAt=record.updated_at or record.created_at,
