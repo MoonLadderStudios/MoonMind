@@ -1122,6 +1122,15 @@ Provider Profile 'claude_anthropic_oauth' belongs to runtime 'claude_code' and
 cannot be used with runtime 'codex_cli'.
 ```
 
+The rule is expressed once as a typed contract at the shared authoring
+boundary — `api_service/services/provider_profile_runtime.py` — rather than
+copied per router, so a new authoring path cannot silently omit it. Direct
+execution submission, step authoring, and recurring-schedule authoring all
+resolve the pair through that module and surface the same 409 payload. A
+recurring schedule persists the target whose `initialParameters` a later
+schedule action launches, so its create and update paths validate the pair
+before the target is stored, not only when a run is started.
+
 For Omnigent submissions the equivalent rejection comes from the Omnigent
 selection boundary when the requested profile falls outside the selected
 execution target's compatibility set. Existing authorization, visibility,

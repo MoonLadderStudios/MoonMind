@@ -79,6 +79,12 @@ from api_service.db.models import (
     WorkflowCheckpointBranchTurn,
 )
 from api_service.services.checkpoint_branches import prepare_checkpoint_branch_workspace
+from api_service.services.provider_profile_runtime import (
+    ProviderProfileNotFoundError,
+    ProviderProfileRuntimeMismatchError,
+    load_provider_profile_for_runtime,
+    require_provider_profile_runtime,
+)
 from api_service.services.omnigent_agent_profile_selection import (
     compile_agent_profile_snapshot_parameters,
     refresh_managed_bootstrap_snapshot,
@@ -7817,45 +7823,26 @@ def _require_provider_profile_runtime(
     profile_id: str,
     selected_runtime: str | None,
 ) -> None:
-    """Reject a Provider Profile that is not owned by the selected runtime.
+    """Map the shared Provider Profile runtime invariant onto HTTP 409.
 
-    Provider Profiles are runtime-owned launch contracts: ``runtime_id`` decides
-    credential materialization, environment and file shaping, command behavior,
-    and model tiers, so the same upstream provider needs one profile per
-    runtime. Enforcing the relationship here keeps alternate clients from
-    bypassing the runtime-scoped selectors in the dashboard.
-
-    ``omnigent`` is an execution facade rather than a Provider Profile owner:
-    the profile it launches stays owned by the underlying managed runtime, and
-    compatibility is enforced against the selected execution target by
-    ``api_service.services.omnigent_agent_profile_selection``.
+    The rule itself lives in
+    :mod:`api_service.services.provider_profile_runtime` so that every
+    launch-authoring boundary — execution submission, step authoring, and
+    recurring-schedule authoring — enforces one contract instead of a copy per
+    router.
     """
 
-    if profile is None or not selected_runtime:
-        return
-    canonical_runtime = normalize_runtime_id(selected_runtime)
-    if canonical_runtime == "omnigent":
-        return
-    raw_profile_runtime = str(getattr(profile, "runtime_id", "") or "").strip()
-    if not raw_profile_runtime:
-        return
-    profile_runtime = normalize_runtime_id(raw_profile_runtime)
-    if profile_runtime == canonical_runtime:
-        return
-    raise HTTPException(
-        status_code=status.HTTP_409_CONFLICT,
-        detail={
-            "code": "provider_profile_runtime_mismatch",
-            "message": (
-                f"Provider Profile {profile_id!r} belongs to runtime "
-                f"{profile_runtime!r} and cannot be used with runtime "
-                f"{canonical_runtime!r}."
-            ),
-            "profileId": profile_id,
-            "profileRuntime": profile_runtime,
-            "selectedRuntime": canonical_runtime,
-        },
-    )
+    try:
+        require_provider_profile_runtime(
+            profile=profile,
+            profile_id=profile_id,
+            selected_runtime=selected_runtime,
+        )
+    except ProviderProfileRuntimeMismatchError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=exc.detail,
+        ) from exc
 
 
 async def _load_provider_profile_for_runtime(
@@ -7871,18 +7858,19 @@ async def _load_provider_profile_for_runtime(
     anything, so an incompatible pair can never reach a launch.
     """
 
-    session_get = getattr(session, "get", None)
-    if session is None or not callable(session_get):
-        return None
-    profile = await session_get(ManagedAgentProviderProfile, profile_id)
-    if profile is None:
-        raise _invalid_workflow_request(not_found_message)
-    _require_provider_profile_runtime(
-        profile=profile,
-        profile_id=profile_id,
-        selected_runtime=selected_runtime,
-    )
-    return profile
+    try:
+        return await load_provider_profile_for_runtime(
+            session=session,
+            profile_id=profile_id,
+            selected_runtime=selected_runtime,
+        )
+    except ProviderProfileNotFoundError as exc:
+        raise _invalid_workflow_request(not_found_message) from exc
+    except ProviderProfileRuntimeMismatchError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=exc.detail,
+        ) from exc
 
 
 async def _load_default_provider_profile_for_runtime(
@@ -12091,6 +12079,13 @@ async def _handle_recurring_schedule(
             agent_profile_selection=agent_profile_selection,
             actor=user,
         )
+    except ProviderProfileRuntimeMismatchError as exc:
+        # The service re-checks the invariant it owns; keep the 409 contract
+        # identical to the one this router already raises while authoring.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=exc.detail,
+        ) from exc
     except RecurringWorkflowValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

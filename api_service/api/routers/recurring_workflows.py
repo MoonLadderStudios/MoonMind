@@ -21,6 +21,9 @@ from api_service.db.models import (
     RecurringWorkflowScopeType,
     User,
 )
+from api_service.services.provider_profile_runtime import (
+    ProviderProfileRuntimeMismatchError,
+)
 from api_service.services.recurring_workflows_service import (
     RecurringScheduleRuntimeSummary,
     RecurringWorkflowAuthorizationError,
@@ -517,6 +520,13 @@ def _recurring_sort_value(
     return definition.updated_at or _MIN_AWARE_DATETIME
 
 def _map_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, ProviderProfileRuntimeMismatchError):
+        # Provider Profiles are runtime-owned launch contracts; the shared
+        # invariant raises one error contract for every authoring boundary.
+        return HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=exc.detail,
+        )
     if isinstance(exc, RecurringWorkflowNotFoundError):
         return HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
