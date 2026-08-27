@@ -12,6 +12,7 @@ def _build(*, target_path: str, github_attachment=None):
             }
         ],
         skill_attachment={"targetPath": "/opt/moonmind-skills"},
+        step_execution_id="workflow:run:node-1:execution:1",
         github_credential_attachment=github_attachment,
     )
 
@@ -36,7 +37,13 @@ def test_opencode_materializer_pins_deterministic_server_startup_environment():
         name for name in expected_flags if environment[name] == "1"
     } == expected_flags
     assert set(environment["OMNIGENT_RUNNER_ENV_PASSTHROUGH"].split(",")) == (
-        expected_flags | expected_proxies | {"MOONMIND_ACTIVE_SKILLS_DIR"}
+        expected_flags
+        | expected_proxies
+        | {"MOONMIND_ACTIVE_SKILLS_DIR", "MOONMIND_STEP_EXECUTION_ID"}
+    )
+    assert (
+        environment["MOONMIND_STEP_EXECUTION_ID"]
+        == "workflow:run:node-1:execution:1"
     )
 
 
@@ -44,9 +51,10 @@ def test_non_opencode_materializer_does_not_inject_opencode_runtime_flags():
     _script, environment = _build(target_path="/run/mm-credentials/other")
 
     assert not any(name.startswith("OPENCODE_") for name in environment)
-    assert environment["OMNIGENT_RUNNER_ENV_PASSTHROUGH"] == (
-        "MOONMIND_ACTIVE_SKILLS_DIR"
-    )
+    assert set(environment["OMNIGENT_RUNNER_ENV_PASSTHROUGH"].split(",")) == {
+        "MOONMIND_ACTIVE_SKILLS_DIR",
+        "MOONMIND_STEP_EXECUTION_ID",
+    }
 
 
 def test_github_projection_exposes_only_non_secret_cli_environment():

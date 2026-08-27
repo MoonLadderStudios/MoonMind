@@ -338,10 +338,12 @@ class DockerOmnigentHostAttestor:
                 "-ceu",
                 (
                     'test "${MOONMIND_ACTIVE_SKILLS_DIR:-}" = "$1"; '
-                    'test -d "$1"; test -r "$1/_manifest.json"'
+                    'test -d "$1"; test -r "$1/_manifest.json"; '
+                    'test "${MOONMIND_STEP_EXECUTION_ID:-}" = "$2"'
                 ),
                 "--",
                 skill_target,
+                spec.stepExecutionId,
             ],
         )
         if code != 0:

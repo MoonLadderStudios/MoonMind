@@ -50,6 +50,7 @@ class OmnigentRuntimeScriptService:
         *,
         credential_handles: list[dict[str, Any]],
         skill_attachment: dict[str, Any],
+        step_execution_id: str,
         tool_attachments: tuple[dict[str, Any], ...] = (),
         github_credential_attachment: dict[str, Any] | None = None,
         control_attachment: dict[str, Any] | None = None,
@@ -66,6 +67,7 @@ class OmnigentRuntimeScriptService:
         environment = {
             "MOONMIND_CREDENTIAL_GENERATION_CHECKS": ",".join(generation_checks),
             "MOONMIND_ACTIVE_SKILLS_DIR": str(skill_attachment["targetPath"]),
+            "MOONMIND_STEP_EXECUTION_ID": step_execution_id,
         }
         tool_bins = [
             str(item["targetPath"]).rstrip("/") + "/bin"
@@ -121,6 +123,7 @@ class OmnigentRuntimeScriptService:
             environment.update(_GITHUB_RUNTIME_ENV)
         passthrough_names = {
             "MOONMIND_ACTIVE_SKILLS_DIR",
+            "MOONMIND_STEP_EXECUTION_ID",
             *(_OPENCODE_RUNTIME_ENV if has_opencode_materializer else {}),
             *(_OPENCODE_PROXY_ENV_NAMES if has_opencode_materializer else {}),
             *(

@@ -232,6 +232,11 @@ class GenericOmnigentHostRuntime:
         spec = HostLaunchSpec.model_validate(
             {
                 "executionPlanRef": plan.planRef,
+                "stepExecutionId": (
+                    request.step_execution.step_execution_id
+                    if request.step_execution is not None
+                    else request.correlation_id
+                ),
                 "runtimeBindingId": runtime_binding_id,
                 "hostLeaseRef": host_lease_ref,
                 "hostLeaseGeneration": host_lease_generation,
