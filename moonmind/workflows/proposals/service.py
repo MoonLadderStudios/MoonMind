@@ -16,6 +16,10 @@ from uuid import UUID
 import httpx
 from pydantic import ValidationError
 
+from api_service.services.provider_profile_runtime import (
+    ProviderProfileRuntimeMismatchError,
+    require_launch_target_provider_profile_runtime,
+)
 from moonmind.config import settings
 from moonmind.security import scan_outbound_text
 from moonmind.utils.logging import SecretRedactor
@@ -1863,6 +1867,28 @@ class WorkflowProposalService:
             self._enforce_flat_preset_derived_steps(payload)
         payload = self._enforce_proposal_pr_publish_mode(payload)
         request["payload"] = payload
+
+        # A promotion is a launch-authoring boundary: the runtime override
+        # rewrites ``targetRuntime`` and ``workflow.runtime.mode`` while leaving
+        # any authored Provider Profile ref untouched, so the override itself can
+        # create an incompatible pair. Enforce the shared runtime-ownership
+        # invariant on the final payload before the proposal is durably marked
+        # promoted, otherwise a rejected promotion would leave the proposal in a
+        # terminal state with no execution behind it.
+        try:
+            await require_launch_target_provider_profile_runtime(
+                session=self._repository.session,
+                target={"initialParameters": payload},
+            )
+        except ProviderProfileRuntimeMismatchError:
+            self._append_proposal_event(
+                proposal,
+                "proposal.promotion_failed",
+                reason="provider_profile_runtime_mismatch",
+                runtimeModeOverride=runtime_mode_override,
+            )
+            await self._repository.commit()
+            raise
 
         priority = request.get("priority", 0)
         if priority_override is not None:

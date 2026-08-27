@@ -2,16 +2,24 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException, status
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import sessionmaker
 
 from api_service.api.routers import recurring_workflows as recurring_router
 from api_service.db.models import (
+    Base,
+    ManagedAgentProviderProfile,
+    RecurringWorkflowDefinition,
     RecurringWorkflowRunOutcome,
     RecurringWorkflowRunTrigger,
     RecurringWorkflowScheduleType,
@@ -20,6 +28,7 @@ from api_service.db.models import (
 from api_service.services.recurring_workflows_service import (
     RecurringScheduleRuntimeSummary,
     RecurringWorkflowConflictError,
+    RecurringWorkflowsService,
     RecurringWorkflowValidationError,
 )
 
@@ -423,3 +432,240 @@ async def test_list_recurring_workflow_runs_hydrates_actual_start_time() -> None
     assert response.items[0].temporal_workflow_id == "workflow-from-schedule"
     assert response.items[0].started_at == started_at
     service.started_at_by_workflow_id.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# MoonLadderStudios/MoonMind#3788 — the recurring-workflows routes are a launch
+# authoring boundary: the target they persist is what a later schedule action
+# launches, so a mismatched runtime/Provider Profile pair must be rejected here
+# with the same 409 contract the execution-submission path raises.
+# ---------------------------------------------------------------------------
+
+
+@asynccontextmanager
+async def _mm3788_session(tmp_path: Path):
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{tmp_path / 'recurring_routes.db'}", future=True
+    )
+    session_maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with session_maker() as session:
+            session.add_all(
+                [
+                    ManagedAgentProviderProfile(
+                        profile_id="codex_minimax_team",
+                        runtime_id="codex_cli",
+                        provider_id="minimax",
+                    ),
+                    ManagedAgentProviderProfile(
+                        profile_id="claude_minimax_team",
+                        runtime_id="claude_code",
+                        provider_id="minimax",
+                    ),
+                ]
+            )
+            await session.flush()
+            yield session
+    finally:
+        await engine.dispose()
+
+
+def _mm3788_service(session) -> RecurringWorkflowsService:
+    adapter = MagicMock()
+    adapter.create_schedule = AsyncMock(return_value="mm-schedule:id")
+    adapter.update_schedule = AsyncMock()
+    adapter.pause_schedule = AsyncMock()
+    adapter.unpause_schedule = AsyncMock()
+    adapter.delete_schedule = AsyncMock()
+    adapter.resolve_workflow_task_queue = MagicMock(return_value="mm.workflow.user.v2")
+    return RecurringWorkflowsService(session, temporal_client_adapter=adapter)
+
+
+def _mm3788_route_target(*, target_runtime: str, profile_id: str) -> dict:
+    return {
+        "workflowType": "MoonMind.UserWorkflow",
+        "initialParameters": {
+            "targetRuntime": target_runtime,
+            "workflow": {
+                "instructions": "Run the nightly resolver.",
+                "runtime": {"mode": target_runtime, "providerProfileRef": profile_id},
+            },
+        },
+    }
+
+
+def _mm3788_create_payload(target: dict) -> recurring_router.CreateRecurringWorkflowRequest:
+    return recurring_router.CreateRecurringWorkflowRequest(
+        name="MM-3788 schedule",
+        cron="0 6 * * *",
+        timezone="UTC",
+        scopeType="personal",
+        target=target,
+        policy={},
+    )
+
+
+async def _mm3788_create_owned(service, user):
+    return await recurring_router.create_recurring_workflow(
+        payload=_mm3788_create_payload(
+            _mm3788_route_target(
+                target_runtime="claude_code", profile_id="claude_minimax_team"
+            )
+        ),
+        service=service,
+        user=user,
+    )
+
+
+@pytest.mark.asyncio
+async def test_mm3788_create_route_rejects_a_cross_runtime_provider_profile(
+    tmp_path: Path,
+) -> None:
+    user = SimpleNamespace(id=uuid4(), is_superuser=False)
+
+    async with _mm3788_session(tmp_path) as session:
+        service = _mm3788_service(session)
+
+        with pytest.raises(HTTPException) as excinfo:
+            await recurring_router.create_recurring_workflow(
+                payload=_mm3788_create_payload(
+                    _mm3788_route_target(
+                        target_runtime="claude_code",
+                        profile_id="codex_minimax_team",
+                    )
+                ),
+                service=service,
+                user=user,
+            )
+
+        assert excinfo.value.status_code == status.HTTP_409_CONFLICT
+        detail = excinfo.value.detail
+        assert detail["code"] == "provider_profile_runtime_mismatch"
+        assert detail["profileId"] == "codex_minimax_team"
+        assert detail["profileRuntime"] == "codex_cli"
+        assert detail["selectedRuntime"] == "claude_code"
+        assert "codex_minimax_team" in detail["message"]
+        assert "claude_code" in detail["message"]
+        # Nothing was persisted by the rejected request.
+        await session.rollback()
+        stored = (
+            await session.execute(select(RecurringWorkflowDefinition))
+        ).scalars().all()
+        assert stored == []
+
+
+@pytest.mark.asyncio
+async def test_mm3788_create_route_accepts_a_profile_owned_by_the_target_runtime(
+    tmp_path: Path,
+) -> None:
+    user = SimpleNamespace(id=uuid4(), is_superuser=False)
+
+    async with _mm3788_session(tmp_path) as session:
+        created = await _mm3788_create_owned(_mm3788_service(session), user)
+
+        assert created.target["initialParameters"]["workflow"]["runtime"][
+            "providerProfileRef"
+        ] == "claude_minimax_team"
+        stored = (
+            await session.execute(select(RecurringWorkflowDefinition))
+        ).scalars().all()
+        assert [item.id for item in stored] == [created.id]
+
+
+@pytest.mark.asyncio
+async def test_mm3788_create_route_defers_omnigent_compatibility_to_selection(
+    tmp_path: Path,
+) -> None:
+    """An Omnigent target is not a runtime mismatch; selection owns that check."""
+
+    user = SimpleNamespace(id=uuid4(), is_superuser=False)
+
+    async with _mm3788_session(tmp_path) as session:
+        created = await recurring_router.create_recurring_workflow(
+            payload=_mm3788_create_payload(
+                _mm3788_route_target(
+                    target_runtime="omnigent", profile_id="codex_minimax_team"
+                )
+            ),
+            service=_mm3788_service(session),
+            user=user,
+        )
+
+        assert created.target["initialParameters"]["targetRuntime"] == "omnigent"
+
+
+@pytest.mark.asyncio
+async def test_mm3788_update_route_rejects_a_cross_runtime_provider_profile(
+    tmp_path: Path,
+) -> None:
+    user = SimpleNamespace(id=uuid4(), is_superuser=False)
+
+    async with _mm3788_session(tmp_path) as session:
+        created = await _mm3788_create_owned(_mm3788_service(session), user)
+        definition_id = created.id
+        stored_target = dict(created.target)
+
+        with pytest.raises(HTTPException) as excinfo:
+            await recurring_router.update_recurring_workflow(
+                definition_id=definition_id,
+                payload=recurring_router.UpdateRecurringWorkflowRequest(
+                    name="Renamed by a rejected edit",
+                    target=_mm3788_route_target(
+                        target_runtime="claude_code",
+                        profile_id="codex_minimax_team",
+                    ),
+                    version=created.version,
+                ),
+                service=_mm3788_service(session),
+                user=user,
+            )
+
+        assert excinfo.value.status_code == status.HTTP_409_CONFLICT
+        assert excinfo.value.detail == {
+            "code": "provider_profile_runtime_mismatch",
+            "message": (
+                "Provider Profile 'codex_minimax_team' belongs to runtime "
+                "'codex_cli' and cannot be used with runtime 'claude_code'."
+            ),
+            "profileId": "codex_minimax_team",
+            "profileRuntime": "codex_cli",
+            "selectedRuntime": "claude_code",
+        }
+        # The stored target survived the rejected edit unchanged.
+        await session.rollback()
+        reloaded = await session.get(
+            RecurringWorkflowDefinition, definition_id, populate_existing=True
+        )
+        assert reloaded.target == stored_target
+        assert reloaded.name == "MM-3788 schedule"
+
+
+@pytest.mark.asyncio
+async def test_mm3788_update_route_accepts_a_profile_owned_by_the_target_runtime(
+    tmp_path: Path,
+) -> None:
+    user = SimpleNamespace(id=uuid4(), is_superuser=False)
+
+    async with _mm3788_session(tmp_path) as session:
+        created = await _mm3788_create_owned(_mm3788_service(session), user)
+
+        updated = await recurring_router.update_recurring_workflow(
+            definition_id=created.id,
+            payload=recurring_router.UpdateRecurringWorkflowRequest(
+                name="Renamed by an accepted edit",
+                target=_mm3788_route_target(
+                    target_runtime="claude_code",
+                    profile_id="claude_minimax_team",
+                ),
+                version=created.version,
+            ),
+            service=_mm3788_service(session),
+            user=user,
+        )
+
+        assert updated.name == "Renamed by an accepted edit"
+        assert updated.target["initialParameters"]["workflow"]["runtime"][
+            "providerProfileRef"
+        ] == "claude_minimax_team"

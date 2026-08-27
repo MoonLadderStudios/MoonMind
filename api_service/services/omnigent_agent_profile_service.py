@@ -295,10 +295,6 @@ async def record_upstream_sync_failure(
     await session.commit()
 
 
-_OPENCODE_NATIVE_UI_ID = "opencode-native-ui"
-_OPENCODE_NATIVE_UI_VERSION = "1"
-
-
 def _synthetic_opencode_implementation() -> Any:
     from moonmind.omnigent.harness_platform.catalog import (
         HarnessImplementationIdentity,
@@ -339,9 +335,10 @@ def _overlay_synthetic_opencode(result: Any) -> Any:
     """Merge the local OpenCode overlay into one authenticated observation.
 
     Stock Omnigent endpoints do not advertise ``opencode-native``. When OpenCode
-    support is enabled, each observation carries the stable overlay harness and
-    upstream agent identity so freshness attestation and launch planning keep
-    succeeding without forking the readiness path.
+    support is enabled, each observation carries the stable overlay harness.
+    Agent identity remains exclusively owned by authenticated ``/v1/agents``
+    inventory; inventing an agent row here would defer a missing deployment
+    prerequisite until session creation.
     """
 
     import hashlib
@@ -365,11 +362,6 @@ def _overlay_synthetic_opencode(result: Any) -> Any:
         for harness in result.snapshot.harnesses
     ]
     synthetic_harness_row = _synthetic_opencode_harness_row()
-    synthetic_agent_row = {
-        "id": _OPENCODE_NATIVE_UI_ID,
-        "version": _OPENCODE_NATIVE_UI_VERSION,
-        "harness": "opencode-native",
-    }
     harness_rows.append(synthetic_harness_row)
     # The overlay is applied before the observation is persisted, so it is the
     # only row published for this synchronization and needs no timestamp offset
@@ -384,7 +376,6 @@ def _overlay_synthetic_opencode(result: Any) -> Any:
             "prior": result.snapshot.sourceDigest,
             "overlay": True,
             "syntheticHarness": synthetic_harness_row,
-            "syntheticAgent": synthetic_agent_row,
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -431,8 +422,9 @@ def _overlay_synthetic_opencode(result: Any) -> Any:
         diagnostics={
             **dict(result.diagnostics),
             "agents": [
-                *[item for item in result.diagnostics.get("agents", []) if isinstance(item, dict)],
-                dict(synthetic_agent_row),
+                item
+                for item in result.diagnostics.get("agents", [])
+                if isinstance(item, dict)
             ],
             "syntheticOpencodeOverlay": True,
         },

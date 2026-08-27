@@ -20,7 +20,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from moonmind.omnigent.conformance import assert_secret_free
 from moonmind.omnigent.harness_platform.support import (
+    DEPLOYMENT_QUALIFICATION_EXCLUDED_FIELDS,
     SupportKeyPayload,
+    compute_deployment_qualification_key,
     compute_support_combination_key,
 )
 
@@ -277,19 +279,28 @@ def assert_deployment_evidence_matches_plan(
     # compilations. The policy digests are intentionally excluded for deployment
     # qualification, which proves the deployment can run the combination, not a
     # single historical policy snapshot.
+    def _qualified_identity(identity: SupportKeyPayload) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in identity.model_dump(mode="json", by_alias=True).items()
+            if key not in DEPLOYMENT_QUALIFICATION_EXCLUDED_FIELDS
+        }
+
     expected = {
-        "supportCombinationKey": plan_payload.supportCombinationKey,
-        "supportIdentity": support_identity.model_dump(mode="json", by_alias=True),
+        "deploymentQualificationKey": compute_deployment_qualification_key(
+            support_identity
+        ),
+        "supportIdentity": _qualified_identity(support_identity),
         "hostImageRef": plan_payload.hostImageRef,
         "featureGeneration": OMNIGENT_SESSION_FEATURE_GENERATION,
         "replayCompatibilityVersion": OMNIGENT_SESSION_COMPATIBILITY_VERSION,
         "rollbackPolicyVersion": SUPERVISOR_ROLLBACK_POLICY_VERSION,
     }
     actual = {
-        "supportCombinationKey": evidence.support_combination_key,
-        "supportIdentity": evidence.support_identity.model_dump(
-            mode="json", by_alias=True
+        "deploymentQualificationKey": compute_deployment_qualification_key(
+            evidence.support_identity
         ),
+        "supportIdentity": _qualified_identity(evidence.support_identity),
         "hostImageRef": evidence.host_image_ref,
         "featureGeneration": evidence.feature_generation,
         "replayCompatibilityVersion": evidence.replay_compatibility_version,
@@ -297,6 +308,60 @@ def assert_deployment_evidence_matches_plan(
     }
     if actual != expected:
         raise ValueError("deployment evidence conflicts with the execution plan")
+
+
+def _candidate_qualification_key(candidate: Mapping[str, Any]) -> str | None:
+    """Return one published entry's deployment-scoped combination key."""
+
+    identity = candidate.get("supportIdentity")
+    if not isinstance(identity, Mapping):
+        return None
+    return compute_deployment_qualification_key(dict(identity))
+
+
+def _support_identity_drift(
+    plan_payload: Any, candidate: Mapping[str, Any]
+) -> list[str]:
+    """Name fields that separate a plan from untrusted candidate evidence.
+
+    Candidate values have not passed schema validation, the secret scan, or
+    HMAC verification. Diagnostics therefore expose bounded field names only.
+    """
+
+    requested = plan_payload.supportIdentity.model_dump(mode="json", by_alias=True)
+    attested = candidate.get("supportIdentity")
+    if not isinstance(attested, Mapping):
+        return ["supportIdentity"]
+    drift: list[str] = []
+    for field in sorted(set(requested) | set(attested)):
+        if field in DEPLOYMENT_QUALIFICATION_EXCLUDED_FIELDS:
+            continue
+        if requested.get(field) != attested.get(field):
+            drift.append(f"{field} differs")
+    return drift
+
+
+def _unqualified_combination_message(
+    plan_payload: Any, candidates: list[Any]
+) -> str:
+    """Explain which exact combination is missing and how to re-qualify.
+
+    Candidates are untrusted until schema, secret, and signature validation,
+    so only bounded field names may appear in this pre-validation diagnostic.
+    """
+
+    drift: list[str] = []
+    for candidate in candidates:
+        if isinstance(candidate, Mapping):
+            drift.extend(_support_identity_drift(plan_payload, candidate))
+    detail = "; ".join(drift) if drift else "no deployment evidence is published"
+    return (
+        "this deployment is not qualified for the requested execution "
+        f"combination {plan_payload.supportCombinationKey} ({detail}). "
+        "Qualification follows the current Provider and Agent Profile defaults; "
+        "align those defaults with the requested launch policy, model, and effort "
+        "before qualifying the deployment."
+    )
 
 
 def load_deployment_evidence(
@@ -321,14 +386,17 @@ def load_deployment_evidence(
         raise ValueError("deployment evidence must be an object")
     entries = raw.get("entries")
     candidates = list(entries) if isinstance(entries, list) else [raw]
+    requested_qualification_key = compute_deployment_qualification_key(
+        plan_payload.supportIdentity
+    )
     matching = [
         value
         for value in candidates
         if isinstance(value, Mapping)
-        and value.get("supportCombinationKey") == plan_payload.supportCombinationKey
+        and _candidate_qualification_key(value) == requested_qualification_key
     ]
     if len(matching) != 1:
-        raise ValueError("exact deployment execution evidence is unavailable")
+        raise ValueError(_unqualified_combination_message(plan_payload, candidates))
     parsed = validate_deployment_evidence(matching[0], now=now)
     assert_deployment_evidence_matches_plan(parsed, plan_payload)
     return parsed.model_dump(mode="json", by_alias=True)

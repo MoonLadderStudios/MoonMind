@@ -9,6 +9,10 @@ from types import SimpleNamespace
 
 import pytest
 
+from moonmind.auth.github_credentials import (
+    GitHubCredentialSource,
+    ResolvedGitHubCredential,
+)
 from moonmind.omnigent.credential_materializers import (
     CredentialMaterializationContext,
     CredentialRuntimeHandle,
@@ -49,8 +53,18 @@ from moonmind.omnigent.host_leases import InMemoryOmnigentHostLeaseRepository
 from moonmind.omnigent.host_services.attestation import (
     _assert_exact_omnigent_build,
     _attest_workspace_mount,
+    _read_exact_host_model_options,
+    _run_exact_host_opencode_command,
+    _run_exact_host_runner_command,
 )
-from moonmind.omnigent.host_services.mounted_tools import OmnigentMountedToolService
+from moonmind.omnigent.host_services.github_credentials import (
+    OmnigentGithubCredentialService,
+    github_repository_from_request,
+)
+from moonmind.omnigent.host_services.mounted_tools import (
+    OmnigentMountedToolService,
+    deployment_mounted_tool_names,
+)
 from moonmind.omnigent.host_services.workspace import OmnigentWorkspaceMaterializer
 from moonmind.omnigent.provider_leases import (
     AcquiredProviderLease,
@@ -116,6 +130,176 @@ def test_exact_host_attestation_enforces_workspace_access_mode() -> None:
             ],
             attachment,
         )
+
+
+@pytest.mark.asyncio
+async def test_opencode_exact_host_model_options_use_portable_cli_helper() -> None:
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    class Backend:
+        async def run(self, argv, **kwargs):
+            calls.append((list(argv), dict(kwargs)))
+            return (
+                0,
+                json.dumps(
+                    {
+                        "models": [
+                            {
+                                "id": "opencode-go/muse-spark-1.2-contributor",
+                                "providerID": "opencode-go",
+                            }
+                        ]
+                    }
+                ),
+                "",
+            )
+
+    class Client:
+        async def get_host_model_options(self, *_args):
+            raise AssertionError("OpenCode must not use the unsupported host tunnel")
+
+    result, source = await _read_exact_host_model_options(
+        backend=Backend(),
+        client=Client(),
+        container_name="mm-host-opencode",
+        omnigent_host_id="host-opencode",
+        harness_id="opencode-native",
+    )
+
+    assert result["models"][0]["id"] == "opencode-go/muse-spark-1.2-contributor"
+    assert source == "exact-host-opencode-cli"
+    argv, kwargs = calls[0]
+    assert argv[:4] == [
+        "docker",
+        "exec",
+        "mm-host-opencode",
+        "/opt/venv/bin/python",
+    ]
+    assert "list_opencode_cli_model_options" in argv[-1]
+    assert kwargs == {"timeout_seconds": 45.0, "check": False}
+
+
+@pytest.mark.asyncio
+async def test_exact_host_runner_probe_uses_authoritative_environment_builder() -> None:
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    class Backend:
+        async def run(self, argv, **kwargs):
+            calls.append((argv, kwargs))
+            return 0, "ready", ""
+
+    result = await _run_exact_host_runner_command(
+        backend=Backend(),
+        container_name="mm-host-opencode",
+        argv=["gh", "auth", "status", "--hostname", "github.com"],
+    )
+
+    assert result == (0, "ready", "")
+    argv, kwargs = calls[0]
+    assert argv[:5] == [
+        "docker",
+        "exec",
+        "mm-host-opencode",
+        "/opt/venv/bin/python",
+        "-c",
+    ]
+    assert "from omnigent.host.connect import _build_runner_env" in argv[5]
+    assert argv[6:] == ["gh", "auth", "status", "--hostname", "github.com"]
+    assert kwargs == {"timeout_seconds": 30.0, "check": False}
+
+
+@pytest.mark.asyncio
+async def test_exact_host_opencode_probe_composes_both_environment_builders() -> None:
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    class Backend:
+        async def run(self, argv, **kwargs):
+            calls.append((argv, kwargs))
+            return 0, "ready", ""
+
+    result = await _run_exact_host_opencode_command(
+        backend=Backend(),
+        container_name="mm-host-opencode",
+        argv=["gh", "auth", "status", "--hostname", "github.com"],
+    )
+
+    assert result == (0, "ready", "")
+    argv, kwargs = calls[0]
+    assert argv[:5] == [
+        "docker",
+        "exec",
+        "mm-host-opencode",
+        "/opt/venv/bin/python",
+        "-c",
+    ]
+    assert "from omnigent.host.connect import _build_runner_env" in argv[5]
+    assert "from omnigent.opencode_native_app_server import filtered_server_env" in argv[5]
+    assert "moonmind-opencode-context" in argv[5]
+    assert "env=runner_env" in argv[5]
+    assert argv[6:] == ["gh", "auth", "status", "--hostname", "github.com"]
+    assert kwargs == {"timeout_seconds": 30.0, "check": False}
+
+
+@pytest.mark.asyncio
+async def test_non_opencode_exact_host_model_options_use_tunnel() -> None:
+    class Backend:
+        async def run(self, *_args, **_kwargs):
+            raise AssertionError("non-OpenCode harnesses must use the host tunnel")
+
+    class Client:
+        async def get_host_model_options(self, host_id, harness_id):
+            assert (host_id, harness_id) == ("host-pi", "pi-native")
+            return {"models": [{"id": "anthropic/claude-sonnet-4-6"}]}
+
+    result, source = await _read_exact_host_model_options(
+        backend=Backend(),
+        client=Client(),
+        container_name="mm-host-pi",
+        omnigent_host_id="host-pi",
+        harness_id="pi-native",
+    )
+
+    assert result == {"models": [{"id": "anthropic/claude-sonnet-4-6"}]}
+    assert source == "omnigent-host-tunnel"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("return_value", "expected_message"),
+    [
+        (
+            (1, "", "provider diagnostic containing sensitive context"),
+            "exact host OpenCode model catalog probe failed",
+        ),
+        (
+            (0, "not-json", ""),
+            "exact host OpenCode model catalog probe returned invalid JSON",
+        ),
+        (
+            (0, '{"models": {}}', ""),
+            "exact host OpenCode model catalog probe returned an invalid catalog",
+        ),
+    ],
+)
+async def test_opencode_exact_host_model_options_fail_closed_without_diagnostics(
+    return_value: tuple[int, str, str], expected_message: str
+) -> None:
+    class Backend:
+        async def run(self, *_args, **_kwargs):
+            return return_value
+
+    with pytest.raises(HarnessPlatformError) as exc:
+        await _read_exact_host_model_options(
+            backend=Backend(),
+            client=object(),
+            container_name="mm-host-opencode",
+            omnigent_host_id="host-opencode",
+            harness_id="opencode-native",
+        )
+
+    assert str(exc.value) == expected_message
+    assert exc.value.code == HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE
+    assert "sensitive context" not in str(exc.value)
 
 
 def test_planning_model_evidence_is_bound_to_generation_and_host_image() -> None:
@@ -316,9 +500,7 @@ async def test_planned_host_resolver_uses_exact_launch_artifact() -> None:
         {
             "id": "opencode-native",
             "label": "OpenCode",
-            "implementation": implementation.model_dump(
-                mode="json", by_alias=True
-            ),
+            "implementation": implementation.model_dump(mode="json", by_alias=True),
             "capabilities": {
                 "integrationMode": "native-server",
                 "authModel": "own-auth",
@@ -376,13 +558,10 @@ async def test_planned_host_resolver_uses_exact_launch_artifact() -> None:
     }
     canonical = json.dumps(launch, sort_keys=True, separators=(",", ":"))
     launch["snapshotRef"] = (
-        "omnigent-launch:sha256:"
-        + hashlib.sha256(canonical.encode()).hexdigest()
+        "omnigent-launch:sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
     )
     raw = json.dumps(launch, sort_keys=True, separators=(",", ":")).encode()
-    payload = _plan("opencode-go/model").payload.model_dump(
-        mode="json", by_alias=True
-    )
+    payload = _plan("opencode-go/model").payload.model_dump(mode="json", by_alias=True)
     payload.update(
         {
             "harnessImplementationRef": implementation.implementation_ref(),
@@ -584,6 +763,78 @@ def _request() -> AgentExecutionRequest:
             "parameters": {},
         }
     )
+
+
+@pytest.mark.asyncio
+async def test_github_credential_projection_transports_secret_only_on_stdin(
+    monkeypatch,
+) -> None:
+    secret = "github-secret-that-must-not-be-inspectable"
+
+    async def resolve(*, repo=None):
+        assert repo == "MoonLadderStudios/Tactics"
+        return ResolvedGitHubCredential(
+            token=secret,
+            source=GitHubCredentialSource.DIRECT_ENV,
+            sourceName="GITHUB_TOKEN",
+            repo=repo,
+        )
+
+    monkeypatch.setattr(
+        "moonmind.omnigent.host_services.github_credentials.resolve_github_credential",
+        resolve,
+    )
+
+    class Backend:
+        def __init__(self) -> None:
+            self.calls = []
+
+        async def run(self, argv, **kwargs):
+            self.calls.append((list(argv), dict(kwargs)))
+            if argv[1:3] == ["volume", "inspect"]:
+                owner_ref = "lease-owner-1"
+                return 0, hashlib.sha256(owner_ref.encode()).hexdigest()[:32], ""
+            return 0, "", ""
+
+    request = _request().model_copy(
+        update={
+            "workspace_spec": {
+                "repositoryTarget": {
+                    "provider": "git",
+                    "repository": {"name": "MoonLadderStudios/Tactics"},
+                }
+            }
+        }
+    )
+    backend = Backend()
+    service = OmnigentGithubCredentialService(backend)
+    attachment = await service.materialize(
+        request=request,
+        resolved_tools={"tools": ["gh", "git"]},
+        owner_ref="lease-owner-1",
+        writer_image_ref="ghcr.io/example/opencode@sha256:" + "1" * 64,
+        runtime_uid=1000,
+        runtime_gid=1000,
+    )
+
+    assert github_repository_from_request(request) == "MoonLadderStudios/Tactics"
+    assert attachment is not None
+    assert attachment["accessMode"] == "read-only"
+    assert attachment["targetPath"] == "/run/mm-credentials/github"
+    inspectable = json.dumps(
+        {
+            "calls": [argv for argv, _kwargs in backend.calls],
+            "attachment": attachment,
+        },
+        sort_keys=True,
+    )
+    assert secret not in inspectable
+    stdin_payloads = [
+        kwargs.get("input_bytes")
+        for _argv, kwargs in backend.calls
+        if kwargs.get("input_bytes")
+    ]
+    assert stdin_payloads == [secret.encode()]
 
 
 @pytest.mark.asyncio
@@ -939,7 +1190,7 @@ async def test_generic_realizer_persists_authority_and_releases_provider_last() 
                 skill_attachment={
                     "kind": "bind",
                     "sourceRef": "/tmp/skills",
-                    "targetPath": "/opt/moonmind/skills_active",
+                    "targetPath": "/opt/moonmind-skills",
                     "accessMode": "read-only",
                     "deliveryRef": "skill-delivery:one",
                 },
@@ -1010,19 +1261,16 @@ async def test_generic_realizer_persists_authority_and_releases_provider_last() 
             "stream": False,
             "evidence": False,
         }
-        authorization = request.parameters["omnigent"][
-            "_moonmindProfileAuthorization"
-        ]
-        assert authorization["executionPlanRef"] == request.parameters[
-            "executionPlanRef"
-        ]
-        assert authorization["runtimeBindingRef"] == request.parameters[
-            "runtimeBindingRef"
-        ]
-        assert authorization["providerProfileId"] == "opencode-go-primary"
-        assert authorization["providerLeaseRef"] == (
-            "provider-profile-lease:lease-1"
+        authorization = request.parameters["omnigent"]["_moonmindProfileAuthorization"]
+        assert (
+            authorization["executionPlanRef"] == request.parameters["executionPlanRef"]
         )
+        assert (
+            authorization["runtimeBindingRef"]
+            == request.parameters["runtimeBindingRef"]
+        )
+        assert authorization["providerProfileId"] == "opencode-go-primary"
+        assert authorization["providerLeaseRef"] == ("provider-profile-lease:lease-1")
         assert authorization["credentialGeneration"] == 4
         assert authorization["hostBindingRef"]
         assert authorization["hostLeaseRef"]
@@ -1061,20 +1309,17 @@ async def test_generic_realizer_persists_authority_and_releases_provider_last() 
     result = await realizer.execute(_request(), _plan("opencode-go/model"))
 
     assert result.summary == "done"
-    assert result.metadata["executionPlanRef"] == _plan(
-        "opencode-go/model"
-    ).planRef
+    assert result.metadata["executionPlanRef"] == _plan("opencode-go/model").planRef
     assert result.metadata["runtimeBindingRef"].startswith(
         "omnigent-runtime-binding:sha256:"
     )
-    assert result.metadata["supportCombinationIdentity"][
-        "supportCombinationKey"
-    ] == _plan("opencode-go/model").payload.supportCombinationKey
+    assert (
+        result.metadata["supportCombinationIdentity"]["supportCombinationKey"]
+        == _plan("opencode-go/model").payload.supportCombinationKey
+    )
     assert events[-1] == "command-settled:applied"
     assert events.index("command-claimed") < events.index("provider-acquired")
-    assert events.index("provider-released") < events.index(
-        "command-settled:applied"
-    )
+    assert events.index("provider-released") < events.index("command-settled:applied")
     assert events.index("host-cleaned") < events.index("credentials-cleaned")
     assert events.index("credentials-cleaned") < events.index("provider-released")
     assert host_leases.heartbeat_count >= 1
@@ -1293,6 +1538,18 @@ async def test_tool_delivery_uses_plan_names_and_deployment_owned_volume(
     assert result[0]["sourceRef"] == "deployment-tools"
     assert result[0]["accessMode"] == "read-only"
     assert result[0]["tools"][0]["executableDigests"] == ["a" * 64]
+
+
+def test_deployment_mounted_tool_names_come_from_locked_manifest(
+    tmp_path: Path,
+) -> None:
+    manifest = tmp_path / "manifest.lock.json"
+    manifest.write_text(
+        json.dumps({"tools": [{"name": "GH"}, {"name": ""}]}),
+        encoding="utf-8",
+    )
+
+    assert deployment_mounted_tool_names(manifest) == ("gh",)
 
 
 @pytest.mark.asyncio

@@ -2797,6 +2797,10 @@ class TemporalSandboxActivities:
         return [context_ref] if context_ref else []
 
     def _workspace_has_unsafe_skill_projection(self, workspace: Path) -> bool:
+        try:
+            workspace_uid = workspace.lstat().st_uid
+        except OSError:
+            return True
         for relative in (".agents/skills", ".gemini/skills"):
             candidate = workspace / relative
             if not candidate.exists():
@@ -2805,12 +2809,28 @@ class TemporalSandboxActivities:
                 info = candidate.lstat()
             except OSError:
                 continue
-            if info.st_uid == 0 or candidate.is_symlink():
+            # A projection owned by a different principal than the authoritative
+            # workspace is unsafe. UID 0 alone is not evidence of a mismatch:
+            # hermetic CI legitimately creates the whole workspace as root.
+            if info.st_uid != workspace_uid or candidate.is_symlink():
                 return True
         return False
 
+    @staticmethod
+    def _workspace_archive_excludes(relative: Path) -> bool:
+        return any(part in {".git", "__pycache__"} for part in relative.parts) or (
+            relative.parts[:2]
+            in {
+                (".agents", "skills"),
+                (".gemini", "skills"),
+            }
+        )
+
     def _workspace_has_traversal(self, workspace: Path) -> bool:
         for path in workspace.rglob("*"):
+            relative = path.relative_to(workspace)
+            if self._workspace_archive_excludes(relative):
+                continue
             try:
                 if path.is_symlink():
                     target = path.resolve()
@@ -3092,12 +3112,7 @@ class TemporalSandboxActivities:
         with tarfile.open(fileobj=output, mode="w:gz") as archive:
             for path in sorted(workspace.rglob("*")):
                 relative = path.relative_to(workspace)
-                if any(part in {".git", "__pycache__"} for part in relative.parts):
-                    continue
-                if relative.parts[:2] in {
-                    (".agents", "skills"),
-                    (".gemini", "skills"),
-                }:
+                if self._workspace_archive_excludes(relative):
                     continue
                 if path.is_dir():
                     continue

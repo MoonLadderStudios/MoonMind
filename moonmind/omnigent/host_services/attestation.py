@@ -12,6 +12,9 @@ from moonmind.omnigent.harness_platform.failures import (
 )
 from moonmind.omnigent.harness_platform.host_classes import HostClass
 from moonmind.omnigent.host_services.docker_backend import DockerCommandBackend
+from moonmind.omnigent.host_services.github_credentials import (
+    github_repository_from_request,
+)
 from moonmind.omnigent.host_services.launcher import HostLaunchSpec
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.security.egress import (
@@ -39,6 +42,158 @@ def _model_ids(value: Any) -> set[str]:
     return found
 
 
+async def _read_exact_host_model_options(
+    *,
+    backend: DockerCommandBackend,
+    client: Any,
+    container_name: str,
+    omnigent_host_id: str,
+    harness_id: str,
+) -> tuple[Any, str]:
+    """Read model options from the exact host through its supported substrate.
+
+    Omnigent's host tunnel does not expose pre-launch model options for
+    ``opencode-native``. The upstream package does expose one portable catalog
+    helper, and the selected host already owns the exact image, environment,
+    egress policy, and materialized credential that helper must inspect. Run
+    that helper inside the host instead of turning the tunnel's honest
+    unsupported-harness response into a generic HTTP 502.
+    """
+
+    if harness_id != "opencode-native":
+        return (
+            await client.get_host_model_options(omnigent_host_id, harness_id),
+            "omnigent-host-tunnel",
+        )
+
+    probe = (
+        "import json; "
+        "from omnigent.opencode_native_app_server import "
+        "list_opencode_cli_model_options; "
+        "print(json.dumps({'models': list_opencode_cli_model_options()}))"
+    )
+    code, stdout, _stderr = await backend.run(
+        [
+            "docker",
+            "exec",
+            container_name,
+            "/opt/venv/bin/python",
+            "-c",
+            probe,
+        ],
+        timeout_seconds=45.0,
+        check=False,
+    )
+    if code != 0:
+        # Provider CLI diagnostics can include credential-sensitive context.
+        # Exact-host evidence needs only the typed failure, never raw output.
+        raise HarnessPlatformError(
+            "exact host OpenCode model catalog probe failed",
+            code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,
+        )
+    try:
+        payload = json.loads(stdout)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise HarnessPlatformError(
+            "exact host OpenCode model catalog probe returned invalid JSON",
+            code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,
+        ) from exc
+    if not isinstance(payload, dict) or not isinstance(payload.get("models"), list):
+        raise HarnessPlatformError(
+            "exact host OpenCode model catalog probe returned an invalid catalog",
+            code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,
+        )
+    return payload, "exact-host-opencode-cli"
+
+
+async def _run_exact_host_runner_command(
+    *,
+    backend: DockerCommandBackend,
+    container_name: str,
+    argv: list[str],
+    timeout_seconds: float = 30.0,
+) -> tuple[int, str, str]:
+    """Execute a probe through the stock host's runner environment builder."""
+
+    runner_probe = (
+        "import os, subprocess, sys; "
+        "from omnigent.host.connect import _build_runner_env; "
+        "env = _build_runner_env(os.environ, "
+        "server_url=os.environ.get('OMNIGENT_SERVER_URL', ''), "
+        "runner_id='moonmind-attestation', "
+        "binding_token='moonmind-attestation', "
+        "workspace='/workspaces/run', parent_pid=os.getpid()); "
+        "result = subprocess.run(sys.argv[1:], env=env, text=True, "
+        "capture_output=True); "
+        "sys.stdout.write(result.stdout); sys.stderr.write(result.stderr); "
+        "raise SystemExit(result.returncode)"
+    )
+    return await backend.run(
+        [
+            "docker",
+            "exec",
+            container_name,
+            "/opt/venv/bin/python",
+            "-c",
+            runner_probe,
+            *argv,
+        ],
+        timeout_seconds=timeout_seconds,
+        check=False,
+    )
+
+
+async def _run_exact_host_opencode_command(
+    *,
+    backend: DockerCommandBackend,
+    container_name: str,
+    argv: list[str],
+    timeout_seconds: float = 30.0,
+) -> tuple[int, str, str]:
+    """Execute through the runner, OpenCode filter, and MoonMind context shim."""
+
+    filtered_child_probe = (
+        "import subprocess, sys; from pathlib import Path; "
+        "from omnigent.opencode_native_app_server import filtered_server_env; "
+        "env = filtered_server_env("
+        "bridge_dir=Path('/tmp/moonmind-opencode-attestation'), "
+        "auth_secret='moonmind-attestation'); "
+        "result = subprocess.run("
+        "['/home/app/.omnigent/moonmind/bin/moonmind-opencode-context', "
+        "*sys.argv[1:]], "
+        "env=env, text=True, capture_output=True); "
+        "sys.stdout.write(result.stdout); sys.stderr.write(result.stderr); "
+        "raise SystemExit(result.returncode)"
+    )
+    opencode_probe = (
+        "import os, subprocess, sys; "
+        "from omnigent.host.connect import _build_runner_env; "
+        "runner_env = _build_runner_env(os.environ, "
+        "server_url=os.environ.get('OMNIGENT_SERVER_URL', ''), "
+        "runner_id='moonmind-attestation', "
+        "binding_token='moonmind-attestation', "
+        "workspace='/workspaces/run', parent_pid=os.getpid()); "
+        f"child = {filtered_child_probe!r}; "
+        "result = subprocess.run([sys.executable, '-c', child, *sys.argv[1:]], "
+        "env=runner_env, text=True, "
+        "capture_output=True); sys.stdout.write(result.stdout); "
+        "sys.stderr.write(result.stderr); raise SystemExit(result.returncode)"
+    )
+    return await backend.run(
+        [
+            "docker",
+            "exec",
+            container_name,
+            "/opt/venv/bin/python",
+            "-c",
+            opencode_probe,
+            *argv,
+        ],
+        timeout_seconds=timeout_seconds,
+        check=False,
+    )
+
+
 def _assert_exact_omnigent_build(
     image: dict[str, Any], expected_build_digest: str
 ) -> None:
@@ -61,8 +216,7 @@ def _attest_workspace_mount(
             for mount in mounts
             if str(mount.get("Name") or mount.get("Source") or "")
             == str(attachment["sourceRef"])
-            and str(mount.get("Destination") or "")
-            == str(attachment["targetPath"])
+            and str(mount.get("Destination") or "") == str(attachment["targetPath"])
         ),
         None,
     )
@@ -150,11 +304,17 @@ class DockerOmnigentHostAttestor:
                 code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
             )
         _code, omnigent_version, _err = await self._backend.run(
-            ["docker", "exec", launch_result["containerName"],
-             "/opt/venv/bin/omnigent", "--version"],
+            [
+                "docker",
+                "exec",
+                launch_result["containerName"],
+                "/opt/venv/bin/omnigent",
+                "--version",
+            ],
             failure_code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
         )
         import logging
+
         logging.getLogger(__name__).info(
             "omnigent --version probe: expected=%r got=%r",
             host_class.omnigentVersion,
@@ -220,6 +380,50 @@ class DockerOmnigentHostAttestor:
             ],
             failure_code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
         )
+        skill_target = str(spec.skillAttachment["targetPath"])
+        code, _out, _err = await _run_exact_host_runner_command(
+            backend=self._backend,
+            container_name=launch_result["containerName"],
+            argv=[
+                "/bin/sh",
+                "-ceu",
+                (
+                    'test "${MOONMIND_ACTIVE_SKILLS_DIR:-}" = "$1"; '
+                    'test -d "$1"; test -r "$1/_manifest.json"; '
+                    'test "${MOONMIND_STEP_EXECUTION_ID:-}" = "$2"'
+                ),
+                "--",
+                skill_target,
+                spec.stepExecutionId,
+            ],
+        )
+        if code != 0:
+            raise HarnessPlatformError(
+                "resolved Skill projection is unavailable in the exact runner environment",
+                code=HarnessPlatformFailure.OMNIGENT_SKILL_SNAPSHOT_UNAVAILABLE,
+            )
+        if plan.payload.harnessId == "opencode-native":
+            code, _out, _err = await _run_exact_host_opencode_command(
+                backend=self._backend,
+                container_name=launch_result["containerName"],
+                argv=[
+                    "/bin/sh",
+                    "-ceu",
+                    (
+                        'test "${MOONMIND_ACTIVE_SKILLS_DIR:-}" = "$1"; '
+                        'test -d "$1"; test -r "$1/_manifest.json"; '
+                        'test "${MOONMIND_STEP_EXECUTION_ID:-}" = "$2"'
+                    ),
+                    "--",
+                    skill_target,
+                    spec.stepExecutionId,
+                ],
+            )
+            if code != 0:
+                raise HarnessPlatformError(
+                    "resolved Skill projection is unavailable in the OpenCode shell environment",
+                    code=HarnessPlatformFailure.OMNIGENT_SKILL_SNAPSHOT_UNAVAILABLE,
+                )
         tool_mount_evidence: list[dict[str, Any]] = []
         for attachment in spec.toolAttachments:
             matched = next(
@@ -297,6 +501,192 @@ class DockerOmnigentHostAttestor:
             control_mount_evidence = {
                 "targetPath": spec.controlAttachment["targetPath"],
                 "accessMode": "read-only",
+                "secretValueRecorded": False,
+            }
+        github_mount_evidence: dict[str, Any] | None = None
+        if spec.githubCredentialAttachment is not None:
+            github_mount = next(
+                (
+                    mount
+                    for mount in mounts
+                    if str(mount.get("Name") or mount.get("Source") or "")
+                    == str(spec.githubCredentialAttachment["sourceRef"])
+                    and str(mount.get("Destination") or "")
+                    == str(spec.githubCredentialAttachment["targetPath"])
+                ),
+                None,
+            )
+            if github_mount is None or bool(github_mount.get("RW")):
+                raise HarnessPlatformError(
+                    "GitHub credential projection is missing or writable",
+                    code=(
+                        HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED
+                    ),
+                )
+            target = str(spec.githubCredentialAttachment["targetPath"])
+            verify_github_config_script = (
+                'test "$(stat -c %u:%g "$1")" = "$2:$3"; '
+                'test "$(stat -c %a "$1")" = 700; '
+                'test "$(stat -c %u:%g "$1/hosts.yml")" = "$2:$3"; '
+                'test "$(stat -c %a "$1/hosts.yml")" = 600'
+            )
+            code, _out, _err = await self._backend.run(
+                [
+                    "docker",
+                    "exec",
+                    launch_result["containerName"],
+                    "/bin/sh",
+                    "-ceu",
+                    verify_github_config_script,
+                    "--",
+                    target,
+                    str(host_class.runtime.get("uid", 1000)),
+                    str(host_class.runtime.get("gid", 1000)),
+                ],
+                check=False,
+            )
+            if code != 0:
+                raise HarnessPlatformError(
+                    "GitHub credential projection ownership or mode is invalid",
+                    code=(
+                        HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED
+                    ),
+                )
+            code, _out, _err = await self._backend.run(
+                [
+                    "docker",
+                    "exec",
+                    launch_result["containerName"],
+                    "gh",
+                    "auth",
+                    "status",
+                    "--hostname",
+                    "github.com",
+                ],
+                timeout_seconds=30.0,
+                check=False,
+            )
+            if code != 0:
+                raise HarnessPlatformError(
+                    "GitHub CLI authentication failed on the exact host",
+                    code=(
+                        HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED
+                    ),
+                )
+            code, _out, _err = await _run_exact_host_runner_command(
+                backend=self._backend,
+                container_name=launch_result["containerName"],
+                argv=["gh", "auth", "status", "--hostname", "github.com"],
+            )
+            if code != 0:
+                raise HarnessPlatformError(
+                    "GitHub CLI authentication failed in the exact runner environment",
+                    code=(
+                        HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED
+                    ),
+                )
+            if plan.payload.harnessId == "opencode-native":
+                code, _out, _err = await _run_exact_host_opencode_command(
+                    backend=self._backend,
+                    container_name=launch_result["containerName"],
+                    argv=["gh", "auth", "status", "--hostname", "github.com"],
+                )
+                if code != 0:
+                    raise HarnessPlatformError(
+                        "GitHub CLI authentication failed in the OpenCode shell environment",
+                        code=(
+                            HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED
+                        ),
+                    )
+            expected_helper = (
+                "!/home/app/.omnigent/moonmind/bin/gh auth git-credential"
+            )
+            code, observed, _err = await self._backend.run(
+                [
+                    "docker",
+                    "exec",
+                    launch_result["containerName"],
+                    "git",
+                    "config",
+                    "--get-urlmatch",
+                    "credential.helper",
+                    "https://github.com",
+                ],
+                check=False,
+            )
+            if code != 0 or observed.strip() != expected_helper:
+                raise HarnessPlatformError(
+                    "GitHub git credential helper is not active on the exact host",
+                    code=(
+                        HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED
+                    ),
+                )
+            repository = github_repository_from_request(request)
+            repository_authorized: bool | None = None
+            repository_permission: str | None = None
+            if repository:
+                code, observed, _err = await self._backend.run(
+                    [
+                        "docker",
+                        "exec",
+                        launch_result["containerName"],
+                        "gh",
+                        "repo",
+                        "view",
+                        repository,
+                        "--json",
+                        "nameWithOwner,viewerPermission",
+                        "--jq",
+                        "[.nameWithOwner, .viewerPermission] | @tsv",
+                    ],
+                    timeout_seconds=30.0,
+                    check=False,
+                )
+                parts = observed.strip().split("\t", 1)
+                observed_repository = parts[0] if parts else ""
+                repository_permission = parts[1] if len(parts) == 2 else None
+                repository_authorized = code == 0 and (
+                    observed_repository.casefold() == repository.casefold()
+                )
+                if not repository_authorized:
+                    raise HarnessPlatformError(
+                        "GitHub credential cannot access the admitted repository",
+                        code=(
+                            HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED
+                        ),
+                    )
+                code, runner_observed, _err = await _run_exact_host_runner_command(
+                    backend=self._backend,
+                    container_name=launch_result["containerName"],
+                    argv=[
+                        "gh",
+                        "repo",
+                        "view",
+                        repository,
+                        "--json",
+                        "nameWithOwner,viewerPermission",
+                        "--jq",
+                        "[.nameWithOwner, .viewerPermission] | @tsv",
+                    ],
+                )
+                runner_parts = runner_observed.strip().split("\t", 1)
+                runner_repository = runner_parts[0] if runner_parts else ""
+                if code != 0 or runner_repository.casefold() != repository.casefold():
+                    raise HarnessPlatformError(
+                        "GitHub credential cannot access the admitted repository "
+                        "from the exact runner environment",
+                        code=(
+                            HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED
+                        ),
+                    )
+            github_mount_evidence = {
+                "targetPath": target,
+                "accessMode": "read-only",
+                "authenticated": True,
+                "repository": repository or None,
+                "repositoryAuthorized": repository_authorized,
+                "repositoryPermission": repository_permission,
+                "gitCredentialHelperConfigured": True,
                 "secretValueRecorded": False,
             }
         credential_mount_evidence: list[dict[str, Any]] = []
@@ -392,8 +782,12 @@ class DockerOmnigentHostAttestor:
                 "exact host restricted-egress attachment could not be attested",
                 code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
             ) from exc
-        model_options = await self._client.get_host_model_options(
-            host_id, plan.payload.harnessId
+        model_options, model_options_source = await _read_exact_host_model_options(
+            backend=self._backend,
+            client=self._client,
+            container_name=launch_result["containerName"],
+            omnigent_host_id=host_id,
+            harness_id=plan.payload.harnessId,
         )
         selected_model = plan.payload.modelConfig.qualifiedId
         if selected_model not in _model_ids(model_options):
@@ -421,6 +815,7 @@ class DockerOmnigentHostAttestor:
             "credentialMounts": credential_mount_evidence,
             "workspaceMount": workspace_mount_evidence,
             "controlCredentialMount": control_mount_evidence,
+            "githubCredentialMount": github_mount_evidence,
             "skillDeliveryRef": spec.skillAttachment.get("deliveryRef"),
             "toolDeliveryRefs": [
                 item.get("toolDeliveryRef") for item in spec.toolAttachments
@@ -444,6 +839,7 @@ class DockerOmnigentHostAttestor:
                 "harnessId": plan.payload.harnessId,
                 "selectedModel": selected_model,
                 "availableModels": sorted(_model_ids(model_options)),
+                "source": model_options_source,
             },
             link_type="evidence.model_options",
         )
@@ -456,4 +852,4 @@ class DockerOmnigentHostAttestor:
         }
 
 
-__all__ = ["DockerOmnigentHostAttestor"]
+__all__ = ["DockerOmnigentHostAttestor", "_read_exact_host_model_options"]

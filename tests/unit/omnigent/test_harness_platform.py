@@ -599,6 +599,20 @@ def test_class_capability_negotiation_blocks_unknown():
     assert exc.value.code == HarnessPlatformFailure.OMNIGENT_CAPABILITY_REQUIRED_UNKNOWN
 
 
+def test_class_capability_negotiation_accepts_a_host_declared_capability():
+    decision = compute_class_admission(
+        workflow_requirements=["git"],
+        profile_requirements={"required": [], "preferred": []},
+        catalog_capabilities={},
+        host_class_capabilities={"git": True},
+        materializer_capabilities={},
+        bridge_capabilities={},
+        launch_policy_capabilities=[],
+    )
+
+    assert decision.requiredSatisfied == ("git",)
+
+
 # AC 11: On-demand hosts admitted by Host Class evidence, not fictional exact-host readiness
 def test_host_class_admission_not_exact_host():
     hc = get_host_class("omnigent-native-standard@3")

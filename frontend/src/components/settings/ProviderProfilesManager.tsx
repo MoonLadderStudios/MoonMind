@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { QueryClient, useMutation } from '@tanstack/react-query';
 
-import { formatStatusLabel } from '../../utils/formatters';
+import { formatRuntimeLabel, formatStatusLabel } from '../../utils/formatters';
 
 export interface ProviderProfile {
   profile_id: string;
@@ -64,6 +64,10 @@ interface Notice {
 }
 
 interface ProviderProfilesManagerProps {
+  /**
+   * Rows to display. Settings owns the runtime filter, so this collection is
+   * already scoped to `selectedRuntimeId` when a single runtime is active.
+   */
   profiles: ProviderProfile[];
   secretSlugs: string[];
   onNotice: (notice: Notice | null) => void;
@@ -71,6 +75,16 @@ interface ProviderProfilesManagerProps {
   /** Map of canonical runtime_id → default model from the boot config. */
   defaultTaskModelByRuntime?: Record<string, string>;
   canWriteProviderProfiles?: boolean;
+  /**
+   * Canonical runtime_id of the active administrative filter, or undefined for
+   * the All-runtimes view. It seeds the runtime of a newly created profile and
+   * never overwrites the immutable runtime of an existing one.
+   */
+  selectedRuntimeId?: string | undefined;
+  /** Canonical runtime IDs offered beside the All-runtimes option. */
+  runtimeFilterOptions?: string[];
+  /** Called with a canonical runtime_id, or undefined for All runtimes. */
+  onSelectRuntimeId?: ((runtimeId: string | undefined) => void) | undefined;
 }
 
 interface ProviderProfileFormState {
@@ -155,6 +169,9 @@ interface OAuthSessionState {
 }
 
 export const PROVIDER_PROFILE_QUERY_KEY = ['provider-profiles'] as const;
+/** Sentinel value for the All-runtimes administrative view in Settings. */
+export const ALL_RUNTIMES_FILTER_VALUE = 'all';
+const RUNTIME_FILTER_CONTROL_ID = 'provider-profile-runtime-filter';
 const PROVIDER_PROFILE_REFRESH_STORAGE_KEY = 'moonmind:provider-profile-updated';
 
 function providerProfileModelTiers(profile: ProviderProfile): ProviderModelEffortTier[] {
@@ -199,10 +216,10 @@ function oauthSessionStatesEqual(left: OAuthSessionState, right: OAuthSessionSta
   );
 }
 
-export function defaultFormState(): ProviderProfileFormState {
+export function defaultFormState(runtimeId = ''): ProviderProfileFormState {
   return {
     profileId: '',
-    runtimeId: '',
+    runtimeId,
     providerId: '',
     providerLabel: '',
     defaultModel: '',
@@ -698,14 +715,43 @@ export function ProviderProfilesManager({
   queryClient,
   defaultTaskModelByRuntime = {},
   canWriteProviderProfiles = true,
+  selectedRuntimeId,
+  runtimeFilterOptions = [],
+  onSelectRuntimeId,
 }: ProviderProfilesManagerProps) {
-  const [form, setForm] = useState<ProviderProfileFormState>(() => defaultFormState());
+  const createFormRuntimeSeed = selectedRuntimeId ?? '';
+  const [form, setForm] = useState<ProviderProfileFormState>(() =>
+    defaultFormState(createFormRuntimeSeed),
+  );
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
+  const createFormRuntimeSeedRef = useRef(createFormRuntimeSeed);
   const [oauthSessions, setOauthSessions] = useState<Record<string, OAuthSessionState>>({});
   const [tmateOAuthSession, setTmateOAuthSession] = useState<OAuthSessionState | null>(null);
   const [claudeEnrollment, setClaudeEnrollment] = useState<ClaudeEnrollmentState | null>(null);
   const claudeEnrollmentDrawerRef = useRef<HTMLDivElement | null>(null);
   const claudeEnrollmentProfileIdRef = useRef<string | null>(null);
+
+  const activeRuntimeFilterValue = selectedRuntimeId ?? ALL_RUNTIMES_FILTER_VALUE;
+  // Canonical runtime IDs are the option values; the shared runtime formatter
+  // supplies the display text so Settings never invents a second label source.
+  // The active filter is always offered so the control stays consistent even if
+  // its last profile is deleted.
+  const runtimeFilterChoices = useMemo(() => {
+    const runtimeIds: string[] = [];
+    for (const runtimeId of [...runtimeFilterOptions, selectedRuntimeId ?? '']) {
+      const canonical = runtimeId.trim();
+      if (canonical && !runtimeIds.includes(canonical)) {
+        runtimeIds.push(canonical);
+      }
+    }
+    return [
+      { value: ALL_RUNTIMES_FILTER_VALUE, label: 'All runtimes' },
+      ...runtimeIds.map((runtimeId) => ({
+        value: runtimeId,
+        label: formatRuntimeLabel(runtimeId),
+      })),
+    ] as ReadonlyArray<{ value: string; label: string }>;
+  }, [runtimeFilterOptions, selectedRuntimeId]);
 
   const isEditing = editingProfileId !== null;
   const isCodexOAuthForm =
@@ -747,6 +793,41 @@ export function ProviderProfilesManager({
     claudeEnrollmentProfileIdRef.current = claudeEnrollment?.profile.profile_id ?? null;
   }, [claudeEnrollment?.profile.profile_id]);
 
+  // The runtime filter is the administrative equivalent of "Add Provider
+  // Profile for this runtime": it seeds the create form so a new profile lands
+  // in the runtime the operator is looking at. An explicitly typed runtime is
+  // never overwritten, and an existing profile's immutable runtime is never
+  // touched.
+  useEffect(() => {
+    const previousSeed = createFormRuntimeSeedRef.current;
+    if (previousSeed === createFormRuntimeSeed) {
+      return;
+    }
+    createFormRuntimeSeedRef.current = createFormRuntimeSeed;
+    if (editingProfileId !== null) {
+      return;
+    }
+    setForm((current) =>
+      current.runtimeId === '' || current.runtimeId === previousSeed
+        ? { ...current, runtimeId: createFormRuntimeSeed }
+        : current,
+    );
+  }, [createFormRuntimeSeed, editingProfileId]);
+
+  // A single-runtime view cannot show the row being edited when that row
+  // belongs to another runtime, so close the editor instead of leaving it
+  // pointing at an invisible profile.
+  useEffect(() => {
+    if (editingProfileId === null || !selectedRuntimeId) {
+      return;
+    }
+    if (form.runtimeId === selectedRuntimeId) {
+      return;
+    }
+    setEditingProfileId(null);
+    setForm(defaultFormState(selectedRuntimeId));
+  }, [editingProfileId, form.runtimeId, selectedRuntimeId]);
+
   useEffect(() => {
     const handleProviderProfileRefresh = (event: StorageEvent) => {
       if (event.key !== PROVIDER_PROFILE_REFRESH_STORAGE_KEY || !event.newValue) {
@@ -762,7 +843,7 @@ export function ProviderProfilesManager({
 
   const resetForm = () => {
     setEditingProfileId(null);
-    setForm(defaultFormState());
+    setForm(defaultFormState(createFormRuntimeSeed));
     onNotice(null);
   };
 
@@ -1095,7 +1176,7 @@ export function ProviderProfilesManager({
           : `Provider profile "${submittedForm.profileId.trim()}" created.`,
       });
       setEditingProfileId(null);
-      setForm(defaultFormState());
+      setForm(defaultFormState(createFormRuntimeSeed));
       queryClient.setQueryData<ProviderProfile[]>(
         PROVIDER_PROFILE_QUERY_KEY,
         (currentProfiles = []) => {
@@ -1146,7 +1227,7 @@ export function ProviderProfilesManager({
       onNotice({ level: 'ok', text: `Provider profile "${profileId}" deleted.` });
       if (editingProfileId === profileId) {
         setEditingProfileId(null);
-        setForm(defaultFormState());
+        setForm(defaultFormState(createFormRuntimeSeed));
       }
       queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
     },
@@ -1449,6 +1530,35 @@ export function ProviderProfilesManager({
         </div>
       </div>
 
+      {onSelectRuntimeId ? (
+        <div className="mt-4 flex flex-col gap-1.5 text-sm md:max-w-xs">
+          <label
+            className="font-medium text-slate-700 dark:text-slate-300"
+            htmlFor={RUNTIME_FILTER_CONTROL_ID}
+          >
+            Provider Profile runtime filter
+          </label>
+          <select
+            id={RUNTIME_FILTER_CONTROL_ID}
+            className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
+            value={activeRuntimeFilterValue}
+            onChange={(event) =>
+              onSelectRuntimeId(
+                event.target.value === ALL_RUNTIMES_FILTER_VALUE
+                  ? undefined
+                  : event.target.value,
+              )
+            }
+          >
+            {runtimeFilterChoices.map((choice) => (
+              <option key={choice.value} value={choice.value}>
+                {choice.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      ) : null}
+
       <div className="provider-profiles-table-wrap mt-6 overflow-x-auto">
         <table
           className="provider-profiles-table min-w-full md:divide-y divide-slate-200 dark:divide-slate-800 text-left text-sm"
@@ -1518,7 +1628,9 @@ export function ProviderProfilesManager({
             {profiles.length === 0 ? (
               <tr role="row">
                 <td className="px-3 py-6 text-slate-500 dark:text-slate-400" colSpan={7} role="cell">
-                  No provider profiles configured yet.
+                  {selectedRuntimeId
+                    ? `No provider profiles are configured for ${formatRuntimeLabel(selectedRuntimeId)}.`
+                    : 'No provider profiles configured yet.'}
                 </td>
               </tr>
             ) : (

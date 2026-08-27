@@ -27,8 +27,24 @@ from api_service.services.provider_profile_readiness import (
 from api_service.services.provider_profile_service import (
     _managed_secret_statuses_for_profiles,
 )
+from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 
 _OVERRIDABLE_SECTIONS = frozenset({"model", "capture", "rag", "publish"})
+
+
+def default_launch_policy_ref(allowed_launch_policy_refs: Any) -> str:
+    """Return the launch policy admission selects when none is authored.
+
+    Deployment qualification must qualify the same combination admission
+    compiles, so the launch policy is derived from the Agent Profile instead of
+    being restated per call site.
+    """
+
+    for candidate in allowed_launch_policy_refs or ():
+        cleaned = str(candidate or "").strip()
+        if cleaned:
+            return cleaned
+    raise ValueError("agent profile declares no allowed launch policy")
 
 
 def _provider_profile_visibility_filter(user: User | None) -> Any | None:
@@ -355,6 +371,49 @@ async def resolve_agent_profile_snapshot(
             and compatible_provider.provider_id not in accepted_provider_ids
         ):
             compatible_provider = None
+        if compatible_provider is not None:
+            # A Provider Profile stays owned by its managed runtime even when it
+            # launches through Omnigent, so the requested profile must be one the
+            # selected harness can actually materialize under every launch policy
+            # the profile allows. Proving only that *some* materializer exists for
+            # the pair would accept a profile the readiness projection excludes:
+            # `codex-oauth-home@1` is registered for `codex_cli/openai` but is not
+            # accepted by the `pi-native` harness. This is the same capability
+            # boundary the readiness projection uses to build
+            # `compatibleProviderProfiles`, not a second compatibility source.
+            from moonmind.omnigent.harness_platform.host_classes import (
+                get_launch_policy,
+            )
+            from moonmind.omnigent.harness_platform.materializers import (
+                materializer_ref_for_provider,
+                validate_binding_materializer,
+            )
+
+            harness_selection = document.get("harness") or {}
+            try:
+                materializer_ref = materializer_ref_for_provider(
+                    compatible_provider.runtime_id,
+                    compatible_provider.provider_id,
+                )
+                for policy_ref in document.get("allowedLaunchPolicyRefs") or ():
+                    validate_binding_materializer(
+                        materializer_ref=materializer_ref,
+                        harness_implementation_ref=str(
+                            harness_selection.get("implementationRef") or ""
+                        ),
+                        harness_id=str(harness_selection.get("id") or "") or None,
+                        host_mode=get_launch_policy(policy_ref).hostMode,
+                    )
+            except HarnessPlatformError as exc:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    (
+                        f"selected Provider Profile "
+                        f"{compatible_provider.profile_id!r} belongs to runtime "
+                        f"{compatible_provider.runtime_id!r} and is not "
+                        f"compatible with the selected Omnigent execution target"
+                    ),
+                ) from exc
     else:
         requirements = document["providerRequirements"]
         provider_query = select(ManagedAgentProviderProfile).where(
@@ -413,7 +472,9 @@ async def resolve_agent_profile_snapshot(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             "agentProfile.launchPolicyRef is not allowed by the selected profile",
         )
-    launch_policy_ref = requested_launch_policy or allowed_launch_policies[0]
+    launch_policy_ref = requested_launch_policy or default_launch_policy_ref(
+        allowed_launch_policies
+    )
 
     # Generic (v2) profiles do not carry an execution-profile declaration of
     # their own; the launch policy owns that identity. Derive the canonical
@@ -722,6 +783,7 @@ async def refresh_managed_bootstrap_snapshot(
 
 __all__ = [
     "compile_agent_profile_snapshot_parameters",
+    "default_launch_policy_ref",
     "refresh_managed_bootstrap_snapshot",
     "resolve_agent_profile_snapshot",
     "resolve_default_agent_profile_snapshot",

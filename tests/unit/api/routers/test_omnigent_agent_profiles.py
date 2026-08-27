@@ -9,9 +9,11 @@ from api_service.api.routers.omnigent_agent_profiles import (
     GuidedProfileCreate,
     _digest,
     _normalized,
+    _preserve_builtin_opencode_model,
     _response,
     router,
 )
+
 
 def document(**source):
     return AgentProfileDocument.model_validate({
@@ -30,6 +32,25 @@ def test_normalization_and_digest_are_stable():
     second = dict(reversed(list(first.items())))
     assert _digest(first) == _digest(second)
     assert _digest(first).startswith("sha256:")
+
+
+def test_catalog_refresh_preserves_bootstrap_qualified_opencode_model():
+    seed = {
+        "source": {"upstreamId": "agent-1", "upstreamVersion": "6"},
+        "model": {},
+    }
+    active = {
+        "source": {"upstreamId": "agent-1", "upstreamVersion": "6"},
+        "model": {
+            "qualifiedId": "opencode-go/gpt-5.6-luna",
+            "effort": "xhigh",
+        },
+    }
+
+    reconciled = _preserve_builtin_opencode_model(seed, active)
+
+    assert reconciled["model"] == active["model"]
+    assert seed["model"] == {}
 
 
 def test_guided_profile_rejects_unqualified_pi_preset() -> None:

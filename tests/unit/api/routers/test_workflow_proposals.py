@@ -16,6 +16,9 @@ from api_service.api.routers.workflow_proposals import (
     router,
 )
 from api_service.auth_providers import get_current_user, get_current_user_optional
+from api_service.services.provider_profile_runtime import (
+    ProviderProfileRuntimeMismatchError,
+)
 from moonmind.workflows.proposals.delivery import github_marker_for_proposal
 from moonmind.workflows.proposals.models import (
     WorkflowProposalOriginSource,
@@ -1089,3 +1092,81 @@ def test_sync_proposal_delivery_endpoint_returns_validation_errors(
 
     assert response.status_code == 400
     assert response.json()["detail"]["code"] == "invalid_request"
+
+
+# ---------------------------------------------------------------------------
+# MoonLadderStudios/MoonMind#3788 — the promote routes surface the shared
+# runtime-ownership rejection as the same 409 contract every other
+# launch-authoring boundary returns, and no execution is created behind it.
+# ---------------------------------------------------------------------------
+
+
+def _mm3788_mismatch() -> ProviderProfileRuntimeMismatchError:
+    return ProviderProfileRuntimeMismatchError(
+        profile_id="codex_minimax_team",
+        profile_runtime="codex_cli",
+        selected_runtime="claude_code",
+    )
+
+
+def test_mm3788_promote_maps_provider_profile_runtime_mismatch_to_409(
+    client: tuple[TestClient, AsyncMock, AsyncMock],
+) -> None:
+    test_client, service, execution_service = client
+    proposal = _build_proposal()
+    service.promote_proposal.side_effect = _mm3788_mismatch()
+
+    response = test_client.post(
+        f"/api/proposals/{proposal.id}/promote",
+        json={"runtimeMode": "claude_code"},
+    )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["code"] == "provider_profile_runtime_mismatch"
+    assert detail["profileId"] == "codex_minimax_team"
+    assert detail["profileRuntime"] == "codex_cli"
+    assert detail["selectedRuntime"] == "claude_code"
+    # The rejection happens before any execution is created.
+    execution_service.create_execution.assert_not_awaited()
+
+
+def test_mm3788_provider_decision_maps_runtime_mismatch_to_409(
+    client: tuple[TestClient, AsyncMock, AsyncMock],
+) -> None:
+    test_client, service, execution_service = client
+    proposal = _build_proposal()
+    proposal.provider = "jira"
+    proposal.external_key = "MM-3788"
+    service.record_provider_decision_event.return_value = SimpleNamespace(
+        accepted=True,
+        decision="promote",
+        reason=None,
+        actor="reviewer",
+        provider_event_id="evt-mm3788",
+        note=None,
+        priority=None,
+        defer_until=None,
+        runtime_mode="claude",
+        external_state=None,
+        promoted_execution_id=None,
+    )
+    service.promote_proposal.side_effect = _mm3788_mismatch()
+
+    response = test_client.post(
+        f"/api/proposals/{proposal.id}/provider-decision",
+        json={
+            "provider": "jira",
+            "externalKey": "MM-3788",
+            "providerEventId": "evt-mm3788",
+            "actor": "reviewer",
+            "body": "/moonmind promote --runtime claude",
+            "authenticity": {"verified": True, "method": "signature"},
+        },
+    )
+
+    assert response.status_code == 409
+    assert (
+        response.json()["detail"]["code"] == "provider_profile_runtime_mismatch"
+    )
+    execution_service.create_execution.assert_not_awaited()

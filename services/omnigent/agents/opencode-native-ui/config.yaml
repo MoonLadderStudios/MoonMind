@@ -1,0 +1,21 @@
+spec_version: 1
+name: opencode-native-ui
+description: OpenCode coding agent exposed through the Omnigent native host.
+
+executor:
+  type: omnigent
+  config:
+    harness: opencode-native
+
+prompt: |
+  You are an OpenCode coding agent. Follow the supplied task, the repository's
+  checked-in agent instructions, and the authority boundaries of the runtime.
+  Work only in the supplied workspace, verify the result with the relevant
+  tests, and report concrete terminal evidence.
+
+os_env:
+  type: caller_process
+  cwd: .
+  sandbox:
+    type: none
+

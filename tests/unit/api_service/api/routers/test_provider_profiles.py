@@ -3137,3 +3137,174 @@ async def test_oauth_lifecycle_rejects_non_first_party_profile(
     assert validate_response.json()["detail"] == expected_detail
     assert disconnect_response.status_code == 422
     assert disconnect_response.json()["detail"] == expected_detail
+
+
+# ---------------------------------------------------------------------------
+# MoonLadderStudios/MoonMind#3788 — runtime-scoped listing is what execution
+# surfaces rely on to never offer a profile owned by another runtime.
+# ---------------------------------------------------------------------------
+
+
+def _mm3788_profile_payload(
+    *,
+    profile_id: str,
+    runtime_id: str,
+    enabled: bool = True,
+) -> dict[str, Any]:
+    return {
+        "profile_id": profile_id,
+        "runtime_id": runtime_id,
+        "provider_id": "minimax",
+        "credential_source": "secret_ref",
+        "runtime_materialization_mode": "api_key_env",
+        # The same managed secret may back one profile per runtime.
+        "secret_refs": {"MINIMAX_API_KEY": "env://mm3788_minimax_secret"},
+        "enabled": enabled,
+        "auth_state": "connected" if enabled else "not_configured",
+        "disabled_reason": None if enabled else "missing_credentials",
+        "last_auth_method": "secret_ref",
+    }
+
+
+@pytest.mark.asyncio
+async def test_mm3788_runtime_filter_excludes_other_runtime_profiles(
+    client_app: AsyncClient, _module_db
+) -> None:
+    _override_current_user(is_superuser=True)
+
+    async with client_app as client:
+        codex_response = await client.post(
+            "/api/v1/provider-profiles",
+            json=_mm3788_profile_payload(
+                profile_id="mm3788_codex_minimax", runtime_id="codex_cli"
+            ),
+        )
+        claude_response = await client.post(
+            "/api/v1/provider-profiles",
+            json=_mm3788_profile_payload(
+                profile_id="mm3788_claude_minimax", runtime_id="claude_code"
+            ),
+        )
+        codex_listed = await client.get(
+            "/api/v1/provider-profiles", params={"runtime_id": "codex_cli"}
+        )
+        claude_listed = await client.get(
+            "/api/v1/provider-profiles", params={"runtime_id": "claude_code"}
+        )
+        unfiltered = await client.get("/api/v1/provider-profiles")
+
+    assert codex_response.status_code == 201
+    assert claude_response.status_code == 201
+
+    assert codex_listed.status_code == 200
+    codex_rows = codex_listed.json()
+    assert {row["runtime_id"] for row in codex_rows} == {"codex_cli"}
+    codex_ids = {row["profile_id"] for row in codex_rows}
+    assert "mm3788_codex_minimax" in codex_ids
+    assert "mm3788_claude_minimax" not in codex_ids
+
+    assert claude_listed.status_code == 200
+    claude_rows = claude_listed.json()
+    assert {row["runtime_id"] for row in claude_rows} == {"claude_code"}
+    claude_ids = {row["profile_id"] for row in claude_rows}
+    assert "mm3788_claude_minimax" in claude_ids
+    assert "mm3788_codex_minimax" not in claude_ids
+
+    # Settings keeps the complete administrative view.
+    unfiltered_ids = {row["profile_id"] for row in unfiltered.json()}
+    assert {"mm3788_codex_minimax", "mm3788_claude_minimax"} <= unfiltered_ids
+
+
+@pytest.mark.asyncio
+async def test_mm3788_runtime_filter_composes_with_enabled_only(
+    client_app: AsyncClient, _module_db
+) -> None:
+    _override_current_user(is_superuser=True)
+
+    async with client_app as client:
+        enabled_response = await client.post(
+            "/api/v1/provider-profiles",
+            json=_mm3788_profile_payload(
+                profile_id="mm3788_compose_enabled",
+                runtime_id="mm3788_compose_runtime",
+            ),
+        )
+        disabled_response = await client.post(
+            "/api/v1/provider-profiles",
+            json=_mm3788_profile_payload(
+                profile_id="mm3788_compose_disabled",
+                runtime_id="mm3788_compose_runtime",
+                enabled=False,
+            ),
+        )
+        other_runtime_response = await client.post(
+            "/api/v1/provider-profiles",
+            json=_mm3788_profile_payload(
+                profile_id="mm3788_compose_other_runtime",
+                runtime_id="mm3788_compose_other",
+            ),
+        )
+        filtered = await client.get(
+            "/api/v1/provider-profiles",
+            params={"runtime_id": "mm3788_compose_runtime", "enabled_only": "true"},
+        )
+        runtime_only = await client.get(
+            "/api/v1/provider-profiles",
+            params={"runtime_id": "mm3788_compose_runtime"},
+        )
+
+    assert enabled_response.status_code == 201
+    assert disabled_response.status_code == 201
+    assert other_runtime_response.status_code == 201
+
+    assert filtered.status_code == 200
+    assert [row["profile_id"] for row in filtered.json()] == [
+        "mm3788_compose_enabled"
+    ]
+
+    assert runtime_only.status_code == 200
+    assert {row["profile_id"] for row in runtime_only.json()} == {
+        "mm3788_compose_enabled",
+        "mm3788_compose_disabled",
+    }
+
+
+@pytest.mark.asyncio
+async def test_mm3788_runtime_filter_still_applies_profile_visibility(
+    client_app: AsyncClient, _module_db
+) -> None:
+    owner = _override_current_user()
+    other_owner_id = uuid4()
+
+    async with db_base.async_session_maker() as session:
+        for profile_id, owner_user_id in (
+            ("mm3788_visible_owned", owner.id),
+            ("mm3788_hidden_other_owner", other_owner_id),
+        ):
+            if await session.get(ManagedAgentProviderProfile, profile_id) is None:
+                session.add(
+                    ManagedAgentProviderProfile(
+                        profile_id=profile_id,
+                        runtime_id="mm3788_visibility_runtime",
+                        provider_id="minimax",
+                        credential_source=ProviderCredentialSource.NONE,
+                        runtime_materialization_mode=(
+                            RuntimeMaterializationMode.COMPOSITE
+                        ),
+                        owner_user_id=owner_user_id,
+                        enabled=True,
+                    )
+                )
+        await session.commit()
+
+    async with client_app as client:
+        listed = await client.get(
+            "/api/v1/provider-profiles",
+            params={"runtime_id": "mm3788_visibility_runtime"},
+        )
+
+    assert listed.status_code == 200
+    listed_ids = {row["profile_id"] for row in listed.json()}
+    assert "mm3788_visible_owned" in listed_ids
+    # Runtime scoping narrows the result set; it never widens visibility.
+    assert "mm3788_hidden_other_owner" not in listed_ids

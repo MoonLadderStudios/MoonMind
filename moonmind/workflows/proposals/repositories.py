@@ -19,6 +19,12 @@ class WorkflowProposalRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
+    @property
+    def session(self) -> AsyncSession:
+        """Expose the unit-of-work session for shared validation contracts."""
+
+        return self._session
+
     async def create_proposal(
         self,
         *,

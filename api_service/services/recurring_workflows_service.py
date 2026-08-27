@@ -31,6 +31,9 @@ from api_service.services.omnigent_agent_profile_selection import (
     refresh_managed_bootstrap_snapshot,
     resolve_agent_profile_snapshot,
 )
+from api_service.services.provider_profile_runtime import (
+    require_launch_target_provider_profile_runtime,
+)
 from moonmind.workflows.recurring.cron import (
     compute_next_occurrence,
     parse_cron_expression,
@@ -928,6 +931,13 @@ class RecurringWorkflowsService:
         timezone_name = validate_timezone_name(timezone)
         name_text = _clean_text(name, field_name="name", required=True) or ""
         target_payload = _normalize_target(_json_object(target, field_name="target"))
+        # The stored target's initialParameters are what a later schedule action
+        # launches, so the runtime/Provider Profile pair is validated here,
+        # before anything is persisted.
+        await require_launch_target_provider_profile_runtime(
+            session=self._session,
+            target=target_payload,
+        )
         policy_payload = _json_object(policy, field_name="policy")
         policy_obj = _normalize_policy(
             policy_payload,
@@ -1137,6 +1147,20 @@ class RecurringWorkflowsService:
             raise RecurringWorkflowConflictError(
                 "recurring workflow changed since it was loaded; refresh and retry"
             )
+
+        # Normalize and validate the replacement target before any field of the
+        # locked definition is mutated, so a rejected edit leaves the stored
+        # target untouched.
+        normalized_target: dict[str, Any] | None = None
+        if target is not None:
+            normalized_target = _normalize_target(
+                _json_object(target, field_name="target")
+            )
+            await require_launch_target_provider_profile_runtime(
+                session=self._session,
+                target=normalized_target,
+            )
+
         changed_schedule = False
         now = datetime.now(UTC)
 
@@ -1160,10 +1184,7 @@ class RecurringWorkflowsService:
         if timezone is not None:
             definition.timezone = validate_timezone_name(timezone)
             changed_schedule = True
-        if target is not None:
-            normalized_target = _normalize_target(
-                _json_object(target, field_name="target")
-            )
+        if normalized_target is not None:
             current_parameters = dict(
                 (definition.target or {}).get("initialParameters") or {}
             )
