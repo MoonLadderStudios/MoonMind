@@ -13730,7 +13730,9 @@ def test_describe_execution_falls_back_to_managed_run_store_agent_run_id(
 
 def test_request_rerun_update_response_includes_continue_as_new_cause() -> None:
     for test_client, service in _client_with_service():
-        service.describe_execution.return_value = _build_execution_record()
+        service.describe_execution.return_value = _build_execution_record(
+            has_workflow_input_snapshot=False
+        )
         service.update_execution.return_value = {
             "accepted": True,
             "applied": "continue_as_new",
@@ -13751,7 +13753,7 @@ def test_request_rerun_update_response_includes_continue_as_new_cause() -> None:
 
 def test_request_rerun_update_redirects_response_to_created_rerun_execution() -> None:
     for test_client, service in _client_with_service():
-        source_record = _build_execution_record()
+        source_record = _build_execution_record(has_workflow_input_snapshot=False)
         rerun_record = _build_execution_record()
         rerun_record.workflow_id = "mm:rerun-created"
         rerun_record.run_id = "run-rerun"
@@ -13790,6 +13792,7 @@ def test_request_rerun_update_redirects_response_to_created_rerun_execution() ->
 @pytest.mark.asyncio
 async def test_request_rerun_update_flushes_snapshot_reuse_before_serializing_response(
     tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     db_url = f"sqlite+aiosqlite:///{tmp_path}/rerun_update_response.db"
     engine = create_async_engine(db_url, future=True)
@@ -13866,6 +13869,10 @@ async def test_request_rerun_update_flushes_snapshot_reuse_before_serializing_re
             for source_record in source_records:
                 await session.refresh(source_record)
 
+            monkeypatch.setattr(
+                "api_service.api.routers.executions._exact_rerun_parameters_from_snapshot",
+                AsyncMock(return_value=None),
+            )
             response = await update_execution_route(
                 workflow_id=source_workflow_id,
                 payload=UpdateExecutionRequest(updateName="RequestRerun"),
@@ -13998,6 +14005,122 @@ def test_request_rerun_update_snapshot_hydrates_instructions_from_input_artifact
     assert steps[0]["instructions"] == "First step instructions."
     assert steps[1]["instructions"] == "Second step instructions."
     session.commit.assert_awaited_once()
+
+
+def test_exact_rerun_restores_publish_policy_from_authoritative_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    service = AsyncMock()
+    source_record = _build_execution_record(
+        state=MoonMindWorkflowState.FAILED,
+        has_workflow_input_snapshot=False,
+    )
+    source_record.workflow_id = "mm:wf-1"
+    source_record.run_id = "run-source"
+    source_record.parameters = {
+        "publishMode": "none",
+        "workflow": {"runtime": {"mode": "claude_code"}},
+    }
+    source_record.memo = {
+        **dict(source_record.memo or {}),
+        "task_input_snapshot_ref": "art-snapshot-source",
+        "task_input_snapshot_version": 1,
+        "task_input_snapshot_source_kind": "create",
+    }
+    rerun_record = _build_execution_record()
+    rerun_record.workflow_id = "mm:rerun-created"
+    rerun_record.run_id = "run-rerun"
+    service.describe_execution.side_effect = [source_record, rerun_record]
+    service.update_execution.return_value = {
+        "accepted": True,
+        "applied": "continue_as_new",
+        "message": "Rerun requested. New execution created.",
+        "continue_as_new_cause": "manual_rerun",
+        "workflow_id": "mm:rerun-created",
+    }
+    app.dependency_overrides[_get_service] = lambda: service
+    _override_temporal_client(app)
+    user = _override_user_dependencies(app, is_superuser=True)
+    session = AsyncMock()
+    app.dependency_overrides[get_async_session] = lambda: session
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    monkeypatch.setattr(
+        settings.temporal_dashboard, "temporal_workflow_editing_enabled", True
+    )
+    artifact_service = SimpleNamespace(
+        read=AsyncMock(
+            return_value=(
+                SimpleNamespace(artifact_id="art-snapshot-source"),
+                json.dumps(
+                    {
+                        "snapshotVersion": 1,
+                        "draft": {
+                            "repository": "g3-qrtr/crash_server_main",
+                            "targetRuntime": "claude_code",
+                            "requiredCapabilities": ["claude_code", "git", "gh"],
+                            "workflow": {
+                                "instructions": "Resolve pull request 789.",
+                                "runtime": {"mode": "claude_code"},
+                                "publish": {
+                                    "mode": "none",
+                                    "mergeAutomation": {
+                                        "enabled": True,
+                                        "finishMode": "fix_only",
+                                        "reviewLoop": {
+                                            "enabled": True,
+                                            "provider": "codex",
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    }
+                ).encode("utf-8"),
+            )
+        )
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.get_temporal_artifact_service",
+        lambda _session: artifact_service,
+    )
+    reuse_snapshot = AsyncMock(return_value="art-snapshot-source")
+    monkeypatch.setattr(
+        "api_service.api.routers.executions._reuse_original_task_input_snapshot_from_source",
+        reuse_snapshot,
+    )
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions/mm:wf-1/update",
+            json={"updateName": "RequestRerun"},
+        )
+
+    assert response.status_code == 200
+    parameters_patch = service.update_execution.await_args.kwargs[
+        "parameters_patch"
+    ]
+    assert parameters_patch["publishMode"] == "none"
+    assert parameters_patch["workflow"]["publish"] == {
+        "mode": "none",
+        "mergeAutomation": {
+            "enabled": True,
+            "finishMode": "fix_only",
+            "reviewLoop": {"enabled": True, "provider": "codex"},
+        },
+    }
+    assert parameters_patch["workflow"]["recovery"] == {
+        "kind": "exact_full_rerun",
+        "sourceWorkflowId": "mm:wf-1",
+        "sourceRunId": "run-source",
+    }
+    artifact_service.read.assert_awaited_once_with(
+        artifact_id="art-snapshot-source",
+        principal=str(user.id),
+        allow_restricted_raw=True,
+    )
+    reuse_snapshot.assert_awaited_once()
 
 
 def test_task_input_snapshot_artifact_id_strips_input_prefix_without_scheme() -> None:
@@ -14207,7 +14330,9 @@ def test_task_editing_update_route_emits_attempt_and_result_metrics() -> None:
 def test_task_editing_update_route_emits_failure_reason_metrics() -> None:
     metrics = Mock()
     for test_client, service in _client_with_service():
-        service.describe_execution.return_value = _build_execution_record()
+        service.describe_execution.return_value = _build_execution_record(
+            has_workflow_input_snapshot=False
+        )
         service.update_execution.side_effect = TemporalExecutionValidationError(
             "Workflow state changed and rerun is no longer available."
         )

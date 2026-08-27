@@ -123,6 +123,13 @@ def test_expand_template_success() -> None:
         },
         "capabilities": ["codex", "git"],
         "warnings": [],
+        "publish": {
+            "mode": "none",
+            "mergeAutomation": {
+                "enabled": True,
+                "finishMode": "fix_only",
+            },
+        },
     }
 
     response = client.post(
@@ -136,6 +143,13 @@ def test_expand_template_success() -> None:
     assert payload["appliedTemplate"]["slug"] == "demo"
     assert payload["composition"]["slug"] == "demo"
     assert payload["capabilities"] == ["codex", "git"]
+    assert payload["publish"] == {
+        "mode": "none",
+        "mergeAutomation": {
+            "enabled": True,
+            "finishMode": "fix_only",
+        },
+    }
 
 def test_save_from_workflow_success() -> None:
     client, _, saver = _build_app()

@@ -821,10 +821,11 @@ def _derive_pr_resolver_failure(
         )
 
     status = _pr_resolver_status(payload)
-    if (
-        _pr_resolver_disposition(payload, merge_gate_owned=merge_gate_owned)
-        == "reenter_gate"
-    ):
+    disposition = _pr_resolver_disposition(
+        payload,
+        merge_gate_owned=merge_gate_owned,
+    )
+    if merge_gate_owned and disposition in {"reenter_gate", "request_review"}:
         return None, None
     if status not in _PR_RESOLVER_FAILURE_STATUSES:
         return None, None
@@ -846,8 +847,7 @@ def _derive_pr_resolver_failure(
     # User fault is intentionally allow-listed and can only come from a terminal
     # artifact that passed identity, freshness, and terminal-shape validation.
     failure_class = "user_error" if (
-        _pr_resolver_disposition(payload, merge_gate_owned=merge_gate_owned)
-        == "manual_review"
+        disposition == "manual_review"
         and normalized_reason in _PR_RESOLVER_USER_ACTIONABLE_REASONS
     ) else "execution_error"
     return failure_class, "; ".join(summary_parts)

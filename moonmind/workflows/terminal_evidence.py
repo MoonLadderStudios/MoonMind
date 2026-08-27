@@ -307,6 +307,7 @@ def evaluate_terminal_evidence(
             "already_merged",
             "review_clean",
             "reenter_gate",
+            "request_review",
             "manual_review",
             "failed",
         }:
@@ -380,37 +381,82 @@ def evaluate_terminal_evidence(
                 }:
                     return _failure("UNAUTHORIZED_MERGE_EVIDENCE", metadata=metadata)
             return _success(metadata)
-        if disposition == "reenter_gate":
+        if disposition in {"reenter_gate", "request_review"}:
             continuation = payload.get("gatedContinuation")
             if isinstance(continuation, Mapping):
+                expected_schema = (
+                    "gated-continuation/v2"
+                    if disposition == "request_review"
+                    else "gated-continuation/v1"
+                )
                 if (
-                    continuation.get("schemaVersion") != "gated-continuation/v1"
+                    continuation.get("schemaVersion") != expected_schema
                     or continuation.get("gateType") != "merge_automation"
-                    or continuation.get("action") != "reenter_gate"
+                    or continuation.get("action") != disposition
                 ):
                     return _failure("MALFORMED_TERMINAL_EVIDENCE", metadata=metadata)
-                not_before = str(continuation.get("notBefore") or "").strip()
-                retry_after = continuation.get("retryAfterSeconds")
-                if not_before and retry_after is not None:
-                    return _failure("MALFORMED_TERMINAL_EVIDENCE", metadata=metadata)
-                if not_before:
-                    try:
-                        parsed = datetime.fromisoformat(
-                            not_before.replace("Z", "+00:00")
-                        )
-                    except ValueError:
+                if disposition == "request_review":
+                    required_text = (
+                        "provider",
+                        "reason",
+                        "executionRef",
+                        "headSha",
+                    )
+                    if any(
+                        not isinstance(continuation.get(key), str)
+                        or not str(continuation.get(key)).strip()
+                        for key in required_text
+                    ):
                         return _failure(
                             "MALFORMED_TERMINAL_EVIDENCE", metadata=metadata
                         )
-                    if parsed.tzinfo is None:
+                    if str(continuation.get("executionRef") or "").strip() != (
+                        expected_execution
+                    ):
+                        return _failure("STALE_TERMINAL_EVIDENCE", metadata=metadata)
+                    head_sha = str(continuation.get("headSha") or "").strip()
+                    if not (7 <= len(head_sha) <= 64) or any(
+                        char not in "0123456789abcdefABCDEF" for char in head_sha
+                    ):
                         return _failure("MALFORMED_TERMINAL_EVIDENCE", metadata=metadata)
-                if retry_after is not None and (
-                    isinstance(retry_after, bool)
-                    or not isinstance(retry_after, int)
-                    or retry_after < 1
-                ):
-                    return _failure("MALFORMED_TERMINAL_EVIDENCE", metadata=metadata)
+                    progress_signature = continuation.get("progressSignature")
+                    if progress_signature is not None and not isinstance(
+                        progress_signature, str
+                    ):
+                        return _failure(
+                            "MALFORMED_TERMINAL_EVIDENCE", metadata=metadata
+                        )
+                else:
+                    not_before = str(continuation.get("notBefore") or "").strip()
+                    retry_after = continuation.get("retryAfterSeconds")
+                    if not_before and retry_after is not None:
+                        return _failure(
+                            "MALFORMED_TERMINAL_EVIDENCE", metadata=metadata
+                        )
+                    if not_before:
+                        try:
+                            parsed = datetime.fromisoformat(
+                                not_before.replace("Z", "+00:00")
+                            )
+                        except ValueError:
+                            return _failure(
+                                "MALFORMED_TERMINAL_EVIDENCE", metadata=metadata
+                            )
+                        if parsed.tzinfo is None:
+                            return _failure(
+                                "MALFORMED_TERMINAL_EVIDENCE", metadata=metadata
+                            )
+                    if retry_after is not None and (
+                        isinstance(retry_after, bool)
+                        or not isinstance(retry_after, int)
+                        or retry_after < 1
+                    ):
+                        return _failure(
+                            "MALFORMED_TERMINAL_EVIDENCE", metadata=metadata
+                        )
                 metadata["gatedContinuation"] = dict(continuation)
+            elif disposition == "request_review":
+                return _failure("MALFORMED_TERMINAL_EVIDENCE", metadata=metadata)
             metadata["terminalContractOutcome"] = "continuation_requested"
             return TerminalEvidenceEvaluation(
                 False, metadata=metadata, outcome="continuation_requested"

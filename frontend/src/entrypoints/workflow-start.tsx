@@ -1021,6 +1021,7 @@ interface ExpandedStepPayload {
   story_output?: Record<string, unknown>;
   jiraOrchestration?: Record<string, unknown>;
   jira_orchestration?: Record<string, unknown>;
+  githubOrchestration?: Record<string, unknown>;
 }
 
 interface PresetExpandResponse {
@@ -1209,6 +1210,7 @@ interface StepState {
   source?: Record<string, unknown>;
   storyOutput?: Record<string, unknown>;
   jiraOrchestration?: Record<string, unknown>;
+  githubOrchestration?: Record<string, unknown>;
   runtimeCommand?: Record<string, unknown>;
 }
 
@@ -2289,6 +2291,9 @@ function createStepStateEntriesFromTemporalDraft(
     const hasJiraOrchestration =
       step.jiraOrchestration &&
       Object.keys(step.jiraOrchestration).length > 0;
+    const hasGithubOrchestration =
+      step.githubOrchestration &&
+      Object.keys(step.githubOrchestration).length > 0;
     const toolPayload = step.tool || {};
     const presetPayload = step.preset || {};
     const presetKey =
@@ -2369,6 +2374,9 @@ function createStepStateEntriesFromTemporalDraft(
         : {}),
       ...(hasJiraOrchestration
         ? { jiraOrchestration: step.jiraOrchestration }
+        : {}),
+      ...(hasGithubOrchestration
+        ? { githubOrchestration: step.githubOrchestration }
         : {}),
       ...(step.runtimeCommand && Object.keys(step.runtimeCommand).length > 0
         ? { runtimeCommand: step.runtimeCommand }
@@ -3476,6 +3484,7 @@ function mapExpandedStepToState(
   const jiraOrchestration =
     nonEmptyRecordValue(step.jiraOrchestration) ||
     nonEmptyRecordValue(step.jira_orchestration);
+  const githubOrchestration = nonEmptyRecordValue(step.githubOrchestration);
   const annotations = nonEmptyRecordValue(step.annotations);
   const source =
     nonEmptyRecordValue(step.source) ||
@@ -3516,6 +3525,7 @@ function mapExpandedStepToState(
     ...(normalizedSource ? { source: normalizedSource } : {}),
     ...(storyOutput ? { storyOutput } : {}),
     ...(jiraOrchestration ? { jiraOrchestration } : {}),
+    ...(githubOrchestration ? { githubOrchestration } : {}),
   });
 }
 
@@ -11012,6 +11022,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             Boolean(
               sourceStep.jiraOrchestration &&
                 Object.keys(sourceStep.jiraOrchestration).length > 0,
+            ) ||
+            Boolean(
+              sourceStep.githubOrchestration &&
+                Object.keys(sourceStep.githubOrchestration).length > 0,
             );
           const shouldSubmitStepType =
             submittedStepType === "tool" ||
@@ -11042,6 +11056,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             ...(sourceStep.jiraOrchestration &&
             Object.keys(sourceStep.jiraOrchestration).length > 0
               ? { jiraOrchestration: sourceStep.jiraOrchestration }
+              : {}),
+            ...(sourceStep.githubOrchestration &&
+            Object.keys(sourceStep.githubOrchestration).length > 0
+              ? { githubOrchestration: sourceStep.githubOrchestration }
               : {}),
             ...entry.payload,
           };

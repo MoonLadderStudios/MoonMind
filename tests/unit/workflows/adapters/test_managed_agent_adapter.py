@@ -2223,6 +2223,63 @@ async def test_fetch_result_treats_pr_resolver_reenter_gate_as_continuation(
     assert result.failure_class is None
     assert result.metadata["mergeAutomationDisposition"] == "reenter_gate"
 
+
+async def test_fetch_result_treats_pr_resolver_review_request_as_continuation(
+    tmp_path: Path,
+):
+    from datetime import UTC, datetime
+
+    from moonmind.schemas.agent_runtime_models import ManagedRunRecord
+    from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+
+    workspace_path = tmp_path / "workspace"
+    result_dir = workspace_path / "var" / "pr_resolver"
+    result_dir.mkdir(parents=True)
+    (result_dir / "result.json").write_text(
+        (
+            "{\n"
+            '  "schema_version": "moonmind.pr-resolver-result.v1",\n'
+            '  "status": "blocked",\n'
+            '  "mergeAutomationDisposition": "request_review",\n'
+            '  "final_reason": "fresh_review_required_after_remediation",\n'
+            '  "next_step": "request_automated_review"\n'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    store = ManagedRunStore(tmp_path / "run_store")
+    store.save(
+        ManagedRunRecord(
+            run_id="run-result-pr-review-request",
+            agent_id="claude_code",
+            runtime_id="claude_code",
+            status="completed",
+            started_at=datetime.now(tz=UTC),
+            workspace_path=str(workspace_path),
+        )
+    )
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles([]),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-result-pr-review-request",
+        run_store=store,
+    )
+
+    result = await adapter.fetch_result(
+        "run-result-pr-review-request",
+        pr_resolver_expected=True,
+        pr_resolver_merge_gate_owned=True,
+    )
+
+    assert result.failure_class is None
+    assert result.provider_error_code is None
+    assert result.metadata["mergeAutomationDisposition"] == "request_review"
+
+
 async def test_fetch_result_derives_pr_resolver_reenter_gate_from_next_step(
     tmp_path: Path,
 ):
