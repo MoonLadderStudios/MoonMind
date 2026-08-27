@@ -51,7 +51,10 @@ from moonmind.omnigent.host_services.attestation import (
     _attest_workspace_mount,
     _read_exact_host_model_options,
 )
-from moonmind.omnigent.host_services.mounted_tools import OmnigentMountedToolService
+from moonmind.omnigent.host_services.mounted_tools import (
+    OmnigentMountedToolService,
+    deployment_mounted_tool_names,
+)
 from moonmind.omnigent.host_services.workspace import OmnigentWorkspaceMaterializer
 from moonmind.omnigent.provider_leases import (
     AcquiredProviderLease,
@@ -1392,6 +1395,18 @@ async def test_tool_delivery_uses_plan_names_and_deployment_owned_volume(
     assert result[0]["sourceRef"] == "deployment-tools"
     assert result[0]["accessMode"] == "read-only"
     assert result[0]["tools"][0]["executableDigests"] == ["a" * 64]
+
+
+def test_deployment_mounted_tool_names_come_from_locked_manifest(
+    tmp_path: Path,
+) -> None:
+    manifest = tmp_path / "manifest.lock.json"
+    manifest.write_text(
+        json.dumps({"tools": [{"name": "GH"}, {"name": ""}]}),
+        encoding="utf-8",
+    )
+
+    assert deployment_mounted_tool_names(manifest) == ("gh",)
 
 
 @pytest.mark.asyncio

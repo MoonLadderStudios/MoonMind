@@ -11,6 +11,7 @@ from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from moonmind.omnigent.host_services.workspace import (
     OmnigentWorkspaceMaterializer,
     build_daemon_git_clone_argv,
+    build_daemon_workspace_chown_argv,
     normalize_github_clone_source,
 )
 from moonmind.schemas.workspace_locator_models import SandboxWorkspaceLocator
@@ -65,16 +66,43 @@ def test_daemon_git_clone_argv_pins_target():
     assert "clone" in argv and "--single-branch" in argv
 
 
+def test_daemon_workspace_chown_argv_pins_target_and_runtime_owner():
+    argv = build_daemon_workspace_chown_argv(
+        volume="agent_workspaces",
+        target_in_volume="temporal_sandbox/ws-1/repo",
+        runtime_uid=1000,
+        runtime_gid=1000,
+        image="alpine/git:v2.43.0",
+    )
+
+    assert argv == [
+        "docker",
+        "run",
+        "--rm",
+        "-v",
+        "agent_workspaces:/work",
+        "--entrypoint",
+        "/bin/chown",
+        "alpine/git:v2.43.0",
+        "-R",
+        "--",
+        "1000:1000",
+        "/work/temporal_sandbox/ws-1/repo",
+    ]
+
+
 @pytest.mark.asyncio
 async def test_materializer_clones_missing_sandbox_workspace_via_daemon(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ):
     """A fresh sandbox locator materializes by cloning the requested branch."""
 
-    captured: dict = {}
+    captured: list[list[str]] = []
 
     async def runner(argv):
-        captured["argv"] = argv
+        captured.append(argv)
+        if "clone" not in argv:
+            return 0, "", ""
         # Simulate git creating the checkout inside the volume.
         target = argv[-1]
         assert target.startswith("/work/")
@@ -113,7 +141,8 @@ async def test_materializer_clones_missing_sandbox_workspace_via_daemon(
     )
 
     assert workspace["kind"] == "bind"
-    argv = captured["argv"]
+    assert len(captured) == 2
+    argv = captured[0]
     assert argv[0] == "docker"
     assert f"{materializer._workspace_volume}:/work" in argv
     assert "/work/temporal_sandbox/" + workspace_id + "/repo" in argv
@@ -123,6 +152,10 @@ async def test_materializer_clones_missing_sandbox_workspace_via_daemon(
     assert "https://x-access-token:" in joined
     assert "@github.com/MoonLadderStudios/MoonMind.git" in joined
     assert "dependabot/npm_and_yarn/multi-2181bdc769" in joined
+    assert captured[1][-2:] == [
+        "1000:1000",
+        "/work/temporal_sandbox/" + workspace_id + "/repo",
+    ]
     record = SandboxWorkspaceRecordStore(tmp_path).load(workspace_id)
     assert record == SandboxWorkspaceRecord(
         workspace_id=workspace_id,

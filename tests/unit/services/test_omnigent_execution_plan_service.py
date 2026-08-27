@@ -11,11 +11,11 @@ from api_service.services.omnigent_agent_profile_selection import (
     default_launch_policy_ref,
 )
 from api_service.services.omnigent_policies import bootstrap_document
-from moonmind.omnigent.policies import compile_policy_snapshot
 from moonmind.omnigent.execution_support_evidence import (
     EXECUTION_SUPPORT_EVIDENCE_ISSUER,
     EXECUTION_SUPPORT_EVIDENCE_VERSION,
 )
+from moonmind.omnigent.policies import compile_policy_snapshot
 from moonmind.omnigent.session_supervisor_rollback import (
     SUPERVISOR_ROLLBACK_POLICY_VERSION,
 )
@@ -325,6 +325,45 @@ async def _compile_opencode_plan(
         task_input_snapshot_digest="sha256:" + "1" * 64,
         execution_plan_store=plan_store,
     )
+
+
+@pytest.mark.asyncio
+async def test_resolved_skill_capabilities_drive_plan_and_mounted_tools(
+    monkeypatch,
+) -> None:
+    async def resolve_skills(**_kwargs):
+        return (
+            SimpleNamespace(
+                skills=[
+                    SimpleNamespace(required_capabilities=["git", "gh"]),
+                    SimpleNamespace(required_capabilities=["Git"]),
+                ]
+            ),
+            "art_skill_manifest",
+            "sha256:" + "5" * 64,
+            (),
+        )
+
+    monkeypatch.setattr(service, "_resolve_and_persist_skills", resolve_skills)
+
+    def resolve_evidence(plan_payload, **_kwargs):
+        return _protected_support_evidence(plan_payload), "supported"
+
+    monkeypatch.setattr(service, "resolve_execution_evidence", resolve_evidence)
+    result = await _compile_opencode_plan(
+        monkeypatch,
+        artifacts=_ArtifactService(),
+        launch_policy_ref="opencode-on-demand@1",
+        plan_store=_PlanStore(object()),
+        extra_parameters={"requiredCapabilities": ["custom-capability"]},
+    )
+
+    assert result.envelope.payload.resolvedTools["tools"] == ["gh"]
+    assert result.envelope.payload.classAdmissionDecision["requiredSatisfied"] == [
+        "custom-capability",
+        "gh",
+        "git",
+    ]
 
 
 async def _capture_plan_payload(*, launch_policy_ref: str):

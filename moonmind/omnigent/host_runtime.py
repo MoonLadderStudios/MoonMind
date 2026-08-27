@@ -91,12 +91,15 @@ class GenericOmnigentHostRuntime:
         *,
         request: AgentExecutionRequest,
         plan: OmnigentExecutionPlanEnvelope,
+        host_class: HostClass,
         launch_policy: LaunchPolicy,
         authority_sink: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> PreparedHostInputs:
         workspace = await self._workspace.materialize(
             request,
             mutation=plan.payload.workspaceMutation,
+            runtime_uid=int(host_class.runtime.get("uid", 1000)),
+            runtime_gid=int(host_class.runtime.get("gid", 1000)),
         )
         if authority_sink is not None:
             await authority_sink({"kind": "workspace", **workspace})

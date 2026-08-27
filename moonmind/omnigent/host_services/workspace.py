@@ -96,6 +96,8 @@ class OmnigentWorkspaceMaterializer:
         request: AgentExecutionRequest,
         *,
         mutation: str = "allowed",
+        runtime_uid: int = 1000,
+        runtime_gid: int = 1000,
     ) -> dict[str, Any]:
         if mutation not in {"allowed", "read_only", "checkpoint_branch"}:
             raise HarnessPlatformError(
@@ -178,7 +180,12 @@ class OmnigentWorkspaceMaterializer:
                     "authoritative workspace path does not exist",
                     code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
                 )
-            await self._prepare_sandbox_workspace(candidate, spec=spec)
+            await self._prepare_sandbox_workspace(
+                candidate,
+                spec=spec,
+                runtime_uid=runtime_uid,
+                runtime_gid=runtime_gid,
+            )
         if not candidate.is_dir() or candidate.is_symlink():
             raise HarnessPlatformError(
                 "authoritative workspace is unavailable or unsafe",
@@ -206,7 +213,12 @@ class OmnigentWorkspaceMaterializer:
         }
 
     async def _prepare_sandbox_workspace(
-        self, candidate: Path, *, spec: dict[str, Any]
+        self,
+        candidate: Path,
+        *,
+        spec: dict[str, Any],
+        runtime_uid: int,
+        runtime_gid: int,
     ) -> None:
         """Clone the requested repository branch into a fresh sandbox dir.
 
@@ -243,10 +255,22 @@ class OmnigentWorkspaceMaterializer:
             )
         rel = candidate.relative_to(self._root)
         await self._clone_into_volume(
-            rel=rel, source=clone_source, branch=branch
+            rel=rel,
+            source=clone_source,
+            branch=branch,
+            runtime_uid=runtime_uid,
+            runtime_gid=runtime_gid,
         )
 
-    async def _clone_into_volume(self, *, rel: Path, source: str, branch: str) -> None:
+    async def _clone_into_volume(
+        self,
+        *,
+        rel: Path,
+        source: str,
+        branch: str,
+        runtime_uid: int,
+        runtime_gid: int,
+    ) -> None:
         """Clone into the agent-workspaces volume through the Docker daemon.
 
         The worker image deliberately ships without a host ``git``; the same
@@ -254,9 +278,6 @@ class OmnigentWorkspaceMaterializer:
         performs the authenticated clone inside a disposable container.
         """
 
-        from moonmind.workflows.temporal.runtime.git_auth import (
-            build_github_token_git_environment,
-        )
         from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
             resolve_github_token_for_launch,
         )
@@ -274,18 +295,34 @@ class OmnigentWorkspaceMaterializer:
         authed_source = source.replace(
             "https://", f"https://x-access-token:{token}@", 1
         )
+        image = os.getenv("MOONMIND_WORKSPACE_GIT_IMAGE", "alpine/git:v2.43.0")
         argv = build_daemon_git_clone_argv(
             volume=self._workspace_volume,
             target_in_volume=rel.as_posix(),
             source=authed_source,
             branch=branch,
-            image=os.getenv("MOONMIND_WORKSPACE_GIT_IMAGE", "alpine/git:v2.43.0"),
+            image=image,
         )
         code, _stdout, stderr = await self._runner(argv)
         if code != 0:
             detail = (stderr or "").strip()[-300:]
             raise HarnessPlatformError(
                 "sandbox workspace clone failed for the requested branch"
+                + (f": {detail}" if detail else ""),
+                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            )
+        ownership_argv = build_daemon_workspace_chown_argv(
+            volume=self._workspace_volume,
+            target_in_volume=rel.as_posix(),
+            runtime_uid=runtime_uid,
+            runtime_gid=runtime_gid,
+            image=image,
+        )
+        code, _stdout, stderr = await self._runner(ownership_argv)
+        if code != 0:
+            detail = (stderr or "").strip()[-300:]
+            raise HarnessPlatformError(
+                "sandbox workspace ownership handoff failed"
                 + (f": {detail}" if detail else ""),
                 code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
             )
@@ -311,6 +348,49 @@ def build_daemon_git_clone_argv(
     return argv
 
 
+def build_daemon_workspace_chown_argv(
+    *,
+    volume: str,
+    target_in_volume: str,
+    runtime_uid: int,
+    runtime_gid: int,
+    image: str,
+) -> list[str]:
+    """Build the bounded ownership handoff for a daemon-created checkout."""
+
+    if not _SAFE_VOLUME.fullmatch(volume):
+        raise HarnessPlatformError(
+            "agent workspace volume name is unavailable or unsafe",
+            code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+        )
+    target = Path(target_in_volume)
+    if (
+        target.is_absolute()
+        or not target.parts
+        or ".." in target.parts
+        or runtime_uid <= 0
+        or runtime_gid <= 0
+    ):
+        raise HarnessPlatformError(
+            "sandbox workspace ownership target is unavailable or unsafe",
+            code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+        )
+    return [
+        "docker",
+        "run",
+        "--rm",
+        "-v",
+        f"{volume}:/work",
+        "--entrypoint",
+        "/bin/chown",
+        image,
+        "-R",
+        "--",
+        f"{runtime_uid}:{runtime_gid}",
+        "/work/" + target.as_posix(),
+    ]
+
+
 def _rmdir_if_empty(path: Path) -> None:
     try:
         if path.is_dir() and not any(path.iterdir()):
@@ -325,6 +405,7 @@ def _rmdir_if_empty(path: Path) -> None:
 __all__ = [
     "OmnigentWorkspaceMaterializer",
     "build_daemon_git_clone_argv",
+    "build_daemon_workspace_chown_argv",
     "normalize_github_clone_source",
     "resolve_daemon_workspace_root",
 ]

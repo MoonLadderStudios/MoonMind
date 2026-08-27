@@ -41,6 +41,9 @@ from moonmind.omnigent.harness_platform.host_classes import (
 from moonmind.omnigent.harness_platform.planner import compile_execution_plan
 from moonmind.omnigent.harness_platform.skills import ResolvedSkillSet
 from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
+from moonmind.omnigent.host_services.mounted_tools import (
+    deployment_mounted_tool_names,
+)
 from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
 from moonmind.schemas.agent_skill_models import (
     AgentSkillFormat,
@@ -556,6 +559,7 @@ def _build_v2_profile(
     implementation_ref: str,
     harness_id: str,
     auth_model: str,
+    additional_tools: tuple[str, ...] = (),
 ) -> OmnigentAgentProfileV2:
     document = snapshot.get("document")
     if not isinstance(document, Mapping):
@@ -628,7 +632,16 @@ def _build_v2_profile(
             "model": dict(document.get("model") or {}),
             "workspace": dict(document.get("workspace") or {}),
             "skills": list(document.get("skills") or []),
-            "tools": list(document.get("tools") or []),
+            "tools": sorted(
+                {
+                    *(
+                        str(value).strip().lower()
+                        for value in document.get("tools") or []
+                        if str(value).strip()
+                    ),
+                    *additional_tools,
+                }
+            ),
             "capture": dict(document.get("capture") or {}),
             "continuations": dict(document.get("continuations") or {}),
             "publish": dict(document.get("publish") or {}),
@@ -905,7 +918,7 @@ async def compile_and_persist_execution_plan(
         payload=profile_snapshot_payload,
     )
     (
-        _agent_resolved_skills,
+        agent_resolved_skills,
         skill_ref,
         skill_digest,
         skill_content_refs,
@@ -930,6 +943,26 @@ async def compile_and_persist_execution_plan(
             "resolvedSkillSetDigest": skill_digest,
             "skillDeliveryRef": skill_delivery_ref,
         }
+    )
+    required_capabilities = tuple(
+        sorted(
+            {
+                *(
+                    str(value).strip().lower()
+                    for value in initial_parameters.get("requiredCapabilities") or []
+                    if str(value).strip()
+                ),
+                *(
+                    str(capability).strip().lower()
+                    for skill in agent_resolved_skills.skills
+                    for capability in skill.required_capabilities
+                    if str(capability).strip()
+                ),
+            }
+        )
+    )
+    mounted_skill_tools = tuple(
+        sorted(set(required_capabilities).intersection(deployment_mounted_tool_names()))
     )
     binding_set = create_binding_set(
         bindingSetId=f"{harness_id}.primary-model",
@@ -1019,6 +1052,7 @@ async def compile_and_persist_execution_plan(
             implementation_ref=implementation.implementation_ref(),
             harness_id=harness_id,
             auth_model=config["authModel"],
+            additional_tools=mounted_skill_tools,
         ),
         harness_catalog=catalog,
         trust_record=trust,
@@ -1046,12 +1080,10 @@ async def compile_and_persist_execution_plan(
         model_route_ref=str(getattr(provider_profile, "provider_id", "") or "")
         or None,
         model_normalized_options=dict(model_mapping.get("settings") or {}),
-        workflow_requirements=list(
-            initial_parameters.get("requiredCapabilities") or []
-        ),
+        workflow_requirements=list(required_capabilities),
         bridge_capabilities={
             str(capability): True
-            for capability in initial_parameters.get("requiredCapabilities") or []
+            for capability in required_capabilities
         },
         workspace_intent_ref=_digest_ref(
             "workspace-intent", {"repository": repository, "workspace": workspace}

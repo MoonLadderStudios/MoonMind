@@ -353,6 +353,7 @@ class GenericOmnigentHostRealizer:
             prepared = await self._host_runtime.prepare(
                 request=request,
                 plan=plan,
+                host_class=host_class,
                 launch_policy=launch_policy,
                 authority_sink=record_prepared,
             )
