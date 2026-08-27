@@ -65,6 +65,56 @@ describe('dashboard page layout styles', () => {
       'stroke: currentcolor;',
     );
   });
+
+  it('keeps the skill combobox chevron a chromeless indicator in every state', () => {
+    // The field already signals interaction with its focus ring and the open
+    // listbox. The chevron must never grow a box of its own, so it is opted out
+    // of the filled-CTA globals and restates the reset for every state those
+    // globals target.
+    const filledCtaSelectors: string[] = [];
+    cssRoot().walkRules((rule: Rule) => {
+      // Match the whole selector: the exclusion list itself contains commas,
+      // so it cannot be split on them.
+      if (/(?:^|,)\s*\.?button:where\(:not\(/.test(rule.selector)) {
+        filledCtaSelectors.push(rule.selector);
+      }
+    });
+    expect(filledCtaSelectors.length).toBeGreaterThan(0);
+    filledCtaSelectors.forEach((selector) => {
+      expect(selector).toContain('.skill-combobox-toggle');
+      // The attachment thumbnail and its lightbox close button opt out for the
+      // same reason: neither is a filled call to action.
+      expect(selector).toContain('.attachment-thumbnail');
+      expect(selector).toContain('.attachment-lightbox-close');
+    });
+
+    const toggle = cssRuleBlock('.skill-combobox-toggle');
+    expect(toggle).toContain('background: none;');
+    expect(toggle).toContain('border: 0;');
+    expect(toggle).toContain('border-radius: 0;');
+    expect(toggle).toContain('box-shadow: none;');
+    expect(toggle).toContain('-webkit-tap-highlight-color: transparent;');
+
+    for (const state of [
+      '.skill-combobox-toggle:hover',
+      '.skill-combobox-toggle:focus',
+      '.skill-combobox-toggle:focus-visible',
+      '.skill-combobox-toggle:active',
+      '.skill-combobox-toggle.is-clicked',
+    ]) {
+      const block = cssRuleBlock(state);
+      expect(block).toContain('background: none;');
+      expect(block).toContain('box-shadow: none;');
+      expect(block).toContain('transform: none;');
+      expect(block).toContain('filter: none;');
+      // No hover/active color shift either: the glyph stays muted and only
+      // rotates to report the open state.
+      expect(block).toContain('color: rgb(var(--mm-muted));');
+    }
+    expect(cssRuleBlock('.skill-combobox-toggle[aria-expanded="true"] svg')).toContain(
+      'transform: rotate(180deg);',
+    );
+  });
 });
 
 describe('dashboard masthead brand styles', () => {

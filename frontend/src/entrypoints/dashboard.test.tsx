@@ -3420,12 +3420,12 @@ describe('Dashboard shared entry', () => {
     const routineBlocks = [
       cssRuleBlock(
         dashboardCss,
-        'button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)):hover',
+        'button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)):hover',
       ),
       cssRuleBlock(dashboardCss, 'button.secondary:hover'),
       cssRuleBlock(
         dashboardCss,
-        '.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)):hover',
+        '.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)):hover',
       ),
       cssRuleBlock(dashboardCss, '.button.secondary:hover'),
       cssRuleBlock(dashboardCss, '.queue-action:hover,\n.queue-submit-primary:hover'),
@@ -3442,11 +3442,11 @@ describe('Dashboard shared entry', () => {
     const pressedBlocks = [
       cssRuleBlock(
         dashboardCss,
-        'button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)):active',
+        'button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)):active',
       ),
       cssRuleBlock(
         dashboardCss,
-        '.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)):active',
+        '.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)):active',
       ),
       cssRuleBlock(dashboardCss, '.queue-action:active,\n.queue-submit-primary:active'),
       cssRuleBlock(dashboardCss, '.queue-step-icon-button:active'),
@@ -3505,7 +3505,7 @@ describe('Dashboard shared entry', () => {
     expect(cssRuleBlock(dashboardCss, 'input:focus-visible,\nselect:focus-visible,\ntextarea:focus-visible')).toContain(
       'box-shadow: var(--mm-control-focus-ring)',
     );
-    expect(cssRuleBlock(dashboardCss, 'button:disabled,\nbutton:disabled:hover,\nbutton.secondary:disabled,\nbutton.secondary:disabled:hover,\nbutton:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)):disabled,\nbutton:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)):disabled:hover,\n.button[aria-disabled="true"],\n.button[aria-disabled="true"]:hover,\n.button.secondary[aria-disabled="true"],\n.button.secondary[aria-disabled="true"]:hover,\n.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle))[aria-disabled="true"],\n.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle))[aria-disabled="true"]:hover')).toMatch(
+    expect(cssRuleBlock(dashboardCss, 'button:disabled,\nbutton:disabled:hover,\nbutton.secondary:disabled,\nbutton.secondary:disabled:hover,\nbutton:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)):disabled,\nbutton:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)):disabled:hover,\n.button[aria-disabled="true"],\n.button[aria-disabled="true"]:hover,\n.button.secondary[aria-disabled="true"],\n.button.secondary[aria-disabled="true"]:hover,\n.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close))[aria-disabled="true"],\n.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close))[aria-disabled="true"]:hover')).toMatch(
       /opacity:\s*var\(--mm-control-disabled-opacity\);[^}]*transform:\s*none;[^}]*box-shadow:\s*none;/s,
     );
     expect(dashboardCss).toMatch(

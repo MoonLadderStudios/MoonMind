@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, ReactElement } from "react";
+import type { CSSProperties, DragEvent, ReactElement } from "react";
 import { createPortal } from "react-dom";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useInRouterContext, useLocation } from "react-router-dom";
@@ -7,7 +7,14 @@ import { useInRouterContext, useLocation } from "react-router-dom";
 import type { BootPayload } from "../boot/parseBootPayload";
 import { configQueryDefaults } from "../boot/queryClient";
 import { LoadingPlaceholder } from "../components/dashboard/LoadingPlaceholder";
+import { AttachmentImagePreview } from "../components/AttachmentImagePreview";
 import { SkillCombobox } from "../components/SkillCombobox";
+import {
+  dragEventHasFiles,
+  droppedFiles,
+  partitionDroppedAttachments,
+  unsupportedAttachmentMessage,
+} from "../lib/attachmentDrop";
 import { DashboardErrorDetails } from "../components/dashboard/DashboardErrorDetails";
 import { useLiquidGL } from "../lib/liquidGL/useLiquidGL";
 import { navigateTo } from "../lib/navigation";
@@ -5633,6 +5640,9 @@ interface StepContextAttachmentItem {
   filename: string;
   detail: string;
   targetLabel: string;
+  contentType?: string;
+  /** Pending (not yet uploaded) file, previewed through an object URL. */
+  file?: File;
   href?: string;
   download?: string;
   removeLabel: string;
@@ -5666,6 +5676,14 @@ function StepContextBar({
         >
           {attachments.map((attachment) => (
             <li key={attachment.key} className="queue-step-attachment-chip">
+              <AttachmentImagePreview
+                filename={attachment.filename}
+                contentType={attachment.contentType}
+                file={attachment.file}
+                href={attachment.href}
+                download={attachment.download}
+                detail={`${attachment.targetLabel} · ${attachment.detail}`}
+              />
               <span className="queue-step-attachment-chip-icon" aria-hidden="true">
                 🖼
               </span>
@@ -6015,6 +6033,12 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const [attachmentTargetErrors, setAttachmentTargetErrors] = useState<
     Record<string, string>
   >({});
+  // Step currently under a file drag, plus the nested dragenter/dragleave depth
+  // that keeps the highlight stable while the pointer crosses child elements.
+  const [attachmentDropStepId, setAttachmentDropStepId] = useState<string | null>(
+    null,
+  );
+  const attachmentDropDepthRef = useRef<Record<string, number>>({});
   const [submitMessageState, setSubmitMessageState] = useState<
     { text: string; tone: "error" | "pending" | "ok" } | null
   >(null);
@@ -8020,6 +8044,90 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       }
       return next;
     });
+  }
+
+  // Dropping files onto a step is the same entry point as the file picker: it
+  // funnels into updateStepAttachments so policy counts, dedupe and template
+  // rebinding behave identically. Files the policy would reject at submit are
+  // rejected here instead, with the same wording.
+  function handleStepAttachmentDrop(localId: string, files: File[]) {
+    if (!attachmentPolicy.enabled || files.length === 0) {
+      return;
+    }
+    const { accepted, rejected } = partitionDroppedAttachments(
+      files,
+      attachmentPolicy.allowedContentTypes,
+    );
+    if (accepted.length > 0) {
+      updateStepAttachments(localId, accepted);
+    }
+    if (rejected.length > 0) {
+      const message = unsupportedAttachmentMessage(rejected);
+      setAttachmentTargetErrors((current) => ({
+        ...current,
+        [attachmentTargetKey(localId)]: message,
+      }));
+    }
+  }
+
+  function clearStepAttachmentDropState(localId: string) {
+    delete attachmentDropDepthRef.current[localId];
+    setAttachmentDropStepId((current) => (current === localId ? null : current));
+  }
+
+  function stepAttachmentDropHandlers(
+    localId: string,
+  ): Partial<{
+    onDragEnter: (event: DragEvent<HTMLElement>) => void;
+    onDragOver: (event: DragEvent<HTMLElement>) => void;
+    onDragLeave: (event: DragEvent<HTMLElement>) => void;
+    onDrop: (event: DragEvent<HTMLElement>) => void;
+  }> {
+    if (!attachmentPolicy.enabled) {
+      return {};
+    }
+    return {
+      onDragEnter: (event) => {
+        if (!dragEventHasFiles(event.dataTransfer)) {
+          return;
+        }
+        event.preventDefault();
+        attachmentDropDepthRef.current[localId] =
+          (attachmentDropDepthRef.current[localId] || 0) + 1;
+        setAttachmentDropStepId(localId);
+      },
+      onDragOver: (event) => {
+        // Only a preventDefault()ed dragover makes an element a drop target;
+        // text drags inside the instructions textarea must keep native handling.
+        if (!dragEventHasFiles(event.dataTransfer)) {
+          return;
+        }
+        event.preventDefault();
+        if (event.dataTransfer) {
+          event.dataTransfer.dropEffect = "copy";
+        }
+        setAttachmentDropStepId(localId);
+      },
+      onDragLeave: (event) => {
+        if (!dragEventHasFiles(event.dataTransfer)) {
+          return;
+        }
+        const depth = (attachmentDropDepthRef.current[localId] || 1) - 1;
+        if (depth > 0) {
+          attachmentDropDepthRef.current[localId] = depth;
+          return;
+        }
+        clearStepAttachmentDropState(localId);
+      },
+      onDrop: (event) => {
+        if (!dragEventHasFiles(event.dataTransfer)) {
+          return;
+        }
+        event.preventDefault();
+        clearStepAttachmentDropState(localId);
+        handleStepAttachmentDrop(localId, droppedFiles(event.dataTransfer));
+      },
+    };
   }
 
   function removePersistedObjectiveAttachment(artifactId: string) {
@@ -12654,6 +12762,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                       filename: attachment.filename,
                       detail: formatAttachmentBytes(attachment.sizeBytes),
                       targetLabel: "Objective",
+                      contentType: attachment.contentType,
                       href: configuredArtifactDownloadUrl(
                         artifactDownloadEndpoint,
                         attachment.artifactId,
@@ -12671,6 +12780,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                   filename: attachment.filename,
                   detail: formatAttachmentBytes(attachment.sizeBytes),
                   targetLabel: `Step ${index + 1}`,
+                  contentType: attachment.contentType,
                   href: configuredArtifactDownloadUrl(
                     artifactDownloadEndpoint,
                     attachment.artifactId,
@@ -12689,6 +12799,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                     filename: file.name || "attachment",
                     detail: `${file.type || "application/octet-stream"}, ${formatAttachmentBytes(file.size)}`,
                     targetLabel: `Step ${index + 1}`,
+                    contentType: file.type,
+                    file,
                     removeLabel: `Remove Step ${index + 1} attachment ${file.name}`,
                     onRemove: () => removeStepAttachment(step.localId, file),
                     ...(stepAttachmentTargetError
@@ -12703,12 +12815,26 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                   }),
                 ),
               ];
+              const isStepDropTarget =
+                attachmentPolicy.enabled && attachmentDropStepId === step.localId;
               return (
                 <section
                   key={step.localId}
-                  className="stack queue-step-section"
+                  className={`stack queue-step-section${
+                    isStepDropTarget ? " is-attachment-drop-target" : ""
+                  }`}
                   data-step-index={index}
+                  {...stepAttachmentDropHandlers(step.localId)}
                 >
+                  {isStepDropTarget ? (
+                    <div className="queue-step-drop-overlay" aria-hidden="true">
+                      <span className="queue-step-drop-overlay-label">
+                        {isImageOnlyPolicy(attachmentPolicy)
+                          ? `Drop image to attach to Step ${index + 1}`
+                          : `Drop file to attach to Step ${index + 1}`}
+                      </span>
+                    </div>
+                  ) : null}
                   <div className="queue-step-header">
                     <strong>{`Step ${index + 1}`}</strong>
                     <div

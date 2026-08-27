@@ -4437,13 +4437,13 @@ button {
   transition: var(--mm-control-transition);
 }
 
-button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)) {
+button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)) {
   border-color: rgb(255 255 255 / 0.52);
   color: #fff;
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.2), 0 12px 24px -16px rgb(var(--mm-accent) / 0.82);
 }
 
-button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)):hover {
+button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)):hover {
   background-image: linear-gradient(
     160deg,
     rgb(var(--mm-accent) / 1) 0%,
@@ -4463,8 +4463,8 @@ button:focus-visible {
   box-shadow: var(--mm-control-focus-ring);
 }
 
-button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)):active,
-button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)).is-clicked {
+button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)):active,
+button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)).is-clicked {
   background-image: linear-gradient(
     160deg,
     rgb(var(--mm-accent) / 1) 0%,
@@ -4536,12 +4536,12 @@ button.workflow-list-column-filter-button.is-active {
   transition: var(--mm-control-transition);
 }
 
-.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)) {
+.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)) {
   border-color: rgb(255 255 255 / 0.52);
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.2), 0 12px 24px -16px rgb(var(--mm-accent) / 0.82);
 }
 
-.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)):hover {
+.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)):hover {
   background-image: linear-gradient(
     160deg,
     rgb(var(--mm-accent) / 1) 0%,
@@ -4561,8 +4561,8 @@ button.workflow-list-column-filter-button.is-active {
   box-shadow: var(--mm-control-focus-ring);
 }
 
-.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)):active,
-.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)).is-clicked {
+.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)):active,
+.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)).is-clicked {
   background-image: linear-gradient(
     160deg,
     rgb(var(--mm-accent) / 1) 0%,
@@ -4594,14 +4594,14 @@ button:disabled,
 button:disabled:hover,
 button.secondary:disabled,
 button.secondary:disabled:hover,
-button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)):disabled,
-button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)):disabled:hover,
+button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)):disabled,
+button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)):disabled:hover,
 .button[aria-disabled="true"],
 .button[aria-disabled="true"]:hover,
 .button.secondary[aria-disabled="true"],
 .button.secondary[aria-disabled="true"]:hover,
-.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle))[aria-disabled="true"],
-.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle))[aria-disabled="true"]:hover {
+.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close))[aria-disabled="true"],
+.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close))[aria-disabled="true"]:hover {
   cursor: not-allowed;
   opacity: var(--mm-control-disabled-opacity);
   transform: none;
@@ -6142,7 +6142,151 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .queue-step-section {
+  position: relative;
   padding: 0;
+}
+
+/* Dropping files onto a step is the drag-and-drop twin of the "+ → Image…"
+ * picker. The affordance only appears while a file drag is over the step, so
+ * the resting layout stays unchanged. */
+.queue-step-section.is-attachment-drop-target {
+  outline: 2px dashed rgb(var(--mm-accent) / 0.75);
+  outline-offset: 6px;
+  border-radius: 10px;
+}
+
+.queue-step-drop-overlay {
+  position: absolute;
+  inset: -6px;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: rgb(var(--mm-panel) / 0.82);
+  /* The overlay must not swallow the drop: the step section owns the handlers. */
+  pointer-events: none;
+}
+
+.queue-step-drop-overlay-label {
+  padding: 0.4rem 0.8rem;
+  border: 1px solid rgb(var(--mm-accent) / 0.6);
+  border-radius: 999px;
+  background: rgb(var(--mm-panel));
+  color: rgb(var(--mm-ink));
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+
+/* Image attachments preview inline instead of behind a generic glyph. The
+ * thumbnail replaces the placeholder icon whenever one renders. */
+.queue-step-attachment-chip:has(.attachment-thumbnail)
+  .queue-step-attachment-chip-icon {
+  display: none;
+}
+
+.attachment-thumbnail {
+  width: 1.6rem;
+  height: 1.6rem;
+  min-width: 1.6rem;
+  padding: 0;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border: 1px solid rgb(var(--mm-border));
+  border-radius: 5px;
+  background: rgb(var(--mm-panel));
+  cursor: zoom-in;
+  line-height: 0;
+}
+
+.attachment-thumbnail:hover {
+  border-color: rgb(var(--mm-accent));
+}
+
+.attachment-thumbnail-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.attachment-lightbox-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  background: rgb(15 23 42 / 0.72);
+}
+
+.attachment-lightbox-panel {
+  position: relative;
+  display: grid;
+  gap: 0.6rem;
+  justify-items: center;
+  max-width: min(1200px, 100%);
+  max-height: calc(100vh - 3rem);
+  margin: 0;
+  padding: 0.75rem;
+  border: 1px solid rgb(var(--mm-border));
+  border-radius: 10px;
+  background: rgb(var(--mm-bg));
+  box-shadow: 0 24px 70px -32px rgb(0 0 0 / 0.6);
+}
+
+.attachment-lightbox-image {
+  max-width: 100%;
+  max-height: calc(100vh - 8rem);
+  object-fit: contain;
+  border-radius: 6px;
+}
+
+.attachment-lightbox-caption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  font-size: 0.85rem;
+  color: rgb(var(--mm-ink));
+}
+
+.attachment-lightbox-detail {
+  color: rgb(var(--mm-muted));
+}
+
+.attachment-lightbox-download {
+  color: rgb(var(--mm-accent));
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.attachment-lightbox-download:hover,
+.attachment-lightbox-download:focus-visible {
+  text-decoration: underline;
+}
+
+.attachment-lightbox-close {
+  position: absolute;
+  top: -0.7rem;
+  inset-inline-end: -0.7rem;
+  width: 1.9rem;
+  height: 1.9rem;
+  min-width: 1.9rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid rgb(var(--mm-border));
+  border-radius: 999px;
+  background: rgb(var(--mm-panel));
+  color: rgb(var(--mm-ink));
+  font-size: 1.15rem;
+  line-height: 1;
+}
+
+.attachment-lightbox-close:hover {
+  border-color: rgb(var(--mm-accent));
 }
 
 /* MM-1138 Q3: one canonical segmented-control system with two intensity tiers.
@@ -6500,6 +6644,11 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   padding-inline-end: 4.5rem;
 }
 
+/* The chevron is a disclosure *indicator*, not a control with its own chrome:
+ * the field already communicates state through its focus ring and the open
+ * listbox, so a second hoverable surface stacked inside the same box reads as a
+ * separate affordance and competes with it. Keep the affordance to the glyph
+ * (muted, rotates when open) and give it no box of its own in any state. */
 .skill-combobox-toggle {
   position: absolute;
   inset-block: 0;
@@ -6512,17 +6661,27 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   min-height: 44px;
   padding: 0;
   margin: 0;
-  background: transparent;
+  background: none;
   border: 0;
+  border-radius: 0;
+  box-shadow: none;
   color: rgb(var(--mm-muted));
   cursor: pointer;
-  border-radius: 0.56rem;
   touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .skill-combobox-toggle:hover,
-.skill-combobox-toggle:focus-visible {
-  color: rgb(var(--mm-ink));
+.skill-combobox-toggle:focus,
+.skill-combobox-toggle:focus-visible,
+.skill-combobox-toggle:active,
+.skill-combobox-toggle.is-clicked {
+  background: none;
+  border-color: transparent;
+  box-shadow: none;
+  color: rgb(var(--mm-muted));
+  transform: none;
+  filter: none;
 }
 
 .skill-combobox-toggle[aria-expanded="true"] svg {
