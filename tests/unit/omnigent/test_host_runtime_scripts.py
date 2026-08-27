@@ -1,3 +1,5 @@
+import subprocess
+
 from moonmind.omnigent.host_services.runtime_scripts import (
     OmnigentRuntimeScriptService,
 )
@@ -18,7 +20,7 @@ def _build(*, target_path: str, github_attachment=None):
 
 
 def test_opencode_materializer_pins_deterministic_server_startup_environment():
-    _script, environment = _build(target_path="/run/mm-credentials/opencode")
+    script, environment = _build(target_path="/run/mm-credentials/opencode")
 
     expected_flags = {
         "OPENCODE_DISABLE_AUTOUPDATE",
@@ -45,6 +47,22 @@ def test_opencode_materializer_pins_deterministic_server_startup_environment():
         environment["MOONMIND_STEP_EXECUTION_ID"]
         == "workflow:run:node-1:execution:1"
     )
+    assert "> /home/app/.local/bin/moonmind-opencode-context" in script
+    assert "> /home/app/.local/bin/opencode" in script
+    assert (
+        'exec /home/app/.local/bin/moonmind-opencode-context '
+        '/usr/local/bin/opencode "$@"'
+    ) in script
+    assert "MOONMIND_STEP_EXECUTION_ID=$(cat" in script
+    assert "MOONMIND_ACTIVE_SKILLS_DIR=$(cat" in script
+    syntax = subprocess.run(
+        ["/bin/sh", "-n"],
+        input=script,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert syntax.returncode == 0, syntax.stderr
 
 
 def test_non_opencode_materializer_does_not_inject_opencode_runtime_flags():
@@ -97,3 +115,5 @@ def test_github_projection_exposes_only_non_secret_cli_environment():
     assert "cp /run/mm-credentials/github/hosts.yml" in _script
     assert "/home/app/.config/gh/hosts.yml" in _script
     assert "> /home/app/.local/bin/gh" in _script
+    assert "export GH_CONFIG_DIR=/home/app/.config/gh" in _script
+    assert "GIT_CONFIG_VALUE_0" in _script

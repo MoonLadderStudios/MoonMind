@@ -143,6 +143,56 @@ async def _run_exact_host_runner_command(
     )
 
 
+async def _run_exact_host_opencode_command(
+    *,
+    backend: DockerCommandBackend,
+    container_name: str,
+    argv: list[str],
+    timeout_seconds: float = 30.0,
+) -> tuple[int, str, str]:
+    """Execute through the runner, OpenCode filter, and MoonMind context shim."""
+
+    filtered_child_probe = (
+        "import subprocess, sys; from pathlib import Path; "
+        "from omnigent.opencode_native_app_server import filtered_server_env; "
+        "env = filtered_server_env("
+        "bridge_dir=Path('/tmp/moonmind-opencode-attestation'), "
+        "auth_secret='moonmind-attestation'); "
+        "result = subprocess.run("
+        "['/home/app/.local/bin/moonmind-opencode-context', *sys.argv[1:]], "
+        "env=env, text=True, capture_output=True); "
+        "sys.stdout.write(result.stdout); sys.stderr.write(result.stderr); "
+        "raise SystemExit(result.returncode)"
+    )
+    opencode_probe = (
+        "import os, subprocess, sys; "
+        "from omnigent.host.connect import _build_runner_env; "
+        "runner_env = _build_runner_env(os.environ, "
+        "server_url=os.environ.get('OMNIGENT_SERVER_URL', ''), "
+        "runner_id='moonmind-attestation', "
+        "binding_token='moonmind-attestation', "
+        "workspace='/workspaces/run', parent_pid=os.getpid()); "
+        f"child = {filtered_child_probe!r}; "
+        "result = subprocess.run([sys.executable, '-c', child, *sys.argv[1:]], "
+        "env=runner_env, text=True, "
+        "capture_output=True); sys.stdout.write(result.stdout); "
+        "sys.stderr.write(result.stderr); raise SystemExit(result.returncode)"
+    )
+    return await backend.run(
+        [
+            "docker",
+            "exec",
+            container_name,
+            "/opt/venv/bin/python",
+            "-c",
+            opencode_probe,
+            *argv,
+        ],
+        timeout_seconds=timeout_seconds,
+        check=False,
+    )
+
+
 def _assert_exact_omnigent_build(
     image: dict[str, Any], expected_build_digest: str
 ) -> None:
@@ -351,6 +401,28 @@ class DockerOmnigentHostAttestor:
                 "resolved Skill projection is unavailable in the exact runner environment",
                 code=HarnessPlatformFailure.OMNIGENT_SKILL_SNAPSHOT_UNAVAILABLE,
             )
+        if plan.payload.harnessId == "opencode-native":
+            code, _out, _err = await _run_exact_host_opencode_command(
+                backend=self._backend,
+                container_name=launch_result["containerName"],
+                argv=[
+                    "/bin/sh",
+                    "-ceu",
+                    (
+                        'test "${MOONMIND_ACTIVE_SKILLS_DIR:-}" = "$1"; '
+                        'test -d "$1"; test -r "$1/_manifest.json"; '
+                        'test "${MOONMIND_STEP_EXECUTION_ID:-}" = "$2"'
+                    ),
+                    "--",
+                    skill_target,
+                    spec.stepExecutionId,
+                ],
+            )
+            if code != 0:
+                raise HarnessPlatformError(
+                    "resolved Skill projection is unavailable in the OpenCode shell environment",
+                    code=HarnessPlatformFailure.OMNIGENT_SKILL_SNAPSHOT_UNAVAILABLE,
+                )
         tool_mount_evidence: list[dict[str, Any]] = []
         for attachment in spec.toolAttachments:
             matched = next(
@@ -512,6 +584,19 @@ class DockerOmnigentHostAttestor:
                         HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED
                     ),
                 )
+            if plan.payload.harnessId == "opencode-native":
+                code, _out, _err = await _run_exact_host_opencode_command(
+                    backend=self._backend,
+                    container_name=launch_result["containerName"],
+                    argv=["gh", "auth", "status", "--hostname", "github.com"],
+                )
+                if code != 0:
+                    raise HarnessPlatformError(
+                        "GitHub CLI authentication failed in the OpenCode shell environment",
+                        code=(
+                            HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED
+                        ),
+                    )
             expected_helper = "!/home/app/.local/bin/gh auth git-credential"
             code, observed, _err = await self._backend.run(
                 [

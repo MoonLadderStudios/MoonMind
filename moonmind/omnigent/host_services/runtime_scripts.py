@@ -107,6 +107,9 @@ class OmnigentRuntimeScriptService:
         # data directory, which a read-only credential mount would block.
         staging_dir = "/run/mm-credentials/opencode"
         opencode_data = "/home/app/.local/share/opencode"
+        runtime_context_dir = "/home/app/.moonmind/runtime-context"
+        opencode_context_wrapper = "/home/app/.local/bin/moonmind-opencode-context"
+        opencode_wrapper = "/home/app/.local/bin/opencode"
         has_opencode_materializer = any(
             str(attachment.get("targetPath") or "").rstrip("/") == staging_dir
             for handle in credential_handles
@@ -148,12 +151,52 @@ class OmnigentRuntimeScriptService:
             "if [ -d "
             '"' + staging_dir + '"'
             " ]; then "
-            "mkdir -p " + opencode_data + "; "
+            "mkdir -p "
+            + opencode_data
+            + " "
+            + runtime_context_dir
+            + " /home/app/.local/bin; "
             "cp "
             '"' + staging_dir + '/auth.json" '
             + opencode_data + "/auth.json; "
             "chown 1000:1000 " + opencode_data + "/auth.json; "
-            "chmod 0600 " + opencode_data + "/auth.json; fi; "
+            "chmod 0600 " + opencode_data + "/auth.json; "
+            "printf '%s\\n' \"$MOONMIND_ACTIVE_SKILLS_DIR\" > "
+            + runtime_context_dir
+            + "/active-skills-dir; "
+            "printf '%s\\n' \"$MOONMIND_STEP_EXECUTION_ID\" > "
+            + runtime_context_dir
+            + "/step-execution-id; "
+            "chmod 0600 " + runtime_context_dir + "/*; "
+            "printf '%s\\n' '#!/bin/sh' "
+            "'export MOONMIND_ACTIVE_SKILLS_DIR=$(cat "
+            + runtime_context_dir
+            + "/active-skills-dir)' "
+            "'export MOONMIND_STEP_EXECUTION_ID=$(cat "
+            + runtime_context_dir
+            + "/step-execution-id)' "
+            "'if [ -r /home/app/.config/gh/hosts.yml ]; then' "
+            "'  export GH_CONFIG_DIR=/home/app/.config/gh' "
+            "'  export GH_PROMPT_DISABLED=1' "
+            "'  export GH_NO_UPDATE_NOTIFIER=1' "
+            "'  export GH_NO_EXTENSION_UPDATE_NOTIFIER=1' "
+            "'  export GIT_CONFIG_COUNT=1' "
+            "'  export GIT_CONFIG_KEY_0=credential.https://github.com.helper' "
+            "'  export GIT_CONFIG_VALUE_0=\"!/home/app/.local/bin/gh auth git-credential\"' "
+            "'fi' 'exec \"$@\"' > "
+            + opencode_context_wrapper
+            + "; "
+            "printf '%s\\n' '#!/bin/sh' "
+            "'exec "
+            + opencode_context_wrapper
+            + " /usr/local/bin/opencode \"$@\"' > "
+            + opencode_wrapper
+            + "; "
+            "chmod 0700 "
+            + opencode_context_wrapper
+            + " "
+            + opencode_wrapper
+            + "; fi; "
             "if [ -d /run/mm-credentials/github ]; then "
             "mkdir -p /home/app/.config/gh; "
             "cp /run/mm-credentials/github/hosts.yml "

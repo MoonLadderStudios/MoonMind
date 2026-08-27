@@ -54,6 +54,7 @@ from moonmind.omnigent.host_services.attestation import (
     _assert_exact_omnigent_build,
     _attest_workspace_mount,
     _read_exact_host_model_options,
+    _run_exact_host_opencode_command,
     _run_exact_host_runner_command,
 )
 from moonmind.omnigent.host_services.github_credentials import (
@@ -203,6 +204,38 @@ async def test_exact_host_runner_probe_uses_authoritative_environment_builder() 
         "-c",
     ]
     assert "from omnigent.host.connect import _build_runner_env" in argv[5]
+    assert argv[6:] == ["gh", "auth", "status", "--hostname", "github.com"]
+    assert kwargs == {"timeout_seconds": 30.0, "check": False}
+
+
+@pytest.mark.asyncio
+async def test_exact_host_opencode_probe_composes_both_environment_builders() -> None:
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    class Backend:
+        async def run(self, argv, **kwargs):
+            calls.append((argv, kwargs))
+            return 0, "ready", ""
+
+    result = await _run_exact_host_opencode_command(
+        backend=Backend(),
+        container_name="mm-host-opencode",
+        argv=["gh", "auth", "status", "--hostname", "github.com"],
+    )
+
+    assert result == (0, "ready", "")
+    argv, kwargs = calls[0]
+    assert argv[:5] == [
+        "docker",
+        "exec",
+        "mm-host-opencode",
+        "/opt/venv/bin/python",
+        "-c",
+    ]
+    assert "from omnigent.host.connect import _build_runner_env" in argv[5]
+    assert "from omnigent.opencode_native_app_server import filtered_server_env" in argv[5]
+    assert "moonmind-opencode-context" in argv[5]
+    assert "env=runner_env" in argv[5]
     assert argv[6:] == ["gh", "auth", "status", "--hostname", "github.com"]
     assert kwargs == {"timeout_seconds": 30.0, "check": False}
 
