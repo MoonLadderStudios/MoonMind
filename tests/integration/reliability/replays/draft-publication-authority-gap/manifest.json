@@ -1,6 +1,6 @@
 {
   "schemaVersion": "escaped-failure-replay/v1",
-  "incident": "verified pushed branches were orphaned after MoonSpec remediation exhaustion",
+  "incident": "verified pushed branches were orphaned after MoonSpec remediation exhaustion, including when the gate tripped on a read-only verification step that published nothing of its own",
   "publishMode": "pr",
   "draftPublicationPolicy": "draft_pr_on_additional_work_needed",
   "cases": [
@@ -24,6 +24,55 @@
         "push_head_sha": "669cc50ce4b2aba63f0d68ecf1abf4daa793f9b8",
         "push_commit_count": 3,
         "remote_verified": true
+      }
+    }
+  ],
+  "verificationGateCases": [
+    {
+      "workflowId": "mm:53e35d1e-343c-4ebb-9029-9ed823cd090f",
+      "gateLogicalStepId": "issue-implementation-remediation:verification:3",
+      "verdict": "ADDITIONAL_WORK_NEEDED",
+      "verificationStepOutputs": {
+        "summary": "MoonSpec verification report",
+        "moonSpecVerify": {
+          "schemaVersion": 1,
+          "verdict": "ADDITIONAL_WORK_NEEDED",
+          "confidence": "HIGH",
+          "gateResultRef": "art_01M13KMEQB4J3GA51HD4RMBBSY"
+        }
+      },
+      "publishContext": {
+        "pushStatus": "pushed",
+        "branch": "fetch-github-issue-moonladderstudios-tac-4f8e2aa7",
+        "baseRef": "origin/main",
+        "headSha": "5c1837fa677aff381af09601f8d86055f0eccbcd",
+        "commitCount": 2
+      }
+    }
+  ],
+  "preservedNegativeCases": [
+    {
+      "reason": "publication_unauthorized",
+      "acceptedRepositoryEvidence": {
+        "schemaVersion": "accepted-repository-evidence/v1",
+        "pushStatus": "pushed",
+        "publicationAuthorized": false
+      }
+    },
+    {
+      "reason": "candidate_contaminated",
+      "acceptedRepositoryEvidence": {
+        "schemaVersion": "accepted-repository-evidence/v1",
+        "pushStatus": "pushed",
+        "candidateContaminated": true
+      }
+    },
+    {
+      "reason": "no_candidate_change",
+      "acceptedRepositoryEvidence": {
+        "schemaVersion": "accepted-repository-evidence/v1",
+        "pushStatus": "no_commits",
+        "commitsAheadOfBase": 0
       }
     }
   ]

@@ -177,6 +177,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_PUBLISH_MODE_REPOSITORY_OPERATION_PATCH,
     RUN_PUBLISHED_BRANCH_HANDOFF_PATCH,
     RUN_REMEDIATION_EXPLICIT_EVIDENCE_INPUTS_PATCH,
+    RUN_TERMINAL_GATE_PUBLISHED_HEAD_FEASIBILITY_PATCH,
     MoonMindRunWorkflow,
 )
 from moonmind.workflows.terminal_evidence import evaluate_terminal_evidence
@@ -1481,6 +1482,128 @@ async def test_verified_remediation_push_reaches_draft_publication_handoff() -> 
             draft_publication_policy=manifest["draftPublicationPolicy"],
             publication_feasible=feasibility["feasible"],
         ) == expected["terminalHandoff"]
+
+
+async def test_verification_gate_draft_publishes_run_owned_published_head(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay mm:53e35d1e through the terminal gate's publication authority.
+
+    The MoonSpec gate always trips on a read-only verification step. That step
+    pushes nothing, so its own repository evidence is inconclusive and the
+    mandated draft publication handoff was unreachable -- the run failed and
+    orphaned a branch that really existed on the remote.
+    """
+
+    replay_id = "draft-publication-authority-gap"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+
+    for case in manifest["verificationGateCases"]:
+        execution_result = {
+            "status": "COMPLETED",
+            "outputs": case["verificationStepOutputs"],
+        }
+
+        # The verification step's own evidence is inconclusive, before and
+        # after the fix. That classification is correct for the step.
+        step_scoped = MoonMindRunWorkflow()
+        step_scoped._publish_context.update(case["publishContext"])
+        assert step_scoped._step_publication_feasibility(execution_result)[
+            "reason"
+        ] == expected["verificationGateStepFeasibilityReason"]
+
+        # In-flight histories that never recorded the patch keep replaying the
+        # previous artifact-backed handoff.
+        unpatched = MoonMindRunWorkflow()
+        unpatched._publish_context.update(case["publishContext"])
+        monkeypatch.setattr(
+            unpatched, "_patched_or_false_outside_workflow", lambda _: False
+        )
+        unpatched_feasibility = unpatched._publication_feasibility(execution_result)
+        assert unpatched_feasibility["feasible"] is False
+        assert unpatched_feasibility["reason"] == expected[
+            "verificationGateStepFeasibilityReason"
+        ]
+        assert unpatched._terminal_gate_handoff_kind(
+            publish_mode=manifest["publishMode"],
+            draft_publication_policy=manifest["draftPublicationPolicy"],
+            publication_feasible=unpatched_feasibility["feasible"],
+        ) == expected["verificationGateUnpatchedTerminalHandoff"]
+
+        # New histories resolve feasibility for the run, so the pushed
+        # remediation head reaches the draft publication handoff.
+        workflow_run = MoonMindRunWorkflow()
+        workflow_run._publish_context.update(case["publishContext"])
+        monkeypatch.setattr(
+            workflow_run,
+            "_patched_or_false_outside_workflow",
+            lambda patch_id: patch_id
+            == RUN_TERMINAL_GATE_PUBLISHED_HEAD_FEASIBILITY_PATCH,
+        )
+        feasibility = workflow_run._publication_feasibility(execution_result)
+        assert feasibility["feasible"] is True
+        assert feasibility["reason"] == expected[
+            "verificationGateRunFeasibilityReason"
+        ]
+
+        draft_policy = workflow_run._moonspec_draft_publication_policy(
+            environment_blocked_enabled=False,
+            additional_work_enabled=True,
+        )
+        assert draft_policy is None  # no gate verdict recorded yet
+        workflow_run._moonspec_gate_verdict = case["verdict"]
+        draft_policy = workflow_run._moonspec_draft_publication_policy(
+            environment_blocked_enabled=False,
+            additional_work_enabled=True,
+        )
+        assert draft_policy == manifest["draftPublicationPolicy"]
+        assert workflow_run._terminal_gate_handoff_kind(
+            publish_mode=manifest["publishMode"],
+            draft_publication_policy=draft_policy,
+            publication_feasible=feasibility["feasible"],
+        ) == expected["verificationGateTerminalHandoff"]
+
+        # Activating the handoff must release the fail-closed publication block
+        # so the native PR boundary opens a draft instead of skipping.
+        workflow_run._publish_context["moonSpecGate"] = {
+            "verdict": case["verdict"],
+            "gateResultRef": case["verificationStepOutputs"]["moonSpecVerify"][
+                "gateResultRef"
+            ],
+        }
+        workflow_run._activate_moonspec_draft_publication(
+            "MoonSpec verification did not approve publication",
+            policy=draft_policy,
+        )
+        assert workflow_run._apply_blocking_moonspec_gate_to_publish() is False
+        assert workflow_run._attention_required is True
+        assert "draft" in workflow_run._moonspec_draft_publication_body_section().lower()
+
+    # Definitive negatives stay negative: the run-owned head answers "we do not
+    # know", never "publication was refused".
+    for negative in manifest["preservedNegativeCases"]:
+        refused = MoonMindRunWorkflow()
+        refused._publish_context.update(
+            manifest["verificationGateCases"][0]["publishContext"]
+        )
+        monkeypatch.setattr(
+            refused,
+            "_patched_or_false_outside_workflow",
+            lambda patch_id: patch_id
+            == RUN_TERMINAL_GATE_PUBLISHED_HEAD_FEASIBILITY_PATCH,
+        )
+        outcome = refused._publication_feasibility(
+            {
+                "outputs": {
+                    "acceptedRepositoryEvidence": negative[
+                        "acceptedRepositoryEvidence"
+                    ]
+                }
+            }
+        )
+        assert outcome["reason"] == negative["reason"]
+        assert outcome["feasible"] is False
 
 
 async def test_completed_batch_turn_is_rejected_at_agent_run_boundary(

@@ -349,6 +349,17 @@ Workflows that include MoonSpec verification gates must use the latest structure
 
 `FULLY_IMPLEMENTED` permits PR publication and downstream trusted side effects. `ADDITIONAL_WORK_NEEDED` keeps the workflow in the bounded remediation loop while a later MoonSpec remediation step remains. Once that retry budget is exhausted, a workflow whose publish mode is `pr` opens a draft pull request annotated with the remaining-work verdict and verification report, then fails with `attention_required: true` and skips downstream promotion or trusted handoff steps. The draft is recoverability evidence, not a successful terminal outcome. A pushed branch or created draft pull request must never be classified as `no_commit`.
 
+Publication feasibility at that gate is a property of the **run**, not of the
+step the gate stopped on. A MoonSpec verification step is read-only: it
+reports a verdict and publishes nothing, so it never carries accepted
+repository evidence of its own. When the stopping step's evidence is merely
+inconclusive, the terminal gate defers to the run-owned published head
+(`pushStatus: pushed` plus branch and head SHA in publish context), which a
+prior step established through authoritative accepted repository evidence.
+Definitive refusals recorded by a step — unauthorized publication, a
+contaminated candidate, or no candidate change — are safety decisions and are
+never overridden by that projection.
+
 Non-retryable blocking verdicts, including `NO_DETERMINATION`, `BLOCKED`, and `FAILED_UNRECOVERABLE`, block publication without waiting for additional remediation attempts unless the workflow explicitly models the missing evidence as recoverable work inside the same bounded plan.
 
 The gate distinguishes a verifier judgment from a malformed verdict envelope:

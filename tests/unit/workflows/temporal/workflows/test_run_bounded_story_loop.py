@@ -13,6 +13,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_BOUNDED_STORY_LOOP_FEEDBACK_PROGRESS_PATCH,
     RUN_BOUNDED_STORY_LOOP_PROGRESS_BUDGET_PATCH,
     RUN_BOUNDED_STORY_LOOP_REMEDIATION_BUDGET_PATCH,
+    RUN_TERMINAL_GATE_PUBLISHED_HEAD_FEASIBILITY_PATCH,
     MoonMindRunWorkflow,
     bounded_story_loop_resume_decision,
     bounded_story_loop_scope_guard,
@@ -1403,3 +1404,147 @@ def test_moonspec_gate_context_uses_gate_artifact_for_legacy_remaining_work(
 
     context = workflow._publish_context["moonSpecGate"]
     assert context["remainingWorkRef"] == "artifact://art_verify_legacy"
+
+
+# The MoonSpec terminal gate only ever fires on a read-only verification step.
+# Such a step reports a verdict and pushes nothing, so publication feasibility
+# has to be resolved for the run rather than for that one step.
+_VERIFICATION_STEP_RESULT = {
+    "status": "COMPLETED",
+    "outputs": {
+        "summary": "MoonSpec verification report",
+        "moonSpecVerify": {"schemaVersion": 1, "verdict": "ADDITIONAL_WORK_NEEDED"},
+    },
+}
+_VERIFIED_PUBLISHED_HEAD = {
+    "pushStatus": "pushed",
+    "branch": "fetch-github-issue-moonladderstudios-tac-4f8e2aa7",
+    "baseRef": "origin/main",
+    "headSha": "5c1837fa677aff381af09601f8d86055f0eccbcd",
+    "commitCount": 2,
+}
+
+
+def _gate_workflow(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    published_head_feasibility: bool,
+    publish_context: dict[str, Any] | None = None,
+) -> MoonMindRunWorkflow:
+    workflow = MoonMindRunWorkflow()
+    workflow._publish_context.update(
+        _VERIFIED_PUBLISHED_HEAD if publish_context is None else publish_context
+    )
+    enabled = (
+        {RUN_TERMINAL_GATE_PUBLISHED_HEAD_FEASIBILITY_PATCH}
+        if published_head_feasibility
+        else set()
+    )
+    monkeypatch.setattr(
+        run_module.workflow, "patched", lambda patch_id: patch_id in enabled
+    )
+    return workflow
+
+
+def test_terminal_gate_draft_publishes_run_owned_published_head(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = _gate_workflow(monkeypatch, published_head_feasibility=True)
+
+    # The step's own evidence is still correctly inconclusive.
+    step_scoped = workflow._step_publication_feasibility(_VERIFICATION_STEP_RESULT)
+    assert step_scoped["feasible"] is False
+    assert step_scoped["reason"] == "publication_state_ambiguous"
+
+    feasibility = workflow._publication_feasibility(_VERIFICATION_STEP_RESULT)
+    assert feasibility["feasible"] is True
+    assert feasibility["reason"] == "verified_remote_head"
+
+    workflow._moonspec_gate_verdict = "ADDITIONAL_WORK_NEEDED"
+    policy = workflow._moonspec_draft_publication_policy(
+        environment_blocked_enabled=False,
+        additional_work_enabled=True,
+    )
+    assert policy == "draft_pr_on_additional_work_needed"
+    assert (
+        workflow._terminal_gate_handoff_kind(
+            publish_mode="pr",
+            draft_publication_policy=policy,
+            publication_feasible=feasibility["feasible"],
+        )
+        == "draft_publication"
+    )
+
+
+def test_terminal_gate_keeps_artifact_handoff_for_unpatched_histories(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = _gate_workflow(monkeypatch, published_head_feasibility=False)
+
+    feasibility = workflow._publication_feasibility(_VERIFICATION_STEP_RESULT)
+    assert feasibility["feasible"] is False
+    assert feasibility["reason"] == "publication_state_ambiguous"
+    assert (
+        workflow._terminal_gate_handoff_kind(
+            publish_mode="pr",
+            draft_publication_policy="draft_pr_on_additional_work_needed",
+            publication_feasible=feasibility["feasible"],
+        )
+        == "artifact_backed"
+    )
+
+
+@pytest.mark.parametrize(
+    ("publish_context", "expected_reason"),
+    [
+        ({}, "publication_state_ambiguous"),
+        (
+            {**_VERIFIED_PUBLISHED_HEAD, "pushStatus": "failed"},
+            "publication_state_ambiguous",
+        ),
+        (
+            {"pushStatus": "pushed", "branch": "feature/x"},
+            "publication_state_ambiguous",
+        ),
+    ],
+    ids=["no-published-head", "push-failed", "missing-head-sha"],
+)
+def test_terminal_gate_requires_a_verified_published_head(
+    monkeypatch: pytest.MonkeyPatch,
+    publish_context: dict[str, Any],
+    expected_reason: str,
+) -> None:
+    workflow = _gate_workflow(
+        monkeypatch,
+        published_head_feasibility=True,
+        publish_context=publish_context,
+    )
+
+    feasibility = workflow._publication_feasibility(_VERIFICATION_STEP_RESULT)
+    assert feasibility["feasible"] is False
+    assert feasibility["reason"] == expected_reason
+
+
+@pytest.mark.parametrize(
+    ("evidence", "expected_reason"),
+    [
+        ({"pushStatus": "pushed", "publicationAuthorized": False}, "publication_unauthorized"),
+        ({"pushStatus": "pushed", "candidateContaminated": True}, "candidate_contaminated"),
+        ({"pushStatus": "local", "commitsAheadOfBase": 0}, "no_candidate_change"),
+    ],
+    ids=["unauthorized", "contaminated", "no-candidate-change"],
+)
+def test_terminal_gate_preserves_definitive_publication_refusals(
+    monkeypatch: pytest.MonkeyPatch,
+    evidence: dict[str, Any],
+    expected_reason: str,
+) -> None:
+    """A run-owned head answers "unknown", never "refused"."""
+
+    workflow = _gate_workflow(monkeypatch, published_head_feasibility=True)
+
+    feasibility = workflow._publication_feasibility(
+        {"outputs": {"acceptedRepositoryEvidence": evidence}}
+    )
+    assert feasibility["feasible"] is False
+    assert feasibility["reason"] == expected_reason
