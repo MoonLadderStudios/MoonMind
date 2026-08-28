@@ -332,6 +332,16 @@ Minimum readiness:
 3. required model/provider profile constraints are satisfied;
 4. runtime-specific materialization, prompt, Skill bundle, and artifact contracts can be honored.
 
+The trusted runtime-selection boundary supplies this readiness evidence; the
+authored token cannot attest itself. For a hybrid runtime such as Omnigent, the
+runtime token remains in the normalized authored requirement and is proven by
+the selected execution-plan authority. It is not added to the v1
+`ClassAdmissionDecision.requiredSatisfied` field or its exact-host support
+digest, because older workers interpret that field as capabilities the selected
+host must advertise. The exact host is still required to prove its harness
+implementation, image, vendor runtime, workspace, network, model, Skill, and
+tool evidence.
+
 ### 7.7 Scoped future capabilities
 
 Coarse names remain valid. Future scoped aliases may refine semantics:

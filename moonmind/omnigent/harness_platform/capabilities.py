@@ -42,6 +42,7 @@ def compute_class_admission(
     materializer_capabilities: dict[str, bool],
     bridge_capabilities: dict[str, bool],
     launch_policy_capabilities: list[str],
+    platform_capabilities: dict[str, bool] | None = None,
 ) -> ClassAdmissionDecision:
     """Compute class-level admission decision.
 
@@ -50,6 +51,7 @@ def compute_class_admission(
     """
     required = set(workflow_requirements) | set(profile_requirements.get("required", []))
     preferred = set(profile_requirements.get("preferred", []))
+    platform_caps = platform_capabilities or {}
 
     # Build effective capability map: true if any source says true
     # For class-level, we intersect: capability must be present in catalog+host+materializer+bridge+policy
@@ -67,17 +69,20 @@ def compute_class_admission(
             or cap in materializer_capabilities
             or cap in bridge_capabilities
             or cap in launch_policy_capabilities
+            or cap in platform_caps
         )
         if not declared:
             unknown.append(cap)
             continue
         # Check only trusted declarations. A capability may be supplied by the
-        # catalog, Host Class, materializer, bridge, or launch policy; the
-        # workflow's requirement is deliberately absent from this evidence.
+        # catalog, Host Class, materializer, bridge, launch policy, or trusted
+        # platform runtime selection; the workflow's requirement is
+        # deliberately absent from this evidence.
         host_ok = host_class_capabilities.get(cap, True)  # if not host-specific, ignore
         catalog_ok = catalog_capabilities.get(cap)
         bridge_ok = bridge_capabilities.get(cap)
         materializer_ok = materializer_capabilities.get(cap, True)
+        platform_ok = platform_caps.get(cap)
         # Launch-policy capabilities must positively include control-plane caps
         policy_ok = True
         if cap in {"interrupt", "terminate", "clear_context", "streaming"}:
@@ -86,6 +91,16 @@ def compute_class_admission(
             policy_ok = True
         else:
             policy_ok = True  # non-policy caps defer to other layers
+        exact_host_supported = any(
+            value is True
+            for value in (
+                catalog_capabilities.get(cap),
+                host_class_capabilities.get(cap),
+                materializer_capabilities.get(cap),
+                bridge_capabilities.get(cap),
+            )
+        ) or cap in launch_policy_capabilities
+        platform_supported = platform_caps.get(cap) is True
 
         # If any layer explicitly says False or unsupported, then missing
         # catalog/bridge None means unknown already handled; False means unsupported
@@ -94,23 +109,22 @@ def compute_class_admission(
             or bridge_ok is False
             or host_ok is False
             or materializer_ok is False
+            or platform_ok is False
             or policy_ok is False
         ):
             missing.append(cap)
-        elif not any(
-            value is True
-            for value in (
-                catalog_capabilities.get(cap),
-                host_class_capabilities.get(cap),
-                materializer_capabilities.get(cap),
-                bridge_capabilities.get(cap),
-            )
-        ) and cap not in launch_policy_capabilities:
+        elif not exact_host_supported and not platform_supported:
             # A name appearing without an explicit positive declaration is not
             # support evidence.
             unknown.append(cap)
         else:
-            satisfied.append(cap)
+            # Preserve the v1 wire contract consumed by already-deployed
+            # workers: requiredSatisfied is the exact-host capability set.
+            # Platform-only runtime tokens are proven by the trusted compiler
+            # and selected plan authority, so adding them here would make an
+            # older worker demand a host attestation that cannot exist.
+            if exact_host_supported:
+                satisfied.append(cap)
 
     if missing:
         raise HarnessPlatformError(
@@ -134,9 +148,10 @@ def compute_class_admission(
         # Check if available
         catalog_val = catalog_capabilities.get(cap)
         host_val = host_class_capabilities.get(cap)
-        if catalog_val is None and host_val is None:
+        platform_val = platform_caps.get(cap)
+        if catalog_val is None and host_val is None and platform_val is None:
             pref_unknown.append(cap)
-        elif catalog_val is False or host_val is False:
+        elif catalog_val is False or host_val is False or platform_val is False:
             pref_degraded.append(cap)
         else:
             pref_satisfied.append(cap)
