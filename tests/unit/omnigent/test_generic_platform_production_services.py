@@ -835,6 +835,18 @@ async def test_github_credential_projection_transports_secret_only_on_stdin(
         if kwargs.get("input_bytes")
     ]
     assert stdin_payloads == [secret.encode()]
+    writer_argv = next(
+        argv for argv, kwargs in backend.calls if kwargs.get("input_bytes")
+    )
+    assert writer_argv[0:7] == [
+        "docker",
+        "run",
+        "--rm",
+        "-i",
+        "--user",
+        "0:0",
+        "--network",
+    ]
 
 
 @pytest.mark.asyncio
