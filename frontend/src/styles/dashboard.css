@@ -7672,7 +7672,8 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   margin-right: auto;
 }
 
-.queue-dependencies-heading {
+.queue-dependencies-heading,
+.queue-skill-heading {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -7713,7 +7714,8 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .queue-dependencies-info-panel,
-.queue-advanced-info-panel {
+.queue-advanced-info-panel,
+.queue-skill-info-panel {
   display: grid;
   gap: 0.4rem;
 }

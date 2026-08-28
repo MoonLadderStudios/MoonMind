@@ -6092,6 +6092,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const [presetDialogName, setPresetDialogName] = useState("");
   const [dependencyInfoOpen, setDependencyInfoOpen] = useState(false);
   const [advancedInfoOpen, setAdvancedInfoOpen] = useState(false);
+  const [skillInfoOpenByStep, setSkillInfoOpenByStep] = useState<
+    Record<string, boolean>
+  >({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submitExpansionInFlightRef = useRef(false);
   const submitExpansionRequestIdRef = useRef(0);
@@ -13204,9 +13207,27 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                   {step.stepType === "skill" ? (
                     <div className="stack segmented-control-panel">
                       <div className="field">
-                        <label htmlFor={`queue-step-${step.localId}-skill-id`}>
-                          Skill (optional)
-                        </label>
+                        <div className="queue-skill-heading">
+                          <label htmlFor={`queue-step-${step.localId}-skill-id`}>
+                            Skill
+                          </label>
+                          <button
+                            type="button"
+                            className="queue-step-icon-button queue-info-toggle queue-skill-info-toggle"
+                            aria-label={`Skill info for Step ${index + 1}`}
+                            aria-expanded={!!skillInfoOpenByStep[step.localId]}
+                            aria-controls={`queue-skill-info-panel-${step.localId}`}
+                            title="About skill"
+                            onClick={() =>
+                              setSkillInfoOpenByStep((current) => ({
+                                ...current,
+                                [step.localId]: !current[step.localId],
+                              }))
+                            }
+                          >
+                            <InfoIcon />
+                          </button>
+                        </div>
                         <SkillCombobox
                           inputId={`queue-step-${step.localId}-skill-id`}
                           value={step.skillId}
@@ -13228,12 +13249,30 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                             })
                           }
                         />
-                        {isPrimaryStep ? null : (
-                          <span className="small">
-                            Leave skill blank to run this step without a selected Skill.
-                          </span>
-                        )}
                       </div>
+                      {skillInfoOpenByStep[step.localId] ? (
+                        <div
+                          id={`queue-skill-info-panel-${step.localId}`}
+                          className="notice queue-skill-info-panel"
+                          role="note"
+                        >
+                          <p className="small">
+                            Skill is optional. Leave blank to run this step
+                            without a selected Skill.
+                          </p>
+                          {selectedSkillHasInputFields &&
+                          !showAdvancedStepOptions &&
+                          hiddenOptionalSkillInputCount > 0 ? (
+                            <p
+                              className="small"
+                              data-testid={`skill-optional-inputs-notice-${index}`}
+                            >
+                              Optional Skill inputs are hidden. Advanced mode shows
+                              customization fields.
+                            </p>
+                          ) : null}
+                        </div>
+                      ) : null}
                       {selectedSkillDetail && !selectedSkillHasInputFields ? (
                         <div
                           className="notice small"
@@ -13248,18 +13287,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                             This Skill does not publish structured input fields.
                           </span>
                         </div>
-                      ) : null}
-
-                      {selectedSkillHasInputFields &&
-                      !showAdvancedStepOptions &&
-                      hiddenOptionalSkillInputCount > 0 ? (
-                        <p
-                          className="small"
-                          data-testid={`skill-optional-inputs-notice-${index}`}
-                        >
-                          Optional Skill inputs are hidden. Advanced mode shows
-                          customization fields.
-                        </p>
                       ) : null}
 
                       {showSkillArgsField ? (
