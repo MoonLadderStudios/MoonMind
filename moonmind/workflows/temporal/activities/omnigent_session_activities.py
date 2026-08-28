@@ -1397,6 +1397,70 @@ async def _session_execution_authority_metadata(session: Any) -> dict[str, Any]:
     return metadata
 
 
+def _omnigent_intent_snapshot_payload(
+    *,
+    resolved: OmnigentResolveIntentRequest,
+    request: AgentExecutionRequest,
+    session_id: str,
+) -> tuple[dict[str, Any], str, str]:
+    """Build the replay-versioned intent snapshot and artifact identity."""
+
+    identity = {
+        "sessionId": session_id,
+        "workflowId": resolved.workflow_id,
+        "stepExecutionId": resolved.step_execution_id,
+        "agentRunId": resolved.agent_run_id,
+    }
+    if resolved.request is not None:
+        return (
+            {
+                "schemaVersion": "omnigent-compiled-execution-intent/v1",
+                **identity,
+                "request": request.model_dump(
+                    mode="json", by_alias=True, exclude_none=True
+                ),
+            },
+            "omnigent.compiled-execution-intent.json",
+            "omnigent.compiled_execution_intent",
+        )
+
+    plan_binding = request.omnigent_execution_plan
+    if plan_binding is None:
+        raise ValueError("plan-bound intent snapshot lacks persisted plan authority")
+    return (
+        {
+            "schemaVersion": "omnigent-plan-bound-intent-snapshot/v1",
+            **identity,
+            **(
+                {"logicalStepId": resolved.logical_step_id}
+                if resolved.logical_step_id is not None
+                else {}
+            ),
+            **(
+                {
+                    "executionInstructionRef": resolved.execution_instruction_ref,
+                    "executionInstructionDigest": resolved.execution_instruction_digest,
+                }
+                if resolved.execution_instruction_ref is not None
+                else {}
+            ),
+            **(
+                {
+                    "executionInputRefs": resolved.execution_input_refs,
+                    "executionInputRefsDigest": resolved.execution_input_refs_digest,
+                }
+                if resolved.execution_input_refs
+                else {}
+            ),
+            "omnigentExecutionPlan": plan_binding.model_dump(
+                mode="json", by_alias=True
+            ),
+        },
+        "omnigent.agent-execution-request-snapshot.json",
+        "omnigent.agent_execution_request_snapshot",
+    )
+
+
 async def omnigent_resolve_intent_activity(
     payload: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -1466,37 +1530,13 @@ async def omnigent_resolve_intent_activity(
     )
     turn_attempt_id = canonical_omnigent_turn_attempt_id(session_id)
     chat_binding_id = "omc_" + compute_digest(["chat", session_id])[:40]
-    intent_payload = {
-        "schemaVersion": "omnigent-plan-bound-intent-snapshot/v1",
-        "sessionId": session_id,
-        "workflowId": resolved.workflow_id,
-        "stepExecutionId": resolved.step_execution_id,
-        "agentRunId": resolved.agent_run_id,
-        **(
-            {"logicalStepId": resolved.logical_step_id}
-            if resolved.logical_step_id is not None
-            else {}
-        ),
-        **(
-            {
-                "executionInstructionRef": resolved.execution_instruction_ref,
-                "executionInstructionDigest": resolved.execution_instruction_digest,
-            }
-            if resolved.execution_instruction_ref is not None
-            else {}
-        ),
-        **(
-            {
-                "executionInputRefs": resolved.execution_input_refs,
-                "executionInputRefsDigest": resolved.execution_input_refs_digest,
-            }
-            if resolved.execution_input_refs
-            else {}
-        ),
-        "omnigentExecutionPlan": request.omnigent_execution_plan.model_dump(
-            mode="json", by_alias=True
-        ),
-    }
+    intent_payload, intent_artifact_name, intent_artifact_type = (
+        _omnigent_intent_snapshot_payload(
+            resolved=resolved,
+            request=request,
+            session_id=session_id,
+        )
+    )
     intent_body = _json_bytes(intent_payload)
     intent_digest = _digest_bytes(intent_body)
     store = OmnigentControlPlaneStore(async_session_maker)
@@ -1505,8 +1545,8 @@ async def omnigent_resolve_intent_activity(
     intent_ref = str(existing.intent_ref or "") if existing is not None else ""
     if not intent_ref:
         intent_ref = await _write_json_artifact(
-            name="omnigent.agent-execution-request-snapshot.json",
-            artifact_type="omnigent.agent_execution_request_snapshot",
+            name=intent_artifact_name,
+            artifact_type=intent_artifact_type,
             payload=intent_payload,
         )
     if existing is None:

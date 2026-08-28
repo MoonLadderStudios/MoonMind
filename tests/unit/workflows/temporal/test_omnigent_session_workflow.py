@@ -154,6 +154,97 @@ def test_agent_run_resolve_handoff_is_compact_with_legacy_replay_decode() -> Non
         )
 
 
+def test_intent_snapshot_preserves_legacy_request_authority() -> None:
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="opencode-go-default",
+        correlationId="workflow-legacy",
+        idempotencyKey="step-legacy",
+        instructionRef="art_legacy_instructions",
+    )
+    resolved = OmnigentResolveIntentRequest(
+        workflowId="workflow-legacy",
+        stepExecutionId="step-legacy",
+        agentRunId="agent-run-legacy",
+        request=request.model_dump(mode="json", by_alias=True, exclude_none=True),
+    )
+
+    payload, artifact_name, artifact_type = (
+        omnigent_session_activities._omnigent_intent_snapshot_payload(
+            resolved=resolved,
+            request=request,
+            session_id="oms_legacy",
+        )
+    )
+
+    assert payload == {
+        "schemaVersion": "omnigent-compiled-execution-intent/v1",
+        "sessionId": "oms_legacy",
+        "workflowId": "workflow-legacy",
+        "stepExecutionId": "step-legacy",
+        "agentRunId": "agent-run-legacy",
+        "request": request.model_dump(
+            mode="json", by_alias=True, exclude_none=True
+        ),
+    }
+    assert artifact_name == "omnigent.compiled-execution-intent.json"
+    assert artifact_type == "omnigent.compiled_execution_intent"
+
+
+def test_intent_snapshot_keeps_plan_bound_authority_compact() -> None:
+    binding = OmnigentExecutionPlanBinding(
+        planRef="omnigent-execution-plan:sha256:" + "a" * 64,
+        planDigest="sha256:" + "a" * 64,
+        planArtifactRef="art-plan",
+        taskInputSnapshotRef="art-task",
+        taskInputSnapshotDigest="sha256:" + "b" * 64,
+    )
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="opencode-go-default",
+        correlationId="workflow-plan",
+        idempotencyKey="step-plan",
+        omnigentExecutionPlan=binding,
+    )
+    resolved = OmnigentResolveIntentRequest(
+        workflowId="workflow-plan",
+        stepExecutionId="step-plan",
+        agentRunId="agent-run-plan",
+        logicalStepId="node-1",
+        executionInstructionRef="art-instructions",
+        executionInstructionDigest="sha256:" + "c" * 64,
+        executionInputRefs=["art-input"],
+        executionInputRefsDigest="sha256:" + "d" * 64,
+        omnigentExecutionPlan=binding,
+    )
+
+    payload, artifact_name, artifact_type = (
+        omnigent_session_activities._omnigent_intent_snapshot_payload(
+            resolved=resolved,
+            request=request,
+            session_id="oms_plan",
+        )
+    )
+
+    assert payload == {
+        "schemaVersion": "omnigent-plan-bound-intent-snapshot/v1",
+        "sessionId": "oms_plan",
+        "workflowId": "workflow-plan",
+        "stepExecutionId": "step-plan",
+        "agentRunId": "agent-run-plan",
+        "logicalStepId": "node-1",
+        "executionInstructionRef": "art-instructions",
+        "executionInstructionDigest": "sha256:" + "c" * 64,
+        "executionInputRefs": ["art-input"],
+        "executionInputRefsDigest": "sha256:" + "d" * 64,
+        "omnigentExecutionPlan": binding.model_dump(mode="json", by_alias=True),
+    }
+    assert artifact_name == "omnigent.agent-execution-request-snapshot.json"
+    assert artifact_type == "omnigent.agent_execution_request_snapshot"
+
+
 @pytest.mark.asyncio
 async def test_compact_plan_handoff_reconstructs_selected_authored_step(
     monkeypatch: pytest.MonkeyPatch,
