@@ -88,10 +88,13 @@ The canonical local path needs one value. Set `OPENCODE_API_KEY` in `.env` and
 start Docker Compose; the Omnigent bootstrap reconciliation does the rest on
 startup and on its ongoing cadence:
 
-1. resolve the configured OpenCode host image and tag to an immutable digest and
-   export it, so Host Class selection and launch policy compilation have an
-   authority to select (`OMNIGENT_OPENCODE_HOST_IMAGE_REF` stays optional and
-   overrides the resolution when set);
+1. resolve the configured OpenCode host image and tag to an immutable digest,
+   read its required `moonmind.omnigent.build_digest` label as the shared
+   server/host build identity, and export both authorities for Host Class
+   selection and launch policy compilation
+   (`OMNIGENT_OPENCODE_HOST_IMAGE_REF` stays optional and overrides image
+   resolution when set; the image manifest digest is not substituted for the
+   distinct build identity);
 2. synchronize the authenticated harness catalog and seed the built-in
    `omnigent-opencode-default` Agent Profile;
 3. enroll the `opencode-go-default` Provider Profile from `OPENCODE_API_KEY`,
@@ -296,11 +299,12 @@ insufficient.
 ```
 MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED=true
 MOONMIND_OMNIGENT_OPENCODE_ENABLED=true
-OMNIGENT_BUILD_DIGEST=sha256:<shared-server-and-host-build-identity>
 OMNIGENT_OPENCODE_HOST_IMAGE_REF=ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:<digest>
 # Optional mutable build/pull coordinates; never launch authority:
 OMNIGENT_OPENCODE_HOST_IMAGE=ghcr.io/moonladderstudios/omnigent-host-opencode
 OMNIGENT_OPENCODE_HOST_IMAGE_TAG=1.18.11
+# Optional only for an independently built, explicitly paired server/host set:
+OMNIGENT_BUILD_DIGEST=sha256:<shared-server-and-host-build-identity>
 ```
 
 - Keep `MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED=false` until the generic services, database migration, Docker backend, endpoint, images, and egress policy are configured.
@@ -308,7 +312,9 @@ OMNIGENT_OPENCODE_HOST_IMAGE_TAG=1.18.11
 - Build from pinned Omnigent source/base image
 - Publish to GHCR with provenance and digest evidence
 - Make the immutable digest available to the data-driven Host Class selector
-- Fail closed when only a mutable tag is configured
+- Resolve mutable build coordinates on each reconciliation pass, but launch
+  only the resulting digest-pinned image after its declared build identity and
+  server/host version pairing have been verified
 - Image is pulled lazily only when an OpenCode workflow requires it; cached layers are reused
 
 Synchronize the authenticated Omnigent endpoint after deployment or plugin changes:

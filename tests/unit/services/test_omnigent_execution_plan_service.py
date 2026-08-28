@@ -16,6 +16,7 @@ from moonmind.omnigent.execution_support_evidence import (
     EXECUTION_SUPPORT_EVIDENCE_ISSUER,
     EXECUTION_SUPPORT_EVIDENCE_VERSION,
 )
+from moonmind.omnigent.harness_platform.catalog import create_catalog_snapshot
 from moonmind.omnigent.policies import compile_policy_snapshot
 from moonmind.omnigent.session_supervisor_rollback import (
     SUPERVISOR_ROLLBACK_POLICY_VERSION,
@@ -283,6 +284,111 @@ async def test_product_boundary_persists_secret_free_plan_and_exact_realizer(
         "secretBody",
     ):
         assert forbidden not in serialized
+
+
+@pytest.mark.asyncio
+async def test_product_boundary_uses_profile_catalog_build_identity(
+    monkeypatch,
+) -> None:
+    """A server image manifest digest must not replace the shared build ref."""
+
+    build_identity = "sha256:" + "b" * 64
+    implementation_digest = "sha256:" + "c" * 64
+    catalog = create_catalog_snapshot(
+        endpointRef="default",
+        omnigentVersion="0.11.0",
+        omnigentBuildDigest=build_identity,
+        sourceDigest="sha256:" + "d" * 64,
+        observedAt=datetime.now(UTC),
+        harnesses=[
+            {
+                "id": "opencode-native",
+                "aliases": [],
+                "label": "OpenCode",
+                "implementation": {
+                    "sourceKind": "core",
+                    "package": "omnigent",
+                    "version": "0.11.0",
+                    "digest": implementation_digest,
+                    "pluginEntryPoint": None,
+                },
+                "runtimeRequirements": {},
+                "capabilities": {
+                    "integrationMode": "native-server",
+                    "authModel": "own-auth",
+                    "interrupt": True,
+                    "streaming": True,
+                },
+                "setupSteps": [],
+            }
+        ],
+    )
+    harness = catalog.harnesses[0]
+
+    async def load_authority(**_kwargs):
+        return {
+            "hostClassRef": "omnigent-opencode@1",
+            "implementationDigest": implementation_digest,
+            "materializerRef": "opencode-auth-json@1",
+            "authModel": "own-auth",
+            "integrationMode": "native-server",
+            "_catalogSnapshot": catalog,
+            "_harnessRecord": harness,
+        }
+
+    async def resolve_policy(**_kwargs):
+        return _policy_snapshot(
+            harness="opencode-native",
+            policy="opencode-on-demand@1",
+        )
+
+    monkeypatch.setattr(service, "_try_load_real_harness_config", load_authority)
+    monkeypatch.setattr(service, "_resolve_runtime_policy_snapshot", resolve_policy)
+    monkeypatch.setenv(
+        "OMNIGENT_OPENCODE_HOST_IMAGE_REF",
+        "ghcr.io/example/omnigent-host@sha256:" + "7" * 64,
+    )
+    monkeypatch.setattr(
+        service,
+        "resolve_execution_evidence",
+        lambda plan_payload, **_kwargs: (
+            _protected_support_evidence(plan_payload),
+            "supported",
+        ),
+    )
+
+    result = await service.compile_and_persist_execution_plan(
+        session_factory=object(),
+        artifact_service=_ArtifactService(),
+        principal="user-1",
+        workflow_id="mm:test-profile-catalog-build",
+        agent_profile_snapshot=_snapshot(
+            harness="opencode-native",
+            policy="opencode-on-demand@1",
+            provider_id="provider-opencode-native",
+        ),
+        provider_profile=SimpleNamespace(
+            profile_id="provider-opencode-native",
+            provider_id="opencode-go",
+        ),
+        initial_parameters={
+            "model": "example/model",
+            "targetRuntime": "omnigent",
+            "publishMode": "none",
+            "maxAttempts": 2,
+            "workflow": {"instructions": "Use the pinned catalog."},
+        },
+        authored_request_ref="art_request_1",
+        authored_request_digest="sha256:" + "1" * 64,
+        task_input_snapshot_ref="art_request_1",
+        task_input_snapshot_digest="sha256:" + "1" * 64,
+        execution_plan_store=_PlanStore(object()),
+    )
+
+    support = result.envelope.payload.supportIdentity
+    assert support.omnigentServerBuildRef == build_identity
+    assert support.omnigentHostBuildRef == build_identity
+    assert result.envelope.payload.harnessCatalogRef == catalog.catalogRef
 
 
 async def _compile_opencode_plan(

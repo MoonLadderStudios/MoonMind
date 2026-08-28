@@ -133,11 +133,12 @@ async def _try_load_real_harness_config(
     harness_id: str,
     agent_profile_snapshot: Mapping[str, Any],
     session_factory: Any,
-) -> dict[str, str] | None:
+) -> dict[str, Any] | None:
     """Try to load authoritative harness config from synchronized catalog.
 
-    Returns dict with hostClassRef, implementationDigest, materializerRef,
-    authModel, integrationMode when a real catalog is available, otherwise None.
+    Returns the product configuration plus the exact catalog and harness
+    authorities pinned by the Agent Profile. Hermetic callers without catalog
+    storage receive ``None`` and use the bounded fixture configuration.
     """
     try:
         from moonmind.omnigent.harness_platform.catalog_service import (
@@ -198,6 +199,8 @@ async def _try_load_real_harness_config(
             "materializerRef": materializer,
             "authModel": auth_model,
             "integrationMode": integration_mode,
+            "_catalogSnapshot": catalog_result.snapshot,
+            "_harnessRecord": harness_record,
         }
     except Exception:
         return None
@@ -692,11 +695,15 @@ async def compile_and_persist_execution_plan(
     config = real_config or _HARNESS_PRODUCT_CONFIG.get(harness_id)
     if config is None:
         raise ValueError(f"unsupported trusted Omnigent harness: {harness_id!r}")
-    # Resolve the actual Omnigent server version from the latest catalog
-    # snapshot so the HostClass and plan's mini-catalog carry the real
-    # version rather than a stale hard-coded placeholder.
-    catalog_omnigent_version = "0.10.0"
-    if callable(session_factory):
+    exact_catalog = real_config.get("_catalogSnapshot") if real_config else None
+    exact_harness = real_config.get("_harnessRecord") if real_config else None
+    # Production uses the exact catalog pinned by the Agent Profile. The
+    # latest lookup only supplies a version to hermetic/legacy profiles that do
+    # not carry a catalog ref.
+    catalog_omnigent_version = str(
+        getattr(exact_catalog, "omnigentVersion", None) or "0.10.0"
+    )
+    if exact_catalog is None and callable(session_factory):
         try:
             from moonmind.omnigent.harness_platform.catalog_service import (
                 DbHarnessCatalogRepository as _CatRepo,
@@ -785,36 +792,42 @@ async def compile_and_persist_execution_plan(
         artifact_class="omnigent.effective_launch_snapshot",
         payload=effective_launch,
     )
-    implementation = HarnessImplementationIdentity.model_validate(
-        {
-            "sourceKind": "core",
-            "package": "omnigent",
-            "version": "1.0.0",
-            "digest": config["implementationDigest"],
-            "pluginEntryPoint": None,
-        }
-    )
-    omnigent_build_digest = _image_digest(
+    if isinstance(exact_harness, HarnessRecord):
+        harness_record = exact_harness
+        implementation = harness_record.implementation
+    else:
+        implementation = HarnessImplementationIdentity.model_validate(
+            {
+                "sourceKind": "core",
+                "package": "omnigent",
+                "version": "1.0.0",
+                "digest": config["implementationDigest"],
+                "pluginEntryPoint": None,
+            }
+        )
+        harness_record = HarnessRecord.model_validate(
+            {
+                "id": harness_id,
+                "aliases": [],
+                "label": harness_id,
+                "implementation": implementation.model_dump(
+                    mode="json", by_alias=True
+                ),
+                "runtimeRequirements": {},
+                "capabilities": {
+                    "integrationMode": config["integrationMode"],
+                    "authModel": config["authModel"],
+                    "interrupt": True,
+                    "streaming": True,
+                },
+                "setupSteps": [],
+            }
+        )
+    omnigent_build_digest = str(
+        getattr(exact_catalog, "omnigentBuildDigest", None) or ""
+    ).strip() or _image_digest(
         effective_launch.get("serverImageRef"),
         field_name="effective launch serverImageRef",
-    )
-    harness_record = HarnessRecord.model_validate(
-        {
-            "id": harness_id,
-            "aliases": [],
-            "label": harness_id,
-            "implementation": implementation.model_dump(
-                mode="json", by_alias=True
-            ),
-            "runtimeRequirements": {},
-            "capabilities": {
-                "integrationMode": config["integrationMode"],
-                "authModel": config["authModel"],
-                "interrupt": True,
-                "streaming": True,
-            },
-            "setupSteps": [],
-        }
     )
     if harness_id == "codex-native":
         architectures = [
@@ -894,7 +907,7 @@ async def compile_and_persist_execution_plan(
     )
     if matching_entry is None:
         raise ValueError("Host Class does not declare the selected exact harness")
-    catalog = create_catalog_snapshot(
+    catalog = exact_catalog or create_catalog_snapshot(
         endpointRef=str(document.get("endpointRef") or "default"),
         omnigentVersion=host_class.omnigentVersion,
         omnigentBuildDigest=host_class.omnigentBuildDigest,
@@ -998,7 +1011,7 @@ async def compile_and_persist_execution_plan(
     # observation authority so launch-time host resolution can load it.
     # Hermetic callers may pass a non-callable session factory placeholder;
     # production always provides the canonical async session maker.
-    if callable(session_factory):
+    if exact_catalog is None and callable(session_factory):
         from moonmind.omnigent.harness_platform.catalog_service import (
             DbHarnessCatalogRepository,
             HarnessCatalogSyncResult as _CatalogSyncResult,

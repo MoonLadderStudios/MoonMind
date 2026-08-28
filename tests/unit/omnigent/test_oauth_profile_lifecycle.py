@@ -47,6 +47,7 @@ from moonmind.omnigent.execution_profiles import (
     compile_effective_launch,
     validate_effective_launch_snapshot,
 )
+from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from moonmind.omnigent.mounted_tool_preflight import MountedToolPreflightError
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.omnigent.oauth_hosts import (
@@ -66,6 +67,9 @@ from moonmind.omnigent.profile_bound_execution import (
 )
 from moonmind.omnigent.remediation_workspace import RemediationWorkspaceError
 from moonmind.omnigent.workspace_intent import compile_workspace_intent
+from moonmind.omnigent.workspace_publication import (
+    OmnigentWorkspacePublicationService,
+)
 from moonmind.provider_profiles.lease_client import (
     CredentialLeasePurpose,
     ProviderProfileLeaseClient,
@@ -4245,9 +4249,11 @@ async def test_no_commit_publication_requires_exact_remote_base_head() -> None:
         ]
     )
 
-    evidence = await OmnigentOAuthHostRuntime._verified_no_commit_publication(
-        run_command=run_command,
-        base_branch="main",
+    evidence = (
+        await OmnigentWorkspacePublicationService._verified_no_commit_publication(
+            run_command=run_command,
+            base_branch="main",
+        )
     )
 
     assert evidence == {
@@ -4271,10 +4277,12 @@ async def test_no_commit_publication_rejects_remote_head_mismatch() -> None:
         ]
     )
 
-    with pytest.raises(OmnigentOAuthHostError) as exc:
-        await OmnigentOAuthHostRuntime._verified_no_commit_publication(
-            run_command=run_command,
-            base_branch="main",
+    with pytest.raises(HarnessPlatformError) as exc:
+        await (
+            OmnigentWorkspacePublicationService._verified_no_commit_publication(
+                run_command=run_command,
+                base_branch="main",
+            )
         )
 
     assert exc.value.code == "OMNIGENT_REPOSITORY_PUBLICATION_UNVERIFIED"

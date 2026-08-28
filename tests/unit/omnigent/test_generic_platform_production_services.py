@@ -61,6 +61,10 @@ from moonmind.omnigent.host_services.github_credentials import (
     OmnigentGithubCredentialService,
     github_repository_from_request,
 )
+from moonmind.omnigent.host_services.launcher import (
+    DockerOmnigentHostLauncher,
+    HostLaunchSpec,
+)
 from moonmind.omnigent.host_services.mounted_tools import (
     OmnigentMountedToolService,
     deployment_mounted_tool_names,
@@ -835,6 +839,105 @@ async def test_github_credential_projection_transports_secret_only_on_stdin(
         if kwargs.get("input_bytes")
     ]
     assert stdin_payloads == [secret.encode()]
+    writer_argv = next(
+        argv for argv, kwargs in backend.calls if kwargs.get("input_bytes")
+    )
+    assert writer_argv[0:7] == [
+        "docker",
+        "run",
+        "--rm",
+        "-i",
+        "--user",
+        "0:0",
+        "--network",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_host_volume_initializers_use_setup_authority() -> None:
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    class Backend:
+        async def run(self, argv, **kwargs):
+            calls.append((list(argv), dict(kwargs)))
+            return (0, "container-id" if argv[1] == "create" else "", "")
+
+    class Scripts:
+        def build_entrypoint(self, **_kwargs):
+            return "exec true", {}
+
+    backend = Backend()
+    launcher = DockerOmnigentHostLauncher(
+        backend=backend,
+        runtime_scripts=Scripts(),
+        server_url="http://omnigent:8000",
+        host_api_token="host-control-token",
+    )
+    host_class = HostClass.model_validate(
+        {
+            "hostClassId": "omnigent-opencode",
+            "version": 1,
+            "imageRef": "ghcr.io/example/opencode@sha256:" + "f" * 64,
+            "omnigentVersion": "0.11.0",
+            "omnigentBuildDigest": "sha256:" + "1" * 64,
+            "architectures": ["linux/amd64"],
+            "declaredHarnessImplementations": [],
+            "integrationModes": ["native-server"],
+            "materializerRefs": ["opencode-auth-json@1"],
+            "features": {"readOnlyRoot": True},
+            "runtime": {"uid": 1000, "gid": 1000, "home": "/home/app"},
+        }
+    )
+    owner_ref = "host-lease:one"
+    await launcher.launch(
+        spec=HostLaunchSpec.model_validate(
+            {
+                "executionPlanRef": "plan:one",
+                "stepExecutionId": "step-1",
+                "runtimeBindingId": "binding-1",
+                "hostLeaseRef": owner_ref,
+                "hostLeaseGeneration": 1,
+                "hostClassRef": host_class.ref,
+                "imageRef": host_class.imageRef,
+                "serverEndpointRef": "default",
+                "serverUrl": "http://omnigent:8000",
+                "networkRef": "moonmind_default",
+                "limits": {"cpuMillis": 2000},
+                "runtime": {},
+                "correlationName": "mm-host-test",
+                "workspaceAttachment": {
+                    "kind": "bind",
+                    "sourceRef": "/tmp/workspace",
+                    "targetPath": "/workspaces/run",
+                    "accessMode": "read-write",
+                },
+                "skillAttachment": {
+                    "kind": "bind",
+                    "sourceRef": "/tmp/skills",
+                    "targetPath": "/opt/moonmind-skills",
+                    "accessMode": "read-only",
+                },
+                "controlAttachment": launcher.control_attachment(owner_ref),
+                "stateAttachment": {
+                    "kind": "volume",
+                    "sourceRef": "mm-host-state-test",
+                    "targetPath": "/home/app/.omnigent",
+                    "accessMode": "read-write",
+                },
+                "labels": {},
+            }
+        ),
+        host_class=host_class,
+        launch_policy=get_launch_policy("omnigent-on-demand@1"),
+        credential_handles=[],
+    )
+
+    setup_runs = [argv for argv, _kwargs in calls if argv[:2] == ["docker", "run"]]
+    assert len(setup_runs) == 2
+    for argv in setup_runs:
+        assert argv[argv.index("--user") + 1] == "0:0"
+    workload_create = next(argv for argv, _kwargs in calls if argv[:2] == ["docker", "create"])
+    assert workload_create[workload_create.index("--user") + 1] == "1000:1000"
 
 
 @pytest.mark.asyncio
@@ -892,6 +995,16 @@ async def test_opencode_volume_materialization_transports_secret_only_on_stdin()
     assert json.loads(stdin_payloads[0]) == {
         "opencode-go": {"type": "api", "key": secret}
     }
+    writer_argv = next(argv for argv, payload in backend.calls if payload)
+    assert writer_argv[0:7] == [
+        "docker",
+        "run",
+        "--rm",
+        "-i",
+        "--user",
+        "0:0",
+        "--network",
+    ]
     assert secrets.values == {}
     assert handle.credentialGeneration == 4
     # Credentials mount read-only into a staging directory; the runtime script
@@ -954,6 +1067,16 @@ async def test_pi_provider_config_uses_same_generic_volume_contract() -> None:
     stdin_payloads = [payload for _argv, payload in backend.calls if payload]
     assert len(stdin_payloads) == 1
     config = json.loads(stdin_payloads[0])
+    writer_argv = next(argv for argv, payload in backend.calls if payload)
+    assert writer_argv[0:7] == [
+        "docker",
+        "run",
+        "--rm",
+        "-i",
+        "--user",
+        "0:0",
+        "--network",
+    ]
     assert config["providers"]["moonmind"]["default"] == ["anthropic", "pi"]
     assert config["providers"]["moonmind"]["anthropic"]["api_key"] == secret
     assert handle.materializerRef == "omnigent-provider-config@1"
@@ -1284,6 +1407,18 @@ async def test_generic_realizer_persists_authority_and_releases_provider_last() 
             events.append("session-drained")
             return {"sessionId": session_id, "stopped": True}
 
+    class WorkspacePublisher:
+        async def publish_request_workspace(self, **_kwargs):
+            events.append("workspace-published")
+            return {
+                "push_status": "pushed",
+                "push_branch": "moonmind-job-test",
+                "push_base_branch": "main",
+                "push_head_sha": "a" * 40,
+                "push_commit_count": 1,
+                "remote_verified": True,
+            }
+
     class TurnCommands:
         async def claim(self, **kwargs):
             assert kwargs["payload_digest"] == _plan("opencode-go/model").planRef
@@ -1302,11 +1437,30 @@ async def test_generic_realizer_persists_authority_and_releases_provider_last() 
         planned_host_resolver=resolve_host,
         session_driver=session_driver,
         session_cleanup_service=SessionCleanup(),
+        workspace_publisher=WorkspacePublisher(),
         turn_command_service=TurnCommands(),
         heartbeat_interval_seconds=0.005,
         heartbeat_ttl_seconds=60,
     )
-    result = await realizer.execute(_request(), _plan("opencode-go/model"))
+    publish_request = _request().model_copy(
+        update={
+            "workspace_spec": {
+                "workspaceLocator": {
+                    "kind": "sandbox",
+                    "workspaceId": hashlib.sha256(
+                        b"workflow-1:idem-1"
+                    ).hexdigest()[:24],
+                },
+                "repository": "MoonLadderStudios/MoonMind",
+                "startingBranch": "main",
+            },
+            "parameters": {
+                "publishMode": "pr",
+                "repository": "MoonLadderStudios/MoonMind",
+            },
+        }
+    )
+    result = await realizer.execute(publish_request, _plan("opencode-go/model"))
 
     assert result.summary == "done"
     assert result.metadata["executionPlanRef"] == _plan("opencode-go/model").planRef
@@ -1321,12 +1475,13 @@ async def test_generic_realizer_persists_authority_and_releases_provider_last() 
     assert events.index("command-claimed") < events.index("provider-acquired")
     assert events.index("provider-released") < events.index("command-settled:applied")
     assert events.index("host-cleaned") < events.index("credentials-cleaned")
+    assert events.index("workspace-published") < events.index("host-cleaned")
     assert events.index("credentials-cleaned") < events.index("provider-released")
     assert host_leases.heartbeat_count >= 1
     assert runtime_store.heartbeat_count >= 1
 
     first_execution_events = tuple(events)
-    replay = await realizer.execute(_request(), _plan("opencode-go/model"))
+    replay = await realizer.execute(publish_request, _plan("opencode-go/model"))
 
     assert replay.summary == "done"
     assert events[len(first_execution_events) :] == []

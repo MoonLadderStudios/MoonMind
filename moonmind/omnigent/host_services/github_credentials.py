@@ -147,6 +147,12 @@ class OmnigentGithubCredentialService:
                     "run",
                     "--rm",
                     "-i",
+                    # The selected host image runs workloads as the requested
+                    # runtime UID.  This isolated, networkless setup process
+                    # needs root only to initialize and hand off the credential
+                    # volume to that UID.
+                    "--user",
+                    "0:0",
                     "--network",
                     "none",
                     "--mount",

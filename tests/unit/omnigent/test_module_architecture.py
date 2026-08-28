@@ -50,6 +50,7 @@ RESPONSIBILITY_MODULES: dict[str, tuple[str, ...]] = {
         "moonmind/omnigent/execute.py",
         "moonmind/omnigent/host_runtime.py",
         "moonmind/omnigent/oauth_host_runtime.py",
+        "moonmind/omnigent/workspace_publication.py",
     ),
     "workspace_credential": (
         "moonmind/omnigent/repository_sources.py",
