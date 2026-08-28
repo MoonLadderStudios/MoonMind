@@ -9,6 +9,7 @@ from api_service.db.models import (
     TemporalWorkflowType,
 )
 from moonmind.workflows.temporal.service import (
+    TemporalExecutionCancelUndeliverableError,
     TemporalExecutionService,
     TemporalExecutionValidationError,
 )
@@ -117,6 +118,152 @@ async def test_cancel_action_routes_to_temporal(
     mock_client_adapter.update_workflow.assert_not_called()
     mock_client_adapter.cancel_workflow.assert_awaited_once_with("mm:123")
     mock_client_adapter.terminate_workflow.assert_not_called()
+
+def _describe_with_pending_workflow_task_attempt(attempt: int) -> MagicMock:
+    """Build a Temporal description whose pending workflow task is on ``attempt``.
+
+    Temporal reports attempt 1 for a healthy first attempt; a higher attempt
+    means the previous workflow task failed and the server is retrying it.
+    """
+
+    pending = MagicMock()
+    pending.attempt = attempt
+    raw_description = MagicMock()
+    raw_description.pending_workflow_task = pending
+    description = MagicMock()
+    description.raw_description = raw_description
+    return description
+
+
+def _wedged_execution_record() -> TemporalExecutionCanonicalRecord:
+    return TemporalExecutionCanonicalRecord(
+        workflow_id="mm:123",
+        run_id="run-1",
+        workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+        owner_type=TemporalExecutionOwnerType.USER,
+        state=MoonMindWorkflowState.AWAITING_SLOT,
+        entry="run",
+    )
+
+
+@pytest.mark.asyncio
+async def test_graceful_cancel_submits_request_then_reports_it_unprocessable(
+    service, mock_session, mock_client_adapter
+):
+    """The request must still be sent, but must not be reported as done.
+
+    Graceful cancellation is delivered through a workflow task. An execution
+    stuck retrying its workflow task (nondeterministic history, unloadable
+    definition) never observes the retained request, so reporting success makes
+    the operator's cancel a silent no-op. Withholding the request instead would
+    be worse: a task failing now can retry successfully after a worker restart,
+    and Temporal honors the retained request without the operator asking twice.
+    """
+
+    record = _wedged_execution_record()
+    service._require_cancel_target_execution = AsyncMock(return_value=record)
+    service._sync_projection_best_effort = AsyncMock(return_value=record)
+    mock_client_adapter.describe_workflow.return_value = (
+        _describe_with_pending_workflow_task_attempt(95)
+    )
+
+    with pytest.raises(TemporalExecutionCancelUndeliverableError) as excinfo:
+        await service.cancel_execution(
+            workflow_id="mm:123", reason=None, graceful=True
+        )
+
+    assert "Force cancel" in str(excinfo.value)
+    # The operator's intent reaches Temporal and is retained there...
+    mock_client_adapter.cancel_workflow.assert_awaited_once_with("mm:123")
+    mock_client_adapter.terminate_workflow.assert_not_called()
+    # ...but the record keeps its live state rather than a canceled state the
+    # execution has not reached.
+    assert record.state is MoonMindWorkflowState.AWAITING_SLOT
+    mock_session.commit.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_transient_temporal_cancel_failure_stays_retryable(
+    service, mock_session, mock_client_adapter
+):
+    """A transport failure is not an undeliverable-cancel refusal.
+
+    Callers distinguish the two by type: a conflict answer would tell clients
+    the request can never succeed, when a retry may well reach Temporal.
+    """
+
+    record = _wedged_execution_record()
+    service._require_cancel_target_execution = AsyncMock(return_value=record)
+    service._sync_projection_best_effort = AsyncMock(return_value=record)
+    mock_client_adapter.cancel_workflow.side_effect = RuntimeError("connection reset")
+
+    with pytest.raises(TemporalExecutionValidationError) as excinfo:
+        await service.cancel_execution(
+            workflow_id="mm:123", reason=None, graceful=True
+        )
+
+    assert not isinstance(excinfo.value, TemporalExecutionCancelUndeliverableError)
+    assert record.state is MoonMindWorkflowState.AWAITING_SLOT
+
+
+@pytest.mark.asyncio
+async def test_force_cancel_still_terminates_a_wedged_workflow(
+    service, mock_session, mock_client_adapter
+):
+    """Terminate is the escape hatch: it must not depend on the workflow running."""
+
+    record = _wedged_execution_record()
+    service._require_cancel_target_execution = AsyncMock(return_value=record)
+    service._sync_projection_best_effort = AsyncMock(return_value=record)
+    mock_client_adapter.describe_workflow.return_value = (
+        _describe_with_pending_workflow_task_attempt(95)
+    )
+
+    await service.cancel_execution(
+        workflow_id="mm:123", reason=None, graceful=False
+    )
+
+    mock_client_adapter.terminate_workflow.assert_awaited_once_with(
+        "mm:123", reason="Force canceled by operator."
+    )
+    assert record.state is MoonMindWorkflowState.FAILED
+
+
+@pytest.mark.asyncio
+async def test_graceful_cancel_proceeds_on_first_workflow_task_attempt(
+    service, mock_session, mock_client_adapter
+):
+    """A healthy execution keeps the ordinary graceful cancel path."""
+
+    record = _wedged_execution_record()
+    service._require_cancel_target_execution = AsyncMock(return_value=record)
+    service._sync_projection_best_effort = AsyncMock(return_value=record)
+    mock_client_adapter.describe_workflow.return_value = (
+        _describe_with_pending_workflow_task_attempt(1)
+    )
+
+    await service.cancel_execution(workflow_id="mm:123", reason=None, graceful=True)
+
+    mock_client_adapter.cancel_workflow.assert_awaited_once_with("mm:123")
+    assert record.state is MoonMindWorkflowState.CANCELED
+
+
+@pytest.mark.asyncio
+async def test_graceful_cancel_proceeds_when_deliverability_cannot_be_checked(
+    service, mock_session, mock_client_adapter
+):
+    """The pre-flight check is not the authority for the operator's command."""
+
+    record = _wedged_execution_record()
+    service._require_cancel_target_execution = AsyncMock(return_value=record)
+    service._sync_projection_best_effort = AsyncMock(return_value=record)
+    mock_client_adapter.describe_workflow.side_effect = RuntimeError("temporal down")
+
+    await service.cancel_execution(workflow_id="mm:123", reason=None, graceful=True)
+
+    mock_client_adapter.cancel_workflow.assert_awaited_once_with("mm:123")
+    assert record.state is MoonMindWorkflowState.CANCELED
+
 
 @pytest.mark.asyncio
 async def test_force_terminate_routes_to_temporal_terminate(

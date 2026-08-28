@@ -128,12 +128,17 @@ function readableWorkflowActionError(error: unknown): string {
   if (!message) return DEFAULT_WORKFLOW_ACTION_ERROR;
   try {
     const parsed = JSON.parse(message) as { detail?: unknown; message?: unknown };
+    // Rejected workflow actions answer with a structured `detail` object
+    // ({code, message}); without unwrapping it the operator gets the raw JSON
+    // envelope instead of the reason the action was refused.
     const parsedMessage =
       typeof parsed.detail === 'string'
         ? parsed.detail
-        : typeof parsed.message === 'string'
-          ? parsed.message
-          : null;
+        : isRecord(parsed.detail) && typeof parsed.detail.message === 'string'
+          ? parsed.detail.message
+          : typeof parsed.message === 'string'
+            ? parsed.message
+            : null;
     if (parsedMessage?.trim()) return parsedMessage.trim();
   } catch {
     // Plain text API errors are already user-readable enough for this surface.
