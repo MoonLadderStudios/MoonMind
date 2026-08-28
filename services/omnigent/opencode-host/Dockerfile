@@ -60,12 +60,21 @@ RUN echo "Checking that only expected harness binaries are present..." \
     && ls -la /usr/local/bin/opencode 2>&1 | head -20 \
     && echo "Harness check complete"
 
-# Restore expected runtime user (omnigent-host uses app:1000)
-USER app
+# The exact-host launcher owns the portable numeric runtime contract. Upstream
+# Omnigent images may run as root or may name UID 1000 differently, so ensure
+# that identity and its writable home exist without depending on a
+# provider-owned username.
+RUN if ! getent group 1000 >/dev/null; then groupadd --gid 1000 app; fi \
+    && if ! getent passwd 1000 >/dev/null; then useradd --uid 1000 --gid 1000 --home-dir /home/app --shell /bin/sh app; fi \
+    && mkdir -p /home/app \
+    && chown 1000:1000 /home/app
+
+USER 1000:1000
 WORKDIR /home/app
 
 # Ensure opencode is in PATH for the runtime user
-ENV PATH="/usr/local/bin:${PATH}"
+ENV HOME="/home/app" \
+    PATH="/usr/local/bin:${PATH}"
 
 # Sanity check as non-root
 RUN command -v opencode && opencode --version

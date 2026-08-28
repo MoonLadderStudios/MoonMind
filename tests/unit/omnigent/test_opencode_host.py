@@ -366,6 +366,11 @@ def test_image_does_not_install_unrelated_harnesses():
     )
     # Should verify opencode version
     assert "1.18.11" in content
+    # Runtime identity is a MoonMind numeric contract, not an upstream
+    # provider-owned username that may disappear between Omnigent releases.
+    assert "USER 1000:1000" in content
+    assert "getent passwd 1000" in content
+    assert 'ENV HOME="/home/app"' in content
     # Should not run npm install at workflow launch (only at build)
     # The host start script should not contain npm install
     start_script = Path("services/omnigent/scripts/start-opencode-host.sh")
