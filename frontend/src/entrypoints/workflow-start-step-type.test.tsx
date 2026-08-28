@@ -252,7 +252,7 @@ describe("Task Create Step Type authoring", () => {
     ).toEqual(["Skill", "Tool", "Preset"]);
 
     fireEvent.click(screen.getByLabelText("Advanced mode"));
-    fireEvent.change(within(primaryStep).getByLabelText(/Skill \(optional\)/), {
+    fireEvent.change(within(primaryStep).getByRole("combobox", { name: /skill/i }), {
       target: { value: "moonspec-orchestrate" },
     });
     fireEvent.change(
@@ -270,12 +270,12 @@ describe("Task Create Step Type authoring", () => {
         .value,
     ).toBe("Keep these shared instructions.");
     expect(within(primaryStep).getByLabelText("Tool ID")).toBeTruthy();
-    expect(within(primaryStep).queryByLabelText(/Skill \(optional\)/)).toBeNull();
+    expect(within(primaryStep).queryByRole("combobox", { name: /skill/i })).toBeNull();
 
     selectStepType(primaryStep, "Skill");
 
     expect(
-      (within(primaryStep).getByLabelText(/Skill \(optional\)/) as HTMLInputElement)
+      (within(primaryStep).getByRole("combobox", { name: /skill/i }) as HTMLInputElement)
         .value,
     ).toBe("");
     expect(
@@ -313,7 +313,7 @@ describe("Task Create Step Type authoring", () => {
     // explicit capability — only skill id/args are skill-specific.
     selectStepType(primaryStep, "Tool");
 
-    expect(within(primaryStep).queryByLabelText(/Skill \(optional\)/)).toBeNull();
+    expect(within(primaryStep).queryByRole("combobox", { name: /skill/i })).toBeNull();
     expect(
       within(primaryStep).getByRole("button", { name: removeLabel }),
     ).toBeTruthy();
