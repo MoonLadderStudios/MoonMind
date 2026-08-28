@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
+from pydantic import BaseModel, ConfigDict
 
 from api_service.services import omnigent_execution_plan_service as service
 from api_service.services.omnigent_agent_profile_selection import (
@@ -31,6 +32,17 @@ _OPENCODE_ALLOWED_LAUNCH_POLICIES = [
     "omnigent-on-demand@1",
     "opencode-on-demand@1",
 ]
+
+
+class _LegacyClassAdmissionDecision(BaseModel):
+    """Exact class-decision shape consumed by the pre-cutover worker."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    requiredSatisfied: tuple[str, ...]
+    preferredSatisfied: tuple[str, ...]
+    degraded: tuple[str, ...] = ()
+    unknown: tuple[str, ...] = ()
 
 
 class _ArtifactService:
@@ -380,6 +392,30 @@ async def test_workflow_cannot_self_attest_an_unknown_capability(
             plan_store=_PlanStore(object()),
             extra_parameters={"requiredCapabilities": ["custom-capability"]},
         )
+
+
+@pytest.mark.asyncio
+async def test_selected_omnigent_runtime_is_safe_for_pre_cutover_worker(
+    monkeypatch,
+) -> None:
+    """New API plans preserve the class-decision shape an old worker consumes."""
+
+    def resolve_evidence(plan_payload, **_kwargs):
+        return _protected_support_evidence(plan_payload), "supported"
+
+    monkeypatch.setattr(service, "resolve_execution_evidence", resolve_evidence)
+    result = await _compile_opencode_plan(
+        monkeypatch,
+        artifacts=_ArtifactService(),
+        launch_policy_ref="opencode-on-demand@1",
+        plan_store=_PlanStore(object()),
+        extra_parameters={"requiredCapabilities": ["omnigent"]},
+    )
+
+    decision = result.envelope.payload.classAdmissionDecision
+    legacy_decision = _LegacyClassAdmissionDecision.model_validate(decision)
+    assert legacy_decision.requiredSatisfied == ()
+    assert "exactHostRequired" not in decision
 
 
 async def _capture_plan_payload(*, launch_policy_ref: str):

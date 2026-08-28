@@ -102,6 +102,7 @@ def compile_execution_plan(
     model_normalized_options: dict[str, Any],
     workflow_requirements: list[str] | None = None,
     bridge_capabilities: dict[str, bool] | None = None,
+    platform_capabilities: dict[str, bool] | None = None,
     workspace_intent_ref: str | None = None,
     policy_snapshot_ref: str | None = None,
     policy_snapshot_digest: str | None = None,
@@ -312,6 +313,7 @@ def compile_execution_plan(
         materializer_capabilities=materializer_caps,
         bridge_capabilities=bridge_caps,
         launch_policy_capabilities=policy_caps,
+        platform_capabilities=platform_capabilities,
     )
 
     # 11. Normalize model config + digest

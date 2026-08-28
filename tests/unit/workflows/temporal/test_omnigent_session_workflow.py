@@ -848,6 +848,7 @@ async def test_runtime_binding_exact_capabilities_use_preflight_attestations(
 
     assert captured["mount_attested"] is True
     assert captured["network_attested"] is True
+    assert captured["required_capabilities"] == []
     assert refs["cleanup_authority_refs"] == ["art-egress-1"]
 
 

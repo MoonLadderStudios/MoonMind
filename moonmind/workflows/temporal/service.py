@@ -325,6 +325,28 @@ def _first_nonempty_text(*values: Any) -> str | None:
     return None
 
 
+def _pending_workflow_task_attempt(description: Any) -> int:
+    """Return the retry attempt of the execution's pending workflow task.
+
+    Temporal reports ``1`` for a workflow task on its first attempt, so anything
+    above that means the previous attempt failed and the server is retrying.
+    An execution with no pending workflow task reports ``0``, which the proto
+    default already yields, and that is also the safe answer for any
+    description shape that cannot be read.
+    """
+
+    raw_description = getattr(description, "raw_description", None)
+    if raw_description is None:
+        return 0
+    pending = getattr(raw_description, "pending_workflow_task", None)
+    if pending is None:
+        return 0
+    try:
+        return int(getattr(pending, "attempt", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _recovery_source_block_from_record(record: TemporalExecutionRecord) -> Mapping[str, Any]:
     parameters = getattr(record, "parameters", None)
     if not isinstance(parameters, Mapping):
@@ -430,6 +452,16 @@ class TemporalExecutionValidationError(TemporalExecutionError):
 
 class TemporalExecutionRecoveryCheckpointError(TemporalExecutionValidationError):
     """Raised when failed-step Recovery checkpoint evidence is missing or invalid."""
+
+
+class TemporalExecutionCancelUndeliverableError(TemporalExecutionValidationError):
+    """Raised when a requested cancellation cannot currently be processed.
+
+    Distinct from a transport failure reaching Temporal: the request itself
+    succeeded and is retained, but the execution cannot act on it. Callers use
+    the type rather than the message to tell an operator-actionable refusal
+    apart from a retryable infrastructure failure.
+    """
 
 
 @dataclass(slots=True)
@@ -3224,6 +3256,49 @@ class TemporalExecutionService:
         record = await self.describe_execution(correlation.workflow_id)
         return correlation, record
 
+    async def _require_processable_graceful_cancellation(self, workflow_id: str) -> None:
+        """Refuse to report a cancel the execution cannot currently process.
+
+        Graceful cancellation is delivered through a workflow task: Temporal
+        accepts and retains the request immediately, but the execution only
+        closes once the workflow itself observes it. An execution whose workflow
+        task keeps failing — nondeterministic history, an unloadable workflow
+        definition, a missing activity binding — completes no further workflow
+        task, so the retained request goes unobserved while the projection keeps
+        re-deriving the live Temporal state.
+
+        This runs after the request is submitted, never instead of it: a task
+        failing now may still retry successfully after a worker restart, and the
+        retained request is then honored without the operator asking twice.
+        What it prevents is reporting a cancel as done when the execution has
+        not acted on it.
+        """
+
+        try:
+            description = await self._client_adapter.describe_workflow(workflow_id)
+        except Exception:
+            # This check only decides how the outcome is reported. A describe
+            # failure must not turn an accepted cancellation request into an
+            # error for the operator.
+            logger.warning(
+                "Could not verify graceful cancellation progress for %s",
+                workflow_id,
+                exc_info=True,
+            )
+            return
+
+        attempt = _pending_workflow_task_attempt(description)
+        if attempt <= 1:
+            return
+
+        raise TemporalExecutionCancelUndeliverableError(
+            "Cancellation was requested and Temporal will retain it, but this "
+            f"execution's workflow task has failed {attempt - 1} consecutive "
+            "times, so the workflow cannot process it. It will take effect only "
+            "if that workflow task recovers. Use Force cancel to terminate the "
+            "execution now, which does not require the workflow to run."
+        )
+
     async def cancel_execution(
         self,
         *,
@@ -3276,6 +3351,10 @@ class TemporalExecutionService:
             raise TemporalExecutionValidationError(
                 f"Temporal cancel failed: {exc}"
             ) from exc
+
+        if graceful:
+            # The request is now durable in Temporal whatever this reports.
+            await self._require_processable_graceful_cancellation(record.workflow_id)
 
         record.paused = False
         self._clear_waiting_metadata(record)
