@@ -144,12 +144,18 @@ Provide a concise report with:
 
 After classifying all comments, write the ledger to **`artifacts/pr_resolver_addressed_comments.json`** (this is the path the pr-resolver snapshot reads).
 
+`artifacts/` is ignored and holds no tracked files, so a fresh clone does not
+contain it. Always create the parent directory before writing the ledger;
+otherwise the redirect fails with `No such file or directory` and the ledger is
+never published.
+
 > **IMPORTANT — always write this file using `run_command` with `cat`, never with `write_to_file`.**
 > This file is typically open in the user's editor. Using `write_to_file` triggers a VS Code
 > external-modification dialog that causes the tool pipeline to stall indefinitely until cancelled.
 > Use the shell `cat` heredoc form instead:
 >
 > ```bash
+> mkdir -p artifacts
 > cat > artifacts/pr_resolver_addressed_comments.json << 'EOF'
 > [...]
 > EOF
