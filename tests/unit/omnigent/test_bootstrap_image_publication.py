@@ -71,6 +71,94 @@ async def test_publication_exports_resolved_digests_and_persists_state(
 
 
 @pytest.mark.asyncio
+async def test_default_resolution_uses_host_build_label_not_server_image_digest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The default tag path must attest the shared build identity exactly."""
+
+    from moonmind.omnigent.bootstrap import store
+
+    server_image_digest = "sha256:" + "1" * 64
+    host_image_digest = "sha256:" + "2" * 64
+
+    async def resolve_image(image_env, tag_env, ref_env, env=None):
+        del tag_env, env
+        if image_env == "OMNIGENT_IMAGE":
+            return SERVER_REF, server_image_digest
+        if image_env == "OMNIGENT_OPENCODE_HOST_IMAGE":
+            return HOST_REF, host_image_digest
+        if ref_env == "OMNIGENT_PI_HOST_IMAGE_REF":
+            return None, None
+        raise AssertionError(image_env)
+
+    async def run(cmd, timeout=30):
+        del timeout
+        if cmd[:4] == ["docker", "image", "inspect", HOST_REF]:
+            if cmd[-1] == "{{json .Config.Labels}}":
+                return (
+                    0,
+                    '{"moonmind.omnigent.build_digest":"'
+                    + BUILD_DIGEST
+                    + '"}',
+                    "",
+                )
+            if cmd[-1] == "{{.Architecture}}":
+                return 0, "amd64", ""
+        raise AssertionError(cmd)
+
+    monkeypatch.setattr(image_resolution, "_resolve_image", resolve_image)
+    monkeypatch.setattr(image_resolution, "_run", run)
+    monkeypatch.setattr(store, "load_resolved_state", lambda: None)
+
+    resolved = await image_resolution.resolve_omnigent_images({})
+
+    assert resolved.server_image_ref == SERVER_REF
+    assert resolved.opencode_host_image_ref == HOST_REF
+    assert resolved.omnigent_build_digest == BUILD_DIGEST
+    assert resolved.details == {
+        "serverImageDigest": server_image_digest,
+        "buildIdentitySource": "opencode-host-label",
+    }
+
+
+@pytest.mark.asyncio
+async def test_resolution_rejects_operator_and_host_build_identity_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.omnigent.bootstrap import store
+
+    async def resolve_image(image_env, tag_env, ref_env, env=None):
+        del tag_env, ref_env, env
+        if image_env == "OMNIGENT_IMAGE":
+            return SERVER_REF, "sha256:" + "1" * 64
+        if image_env == "OMNIGENT_OPENCODE_HOST_IMAGE":
+            return HOST_REF, "sha256:" + "2" * 64
+        return None, None
+
+    async def run(cmd, timeout=30):
+        del timeout
+        if cmd[:4] == ["docker", "image", "inspect", HOST_REF]:
+            return (
+                0,
+                '{"moonmind.omnigent.build_digest":"' + BUILD_DIGEST + '"}',
+                "",
+            )
+        raise AssertionError(cmd)
+
+    monkeypatch.setattr(image_resolution, "_resolve_image", resolve_image)
+    monkeypatch.setattr(image_resolution, "_run", run)
+    monkeypatch.setattr(store, "load_resolved_state", lambda: None)
+
+    with pytest.raises(
+        ValueError,
+        match="OMNIGENT_BUILD_DIGEST differs from the configured OpenCode host image",
+    ):
+        await image_resolution.resolve_omnigent_images(
+            {"OMNIGENT_BUILD_DIGEST": "sha256:" + "4" * 64}
+        )
+
+
+@pytest.mark.asyncio
 async def test_resolution_never_reads_a_digest_publication_exported(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

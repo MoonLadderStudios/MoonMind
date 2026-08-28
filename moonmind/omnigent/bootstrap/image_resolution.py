@@ -79,7 +79,7 @@ async def _resolve_image(
     ref_env: str,
     env: Mapping[str, str] | None = None,
 ) -> tuple[str | None, str | None]:
-    """Resolve one image to digest-pinned ref. Returns (pinned_ref, build_digest)."""
+    """Resolve one image to a digest-pinned ref and its image digest."""
     source = os.environ if env is None else env
     pinned = str(source.get(ref_env) or "").strip()
     if pinned and _is_digest_pinned(pinned) and not pinned.endswith("0" * 64) and not pinned.endswith("c" * 64):
@@ -111,6 +111,47 @@ async def _resolve_image(
     return None, None
 
 
+async def _image_build_identity(image_ref: str) -> str | None:
+    """Read the portable Omnigent build identity embedded in a host image.
+
+    A repository manifest digest identifies the container image, not the
+    Omnigent build shared by the server and host. Harness-specific host images
+    publish that separate identity in a required OCI label. Pull an explicitly
+    pinned image once when necessary so operator pins and mutable-tag defaults
+    exercise the same inspection path.
+    """
+
+    async def inspect() -> str | None:
+        code, out, _ = await _run(
+            [
+                "docker",
+                "image",
+                "inspect",
+                image_ref,
+                "--format",
+                "{{json .Config.Labels}}",
+            ]
+        )
+        if code != 0:
+            return None
+        try:
+            labels = json.loads(out.strip())
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(labels, Mapping):
+            return None
+        candidate = str(labels.get("moonmind.omnigent.build_digest") or "").strip()
+        return candidate if _SHA256_RE.fullmatch(candidate) else None
+
+    observed = await inspect()
+    if observed:
+        return observed
+    code, _, _ = await _run(["docker", "pull", image_ref], timeout=120)
+    if code != 0:
+        return None
+    return await inspect()
+
+
 async def resolve_omnigent_images(
     env: Mapping[str, str] | None = None,
 ) -> ResolvedOmnigentDeploymentState:
@@ -130,15 +171,9 @@ async def resolve_omnigent_images(
     previous = load_resolved_state()
 
     # Server image
-    server_ref, server_digest = await _resolve_image(
+    server_ref, server_image_digest = await _resolve_image(
         "OMNIGENT_IMAGE", "OMNIGENT_IMAGE_TAG", "OMNIGENT_IMAGE_REF", source
     )
-    # Also check OMNIGENT_BUILD_DIGEST directly
-    build_digest = str(source.get("OMNIGENT_BUILD_DIGEST") or "").strip()
-    if build_digest and _SHA256_RE.fullmatch(build_digest):
-        server_digest = build_digest
-    elif server_ref:
-        server_digest = server_digest or _extract_digest(server_ref)
 
     # OpenCode host image
     opencode_ref, _ = await _resolve_image(
@@ -158,23 +193,61 @@ async def resolve_omnigent_images(
     # Fall back to previous if still None
     if not server_ref and previous and previous.server_image_ref:
         server_ref = previous.server_image_ref
-        server_digest = previous.omnigent_build_digest or server_digest
+        server_image_digest = _extract_digest(server_ref)
     if not opencode_ref and previous and previous.opencode_host_image_ref:
         opencode_ref = previous.opencode_host_image_ref
     if not pi_ref and previous and previous.pi_host_image_ref:
         pi_ref = previous.pi_host_image_ref
 
-    # If we have pulled digests via alternative method, ensure fallback for build digest from RepoDigests
-    if not server_digest and server_ref:
-        server_digest = _extract_digest(server_ref)
-    # Try to derive build digest from server image inspect if still missing
-    if not server_digest:
+    # The server repository digest is useful deployment evidence, but it is not
+    # the Omnigent build identity attested by a harness-specific host. Preserve
+    # it separately and resolve the shared build identity from the host label.
+    if not server_image_digest and server_ref:
+        server_image_digest = _extract_digest(server_ref)
+    if not server_image_digest:
         # Try to inspect omnigent server container's image
         code, out, _ = await _run(["docker", "inspect", "--format", "{{.Image}}", "moonmind-omnigent-1"])
         if code == 0:
             candidate = out.strip()
             if _SHA256_RE.fullmatch(candidate):
-                server_digest = candidate
+                server_image_digest = candidate
+
+    configured_build_digest = str(
+        source.get("OMNIGENT_BUILD_DIGEST") or ""
+    ).strip()
+    if configured_build_digest and not _SHA256_RE.fullmatch(
+        configured_build_digest
+    ):
+        raise ValueError("OMNIGENT_BUILD_DIGEST must be an exact sha256 identity")
+    host_build_digest = (
+        await _image_build_identity(opencode_ref) if opencode_ref else None
+    )
+    if (
+        configured_build_digest
+        and host_build_digest
+        and configured_build_digest != host_build_digest
+    ):
+        raise ValueError(
+            "OMNIGENT_BUILD_DIGEST differs from the configured OpenCode host image"
+        )
+    if configured_build_digest:
+        omnigent_build_digest = configured_build_digest
+        build_identity_source = "operator"
+    elif host_build_digest:
+        omnigent_build_digest = host_build_digest
+        build_identity_source = "opencode-host-label"
+    elif opencode_ref:
+        raise ValueError(
+            "configured OpenCode host image does not declare "
+            "moonmind.omnigent.build_digest"
+        )
+    elif previous and previous.omnigent_build_digest:
+        omnigent_build_digest = previous.omnigent_build_digest
+        build_identity_source = "persisted"
+    else:
+        # Legacy Codex-only deployments do not select the OpenCode Host Class.
+        omnigent_build_digest = server_image_digest
+        build_identity_source = "server-image-digest"
 
     # Architecture detection
     arch = "linux/amd64"
@@ -193,10 +266,14 @@ async def resolve_omnigent_images(
         serverImageRef=server_ref,
         opencodeHostImageRef=opencode_ref,
         piHostImageRef=pi_ref,
-        omnigentBuildDigest=server_digest,
+        omnigentBuildDigest=omnigent_build_digest,
         architecture=arch,
         resolvedAt=datetime.now(UTC),
         source="auto",
+        details={
+            "serverImageDigest": server_image_digest,
+            "buildIdentitySource": build_identity_source,
+        },
     )
     return state
 

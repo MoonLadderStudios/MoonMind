@@ -88,10 +88,13 @@ The canonical local path needs one value. Set `OPENCODE_API_KEY` in `.env` and
 start Docker Compose; the Omnigent bootstrap reconciliation does the rest on
 startup and on its ongoing cadence:
 
-1. resolve the configured OpenCode host image and tag to an immutable digest and
-   export it, so Host Class selection and launch policy compilation have an
-   authority to select (`OMNIGENT_OPENCODE_HOST_IMAGE_REF` stays optional and
-   overrides the resolution when set);
+1. resolve the configured OpenCode host image and tag to an immutable digest,
+   read its required `moonmind.omnigent.build_digest` label as the shared
+   server/host build identity, and export both authorities for Host Class
+   selection and launch policy compilation
+   (`OMNIGENT_OPENCODE_HOST_IMAGE_REF` stays optional and overrides image
+   resolution when set; the image manifest digest is not substituted for the
+   distinct build identity);
 2. synchronize the authenticated harness catalog and seed the built-in
    `omnigent-opencode-default` Agent Profile;
 3. enroll the `opencode-go-default` Provider Profile from `OPENCODE_API_KEY`,
