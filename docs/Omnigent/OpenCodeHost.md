@@ -240,8 +240,15 @@ Two rules keep qualification and admission on one combination:
 
 Everything else stays exact. Changing an Agent Profile, host image, harness
 catalog, model, or effort changes the qualified combination and invalidates the
-published evidence. Re-qualify from the persisted Provider Profile — the
-credential is already stored, so recovery never needs the API key again:
+published evidence. The startup and maintenance reconciler detects drift in the
+deployment-managed Agent Profile, Provider Profile defaults, resolved image, or
+signed evidence and automatically re-runs the production qualification from the
+persisted Provider Profile. The normal `OPENCODE_API_KEY` path therefore stays
+launch-ready across service and upstream-agent refreshes without another
+operator action or another copy of the credential.
+
+The retry endpoint remains an explicit recovery control when an earlier
+qualification attempt failed:
 
 ```
 POST /api/omnigent/bootstrap/opencode/retry
@@ -251,8 +258,9 @@ Retry checks that the persisted Provider Profile and its managed SecretRefs are
 launch ready, revalidates its credential evidence against the pinned runtime,
 and refreshes the desired model and effort from the current Provider Profile.
 Qualification uses the current Agent Profile's default launch policy. An
-explicit per-run override is not a retry target; align the profile defaults with
-the desired combination before invoking retry.
+explicit per-run override outside those defaults remains a separate
+qualification target; the automatic reconciler owns only the standard managed
+default combination.
 
 ## Exact-host attestation (issue §8)
 

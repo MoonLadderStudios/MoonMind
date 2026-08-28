@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import UTC, datetime
 from typing import Any
@@ -27,6 +28,8 @@ from moonmind.omnigent.bootstrap.store import (
 from moonmind.omnigent.harness_platform.support import (
     compute_support_combination_key,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class BootstrapController:
@@ -172,6 +175,150 @@ class BootstrapController:
         )
         save_bootstrap_record(record)
         return await self._reconcile(record=record, api_key=None, principal=None)
+
+    async def reconcile_deployment_qualification(self) -> bool:
+        """Keep deployment evidence aligned with managed OpenCode defaults.
+
+        Catalog synchronization may advance the built-in Agent Profile after a
+        restart or an upstream agent refresh. Provider revalidation can also
+        advance model, effort, credential-generation, or image authority. The
+        original API-key bootstrap qualified the previous immutable snapshot,
+        so leaving that evidence untouched makes every otherwise-default launch
+        fail admission. Re-run the production qualification only when one of
+        those managed authorities or the signed evidence has actually drifted.
+        """
+
+        record = load_bootstrap_record()
+        if record is None or not str(record.provider_profile_ref or "").strip():
+            # OpenCode has not been enrolled. The console and deployment-key
+            # enrollment paths remain available; there is nothing to qualify.
+            return True
+
+        from sqlalchemy import select
+
+        from api_service.db.models import (
+            ManagedAgentProviderProfile,
+            OmnigentAgentProfile,
+            OmnigentAgentProfileVersion,
+        )
+        from moonmind.omnigent.bootstrap.store import load_resolved_state
+        from moonmind.omnigent.deployment_evidence import (
+            load_deployment_evidence_for_support_combination,
+        )
+
+        drift: list[str] = []
+        provider_profile_ref = str(record.provider_profile_ref)
+        async with self._session_factory() as session:
+            provider_profile = await session.get(
+                ManagedAgentProviderProfile, provider_profile_ref
+            )
+            agent_profile = await session.get(
+                OmnigentAgentProfile, "omnigent-opencode-default"
+            )
+            active_version = None
+            if agent_profile is not None and agent_profile.active_version is not None:
+                active_version = await session.scalar(
+                    select(OmnigentAgentProfileVersion).where(
+                        OmnigentAgentProfileVersion.profile_id
+                        == agent_profile.profile_id,
+                        OmnigentAgentProfileVersion.version
+                        == agent_profile.active_version,
+                    )
+                )
+
+        if provider_profile is None:
+            drift.append("provider_profile")
+        if agent_profile is None or active_version is None:
+            drift.append("agent_profile")
+            current_agent_profile_ref = ""
+        else:
+            current_agent_profile_ref = (
+                f"{agent_profile.profile_id}@{active_version.version}"
+            )
+            if record.agent_profile_ref != current_agent_profile_ref:
+                drift.append("agent_profile_ref")
+
+        resolved = load_resolved_state()
+        if resolved is None:
+            drift.append("resolved_images")
+        else:
+            if (
+                record.resolved.host_image_ref
+                != resolved.opencode_host_image_ref
+            ):
+                drift.append("host_image_ref")
+            if record.resolved.architecture != resolved.architecture:
+                drift.append("architecture")
+            if (
+                resolved.omnigent_build_digest
+                and record.resolved.omnigent_build_digest
+                != resolved.omnigent_build_digest
+            ):
+                drift.append("omnigent_build_digest")
+
+        if provider_profile is not None:
+            current_model = str(provider_profile.default_model or "").strip()
+            current_effort = str(provider_profile.default_effort or "").strip()
+            if (
+                current_model
+                and record.resolved.qualified_model_id != current_model
+            ):
+                drift.append("model")
+            if current_effort and record.desired.effort != current_effort:
+                drift.append("effort")
+
+        evidence = None
+        try:
+            evidence = load_deployment_evidence_for_support_combination(
+                str(record.last_evidence_ref or "")
+            )
+        except ValueError:
+            drift.append("deployment_evidence")
+        if evidence is not None:
+            if (
+                resolved is not None
+                and evidence.host_image_ref != resolved.opencode_host_image_ref
+            ):
+                drift.append("evidence_host_image_ref")
+            if evidence.provider.get("profileRef") != provider_profile_ref:
+                drift.append("evidence_provider_profile")
+            if provider_profile is not None and evidence.provider.get(
+                "credentialGeneration"
+            ) != int(provider_profile.credential_generation):
+                drift.append("evidence_credential_generation")
+            if provider_profile is not None:
+                if evidence.model.get("qualifiedId") != str(
+                    provider_profile.default_model or ""
+                ).strip():
+                    drift.append("evidence_model")
+                if evidence.model.get("effort") != str(
+                    provider_profile.default_effort or ""
+                ).strip():
+                    drift.append("evidence_effort")
+
+        if record.state != BootstrapState.ready:
+            drift.append("bootstrap_state")
+        if not drift:
+            return True
+
+        logger.info(
+            "Refreshing OpenCode deployment qualification after managed "
+            "default drift: fields=%s",
+            ",".join(sorted(set(drift))),
+        )
+        refreshed = await self.requalify()
+        if refreshed.state == BootstrapState.ready:
+            logger.info(
+                "OpenCode deployment qualification now matches Agent Profile %s",
+                refreshed.agent_profile_ref,
+            )
+            return True
+        failure_code = str((refreshed.failure or {}).get("code") or "unknown")
+        logger.warning(
+            "OpenCode deployment qualification refresh deferred: code=%s",
+            failure_code,
+        )
+        return False
 
     async def _reconcile(
         self,
