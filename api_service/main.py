@@ -496,6 +496,47 @@ async def _sync_omnigent_provider_readiness(*, allow_enrollment: bool) -> bool:
         return False
 
 
+async def _sync_omnigent_deployment_qualification() -> bool:
+    """Refresh signed execution evidence after managed default drift.
+
+    The built-in OpenCode Agent Profile is compiled from authenticated catalog
+    inventory and can legitimately advance after a deployment refresh. Keep the
+    qualification bound to that new immutable profile instead of requiring an
+    operator to repeat a bootstrap action for an already-enrolled API key.
+    """
+
+    try:
+        from api_service.db.base import async_session_maker
+        from moonmind.omnigent.bootstrap.controller import BootstrapController
+        from moonmind.omnigent.settings import (
+            build_omnigent_gate,
+            generic_host_enabled,
+            opencode_support_enabled,
+        )
+
+        if (
+            not build_omnigent_gate().enabled
+            or not generic_host_enabled()
+            or not opencode_support_enabled()
+        ):
+            return True
+        return await BootstrapController(
+            session_factory=async_session_maker
+        ).reconcile_deployment_qualification()
+    except (OperationalError, ProgrammingError, SQLAlchemyError, OSError) as exc:
+        logger.warning(
+            "OpenCode deployment qualification reconciliation deferred: %s",
+            exc,
+        )
+        return False
+    except Exception as exc:  # pragma: no cover - bounded startup reconciliation
+        logger.warning(
+            "OpenCode deployment qualification reconciliation deferred: %s",
+            exc,
+        )
+        return False
+
+
 @dataclass(frozen=True)
 class OmnigentBootstrapReadiness:
     """Per-leg outcome of one bootstrap reconciliation pass.
@@ -511,6 +552,7 @@ class OmnigentBootstrapReadiness:
     catalog_ready: bool
     schedules_ready: bool
     provider_ready: bool
+    qualification_ready: bool
 
     @property
     def ready(self) -> bool:
@@ -521,6 +563,7 @@ class OmnigentBootstrapReadiness:
             and self.catalog_ready
             and self.schedules_ready
             and self.provider_ready
+            and self.qualification_ready
         )
 
 
@@ -552,6 +595,11 @@ async def _reconcile_omnigent_bootstrap_once(
         if images_ready
         else False
     )
+    qualification_ready = (
+        await _sync_omnigent_deployment_qualification()
+        if images_ready and catalog_ready and provider_ready
+        else False
+    )
     return OmnigentBootstrapReadiness(
         images_ready=images_ready,
         policies_ready=policies_ready,
@@ -559,6 +607,7 @@ async def _reconcile_omnigent_bootstrap_once(
         catalog_ready=catalog_ready,
         schedules_ready=schedules_ready,
         provider_ready=provider_ready,
+        qualification_ready=qualification_ready,
     )
 
 
