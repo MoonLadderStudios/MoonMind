@@ -18,9 +18,6 @@ class ClassAdmissionDecision(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     requiredSatisfied: tuple[str, ...] = Field(alias="requiredSatisfied")
-    exactHostRequired: tuple[str, ...] = Field(
-        default=(), alias="exactHostRequired"
-    )
     preferredSatisfied: tuple[str, ...] = Field(alias="preferredSatisfied")
     degraded: tuple[str, ...] = ()
     unknown: tuple[str, ...] = ()
@@ -63,7 +60,6 @@ def compute_class_admission(
     degraded: list[str] = []
     unknown: list[str] = []
     missing: list[str] = []
-    exact_host_required: list[str] = []
 
     for cap in required:
         # Unknown if not declared anywhere
@@ -122,13 +118,13 @@ def compute_class_admission(
             # support evidence.
             unknown.append(cap)
         else:
-            satisfied.append(cap)
-            # Runtime-selection capabilities are proven by the trusted
-            # platform/adapter boundary. Capabilities realized by the host,
-            # harness, bridge, materializer, or policy must still be attested
-            # by the exact selected host before session creation.
+            # Preserve the v1 wire contract consumed by already-deployed
+            # workers: requiredSatisfied is the exact-host capability set.
+            # Platform-only runtime tokens are proven by the trusted compiler
+            # and selected plan authority, so adding them here would make an
+            # older worker demand a host attestation that cannot exist.
             if exact_host_supported:
-                exact_host_required.append(cap)
+                satisfied.append(cap)
 
     if missing:
         raise HarnessPlatformError(
@@ -163,7 +159,6 @@ def compute_class_admission(
     return ClassAdmissionDecision.model_validate(
         {
             "requiredSatisfied": sorted(satisfied),
-            "exactHostRequired": sorted(exact_host_required),
             "preferredSatisfied": sorted(pref_satisfied),
             "degraded": sorted(pref_degraded),
             "unknown": sorted(pref_unknown),

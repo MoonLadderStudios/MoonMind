@@ -752,8 +752,7 @@ def _exact_host_evidence_fixture() -> tuple[SimpleNamespace, dict[str, object]]:
             harnessImplementationRef=implementation.implementation_ref(),
             supportIdentity=SimpleNamespace(vendorRuntimeRefs=()),
             classAdmissionDecision={
-                "requiredSatisfied": ["omnigent"],
-                "exactHostRequired": [],
+                "requiredSatisfied": [],
                 "preferredSatisfied": [],
                 "degraded": [],
                 "unknown": [],
@@ -851,46 +850,6 @@ async def test_runtime_binding_exact_capabilities_use_preflight_attestations(
     assert captured["network_attested"] is True
     assert captured["required_capabilities"] == []
     assert refs["cleanup_authority_refs"] == ["art-egress-1"]
-
-
-@pytest.mark.asyncio
-async def test_runtime_binding_legacy_plan_rechecks_all_satisfied_capabilities(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Plans without exactHostRequired retain their recorded exact-host gate."""
-
-    plan, preflight = _exact_host_evidence_fixture()
-    plan.payload.classAdmissionDecision.pop("exactHostRequired")
-    plan.payload.classAdmissionDecision["requiredSatisfied"] = ["git"]
-    preflight["hostRegistrationEvidence"]["capabilities"] = {"git": True}
-    captured: dict[str, object] = {}
-
-    async def persist(**kwargs: object) -> str:
-        return f"art-{kwargs['artifact_type']}"
-
-    from moonmind.omnigent.harness_platform import capabilities
-
-    real_validate = capabilities.validate_exact_host_capabilities
-
-    def capture_validate(**kwargs: object):
-        captured.update(kwargs)
-        return real_validate(**kwargs)
-
-    monkeypatch.setattr(omnigent_session_activities, "_write_json_artifact", persist)
-    monkeypatch.setattr(
-        capabilities,
-        "validate_exact_host_capabilities",
-        capture_validate,
-    )
-    await omnigent_session_activities._persist_host_runtime_evidence(
-        request=SimpleNamespace(),
-        plan=plan,
-        preflight=preflight,
-        model_options={},
-        host_lease_generation=1,
-    )
-
-    assert captured["required_capabilities"] == ["git"]
 
 
 def test_failure_contract_carries_only_typed_bounded_evidence() -> None:

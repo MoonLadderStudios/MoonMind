@@ -885,11 +885,13 @@ workflow requirements
 
 The result is an immutable `ClassAdmissionDecision`. It may prove class-level compatibility. It does not claim that an on-demand exact host is already ready.
 
-The decision records both the complete `requiredSatisfied` set and its
-`exactHostRequired` subset. A runtime-mode token such as `omnigent` is admitted
-only by the trusted runtime-selection boundary and remains in the complete set;
-it is not redundantly treated as a CLI or harness feature the exact host must
-advertise. Workflow-authored input never supplies this evidence.
+The v1 `requiredSatisfied` field remains the exact-host capability set consumed
+by every deployed worker. A runtime-mode token such as `omnigent` is admitted
+only by the trusted runtime-selection boundary and recorded through the selected
+plan authority; it is not added to `requiredSatisfied` or redundantly treated as
+a CLI or harness feature the exact host must advertise. Preserving this wire
+shape lets a new API safely submit plans to a pre-cutover worker.
+Workflow-authored input never supplies the runtime-selection evidence.
 
 The plan also records `runtimeValidationRequirements`, which name every fact that must be proven later. Typical requirements include exact harness implementation, vendor CLI version, restricted-egress attachment, mounted Skills, mounted tools, model availability, and intervention support.
 
@@ -906,10 +908,6 @@ ClassAdmissionDecision
 ```
 
 The result is a fenced `ExactHostCapabilityDecision` stored in the runtime binding. Missing, unknown, stale, or mismatched required evidence blocks runner and session creation.
-
-Plans recorded before `exactHostRequired` existed retain their original
-behavior: exact-host validation rechecks their full recorded
-`requiredSatisfied` set.
 
 ### 15.3 Required, preferred, and unknown
 
