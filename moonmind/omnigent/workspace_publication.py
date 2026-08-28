@@ -13,7 +13,12 @@ from uuid import NAMESPACE_URL, uuid5
 
 from moonmind.config.settings import settings
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+from moonmind.omnigent.workspace_intent import (
+    authored_repository_source,
+    authored_starting_branch,
+)
 from moonmind.publish.service import PublishService
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.schemas.workspace_locator_models import (
     WORKSPACE_LOCATOR_ADAPTER,
     WORKSPACE_LOCATOR_UNSUPPORTED,
@@ -261,6 +266,36 @@ class OmnigentWorkspacePublicationService:
             if pull_request.resolved and pull_request.pr_url:
                 result["pull_request_url"] = pull_request.pr_url
         return result
+
+    async def publish_request_workspace(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        current_workflow_id: str,
+        current_step_execution_id: str,
+    ) -> dict[str, Any]:
+        """Resolve publication inputs at the workspace-owning boundary."""
+
+        parameters = request.parameters if isinstance(request.parameters, dict) else {}
+        workspace_spec = (
+            request.workspace_spec if isinstance(request.workspace_spec, dict) else {}
+        )
+        workspace_locator = workspace_spec.get("workspaceLocator")
+        if not isinstance(workspace_locator, Mapping):
+            raise HarnessPlatformError(
+                "generic Omnigent repository publication requires workspace authority",
+                code="OMNIGENT_REPOSITORY_PUBLICATION_FAILED",
+            )
+        return await self.publish_workspace(
+            workspace_locator=workspace_locator,
+            current_workflow_id=current_workflow_id,
+            current_step_execution_id=current_step_execution_id,
+            publication_identity=request.idempotency_key,
+            publish_mode=str(parameters.get("publishMode") or "none"),
+            base_branch=authored_starting_branch(request),
+            repository=authored_repository_source(request),
+            github_token=None,
+        )
 
 
 __all__ = ["OmnigentWorkspacePublicationService"]

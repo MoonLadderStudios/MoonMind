@@ -623,30 +623,11 @@ class GenericOmnigentHostRealizer:
         publish_mode = str(parameters.get("publishMode") or "none").strip().lower()
         if publish_mode not in {"branch", "pr"}:
             return result
-        workspace_spec = (
-            request.workspace_spec if isinstance(request.workspace_spec, dict) else {}
-        )
-        workspace_locator = workspace_spec.get("workspaceLocator")
-        if not isinstance(workspace_locator, dict):
-            raise HarnessPlatformError(
-                "generic Omnigent repository publication requires workspace authority",
-                code="OMNIGENT_REPOSITORY_PUBLICATION_FAILED",
-            )
         workflow_id, step_execution_id = _execution_identity(request)
-        from moonmind.omnigent.workspace_intent import (
-            authored_repository_source,
-            authored_starting_branch,
-        )
-
-        publication = await self._workspace_publisher.publish_workspace(
-            workspace_locator=workspace_locator,
+        publication = await self._workspace_publisher.publish_request_workspace(
+            request=request,
             current_workflow_id=workflow_id,
             current_step_execution_id=step_execution_id,
-            publication_identity=request.idempotency_key,
-            publish_mode=publish_mode,
-            base_branch=authored_starting_branch(request),
-            repository=authored_repository_source(request),
-            github_token=None,
         )
         push_status = str(publication.get("push_status") or "").strip().lower()
         if push_status != "pushed":

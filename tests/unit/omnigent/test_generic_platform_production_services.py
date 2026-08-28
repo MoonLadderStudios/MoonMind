@@ -1408,7 +1408,7 @@ async def test_generic_realizer_persists_authority_and_releases_provider_last() 
             return {"sessionId": session_id, "stopped": True}
 
     class WorkspacePublisher:
-        async def publish_workspace(self, **_kwargs):
+        async def publish_request_workspace(self, **_kwargs):
             events.append("workspace-published")
             return {
                 "push_status": "pushed",
