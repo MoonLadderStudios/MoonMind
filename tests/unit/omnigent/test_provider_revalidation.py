@@ -10,6 +10,7 @@ boundaries that must not be crossed to get there.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -24,6 +25,9 @@ from moonmind.omnigent.bootstrap.provider_revalidation import (
 CURRENT_IMAGE = "ghcr.io/moonmind/omnigent-host-opencode@sha256:" + "a" * 64
 PREVIOUS_IMAGE = "ghcr.io/moonmind/omnigent-host-opencode@sha256:" + "b" * 64
 API_KEY = "sk-" + "z" * 40
+# Distinguishes "use a fresh observation timestamp" from an explicit ``None``
+# that omits the field entirely.
+_UNSET_VALIDATED_AT = "__unset__"
 
 
 @pytest.fixture(autouse=True)
@@ -43,6 +47,7 @@ def _profile(
     auth_state: str = "connected",
     secret_refs: dict[str, str] | None = None,
     command_behavior: dict | None = None,
+    evidence_validated_at: str | None = _UNSET_VALIDATED_AT,
 ) -> SimpleNamespace:
     evidence = None
     if evidence_image is not None:
@@ -56,6 +61,10 @@ def _profile(
                 generation if evidence_generation is None else evidence_generation
             ),
         }
+        if evidence_validated_at is _UNSET_VALIDATED_AT:
+            evidence["validatedAt"] = datetime.now(UTC).isoformat()
+        elif evidence_validated_at is not None:
+            evidence["validatedAt"] = evidence_validated_at
     return SimpleNamespace(
         profile_id=profile_id,
         runtime_id="opencode",
@@ -209,6 +218,67 @@ def test_evidence_is_current_rejects_fabricated_or_stale_model_catalogs() -> Non
         {"qualifiedId": "opencode-go/gpt-5.6-luna"}
     ]
     assert not evidence_is_current(rotated, image_ref=CURRENT_IMAGE)
+
+
+def test_catalog_observation_expires_by_default() -> None:
+    """An unchanged credential and image must not freeze the model catalog.
+
+    The pinned host image refreshes its catalog from the provider at probe
+    time, so binding the observation only to credential generation and image
+    digest keeps whichever catalog the first probe saw. Models the provider
+    publishes later -- contributor tiers included -- would never reach
+    selection, readiness, or admission on an otherwise unchanged deployment.
+    """
+
+    now = datetime.now(UTC)
+    fresh = _profile(
+        evidence_image=CURRENT_IMAGE,
+        evidence_validated_at=(now - timedelta(hours=1)).isoformat(),
+    )
+    assert evidence_is_current(fresh, image_ref=CURRENT_IMAGE, env={}, now=now)
+
+    aged = _profile(
+        evidence_image=CURRENT_IMAGE,
+        evidence_validated_at=(now - timedelta(hours=7)).isoformat(),
+    )
+    assert not evidence_is_current(aged, image_ref=CURRENT_IMAGE, env={}, now=now)
+
+
+def test_catalog_observation_interval_is_operator_configurable() -> None:
+    now = datetime.now(UTC)
+    aged = _profile(
+        evidence_image=CURRENT_IMAGE,
+        evidence_validated_at=(now - timedelta(hours=7)).isoformat(),
+    )
+    assert evidence_is_current(
+        aged,
+        image_ref=CURRENT_IMAGE,
+        env={"OPENCODE_MODEL_CATALOG_MAX_AGE_HOURS": "24"},
+        now=now,
+    )
+    # ``0`` restores identity-only staleness for a deployment that pins its
+    # catalog deliberately.
+    assert evidence_is_current(
+        aged,
+        image_ref=CURRENT_IMAGE,
+        env={"OPENCODE_MODEL_CATALOG_MAX_AGE_HOURS": "0"},
+        now=now,
+    )
+
+
+def test_catalog_observation_without_a_timestamp_is_not_current() -> None:
+    """An observation that cannot state its age cannot be shown to be current."""
+
+    undated = _profile(evidence_image=CURRENT_IMAGE, evidence_validated_at=None)
+    assert "validatedAt" not in undated.model_catalog_evidence_json
+    assert not evidence_is_current(undated, image_ref=CURRENT_IMAGE, env={})
+    # Pinning the interval off keeps the historical identity-only contract for
+    # evidence written before the field existed.
+    assert evidence_is_current(
+        undated,
+        image_ref=CURRENT_IMAGE,
+        env={"OPENCODE_MODEL_CATALOG_MAX_AGE_HOURS": "0"},
+    )
 
 
 @pytest.mark.asyncio
@@ -389,7 +459,9 @@ async def test_stale_host_image_evidence_is_revalidated_and_refreshed(
             "imageRef": image_ref,
             "runtimeVersions": {"opencode": "1.18.11"},
             "materializerRef": "opencode-auth-json@1",
-            "validatedAt": "2026-08-25T01:00:00+00:00",
+            # Production stamps the observation at probe time; a refreshed
+            # profile is only current because the catalog was just observed.
+            "validatedAt": datetime.now(UTC).isoformat(),
             "credentialGeneration": profile.credential_generation,
         }
 

@@ -136,3 +136,46 @@ def test_native_ui_gate_fails_closed_for_mutable_image_and_serves_when_pinned() 
     )
     assert pinned.ready is True
     assert pinned.reason is None
+
+
+def test_model_catalog_interval_defaults_to_a_bounded_refresh() -> None:
+    """The documented one-value setup must keep observing new provider models.
+
+    A healthy deployment never changes its credential generation or host image
+    digest on its own, so an unbounded observation would pin whichever catalog
+    the first probe saw.
+    """
+
+    from datetime import timedelta
+
+    from moonmind.omnigent.settings import opencode_model_catalog_max_age
+
+    assert opencode_model_catalog_max_age(env={}) == timedelta(hours=6)
+    assert opencode_model_catalog_max_age(
+        env={"OPENCODE_MODEL_CATALOG_MAX_AGE_HOURS": "0.5"}
+    ) == timedelta(minutes=30)
+
+
+def test_model_catalog_interval_is_disabled_by_zero() -> None:
+    from moonmind.omnigent.settings import opencode_model_catalog_max_age
+
+    assert (
+        opencode_model_catalog_max_age(
+            env={"OPENCODE_MODEL_CATALOG_MAX_AGE_HOURS": "0"}
+        )
+        is None
+    )
+
+
+def test_model_catalog_interval_rejects_unusable_values() -> None:
+    """An unreadable interval fails fast rather than silently pinning a catalog."""
+
+    import pytest
+
+    from moonmind.omnigent.settings import opencode_model_catalog_max_age
+
+    for value in ("never", "-1"):
+        with pytest.raises(ValueError):
+            opencode_model_catalog_max_age(
+                env={"OPENCODE_MODEL_CATALOG_MAX_AGE_HOURS": value}
+            )

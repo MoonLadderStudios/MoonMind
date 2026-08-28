@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any, Mapping
 
 OMNIGENT_DISABLED_MESSAGE = (
@@ -88,6 +89,8 @@ def is_omnigent_enabled(*, env: Mapping[str, Any] | None = None) -> bool:
 
 OPENCODE_API_KEY_ENV = "OPENCODE_API_KEY"
 OPENCODE_CONTRIBUTOR_DATA_USE_ENV = "OPENCODE_ACCEPT_CONTRIBUTOR_DATA_USE"
+OPENCODE_MODEL_CATALOG_MAX_AGE_ENV = "OPENCODE_MODEL_CATALOG_MAX_AGE_HOURS"
+OPENCODE_MODEL_CATALOG_DEFAULT_MAX_AGE_HOURS = 6.0
 
 
 def _parse_bool_with_default(
@@ -163,6 +166,44 @@ def opencode_contributor_data_use_accepted(
     return _parse_bool_with_default(
         source.get(OPENCODE_CONTRIBUTOR_DATA_USE_ENV), default=True
     )
+
+
+def opencode_model_catalog_max_age(
+    *, env: Mapping[str, Any] | None = None
+) -> timedelta | None:
+    """Return how long persisted OpenCode model catalog evidence stays current.
+
+    The pinned host image ships a bundled model catalog and refreshes it from
+    the upstream catalog service at probe time. Binding evidence only to the
+    credential generation and the image digest therefore freezes whichever
+    catalog the first successful probe observed: models the provider publishes
+    later never reach selection, readiness, or admission.
+
+    Re-probing on a bounded interval is the default so the documented one-value
+    setup keeps observing the provider's current models, including contributor
+    tiers. ``0`` disables the interval and restores identity-only staleness.
+    """
+
+    source = env if env is not None else os.environ
+    cleaned = _clean(source.get(OPENCODE_MODEL_CATALOG_MAX_AGE_ENV))
+    if not cleaned:
+        hours = OPENCODE_MODEL_CATALOG_DEFAULT_MAX_AGE_HOURS
+    else:
+        try:
+            hours = float(cleaned)
+        except ValueError as exc:
+            raise ValueError(
+                f"invalid {OPENCODE_MODEL_CATALOG_MAX_AGE_ENV} value {cleaned!r}: "
+                "expected a non-negative number of hours"
+            ) from exc
+        if hours < 0:
+            raise ValueError(
+                f"invalid {OPENCODE_MODEL_CATALOG_MAX_AGE_ENV} value {cleaned!r}: "
+                "expected a non-negative number of hours"
+            )
+    if hours == 0:
+        return None
+    return timedelta(hours=hours)
 
 
 def omnigent_evidence_policy(
@@ -292,9 +333,12 @@ __all__ = [
     "generic_host_enabled",
     "opencode_support_enabled",
     "opencode_contributor_data_use_accepted",
+    "opencode_model_catalog_max_age",
     "resolved_opencode_api_key",
     "OPENCODE_API_KEY_ENV",
     "OPENCODE_CONTRIBUTOR_DATA_USE_ENV",
+    "OPENCODE_MODEL_CATALOG_DEFAULT_MAX_AGE_HOURS",
+    "OPENCODE_MODEL_CATALOG_MAX_AGE_ENV",
     "omnigent_evidence_policy",
     "OMNIGENT_GENERIC_HOST_ENABLED_ENV",
     "OMNIGENT_OPENCODE_ENABLED_ENV",

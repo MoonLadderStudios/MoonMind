@@ -794,6 +794,9 @@ RUN_WORKFLOW_GATE_TERMINAL_HANDOFF_PATCH = "run-workflow-gate-terminal-handoff-v
 RUN_MOONSPEC_DRAFT_PUBLISH_RECOVERY_HANDOFF_PATCH = (
     "run-moonspec-draft-publish-recovery-handoff-v1"
 )
+RUN_TERMINAL_GATE_PUBLISHED_HEAD_FEASIBILITY_PATCH = (
+    "run-terminal-gate-published-head-feasibility-v1"
+)
 RUN_AUTHORITATIVE_PUBLISH_OUTCOME_PATCH = "run-authoritative-publish-outcome-v1"
 RUN_AUTHORITATIVE_PR_REQUIREMENT_PATCH = "run-authoritative-pr-requirement-v1"
 RUN_STEP_RETRY_OVERRIDES_PATCH = "run-step-retry-overrides-v1"
@@ -4346,12 +4349,15 @@ class MoonMindRunWorkflow:
         workspace_spec.pop("branch", None)
         return workspace_spec
 
-    def _published_branch_remediation_workspace_spec(
-        self,
-        *,
-        node_inputs: Mapping[str, Any],
-    ) -> dict[str, Any] | None:
-        """Return the workflow-verified published head for external remediation."""
+    def _workflow_verified_published_head(self) -> tuple[str, str] | None:
+        """Return the run-owned published ``(branch, headSha)`` when verified.
+
+        ``pushStatus`` only reaches ``pushed`` once a step produced
+        authoritative accepted repository evidence, so this projection is the
+        run's durable authority for "a verified remote head exists". Steps that
+        publish nothing -- read-only MoonSpec verification in particular --
+        report no push status and leave the projection untouched.
+        """
 
         if (
             str(self._publish_context.get("pushStatus") or "").strip().lower()
@@ -4365,6 +4371,19 @@ class MoonMindRunWorkflow:
         )
         if not branch or not head_sha:
             return None
+        return branch, head_sha
+
+    def _published_branch_remediation_workspace_spec(
+        self,
+        *,
+        node_inputs: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        """Return the workflow-verified published head for external remediation."""
+
+        published_head = self._workflow_verified_published_head()
+        if published_head is None:
+            return None
+        branch, head_sha = published_head
 
         runtime = node_inputs.get("runtime")
         runtime_inputs = runtime if isinstance(runtime, Mapping) else {}
@@ -9377,15 +9396,10 @@ class MoonMindRunWorkflow:
     ) -> None:
         """Pin a downstream fresh workspace to the verified published head."""
 
-        if self._publish_context.get("pushStatus") != "pushed":
+        published_head = self._workflow_verified_published_head()
+        if published_head is None:
             return
-        branch = _normalize_git_branch_ref(self._publish_context.get("branch"))
-        head_sha = self._coerce_text(
-            self._publish_context.get("headSha"),
-            max_chars=80,
-        )
-        if not branch or not head_sha:
-            return
+        branch, head_sha = published_head
 
         repository_target_raw = workspace_spec.get("repositoryTarget")
         repository_target = (
@@ -16918,7 +16932,36 @@ class MoonMindRunWorkflow:
         return self._publication_feasibility(execution_result)["feasible"]
 
     def _publication_feasibility(self, execution_result: Any) -> dict[str, Any]:
-        """Classify accepted repository evidence before selecting a handoff."""
+        """Resolve publication feasibility for the run, not just for one step.
+
+        ``_step_publication_feasibility`` classifies the evidence a single step
+        produced. The MoonSpec terminal gate always trips on a read-only
+        verification step, which pushes nothing and therefore always classifies
+        as ``publication_state_ambiguous``. That made the mandated draft
+        publication handoff unreachable and orphaned pushed remediation heads,
+        so an ambiguous step classification defers to the run's durable
+        published head. Definitive negatives (unauthorized, contaminated, no
+        candidate change) are preserved -- they are safety decisions, not
+        missing knowledge.
+        """
+
+        feasibility = self._step_publication_feasibility(execution_result)
+        if (
+            feasibility.get("reason") == "publication_state_ambiguous"
+            and self._patched_or_false_outside_workflow(
+                RUN_TERMINAL_GATE_PUBLISHED_HEAD_FEASIBILITY_PATCH
+            )
+            and self._workflow_verified_published_head() is not None
+        ):
+            return PublicationFeasibility(
+                feasible=True,
+                reason="verified_remote_head",
+                evidenceRefs=tuple(feasibility.get("evidenceRefs") or ()),
+            ).model_dump(by_alias=True)
+        return feasibility
+
+    def _step_publication_feasibility(self, execution_result: Any) -> dict[str, Any]:
+        """Classify accepted repository evidence produced by a single step."""
 
         if self._extract_pull_request_url(execution_result):
             return PublicationFeasibility(

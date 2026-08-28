@@ -81,16 +81,49 @@ def reset_enrollment_attempts() -> None:
     _ENROLLMENT_ATTEMPTS.clear()
 
 
-def evidence_is_current(profile: Any, *, image_ref: str) -> bool:
-    """Report whether persisted evidence still matches the launchable identity.
+def _observed_within_max_age(
+    evidence: Mapping[str, Any], *, env: Mapping[str, Any] | None, now: datetime
+) -> bool:
+    """Report whether the catalog observation is still inside its interval.
 
-    This mirrors the readiness and planner admission checks exactly: evidence
-    must belong to the profile's current credential generation and to the host
-    image the deployment currently pins.
+    The pinned host image refreshes its model catalog from the provider at
+    probe time, so an observation bound only to credential generation and image
+    digest freezes whichever catalog the first probe saw. Models the provider
+    publishes afterwards -- contributor tiers included -- would never reach
+    selection, readiness, or admission on an otherwise unchanged deployment.
     """
 
-    evidence = profile.model_catalog_evidence_json
-    if not isinstance(evidence, dict):
+    from moonmind.omnigent.settings import opencode_model_catalog_max_age
+
+    max_age = opencode_model_catalog_max_age(env=env)
+    if max_age is None:
+        return True
+    raw = str(evidence.get("validatedAt") or "").strip()
+    if not raw:
+        # An observation that cannot state when it was taken cannot be shown to
+        # be current. Re-probe rather than trust an unbounded snapshot.
+        return False
+    try:
+        observed = datetime.fromisoformat(raw)
+    except ValueError:
+        return False
+    if observed.tzinfo is None:
+        observed = observed.replace(tzinfo=UTC)
+    return now - observed <= max_age
+
+
+def evidence_matches_launchable_identity(
+    evidence: Any, *, profile: Any, image_ref: str
+) -> bool:
+    """Report whether one observation belongs to the launchable identity.
+
+    This mirrors the readiness and planner admission checks exactly: evidence
+    must belong to the profile's current credential generation, to the host
+    image the deployment currently pins, and to the materializer the launch
+    path uses, and it must contain the profile's selected model.
+    """
+
+    if not isinstance(evidence, Mapping):
         return False
     try:
         generation = int(evidence.get("credentialGeneration") or 0)
@@ -111,6 +144,32 @@ def evidence_is_current(profile: Any, *, image_ref: str) -> bool:
     }
     default_model = str(getattr(profile, "default_model", None) or "").strip()
     return bool(default_model and default_model in models)
+
+
+def evidence_is_current(
+    profile: Any,
+    *,
+    image_ref: str,
+    env: Mapping[str, Any] | None = None,
+    now: datetime | None = None,
+) -> bool:
+    """Report whether persisted evidence still answers for this deployment.
+
+    Two separate questions must both hold: the observation belongs to the
+    launchable identity, and it was taken inside the configured catalog
+    interval. Identity alone would keep a first observation forever, because
+    the credential generation and image digest of a healthy deployment never
+    change on their own.
+    """
+
+    evidence = profile.model_catalog_evidence_json
+    if not evidence_matches_launchable_identity(
+        evidence, profile=profile, image_ref=image_ref
+    ):
+        return False
+    return _observed_within_max_age(
+        evidence, env=env, now=now or datetime.now(UTC)
+    )
 
 
 def _has_enrolled_credential(profile: Any) -> bool:
@@ -487,8 +546,11 @@ async def _persist_evidence(
         }
         behavior.pop(REVALIDATION_FAILURE_KEY, None)
         profile.command_behavior = behavior
-        launchable = evidence_is_current(
-            profile,
+        # This pass just observed the catalog, so the refresh interval has
+        # nothing to say about it. Only the launchable identity is in question.
+        launchable = evidence_matches_launchable_identity(
+            evidence,
+            profile=profile,
             image_ref=str(evidence.get("imageRef") or ""),
         )
         await session.commit()
@@ -548,6 +610,7 @@ __all__ = [
     "REVALIDATION_FAILURE_KEY",
     "ProviderReconcileOutcome",
     "evidence_is_current",
+    "evidence_matches_launchable_identity",
     "reconcile_opencode_provider_readiness",
     "reset_enrollment_attempts",
 ]
