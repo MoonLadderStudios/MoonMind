@@ -32,6 +32,7 @@ async def test_omnigent_bootstrap_retries_with_capped_backoff_and_maintains_inve
             catalog_ready=ready,
             schedules_ready=ready,
             provider_ready=ready,
+            qualification_ready=ready,
         )
 
     async def refresh_inventory() -> bool:
@@ -120,6 +121,10 @@ async def test_bootstrap_reconciliation_refreshes_recurring_schedule_authority(
         calls.append(f"provider:{allow_enrollment}")
         return True
 
+    async def qualification() -> bool:
+        calls.append("qualification")
+        return True
+
     monkeypatch.setattr(api_main, "_sync_omnigent_deployment_images", images)
     monkeypatch.setattr(api_main, "_sync_omnigent_bootstrap_policies", policies)
     monkeypatch.setattr(api_main, "_sync_omnigent_bootstrap_agent_profile", agent)
@@ -134,6 +139,11 @@ async def test_bootstrap_reconciliation_refreshes_recurring_schedule_authority(
         "_sync_omnigent_provider_readiness",
         provider,
     )
+    monkeypatch.setattr(
+        api_main,
+        "_sync_omnigent_deployment_qualification",
+        qualification,
+    )
 
     assert (
         await api_main._reconcile_omnigent_bootstrap_once(refresh_images=True)
@@ -147,6 +157,7 @@ async def test_bootstrap_reconciliation_refreshes_recurring_schedule_authority(
         "catalog",
         "schedules",
         "provider:True",
+        "qualification",
     ]
 
 

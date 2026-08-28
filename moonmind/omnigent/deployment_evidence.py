@@ -364,6 +364,54 @@ def _unqualified_combination_message(
     )
 
 
+def load_deployment_evidence_for_support_combination(
+    support_combination_key: str,
+    *,
+    path: str | Path | None = None,
+    now: datetime | None = None,
+) -> DeploymentExecutionEvidence:
+    """Load one exact, recorded deployment qualification document.
+
+    Bootstrap reconciliation owns the support combination it most recently
+    published. It uses this read boundary to distinguish a still-current
+    qualification from missing, expired, or superseded evidence without
+    compiling a caller-owned execution plan.
+    """
+
+    expected_key = str(support_combination_key or "").strip()
+    if not expected_key.startswith("omnigent-support:sha256:"):
+        raise ValueError("deployment support combination key is unavailable")
+    configured = str(
+        path
+        or os.getenv(
+            _DEPLOYMENT_EVIDENCE_ENV,
+            "/workspace/omnigent-evidence/deployment-execution-evidence.json",
+        )
+    ).strip()
+    if not configured:
+        raise ValueError("deployment execution evidence is not configured")
+    try:
+        raw = json.loads(Path(configured).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("deployment execution evidence is unavailable") from exc
+    if not isinstance(raw, Mapping):
+        raise ValueError("deployment evidence must be an object")
+    entries = raw.get("entries")
+    candidates = list(entries) if isinstance(entries, list) else [raw]
+    matching = [
+        value
+        for value in candidates
+        if isinstance(value, Mapping)
+        and value.get("supportCombinationKey") == expected_key
+    ]
+    if len(matching) != 1:
+        raise ValueError(
+            "exact deployment execution evidence is unavailable for the "
+            "recorded support combination"
+        )
+    return validate_deployment_evidence(matching[0], now=now)
+
+
 def load_deployment_evidence(
     plan_payload: Any,
     *,
@@ -412,6 +460,7 @@ __all__ = [
     "assert_deployment_evidence_matches_plan",
     "get_or_create_signing_key",
     "load_deployment_evidence",
+    "load_deployment_evidence_for_support_combination",
     "sign_deployment_evidence",
     "validate_deployment_evidence",
 ]

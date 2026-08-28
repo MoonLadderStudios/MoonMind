@@ -18,7 +18,9 @@ from moonmind.omnigent.bootstrap import controller as controller_module
 from moonmind.omnigent.bootstrap.models import (
     BootstrapDesired,
     BootstrapRecord,
+    BootstrapResolved,
     BootstrapState,
+    ResolvedOmnigentDeploymentState,
 )
 from moonmind.omnigent.bootstrap.opencode import resolve_model_by_display
 from moonmind.omnigent.harness_platform.catalog import create_catalog_snapshot
@@ -220,6 +222,41 @@ async def test_qualification_attests_the_launch_policy_admission_selects(
     expected = default_launch_policy_ref(_ALLOWED_LAUNCH_POLICIES)
     assert expected == "omnigent-on-demand@1"
     assert evidence["supportIdentity"]["launchPolicyRef"] == expected
+
+
+@pytest.mark.asyncio
+async def test_recorded_qualification_loader_selects_and_validates_exact_evidence(
+    qualification_boundary,
+    tmp_path,
+) -> None:
+    from moonmind.omnigent.deployment_evidence import (
+        load_deployment_evidence_for_support_combination,
+    )
+
+    evidence = await _qualify(qualification_boundary)
+    path = tmp_path / "deployment-evidence.json"
+    path.write_text(
+        json.dumps(
+            {
+                "entries": [
+                    {
+                        "supportCombinationKey": (
+                            "omnigent-support:sha256:" + "f" * 64
+                        )
+                    },
+                    evidence,
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = load_deployment_evidence_for_support_combination(
+        evidence["supportCombinationKey"],
+        path=path,
+    )
+
+    assert loaded.support_combination_key == evidence["supportCombinationKey"]
 
 
 @pytest.mark.asyncio
@@ -485,3 +522,159 @@ async def test_requalification_stops_when_runtime_revalidation_fails(
         await controller.requalify()
 
     reconcile.assert_not_awaited()
+
+
+def _ready_bootstrap_record(*, agent_profile_ref: str) -> BootstrapRecord:
+    return BootstrapRecord(
+        state=BootstrapState.ready,
+        desired=BootstrapDesired(
+            modelDisplayName="opencode-go/muse-spark-1.2-contributor",
+            effort="xhigh",
+            acceptContributorDataUse=True,
+        ),
+        resolved=BootstrapResolved(
+            qualifiedModelId="opencode-go/muse-spark-1.2-contributor",
+            hostImageRef=_HOST_IMAGE_REF,
+            omnigentBuildDigest="sha256:" + "a" * 64,
+            architecture="linux/amd64",
+        ),
+        providerProfileRef="opencode-go-default",
+        agentProfileRef=agent_profile_ref,
+        lastEvidenceRef="omnigent-support:sha256:" + "b" * 64,
+    )
+
+
+@pytest.mark.asyncio
+async def test_managed_agent_profile_advance_requalifies_default_deployment(
+    monkeypatch,
+) -> None:
+    """Catalog-owned profile advancement must not strand default launches."""
+
+    provider_profile = SimpleNamespace(
+        default_model="opencode-go/muse-spark-1.2-contributor",
+        default_effort="xhigh",
+        credential_generation=1,
+    )
+    agent_profile = SimpleNamespace(
+        profile_id="omnigent-opencode-default",
+        active_version=8,
+    )
+    active_version = SimpleNamespace(version=8)
+
+    class _QualificationSession:
+        async def get(self, model, _identity):
+            return {
+                "ManagedAgentProviderProfile": provider_profile,
+                "OmnigentAgentProfile": agent_profile,
+            }.get(model.__name__)
+
+        async def scalar(self, _statement):
+            return active_version
+
+    @asynccontextmanager
+    async def _session_scope():
+        yield _QualificationSession()
+
+    current_images = ResolvedOmnigentDeploymentState(
+        serverImageRef=_SERVER_IMAGE_REF,
+        opencodeHostImageRef=_HOST_IMAGE_REF,
+        omnigentBuildDigest="sha256:" + "a" * 64,
+        architecture="linux/amd64",
+    )
+    evidence = SimpleNamespace(
+        host_image_ref=_HOST_IMAGE_REF,
+        provider={"profileRef": "opencode-go-default", "credentialGeneration": 1},
+        model={
+            "qualifiedId": "opencode-go/muse-spark-1.2-contributor",
+            "effort": "xhigh",
+        },
+    )
+    stale = _ready_bootstrap_record(
+        agent_profile_ref="omnigent-opencode-default@7"
+    )
+    refreshed = stale.model_copy(
+        update={"agent_profile_ref": "omnigent-opencode-default@8"}
+    )
+    monkeypatch.setattr(controller_module, "load_bootstrap_record", lambda: stale)
+    monkeypatch.setattr(
+        "moonmind.omnigent.bootstrap.store.load_resolved_state",
+        lambda: current_images,
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.deployment_evidence.load_deployment_evidence_for_support_combination",
+        lambda _key: evidence,
+    )
+    controller = controller_module.BootstrapController(
+        session_factory=lambda: _session_scope()
+    )
+    requalify = AsyncMock(return_value=refreshed)
+    monkeypatch.setattr(controller, "requalify", requalify)
+
+    assert await controller.reconcile_deployment_qualification()
+    requalify.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_current_default_qualification_avoids_repeating_live_workload(
+    monkeypatch,
+) -> None:
+    """The maintenance cadence must not re-run qualification without drift."""
+
+    provider_profile = SimpleNamespace(
+        default_model="opencode-go/muse-spark-1.2-contributor",
+        default_effort="xhigh",
+        credential_generation=1,
+    )
+    agent_profile = SimpleNamespace(
+        profile_id="omnigent-opencode-default",
+        active_version=8,
+    )
+
+    class _QualificationSession:
+        async def get(self, model, _identity):
+            return {
+                "ManagedAgentProviderProfile": provider_profile,
+                "OmnigentAgentProfile": agent_profile,
+            }.get(model.__name__)
+
+        async def scalar(self, _statement):
+            return SimpleNamespace(version=8)
+
+    @asynccontextmanager
+    async def _session_scope():
+        yield _QualificationSession()
+
+    current = _ready_bootstrap_record(
+        agent_profile_ref="omnigent-opencode-default@8"
+    )
+    current_images = ResolvedOmnigentDeploymentState(
+        serverImageRef=_SERVER_IMAGE_REF,
+        opencodeHostImageRef=_HOST_IMAGE_REF,
+        omnigentBuildDigest="sha256:" + "a" * 64,
+        architecture="linux/amd64",
+    )
+    evidence = SimpleNamespace(
+        host_image_ref=_HOST_IMAGE_REF,
+        provider={"profileRef": "opencode-go-default", "credentialGeneration": 1},
+        model={
+            "qualifiedId": "opencode-go/muse-spark-1.2-contributor",
+            "effort": "xhigh",
+        },
+    )
+    monkeypatch.setattr(controller_module, "load_bootstrap_record", lambda: current)
+    monkeypatch.setattr(
+        "moonmind.omnigent.bootstrap.store.load_resolved_state",
+        lambda: current_images,
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.deployment_evidence.load_deployment_evidence_for_support_combination",
+        lambda _key: evidence,
+    )
+    controller = controller_module.BootstrapController(
+        session_factory=lambda: _session_scope()
+    )
+    requalify = AsyncMock()
+    monkeypatch.setattr(controller, "requalify", requalify)
+
+    assert await controller.reconcile_deployment_qualification()
+    requalify.assert_not_awaited()
