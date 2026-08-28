@@ -71,6 +71,9 @@ from moonmind.omnigent.settings import (
     resolved_proxy_forward_headers,
     resolved_server_url,
 )
+from moonmind.omnigent.workspace_publication import (
+    OmnigentWorkspacePublicationService,
+)
 from moonmind.provider_profiles.lease_client import ProviderProfileLeaseClient
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 from moonmind.workflows.temporal.client import TemporalClientAdapter
@@ -278,6 +281,7 @@ def build_generic_omnigent_execution_services(
         ),
         session_driver=session_driver,
         session_cleanup_service=OmnigentSessionCleanupService(client),
+        workspace_publisher=OmnigentWorkspacePublicationService(workspace_root),
         artifact_gateway=artifacts,
         turn_command_service=CanonicalTurnCommandService(
             OmnigentControlPlaneStore(session_factory)

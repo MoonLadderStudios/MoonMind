@@ -31,6 +31,7 @@ from moonmind.omnigent.runtime_bindings import (
     stable_binding_id,
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+from moonmind.schemas.temporal_activity_models import AcceptedRepositoryEvidence
 
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,7 @@ class GenericOmnigentHostRealizer:
         ],
         session_driver: Callable[..., Awaitable[AgentRunResult]],
         session_cleanup_service: Any,
+        workspace_publisher: Any,
         artifact_gateway: Any | None = None,
         turn_command_service: Any | None = None,
         heartbeat_interval_seconds: float = 60.0,
@@ -75,6 +77,7 @@ class GenericOmnigentHostRealizer:
             planned_host_resolver,
             session_driver,
             session_cleanup_service,
+            workspace_publisher,
         )
         if any(item is None for item in dependencies):
             raise HarnessPlatformError(
@@ -89,6 +92,7 @@ class GenericOmnigentHostRealizer:
         self._resolve_host = planned_host_resolver
         self._session_driver = session_driver
         self._session_cleanup = session_cleanup_service
+        self._workspace_publisher = workspace_publisher
         self._artifacts = artifact_gateway
         self._turn_commands = turn_command_service
         if heartbeat_interval_seconds <= 0 or heartbeat_ttl_seconds <= 0:
@@ -449,6 +453,8 @@ class GenericOmnigentHostRealizer:
                 )
             finally:
                 binding = sink.binding
+            if result.failure_class is None:
+                result = await self._publish_repository(request, result)
             result = result.model_copy(
                 update={
                     "metadata": {
@@ -571,6 +577,8 @@ class GenericOmnigentHostRealizer:
                         }
                     }
                 )
+                if result.failure_class is None:
+                    result = await self._publish_repository(request, result)
                 current = await self._update_binding(
                     sink.binding,
                     updates={
@@ -603,6 +611,70 @@ class GenericOmnigentHostRealizer:
                 code=HarnessPlatformFailure.OMNIGENT_GENERIC_DISPATCH_FAILED,
             )
         return result
+
+    async def _publish_repository(
+        self,
+        request: AgentExecutionRequest,
+        result: AgentRunResult,
+    ) -> AgentRunResult:
+        """Publish before cleanup releases the authoritative workspace host."""
+
+        parameters = request.parameters if isinstance(request.parameters, dict) else {}
+        publish_mode = str(parameters.get("publishMode") or "none").strip().lower()
+        if publish_mode not in {"branch", "pr"}:
+            return result
+        workspace_spec = (
+            request.workspace_spec if isinstance(request.workspace_spec, dict) else {}
+        )
+        workspace_locator = workspace_spec.get("workspaceLocator")
+        if not isinstance(workspace_locator, dict):
+            raise HarnessPlatformError(
+                "generic Omnigent repository publication requires workspace authority",
+                code="OMNIGENT_REPOSITORY_PUBLICATION_FAILED",
+            )
+        workflow_id, step_execution_id = _execution_identity(request)
+        from moonmind.omnigent.workspace_intent import (
+            authored_repository_source,
+            authored_starting_branch,
+        )
+
+        publication = await self._workspace_publisher.publish_workspace(
+            workspace_locator=workspace_locator,
+            current_workflow_id=workflow_id,
+            current_step_execution_id=step_execution_id,
+            publication_identity=request.idempotency_key,
+            publish_mode=publish_mode,
+            base_branch=authored_starting_branch(request),
+            repository=authored_repository_source(request),
+            github_token=None,
+        )
+        push_status = str(publication.get("push_status") or "").strip().lower()
+        if push_status != "pushed":
+            raise HarnessPlatformError(
+                "generic Omnigent execution produced no publishable repository output",
+                code="OMNIGENT_REPOSITORY_OUTPUT_MISSING",
+            )
+        evidence = AcceptedRepositoryEvidence(
+            pushStatus="pushed",
+            branch=publication.get("push_branch"),
+            baseBranch=publication.get("push_base_branch"),
+            headSha=publication.get("push_head_sha"),
+            commitsAheadOfBase=publication.get("push_commit_count"),
+            repositoryChanged=True,
+            remoteVerified=publication.get("remote_verified"),
+            authority="omnigent.generic_host_execution",
+        )
+        return result.model_copy(
+            update={
+                "metadata": {
+                    **dict(result.metadata or {}),
+                    **dict(publication),
+                    "acceptedRepositoryEvidence": evidence.model_dump(
+                        mode="json", by_alias=True, exclude_none=True
+                    ),
+                }
+            }
+        )
 
     async def _cleanup(
         self,

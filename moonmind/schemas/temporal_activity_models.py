@@ -390,6 +390,7 @@ class AcceptedRepositoryEvidence(BaseModel):
     authority: Literal[
         "agent_runtime.fetch_result",
         "omnigent.profile_bound_execution",
+        "omnigent.generic_host_execution",
     ] = "agent_runtime.fetch_result"
 
     @model_validator(mode="after")

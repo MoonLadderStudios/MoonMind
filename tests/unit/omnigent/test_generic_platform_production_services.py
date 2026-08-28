@@ -1407,6 +1407,18 @@ async def test_generic_realizer_persists_authority_and_releases_provider_last() 
             events.append("session-drained")
             return {"sessionId": session_id, "stopped": True}
 
+    class WorkspacePublisher:
+        async def publish_workspace(self, **_kwargs):
+            events.append("workspace-published")
+            return {
+                "push_status": "pushed",
+                "push_branch": "moonmind-job-test",
+                "push_base_branch": "main",
+                "push_head_sha": "a" * 40,
+                "push_commit_count": 1,
+                "remote_verified": True,
+            }
+
     class TurnCommands:
         async def claim(self, **kwargs):
             assert kwargs["payload_digest"] == _plan("opencode-go/model").planRef
@@ -1425,11 +1437,30 @@ async def test_generic_realizer_persists_authority_and_releases_provider_last() 
         planned_host_resolver=resolve_host,
         session_driver=session_driver,
         session_cleanup_service=SessionCleanup(),
+        workspace_publisher=WorkspacePublisher(),
         turn_command_service=TurnCommands(),
         heartbeat_interval_seconds=0.005,
         heartbeat_ttl_seconds=60,
     )
-    result = await realizer.execute(_request(), _plan("opencode-go/model"))
+    publish_request = _request().model_copy(
+        update={
+            "workspace_spec": {
+                "workspaceLocator": {
+                    "kind": "sandbox",
+                    "workspaceId": hashlib.sha256(
+                        b"workflow-1:idem-1"
+                    ).hexdigest()[:24],
+                },
+                "repository": "MoonLadderStudios/MoonMind",
+                "startingBranch": "main",
+            },
+            "parameters": {
+                "publishMode": "pr",
+                "repository": "MoonLadderStudios/MoonMind",
+            },
+        }
+    )
+    result = await realizer.execute(publish_request, _plan("opencode-go/model"))
 
     assert result.summary == "done"
     assert result.metadata["executionPlanRef"] == _plan("opencode-go/model").planRef
@@ -1444,12 +1475,13 @@ async def test_generic_realizer_persists_authority_and_releases_provider_last() 
     assert events.index("command-claimed") < events.index("provider-acquired")
     assert events.index("provider-released") < events.index("command-settled:applied")
     assert events.index("host-cleaned") < events.index("credentials-cleaned")
+    assert events.index("workspace-published") < events.index("host-cleaned")
     assert events.index("credentials-cleaned") < events.index("provider-released")
     assert host_leases.heartbeat_count >= 1
     assert runtime_store.heartbeat_count >= 1
 
     first_execution_events = tuple(events)
-    replay = await realizer.execute(_request(), _plan("opencode-go/model"))
+    replay = await realizer.execute(publish_request, _plan("opencode-go/model"))
 
     assert replay.summary == "done"
     assert events[len(first_execution_events) :] == []
