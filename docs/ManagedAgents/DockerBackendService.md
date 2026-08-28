@@ -313,11 +313,19 @@ Rules:
   opaque ref and an undeclared ref fails closed;
 - a declaration that is not a JSON array of objects, omits `sourceRef`/`image`
   or `cacheRef`, repeats a ref, reuses a MoonMind-reserved ref, names a
-  non-volume, or gives a non-absolute cache target is a configuration error;
+  non-volume, gives a non-absolute cache target, or carries a key outside its
+  documented schema is a configuration error. Every declaration key defaults to
+  the permissive value when omitted, so a misspelled `readOnly` or `pullPolicy`
+  would otherwise weaken the access policy the deployment asked for;
+- each declaration variable is consumed exactly as supplied and is never merged
+  with the compose-derived default, so a deployment that declares an additional
+  source repeats every source it intends to keep;
 - `resources.shmSize` is caller-owned. It is refused when it exceeds
   `MOONMIND_CONTAINER_BACKEND_MAX_SHM_SIZE_MIB` (default: the memory ceiling)
   rather than clamped, so the realized value always matches the request; an
-  omitted value applies `MOONMIND_CONTAINER_BACKEND_SHM_SIZE_MIB`;
+  omitted value applies `MOONMIND_CONTAINER_BACKEND_SHM_SIZE_MIB`, which is
+  itself refused at configuration time when it exceeds that ceiling so an
+  omitted request can never launch above the declared maximum;
 - empty or unreachable Docker endpoints fail service readiness;
 - a missing optional image does not fail service or worker readiness;
 - local-build paths are resolved from an operator-owned deployment root, never

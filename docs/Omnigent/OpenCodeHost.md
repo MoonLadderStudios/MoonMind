@@ -177,6 +177,12 @@ image therefore invalidates every previously validated Provider Profile, and an
 expired catalog stops advertising and launching targets until a refresh
 succeeds instead of admitting a model the provider may have removed.
 
+An observation stamped further than a small clock-skew tolerance into the
+future is rejected the same way. A VM snapshot restore or a backward host-clock
+correction would otherwise give the observation a negative age that satisfies
+any interval for as long as the timestamp stays ahead, keeping an old catalog
+authoritative well past its expiry.
+
 MoonMind therefore re-validates automatically. The Omnigent bootstrap
 reconciliation pass re-runs the pinned-runtime validation above for every
 enabled, connected OpenCode Provider Profile whose evidence no longer matches

@@ -27,7 +27,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Collection, Mapping
 from uuid import uuid4
 
@@ -47,6 +47,11 @@ OPENCODE_SECRET_ROLE = "opencode_api_key"
 # rejecting, which only an operator can fix.
 REVALIDATION_FAILURE_KEY = "runtime_revalidation_failure"
 MAX_REVALIDATION_ATTEMPTS = 3
+
+# Observations are stamped by whichever host ran the probe, so a small forward
+# skew is ordinary clock disagreement rather than a stale catalog. Anything
+# further ahead cannot be shown to have been taken inside the interval.
+MAX_OBSERVATION_CLOCK_SKEW = timedelta(minutes=5)
 
 # Enrollment runs the full bootstrap (image acquisition, catalog sync, pinned
 # runtime validation, qualification). Repeating that forever for configuration
@@ -121,7 +126,15 @@ def evidence_observation_is_current(
         return False
     if observed.tzinfo is None:
         observed = observed.replace(tzinfo=UTC)
-    return (now or datetime.now(UTC)) - observed <= max_age
+    age = (now or datetime.now(UTC)) - observed
+    if age < -MAX_OBSERVATION_CLOCK_SKEW:
+        # A snapshot restore or a backward host-clock correction leaves an
+        # observation stamped in the future. Its negative age would satisfy any
+        # interval for as long as the timestamp stays ahead, keeping a catalog
+        # -- including a model the provider has removed -- authoritative for
+        # that whole window. Treat it as unproven and re-probe instead.
+        return False
+    return age <= max_age
 
 
 def revalidation_is_exhausted(profile: Any, *, image_refs: Collection[str]) -> bool:
@@ -673,6 +686,7 @@ async def _record_revalidation_failure(
 
 
 __all__ = [
+    "MAX_OBSERVATION_CLOCK_SKEW",
     "MAX_REVALIDATION_ATTEMPTS",
     "OPENCODE_PROVIDER_ID",
     "OPENCODE_RUNTIME_ID",

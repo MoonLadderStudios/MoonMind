@@ -43,6 +43,16 @@ IMAGE_SOURCES_ENV_KEY: Final[str] = "MOONMIND_CONTAINER_BACKEND_IMAGE_SOURCES"
 #: Deployment-declared named-volume cache sources, as a JSON array of
 #: ``{"cacheRef", "volumeName", "target", "readOnly"}`` objects.
 CACHE_SOURCES_ENV_KEY: Final[str] = "MOONMIND_CONTAINER_BACKEND_CACHE_SOURCES"
+
+#: The complete documented schema of each declaration. A key outside these sets
+#: is a configuration error rather than an ignored field, because every omitted
+#: key falls back to the permissive default.
+_IMAGE_SOURCE_KEYS: Final[frozenset[str]] = frozenset(
+    {"sourceRef", "image", "pullPolicy"}
+)
+_CACHE_SOURCE_KEYS: Final[frozenset[str]] = frozenset(
+    {"cacheRef", "volumeName", "target", "readOnly"}
+)
 PYTHON_TEST_FINGERPRINT_INPUTS: Final[tuple[str, ...]] = (
     ".dockerignore",
     "api_service/Dockerfile",
@@ -260,6 +270,26 @@ def _declaration_objects(
     return tuple(parsed)
 
 
+def _reject_unknown_keys(
+    item: Mapping[str, Any], *, allowed: frozenset[str], field_name: str
+) -> None:
+    """Fail a declaration that carries a key outside its documented schema.
+
+    Every key in these declarations is optional-with-a-default, so a misspelling
+    is silently permissive rather than merely ignored: ``readonly`` mounts a
+    cache read-write, and a misspelled ``pullPolicy`` restores ``if-missing`` for
+    an operator who declared ``never``. A deployment-policy mistake fails during
+    configuration instead of weakening the requested access policy at launch.
+    """
+
+    unknown = sorted(str(key) for key in item if str(key) not in allowed)
+    if unknown:
+        raise ContainerBackendConfigError(
+            f"{field_name} declares unknown key(s) {', '.join(unknown)}; "
+            f"allowed keys: {', '.join(sorted(allowed))}"
+        )
+
+
 def _declared_image_sources(
     raw: object, *, reserved_refs: frozenset[str]
 ) -> tuple[RegistryImageSource, ...]:
@@ -276,6 +306,7 @@ def _declared_image_sources(
         _declaration_objects(raw, field_name=IMAGE_SOURCES_ENV_KEY)
     ):
         field = f"{IMAGE_SOURCES_ENV_KEY}[{index}]"
+        _reject_unknown_keys(item, allowed=_IMAGE_SOURCE_KEYS, field_name=field)
         source_ref = str(item.get("sourceRef") or "").strip()
         image = str(item.get("image") or "").strip()
         if not source_ref or not image:
@@ -316,6 +347,7 @@ def _declared_cache_sources(raw: object) -> tuple[CacheSource, ...]:
         _declaration_objects(raw, field_name=CACHE_SOURCES_ENV_KEY)
     ):
         field = f"{CACHE_SOURCES_ENV_KEY}[{index}]"
+        _reject_unknown_keys(item, allowed=_CACHE_SOURCE_KEYS, field_name=field)
         cache_ref = str(item.get("cacheRef") or "").strip()
         if not cache_ref:
             raise ContainerBackendConfigError(
@@ -428,6 +460,30 @@ def resolve_container_backend_settings(
         minimum=16,
     )
 
+    shm_size_mib = _coerce_int(
+        source.get("MOONMIND_CONTAINER_BACKEND_SHM_SIZE_MIB"),
+        default=64,
+        minimum=1,
+    )
+    # Defaults to the memory ceiling so an omitted value admits any
+    # shared-memory request the job's own memory ceiling already permits,
+    # and never publishes a shared-memory allowance larger than that.
+    max_shm_size_mib = _coerce_int(
+        source.get("MOONMIND_CONTAINER_BACKEND_MAX_SHM_SIZE_MIB"),
+        default=max_memory_mib,
+        minimum=1,
+    )
+    if shm_size_mib > max_shm_size_mib:
+        # The launch boundary only checks caller-supplied shared-memory values,
+        # so a default above the ceiling would launch every omitted request
+        # above the deployment's own declared maximum. Reject the pair here.
+        raise ContainerBackendConfigError(
+            f"container backend shmSize default {shm_size_mib}MiB exceeds the "
+            f"deployment ceiling {max_shm_size_mib}MiB; lower "
+            "MOONMIND_CONTAINER_BACKEND_SHM_SIZE_MIB or raise "
+            "MOONMIND_CONTAINER_BACKEND_MAX_SHM_SIZE_MIB"
+        )
+
     return ContainerBackendSettings(
         enabled=_coerce_bool(
             source.get("MOONMIND_CONTAINER_BACKEND_ENABLED"), default=True
@@ -457,19 +513,8 @@ def resolve_container_backend_settings(
             source.get("MOONMIND_CONTAINER_BACKEND_MAX_GPU_COUNT"),
             minimum=0,
         ),
-        shm_size_mib=_coerce_int(
-            source.get("MOONMIND_CONTAINER_BACKEND_SHM_SIZE_MIB"),
-            default=64,
-            minimum=1,
-        ),
-        # Defaults to the memory ceiling so an omitted value admits any
-        # shared-memory request the job's own memory ceiling already permits,
-        # and never publishes a shared-memory allowance larger than that.
-        max_shm_size_mib=_coerce_int(
-            source.get("MOONMIND_CONTAINER_BACKEND_MAX_SHM_SIZE_MIB"),
-            default=max_memory_mib,
-            minimum=1,
-        ),
+        shm_size_mib=shm_size_mib,
+        max_shm_size_mib=max_shm_size_mib,
         max_timeout_seconds=_coerce_int(
             source.get("MOONMIND_CONTAINER_BACKEND_MAX_TIMEOUT_SECONDS"),
             default=14400,

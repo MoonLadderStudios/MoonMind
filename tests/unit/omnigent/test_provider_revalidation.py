@@ -266,6 +266,31 @@ def test_catalog_observation_interval_is_operator_configurable() -> None:
     )
 
 
+def test_catalog_observation_from_the_future_is_not_current() -> None:
+    """A backward clock correction must not keep an old catalog authoritative.
+
+    A ``validatedAt`` ahead of now yields a negative age that satisfies any
+    interval for as long as the timestamp stays ahead, so readiness and
+    planning would keep admitting models the provider may already have removed
+    for days after a VM snapshot restore.
+    """
+
+    now = datetime.now(UTC)
+    ahead = _profile(
+        evidence_image=CURRENT_IMAGE,
+        evidence_validated_at=(now + timedelta(days=3)).isoformat(),
+    )
+    assert not evidence_is_current(ahead, image_ref=CURRENT_IMAGE, env={}, now=now)
+
+    # Ordinary disagreement between the probing host's clock and this one is
+    # tolerated rather than forcing a re-probe on every pass.
+    skewed = _profile(
+        evidence_image=CURRENT_IMAGE,
+        evidence_validated_at=(now + timedelta(minutes=1)).isoformat(),
+    )
+    assert evidence_is_current(skewed, image_ref=CURRENT_IMAGE, env={}, now=now)
+
+
 def test_catalog_observation_without_a_timestamp_is_not_current() -> None:
     """An observation that cannot state its age cannot be shown to be current."""
 
@@ -900,3 +925,13 @@ def test_evidence_observation_is_current_is_the_shared_admission_predicate() -> 
     # Evidence that cannot state when it was observed is never current.
     assert not evidence_observation_is_current({}, env={}, now=now)
     assert not evidence_observation_is_current(None, env={}, now=now)
+    # Neither is evidence stamped beyond the clock-skew tolerance into the
+    # future, at every boundary and for every configured interval.
+    ahead = {"validatedAt": (now + timedelta(days=3)).isoformat()}
+    assert not evidence_observation_is_current(ahead, env={}, now=now)
+    assert not evidence_observation_is_current(
+        ahead, env={"OPENCODE_MODEL_CATALOG_MAX_AGE_HOURS": "720"}, now=now
+    )
+    assert evidence_observation_is_current(
+        {"validatedAt": (now + timedelta(minutes=1)).isoformat()}, env={}, now=now
+    )

@@ -244,6 +244,77 @@ def test_undeclared_refs_and_malformed_declarations_fail_closed() -> None:
         )
 
 
+def test_declarations_reject_keys_outside_their_documented_schema() -> None:
+    # Every declaration key defaults to the permissive value when omitted, so a
+    # misspelling must fail configuration instead of quietly weakening the
+    # deployment policy the operator declared.
+    with pytest.raises(ContainerBackendConfigError, match="unknown key"):
+        resolve_container_backend_settings(
+            {
+                CACHE_SOURCES_ENV_KEY: json.dumps(
+                    [
+                        {
+                            "cacheRef": DECLARED_CACHE_REF,
+                            "volumeName": "project_build_cache_volume",
+                            "target": "/opt/project/cache",
+                            "readonly": True,
+                        }
+                    ]
+                )
+            }
+        )
+
+    with pytest.raises(ContainerBackendConfigError, match="unknown key"):
+        resolve_container_backend_settings(
+            {
+                IMAGE_SOURCES_ENV_KEY: json.dumps(
+                    [
+                        {
+                            "sourceRef": DECLARED_IMAGE_SOURCE_REF,
+                            "image": DECLARED_IMAGE,
+                            "pullpolicy": "never",
+                        }
+                    ]
+                )
+            }
+        )
+
+    # The documented schemas themselves still resolve.
+    settings = resolve_container_backend_settings(
+        _declared_env(pull_policy="never", read_only=True)
+    )
+    assert settings.image_source(DECLARED_IMAGE_SOURCE_REF).pull_policy == "never"
+    assert settings.cache_source(DECLARED_CACHE_REF).read_only is True
+
+
+def test_shared_memory_default_must_fit_under_its_ceiling() -> None:
+    # ``_enforce_resource_ceilings`` only inspects caller-supplied shmSize, so a
+    # default above the ceiling would launch every omitted request above the
+    # deployment's declared maximum.
+    with pytest.raises(ContainerBackendConfigError, match="shmSize default"):
+        resolve_container_backend_settings(
+            {"MOONMIND_CONTAINER_BACKEND_MAX_SHM_SIZE_MIB": "32"}
+        )
+
+    # Lowering the ceiling is supported when the default is lowered with it.
+    tightened = resolve_container_backend_settings(
+        {
+            "MOONMIND_CONTAINER_BACKEND_MAX_SHM_SIZE_MIB": "32",
+            "MOONMIND_CONTAINER_BACKEND_SHM_SIZE_MIB": "32",
+        }
+    )
+    assert tightened.shm_size_mib == 32
+    assert tightened.max_shm_size_mib == 32
+
+    with pytest.raises(ContainerBackendConfigError, match="shmSize default"):
+        resolve_container_backend_settings(
+            {
+                "MOONMIND_CONTAINER_BACKEND_SHM_SIZE_MIB": "512",
+                "MOONMIND_CONTAINER_BACKEND_MAX_SHM_SIZE_MIB": "256",
+            }
+        )
+
+
 def test_shared_memory_ceiling_defaults_to_the_memory_ceiling() -> None:
     settings = resolve_container_backend_settings({})
     assert settings.shm_size_mib == 64
