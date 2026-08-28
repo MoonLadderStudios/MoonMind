@@ -91,16 +91,18 @@ async def _resolve_image(
     tag = str(source.get(tag_env) or "").strip() or "latest"
     if not image:
         return None, None
-    # Try inspect existing local image without pull
+    # Mutable coordinates are refreshable deployment input, not launch
+    # authority. Ask the registry first on every reconciliation pass so a
+    # newly published default host replaces a cached stale tag. If the registry
+    # is temporarily unavailable, the last locally resolved image remains a
+    # bounded degraded fallback.
     candidate = f"{image}:{tag}"
-    resolved = await _resolve_via_docker_inspect(candidate)
-    if resolved and _is_digest_pinned(resolved):
-        # Ensure we return canonical repo@digest, not just digest from inspect which may be repo@sha256
-        return resolved, _extract_digest(resolved)
-    # Try pull
     pulled = await _resolve_via_docker_pull(image, tag)
     if pulled and _is_digest_pinned(pulled):
         return pulled, _extract_digest(pulled)
+    resolved = await _resolve_via_docker_inspect(candidate)
+    if resolved and _is_digest_pinned(resolved):
+        return resolved, _extract_digest(resolved)
     # Fallback: try docker images --digests
     code, out, _ = await _run(["docker", "images", "--digests", "--format", "{{.Repository}}:{{.Tag}}@{{.Digest}} {{.ID}}"])
     if code == 0:

@@ -36,6 +36,37 @@ def _state(**overrides) -> ResolvedOmnigentDeploymentState:
 
 
 @pytest.mark.asyncio
+async def test_mutable_image_resolution_refreshes_a_cached_tag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    refreshed = "ghcr.io/example/host@sha256:" + "5" * 64
+    cached = "ghcr.io/example/host@sha256:" + "6" * 64
+    calls: list[str] = []
+
+    async def pull(image, tag):
+        calls.append(f"pull:{image}:{tag}")
+        return refreshed
+
+    async def inspect(image):
+        calls.append(f"inspect:{image}")
+        return cached
+
+    monkeypatch.setattr(image_resolution, "_resolve_via_docker_pull", pull)
+    monkeypatch.setattr(image_resolution, "_resolve_via_docker_inspect", inspect)
+
+    ref, digest = await image_resolution._resolve_image(
+        "IMAGE",
+        "TAG",
+        "REF",
+        {"IMAGE": "ghcr.io/example/host", "TAG": "latest"},
+    )
+
+    assert ref == refreshed
+    assert digest == "sha256:" + "5" * 64
+    assert calls == ["pull:ghcr.io/example/host:latest"]
+
+
+@pytest.mark.asyncio
 async def test_publication_exports_resolved_digests_and_persists_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -299,11 +299,12 @@ insufficient.
 ```
 MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED=true
 MOONMIND_OMNIGENT_OPENCODE_ENABLED=true
-OMNIGENT_BUILD_DIGEST=sha256:<shared-server-and-host-build-identity>
 OMNIGENT_OPENCODE_HOST_IMAGE_REF=ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:<digest>
 # Optional mutable build/pull coordinates; never launch authority:
 OMNIGENT_OPENCODE_HOST_IMAGE=ghcr.io/moonladderstudios/omnigent-host-opencode
 OMNIGENT_OPENCODE_HOST_IMAGE_TAG=1.18.11
+# Optional only for an independently built, explicitly paired server/host set:
+OMNIGENT_BUILD_DIGEST=sha256:<shared-server-and-host-build-identity>
 ```
 
 - Keep `MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED=false` until the generic services, database migration, Docker backend, endpoint, images, and egress policy are configured.
@@ -311,7 +312,9 @@ OMNIGENT_OPENCODE_HOST_IMAGE_TAG=1.18.11
 - Build from pinned Omnigent source/base image
 - Publish to GHCR with provenance and digest evidence
 - Make the immutable digest available to the data-driven Host Class selector
-- Fail closed when only a mutable tag is configured
+- Resolve mutable build coordinates on each reconciliation pass, but launch
+  only the resulting digest-pinned image after its declared build identity and
+  server/host version pairing have been verified
 - Image is pulled lazily only when an OpenCode workflow requires it; cached layers are reused
 
 Synchronize the authenticated Omnigent endpoint after deployment or plugin changes:
