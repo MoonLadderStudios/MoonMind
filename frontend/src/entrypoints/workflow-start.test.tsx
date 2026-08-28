@@ -5574,7 +5574,7 @@ describe.skip("Task Create Entrypoint", () => {
         (screen.getByLabelText("Publish Mode") as HTMLSelectElement).value,
       ).toBe("branch");
       expect(
-        (screen.getByLabelText(/Skill \(optional\)/) as HTMLInputElement).value,
+        (screen.getByRole("combobox", { name: /Step 1 skill/i }) as HTMLInputElement).value,
       ).toBe("speckit-implement");
     });
     expect(screen.queryByText("Schedule")).toBeNull();
@@ -5640,7 +5640,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(await screen.findByRole("heading", { name: "Edit Workflow" })).toBeTruthy();
     await waitFor(() => {
       expect(
-        (screen.getByLabelText(/Skill \(optional\)/) as HTMLInputElement).value,
+        (screen.getByRole("combobox", { name: /Step 1 skill/i }) as HTMLInputElement).value,
       ).toBe("moonspec-orchestrate");
     });
   });
@@ -7035,7 +7035,7 @@ describe.skip("Task Create Entrypoint", () => {
       target: { value: "MoonLadderStudios/MoonMind" },
     });
     fireEvent.change(
-      within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
+      within(primaryStep as HTMLElement).getByRole("combobox", { name: /skill/i }),
       {
         target: { value: "speckit-orchestrate" },
       },
@@ -7179,7 +7179,7 @@ describe.skip("Task Create Entrypoint", () => {
       target: { value: "Octo/Repo" },
     });
     fireEvent.change(
-      within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
+      within(primaryStep as HTMLElement).getByRole("combobox", { name: /skill/i }),
       {
         target: { value: "moonspec-orchestrate" },
       },
@@ -7222,7 +7222,7 @@ describe.skip("Task Create Entrypoint", () => {
       target: { value: "Implement MM-564 with the agentic Skill workflow." },
     });
     fireEvent.change(
-      within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
+      within(primaryStep as HTMLElement).getByRole("combobox", { name: /skill/i }),
       {
         target: { value: "moonspec-orchestrate" },
       },
@@ -7377,7 +7377,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(document.querySelector("#queue-advanced-settings")).toBeNull();
 
     fireEvent.change(
-      within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
+      within(primaryStep as HTMLElement).getByRole("combobox", { name: /skill/i }),
       {
         target: { value: "custom-skill" },
       },
@@ -7449,7 +7449,7 @@ describe.skip("Task Create Entrypoint", () => {
       target: { value: "Run the agentic boundary validation flow." },
     });
     fireEvent.change(
-      within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
+      within(primaryStep as HTMLElement).getByRole("combobox", { name: /skill/i }),
       {
         target: { value: "moonspec-orchestrate" },
       },
@@ -8147,7 +8147,7 @@ describe.skip("Task Create Entrypoint", () => {
     );
     expect(additionalStep).not.toBeNull();
     fireEvent.change(
-      within(additionalStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
+      within(additionalStep as HTMLElement).getByRole("combobox", { name: /skill/i }),
       {
         target: { value: "pr-resolver" },
       },
@@ -8359,7 +8359,7 @@ describe.skip("Task Create Entrypoint", () => {
         .defaultPublishMode,
     );
     fireEvent.change(
-      within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
+      within(primaryStep as HTMLElement).getByRole("combobox", { name: /skill/i }),
       {
         target: { value: "pr-resolver" },
       },
@@ -8371,7 +8371,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
 
     fireEvent.change(
-      within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
+      within(primaryStep as HTMLElement).getByRole("combobox", { name: /skill/i }),
       {
         target: { value: "batch-pr-resolver" },
       },
@@ -8415,7 +8415,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(primaryStep).not.toBeNull();
 
     const skillSelect = within(primaryStep as HTMLElement).getByLabelText(
-      /Skill \(optional\)/,
+      /^Skill$/,
     );
     const publishSelect = screen.getByLabelText(
       "Publish Mode",
@@ -8472,7 +8472,7 @@ describe.skip("Task Create Entrypoint", () => {
     );
 
     fireEvent.change(
-      within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
+      within(primaryStep as HTMLElement).getByRole("combobox", { name: /skill/i }),
       {
         target: { value: "jira-verify" },
       },
@@ -8487,7 +8487,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(publishSelect.value).toBe("pr");
 
     fireEvent.change(
-      within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
+      within(primaryStep as HTMLElement).getByRole("combobox", { name: /skill/i }),
       {
         target: { value: "jira-pr-verify" },
       },
@@ -9451,7 +9451,7 @@ describe.skip("Task Create Entrypoint", () => {
     );
     expect(primaryStep).not.toBeNull();
     fireEvent.change(
-      within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
+      within(primaryStep as HTMLElement).getByRole("combobox", { name: /skill/i }),
       {
         target: { value: "pr-resolver" },
       },
@@ -9489,7 +9489,7 @@ describe.skip("Task Create Entrypoint", () => {
     );
     expect(primaryStep).not.toBeNull();
     fireEvent.change(
-      within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
+      within(primaryStep as HTMLElement).getByRole("combobox", { name: /skill/i }),
       {
         target: { value: "fix-ci" },
       },
@@ -9632,7 +9632,7 @@ describe.skip("Task Create Entrypoint", () => {
       target: { value: "pr_with_merge_automation" },
     });
     fireEvent.change(
-      within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
+      within(primaryStep as HTMLElement).getByRole("combobox", { name: /skill/i }),
       {
         target: { value: "pr-resolver" },
       },
@@ -9738,7 +9738,7 @@ describe.skip("Task Create Entrypoint", () => {
     );
     expect(primaryStep).not.toBeNull();
     fireEvent.change(
-      within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
+      within(primaryStep as HTMLElement).getByRole("combobox", { name: /skill/i }),
       {
         target: { value: "pr-resolver" },
       },
@@ -10098,7 +10098,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(getStepTypeRadio(step, "Tool")).toBeTruthy();
     expect(getStepTypeRadio(step, "Preset")).toBeTruthy();
     expect(
-      within(step).getByLabelText(/Skill \(optional\)/),
+      within(step).getByRole("combobox", { name: /skill/i }),
     ).toBeTruthy();
   });
 
@@ -10149,7 +10149,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     expect(instructions.value).toBe("Keep this Step Type instruction.");
     expect(within(step).getByLabelText("Tool ID")).toBeTruthy();
-    expect(within(step).queryByLabelText(/Skill \(optional\)/)).toBeNull();
+    expect(within(step).queryByRole("combobox", { name: /skill/i })).toBeNull();
     expect(within(step).queryByLabelText("Preset Template")).toBeNull();
 
     selectStepType(step, "Preset");
@@ -10160,7 +10160,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(
       within(step).getByRole("button", { name: "Expand" }),
     ).toBeTruthy();
-    expect(within(step).queryByLabelText(/Skill \(optional\)/)).toBeNull();
+    expect(within(step).queryByRole("combobox", { name: /skill/i })).toBeNull();
     expect(within(step).queryByLabelText("Tool ID")).toBeNull();
   });
 
@@ -10611,7 +10611,7 @@ describe.skip("Task Create Entrypoint", () => {
     const step = primaryStep as HTMLElement;
 
     fireEvent.click(screen.getByLabelText("Advanced mode"));
-    fireEvent.change(within(step).getByLabelText(/Skill \(optional\)/), {
+    fireEvent.change(within(step).getByRole("combobox", { name: /skill/i }), {
       target: { value: "custom-skill" },
     });
     fireEvent.change(
@@ -10629,11 +10629,11 @@ describe.skip("Task Create Entrypoint", () => {
       },
     );
     selectStepType(step, "Tool");
-    expect(within(step).queryByLabelText(/Skill \(optional\)/)).toBeNull();
+    expect(within(step).queryByRole("combobox", { name: /skill/i })).toBeNull();
 
     selectStepType(step, "Skill");
     expect(
-      (within(step).getByLabelText(/Skill \(optional\)/) as HTMLInputElement)
+      (within(step).getByRole("combobox", { name: /skill/i }) as HTMLInputElement)
         .value,
     ).toBe("");
     expect(
@@ -10830,7 +10830,7 @@ describe.skip("Task Create Entrypoint", () => {
     );
     expect(primaryStep).not.toBeNull();
     fireEvent.change(
-      within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
+      within(primaryStep as HTMLElement).getByRole("combobox", { name: /skill/i }),
       {
         target: { value: "pr-resolver" },
       },
@@ -12476,7 +12476,7 @@ describe.skip("Task Create Entrypoint", () => {
       },
     );
     fireEvent.change(
-      within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
+      within(primaryStep as HTMLElement).getByRole("combobox", { name: /skill/i }),
       {
         target: { value: "pr-resolver" },
       },
@@ -15613,7 +15613,7 @@ describe("Task Create MM-641 authoring validation", () => {
       target: { value: "MoonLadderStudios/MoonMind" },
     });
     fireEvent.change(
-      within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
+      within(primaryStep as HTMLElement).getByRole("combobox", { name: /skill/i }),
       { target: { value: "speckit-orchestrate" } },
     );
 
@@ -15899,7 +15899,7 @@ describe("Task Create MM-641 authoring validation", () => {
     fireEvent.change(within(primary).getByLabelText("Instructions"), {
       target: { value: "Break down docs/Design.md." },
     });
-    fireEvent.change(within(primary).getByLabelText("Skill (optional)"), {
+    fireEvent.change(within(primary).getByRole("combobox", { name: /skill/i }), {
       target: { value: "moonspec-orchestrate" },
     });
 
@@ -15907,13 +15907,12 @@ describe("Task Create MM-641 authoring validation", () => {
     const secondStep = (await screen.findByText("Step 2")).closest("section");
     expect(secondStep).not.toBeNull();
     const second = secondStep as HTMLElement;
-    const secondSkillInput = within(second).getByLabelText(
-      "Skill (optional)",
-    ) as HTMLInputElement;
+    const secondSkillInput = within(second).getByRole("combobox", { name: /skill/i }) as HTMLInputElement;
     expect(secondSkillInput.placeholder).toBe("optional Skill name");
+    fireEvent.click(within(second).getByRole("button", { name: "Skill info for Step 2" }));
     expect(
-      within(second).getByText(
-        "Leave skill blank to run this step without a selected Skill.",
+      await within(second).findByText(
+        "Skill is optional. Leave blank to run this step without a selected Skill.",
       ),
     ).toBeTruthy();
     fireEvent.change(within(second).getByLabelText("Instructions"), {
@@ -19275,12 +19274,16 @@ describe("Task Create schema-driven capability inputs", () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
     const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
     selectStepType(step, "Skill");
-    fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
+    fireEvent.change(within(step).getByRole("combobox", { name: /skill/i }), {
       target: { value: "schema.skill" },
     });
 
     expect(await within(step).findByLabelText("Repository name")).toBeTruthy();
     expect(within(step).queryByLabelText("Branch")).toBeNull();
+    fireEvent.click(within(step).getByRole("button", { name: "Skill info for Step 1" }));
+    expect(
+      await within(step).findByTestId("skill-optional-inputs-notice-0"),
+    ).toBeTruthy();
     expect(
       within(step).getByTestId("skill-optional-inputs-notice-0").textContent,
     ).toContain("Advanced mode");
@@ -19322,7 +19325,7 @@ describe("Task Create schema-driven capability inputs", () => {
         "section",
       ) as HTMLElement;
       selectStepType(step, "Skill");
-      fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
+      fireEvent.change(within(step).getByRole("combobox", { name: /skill/i }), {
         target: { value: "pr-resolver" },
       });
 
@@ -19368,9 +19371,10 @@ describe("Task Create schema-driven capability inputs", () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
     const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
     selectStepType(step, "Skill");
-    fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
+    fireEvent.change(within(step).getByRole("combobox", { name: /skill/i }), {
       target: { value: "schema.skill" },
     });
+    fireEvent.click(within(step).getByRole("button", { name: "Skill info for Step 1" }));
     expect(
       await within(step).findByTestId("skill-optional-inputs-notice-0"),
     ).toBeTruthy();
@@ -19435,7 +19439,7 @@ describe("Task Create schema-driven capability inputs", () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
     const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
     selectStepType(step, "Skill");
-    fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
+    fireEvent.change(within(step).getByRole("combobox", { name: /skill/i }), {
       target: { value: "no-schema.skill" },
     });
     fireEvent.change(within(step).getByLabelText("Instructions"), {
@@ -19505,9 +19509,10 @@ describe("Task Create schema-driven capability inputs", () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
     const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
     selectStepType(step, "Skill");
-    fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
+    fireEvent.change(within(step).getByRole("combobox", { name: /skill/i }), {
       target: { value: "schema.skill" },
     });
+    fireEvent.click(within(step).getByRole("button", { name: "Skill info for Step 1" }));
     expect(
       await within(step).findByTestId("skill-optional-inputs-notice-0"),
     ).toBeTruthy();
@@ -19573,7 +19578,7 @@ describe("Task Create schema-driven capability inputs", () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
     const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
     selectStepType(step, "Skill");
-    const skillInput = within(step).getByLabelText("Skill (optional)");
+    const skillInput = within(step).getByRole("combobox", { name: /skill/i });
     fireEvent.pointerDown(skillInput);
 
     expect(await screen.findByRole("option", { name: "deployment.skill" })).toBeTruthy();
@@ -19588,7 +19593,7 @@ describe("Task Create schema-driven capability inputs", () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
     const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
     selectStepType(step, "Skill");
-    fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
+    fireEvent.change(within(step).getByRole("combobox", { name: /skill/i }), {
       target: { value: "schema.skill" },
     });
 
@@ -19634,7 +19639,7 @@ describe("Task Create schema-driven capability inputs", () => {
     fireEvent.change(within(step).getByLabelText("Instructions"), {
       target: { value: "Save schema-backed skill inputs." },
     });
-    fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
+    fireEvent.change(within(step).getByRole("combobox", { name: /skill/i }), {
       target: { value: "schema.skill" },
     });
     fireEvent.click(screen.getByLabelText("Advanced mode"));
@@ -19686,14 +19691,14 @@ describe("Task Create schema-driven capability inputs", () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
     const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
     selectStepType(step, "Skill");
-    fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
+    fireEvent.change(within(step).getByRole("combobox", { name: /skill/i }), {
       target: { value: "schema.skill" },
     });
 
     fireEvent.change(await within(step).findByLabelText("Repository name"), {
       target: { value: "MoonLadderStudios/StaleRepo" },
     });
-    fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
+    fireEvent.change(within(step).getByRole("combobox", { name: /skill/i }), {
       target: { value: "schema.other" },
     });
 
@@ -19733,7 +19738,7 @@ describe("Task Create schema-driven capability inputs", () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
     const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
     selectStepType(step, "Skill");
-    fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
+    fireEvent.change(within(step).getByRole("combobox", { name: /skill/i }), {
       target: { value: "schema.skill" },
     });
     fireEvent.click(screen.getByLabelText("Advanced mode"));
@@ -20122,7 +20127,7 @@ describe("Task Create governed Tool authoring", () => {
     fireEvent.change(within(step).getByLabelText("Instructions"), {
       target: { value: "Implement MM-577 with the agentic Skill workflow." },
     });
-    fireEvent.change(within(step).getByLabelText(/Skill \(optional\)/), {
+    fireEvent.change(within(step).getByRole("combobox", { name: /skill/i }), {
       target: { value: "moonspec-orchestrate" },
     });
 
