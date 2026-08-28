@@ -382,6 +382,29 @@ async def test_workflow_cannot_self_attest_an_unknown_capability(
         )
 
 
+@pytest.mark.asyncio
+async def test_selected_omnigent_runtime_satisfies_derived_runtime_capability(
+    monkeypatch,
+) -> None:
+    """The trusted Omnigent lane, not authored input, attests its runtime token."""
+
+    def resolve_evidence(plan_payload, **_kwargs):
+        return _protected_support_evidence(plan_payload), "supported"
+
+    monkeypatch.setattr(service, "resolve_execution_evidence", resolve_evidence)
+    result = await _compile_opencode_plan(
+        monkeypatch,
+        artifacts=_ArtifactService(),
+        launch_policy_ref="opencode-on-demand@1",
+        plan_store=_PlanStore(object()),
+        extra_parameters={"requiredCapabilities": ["omnigent"]},
+    )
+
+    decision = result.envelope.payload.classAdmissionDecision
+    assert decision["requiredSatisfied"] == ["omnigent"]
+    assert decision["exactHostRequired"] == []
+
+
 async def _capture_plan_payload(*, launch_policy_ref: str):
     """Return the compiled plan payload deployment qualification must match.
 

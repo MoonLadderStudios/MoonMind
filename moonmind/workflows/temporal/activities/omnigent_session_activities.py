@@ -1241,8 +1241,12 @@ async def _persist_host_runtime_evidence(
             expected_vendor_runtimes.append(
                 {"name": name, "version": version, "digest": digest}
             )
+    raw_class_decision = plan.payload.classAdmissionDecision
+    class_decision = ClassAdmissionDecision.model_validate(raw_class_decision)
     required_capabilities = list(
-        plan.payload.classAdmissionDecision.get("requiredSatisfied") or []
+        class_decision.exactHostRequired
+        if "exactHostRequired" in raw_class_decision
+        else class_decision.requiredSatisfied
     )
     validate_exact_host_attestation(
         attestation,
@@ -1333,9 +1337,7 @@ async def _persist_host_runtime_evidence(
         },
     )
     exact_decision = validate_exact_host_capabilities(
-        class_decision=ClassAdmissionDecision.model_validate(
-            plan.payload.classAdmissionDecision
-        ),
+        class_decision=class_decision,
         attestation_capabilities={
             str(key): value is True for key, value in capabilities.items()
         },

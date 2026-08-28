@@ -611,6 +611,23 @@ def test_class_capability_negotiation_accepts_a_host_declared_capability():
     )
 
     assert decision.requiredSatisfied == ("git",)
+    assert decision.exactHostRequired == ("git",)
+
+
+def test_class_capability_negotiation_accepts_selected_platform_runtime():
+    decision = compute_class_admission(
+        workflow_requirements=["omnigent"],
+        profile_requirements={"required": [], "preferred": []},
+        catalog_capabilities={},
+        host_class_capabilities={},
+        materializer_capabilities={},
+        bridge_capabilities={},
+        launch_policy_capabilities=[],
+        platform_capabilities={"omnigent": True},
+    )
+
+    assert decision.requiredSatisfied == ("omnigent",)
+    assert decision.exactHostRequired == ()
 
 
 # AC 11: On-demand hosts admitted by Host Class evidence, not fictional exact-host readiness

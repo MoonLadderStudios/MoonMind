@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from api_service.db.models import TemporalArtifactRetentionClass
+from api_service.services.provider_profile_runtime import OMNIGENT_RUNTIME_ID
 from moonmind.omnigent.evidence_resolver import resolve_execution_evidence
 from moonmind.omnigent.execution_support_evidence import (
     load_protected_execution_support_evidence,  # re-export for hermetic test patching
@@ -670,6 +671,14 @@ async def compile_and_persist_execution_plan(
 ) -> PersistedOmnigentExecutionPlan:
     """Compile and persist one plan before Temporal or provider side effects."""
 
+    target_runtime = (
+        str(initial_parameters.get("targetRuntime") or "").strip().lower()
+    )
+    if target_runtime != OMNIGENT_RUNTIME_ID:
+        raise ValueError(
+            "Omnigent execution-plan compilation requires "
+            "targetRuntime='omnigent'"
+        )
     document = agent_profile_snapshot.get("document")
     if not isinstance(document, Mapping):
         raise ValueError("Agent Profile snapshot document is unavailable")
@@ -1091,6 +1100,10 @@ async def compile_and_persist_execution_plan(
         # A workflow request can require a capability, but it cannot make that
         # capability available merely by naming it.
         bridge_capabilities=bridge_capabilities,
+        # Runtime-mode requirements are satisfied by this trusted compiler
+        # only after it has confirmed that the request reached the canonical
+        # Omnigent product boundary. They are not exact-host tool claims.
+        platform_capabilities={OMNIGENT_RUNTIME_ID: True},
         workspace_intent_ref=_digest_ref(
             "workspace-intent", {"repository": repository, "workspace": workspace}
         ),
