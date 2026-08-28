@@ -283,6 +283,12 @@ class DockerOpencodeAuthJsonMaterializer:
                     "run",
                     "--rm",
                     "-i",
+                    # Credential writers must own the mounted volume's initial
+                    # permissions.  The selected host image intentionally runs
+                    # workloads as UID 1000, so make this narrow setup process
+                    # explicitly root instead of inheriting the host default.
+                    "--user",
+                    "0:0",
                     "--network",
                     "none",
                     "--read-only",
@@ -541,6 +547,11 @@ class DockerOmnigentProviderConfigMaterializer(DockerOpencodeAuthJsonMaterialize
                     "run",
                     "--rm",
                     "-i",
+                    # See the OpenCode materializer above: only the isolated,
+                    # networkless credential writer runs as root.  The volume
+                    # it produces remains owned by the workload's UID 1000.
+                    "--user",
+                    "0:0",
                     "--network",
                     "none",
                     "--read-only",
@@ -961,4 +972,3 @@ __all__ = [
     "build_default_credential_materializer_registry",
     "credential_runtime_identity",
 ]
-

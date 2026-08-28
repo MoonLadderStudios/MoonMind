@@ -892,6 +892,16 @@ async def test_opencode_volume_materialization_transports_secret_only_on_stdin()
     assert json.loads(stdin_payloads[0]) == {
         "opencode-go": {"type": "api", "key": secret}
     }
+    writer_argv = next(argv for argv, payload in backend.calls if payload)
+    assert writer_argv[0:7] == [
+        "docker",
+        "run",
+        "--rm",
+        "-i",
+        "--user",
+        "0:0",
+        "--network",
+    ]
     assert secrets.values == {}
     assert handle.credentialGeneration == 4
     # Credentials mount read-only into a staging directory; the runtime script
@@ -954,6 +964,16 @@ async def test_pi_provider_config_uses_same_generic_volume_contract() -> None:
     stdin_payloads = [payload for _argv, payload in backend.calls if payload]
     assert len(stdin_payloads) == 1
     config = json.loads(stdin_payloads[0])
+    writer_argv = next(argv for argv, payload in backend.calls if payload)
+    assert writer_argv[0:7] == [
+        "docker",
+        "run",
+        "--rm",
+        "-i",
+        "--user",
+        "0:0",
+        "--network",
+    ]
     assert config["providers"]["moonmind"]["default"] == ["anthropic", "pi"]
     assert config["providers"]["moonmind"]["anthropic"]["api_key"] == secret
     assert handle.materializerRef == "omnigent-provider-config@1"
