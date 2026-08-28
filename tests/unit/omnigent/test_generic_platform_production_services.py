@@ -61,6 +61,10 @@ from moonmind.omnigent.host_services.github_credentials import (
     OmnigentGithubCredentialService,
     github_repository_from_request,
 )
+from moonmind.omnigent.host_services.launcher import (
+    DockerOmnigentHostLauncher,
+    HostLaunchSpec,
+)
 from moonmind.omnigent.host_services.mounted_tools import (
     OmnigentMountedToolService,
     deployment_mounted_tool_names,
@@ -847,6 +851,93 @@ async def test_github_credential_projection_transports_secret_only_on_stdin(
         "0:0",
         "--network",
     ]
+
+
+@pytest.mark.asyncio
+async def test_host_volume_initializers_use_setup_authority() -> None:
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    class Backend:
+        async def run(self, argv, **kwargs):
+            calls.append((list(argv), dict(kwargs)))
+            return (0, "container-id" if argv[1] == "create" else "", "")
+
+    class Scripts:
+        def build_entrypoint(self, **_kwargs):
+            return "exec true", {}
+
+    backend = Backend()
+    launcher = DockerOmnigentHostLauncher(
+        backend=backend,
+        runtime_scripts=Scripts(),
+        server_url="http://omnigent:8000",
+        host_api_token="host-control-token",
+    )
+    host_class = HostClass.model_validate(
+        {
+            "hostClassId": "omnigent-opencode",
+            "version": 1,
+            "imageRef": "ghcr.io/example/opencode@sha256:" + "f" * 64,
+            "omnigentVersion": "0.11.0",
+            "omnigentBuildDigest": "sha256:" + "1" * 64,
+            "architectures": ["linux/amd64"],
+            "declaredHarnessImplementations": [],
+            "integrationModes": ["native-server"],
+            "materializerRefs": ["opencode-auth-json@1"],
+            "features": {"readOnlyRoot": True},
+            "runtime": {"uid": 1000, "gid": 1000, "home": "/home/app"},
+        }
+    )
+    owner_ref = "host-lease:one"
+    await launcher.launch(
+        spec=HostLaunchSpec.model_validate(
+            {
+                "executionPlanRef": "plan:one",
+                "stepExecutionId": "step-1",
+                "runtimeBindingId": "binding-1",
+                "hostLeaseRef": owner_ref,
+                "hostLeaseGeneration": 1,
+                "hostClassRef": host_class.ref,
+                "imageRef": host_class.imageRef,
+                "serverEndpointRef": "default",
+                "serverUrl": "http://omnigent:8000",
+                "networkRef": "moonmind_default",
+                "limits": {"cpuMillis": 2000},
+                "runtime": {},
+                "correlationName": "mm-host-test",
+                "workspaceAttachment": {
+                    "kind": "bind",
+                    "sourceRef": "/tmp/workspace",
+                    "targetPath": "/workspaces/run",
+                    "accessMode": "read-write",
+                },
+                "skillAttachment": {
+                    "kind": "bind",
+                    "sourceRef": "/tmp/skills",
+                    "targetPath": "/opt/moonmind-skills",
+                    "accessMode": "read-only",
+                },
+                "controlAttachment": launcher.control_attachment(owner_ref),
+                "stateAttachment": {
+                    "kind": "volume",
+                    "sourceRef": "mm-host-state-test",
+                    "targetPath": "/home/app/.omnigent",
+                    "accessMode": "read-write",
+                },
+                "labels": {},
+            }
+        ),
+        host_class=host_class,
+        launch_policy=get_launch_policy("omnigent-on-demand@1"),
+        credential_handles=[],
+    )
+
+    setup_runs = [argv for argv, _kwargs in calls if argv[:2] == ["docker", "run"]]
+    assert len(setup_runs) == 2
+    for argv in setup_runs:
+        assert argv[argv.index("--user") + 1] == "0:0"
+    workload_create = next(argv for argv, _kwargs in calls if argv[:2] == ["docker", "create"])
+    assert workload_create[workload_create.index("--user") + 1] == "1000:1000"
 
 
 @pytest.mark.asyncio
