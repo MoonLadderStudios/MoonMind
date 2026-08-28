@@ -319,6 +319,8 @@ async def test_generic_readiness_requires_both_feature_gates_and_real_launch_dat
         "OMNIGENT_OPENCODE_HOST_IMAGE_REF",
         "registry.test/opencode@sha256:" + "6" * 64,
     )
+    # Exercise the documented default catalog interval, not an inherited value.
+    monkeypatch.delenv("OPENCODE_MODEL_CATALOG_MAX_AGE_HOURS", raising=False)
 
     document = {
         "schemaVersion": "moonmind.omnigent-agent-profile.v2",
@@ -363,6 +365,7 @@ async def test_generic_readiness_requires_both_feature_gates_and_real_launch_dat
             "credentialGeneration": 4,
             "imageRef": "registry.test/opencode@sha256:" + "6" * 64,
             "models": ["opencode-go/test-model"],
+            "validatedAt": datetime.now(UTC).isoformat(),
         },
     )
 
@@ -398,6 +401,32 @@ async def test_generic_readiness_requires_both_feature_gates_and_real_launch_dat
     assert enabled_target.available is True
     assert enabled_target.compatible_host_classes == ["omnigent-opencode@1"]
     assert enabled_target.models == ["opencode-go/test-model"]
+
+    # The pinned host image refreshes its catalog from the provider at probe
+    # time, so an observation older than the configured interval no longer
+    # describes the provider's current models. Advertising a target from it
+    # would keep offering a model the provider may have removed.
+    provider.model_catalog_evidence_json["validatedAt"] = (
+        datetime.now(UTC) - timedelta(hours=9)
+    ).isoformat()
+    expired = await catalog.get_omnigent_execution_readiness(
+        session=Session(), current_user=current_user
+    )
+    expired_target = expired.execution_targets[0]
+    assert expired_target.available is False
+    assert expired_target.models == []
+    expired_codes = {reason.code for reason in expired_target.gate_reasons}
+    # Connected and enrolled: this is a bounded re-validation wait, not a
+    # request to reconnect a profile that is already connected.
+    assert "provider_runtime_revalidation_pending" in expired_codes
+    assert "compatible_provider_profile_unavailable" not in expired_codes
+
+    # ``0`` disables the interval and restores identity-only staleness.
+    monkeypatch.setenv("OPENCODE_MODEL_CATALOG_MAX_AGE_HOURS", "0")
+    identity_only = await catalog.get_omnigent_execution_readiness(
+        session=Session(), current_user=current_user
+    )
+    assert identity_only.execution_targets[0].available is True
 
 
 @pytest.mark.asyncio

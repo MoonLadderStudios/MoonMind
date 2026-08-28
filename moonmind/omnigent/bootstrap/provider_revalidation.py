@@ -28,7 +28,7 @@ import hashlib
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, Mapping
+from typing import Any, Collection, Mapping
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -81,8 +81,11 @@ def reset_enrollment_attempts() -> None:
     _ENROLLMENT_ATTEMPTS.clear()
 
 
-def _observed_within_max_age(
-    evidence: Mapping[str, Any], *, env: Mapping[str, Any] | None, now: datetime
+def evidence_observation_is_current(
+    evidence: Any,
+    *,
+    env: Mapping[str, Any] | None = None,
+    now: datetime | None = None,
 ) -> bool:
     """Report whether the catalog observation is still inside its interval.
 
@@ -91,6 +94,13 @@ def _observed_within_max_age(
     digest freezes whichever catalog the first probe saw. Models the provider
     publishes afterwards -- contributor tiers included -- would never reach
     selection, readiness, or admission on an otherwise unchanged deployment.
+
+    Every boundary that admits an OpenCode target answers this same question:
+    the bootstrap reconciler, the execution-readiness catalog, pre-session
+    planning, and smoke admission. Enforcing the interval in the reconciler
+    alone would leave the other three advertising and launching from a catalog
+    the provider has since changed -- including a model it has removed --
+    whenever a refresh has not yet succeeded.
     """
 
     from moonmind.omnigent.settings import opencode_model_catalog_max_age
@@ -98,6 +108,8 @@ def _observed_within_max_age(
     max_age = opencode_model_catalog_max_age(env=env)
     if max_age is None:
         return True
+    if not isinstance(evidence, Mapping):
+        return False
     raw = str(evidence.get("validatedAt") or "").strip()
     if not raw:
         # An observation that cannot state when it was taken cannot be shown to
@@ -109,7 +121,36 @@ def _observed_within_max_age(
         return False
     if observed.tzinfo is None:
         observed = observed.replace(tzinfo=UTC)
-    return now - observed <= max_age
+    return (now or datetime.now(UTC)) - observed <= max_age
+
+
+def revalidation_is_exhausted(profile: Any, *, image_refs: Collection[str]) -> bool:
+    """Report whether re-validation gave up on this credential and image.
+
+    Re-validation preserves the enrolled credential and its prior evidence when
+    the pinned runtime rejects it, so a revoked key or a provider outage looks
+    exactly like an attempt in flight. ``_record_revalidation_failure`` records
+    the bounded outcome, and reading it is what keeps the reconciler from
+    probing the provider on every background pass and keeps readiness from
+    promising a wait that finishes automatically.
+
+    The record is scoped to the image and credential generation it was earned
+    against, so re-pinning the host image or reconnecting the credential
+    restores the full attempt budget without a separate reset action.
+    """
+
+    behavior = getattr(profile, "command_behavior", None) or {}
+    record = behavior.get(REVALIDATION_FAILURE_KEY)
+    if not isinstance(record, Mapping) or record.get("exhausted") is not True:
+        return False
+    try:
+        generation = int(record.get("credentialGeneration") or 0)
+    except (TypeError, ValueError):
+        return False
+    if generation != int(profile.credential_generation):
+        # A rotated credential has not been attempted yet.
+        return False
+    return str(record.get("imageRef") or "") in set(image_refs)
 
 
 def evidence_matches_launchable_identity(
@@ -167,9 +208,7 @@ def evidence_is_current(
         evidence, profile=profile, image_ref=image_ref
     ):
         return False
-    return _observed_within_max_age(
-        evidence, env=env, now=now or datetime.now(UTC)
-    )
+    return evidence_observation_is_current(evidence, env=env, now=now)
 
 
 def _has_enrolled_credential(profile: Any) -> bool:
@@ -401,7 +440,9 @@ async def _revalidate_stale_evidence(
 
     A profile the runtime rejects is left untouched and reported as deferred:
     this boundary never downgrades an enrolled credential, and it never records
-    evidence for an image other than the one the deployment selects.
+    evidence for an image other than the one the deployment selects. Once the
+    recorded attempt budget is exhausted for that identity the profile stops
+    being probed at all and is reported as an operator-actionable deferral.
     """
 
     from moonmind.omnigent.opencode_runtime_validation import (
@@ -421,10 +462,31 @@ async def _revalidate_stale_evidence(
     if not stale:
         return ProviderReconcileOutcome(ready=True, checked=checked)
 
-    resolver = build_omnigent_secret_resolver()
+    # An identity this image has already rejected ``MAX_REVALIDATION_ATTEMPTS``
+    # times learns nothing from another Docker-backed probe, and the startup
+    # maintainer re-enters this boundary every 120 seconds for as long as
+    # readiness stays false. Without this the recorded budget bounds nothing:
+    # a provider outage or a revoked key would probe the provider forever.
+    # Re-pinning the image or reconnecting the credential restores the budget.
+    exhausted_ids = {
+        profile.profile_id
+        for profile in stale
+        if revalidation_is_exhausted(profile, image_refs=(image_ref,))
+    }
+    for profile_id in sorted(exhausted_ids):
+        logger.warning(
+            "OpenCode Provider Profile re-validation is exhausted; skipping the "
+            "pinned runtime probe until the credential or host image changes: "
+            "profile_id=%s image_ref=%s",
+            profile_id,
+            image_ref,
+        )
+    pending = [p for p in stale if p.profile_id not in exhausted_ids]
+
+    resolver = build_omnigent_secret_resolver() if pending else None
     refreshed: list[str] = []
-    deferred: list[str] = []
-    for row in stale:
+    deferred: list[str] = sorted(exhausted_ids)
+    for row in pending:
         profile_id = row.profile_id
         operation_id = uuid4().hex
         guard = None
@@ -497,12 +559,20 @@ async def _revalidate_stale_evidence(
             image_ref,
         )
 
+    reasons: list[str] = []
+    if exhausted_ids:
+        reasons.append(
+            "pinned runtime re-validation exhausted; reconnect the credential "
+            "or re-pin the OpenCode host image"
+        )
+    if len(deferred) > len(exhausted_ids):
+        reasons.append("pinned runtime re-validation deferred")
     return ProviderReconcileOutcome(
         ready=not deferred,
         checked=checked,
         refreshed=tuple(refreshed),
         deferred=tuple(deferred),
-        reason=None if not deferred else "pinned runtime re-validation deferred",
+        reason="; ".join(reasons) or None,
     )
 
 
@@ -611,6 +681,8 @@ __all__ = [
     "ProviderReconcileOutcome",
     "evidence_is_current",
     "evidence_matches_launchable_identity",
+    "evidence_observation_is_current",
     "reconcile_opencode_provider_readiness",
     "reset_enrollment_attempts",
+    "revalidation_is_exhausted",
 ]
