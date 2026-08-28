@@ -699,13 +699,20 @@ services:
       - MOONMIND_DOCKER_STORAGE_CRITICAL_WATERMARK_PERCENT=${MOONMIND_DOCKER_STORAGE_CRITICAL_WATERMARK_PERCENT:-90}
       - MOONMIND_DOCKER_STORAGE_IMAGE_MIN_AGE_HOURS=${MOONMIND_DOCKER_STORAGE_IMAGE_MIN_AGE_HOURS:-168}
       - MOONMIND_DOCKER_STORAGE_BUILD_CACHE_MIN_AGE_HOURS=${MOONMIND_DOCKER_STORAGE_BUILD_CACHE_MIN_AGE_HOURS:-24}
-      # Deployment-approved Unreal image in the shared host daemon.
+      # Deployment-declared container-job image and cache sources. MoonMind
+      # itself carries no project image, volume, or in-container path: a caller
+      # selects one of these by its opaque ref and an unknown ref fails closed.
       # First use pulls a missing image through the trusted deployment daemon;
       # operators may explicitly select `never` when prewarming is required.
       - MOONMIND_UNREAL_ENGINE_IMAGE=${MOONMIND_UNREAL_ENGINE_IMAGE:-ghcr.io/moonladderstudios/tactics-ue-base:5.8}
       - MOONMIND_UNREAL_ENGINE_IMAGE_PULL_POLICY=${MOONMIND_UNREAL_ENGINE_IMAGE_PULL_POLICY:-if-missing}
       - MOONMIND_UNREAL_CCACHE_VOLUME_NAME=${MOONMIND_UNREAL_CCACHE_VOLUME_NAME:-unreal_ccache_volume}
       - MOONMIND_UNREAL_UBT_VOLUME_NAME=${MOONMIND_UNREAL_UBT_VOLUME_NAME:-unreal_ubt_volume}
+      - MOONMIND_CONTAINER_BACKEND_IMAGE_SOURCES=${MOONMIND_CONTAINER_BACKEND_IMAGE_SOURCES:-[{"sourceRef":"tactics-unreal","image":"${MOONMIND_UNREAL_ENGINE_IMAGE:-ghcr.io/moonladderstudios/tactics-ue-base:5.8}","pullPolicy":"${MOONMIND_UNREAL_ENGINE_IMAGE_PULL_POLICY:-if-missing}"}]}
+      - MOONMIND_CONTAINER_BACKEND_CACHE_SOURCES=${MOONMIND_CONTAINER_BACKEND_CACHE_SOURCES:-[{"cacheRef":"unreal-ccache","volumeName":"${MOONMIND_UNREAL_CCACHE_VOLUME_NAME:-unreal_ccache_volume}","target":"/home/ue4/.ccache"},{"cacheRef":"unreal-ubt","volumeName":"${MOONMIND_UNREAL_UBT_VOLUME_NAME:-unreal_ubt_volume}","target":"/home/ue4/.config/Epic/UnrealBuildTool"}]}
+      # Non-secret deployment values portable Skills may read from a managed
+      # session. Secret-looking names are refused; secrets use credentials.
+      - MOONMIND_MANAGED_SESSION_NON_SECRET_ENV_KEYS=${MOONMIND_MANAGED_SESSION_NON_SECRET_ENV_KEYS:-MOONMIND_UNREAL_ENGINE_IMAGE}
       - MOONMIND_DEPLOYMENT_PROJECT_DIR=${MOONMIND_DEPLOYMENT_PROJECT_DIR:-}
       - MOONMIND_DEPLOYMENT_COMPOSE_FILE=${MOONMIND_DEPLOYMENT_COMPOSE_FILE:-}
       - MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR=/workspace/host_project

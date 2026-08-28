@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 from temporalio.exceptions import ApplicationError
 
 from moonmind.config.container_backend_settings import (
-    TACTICS_UNREAL_IMAGE_SOURCE_REF,
+    ContainerBackendConfigError,
     resolve_container_backend_settings,
 )
 from moonmind.schemas.container_job_models import (
@@ -236,30 +237,56 @@ async def test_if_missing_absent_pulls_and_records_duration(tmp_path) -> None:
     assert obs.pull_duration_ms is not None and obs.pull_duration_ms >= 0
 
 
+DECLARED_IMAGE_SOURCE_REF = "project-toolchain"
+DECLARED_IMAGE = "registry.invalid/example/toolchain:1.0"
+
+
+def _declared_image_source_env(*, pull_policy: str | None = None) -> dict[str, str]:
+    """One deployment-declared registry image source.
+
+    MoonMind ships no project image defaults, so the deployment declaration is
+    the only way a source ref resolves.
+    """
+
+    declaration: dict[str, str] = {
+        "sourceRef": DECLARED_IMAGE_SOURCE_REF,
+        "image": DECLARED_IMAGE,
+    }
+    if pull_policy is not None:
+        declaration["pullPolicy"] = pull_policy
+    return {
+        "MOONMIND_CONTAINER_BACKEND_IMAGE_SOURCES": json.dumps([declaration])
+    }
+
+
 @pytest.mark.asyncio
-async def test_missing_tactics_unreal_source_pulls_on_first_use(tmp_path) -> None:
-    image = "ghcr.io/moonladderstudios/tactics-ue-base:5.8"
+async def test_missing_declared_image_source_pulls_on_first_use(tmp_path) -> None:
     daemon = FakeDaemon()
     backend = _backend(
         daemon,
         tmp_path,
-        settings=resolve_container_backend_settings(
-            {"MOONMIND_UNREAL_ENGINE_IMAGE": image}
-        ),
+        settings=resolve_container_backend_settings(_declared_image_source_env()),
     )
 
     result = await backend.acquire_image(
         _request(
             None,
-            image_source_ref=TACTICS_UNREAL_IMAGE_SOURCE_REF,
+            image_source_ref=DECLARED_IMAGE_SOURCE_REF,
         )
     )
 
-    assert daemon.pulls == [image]
-    assert result.image_observation.image_source_ref == (
-        TACTICS_UNREAL_IMAGE_SOURCE_REF
-    )
+    assert daemon.pulls == [DECLARED_IMAGE]
+    assert result.image_observation.image_source_ref == DECLARED_IMAGE_SOURCE_REF
     assert result.image_observation.provision_action == "pull"
+
+
+@pytest.mark.asyncio
+async def test_undeclared_image_source_ref_fails_closed(tmp_path) -> None:
+    """An image source MoonMind was never told about cannot resolve."""
+
+    settings = resolve_container_backend_settings({})
+    with pytest.raises(ContainerBackendConfigError):
+        settings.image_source(DECLARED_IMAGE_SOURCE_REF)
 
 
 @pytest.mark.asyncio
@@ -282,7 +309,7 @@ async def test_deployment_source_absence_names_operator_remediation(tmp_path) ->
         daemon,
         tmp_path,
         settings=resolve_container_backend_settings(
-            {"MOONMIND_UNREAL_ENGINE_IMAGE_PULL_POLICY": "never"}
+            _declared_image_source_env(pull_policy="never")
         ),
     )
     payload = _request("python:3.13").model_dump(
@@ -291,14 +318,17 @@ async def test_deployment_source_absence_names_operator_remediation(tmp_path) ->
     spec = payload["request"]["spec"]
     spec.pop("image")
     spec.pop("pullPolicy")
-    spec["imageSourceRef"] = "tactics-unreal"
+    spec["imageSourceRef"] = DECLARED_IMAGE_SOURCE_REF
     request = ContainerJobActivityRequest.model_validate(payload)
 
     with pytest.raises(ImageAcquisitionError) as excinfo:
         await backend.acquire_image(request)
 
     assert excinfo.value.failure_class == ContainerJobFailureClass.IMAGE_NOT_FOUND
-    assert "deployment image source 'tactics-unreal' is absent" in str(excinfo.value)
+    assert (
+        f"deployment image source {DECLARED_IMAGE_SOURCE_REF!r} is absent"
+        in str(excinfo.value)
+    )
     assert "provision its configured image" in str(excinfo.value)
     assert daemon.pulls == []
 

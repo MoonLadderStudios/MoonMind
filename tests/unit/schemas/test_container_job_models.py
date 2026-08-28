@@ -23,6 +23,7 @@ from moonmind.schemas.container_job_models import (
     MAX_ARTIFACT_PAGE_ENTRIES,
     MAX_LOG_PAGE_ENTRIES,
     ResolvedContainerLaunchPlan,
+    ResourceLimits,
     TerminalOutcome,
     ensure_temporal_safe,
     workspace_locator_identity,
@@ -380,3 +381,29 @@ def test_every_history_facing_contract_enforces_temporal_limit(monkeypatch) -> N
         )
     with pytest.raises(ValidationError, match="payload must serialize"):
         ContainerJobCancelResult(jobId=JOB_ID, state="canceling", accepted=True)
+
+
+def test_resource_limits_admit_and_validate_a_shared_memory_request() -> None:
+    """The generic contract admits the caller-owned shared-memory field.
+
+    A spec that could not express ``resources.shmSize`` rejected it as
+    ``extra_forbidden``, which blocked every caller whose workload needs more
+    shared memory than the deployment default.
+    """
+
+    admitted = ResourceLimits.model_validate(
+        {"cpuMillis": 1000, "memoryMiB": 512, "shmSize": "8g"}
+    )
+    assert admitted.shm_size == "8g"
+    assert admitted.model_dump(by_alias=True)["shmSize"] == "8g"
+
+    # Omitted means "deployment default applies", not "zero".
+    assert ResourceLimits.model_validate(
+        {"cpuMillis": 1000, "memoryMiB": 512}
+    ).shm_size is None
+
+    for invalid in ("", "   ", "8gigs", "-1g", "0"):
+        with pytest.raises(ValidationError):
+            ResourceLimits.model_validate(
+                {"cpuMillis": 1000, "memoryMiB": 512, "shmSize": invalid}
+            )

@@ -281,20 +281,21 @@ dockerBackendService:
         command: ["python", "-c", "import pytest"]
         networkMode: none
 
-    tactics-unreal:
+    # Every other image source is declared by the deployment through
+    # MOONMIND_CONTAINER_BACKEND_IMAGE_SOURCES, a JSON array of
+    # {"sourceRef", "image", "pullPolicy"} objects. MoonMind ships no project
+    # image default of its own.
+    <deployment-declared>:
       kind: registry
-      imageFrom: MOONMIND_UNREAL_ENGINE_IMAGE
-      defaultImage: ghcr.io/moonladderstudios/tactics-ue-base:5.8
+      from: MOONMIND_CONTAINER_BACKEND_IMAGE_SOURCES
       pullPolicy: if-missing
 
+  # Cache sources are declared the same way, through
+  # MOONMIND_CONTAINER_BACKEND_CACHE_SOURCES, a JSON array of
+  # {"cacheRef", "volumeName", "target", "readOnly"} objects.
   cacheSources:
-    unreal-ccache:
-      volumeFrom: MOONMIND_UNREAL_CCACHE_VOLUME_NAME
-      target: /home/ue4/.ccache
-      readOnly: false
-    unreal-ubt:
-      volumeFrom: MOONMIND_UNREAL_UBT_VOLUME_NAME
-      target: /home/ue4/.config/Epic/UnrealBuildTool
+    <deployment-declared>:
+      from: MOONMIND_CONTAINER_BACKEND_CACHE_SOURCES
       readOnly: false
 
   policy:
@@ -305,6 +306,18 @@ dockerBackendService:
 Rules:
 
 - unsupported backend or image-source kinds are configuration errors;
+- MoonMind owns exactly one image source, its own `moonmind-python-tests`
+  self-test image, and no cache source at all. Every project image, named
+  volume, and in-container cache path is deployment-declared, so MoonMind's
+  generic surfaces name no consuming project. A caller selects a source by its
+  opaque ref and an undeclared ref fails closed;
+- a declaration that is not a JSON array of objects, omits `sourceRef`/`image`
+  or `cacheRef`, repeats a ref, reuses a MoonMind-reserved ref, names a
+  non-volume, or gives a non-absolute cache target is a configuration error;
+- `resources.shmSize` is caller-owned. It is refused when it exceeds
+  `MOONMIND_CONTAINER_BACKEND_MAX_SHM_SIZE_MIB` (default: the memory ceiling)
+  rather than clamped, so the realized value always matches the request; an
+  omitted value applies `MOONMIND_CONTAINER_BACKEND_SHM_SIZE_MIB`;
 - empty or unreachable Docker endpoints fail service readiness;
 - a missing optional image does not fail service or worker readiness;
 - local-build paths are resolved from an operator-owned deployment root, never

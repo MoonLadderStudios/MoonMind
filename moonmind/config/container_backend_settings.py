@@ -15,10 +15,11 @@ construction reads these settings.
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, Mapping
+from typing import Any, Final, Mapping
 
 #: The only backend kind this deployment supports. A second backend kind
 #: (Podman, containerd, Kubernetes, endpoint pools) is explicitly out of scope.
@@ -33,13 +34,15 @@ _FALSEY: Final[frozenset[str]] = frozenset({"0", "false", "no", "off", ""})
 
 PYTHON_TEST_IMAGE_SOURCE_REF: Final[str] = "moonmind-python-tests"
 PYTHON_TEST_LOCAL_IMAGE: Final[str] = "moonmind-python-tests:local"
-TACTICS_UNREAL_IMAGE_SOURCE_REF: Final[str] = "tactics-unreal"
-DEFAULT_TACTICS_UNREAL_IMAGE: Final[str] = (
-    "ghcr.io/moonladderstudios/tactics-ue-base:5.8"
-)
-UNREAL_CCACHE_CACHE_REF: Final[str] = "unreal-ccache"
-UNREAL_UBT_CACHE_REF: Final[str] = "unreal-ubt"
 PYTHON_TEST_RECIPE_VERSION: Final[str] = "v1"
+
+#: Deployment-declared registry image sources, as a JSON array of
+#: ``{"sourceRef", "image", "pullPolicy"}`` objects.
+IMAGE_SOURCES_ENV_KEY: Final[str] = "MOONMIND_CONTAINER_BACKEND_IMAGE_SOURCES"
+
+#: Deployment-declared named-volume cache sources, as a JSON array of
+#: ``{"cacheRef", "volumeName", "target", "readOnly"}`` objects.
+CACHE_SOURCES_ENV_KEY: Final[str] = "MOONMIND_CONTAINER_BACKEND_CACHE_SOURCES"
 PYTHON_TEST_FINGERPRINT_INPUTS: Final[tuple[str, ...]] = (
     ".dockerignore",
     "api_service/Dockerfile",
@@ -157,7 +160,11 @@ class ContainerBackendSettings:
     #: ceiling, so host capability remains the only gate; ``0`` refuses every
     #: device request on this deployment.
     max_gpu_count: int | None
+    #: Shared-memory size applied when a caller requests none.
     shm_size_mib: int
+    #: Highest shared-memory size a caller may request, in MiB. A larger
+    #: request is refused at the launch boundary rather than clamped.
+    max_shm_size_mib: int
     max_timeout_seconds: int
     max_output_bytes: int
     max_output_files: int
@@ -215,6 +222,123 @@ def _registry_pull_policy(value: object, *, default: str) -> str:
             "if-missing, always, never"
         )
     return normalized
+
+
+def _mount_target(value: object, *, field_name: str) -> str:
+    normalized = str(value or "").strip()
+    if (
+        not normalized.startswith("/")
+        or len(normalized) > 512
+        or ".." in normalized.split("/")
+    ):
+        raise ContainerBackendConfigError(
+            f"{field_name} must be a normalized absolute container path"
+        )
+    return normalized
+
+
+def _declaration_objects(
+    raw: object, *, field_name: str
+) -> tuple[Mapping[str, Any], ...]:
+    """Parse one deployment-declared JSON array of source objects."""
+
+    text = str(raw or "").strip()
+    if not text:
+        return ()
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ContainerBackendConfigError(
+            f"{field_name} must be a JSON array of objects: {exc.msg}"
+        ) from exc
+    if not isinstance(parsed, list) or not all(
+        isinstance(item, Mapping) for item in parsed
+    ):
+        raise ContainerBackendConfigError(
+            f"{field_name} must be a JSON array of objects"
+        )
+    return tuple(parsed)
+
+
+def _declared_image_sources(
+    raw: object, *, reserved_refs: frozenset[str]
+) -> tuple[RegistryImageSource, ...]:
+    """Resolve the deployment's own registry image sources.
+
+    MoonMind ships no project image defaults: a caller selects an image through
+    an opaque ``sourceRef`` and the deployment decides what that ref resolves
+    to. An unknown ref already fails closed in ``image_source``.
+    """
+
+    sources: list[RegistryImageSource] = []
+    seen: set[str] = set()
+    for index, item in enumerate(
+        _declaration_objects(raw, field_name=IMAGE_SOURCES_ENV_KEY)
+    ):
+        field = f"{IMAGE_SOURCES_ENV_KEY}[{index}]"
+        source_ref = str(item.get("sourceRef") or "").strip()
+        image = str(item.get("image") or "").strip()
+        if not source_ref or not image:
+            raise ContainerBackendConfigError(
+                f"{field} requires a non-empty sourceRef and image"
+            )
+        if source_ref in reserved_refs:
+            raise ContainerBackendConfigError(
+                f"{field} sourceRef {source_ref!r} is reserved by MoonMind"
+            )
+        if source_ref in seen:
+            raise ContainerBackendConfigError(
+                f"{field} declares duplicate sourceRef {source_ref!r}"
+            )
+        seen.add(source_ref)
+        sources.append(
+            RegistryImageSource(
+                source_ref=source_ref,
+                image=image,
+                # First use is cold-start provisioning, not an operator-only
+                # prewarm requirement. Private registries still fail through
+                # the normal credential-aware pull contract when authorization
+                # is unavailable; deployments may explicitly select ``never``.
+                pull_policy=_registry_pull_policy(
+                    item.get("pullPolicy"), default="if-missing"
+                ),
+            )
+        )
+    return tuple(sources)
+
+
+def _declared_cache_sources(raw: object) -> tuple[CacheSource, ...]:
+    """Resolve the deployment's own named-volume cache sources."""
+
+    sources: list[CacheSource] = []
+    seen: set[str] = set()
+    for index, item in enumerate(
+        _declaration_objects(raw, field_name=CACHE_SOURCES_ENV_KEY)
+    ):
+        field = f"{CACHE_SOURCES_ENV_KEY}[{index}]"
+        cache_ref = str(item.get("cacheRef") or "").strip()
+        if not cache_ref:
+            raise ContainerBackendConfigError(
+                f"{field} requires a non-empty cacheRef"
+            )
+        if cache_ref in seen:
+            raise ContainerBackendConfigError(
+                f"{field} declares duplicate cacheRef {cache_ref!r}"
+            )
+        seen.add(cache_ref)
+        sources.append(
+            CacheSource(
+                cache_ref=cache_ref,
+                volume_name=_named_volume(
+                    item.get("volumeName"), field_name=f"{field}.volumeName"
+                ),
+                target=_mount_target(
+                    item.get("target"), field_name=f"{field}.target"
+                ),
+                read_only=_coerce_bool(item.get("readOnly"), default=False),
+            )
+        )
+    return tuple(sources)
 
 
 def resolve_container_backend_settings(
@@ -285,45 +409,23 @@ def resolve_container_backend_settings(
             validation_command=("python", "-c", "import pytest"),
         )
 
+    # The python-test image is MoonMind's own self-test surface and is the only
+    # image source MoonMind itself owns. Every other image and cache source is
+    # declared by the deployment, so no project's image, volume, or
+    # in-container path is knowledge this module carries.
     image_sources: list[ImageSource] = [python_test_source]
-    tactics_unreal_image = str(
-        source.get("MOONMIND_UNREAL_ENGINE_IMAGE")
-        or DEFAULT_TACTICS_UNREAL_IMAGE
-    ).strip()
-    image_sources.append(
-        RegistryImageSource(
-            source_ref=TACTICS_UNREAL_IMAGE_SOURCE_REF,
-            image=tactics_unreal_image,
-            # First use is cold-start provisioning, not an operator-only
-            # prewarm requirement. Private registries still fail through the
-            # normal credential-aware pull contract when authorization is
-            # unavailable; deployments may explicitly select ``never``.
-            pull_policy=_registry_pull_policy(
-                source.get("MOONMIND_UNREAL_ENGINE_IMAGE_PULL_POLICY"),
-                default="if-missing",
-            ),
+    image_sources.extend(
+        _declared_image_sources(
+            source.get(IMAGE_SOURCES_ENV_KEY),
+            reserved_refs=frozenset({PYTHON_TEST_IMAGE_SOURCE_REF}),
         )
     )
+    cache_sources = _declared_cache_sources(source.get(CACHE_SOURCES_ENV_KEY))
 
-    cache_sources = (
-        CacheSource(
-            cache_ref=UNREAL_CCACHE_CACHE_REF,
-            volume_name=_named_volume(
-                source.get("MOONMIND_UNREAL_CCACHE_VOLUME_NAME")
-                or "unreal_ccache_volume",
-                field_name="MOONMIND_UNREAL_CCACHE_VOLUME_NAME",
-            ),
-            target="/home/ue4/.ccache",
-        ),
-        CacheSource(
-            cache_ref=UNREAL_UBT_CACHE_REF,
-            volume_name=_named_volume(
-                source.get("MOONMIND_UNREAL_UBT_VOLUME_NAME")
-                or "unreal_ubt_volume",
-                field_name="MOONMIND_UNREAL_UBT_VOLUME_NAME",
-            ),
-            target="/home/ue4/.config/Epic/UnrealBuildTool",
-        ),
+    max_memory_mib = _coerce_int(
+        source.get("MOONMIND_CONTAINER_BACKEND_MAX_MEMORY_MIB"),
+        default=16384,
+        minimum=16,
     )
 
     return ContainerBackendSettings(
@@ -341,11 +443,7 @@ def resolve_container_backend_settings(
             default=8000,
             minimum=1,
         ),
-        max_memory_mib=_coerce_int(
-            source.get("MOONMIND_CONTAINER_BACKEND_MAX_MEMORY_MIB"),
-            default=16384,
-            minimum=16,
-        ),
+        max_memory_mib=max_memory_mib,
         max_active_memory_mib=_coerce_optional_int(
             source.get("MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_MEMORY_MIB"),
             minimum=16,
@@ -362,6 +460,14 @@ def resolve_container_backend_settings(
         shm_size_mib=_coerce_int(
             source.get("MOONMIND_CONTAINER_BACKEND_SHM_SIZE_MIB"),
             default=64,
+            minimum=1,
+        ),
+        # Defaults to the memory ceiling so an omitted value admits any
+        # shared-memory request the job's own memory ceiling already permits,
+        # and never publishes a shared-memory allowance larger than that.
+        max_shm_size_mib=_coerce_int(
+            source.get("MOONMIND_CONTAINER_BACKEND_MAX_SHM_SIZE_MIB"),
+            default=max_memory_mib,
             minimum=1,
         ),
         max_timeout_seconds=_coerce_int(

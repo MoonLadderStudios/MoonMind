@@ -472,12 +472,58 @@ _PROPOSAL_TELEMETRY_TAG_LABELS = {
     "retry": "retry",
 }
 _AUTO_SKILL_SENTINEL = "auto"
-_NON_SECRET_MANAGED_SESSION_ENV_KEYS: tuple[str, ...] = (
-    "MOONMIND_URL",
-    # Non-secret Unreal toolchain image ref consumed by portable skills that submit
-    # typed container jobs through MoonMind's API-owned Docker Backend.
-    "MOONMIND_UNREAL_ENGINE_IMAGE",
+#: Non-secret MoonMind-owned keys every managed session may read.
+_NON_SECRET_MANAGED_SESSION_ENV_KEYS: tuple[str, ...] = ("MOONMIND_URL",)
+
+#: Deployment-declared, comma-separated non-secret environment keys forwarded to
+#: managed sessions. A portable Skill that needs a deployment-owned non-secret
+#: value -- an image ref, a registry host, a project identifier -- is served by
+#: the operator declaring the key here, so MoonMind carries no project's variable
+#: names in its own source.
+_MANAGED_SESSION_ENV_ALLOWLIST_KEY: str = (
+    "MOONMIND_MANAGED_SESSION_NON_SECRET_ENV_KEYS"
 )
+_ENV_KEY_SHAPE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
+
+
+def _declared_non_secret_managed_session_env_keys() -> tuple[str, ...]:
+    """Resolve the deployment's declared non-secret managed-session env keys.
+
+    Secret-looking names are refused using the same rule that governs plaintext
+    environment values on the container-job contract: secrets travel the
+    credential path, never this one.
+    """
+
+    from moonmind.schemas.container_job_models import (
+        SENSITIVE_ENVIRONMENT_KEY_PATTERN,
+    )
+
+    keys: list[str] = []
+    raw = os.environ.get(_MANAGED_SESSION_ENV_ALLOWLIST_KEY) or ""
+    for candidate in raw.split(","):
+        key = candidate.strip()
+        if not key or key in keys:
+            continue
+        if _ENV_KEY_SHAPE.fullmatch(key) is None:
+            logger.warning(
+                "ignoring malformed managed-session environment key %r declared "
+                "in %s",
+                key,
+                _MANAGED_SESSION_ENV_ALLOWLIST_KEY,
+            )
+            continue
+        if SENSITIVE_ENVIRONMENT_KEY_PATTERN.search(key):
+            logger.warning(
+                "refusing to forward secret-looking managed-session environment "
+                "key %r declared in %s; use the credential path instead",
+                key,
+                _MANAGED_SESSION_ENV_ALLOWLIST_KEY,
+            )
+            continue
+        keys.append(key)
+    return tuple(keys)
+
+
 _MANAGED_SESSION_TELEMETRY_KEYS: tuple[str, ...] = (
     "activityType",
     "agentRunId",
@@ -10015,7 +10061,10 @@ class TemporalAgentRuntimeActivities:
                     profile=profile,
                 )
             )
-        for key in _NON_SECRET_MANAGED_SESSION_ENV_KEYS:
+        for key in (
+            *_NON_SECRET_MANAGED_SESSION_ENV_KEYS,
+            *_declared_non_secret_managed_session_env_keys(),
+        ):
             value = os.environ.get(key)
             if value is not None and value.strip() and key not in environment:
                 environment[key] = value
