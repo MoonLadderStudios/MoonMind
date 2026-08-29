@@ -39,7 +39,7 @@ This document owns:
 
 - placement of configuration pages in the Settings dropdown;
 - the Configuration group and its ordering;
-- canonical routes and legacy redirects;
+- canonical routes, the default entry point, and legacy path redirects;
 - active destination and dropdown-trigger behavior;
 - shared page-shell rules;
 - page-level loading and failure boundaries;
@@ -140,7 +140,7 @@ It does not expand to `Providers & Secrets` or `User / Workspace`. The active pa
 
 ### 4.3 No Settings landing page
 
-The dropdown is the configuration index. MoonMind does not need another page that repeats the same three choices as cards. The bare `/settings` route redirects to the default configuration page.
+The dropdown is the configuration index. MoonMind does not need another page that repeats the same three choices as cards. The bare `/settings` route resolves to the first configuration page the current user is authorized to see, as defined in section 5.2.
 
 ---
 
@@ -158,24 +158,62 @@ All three destinations belong to the Settings dropdown's Configuration group and
 
 The route registry may map them to three page modules or one shared bundle with three route-owned components. The user-visible contract is three distinct pages.
 
-### 5.2 Default redirect
+### 5.2 Default entry point
 
-`/settings` redirects with replacement history to `/settings/providers-secrets`.
+`/settings` is an entry point, not a destination. It resolves to the first
+destination the backend authorizes for the current user, evaluated in the
+canonical Configuration order:
 
-### 5.3 Legacy redirects
+1. `/settings/providers-secrets`;
+2. `/settings/user-workspace`; then
+3. `/settings/operations`.
 
-| Legacy route | Canonical target |
+Resolution uses replacement history so `/settings` does not become a back-button
+trap. The default must never assume Providers & Secrets is available: when that
+destination is `hidden` or `unavailable` and another destination is `shown`,
+`/settings` resolves to that accessible destination instead.
+
+When no Configuration destination is accessible, `/settings` renders the
+Configuration unavailable state described in section 10 rather than redirecting
+to a forbidden page. This resolution applies only to `/settings` itself; a direct
+request for a specific unauthorized destination still shows that destination's
+own unavailable or forbidden state and is never silently rerouted to a sibling.
+
+### 5.3 Retired `?section=` routing
+
+`?section=` is a superseded internal routing contract, not a supported legacy
+route. MoonMind is pre-release, so the rename is completed rather than aliased:
+the change that introduces the canonical paths also updates every internal
+caller, test, and document that still builds a `?section=` Settings link, and
+deletes the old section-routing code. No redirect table preserves `?section=`,
+because a redirect would let a partial migration keep working and hide the
+remaining callers.
+
+After the rename, `section` carries no page identity. A `section` query
+parameter arriving on a canonical route is ignored and does not select, restore,
+or override the page.
+
+Section 8 covers the separate, still-valid backend use of `section=` as catalog
+classification on the settings API. That server-side parameter is unrelated to
+client routing and is not affected by this rule.
+
+### 5.4 Legacy path redirects
+
+Standalone paths that users may have bookmarked keep a redirect, because they
+are user-visible URLs rather than an internal routing contract:
+
+| Legacy path | Canonical target |
 |---|---|
-| `/settings?section=providers-secrets` | `/settings/providers-secrets` |
-| `/settings?section=user-workspace` | `/settings/user-workspace` |
-| `/settings?section=operations` | `/settings/operations` |
 | `/secrets` | `/settings/providers-secrets` |
 | `/workers` | `/settings/operations` |
-| an unknown older Settings alias | `/settings/providers-secrets` unless a safe mapping exists |
+| an unknown older Settings alias | the default entry point in section 5.2 unless a safe specific mapping exists |
 
-Redirects preserve safe page-relevant query parameters and remove `section`.
+These redirects use replacement history, preserve safe page-relevant query
+parameters, and drop parameters that no longer have meaning on the target page.
+A redirect never lands on a destination the user is not authorized to see; when
+the mapped destination is unavailable, resolution falls back to section 5.2.
 
-### 5.4 Page-local URL state
+### 5.5 Page-local URL state
 
 Page-local filters may use query parameters:
 
@@ -188,7 +226,7 @@ Page-local filters may use query parameters:
 
 Sensitive values never enter paths, query parameters, browser history, page titles, or navigation telemetry.
 
-### 5.5 Page titles
+### 5.6 Page titles
 
 Recommended document titles are:
 
@@ -379,7 +417,7 @@ DELETE /api/v1/settings/user/{key}
 
 ## 9. Descriptor-Driven User / Workspace Contract
 
-A descriptor carries enough metadata for the frontend to render and explain a setting without key-specific logic:
+A descriptor carries enough metadata for the frontend to render and explain a setting without key-specific logic. The backend owns this shape; the fields below are the ones the row contract in this document depends on, and a consumer must not drop a field it renders:
 
 ```yaml
 SettingDescriptor:
@@ -399,15 +437,43 @@ SettingDescriptor:
   options: array | null
   constraints: object | null
   sensitive: boolean
+  secret_role: string | null
   read_only: boolean
   read_only_reason: string | null
   apply_mode: string
   activation_state: string
+  active: boolean
   pending_value: any | null
+  affected_process_or_worker: string | null
+  completion_guidance: string | null
+  requires_reload: boolean
+  requires_worker_restart: boolean
+  requires_process_restart: boolean
   applies_to: [string]
+  depends_on: array
+  order: integer
+  audit: object
   value_version: integer
   diagnostics: array
 ```
+
+These fields are load-bearing for the behavior this document requires:
+
+| Field | Row behavior that depends on it |
+|---|---|
+| `active` | distinguishing an applied value from an accepted-but-pending one |
+| `pending_value` | showing the accepted value awaiting activation |
+| `affected_process_or_worker` | naming the system a pending change is waiting on |
+| `completion_guidance` | telling the operator what completes the activation |
+| `requires_reload`, `requires_worker_restart`, `requires_process_restart` | application-requirement warnings before and after save |
+| `order` | deterministic row ordering within a category |
+| `secret_role` | role-aware SecretRef controls |
+| `depends_on` | dependency warnings in preview and validation |
+| `audit` | whether and how an audit link is offered |
+
+This block is the contract the UI consumes, not an exhaustive mirror of the
+backend model. The backend may add fields; it may not remove one this document
+renders without updating this section in the same change.
 
 Control selection follows descriptor shape:
 
@@ -430,6 +496,24 @@ Filtering should support text search, category, modified-only, read-only, diagno
 Before save, show changed keys, old and proposed values, validation, target scope, expected versions, affected systems, application requirements, dependency warnings, and redaction behavior. The backend preview is authoritative where available.
 
 Draft state is keyed by setting key and scope. Clear it after successful save, explicit discard, confirmed scope change, confirmed route departure, or incompatible catalog-version change. Do not persist drafts to local storage without a separate sensitive-metadata design.
+
+### 9.1 Version conflicts
+
+Saves submit `expected_versions` alongside the changed keys, so the authoritative
+`PATCH` contract can reject the write with `version_conflict` when another
+operator changed the same setting after this page loaded. That is a normal
+concurrency outcome, not a generic failure, and the UI must make it recoverable:
+
+1. stop the save and apply no partial write locally;
+2. reload the affected descriptors;
+3. tell the user that another change occurred, identifying the affected keys;
+4. show the latest value next to the user's proposed value so the user can
+   review the difference; and
+5. require explicit resubmission with refreshed `expected_versions`.
+
+Never auto-retry a `version_conflict` with the stale expected version, and never
+silently overwrite the concurrent change. Unaffected keys in the same submission
+keep their drafts so the user does not lose unrelated edits.
 
 ---
 
@@ -527,114 +611,34 @@ Forbidden patterns include:
 
 ---
 
-## 14. Implementation Migration
+## 14. Ownership Invariants
 
-### 14.1 Destination registry
+These are the durable structural rules the three pages must satisfy. They
+describe the target state, not a sequence of migration steps, and they hold for
+any future change to the Configuration pages.
 
-Replace the single Settings destination with:
+**Destination registry.** Configuration is exactly three sibling destinations,
+each with its own destination key and canonical route as listed in section 5.1.
+The client-side registry and any server-provided registry must agree on those
+entries, their Configuration group membership, and their order. Group membership
+is explicit metadata or deterministically derived, never inferred from a single
+destination key.
 
-```text
-settings-providers-secrets -> /settings/providers-secrets
-settings-user-workspace    -> /settings/user-workspace
-settings-operations        -> /settings/operations
-```
+**Route ownership.** Each destination is owned by a route-matched component.
+Sharing one bundle is allowed; sharing page identity is not. A page must not
+mount managers, panels, or data loaders belonging to a sibling destination, and
+no parent component may select between the three by internal state.
 
-All three belong to the Configuration group. Local and server-provided destination registries must stay synchronized. Group membership should be explicit metadata or stable grouping logic.
+**State ownership.** Page-scoped state lives on the page that owns it: runtime
+filtering on Providers & Secrets, user-versus-workspace scope on User /
+Workspace, and worker command state on Operations. No cross-page selection state
+exists, and browser navigation — not local state — moves between destinations.
 
-### 14.2 Page boundaries
-
-Recommended decomposition:
-
-```text
-ProvidersSecretsSettingsPage
-  ProvidersSecretsHeader
-  ProvidersSecretsHealthSummary
-  ProviderProfilesManager
-  SecretManager
-  OAuth and token validation surfaces
-
-UserWorkspaceSettingsPage
-  UserWorkspaceHeader
-  UserWorkspaceStatusSummary
-  ScopeSwitcher
-  GeneratedSettingsSection
-  User and workspace identity/preferences surfaces
-
-OperationsSettingsPage
-  OperationsHeader
-  OperationsStatusSummary
-  OperationsSettingsSection
-  Operational audit and diagnostics
-```
-
-The pages may initially share one bundle. They must still be route-owned components and must not mount unrelated managers.
-
-### 14.3 Remove old section state
-
-Remove equivalents of:
-
-- `SETTINGS_SECTIONS`;
-- `SettingsSectionId`;
-- `readSectionFromLocation`;
-- `updateSectionInLocation`;
-- local cross-page `section` state;
-- manual `popstate` handling for section selection;
-- the destination radio group or segmented control;
-- descriptions selected from a local section array; and
-- conditional page rendering selected by `section === ...`.
-
-Normal router matching replaces this state.
-
-Move state to the owning page. Runtime filtering stays on Providers & Secrets. User versus workspace scope stays on User / Workspace. Worker command state stays on Operations.
-
-### 14.4 Provider Profile form migration
-
-Refactor the current form into:
-
-```text
-ProviderProfileForm
-  StandardProfileFields
-  ProviderProfileAuthenticationSetup
-  ProviderProfileTierSection
-  MaxParallelRunsField
-  ProviderProfileAdvancedToggle
-  ProviderProfileAdvancedRegion
-```
-
-Migration rules:
-
-1. Move Account label into the standard identity group.
-2. Keep credential connection status and setup actions visible.
-3. Derive credential source and materialization mode from backend capabilities for guided paths.
-4. Move Credentials & Volumes behind advanced options.
-5. Move cooldown and rate-limit policy behind advanced options.
-6. Keep max parallel runs visible.
-7. Keep command behavior, tags, and priority advanced.
-8. Replace editable Clear env keys with backend-generated read-only launch-safety metadata for normal profiles.
-9. Remove unconditional client-side enablement from creation.
-10. Preserve and reveal non-default or invalid advanced fields during edit.
-
-### 14.5 Required tests
-
-Cover:
-
-- three destination-registry entries;
-- one Configuration label and correct ordering;
-- stable Settings trigger behavior;
-- active state for all three routes;
-- desktop and mobile navigation;
-- `/settings` and every legacy redirect;
-- absence of Settings tab or radio navigation;
-- page-specific data loading and no unrelated manager mounting;
-- Back and Forward behavior;
-- dirty-draft route guards;
-- direct-route permissions;
-- deep links with page-local filters;
-- collapsed Provider Profile advanced options on create;
-- visible max parallel runs;
-- backend-owned creation presets and activation;
-- automatic advanced expansion for hidden errors; and
-- preservation of advanced drafts while collapsed.
+**Component ownership.** Provider Profile creation and edit behavior belongs to
+Providers & Secrets and follows `docs/UI/ProviderProfileCreation.md`. The
+generated user and workspace settings surface belongs to User / Workspace and
+follows section 9. Operational commands belong to Operations and are never
+modeled as ordinary boolean preferences.
 
 ---
 
@@ -645,8 +649,8 @@ The design is satisfied when:
 1. The existing Settings dropdown contains one Configuration group.
 2. It contains route links for Providers & Secrets, User / Workspace, and Operations in that order.
 3. Each destination has its own canonical `/settings/...` pathname.
-4. `/settings` redirects to `/settings/providers-secrets`.
-5. Legacy `?section=` links redirect to the corresponding canonical page.
+4. `/settings` resolves to the first Configuration destination the current user is authorized to see, and renders the unavailable state when none is accessible.
+5. `?section=` selects nothing: no client route honors it, and no internal caller, test, or document still builds a `?section=` Settings link.
 6. No configuration page repeats the destinations as tabs, radio buttons, segmented controls, pills, cards, a sidebar, or another local switcher.
 7. The masthead trigger remains `Settings` with the Settings icon while any Configuration page is active.
 8. Desktop and mobile expose the same group and order.
@@ -669,6 +673,8 @@ The design is satisfied when:
 25. A failure on one page does not break sibling Configuration destinations.
 26. Backend authorization, defaults, validation, source resolution, and secret-safety decisions remain authoritative.
 27. Navigation tests and telemetry use canonical destination keys instead of the removed `section` state.
+28. A concurrent-change `version_conflict` stops the save, refreshes the affected descriptors, shows the conflict, and requires explicit resubmission.
+29. Rendered rows keep the descriptor fields section 9 declares load-bearing, including active state, activation guidance, application requirements, and ordering.
 
 ---
 
@@ -677,7 +683,7 @@ The design is satisfied when:
 - Settings is a configuration namespace and dropdown group, not one page with three tabs.
 - Providers & Secrets, User / Workspace, and Operations are sibling pages.
 - Canonical routes are `/settings/providers-secrets`, `/settings/user-workspace`, and `/settings/operations`.
-- `/settings` redirects to Providers & Secrets.
+- `/settings` resolves to the first authorized Configuration destination rather than assuming Providers & Secrets.
 - The Settings dropdown is the single cross-page navigation owner.
 - The Settings trigger remains stable on all three pages.
 - Query parameters represent page-local state, not page identity.
