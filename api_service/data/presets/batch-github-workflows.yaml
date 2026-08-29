@@ -26,12 +26,10 @@ annotations:
     preset:github-issue-implement:
       github_issue: '{{ target.githubIssue }}'
       github_issue_ref: '{{ target.githubIssue.repository }}#{{ target.githubIssue.number }}'
-      constraints: '{{ shared.constraints }}'
       run_verify: '{{ shared.run_verify }}'
     preset:github-issue-orchestrate:
       github_issue: '{{ target.githubIssue }}'
       github_issue_ref: '{{ target.githubIssue.repository }}#{{ target.githubIssue.number }}'
-      constraints: '{{ shared.constraints }}'
       run_verify: '{{ shared.run_verify }}'
   inputSchema:
     type: object
@@ -58,9 +56,6 @@ annotations:
       max_workflows:
         type: string
         title: Max workflows
-      constraints:
-        type: string
-        title: Extra instructions / constraints
       run_verify:
         type: boolean
         title: Run verification
@@ -77,9 +72,6 @@ annotations:
     run_ref:
       widget: select
     repository:
-      advanced: true
-    constraints:
-      widget: textarea
       advanced: true
     run_verify:
       widget: checkbox
@@ -115,11 +107,6 @@ inputs:
   type: text
   required: false
   default: '25'
-- name: constraints
-  label: Extra Instructions / Constraints
-  type: textarea
-  required: false
-  default: ''
 - name: run_verify
   label: Run Verification
   type: boolean
@@ -162,8 +149,7 @@ steps:
     --run-ref "{{ inputs.run_ref }}" \
     --publish-mode "{{ inputs.publish_mode }}" \
     --max-workflows "{{ inputs.max_workflows }}" \
-    {% if inputs.run_verify %}--run-verify{% else %}--no-run-verify{% endif %} \
-    --constraints "{{ inputs.constraints }}"
+    {% if inputs.run_verify %}--run-verify{% else %}--no-run-verify{% endif %}
 
     The helper writes artifacts/batch-workflows-result.json. Report its queued,
     skipped, and error counts honestly and link every queued child workflow.
@@ -176,7 +162,6 @@ steps:
     target:
       runRef: '{{ inputs.run_ref }}'
     sharedInputs:
-      constraints: '{{ inputs.constraints }}'
       run_verify: '{{ inputs.run_verify }}'
     publish:
       mode: '{{ inputs.publish_mode }}'

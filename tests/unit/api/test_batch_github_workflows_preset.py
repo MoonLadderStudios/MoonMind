@@ -59,7 +59,6 @@ async def test_batch_github_workflows_seed_and_expansion_contract(tmp_path):
                     "repository": "MoonLadderStudios/MoonMind",
                     "publish_mode": "pr_with_merge_automation",
                     "max_workflows": "10",
-                    "constraints": "Keep changes focused",
                     "run_verify": True,
                 },
             )
@@ -93,6 +92,48 @@ async def test_batch_github_workflows_seed_and_expansion_contract(tmp_path):
         "--targets artifacts/batch-workflows-targets.json"
         not in step["instructions"]
     )
+    assert "--constraints" not in step["instructions"]
+    assert "constraints" not in orchestration["sharedInputs"]
+    assert "constraints" not in expanded["appliedTemplate"]["inputs"]
+
+
+async def test_batch_github_workflows_drops_constraints_input(tmp_path):
+    async with _catalog_db(tmp_path) as sessions:
+        async with sessions() as session:
+            service = PresetCatalogService(session)
+            await service.sync_seed_templates(seed_dir=_seed_dir(tmp_path))
+            template = await service.get_template(
+                slug="batch-github-workflows",
+                scope="global",
+                scope_ref=None,
+            )
+
+            expanded = await service.expand_template(
+                slug="batch-github-workflows",
+                scope="global",
+                scope_ref=None,
+                inputs={
+                    "issue_range": "3142-3150",
+                    "run_ref": "preset:github-issue-implement",
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "constraints": "Stale client value",
+                },
+            )
+
+    assert "constraints" not in template["inputSchema"]["properties"]
+    assert "constraints" not in template["uiSchema"]
+    assert "constraints" not in template["defaults"]
+    assert all(
+        definition["name"] != "constraints" for definition in template["inputs"]
+    )
+    for binding in template["annotations"]["bindings"].values():
+        assert "constraints" not in binding
+
+    assert "constraints" not in expanded["appliedTemplate"]["inputs"]
+    step = expanded["steps"][0]
+    assert "--constraints" not in step["instructions"]
+    assert "Stale client value" not in step["instructions"]
+    assert "constraints" not in step["batchOrchestration"]["sharedInputs"]
 
 
 async def test_batch_github_workflows_uses_repository_context(tmp_path):
