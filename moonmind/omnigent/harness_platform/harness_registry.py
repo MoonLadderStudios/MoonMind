@@ -52,11 +52,30 @@ def register_harness_product(registration: HarnessProductRegistration) -> None:
             "different product authority",
             code=HarnessPlatformFailure.OMNIGENT_HARNESS_UNKNOWN,
         )
+    # Canonical ids and aliases share one resolution namespace, and
+    # ``canonical_harness_id`` reads ``_ALIASES`` first. So an alias that
+    # shadows another harness's canonical id silently reroutes that harness to
+    # the wrong product authority, and a canonical id that shadows an existing
+    # alias registers a harness no lookup can reach. Validate both names
+    # against both registries before mutating either one.
+    alias_owner = _ALIASES.get(registration.harnessId)
+    if alias_owner is not None and alias_owner != registration.harnessId:
+        raise HarnessPlatformError(
+            f"harness {registration.harnessId} is already an alias of "
+            f"{alias_owner}",
+            code=HarnessPlatformFailure.OMNIGENT_HARNESS_UNKNOWN,
+        )
     for alias in registration.aliases:
         owner = _ALIASES.get(alias)
         if owner is not None and owner != registration.harnessId:
             raise HarnessPlatformError(
                 f"harness alias {alias} already resolves to {owner}",
+                code=HarnessPlatformFailure.OMNIGENT_HARNESS_UNKNOWN,
+            )
+        if alias != registration.harnessId and alias in _REGISTRATIONS:
+            raise HarnessPlatformError(
+                f"harness alias {alias} collides with canonical harness "
+                f"{alias}",
                 code=HarnessPlatformFailure.OMNIGENT_HARNESS_UNKNOWN,
             )
     _REGISTRATIONS[registration.harnessId] = registration

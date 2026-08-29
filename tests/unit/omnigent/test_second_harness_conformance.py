@@ -411,3 +411,106 @@ def test_registering_a_conflicting_harness_alias_is_rejected(
 
     with pytest.raises(HarnessPlatformError):
         harness_registry.harness_registration("unregistered-native")
+
+
+def test_registering_an_alias_that_shadows_a_canonical_harness_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An alias may not capture another harness's canonical id.
+
+    ``canonical_harness_id`` resolves aliases before canonical ids, so accepting
+    such an alias would silently reroute the shadowed harness to the new
+    harness's product authority.
+    """
+
+    from moonmind.omnigent.harness_platform import harness_registry
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+
+    monkeypatch.setattr(
+        harness_registry, "_REGISTRATIONS", dict(harness_registry._REGISTRATIONS)
+    )
+    monkeypatch.setattr(
+        harness_registry, "_ALIASES", dict(harness_registry._ALIASES)
+    )
+
+    with pytest.raises(HarnessPlatformError):
+        harness_registry.register_harness_product(
+            harness_registry.HarnessProductRegistration.model_validate(
+                {
+                    "harnessId": "qwen-native",
+                    "aliases": ["codex-native"],
+                    "executionTargetRef": "omnigent-qwen@1",
+                    "hostClassRef": "omnigent-qwen@1",
+                    "materializerRef": "omnigent-provider-config@1",
+                    "authModel": "omnigent-provider-config",
+                }
+            )
+        )
+
+    # The rejected registration must not have mutated either registry.
+    assert harness_registry.canonical_harness_id("codex-native") == "codex-native"
+    assert (
+        harness_registry.harness_registration("codex-native").executionTargetRef
+        == "omnigent-codex@1"
+    )
+    assert "qwen-native" not in harness_registry.approved_harness_ids()
+
+
+def test_registering_a_canonical_id_that_shadows_an_alias_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A canonical id may not reuse an existing alias.
+
+    Alias resolution runs first, so such a registration would never be reachable
+    through ``harness_registration`` or ``find_harness_registration``.
+    """
+
+    from moonmind.omnigent.harness_platform import harness_registry
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+
+    monkeypatch.setattr(
+        harness_registry, "_REGISTRATIONS", dict(harness_registry._REGISTRATIONS)
+    )
+    monkeypatch.setattr(
+        harness_registry, "_ALIASES", dict(harness_registry._ALIASES)
+    )
+
+    with pytest.raises(HarnessPlatformError):
+        harness_registry.register_harness_product(
+            harness_registry.HarnessProductRegistration.model_validate(
+                {
+                    "harnessId": "codex",
+                    "aliases": [],
+                    "executionTargetRef": "omnigent-shadow@1",
+                    "hostClassRef": "omnigent-shadow@1",
+                    "materializerRef": "omnigent-provider-config@1",
+                    "authModel": "omnigent-provider-config",
+                }
+            )
+        )
+
+    assert "codex" not in harness_registry.approved_harness_ids()
+    assert harness_registry.canonical_harness_id("codex") == "codex-native"
+
+
+def test_registering_identical_harness_data_stays_a_no_op(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Collision validation must not break idempotent re-registration."""
+
+    from moonmind.omnigent.harness_platform import harness_registry
+
+    monkeypatch.setattr(
+        harness_registry, "_REGISTRATIONS", dict(harness_registry._REGISTRATIONS)
+    )
+    monkeypatch.setattr(
+        harness_registry, "_ALIASES", dict(harness_registry._ALIASES)
+    )
+
+    before = harness_registry.approved_harness_ids()
+    harness_registry.register_harness_product(
+        harness_registry.harness_registration("codex-native")
+    )
+
+    assert harness_registry.approved_harness_ids() == before
+    assert harness_registry.canonical_harness_id("codex") == "codex-native"
