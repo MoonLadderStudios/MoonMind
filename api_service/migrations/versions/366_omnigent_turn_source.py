@@ -18,8 +18,8 @@ than aliased (Compatibility Policy):
 A CHECK constraint makes the vocabulary closed at the durable boundary, so no
 future writer can reintroduce a free-form lineage value.
 
-Revision ID: 365_omnigent_turn_source
-Revises: 364_container_job_gpu_obs
+Revision ID: 366_omnigent_turn_source
+Revises: 365_profile_tier_provenance
 Create Date: 2026-08-29
 """
 
@@ -30,8 +30,8 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "365_omnigent_turn_source"
-down_revision: Union[str, None] = "364_container_job_gpu_obs"
+revision: str = "366_omnigent_turn_source"
+down_revision: Union[str, None] = "365_profile_tier_provenance"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

@@ -139,7 +139,6 @@ from .turn_commands import (
     CanonicalTurnCommandService,
 )
 from .turn_sources import (
-    BOOTSTRAP_TURN_SOURCES,
     TURN_SOURCES,
     TURN_SOURCE_VOCABULARY_VERSION,
     TurnSource,
@@ -163,7 +162,6 @@ __all__ = [
     "COMMAND_STATE_PENDING",
     "COMMAND_STATES",
     "COMMAND_TERMINAL_STATES",
-    "BOOTSTRAP_TURN_SOURCES",
     "CanonicalTurnAdmissionRejected",
     "CanonicalTurnAuthorityUnavailable",
     "CanonicalSessionBootstrap",

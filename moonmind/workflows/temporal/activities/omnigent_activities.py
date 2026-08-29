@@ -629,6 +629,10 @@ async def _omnigent_execute_activity(
         TemporalOmnigentArtifactGateway,
     )
     from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
+    from moonmind.omnigent.control_plane import OmnigentControlPlaneStore
+    from moonmind.omnigent.control_plane.turn_commands import (
+        CanonicalTurnCommandService,
+    )
     from moonmind.omnigent.execute import run_omnigent_execution
     from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
     from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
@@ -712,6 +716,14 @@ async def _omnigent_execute_activity(
                 workspace_root,
                 restorer=ManagedServiceRemediationRestorer(restore_service),
                 head_loader=ArtifactRemediationHeadLoader(artifact_service),
+            ),
+            # This activity still reaches the coordinator directly whenever the
+            # request carries no executionPlanRef and no agentProfileRef, so it
+            # must own the same canonical turn boundary the realizer-dispatched
+            # path owns (#3707 §1). Without it every repository continuation on
+            # this path would submit outside the boundary and fence no cleanup.
+            turn_command_service=CanonicalTurnCommandService(
+                OmnigentControlPlaneStore(async_session_maker)
             ),
         )
         recovery_inputs = _checkpoint_recovery_from_request(request)

@@ -4,10 +4,10 @@ Source: MoonLadderStudios/MoonMind#3707 ([Omnigent control plane 7/11]).
 
 Codex and the generic Omnigent host must use the *same* session and turn
 ownership model through their recorded realizers. This helper owns that model
-once: claim the canonical turn command, run the harness-specific lifecycle, and
-settle the command with the outcome the lifecycle actually produced. It contains
-no harness lifecycle branches -- the operation it wraps is supplied by the
-realizer.
+once: derive the canonical turn source from the admitted request, claim the
+canonical turn command, run the harness-specific lifecycle, and settle the
+command with the outcome the lifecycle actually produced. It contains no harness
+lifecycle branches -- the operation it wraps is supplied by the realizer.
 """
 
 from __future__ import annotations
@@ -42,6 +42,22 @@ def execution_identity(request: AgentExecutionRequest) -> tuple[str, str]:
     return request.correlation_id, request.correlation_id
 
 
+def canonical_turn_source(request: AgentExecutionRequest) -> TurnSource:
+    """Return the closed turn source the admitted request actually carries.
+
+    The source is derived from typed request authority, never from a harness,
+    realizer, or Skill name (#3707). ``remediationWorkspace`` is
+    controller-produced remediation authority -- ``workflows/run.py`` refuses any
+    plan- or browser-authored value -- so its presence *is* the remediation
+    capability. Naming it here is what makes the AC6 non-broadening guard
+    reachable on a real remediation attempt instead of only in tests.
+    """
+
+    if request.remediation_workspace is not None:
+        return TurnSource.REMEDIATION
+    return TurnSource.INITIAL
+
+
 async def deliver_canonical_turn(
     turn_commands: Any,
     *,
@@ -49,20 +65,25 @@ async def deliver_canonical_turn(
     plan: Any,
     command_type: str,
     operation: Callable[[], Awaitable[AgentRunResult]],
-    turn_source: TurnSource = TurnSource.INITIAL,
 ) -> AgentRunResult:
     """Run ``operation`` inside one claimed, fenced canonical turn command.
+
+    The turn source is derived from the request by
+    :func:`canonical_turn_source`; no realizer may name its own source, so a
+    remediation attempt cannot be journaled as an initial turn.
 
     ``turn_commands`` may be ``None`` in unit harnesses that do not wire the
     control plane; the operation then runs unwrapped. A rejected admission
     (changed immutable authority, terminal session, completed cleanup) is
     surfaced as a typed harness-platform failure *before* the lifecycle runs, so
-    the prior session is never silently mutated.
+    the prior session is never silently mutated. A remediation turn that would
+    broaden bounded authority raises before the lifecycle runs as well.
     """
 
     if turn_commands is None:
         return await operation()
 
+    turn_source = canonical_turn_source(request)
     workflow_id, step_execution_id = execution_identity(request)
     try:
         command_claim = await turn_commands.claim(
@@ -137,4 +158,8 @@ async def deliver_canonical_turn(
     return result
 
 
-__all__ = ["deliver_canonical_turn", "execution_identity"]
+__all__ = [
+    "canonical_turn_source",
+    "deliver_canonical_turn",
+    "execution_identity",
+]

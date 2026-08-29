@@ -257,6 +257,9 @@ class CanonicalTurnCommandService:
                             chat_binding_id=chat_binding_id,
                             session_id=session_id,
                         )
+                    bootstrapping_instruction = (
+                        bootstrap.source_idempotency_key == idempotency_key
+                    )
                     bootstrap_turn = await repos.turn_attempts.create(
                         turn_attempt_id=first_turn_id,
                         session_id=session_id,
@@ -266,12 +269,21 @@ class CanonicalTurnCommandService:
                                 workflow_id, bootstrap.source_idempotency_key
                             )
                         ),
-                        lineage_kind=TurnSource.INITIAL,
+                        # When this claim *is* the instruction that bootstraps
+                        # the session, the bootstrap attempt is that
+                        # instruction's turn and must journal its real source
+                        # (#3707 AC3) -- a remediation attempt that opens its own
+                        # canonical session is not an ``initial`` turn. When the
+                        # claim is a later follow-up canonicalizing an older
+                        # session on demand, it cannot attest the earlier
+                        # instruction's source, so the bootstrap attempt keeps
+                        # the one source that establishes a session.
+                        lineage_kind=(
+                            source if bootstrapping_instruction else TurnSource.INITIAL
+                        ),
                         step_execution_id=bootstrap.step_execution_id,
                         instruction_digest=(
-                            payload_digest
-                            if bootstrap.source_idempotency_key == idempotency_key
-                            else None
+                            payload_digest if bootstrapping_instruction else None
                         ),
                     )
                     session = await repos.sessions.update_lifecycle(

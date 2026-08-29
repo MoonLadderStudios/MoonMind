@@ -860,3 +860,114 @@ async def test_live_recovery_authority_fails_closed_for_ambiguous_or_mismatched_
 
 async def _async_value(value):
     return value
+
+
+@pytest.mark.asyncio
+async def test_profile_bound_activity_coordinator_claims_canonical_continuations(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """The legacy coordinator path owns the canonical turn boundary (#3707 §1).
+
+    A profile-bound Codex request that carries no execution plan and no Agent
+    Profile ref is not realizer-dispatched: ``_try_generic_realizer_dispatch``
+    returns ``None`` and this activity builds the coordinator directly. That
+    construction must inject the canonical turn service, or every repository
+    continuation on this path submits outside the boundary and fences no
+    cleanup.
+
+    This drives the real activity, captures the coordinator it actually built,
+    and then exercises that coordinator's real continuation-claim method against
+    a real control-plane store.
+    """
+
+    import api_service.db.base as db_base
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from api_service.db.models import Base
+    from moonmind.omnigent import profile_bound_execution as pbe_module
+    from moonmind.omnigent.control_plane import (
+        OmnigentControlPlaneStore,
+        TurnSource,
+    )
+    from moonmind.omnigent.control_plane.identities import (
+        canonical_omnigent_session_id,
+    )
+    from moonmind.omnigent.control_plane.turn_commands import (
+        CanonicalTurnCommandService,
+    )
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/legacy_path.db")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    monkeypatch.setattr(db_base, "async_session_maker", session_factory)
+
+    built: list[object] = []
+    expected_result = AgentRunResult(summary="legacy path", output_refs=[])
+
+    class CapturingCoordinator(pbe_module.OmnigentProfileBoundExecutionCoordinator):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            built.append(self)
+
+        async def execute(self, request):
+            return expected_result
+
+    monkeypatch.setattr(
+        pbe_module,
+        "OmnigentProfileBoundExecutionCoordinator",
+        CapturingCoordinator,
+    )
+
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="legacy-run",
+        idempotencyKey="legacy-key",
+        executionProfileRef="codex-profile-1",
+        parameters={"publishMode": "none"},
+    )
+
+    result = await ActivityEnvironment().run(omnigent_execute_activity, request)
+
+    assert result == expected_result
+    assert len(built) == 1
+    coordinator = built[0]
+    # The activity-built coordinator owns the canonical turn service.
+    assert isinstance(coordinator._turn_commands, CanonicalTurnCommandService)
+
+    # Drive the coordinator's real continuation admission.
+    continuation = request.model_copy(
+        deep=True,
+        update={"idempotency_key": f"{request.idempotency_key}:repository-continuation:1"},
+    )
+    claim = await coordinator._claim_continuation_turn(
+        request=continuation,
+        source_request=request,
+        workflow_id="legacy-run",
+        step_execution_id="legacy-step",
+        recorded_plan=None,
+        provider_profile_id="codex-profile-1",
+        credential_generation=1,
+        runtime_binding_ref=None,
+    )
+    assert claim is not None
+
+    expected_session_id = canonical_omnigent_session_id(
+        workflow_id="legacy-run",
+        step_execution_id="legacy-step",
+        agent_run_id="legacy-run",
+    )
+    assert claim.session_id == expected_session_id
+
+    store = OmnigentControlPlaneStore(session_factory)
+    async with store.transaction() as repos:
+        turns = await repos.turn_attempts.list_for_session(expected_session_id)
+        cleanup = await repos.cleanup.get(expected_session_id)
+    lineages = [turn.lineage_kind for turn in turns]
+    assert TurnSource.REPOSITORY_CONTINUATION.value in lineages
+    # The admitted continuation fenced incompatible cleanup before mutation.
+    assert cleanup is not None and cleanup.generation >= 1
+
+    await engine.dispose()

@@ -55,6 +55,30 @@ database `CHECK` constraint and by `coerce_turn_source`, which fails closed. The
 source changes authorization, evidence, and policy; it never changes the command,
 idempotency, fencing, observation, or terminality model.
 
+### Where a producer's source comes from
+
+No producer names its own source as a literal. The source is derived from typed
+request authority at the boundary the producer already uses:
+
+- `moonmind/omnigent/realizers/turn_delivery.py` derives it with
+  `canonical_turn_source(request)` for both execution realizers. A request
+  carrying controller-produced `remediationWorkspace` authority is a
+  `remediation` turn; `workflows/run.py` refuses any plan- or browser-authored
+  value for that field, so its presence is the capability, not a hint.
+- `api_service/api/routers/omnigent_bridge.py` maps native Workflow Chat control
+  types to `workflow_chat`, `approval_response`, or `steering` by exhaustive
+  membership.
+- `moonmind/omnigent/profile_bound_execution.py` claims
+  `repository_continuation` for each repository-output continuation, and
+  `api_service/services/checkpoint_branch_turn_execution.py` claims
+  `checkpoint_resume`.
+
+The instruction that bootstraps a canonical session journals its own source on
+the bootstrap attempt, so a remediation attempt that opens its own session is
+not recorded as `initial`. A later follow-up that canonicalizes an older session
+on demand cannot attest the earlier instruction's source, so that bootstrap
+attempt keeps `initial`.
+
 `linked_branch` names a linked-branch turn that targets an *existing* canonical
 session. The **Continue in a new workflow** action deliberately reserves a new
 destination Workflow Execution instead (`api_service/services/linked_continuation.py`),
@@ -150,6 +174,12 @@ use it; only the wrapped lifecycle differs. Immutable authority is projected
 from the recorded execution plan by
 `moonmind/omnigent/turn_authority.py`, which reads plan payload fields rather
 than harness-specific state.
+
+Codex reaches the coordinator through two production entrypoints — the realizer
+registry and `integration.omnigent.execute` for requests carrying no execution
+plan and no Agent Profile ref. Both construct
+`OmnigentProfileBoundExecutionCoordinator` with the canonical turn service, so
+neither has a repository continuation that submits outside the boundary.
 
 ## Non-goals
 

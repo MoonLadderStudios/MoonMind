@@ -52,10 +52,6 @@ TURN_SOURCES: frozenset[str] = frozenset(member.value for member in TurnSource)
 #: truncate durable lineage authority.
 assert all(len(value) <= TURN_SOURCE_MAX_LENGTH for value in TURN_SOURCES)
 
-#: The one source that may bootstrap a canonical session; every other source
-#: requires an already-resolved session.
-BOOTSTRAP_TURN_SOURCES: frozenset[TurnSource] = frozenset({TurnSource.INITIAL})
-
 
 class UnknownTurnSourceError(OmnigentControlPlaneError):
     """Raised when a turn names a source outside the closed vocabulary."""
@@ -81,7 +77,6 @@ def coerce_turn_source(value: object) -> TurnSource:
 
 
 __all__ = [
-    "BOOTSTRAP_TURN_SOURCES",
     "TURN_SOURCES",
     "TURN_SOURCE_MAX_LENGTH",
     "TURN_SOURCE_VOCABULARY_VERSION",

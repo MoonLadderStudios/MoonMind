@@ -24,7 +24,6 @@ from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
 )
-from moonmind.omnigent.control_plane.turn_sources import TurnSource
 from moonmind.omnigent.realizers.turn_delivery import (
     deliver_canonical_turn,
     execution_identity as _execution_identity,
@@ -127,7 +126,6 @@ class GenericOmnigentHostRealizer:
             request=request,
             plan=plan,
             command_type="execute_admitted_plan",
-            turn_source=TurnSource.INITIAL,
             operation=lambda: self._execute_lifecycle(request, plan),
         )
 

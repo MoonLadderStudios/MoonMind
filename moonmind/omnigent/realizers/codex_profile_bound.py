@@ -49,7 +49,9 @@ class CodexProfileBoundRealizer:
         """Fence one canonical turn command around the Codex lifecycle.
 
         Codex and the generic Omnigent host share exactly one session and turn
-        ownership model (#3707 AC10); only the wrapped lifecycle differs.
+        ownership model (#3707 AC10); only the wrapped lifecycle differs. The
+        turn source is derived from the request by the shared wrapper, so a
+        Codex remediation attempt claims under ``TurnSource.REMEDIATION``.
         """
 
         from moonmind.omnigent.realizers.turn_delivery import (
