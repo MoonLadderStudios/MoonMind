@@ -39,8 +39,8 @@ from moonmind.auth.secret_refs import (
 from moonmind.provider_profiles.model_tiers import (
     ProviderModelEffortTier,
     coerce_model_effort_tier_policy,
+    is_single_legacy_default_model_effort_tier,
     is_single_runtime_default_model_effort_tier,
-    legacy_default_model_effort_tier,
 )
 from moonmind.provider_profiles.oauth_policy import (
     CODEX_OAUTH_EXCLUSIVE_CAPACITY_ERROR,
@@ -767,11 +767,9 @@ async def update_profile(
         and (
             is_single_runtime_default_model_effort_tier(profile.model_tiers)
             or (
-                isinstance(profile.model_tiers, list)
-                and len(profile.model_tiers) == 1
-                and profile.default_model_tier == 1
-                and profile.model_tiers[0]
-                == legacy_default_model_effort_tier(
+                profile.default_model_tier == 1
+                and is_single_legacy_default_model_effort_tier(
+                    profile.model_tiers,
                     legacy_default_model=profile.default_model,
                     legacy_default_effort=profile.default_effort,
                 )

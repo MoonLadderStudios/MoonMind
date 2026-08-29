@@ -76,8 +76,12 @@ from moonmind.services.skill_step_inputs import validate_skill_step_inputs
 from moonmind.security.outbound_scan import scan_outbound_text
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.artifacts import (
+    TemporalArtifactAuthorizationError,
+    TemporalArtifactNotFoundError,
     TemporalArtifactRepository,
     TemporalArtifactService,
+    TemporalArtifactStateError,
+    TemporalArtifactValidationError,
 )
 from moonmind.workflows.temporal.checkpoint_policy import resolve_checkpoint_policy
 from moonmind.workflows.temporal.activity_catalog import (
@@ -448,6 +452,32 @@ class TemporalExecutionNotFoundError(TemporalExecutionError):
 
 class TemporalExecutionValidationError(TemporalExecutionError):
     """Raised when lifecycle invariants are violated."""
+
+
+class TemporalExecutionRerunSkillSnapshotError(TemporalExecutionValidationError):
+    """Raised when an exact rerun cannot prove immutable Skill authority."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "exact_rerun_skill_snapshot_unavailable",
+        missing_skills: list[str] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.missing_skills = tuple(missing_skills or ())
+
+    @property
+    def detail(self) -> dict[str, Any]:
+        detail: dict[str, Any] = {
+            "code": self.code,
+            "message": str(self),
+            "nextAction": "create_fresh_workflow",
+        }
+        if self.missing_skills:
+            detail["missingSkills"] = list(self.missing_skills)
+        return detail
 
 
 class TemporalExecutionRecoveryCheckpointError(TemporalExecutionValidationError):
@@ -2530,6 +2560,85 @@ class TemporalExecutionService:
             return candidate
         raise TemporalExecutionValidationError("workflowId is required")
 
+    async def validate_exact_rerun_skill_snapshot(
+        self,
+        *,
+        source_record: TemporalExecutionRecord | TemporalExecutionCanonicalRecord,
+        parameters: Mapping[str, Any],
+    ) -> None:
+        """Reject exact Omnigent reruns with incomplete Skill authority."""
+
+        if not isinstance(parameters.get("omnigentExecutionPlan"), Mapping):
+            return
+
+        from api_service.services.omnigent_execution_plan_service import (
+            selected_skill_names,
+        )
+        from moonmind.schemas.agent_skill_models import ResolvedSkillSet
+
+        try:
+            selected = selected_skill_names(parameters)
+        except (ValidationError, ValueError, TypeError) as exc:
+            raise TemporalExecutionRerunSkillSnapshotError(
+                "Exact rerun cannot parse the stored Skill selection contract. "
+                "Create a new workflow to explicitly re-resolve Skill authority."
+            ) from exc
+        if not selected:
+            return
+
+        snapshot_ref = str(parameters.get("resolvedSkillsetRef") or "").strip()
+        artifact_id = snapshot_ref.removeprefix("artifact://").removeprefix(
+            "input/"
+        ).strip()
+        if not artifact_id:
+            raise TemporalExecutionRerunSkillSnapshotError(
+                "Exact rerun cannot verify the original immutable Skill snapshot. "
+                "Create a new workflow to explicitly re-resolve Skill authority."
+            )
+
+        principal = str(getattr(source_record, "owner_id", None) or "").strip()
+        if not principal:
+            principal = "service:temporal-execution-rerun-admission"
+        try:
+            artifact_service = TemporalArtifactService(
+                TemporalArtifactRepository(self._session)
+            )
+            _artifact, body = await artifact_service.read(
+                artifact_id=artifact_id,
+                principal=principal,
+                allow_restricted_raw=True,
+            )
+            resolved = ResolvedSkillSet.model_validate_json(body)
+        except (PermissionError, TemporalArtifactAuthorizationError) as exc:
+            raise TemporalExecutionRerunSkillSnapshotError(
+                "Exact rerun is not authorized to read the original immutable "
+                "Skill snapshot."
+            ) from exc
+        except (
+            TemporalArtifactNotFoundError,
+            TemporalArtifactStateError,
+            TemporalArtifactValidationError,
+            ValidationError,
+            ValueError,
+            TypeError,
+        ) as exc:
+            raise TemporalExecutionRerunSkillSnapshotError(
+                "Exact rerun found an invalid original immutable Skill snapshot. "
+                "Create a new workflow to explicitly re-resolve Skill authority."
+            ) from exc
+
+        resolved_names = {entry.skill_name for entry in resolved.skills}
+        missing = [name for name in selected if name not in resolved_names]
+        if missing:
+            raise TemporalExecutionRerunSkillSnapshotError(
+                "Exact rerun preserves the original immutable Skill snapshot, but "
+                "that snapshot does not contain every Skill declared by the "
+                "authored workflow. Create a new workflow to explicitly re-resolve "
+                "Skill authority.",
+                code="exact_rerun_skill_snapshot_incomplete",
+                missing_skills=missing,
+            )
+
     async def update_execution(
         self,
         *,
@@ -2578,6 +2687,15 @@ class TemporalExecutionService:
             cached = record.last_update_response
             if isinstance(cached, dict):
                 return dict(cached)
+
+        if update_name == "RequestRerun" and record.state not in TERMINAL_STATES:
+            rerun_parameters = dict(record.parameters or {})
+            if parameters_patch:
+                rerun_parameters.update(parameters_patch)
+            await self.validate_exact_rerun_skill_snapshot(
+                source_record=record,
+                parameters=rerun_parameters,
+            )
 
         if record.state in TERMINAL_STATES and update_name != "RequestRerun":
             return {
@@ -4025,6 +4143,10 @@ class TemporalExecutionService:
                 initial_parameters=params,
                 allow_goal_schedule=False,
             )
+        await self.validate_exact_rerun_skill_snapshot(
+            source_record=record,
+            parameters=params,
+        )
 
         next_input_ref = input_artifact_ref or record.input_ref
         next_plan_ref = plan_artifact_ref or record.plan_ref

@@ -1241,6 +1241,140 @@ async def test_mm1169_update_legacy_default_preserves_explicit_tiers(
 
 
 @pytest.mark.asyncio
+async def test_migrated_runtime_default_tier_refreshes_on_legacy_default_update(
+    client_app: AsyncClient, _module_db
+) -> None:
+    """MoonLadderStudios/MoonMind#3793: migrated tiers stay legacy-default aware."""
+
+    profile_id = "migrated_runtime_default_tier"
+    payload = {
+        "profile_id": profile_id,
+        "runtime_id": "codex_cli",
+        "provider_id": "openai",
+        "credential_source": "none",
+        "runtime_materialization_mode": "composite",
+        "model_tiers": [
+            {
+                "label": "Runtime default",
+                "model": None,
+                "effort": None,
+                "parameters": {},
+                "annotations": {"migratedFrom": "runtime_default"},
+            }
+        ],
+    }
+
+    async with client_app as client:
+        create_response = await client.post("/api/v1/provider-profiles", json=payload)
+        update_response = await client.patch(
+            f"/api/v1/provider-profiles/{profile_id}",
+            json={"default_model": "new-model", "default_effort": "high"},
+        )
+
+    assert create_response.status_code == 201
+    assert create_response.json()["model_tiers"] == payload["model_tiers"]
+    assert update_response.status_code == 200
+    data = update_response.json()
+    assert data["model_tiers"] == [
+        {
+            "label": "Legacy default",
+            "model": "new-model",
+            "effort": "high",
+            "parameters": {},
+            "annotations": {},
+        }
+    ]
+    assert data["default_model_tier"] == 1
+
+
+@pytest.mark.asyncio
+async def test_migrated_legacy_default_tier_refreshes_on_legacy_default_update(
+    client_app: AsyncClient, _module_db
+) -> None:
+    """MoonLadderStudios/MoonMind#3793: migrated tiers stay legacy-default aware."""
+
+    profile_id = "migrated_legacy_default_tier"
+    payload = {
+        "profile_id": profile_id,
+        "runtime_id": "codex_cli",
+        "provider_id": "openai",
+        "credential_source": "none",
+        "runtime_materialization_mode": "composite",
+        "default_model": "old-model",
+        "default_effort": "low",
+        "model_tiers": [
+            {
+                "label": "Legacy default",
+                "model": "old-model",
+                "effort": "low",
+                "parameters": {},
+                "annotations": {"migratedFrom": "default_model_default_effort"},
+            }
+        ],
+    }
+
+    async with client_app as client:
+        create_response = await client.post("/api/v1/provider-profiles", json=payload)
+        update_response = await client.patch(
+            f"/api/v1/provider-profiles/{profile_id}",
+            json={"default_model": "new-model"},
+        )
+
+    assert create_response.status_code == 201
+    assert update_response.status_code == 200
+    data = update_response.json()
+    assert data["default_model"] == "new-model"
+    assert data["default_effort"] == "low"
+    assert data["model_tiers"] == [
+        {
+            "label": "Legacy default",
+            "model": "new-model",
+            "effort": "low",
+            "parameters": {},
+            "annotations": {},
+        }
+    ]
+    assert data["default_model_tier"] == 1
+
+
+@pytest.mark.asyncio
+async def test_operator_annotated_tier_survives_legacy_default_update(
+    client_app: AsyncClient, _module_db
+) -> None:
+    """MoonLadderStudios/MoonMind#3793: only migration provenance is refreshable."""
+
+    profile_id = "operator_annotated_tier"
+    payload = {
+        "profile_id": profile_id,
+        "runtime_id": "codex_cli",
+        "provider_id": "openai",
+        "credential_source": "none",
+        "runtime_materialization_mode": "composite",
+        "default_model": "old-model",
+        "model_tiers": [
+            {
+                "label": "Legacy default",
+                "model": "old-model",
+                "effort": None,
+                "parameters": {},
+                "annotations": {"owner": "platform"},
+            }
+        ],
+    }
+
+    async with client_app as client:
+        create_response = await client.post("/api/v1/provider-profiles", json=payload)
+        update_response = await client.patch(
+            f"/api/v1/provider-profiles/{profile_id}",
+            json={"default_model": "new-model"},
+        )
+
+    assert create_response.status_code == 201
+    assert update_response.status_code == 200
+    assert update_response.json()["model_tiers"] == payload["model_tiers"]
+
+
+@pytest.mark.asyncio
 async def test_mm1169_orm_insert_uses_legacy_defaults_for_model_tiers(
     _module_db,
 ) -> None:

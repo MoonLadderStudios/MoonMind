@@ -3366,6 +3366,13 @@ class ManagedAgentProviderProfile(Base):
             ")",
             name="ck_provider_profiles_last_auth_method",
         ),
+        # PostgreSQL-only: the JSON array/length rule is expressed with jsonb
+        # functions, so it is emitted for the deployment backend that supports it.
+        CheckConstraint(
+            "jsonb_typeof(model_tiers) = 'array' "
+            "AND jsonb_array_length(model_tiers) >= 1",
+            name="ck_provider_profiles_model_tiers_array",
+        ).ddl_if(dialect="postgresql"),
         CheckConstraint(
             "default_model_tier >= 1",
             name="ck_provider_profiles_default_model_tier_positive",
@@ -3402,7 +3409,10 @@ class ManagedAgentProviderProfile(Base):
     default_model: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     default_effort: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     model_tiers: Mapped[list[dict[str, Any]]] = mapped_column(
-        JSON,
+        # ck_provider_profiles_model_tiers_array calls jsonb-only functions, so
+        # the mapped column must be jsonb on PostgreSQL for metadata-created
+        # schemas to match the migrated deployment schema.
+        _json_variant(),
         nullable=False,
         default=_provider_profile_model_tiers_default,
         server_default=literal_column(

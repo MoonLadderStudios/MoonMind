@@ -557,18 +557,26 @@ class GenericOmnigentHostRealizer:
             current_step_execution_id=step_execution_id,
         )
         push_status = str(publication.get("push_status") or "").strip().lower()
-        if push_status != "pushed":
+        # ``no_commits`` is a canonical terminal publication outcome, not a
+        # dispatch failure. The publisher already proved the workspace head is
+        # exactly the remote base head, so no repository work was lost, and the
+        # durable workflow owns whether a step without commits satisfies its
+        # publish contract -- exactly as it does for the managed-runtime push
+        # boundary. Failing here instead strands workflow-owned side effects
+        # (issue transitions, agent-created pull requests) behind an
+        # unretryable provider error.
+        if push_status not in {"pushed", "no_commits"}:
             raise HarnessPlatformError(
                 "generic Omnigent execution produced no publishable repository output",
                 code="OMNIGENT_REPOSITORY_OUTPUT_MISSING",
             )
         evidence = AcceptedRepositoryEvidence(
-            pushStatus="pushed",
+            pushStatus=push_status,
             branch=publication.get("push_branch"),
             baseBranch=publication.get("push_base_branch"),
             headSha=publication.get("push_head_sha"),
             commitsAheadOfBase=publication.get("push_commit_count"),
-            repositoryChanged=True,
+            repositoryChanged=push_status == "pushed",
             remoteVerified=publication.get("remote_verified"),
             authority="omnigent.generic_host_execution",
         )
