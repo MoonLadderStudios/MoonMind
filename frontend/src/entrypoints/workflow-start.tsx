@@ -13375,6 +13375,154 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                     </div>
                   ) : null}
 
+                  {step.stepType === "preset" ? (
+                    <div
+                      className="stack queue-step-preset-options"
+                      aria-label="Step Preset Options"
+                    >
+                      {visiblePresetSchemaFields.length > 0 && step.presetDetail ? (
+                        <SchemaCapabilityFields
+                          fields={visiblePresetSchemaFields}
+                          detail={step.presetDetail}
+                          values={step.presetInputValues}
+                          errors={step.presetInputErrors}
+                          disabled={isApplyingPreset}
+                          repositoryOptions={repositoryOptions}
+                          branchOptions={branchOptions}
+                          onGitHubIssueRepositoryChange={
+                            handleGitHubIssueRepositoryChange
+                          }
+                          onChange={(name, value) =>
+                            updateStepPresetInputValue(
+                              step.localId,
+                              { name },
+                              value,
+                            )
+                          }
+                        />
+                      ) : visiblePresetInputs.length > 0 ? (
+                        <div className="grid-2">
+                          {visiblePresetInputs.map((definition) => {
+                              const inputId = `queue-step-${step.localId}-preset-input-${definition.name}`;
+                              const value = stepTemplateInputDisplayValue(
+                                step,
+                                definition,
+                              );
+                              if (definition.type === "enum") {
+                                return (
+                                  <label key={definition.name} htmlFor={inputId}>
+                                    {definition.label}
+                                    <select
+                                      id={inputId}
+                                      value={value}
+                                      disabled={isApplyingPreset}
+                                      onChange={(event) =>
+                                        updateStepPresetInputValue(
+                                          step.localId,
+                                          definition,
+                                          event.target.value,
+                                        )
+                                      }
+                                    >
+                                      {(definition.options || []).map((option) => (
+                                        <option key={option} value={option}>
+                                          {templateEnumOptionLabel(
+                                            definition,
+                                            option,
+                                          )}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </label>
+                                );
+                              }
+                              if (definition.type === "boolean") {
+                                return (
+                                  <label key={definition.name} htmlFor={inputId}>
+                                    {definition.label}
+                                    <input
+                                      id={inputId}
+                                      type="checkbox"
+                                      checked={value === "true"}
+                                      disabled={isApplyingPreset}
+                                      onChange={(event) =>
+                                        updateStepPresetInputValue(
+                                          step.localId,
+                                          definition,
+                                          event.target.checked,
+                                        )
+                                      }
+                                    />
+                                  </label>
+                                );
+                              }
+                              if (
+                                definition.type === "textarea" ||
+                                definition.type === "markdown"
+                              ) {
+                                return (
+                                  <label key={definition.name} htmlFor={inputId}>
+                                    {definition.label}
+                                    <textarea
+                                      id={inputId}
+                                      value={value}
+                                      placeholder={definition.placeholder || ""}
+                                      disabled={isApplyingPreset}
+                                      onChange={(event) =>
+                                        updateStepPresetInputValue(
+                                          step.localId,
+                                          definition,
+                                          event.target.value,
+                                        )
+                                      }
+                                    />
+                                  </label>
+                                );
+                              }
+                              return (
+                                <label key={definition.name} htmlFor={inputId}>
+                                  {definition.label}
+                                  <input
+                                    id={inputId}
+                                    type="text"
+                                    value={value}
+                                    placeholder={definition.placeholder || ""}
+                                    disabled={isApplyingPreset}
+                                    onChange={(event) =>
+                                      updateStepPresetInputValue(
+                                        step.localId,
+                                        definition,
+                                        event.target.value,
+                                      )
+                                    }
+                                  />
+                                </label>
+                              );
+                            })}
+                        </div>
+                      ) : null}
+                      <button
+                        type="button"
+                        aria-disabled={
+                          isApplyingPreset ||
+                          !step.presetKey
+                        }
+                        aria-busy={isApplyingPreset}
+                        title={expandStepPresetTooltip}
+                        disabled={
+                          isApplyingPreset ||
+                          !step.presetKey
+                        }
+                        onClick={() => handleExpandStepPreset(step.localId)}
+                      >
+                        Expand
+                      </button>
+                      {stepPresetStatusText(step) ? (
+                        <p className="small">{stepPresetStatusText(step)}</p>
+                      ) : null}
+                    </div>
+                  ) : null}
+
                   {showAdvancedStepOptions ? (
                     <div
                       className="grid-2"
@@ -13604,153 +13752,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                     ) : null}
                   </div>
 
-                  {step.stepType === "preset" ? (
-                    <div
-                      className="stack queue-step-preset-options"
-                      aria-label="Step Preset Options"
-                    >
-                      {visiblePresetSchemaFields.length > 0 && step.presetDetail ? (
-                        <SchemaCapabilityFields
-                          fields={visiblePresetSchemaFields}
-                          detail={step.presetDetail}
-                          values={step.presetInputValues}
-                          errors={step.presetInputErrors}
-                          disabled={isApplyingPreset}
-                          repositoryOptions={repositoryOptions}
-                          branchOptions={branchOptions}
-                          onGitHubIssueRepositoryChange={
-                            handleGitHubIssueRepositoryChange
-                          }
-                          onChange={(name, value) =>
-                            updateStepPresetInputValue(
-                              step.localId,
-                              { name },
-                              value,
-                            )
-                          }
-                        />
-                      ) : visiblePresetInputs.length > 0 ? (
-                        <div className="grid-2">
-                          {visiblePresetInputs.map((definition) => {
-                              const inputId = `queue-step-${step.localId}-preset-input-${definition.name}`;
-                              const value = stepTemplateInputDisplayValue(
-                                step,
-                                definition,
-                              );
-                              if (definition.type === "enum") {
-                                return (
-                                  <label key={definition.name} htmlFor={inputId}>
-                                    {definition.label}
-                                    <select
-                                      id={inputId}
-                                      value={value}
-                                      disabled={isApplyingPreset}
-                                      onChange={(event) =>
-                                        updateStepPresetInputValue(
-                                          step.localId,
-                                          definition,
-                                          event.target.value,
-                                        )
-                                      }
-                                    >
-                                      {(definition.options || []).map((option) => (
-                                        <option key={option} value={option}>
-                                          {templateEnumOptionLabel(
-                                            definition,
-                                            option,
-                                          )}
-                                        </option>
-                                      ))}
-                                    </select>
-                                  </label>
-                                );
-                              }
-                              if (definition.type === "boolean") {
-                                return (
-                                  <label key={definition.name} htmlFor={inputId}>
-                                    {definition.label}
-                                    <input
-                                      id={inputId}
-                                      type="checkbox"
-                                      checked={value === "true"}
-                                      disabled={isApplyingPreset}
-                                      onChange={(event) =>
-                                        updateStepPresetInputValue(
-                                          step.localId,
-                                          definition,
-                                          event.target.checked,
-                                        )
-                                      }
-                                    />
-                                  </label>
-                                );
-                              }
-                              if (
-                                definition.type === "textarea" ||
-                                definition.type === "markdown"
-                              ) {
-                                return (
-                                  <label key={definition.name} htmlFor={inputId}>
-                                    {definition.label}
-                                    <textarea
-                                      id={inputId}
-                                      value={value}
-                                      placeholder={definition.placeholder || ""}
-                                      disabled={isApplyingPreset}
-                                      onChange={(event) =>
-                                        updateStepPresetInputValue(
-                                          step.localId,
-                                          definition,
-                                          event.target.value,
-                                        )
-                                      }
-                                    />
-                                  </label>
-                                );
-                              }
-                              return (
-                                <label key={definition.name} htmlFor={inputId}>
-                                  {definition.label}
-                                  <input
-                                    id={inputId}
-                                    type="text"
-                                    value={value}
-                                    placeholder={definition.placeholder || ""}
-                                    disabled={isApplyingPreset}
-                                    onChange={(event) =>
-                                      updateStepPresetInputValue(
-                                        step.localId,
-                                        definition,
-                                        event.target.value,
-                                      )
-                                    }
-                                  />
-                                </label>
-                              );
-                            })}
-                        </div>
-                      ) : null}
-                      <button
-                        type="button"
-                        aria-disabled={
-                          isApplyingPreset ||
-                          !step.presetKey
-                        }
-                        aria-busy={isApplyingPreset}
-                        title={expandStepPresetTooltip}
-                        disabled={
-                          isApplyingPreset ||
-                          !step.presetKey
-                        }
-                        onClick={() => handleExpandStepPreset(step.localId)}
-                      >
-                        Expand
-                      </button>
-                      {stepPresetStatusText(step) ? (
-                        <p className="small">{stepPresetStatusText(step)}</p>
-                      ) : null}
-                    </div>
-                  ) : null}
+
                 </section>
               );
             })}
