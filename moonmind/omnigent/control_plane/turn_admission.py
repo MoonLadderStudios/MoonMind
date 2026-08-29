@@ -86,22 +86,6 @@ class ImmutableTurnAuthority:
             },
         )
 
-    @property
-    def complete(self) -> bool:
-        """True when every immutable dimension carries a concrete value."""
-
-        return all(
-            self.dimensions.get(name) is not None
-            for name in IMMUTABLE_TURN_AUTHORITY_DIMENSIONS
-        )
-
-    def missing_dimensions(self) -> tuple[str, ...]:
-        return tuple(
-            name
-            for name in IMMUTABLE_TURN_AUTHORITY_DIMENSIONS
-            if self.dimensions.get(name) is None
-        )
-
     def as_metadata(self) -> dict[str, Any]:
         """Return the compact, non-sensitive durable projection."""
 
