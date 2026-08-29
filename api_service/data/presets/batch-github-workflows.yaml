@@ -136,6 +136,14 @@ steps:
     context. Do not re-select provider, model, or effort: every child inherits the
     parent runtime via runtimeInheritance="caller".
 
+    This preset has no separate constraints input: this Instructions box is the
+    only batch-level guidance surface. Before invoking the helper, create the
+    artifacts directory and copy any operator-authored guidance added to this box
+    verbatim into artifacts/batch-workflows-constraints.txt so every child
+    workflow receives it as its constraints input. Copy only that added guidance,
+    never this template text. When the operator added none, leave the file absent
+    and the helper sends empty constraints.
+
     Resolve the range and queue each matched issue with "{{ inputs.run_ref }}" and
     publish override "{{ inputs.publish_mode }}" using one helper invocation. The
     portable helper performs the trusted GitHub query, excludes closed issues,
@@ -149,7 +157,8 @@ steps:
     --run-ref "{{ inputs.run_ref }}" \
     --publish-mode "{{ inputs.publish_mode }}" \
     --max-workflows "{{ inputs.max_workflows }}" \
-    {% if inputs.run_verify %}--run-verify{% else %}--no-run-verify{% endif %}
+    {% if inputs.run_verify %}--run-verify{% else %}--no-run-verify{% endif %} \
+    --constraints-file artifacts/batch-workflows-constraints.txt
 
     The helper writes artifacts/batch-workflows-result.json. Report its queued,
     skipped, and error counts honestly and link every queued child workflow.

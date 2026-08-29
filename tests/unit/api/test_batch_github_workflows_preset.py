@@ -92,7 +92,11 @@ async def test_batch_github_workflows_seed_and_expansion_contract(tmp_path):
         "--targets artifacts/batch-workflows-targets.json"
         not in step["instructions"]
     )
-    assert "--constraints" not in step["instructions"]
+    assert '--constraints "' not in step["instructions"]
+    assert (
+        "--constraints-file artifacts/batch-workflows-constraints.txt"
+        in step["instructions"]
+    )
     assert "constraints" not in orchestration["sharedInputs"]
     assert "constraints" not in expanded["appliedTemplate"]["inputs"]
 
@@ -131,9 +135,37 @@ async def test_batch_github_workflows_drops_constraints_input(tmp_path):
 
     assert "constraints" not in expanded["appliedTemplate"]["inputs"]
     step = expanded["steps"][0]
-    assert "--constraints" not in step["instructions"]
+    assert '--constraints "' not in step["instructions"]
     assert "Stale client value" not in step["instructions"]
     assert "constraints" not in step["batchOrchestration"]["sharedInputs"]
+
+
+async def test_batch_github_workflows_forwards_step_instruction_constraints(
+    tmp_path,
+):
+    async with _catalog_db(tmp_path) as sessions:
+        async with sessions() as session:
+            service = PresetCatalogService(session)
+            await service.sync_seed_templates(seed_dir=_seed_dir(tmp_path))
+
+            expanded = await service.expand_template(
+                slug="batch-github-workflows",
+                scope="global",
+                scope_ref=None,
+                inputs={
+                    "issue_range": "3142-3150",
+                    "run_ref": "preset:github-issue-implement",
+                    "repository": "MoonLadderStudios/MoonMind",
+                },
+            )
+
+    instructions = expanded["steps"][0]["instructions"]
+    assert (
+        "--constraints-file artifacts/batch-workflows-constraints.txt"
+        in instructions
+    )
+    assert "artifacts/batch-workflows-constraints.txt" in instructions
+    assert "this Instructions box is the" in instructions
 
 
 async def test_batch_github_workflows_uses_repository_context(tmp_path):

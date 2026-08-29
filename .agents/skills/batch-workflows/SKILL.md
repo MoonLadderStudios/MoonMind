@@ -43,8 +43,9 @@ Progress" with a single batch run.
   `preset:github-issue-orchestrate` through the same helper.
 - `max_workflows` (number, optional): hard cap on queued children. Default `25`.
 - `constraints` (string, optional): shared input copied to every child. The
-  Jira preset exposes this input; the GitHub preset relies on its step
-  instructions instead.
+  Jira preset exposes this input; the GitHub preset has no constraints input and
+  instead forwards operator guidance written into its step Instructions box
+  through `--constraints-file artifacts/batch-workflows-constraints.txt`.
 - `run_verify` (boolean, optional): shared verification toggle copied to child
   implement presets. Default `true`.
 - `additional_jql` (string, optional): advanced JQL AND-clause appended to the
