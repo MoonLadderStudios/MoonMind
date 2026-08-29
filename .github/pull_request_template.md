@@ -51,20 +51,6 @@ For AI-assisted or AI-written descriptions:
 - [ ] Existing tests cover this change
 - [ ] Not applicable
 
-## AI assistance
-
-- [ ] No material AI assistance
-- [ ] AI-assisted or AI-generated contribution
-
-If AI-assisted:
-
-- Tool or workflow used:
-- What the AI helped with:
-- What I manually reviewed:
-- What I verified independently:
-
-I understand that I am responsible for the final submitted change.
-
 ## Risk notes
 
 <!--
