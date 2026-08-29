@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 import pytest_asyncio
@@ -313,3 +313,155 @@ async def test_readiness_bundle_provenance_fails_for_missing_artifact(session):
     by_name = {check["name"]: check for check in outcome.checks}
     assert by_name["bundle_provenance"]["ready"] is False
     assert "bundle_contents" not in by_name
+
+
+# --------------------------------------------------------------------------
+# Model catalog admission: identity and observation age
+# --------------------------------------------------------------------------
+
+
+def _opencode_v2_document(*, harness, catalog_ref: str) -> dict:
+    return {
+        "schemaVersion": "moonmind.omnigent-agent-profile.v2",
+        "endpointRef": "default",
+        "source": {
+            "kind": "upstream",
+            "upstreamId": "opencode-native-ui",
+            "upstreamVersion": "1",
+            "upstreamSnapshotDigest": "sha256:" + "7" * 64,
+        },
+        "harness": {
+            "id": harness.id,
+            "catalogRef": catalog_ref,
+            "implementationRef": harness.implementation.implementation_ref(),
+        },
+        "credentialSlots": [
+            {"id": "primary-model", "acceptedProviderIds": ["opencode-go"]}
+        ],
+        "allowedLaunchPolicyRefs": ["omnigent-on-demand@1"],
+        "model": {"qualifiedId": "opencode-go/test-model"},
+    }
+
+
+async def _seed_opencode_smoke_admission(session, *, validated_at: datetime):
+    """Seed the exact rows the v2 provider admission loop reads."""
+
+    from api_service.db.models import (
+        OmnigentHarnessCatalogSnapshotRecord,
+        OmnigentHarnessTrustRecord,
+    )
+    from moonmind.omnigent.harness_platform.catalog import (
+        TrustState,
+        create_catalog_snapshot,
+    )
+
+    snapshot = create_catalog_snapshot(
+        endpointRef="default",
+        omnigentVersion="0.11.0",
+        omnigentBuildDigest="sha256:" + "4" * 64,
+        sourceDigest="sha256:" + "5" * 64,
+        harnesses=[
+            {
+                "id": "opencode-native",
+                "label": "OpenCode",
+                "implementation": {
+                    "sourceKind": "core",
+                    "package": "omnigent",
+                    "version": "0.11.0",
+                    "digest": "sha256:" + "3" * 64,
+                },
+                "capabilities": {"integrationMode": "native-server"},
+            }
+        ],
+    )
+    harness = snapshot.harnesses[0]
+    session.add(
+        OmnigentHarnessCatalogSnapshotRecord(
+            catalog_ref=snapshot.catalogRef,
+            endpoint_ref="default",
+            omnigent_version=snapshot.omnigentVersion,
+            omnigent_build_digest=snapshot.omnigentBuildDigest,
+            observed_at=datetime.now(timezone.utc),
+            source_digest=snapshot.sourceDigest,
+            snapshot_json=snapshot.model_dump(mode="json"),
+            diagnostics_json={},
+        )
+    )
+    await session.flush()
+    session.add(
+        OmnigentHarnessTrustRecord(
+            implementation_ref=harness.implementation.implementation_ref(),
+            harness_id=harness.id,
+            catalog_ref=snapshot.catalogRef,
+            trust_state=TrustState.core_trusted.value,
+        )
+    )
+    provider = ManagedAgentProviderProfile(
+        profile_id="opencode-go-primary",
+        runtime_id="opencode",
+        provider_id="opencode-go",
+        credential_source=ProviderCredentialSource.SECRET_REF,
+        runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+        enabled=True,
+        auth_state=ProviderProfileAuthState.CONNECTED,
+        secret_refs={"opencode_api_key": "env://OPENCODE_API_KEY"},
+        credential_generation=4,
+        model_catalog_evidence_json={
+            "credentialGeneration": 4,
+            "imageRef": "registry.test/opencode@sha256:" + "6" * 64,
+            "models": [{"qualifiedId": "opencode-go/test-model"}],
+            "validatedAt": validated_at.isoformat(),
+        },
+    )
+    session.add(provider)
+    await session.commit()
+    return _opencode_v2_document(harness=harness, catalog_ref=snapshot.catalogRef)
+
+
+async def _provider_check(session, document):
+    outcome = await run_profile_readiness_checks(
+        session,
+        document=document,
+        refresh_upstream=_noop_refresh,
+        read_bundle_bytes=_unused_bundle_reader,
+    )
+    return {check["name"]: check for check in outcome.checks}["provider_profile"]
+
+
+async def test_smoke_admission_rejects_an_expired_model_catalog(session, monkeypatch):
+    """Smoke launches the real host, so it must not admit an expired catalog.
+
+    The pinned host image refreshes its catalog from the provider at probe
+    time. Binding admission to the credential generation and image digest alone
+    would let smoke keep launching from the first catalog it ever observed --
+    including a model the provider has since removed -- because neither of
+    those changes on a healthy deployment.
+    """
+
+    monkeypatch.setenv(
+        "OMNIGENT_OPENCODE_HOST_IMAGE_REF",
+        "registry.test/opencode@sha256:" + "6" * 64,
+    )
+    # Exercise the documented default catalog interval, not an inherited value.
+    monkeypatch.delenv("OPENCODE_MODEL_CATALOG_MAX_AGE_HOURS", raising=False)
+    document = await _seed_opencode_smoke_admission(
+        session, validated_at=datetime.now(timezone.utc)
+    )
+
+    assert (await _provider_check(session, document))["ready"] is True
+
+    provider = await session.get(ManagedAgentProviderProfile, "opencode-go-primary")
+    provider.model_catalog_evidence_json = {
+        **provider.model_catalog_evidence_json,
+        "validatedAt": (
+            datetime.now(timezone.utc) - timedelta(hours=9)
+        ).isoformat(),
+    }
+    await session.commit()
+
+    assert (await _provider_check(session, document))["ready"] is False
+
+    # The interval is deployment-configurable; ``0`` restores identity-only
+    # staleness at this boundary exactly as it does at the reconciler.
+    monkeypatch.setenv("OPENCODE_MODEL_CATALOG_MAX_AGE_HOURS", "0")
+    assert (await _provider_check(session, document))["ready"] is True

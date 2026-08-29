@@ -2643,18 +2643,6 @@ class AppSettings(BaseSettings):
         exclude=True,
         description="Compatibility passthrough for worker capabilities declaration.",
     )
-    moonmind_unreal_ccache_volume_name: Optional[str] = Field(
-        None,
-        alias="MOONMIND_UNREAL_CCACHE_VOLUME_NAME",
-        exclude=True,
-        description="Deployment-owned ccache volume for approved container jobs.",
-    )
-    moonmind_unreal_ubt_volume_name: Optional[str] = Field(
-        None,
-        alias="MOONMIND_UNREAL_UBT_VOLUME_NAME",
-        exclude=True,
-        description="Deployment-owned UBT metadata volume for approved container jobs.",
-    )
     workflow_git_user_name: Optional[str] = Field(
         None,
         validation_alias=AliasChoices(

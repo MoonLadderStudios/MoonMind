@@ -276,6 +276,9 @@ async def _run_v2_profile_readiness_checks(
         OmnigentHarnessCatalogSnapshotRecord,
         OmnigentHarnessTrustRecord,
     )
+    from moonmind.omnigent.bootstrap.provider_revalidation import (
+        evidence_observation_is_current,
+    )
     from moonmind.omnigent.harness_platform.agent_profile import (
         BundleSource,
         validate_agent_profile,
@@ -496,6 +499,9 @@ async def _run_v2_profile_readiness_checks(
                 != int(provider.credential_generation)
                 or str(evidence.get("imageRef") or "")
                 not in {item.imageRef for item in selected_classes}
+                # Smoke launches the real host, so it must not admit a catalog
+                # the provider may have changed since it was observed.
+                or not evidence_observation_is_current(evidence)
                 or not model
                 or model not in _profile_model_ids(evidence.get("models", []))
             ):

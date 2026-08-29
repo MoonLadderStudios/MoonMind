@@ -10,6 +10,7 @@ boundaries that must not be crossed to get there.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -24,6 +25,9 @@ from moonmind.omnigent.bootstrap.provider_revalidation import (
 CURRENT_IMAGE = "ghcr.io/moonmind/omnigent-host-opencode@sha256:" + "a" * 64
 PREVIOUS_IMAGE = "ghcr.io/moonmind/omnigent-host-opencode@sha256:" + "b" * 64
 API_KEY = "sk-" + "z" * 40
+# Distinguishes "use a fresh observation timestamp" from an explicit ``None``
+# that omits the field entirely.
+_UNSET_VALIDATED_AT = "__unset__"
 
 
 @pytest.fixture(autouse=True)
@@ -43,6 +47,7 @@ def _profile(
     auth_state: str = "connected",
     secret_refs: dict[str, str] | None = None,
     command_behavior: dict | None = None,
+    evidence_validated_at: str | None = _UNSET_VALIDATED_AT,
 ) -> SimpleNamespace:
     evidence = None
     if evidence_image is not None:
@@ -56,6 +61,10 @@ def _profile(
                 generation if evidence_generation is None else evidence_generation
             ),
         }
+        if evidence_validated_at is _UNSET_VALIDATED_AT:
+            evidence["validatedAt"] = datetime.now(UTC).isoformat()
+        elif evidence_validated_at is not None:
+            evidence["validatedAt"] = evidence_validated_at
     return SimpleNamespace(
         profile_id=profile_id,
         runtime_id="opencode",
@@ -209,6 +218,92 @@ def test_evidence_is_current_rejects_fabricated_or_stale_model_catalogs() -> Non
         {"qualifiedId": "opencode-go/gpt-5.6-luna"}
     ]
     assert not evidence_is_current(rotated, image_ref=CURRENT_IMAGE)
+
+
+def test_catalog_observation_expires_by_default() -> None:
+    """An unchanged credential and image must not freeze the model catalog.
+
+    The pinned host image refreshes its catalog from the provider at probe
+    time, so binding the observation only to credential generation and image
+    digest keeps whichever catalog the first probe saw. Models the provider
+    publishes later -- contributor tiers included -- would never reach
+    selection, readiness, or admission on an otherwise unchanged deployment.
+    """
+
+    now = datetime.now(UTC)
+    fresh = _profile(
+        evidence_image=CURRENT_IMAGE,
+        evidence_validated_at=(now - timedelta(hours=1)).isoformat(),
+    )
+    assert evidence_is_current(fresh, image_ref=CURRENT_IMAGE, env={}, now=now)
+
+    aged = _profile(
+        evidence_image=CURRENT_IMAGE,
+        evidence_validated_at=(now - timedelta(hours=7)).isoformat(),
+    )
+    assert not evidence_is_current(aged, image_ref=CURRENT_IMAGE, env={}, now=now)
+
+
+def test_catalog_observation_interval_is_operator_configurable() -> None:
+    now = datetime.now(UTC)
+    aged = _profile(
+        evidence_image=CURRENT_IMAGE,
+        evidence_validated_at=(now - timedelta(hours=7)).isoformat(),
+    )
+    assert evidence_is_current(
+        aged,
+        image_ref=CURRENT_IMAGE,
+        env={"OPENCODE_MODEL_CATALOG_MAX_AGE_HOURS": "24"},
+        now=now,
+    )
+    # ``0`` restores identity-only staleness for a deployment that pins its
+    # catalog deliberately.
+    assert evidence_is_current(
+        aged,
+        image_ref=CURRENT_IMAGE,
+        env={"OPENCODE_MODEL_CATALOG_MAX_AGE_HOURS": "0"},
+        now=now,
+    )
+
+
+def test_catalog_observation_from_the_future_is_not_current() -> None:
+    """A backward clock correction must not keep an old catalog authoritative.
+
+    A ``validatedAt`` ahead of now yields a negative age that satisfies any
+    interval for as long as the timestamp stays ahead, so readiness and
+    planning would keep admitting models the provider may already have removed
+    for days after a VM snapshot restore.
+    """
+
+    now = datetime.now(UTC)
+    ahead = _profile(
+        evidence_image=CURRENT_IMAGE,
+        evidence_validated_at=(now + timedelta(days=3)).isoformat(),
+    )
+    assert not evidence_is_current(ahead, image_ref=CURRENT_IMAGE, env={}, now=now)
+
+    # Ordinary disagreement between the probing host's clock and this one is
+    # tolerated rather than forcing a re-probe on every pass.
+    skewed = _profile(
+        evidence_image=CURRENT_IMAGE,
+        evidence_validated_at=(now + timedelta(minutes=1)).isoformat(),
+    )
+    assert evidence_is_current(skewed, image_ref=CURRENT_IMAGE, env={}, now=now)
+
+
+def test_catalog_observation_without_a_timestamp_is_not_current() -> None:
+    """An observation that cannot state its age cannot be shown to be current."""
+
+    undated = _profile(evidence_image=CURRENT_IMAGE, evidence_validated_at=None)
+    assert "validatedAt" not in undated.model_catalog_evidence_json
+    assert not evidence_is_current(undated, image_ref=CURRENT_IMAGE, env={})
+    # Pinning the interval off keeps the historical identity-only contract for
+    # evidence written before the field existed.
+    assert evidence_is_current(
+        undated,
+        image_ref=CURRENT_IMAGE,
+        env={"OPENCODE_MODEL_CATALOG_MAX_AGE_HOURS": "0"},
+    )
 
 
 @pytest.mark.asyncio
@@ -389,7 +484,9 @@ async def test_stale_host_image_evidence_is_revalidated_and_refreshed(
             "imageRef": image_ref,
             "runtimeVersions": {"opencode": "1.18.11"},
             "materializerRef": "opencode-auth-json@1",
-            "validatedAt": "2026-08-25T01:00:00+00:00",
+            # Production stamps the observation at probe time; a refreshed
+            # profile is only current because the catalog was just observed.
+            "validatedAt": datetime.now(UTC).isoformat(),
             "credentialGeneration": profile.credential_generation,
         }
 
@@ -484,6 +581,62 @@ async def test_unavailable_maintenance_lease_defers_the_pass(
     assert outcome.ready is False
     assert outcome.deferred == ("opencode-go-default",)
     assert rows[0].model_catalog_evidence_json["imageRef"] == PREVIOUS_IMAGE
+
+
+@pytest.mark.asyncio
+async def test_lease_failures_never_consume_the_revalidation_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Lease contention is not a provider verdict, so it must stay retryable.
+
+    ``acquire_credential_maintenance_guard`` fails on maintainer contention and
+    on transient Temporal/profile-manager errors, and no provider probe runs in
+    either case. Charging those to ``MAX_REVALIDATION_ATTEMPTS`` would let three
+    of them mark the identity exhausted, after which the reconciler skips the
+    profile entirely until its credential or host image changes.
+    """
+
+    from moonmind.omnigent.bootstrap.provider_revalidation import (
+        MAX_REVALIDATION_ATTEMPTS,
+        REVALIDATION_FAILURE_KEY,
+        revalidation_is_exhausted,
+    )
+
+    _install_stubs(monkeypatch, acquire_error=RuntimeError("profile is busy"))
+    rows = [_profile()]
+
+    for _ in range(MAX_REVALIDATION_ATTEMPTS + 1):
+        outcome = await reconcile_opencode_provider_readiness(
+            session_factory=_session_factory(rows), controller=_Controller()
+        )
+        assert outcome.deferred == ("opencode-go-default",)
+
+    assert REVALIDATION_FAILURE_KEY not in (rows[0].command_behavior or {})
+    assert not revalidation_is_exhausted(rows[0], image_refs=(CURRENT_IMAGE,))
+
+    # The full budget is intact, so the very next pass still probes the
+    # provider once the lease is available again.
+    probed: list[str] = []
+
+    async def validate(profile, image_ref, _lease, _kwargs):
+        probed.append(profile.profile_id)
+        return {
+            "schemaVersion": "moonmind.provider-model-catalog-evidence.v1",
+            "models": [{"qualifiedId": "opencode-go/muse-spark-1.2-contributor"}],
+            "imageRef": image_ref,
+            "runtimeVersions": {"opencode": "1.18.11"},
+            "materializerRef": "opencode-auth-json@1",
+            "validatedAt": datetime.now(UTC).isoformat(),
+            "credentialGeneration": profile.credential_generation,
+        }
+
+    _install_stubs(monkeypatch, validate=validate)
+    outcome = await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory(rows), controller=_Controller()
+    )
+
+    assert probed == ["opencode-go-default"]
+    assert outcome.refreshed == ("opencode-go-default",)
 
 
 @pytest.mark.asyncio
@@ -638,6 +791,126 @@ async def test_a_successful_refresh_clears_a_recorded_failure(
                 REVALIDATION_FAILURE_KEY: {
                     "imageRef": CURRENT_IMAGE,
                     "credentialGeneration": 3,
+                    "attempts": 1,
+                    "exhausted": False,
+                }
+            }
+        )
+    ]
+
+    outcome = await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory(rows), controller=_Controller()
+    )
+
+    assert outcome.refreshed == ("opencode-go-default",)
+    assert REVALIDATION_FAILURE_KEY not in rows[0].command_behavior
+
+
+@pytest.mark.asyncio
+async def test_exhausted_revalidation_stops_probing_the_pinned_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The recorded attempt budget must bound provider work, not just reporting.
+
+    The startup maintainer re-enters this boundary every 120 seconds for as
+    long as readiness stays false, so a provider outage or a revoked key would
+    otherwise launch a Docker-backed probe forever.
+    """
+
+    from moonmind.omnigent.bootstrap.provider_revalidation import (
+        REVALIDATION_FAILURE_KEY,
+    )
+
+    # ``validate=None`` makes the stub assert if the runtime probe is reached.
+    _install_stubs(monkeypatch)
+    rows = [
+        _profile(
+            command_behavior={
+                REVALIDATION_FAILURE_KEY: {
+                    "imageRef": CURRENT_IMAGE,
+                    "credentialGeneration": 3,
+                    "attempts": 3,
+                    "exhausted": True,
+                }
+            }
+        )
+    ]
+
+    outcome = await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory(rows), controller=_Controller()
+    )
+
+    assert outcome.refreshed == ()
+    assert outcome.deferred == ("opencode-go-default",)
+    # Not "ready": the profile still cannot launch, and only an operator can
+    # change that. The pass simply stops paying for the same answer.
+    assert outcome.ready is False
+    assert "exhausted" in (outcome.reason or "")
+    assert rows[0].command_behavior[REVALIDATION_FAILURE_KEY]["attempts"] == 3
+
+
+@pytest.mark.asyncio
+async def test_an_expired_catalog_stops_probing_once_attempts_are_exhausted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Interval-driven staleness inherits the same bounded attempt budget."""
+
+    from moonmind.omnigent.bootstrap.provider_revalidation import (
+        MAX_REVALIDATION_ATTEMPTS,
+        REVALIDATION_FAILURE_KEY,
+    )
+
+    attempts: list[str] = []
+
+    async def validate(profile, image_ref, _lease, _kwargs):
+        del profile, image_ref
+        attempts.append("probe")
+        raise RuntimeError("provider catalog service is unavailable")
+
+    _install_stubs(monkeypatch, validate=validate)
+    aged = (datetime.now(UTC) - timedelta(hours=9)).isoformat()
+    rows = [_profile(evidence_image=CURRENT_IMAGE, evidence_validated_at=aged)]
+
+    for _ in range(MAX_REVALIDATION_ATTEMPTS + 3):
+        outcome = await reconcile_opencode_provider_readiness(
+            session_factory=_session_factory(rows), controller=_Controller()
+        )
+
+    assert len(attempts) == MAX_REVALIDATION_ATTEMPTS
+    assert rows[0].command_behavior[REVALIDATION_FAILURE_KEY]["exhausted"] is True
+    assert outcome.ready is False
+    assert outcome.deferred == ("opencode-go-default",)
+
+
+@pytest.mark.asyncio
+async def test_a_new_pinned_image_restores_the_revalidation_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exhaustion is scoped to the identity it was earned against."""
+
+    from moonmind.omnigent.bootstrap.provider_revalidation import (
+        REVALIDATION_FAILURE_KEY,
+    )
+
+    async def validate(profile, image_ref, _lease, _kwargs):
+        return {
+            "schemaVersion": "moonmind.provider-model-catalog-evidence.v1",
+            "models": [{"qualifiedId": "opencode-go/muse-spark-1.2-contributor"}],
+            "imageRef": image_ref,
+            "runtimeVersions": {"opencode": "1.18.11"},
+            "materializerRef": "opencode-auth-json@1",
+            "validatedAt": datetime.now(UTC).isoformat(),
+            "credentialGeneration": profile.credential_generation,
+        }
+
+    _install_stubs(monkeypatch, validate=validate)
+    rows = [
+        _profile(
+            command_behavior={
+                REVALIDATION_FAILURE_KEY: {
+                    # Earned against the image the deployment no longer pins.
+                    "imageRef": PREVIOUS_IMAGE,
+                    "credentialGeneration": 3,
                     "attempts": 3,
                     "exhausted": True,
                 }
@@ -650,4 +923,71 @@ async def test_a_successful_refresh_clears_a_recorded_failure(
     )
 
     assert outcome.refreshed == ("opencode-go-default",)
+    assert outcome.ready is True
     assert REVALIDATION_FAILURE_KEY not in rows[0].command_behavior
+
+
+def test_revalidation_is_exhausted_is_scoped_to_image_and_generation() -> None:
+    from moonmind.omnigent.bootstrap.provider_revalidation import (
+        REVALIDATION_FAILURE_KEY,
+        revalidation_is_exhausted,
+    )
+
+    def _record(**overrides):
+        record = {
+            "imageRef": CURRENT_IMAGE,
+            "credentialGeneration": 3,
+            "attempts": 3,
+            "exhausted": True,
+        }
+        record.update(overrides)
+        return _profile(command_behavior={REVALIDATION_FAILURE_KEY: record})
+
+    assert revalidation_is_exhausted(_record(), image_refs=(CURRENT_IMAGE,))
+    assert not revalidation_is_exhausted(_record(), image_refs=(PREVIOUS_IMAGE,))
+    assert not revalidation_is_exhausted(
+        _record(credentialGeneration=2), image_refs=(CURRENT_IMAGE,)
+    )
+    assert not revalidation_is_exhausted(
+        _record(exhausted=False), image_refs=(CURRENT_IMAGE,)
+    )
+    assert not revalidation_is_exhausted(_profile(), image_refs=(CURRENT_IMAGE,))
+
+
+def test_evidence_observation_is_current_is_the_shared_admission_predicate() -> None:
+    """Every admission boundary asks this one question about observation age."""
+
+    from moonmind.omnigent.bootstrap.provider_revalidation import (
+        evidence_observation_is_current,
+    )
+
+    now = datetime(2026, 8, 28, 12, 0, tzinfo=UTC)
+    fresh = {"validatedAt": (now - timedelta(hours=5)).isoformat()}
+    aged = {"validatedAt": (now - timedelta(hours=7)).isoformat()}
+
+    assert evidence_observation_is_current(fresh, env={}, now=now)
+    assert not evidence_observation_is_current(aged, env={}, now=now)
+    # An explicit interval overrides the default in both directions.
+    assert evidence_observation_is_current(
+        aged, env={"OPENCODE_MODEL_CATALOG_MAX_AGE_HOURS": "12"}, now=now
+    )
+    assert not evidence_observation_is_current(
+        fresh, env={"OPENCODE_MODEL_CATALOG_MAX_AGE_HOURS": "1"}, now=now
+    )
+    # ``0`` restores identity-only staleness for every boundary at once.
+    assert evidence_observation_is_current(
+        aged, env={"OPENCODE_MODEL_CATALOG_MAX_AGE_HOURS": "0"}, now=now
+    )
+    # Evidence that cannot state when it was observed is never current.
+    assert not evidence_observation_is_current({}, env={}, now=now)
+    assert not evidence_observation_is_current(None, env={}, now=now)
+    # Neither is evidence stamped beyond the clock-skew tolerance into the
+    # future, at every boundary and for every configured interval.
+    ahead = {"validatedAt": (now + timedelta(days=3)).isoformat()}
+    assert not evidence_observation_is_current(ahead, env={}, now=now)
+    assert not evidence_observation_is_current(
+        ahead, env={"OPENCODE_MODEL_CATALOG_MAX_AGE_HOURS": "720"}, now=now
+    )
+    assert evidence_observation_is_current(
+        {"validatedAt": (now + timedelta(minutes=1)).isoformat()}, env={}, now=now
+    )

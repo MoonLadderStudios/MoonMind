@@ -148,26 +148,65 @@ deferred until an operator selects another observed model, because changing a
 billing-relevant model is not an automatic recovery action. Raw key is never
 returned after submission.
 
-### Automatic re-validation after a host image change
+### Automatic re-validation after a host image change or catalog interval
 
-Model catalog evidence is bound to the exact digest-pinned host image that
-produced it and to the credential generation that was active at the time.
-Readiness, planning, and smoke admission all reject evidence that belongs to any
-other image or generation, so re-pulling or rebuilding the OpenCode host image
-invalidates every previously validated Provider Profile.
+Model catalog evidence answers two separate questions, and both must hold for a
+persisted observation to stay authoritative.
+
+The first is **launchable identity**: evidence is bound to the exact
+digest-pinned host image that produced it, to the credential generation that
+was active at the time, to the `opencode-auth-json@1` materializer, and it must
+contain the profile's selected default model.
+
+The second is **observation age**. The pinned host image ships a bundled model
+catalog and refreshes it from the provider at probe time, so identity alone
+would freeze whichever catalog the first successful probe observed: a healthy
+deployment never changes its credential generation or image digest on its own,
+and models the provider publishes later — contributor tiers included — would
+never reach selection, readiness, or admission.
+`OPENCODE_MODEL_CATALOG_MAX_AGE_HOURS` bounds that age and defaults to `6`, so
+the documented one-value setup keeps observing the provider's current models
+without another operator action. Set it to `0` to re-probe only on an identity
+change. A pass that has just observed the catalog is judged on identity alone;
+the interval decides when to re-probe, not whether a fresh observation counts.
+
+Readiness, planning, and smoke admission all apply both questions: they reject
+evidence that belongs to any other image or generation, and they reject an
+observation older than the interval. Re-pulling or rebuilding the OpenCode host
+image therefore invalidates every previously validated Provider Profile, and an
+expired catalog stops advertising and launching targets until a refresh
+succeeds instead of admitting a model the provider may have removed.
+
+An observation stamped further than a small clock-skew tolerance into the
+future is rejected the same way. A VM snapshot restore or a backward host-clock
+correction would otherwise give the observation a negative age that satisfies
+any interval for as long as the timestamp stays ahead, keeping an old catalog
+authoritative well past its expiry.
 
 MoonMind therefore re-validates automatically. The Omnigent bootstrap
 reconciliation pass re-runs the pinned-runtime validation above for every
 enabled, connected OpenCode Provider Profile whose evidence no longer matches
-the currently pinned image, using the already-enrolled `opencode_api_key`
-SecretRef. No new credential is requested, no image is substituted, and a
-credential the runtime rejects keeps its previous evidence and stays connected.
+the currently pinned image or has aged past the catalog interval, using the
+already-enrolled `opencode_api_key` SecretRef. No new credential is requested,
+no image is substituted, and a credential the runtime rejects keeps its previous
+evidence and stays connected.
 Fresh catalog evidence is retained when the credential remains valid but the
 configured default model has rotated out, while readiness stays deferred rather
 than silently selecting a replacement.
 While a profile is waiting for that pass, Workflow Create reports
 `provider_runtime_revalidation_pending` rather than asking the operator to
 reconnect a profile that is already connected.
+
+That wait is bounded. Re-validation gets `MAX_REVALIDATION_ATTEMPTS` tries per
+credential generation and host image; once they are spent, the reconciler stops
+probing the provider for that identity and readiness stops reporting a pending
+wait. This is what keeps a provider outage or a revoked key from launching a
+Docker-backed probe on every background pass for as long as the deployment
+runs. Reconnecting the credential or re-pinning the host image is a new
+identity, so it restores the full attempt budget without a separate reset
+action. Only a probe the provider actually answered spends an attempt: when the
+credential maintenance lease cannot be acquired, no probe ran, so the pass
+defers with its budget intact.
 
 ## Agent Profile
 

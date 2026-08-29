@@ -23,6 +23,7 @@ from moonmind.schemas.container_job_models import (
     MAX_ARTIFACT_PAGE_ENTRIES,
     MAX_LOG_PAGE_ENTRIES,
     ResolvedContainerLaunchPlan,
+    ResourceLimits,
     TerminalOutcome,
     ensure_temporal_safe,
     workspace_locator_identity,
@@ -144,6 +145,35 @@ def test_workdir_rejects_traversal(workdir: str) -> None:
     data["spec"]["workdir"] = workdir
     with pytest.raises(ValidationError):
         ContainerJobSubmitRequest.model_validate(data)
+
+
+@pytest.mark.parametrize(
+    "target",
+    ["/", "/cache/", "/cache//pip", "//cache", "/ca che", "/cache/..", "cache"],
+)
+def test_cache_target_requires_a_normalized_absolute_path(target: str) -> None:
+    """A cache target names one exact mount point, so it must be normalized.
+
+    The deployment declares its approved cache targets and the backend selects
+    a source by matching this value exactly. An un-normalized spelling would
+    describe the same mount point under a name no declaration can match, so the
+    request contract refuses it rather than resolving it later.
+    """
+
+    data = payload()
+    data["spec"]["caches"] = [{"cacheRef": "build-cache", "target": target}]
+    with pytest.raises(ValidationError):
+        ContainerJobSubmitRequest.model_validate(data)
+
+
+def test_cache_target_accepts_a_normalized_absolute_path() -> None:
+    data = payload()
+    data["spec"]["caches"] = [
+        {"cacheRef": "build-cache", "target": "/opt/project/cache", "readOnly": True}
+    ]
+    mount = ContainerJobSubmitRequest.model_validate(data).spec.caches[0]
+    assert mount.target == "/opt/project/cache"
+    assert mount.read_only is True
 
 
 @pytest.mark.parametrize(
@@ -380,3 +410,29 @@ def test_every_history_facing_contract_enforces_temporal_limit(monkeypatch) -> N
         )
     with pytest.raises(ValidationError, match="payload must serialize"):
         ContainerJobCancelResult(jobId=JOB_ID, state="canceling", accepted=True)
+
+
+def test_resource_limits_admit_and_validate_a_shared_memory_request() -> None:
+    """The generic contract admits the caller-owned shared-memory field.
+
+    A spec that could not express ``resources.shmSize`` rejected it as
+    ``extra_forbidden``, which blocked every caller whose workload needs more
+    shared memory than the deployment default.
+    """
+
+    admitted = ResourceLimits.model_validate(
+        {"cpuMillis": 1000, "memoryMiB": 512, "shmSize": "8g"}
+    )
+    assert admitted.shm_size == "8g"
+    assert admitted.model_dump(by_alias=True)["shmSize"] == "8g"
+
+    # Omitted means "deployment default applies", not "zero".
+    assert ResourceLimits.model_validate(
+        {"cpuMillis": 1000, "memoryMiB": 512}
+    ).shm_size is None
+
+    for invalid in ("", "   ", "8gigs", "-1g", "0"):
+        with pytest.raises(ValidationError):
+            ResourceLimits.model_validate(
+                {"cpuMillis": 1000, "memoryMiB": 512, "shmSize": invalid}
+            )

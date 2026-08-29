@@ -1869,11 +1869,33 @@ async def test_launch_session_injects_moonmind_url_from_activity_environment(
     assert launched_request.environment["PATH"] == "/usr/bin"
     assert launched_request.environment["MOONMIND_URL"] == "http://api:8000"
 
-async def test_launch_session_injects_unreal_image_refs_from_activity_environment(
+@pytest.mark.parametrize(
+    ("declared", "forwarded"),
+    [
+        ("PROJECT_TOOLCHAIN_IMAGE", True),
+        # Secret-looking names never reach a session through this path.
+        ("PROJECT_REGISTRY_TOKEN", False),
+        # Malformed declarations are ignored rather than forwarded blindly.
+        ("not a key", False),
+    ],
+    ids=["non-secret", "secret-looking", "malformed"],
+)
+async def test_launch_session_injects_declared_non_secret_environment(
     monkeypatch: pytest.MonkeyPatch,
+    declared: str,
+    forwarded: bool,
 ) -> None:
-    pinned = "ghcr.io/moonladderstudios/tactics-ue-base@sha256:abc123"
-    monkeypatch.setenv("MOONMIND_UNREAL_ENGINE_IMAGE", pinned)
+    """A deployment declares which non-secret keys a Skill may read.
+
+    MoonMind used to hardcode one project's variable name here. The allowlist
+    is now operator-declared, so no project is named in MoonMind's source.
+    """
+
+    pinned = "registry.invalid/example/toolchain@sha256:abc123"
+    monkeypatch.setenv(declared, pinned)
+    monkeypatch.setenv(
+        "MOONMIND_MANAGED_SESSION_NON_SECRET_ENV_KEYS", f" {declared} , ,{declared}"
+    )
     controller = AsyncMock()
     controller.launch_session = AsyncMock(
         return_value=CodexManagedSessionHandle(
@@ -1904,7 +1926,10 @@ async def test_launch_session_injects_unreal_image_refs_from_activity_environmen
     )
 
     launched_request = controller.launch_session.await_args.args[0]
-    assert launched_request.environment["MOONMIND_UNREAL_ENGINE_IMAGE"] == pinned
+    if forwarded:
+        assert launched_request.environment[declared] == pinned
+    else:
+        assert declared not in launched_request.environment
 
 
 async def test_pre_cutover_ensure_sidecar_activity_remains_executable() -> None:

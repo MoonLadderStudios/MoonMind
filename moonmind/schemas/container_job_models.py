@@ -15,6 +15,7 @@ from moonmind.schemas.workload_models import (
     WorkloadGpuRequest,
     WorkloadGpuRequestError,
     WorkloadGpuVendor,
+    parse_size_bytes,
 )
 from moonmind.schemas.workspace_locator_models import (
     ExternalStateLocator,
@@ -29,7 +30,7 @@ MAX_TEMPORAL_PAYLOAD_BYTES = 64 * 1024
 MAX_LOG_PAGE_ENTRIES = 500
 MAX_ARTIFACT_PAGE_ENTRIES = 200
 _JOB_ID = re.compile(r"^container-job:[0-9a-f]{32}$")
-_SECRET_KEY = re.compile(r"(?:password|passwd|secret|token|api[_-]?key|auth|credential|docker_host|registry_auth)", re.I)
+SENSITIVE_ENVIRONMENT_KEY_PATTERN = re.compile(r"(?:password|passwd|secret|token|api[_-]?key|auth|credential|docker_host|registry_auth)", re.I)
 _FORBIDDEN_KEYS = {
     "dockerhost", "dockerurl", "socketpath", "tlspath", "hostpath", "sourcepath",
     "privileged", "devices", "pidmode", "ipcmode", "utsmode", "usernsmode",
@@ -181,15 +182,30 @@ class EnvironmentOverride(ContractModel):
     def exactly_one_value(self) -> "EnvironmentOverride":
         if (self.value is None) == (self.secret_ref is None):
             raise ValueError("exactly one of value or secretRef is required")
-        if _SECRET_KEY.search(self.name) and self.value is not None:
+        if (
+            SENSITIVE_ENVIRONMENT_KEY_PATTERN.search(self.name)
+            and self.value is not None
+        ):
             raise ValueError("sensitive environment keys require secretRef")
         return self
 
 
 class CacheMount(ContractModel):
     cache_ref: str = Field(alias="cacheRef", min_length=1, max_length=255)
-    target: str = Field(pattern=r"^/[A-Za-z0-9._/@+-]+(?:/[A-Za-z0-9._@+-]+)*$", max_length=512)
+    # A normalized absolute container path: every segment is non-empty, so a
+    # bare ``/``, a trailing slash, and a doubled separator are all refused.
+    # The leading segment previously admitted ``/`` itself, which made the
+    # per-segment group unreachable and accepted un-normalized targets that
+    # the deployment's declared cache target could never match exactly.
+    target: str = Field(pattern=r"^/[A-Za-z0-9._@+-]+(?:/[A-Za-z0-9._@+-]+)*$", max_length=512)
     read_only: bool = Field(False, alias="readOnly")
+
+    @field_validator("target")
+    @classmethod
+    def _target_is_normalized(cls, value: str) -> str:
+        if ".." in value.split("/"):
+            raise ValueError("target must be a normalized absolute container path")
+        return value
 
 
 class ResourceLimits(ContractModel):
@@ -200,6 +216,20 @@ class ResourceLimits(ContractModel):
     # request contract is shared with the container launch boundary so a GPU
     # resource has exactly one canonical shape.
     gpu: WorkloadGpuRequest | None = None
+    # A caller-supplied shared-memory size, spelled as a Docker size string so
+    # the contract matches the workload launch boundary. Absent means the
+    # deployment default applies; a request above the deployment ceiling is
+    # refused at the launch boundary rather than clamped, so the realized value
+    # never differs from the value the caller asked for.
+    shm_size: str | None = Field(None, alias="shmSize", max_length=32)
+
+    @field_validator("shm_size")
+    @classmethod
+    def _shm_size_is_a_size(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        parse_size_bytes(value)
+        return value
 
 
 class OutputDeclaration(ContractModel):
@@ -1018,7 +1048,9 @@ def _reject_forbidden(value: Any, path: str = "request") -> None:
     if isinstance(value, dict):
         for raw_key, nested in value.items():
             key = re.sub(r"[^a-z0-9]", "", str(raw_key).lower())
-            if key in _FORBIDDEN_KEYS or _SECRET_KEY.fullmatch(key):
+            if key in _FORBIDDEN_KEYS or SENSITIVE_ENVIRONMENT_KEY_PATTERN.fullmatch(
+                key
+            ):
                 raise ValueError(f"{path}.{raw_key} is forbidden")
             _reject_forbidden(nested, f"{path}.{raw_key}")
     elif isinstance(value, list):

@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import pytest
 
+import json
+
+from pydantic import ValidationError
+
+from moonmind.schemas.container_job_models import CacheMount
+
 from moonmind.config.container_backend_settings import (
+    CACHE_SOURCES_ENV_KEY,
+    IMAGE_SOURCES_ENV_KEY,
     PYTHON_TEST_FINGERPRINT_INPUTS,
     PYTHON_TEST_IMAGE_SOURCE_REF,
-    TACTICS_UNREAL_IMAGE_SOURCE_REF,
-    UNREAL_CCACHE_CACHE_REF,
-    UNREAL_UBT_CACHE_REF,
     LocalImageRecipe,
     RegistryImageSource,
     SUPPORTED_CONTAINER_BACKEND_KINDS,
@@ -17,6 +22,38 @@ from moonmind.config.container_backend_settings import (
     ContainerBackendReadinessError,
     resolve_container_backend_settings,
 )
+
+#: A deployment declaration standing in for whatever a real operator approves.
+#: MoonMind must carry no project's image, volume, or in-container path itself.
+DECLARED_IMAGE_SOURCE_REF = "project-toolchain"
+DECLARED_IMAGE = "registry.invalid/example/toolchain:1.0"
+DECLARED_CACHE_REF = "project-build-cache"
+
+
+def _declared_env(
+    *,
+    pull_policy: str | None = None,
+    volume_name: str = "project_build_cache_volume",
+    target: str = "/opt/project/cache",
+    read_only: object = None,
+) -> dict[str, str]:
+    image: dict[str, str] = {
+        "sourceRef": DECLARED_IMAGE_SOURCE_REF,
+        "image": DECLARED_IMAGE,
+    }
+    if pull_policy is not None:
+        image["pullPolicy"] = pull_policy
+    cache: dict[str, object] = {
+        "cacheRef": DECLARED_CACHE_REF,
+        "volumeName": volume_name,
+        "target": target,
+    }
+    if read_only is not None:
+        cache["readOnly"] = read_only
+    return {
+        IMAGE_SOURCES_ENV_KEY: json.dumps([image]),
+        CACHE_SOURCES_ENV_KEY: json.dumps([cache]),
+    }
 
 
 def test_defaults_are_deployment_safe() -> None:
@@ -34,15 +71,12 @@ def test_defaults_are_deployment_safe() -> None:
     assert source.image == "moonmind-python-tests:local"
     assert source.target == "test-runtime"
     assert source.fingerprint_inputs == PYTHON_TEST_FINGERPRINT_INPUTS
-    assert settings.cache_source(UNREAL_CCACHE_CACHE_REF).volume_name == (
-        "unreal_ccache_volume"
-    )
-    assert settings.cache_source(UNREAL_CCACHE_CACHE_REF).target == (
-        "/home/ue4/.ccache"
-    )
-    assert settings.cache_source(UNREAL_UBT_CACHE_REF).target == (
-        "/home/ue4/.config/Epic/UnrealBuildTool"
-    )
+    # MoonMind owns exactly one image source -- its own test image -- and no
+    # cache source at all. Every project source is deployment-declared.
+    assert [item.source_ref for item in settings.image_sources] == [
+        PYTHON_TEST_IMAGE_SOURCE_REF
+    ]
+    assert settings.cache_sources == ()
     for pattern in source.fingerprint_inputs:
         assert any(path.is_file() for path in source.context_root.glob(pattern))
 
@@ -114,49 +148,196 @@ def test_prebuilt_python_test_image_replaces_local_recipe() -> None:
     assert source.pull_policy == "if-missing"
 
 
-def test_tactics_image_pulls_on_first_use_and_reuses_host_cache() -> None:
+def test_declared_image_pulls_on_first_use_and_reuses_declared_cache() -> None:
     settings = resolve_container_backend_settings(
-        {
-            "MOONMIND_UNREAL_ENGINE_IMAGE": (
-                "ghcr.io/moonladderstudios/tactics-ue-base:5.8"
-            ),
-            "MOONMIND_UNREAL_CCACHE_VOLUME_NAME": "shared-ccache",
-            "MOONMIND_UNREAL_UBT_VOLUME_NAME": "shared-ubt",
-        }
+        _declared_env(volume_name="shared-cache", read_only=True)
     )
 
-    source = settings.image_source(TACTICS_UNREAL_IMAGE_SOURCE_REF)
+    source = settings.image_source(DECLARED_IMAGE_SOURCE_REF)
     assert isinstance(source, RegistryImageSource)
-    assert source.image == "ghcr.io/moonladderstudios/tactics-ue-base:5.8"
+    assert source.image == DECLARED_IMAGE
     assert source.pull_policy == "if-missing"
-    assert settings.cache_source(UNREAL_CCACHE_CACHE_REF).volume_name == (
-        "shared-ccache"
-    )
-    assert settings.cache_source(UNREAL_UBT_CACHE_REF).volume_name == "shared-ubt"
+    cache = settings.cache_source(DECLARED_CACHE_REF)
+    assert cache.volume_name == "shared-cache"
+    assert cache.target == "/opt/project/cache"
+    assert cache.read_only is True
 
 
-def test_default_tactics_source_and_invalid_cache_volume_fail_closed() -> None:
-    settings = resolve_container_backend_settings({})
-    source = settings.image_source(TACTICS_UNREAL_IMAGE_SOURCE_REF)
-    assert isinstance(source, RegistryImageSource)
-    assert source.image == "ghcr.io/moonladderstudios/tactics-ue-base:5.8"
-    assert source.pull_policy == "if-missing"
+def test_undeclared_refs_and_malformed_declarations_fail_closed() -> None:
+    empty = resolve_container_backend_settings({})
+    with pytest.raises(ContainerBackendConfigError, match="is not configured"):
+        empty.image_source(DECLARED_IMAGE_SOURCE_REF)
+    with pytest.raises(ContainerBackendConfigError, match="is not configured"):
+        empty.cache_source(DECLARED_CACHE_REF)
 
     prewarmed = resolve_container_backend_settings(
-        {"MOONMIND_UNREAL_ENGINE_IMAGE_PULL_POLICY": "never"}
-    ).image_source(TACTICS_UNREAL_IMAGE_SOURCE_REF)
+        _declared_env(pull_policy="never")
+    ).image_source(DECLARED_IMAGE_SOURCE_REF)
     assert isinstance(prewarmed, RegistryImageSource)
     assert prewarmed.pull_policy == "never"
 
     with pytest.raises(ContainerBackendConfigError, match="named volume"):
-        resolve_container_backend_settings(
-            {"MOONMIND_UNREAL_CCACHE_VOLUME_NAME": "/host/cache"}
-        )
+        resolve_container_backend_settings(_declared_env(volume_name="/host/cache"))
+
+    with pytest.raises(ContainerBackendConfigError, match="absolute container path"):
+        resolve_container_backend_settings(_declared_env(target="relative/cache"))
+
+    with pytest.raises(ContainerBackendConfigError, match="absolute container path"):
+        resolve_container_backend_settings(_declared_env(target="/opt/../etc"))
 
     with pytest.raises(ContainerBackendConfigError, match="pull policy"):
+        resolve_container_backend_settings(_declared_env(pull_policy="sometimes"))
+
+    with pytest.raises(ContainerBackendConfigError, match="JSON array of objects"):
+        resolve_container_backend_settings({IMAGE_SOURCES_ENV_KEY: "not-json"})
+
+    with pytest.raises(ContainerBackendConfigError, match="JSON array of objects"):
         resolve_container_backend_settings(
-            {"MOONMIND_UNREAL_ENGINE_IMAGE_PULL_POLICY": "sometimes"}
+            {CACHE_SOURCES_ENV_KEY: json.dumps({"cacheRef": DECLARED_CACHE_REF})}
         )
+
+    with pytest.raises(ContainerBackendConfigError, match="non-empty sourceRef"):
+        resolve_container_backend_settings(
+            {IMAGE_SOURCES_ENV_KEY: json.dumps([{"image": DECLARED_IMAGE}])}
+        )
+
+    with pytest.raises(ContainerBackendConfigError, match="reserved by MoonMind"):
+        resolve_container_backend_settings(
+            {
+                IMAGE_SOURCES_ENV_KEY: json.dumps(
+                    [
+                        {
+                            "sourceRef": PYTHON_TEST_IMAGE_SOURCE_REF,
+                            "image": DECLARED_IMAGE,
+                        }
+                    ]
+                )
+            }
+        )
+
+    with pytest.raises(ContainerBackendConfigError, match="duplicate sourceRef"):
+        resolve_container_backend_settings(
+            {
+                IMAGE_SOURCES_ENV_KEY: json.dumps(
+                    [
+                        {"sourceRef": DECLARED_IMAGE_SOURCE_REF, "image": "a:1"},
+                        {"sourceRef": DECLARED_IMAGE_SOURCE_REF, "image": "b:1"},
+                    ]
+                )
+            }
+        )
+
+    with pytest.raises(ContainerBackendConfigError, match="duplicate cacheRef"):
+        resolve_container_backend_settings(
+            {
+                CACHE_SOURCES_ENV_KEY: json.dumps(
+                    [
+                        {
+                            "cacheRef": DECLARED_CACHE_REF,
+                            "volumeName": "one",
+                            "target": "/a",
+                        },
+                        {
+                            "cacheRef": DECLARED_CACHE_REF,
+                            "volumeName": "two",
+                            "target": "/b",
+                        },
+                    ]
+                )
+            }
+        )
+
+
+def test_declarations_reject_keys_outside_their_documented_schema() -> None:
+    # Every declaration key defaults to the permissive value when omitted, so a
+    # misspelling must fail configuration instead of quietly weakening the
+    # deployment policy the operator declared.
+    with pytest.raises(ContainerBackendConfigError, match="unknown key"):
+        resolve_container_backend_settings(
+            {
+                CACHE_SOURCES_ENV_KEY: json.dumps(
+                    [
+                        {
+                            "cacheRef": DECLARED_CACHE_REF,
+                            "volumeName": "project_build_cache_volume",
+                            "target": "/opt/project/cache",
+                            "readonly": True,
+                        }
+                    ]
+                )
+            }
+        )
+
+    with pytest.raises(ContainerBackendConfigError, match="unknown key"):
+        resolve_container_backend_settings(
+            {
+                IMAGE_SOURCES_ENV_KEY: json.dumps(
+                    [
+                        {
+                            "sourceRef": DECLARED_IMAGE_SOURCE_REF,
+                            "image": DECLARED_IMAGE,
+                            "pullpolicy": "never",
+                        }
+                    ]
+                )
+            }
+        )
+
+    # The documented schemas themselves still resolve.
+    settings = resolve_container_backend_settings(
+        _declared_env(pull_policy="never", read_only=True)
+    )
+    assert settings.image_source(DECLARED_IMAGE_SOURCE_REF).pull_policy == "never"
+    assert settings.cache_source(DECLARED_CACHE_REF).read_only is True
+
+
+def test_shared_memory_default_must_fit_under_its_ceiling() -> None:
+    # ``_enforce_resource_ceilings`` only inspects caller-supplied shmSize, so a
+    # default above the ceiling would launch every omitted request above the
+    # deployment's declared maximum.
+    with pytest.raises(ContainerBackendConfigError, match="shmSize default"):
+        resolve_container_backend_settings(
+            {"MOONMIND_CONTAINER_BACKEND_MAX_SHM_SIZE_MIB": "32"}
+        )
+
+    # Lowering the ceiling is supported when the default is lowered with it.
+    tightened = resolve_container_backend_settings(
+        {
+            "MOONMIND_CONTAINER_BACKEND_MAX_SHM_SIZE_MIB": "32",
+            "MOONMIND_CONTAINER_BACKEND_SHM_SIZE_MIB": "32",
+        }
+    )
+    assert tightened.shm_size_mib == 32
+    assert tightened.max_shm_size_mib == 32
+
+    with pytest.raises(ContainerBackendConfigError, match="shmSize default"):
+        resolve_container_backend_settings(
+            {
+                "MOONMIND_CONTAINER_BACKEND_SHM_SIZE_MIB": "512",
+                "MOONMIND_CONTAINER_BACKEND_MAX_SHM_SIZE_MIB": "256",
+            }
+        )
+
+
+def test_shared_memory_ceiling_defaults_to_the_memory_ceiling() -> None:
+    settings = resolve_container_backend_settings({})
+    assert settings.shm_size_mib == 64
+    assert settings.max_shm_size_mib == settings.max_memory_mib
+
+    tightened = resolve_container_backend_settings(
+        {
+            "MOONMIND_CONTAINER_BACKEND_MAX_MEMORY_MIB": "2048",
+            "MOONMIND_CONTAINER_BACKEND_MAX_SHM_SIZE_MIB": "512",
+        }
+    )
+    assert tightened.max_memory_mib == 2048
+    assert tightened.max_shm_size_mib == 512
+
+    # An omitted shared-memory ceiling still tracks a tightened memory ceiling.
+    derived = resolve_container_backend_settings(
+        {"MOONMIND_CONTAINER_BACKEND_MAX_MEMORY_MIB": "4096"}
+    )
+    assert derived.max_shm_size_mib == 4096
 
 
 def test_python_test_recipe_uses_deployment_root_and_optional_max_age(
@@ -173,3 +354,45 @@ def test_python_test_recipe_uses_deployment_root_and_optional_max_age(
     assert isinstance(source, LocalImageRecipe)
     assert source.context_root == tmp_path.resolve()
     assert source.max_age_seconds == 3600
+
+
+#: Targets the public ``CacheMount`` request contract refuses. A deployment
+#: that declares one of these creates a cache source no valid job request can
+#: ever select, because the backend matches the declared target exactly.
+UNSELECTABLE_CACHE_TARGETS: tuple[str, ...] = (
+    "/",
+    "/opt/project/cache/",
+    "/opt//project/cache",
+    "//opt/project/cache",
+    "/opt/project cache",
+    "relative/cache",
+    "/opt/../etc",
+)
+
+
+@pytest.mark.parametrize("target", UNSELECTABLE_CACHE_TARGETS)
+def test_declared_cache_target_matches_the_request_contract(target: str) -> None:
+    """A declaration the request contract rejects must fail at configuration.
+
+    Deployment policy and the public job contract have to agree on what a cache
+    target is: the backend selects a declared source by matching a request's
+    ``CacheMount.target`` exactly, so a target only one side accepts is either
+    dead configuration or a mount the operator cannot describe. Failing here
+    keeps the mistake at startup instead of at the launch boundary.
+    """
+
+    with pytest.raises(ContainerBackendConfigError, match="absolute container path"):
+        resolve_container_backend_settings(_declared_env(target=target))
+
+    with pytest.raises(ValidationError):
+        CacheMount(cacheRef=DECLARED_CACHE_REF, target=target)
+
+
+def test_declared_cache_target_accepts_what_a_request_can_select() -> None:
+    target = "/opt/project/cache"
+    source = resolve_container_backend_settings(
+        _declared_env(target=target)
+    ).cache_source(DECLARED_CACHE_REF)
+
+    assert source.target == target
+    assert CacheMount(cacheRef=DECLARED_CACHE_REF, target=target).target == target

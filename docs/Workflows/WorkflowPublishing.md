@@ -349,6 +349,30 @@ Workflows that include MoonSpec verification gates must use the latest structure
 
 `FULLY_IMPLEMENTED` permits PR publication and downstream trusted side effects. `ADDITIONAL_WORK_NEEDED` keeps the workflow in the bounded remediation loop while a later MoonSpec remediation step remains. Once that retry budget is exhausted, a workflow whose publish mode is `pr` opens a draft pull request annotated with the remaining-work verdict and verification report, then fails with `attention_required: true` and skips downstream promotion or trusted handoff steps. The draft is recoverability evidence, not a successful terminal outcome. A pushed branch or created draft pull request must never be classified as `no_commit`.
 
+Publication feasibility at that gate is a property of the **run**, not of the
+step the gate stopped on. A MoonSpec verification step is read-only: it
+reports a verdict and publishes nothing, so it never carries accepted
+repository evidence of its own. When the stopping step's evidence is merely
+inconclusive, the terminal gate defers to the run-owned published head — the
+branch and head SHA a prior step established through authoritative
+`acceptedRepositoryEvidence`, recorded as one atomic projection. Raw
+`pushStatus`, `branch`, and `headSha` keys that any step's metadata may carry
+are not that evidence: `agent_runtime.fetch_result` strips forged accepted
+evidence objects but leaves those raw keys intact, so only the managed push
+boundary's own evidence can make the gate publication-feasible. Definitive
+refusals recorded by a step — unauthorized publication, a contaminated
+candidate, or no candidate change — are safety decisions and are never
+overridden by that projection.
+
+The published head that makes the gate feasible is also the head the draft is
+opened against. Native PR branch resolution prefers the run-owned published
+head over every other candidate, because the remaining candidates are mutable
+step metadata: the read-only verification step the gate stops on may itself
+emit `branch` and `headSha`, and the publish context mirrors whichever step
+wrote last. Deriving the publication target separately from the feasibility
+decision would open a draft for a head the managed push boundary never
+remotely verified.
+
 Non-retryable blocking verdicts, including `NO_DETERMINATION`, `BLOCKED`, and `FAILED_UNRECOVERABLE`, block publication without waiting for additional remediation attempts unless the workflow explicitly models the missing evidence as recoverable work inside the same bounded plan.
 
 The gate distinguishes a verifier judgment from a malformed verdict envelope:

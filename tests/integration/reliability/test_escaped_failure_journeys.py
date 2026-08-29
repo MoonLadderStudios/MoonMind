@@ -169,6 +169,7 @@ from moonmind.workflows.temporal.workflows.provider_profile_manager import (
     ProfileSlotState,
 )
 from moonmind.workflows.temporal.workflows.run import (
+    NATIVE_PR_BRANCH_DEFAULTS_PATCH,
     RUN_AGENT_REQUIRED_CAPABILITIES_PROPAGATION_PATCH,
     RUN_HEADLESS_REMEDIATION_VERIFIED_WORKSPACE_PATCH,
     RUN_WORKFLOW_HEADLESS_REMEDIATION_PATCH,
@@ -177,6 +178,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_PUBLISH_MODE_REPOSITORY_OPERATION_PATCH,
     RUN_PUBLISHED_BRANCH_HANDOFF_PATCH,
     RUN_REMEDIATION_EXPLICIT_EVIDENCE_INPUTS_PATCH,
+    RUN_TERMINAL_GATE_PUBLISHED_HEAD_FEASIBILITY_PATCH,
     MoonMindRunWorkflow,
 )
 from moonmind.workflows.terminal_evidence import evaluate_terminal_evidence
@@ -1481,6 +1483,222 @@ async def test_verified_remediation_push_reaches_draft_publication_handoff() -> 
             draft_publication_policy=manifest["draftPublicationPolicy"],
             publication_feasible=feasibility["feasible"],
         ) == expected["terminalHandoff"]
+
+
+def _replay_published_head(case: dict) -> MoonMindRunWorkflow:
+    """Replay the managed push boundary that earned the run's published head.
+
+    Only ``acceptedRepositoryEvidence`` proves a remote head, so the run must
+    record it through the same production path a real remediation step takes.
+    """
+
+    replayed = MoonMindRunWorkflow()
+    replayed._record_execution_context(
+        node_id=case["gateLogicalStepId"],
+        execution_result={
+            "status": "COMPLETED",
+            "outputs": case["remediationStepOutputs"],
+        },
+    )
+    return replayed
+
+
+def _resolve_draft_branches(
+    workflow_run: MoonMindRunWorkflow,
+    case: dict,
+    *,
+    patched: frozenset[str],
+) -> tuple[str, str]:
+    """Resolve the draft's native PR head and base under one patch set."""
+
+    with pytest.MonkeyPatch.context() as branch_patch:
+        branch_patch.setattr(
+            run_workflow_module.workflow,
+            "patched",
+            lambda patch_id: patch_id in patched,
+        )
+        return workflow_run._resolve_native_pr_branches(
+            parameters={},
+            agent_outputs=case["contaminatingVerificationStepOutputs"],
+            workspace_spec={},
+            last_node_inputs={},
+            publish_payload=case["publishPayload"],
+        )
+
+
+async def test_verification_gate_draft_publishes_run_owned_published_head(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay mm:53e35d1e through the terminal gate's publication authority.
+
+    The MoonSpec gate always trips on a read-only verification step. That step
+    pushes nothing, so its own repository evidence is inconclusive and the
+    mandated draft publication handoff was unreachable -- the run failed and
+    orphaned a branch that really existed on the remote.
+    """
+
+    replay_id = "draft-publication-authority-gap"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+
+    for case in manifest["verificationGateCases"]:
+        execution_result = {
+            "status": "COMPLETED",
+            "outputs": case["verificationStepOutputs"],
+        }
+
+        # The verification step's own evidence is inconclusive, before and
+        # after the fix. That classification is correct for the step.
+        step_scoped = _replay_published_head(case)
+        assert step_scoped._step_publication_feasibility(execution_result)[
+            "reason"
+        ] == expected["verificationGateStepFeasibilityReason"]
+
+        # Raw push keys a non-publishing step left in the publish context are
+        # not accepted evidence, so they never upgrade the gate on their own.
+        unverified = MoonMindRunWorkflow()
+        unverified._publish_context.update(case["unverifiedPublishContext"])
+        monkeypatch.setattr(
+            unverified,
+            "_patched_or_false_outside_workflow",
+            lambda patch_id: patch_id
+            == RUN_TERMINAL_GATE_PUBLISHED_HEAD_FEASIBILITY_PATCH,
+        )
+        unverified_feasibility = unverified._publication_feasibility(execution_result)
+        assert unverified_feasibility["feasible"] is False
+        assert unverified_feasibility["reason"] == expected[
+            "verificationGateUnverifiedFeasibilityReason"
+        ]
+
+        # In-flight histories that never recorded the patch keep replaying the
+        # previous artifact-backed handoff.
+        unpatched = _replay_published_head(case)
+        monkeypatch.setattr(
+            unpatched, "_patched_or_false_outside_workflow", lambda _: False
+        )
+        unpatched_feasibility = unpatched._publication_feasibility(execution_result)
+        assert unpatched_feasibility["feasible"] is False
+        assert unpatched_feasibility["reason"] == expected[
+            "verificationGateStepFeasibilityReason"
+        ]
+        assert unpatched._terminal_gate_handoff_kind(
+            publish_mode=manifest["publishMode"],
+            draft_publication_policy=manifest["draftPublicationPolicy"],
+            publication_feasible=unpatched_feasibility["feasible"],
+        ) == expected["verificationGateUnpatchedTerminalHandoff"]
+
+        # New histories resolve feasibility for the run, so the pushed
+        # remediation head reaches the draft publication handoff.
+        workflow_run = _replay_published_head(case)
+        monkeypatch.setattr(
+            workflow_run,
+            "_patched_or_false_outside_workflow",
+            lambda patch_id: patch_id
+            == RUN_TERMINAL_GATE_PUBLISHED_HEAD_FEASIBILITY_PATCH,
+        )
+        feasibility = workflow_run._publication_feasibility(execution_result)
+        assert feasibility["feasible"] is True
+        assert feasibility["reason"] == expected[
+            "verificationGateRunFeasibilityReason"
+        ]
+
+        draft_policy = workflow_run._moonspec_draft_publication_policy(
+            environment_blocked_enabled=False,
+            additional_work_enabled=True,
+        )
+        assert draft_policy is None  # no gate verdict recorded yet
+        workflow_run._moonspec_gate_verdict = case["verdict"]
+        draft_policy = workflow_run._moonspec_draft_publication_policy(
+            environment_blocked_enabled=False,
+            additional_work_enabled=True,
+        )
+        assert draft_policy == manifest["draftPublicationPolicy"]
+        assert workflow_run._terminal_gate_handoff_kind(
+            publish_mode=manifest["publishMode"],
+            draft_publication_policy=draft_policy,
+            publication_feasible=feasibility["feasible"],
+        ) == expected["verificationGateTerminalHandoff"]
+
+        # Activating the handoff must release the fail-closed publication block
+        # so the native PR boundary opens a draft instead of skipping.
+        workflow_run._publish_context["moonSpecGate"] = {
+            "verdict": case["verdict"],
+            "gateResultRef": case["verificationStepOutputs"]["moonSpecVerify"][
+                "gateResultRef"
+            ],
+        }
+        workflow_run._activate_moonspec_draft_publication(
+            "MoonSpec verification did not approve publication",
+            policy=draft_policy,
+        )
+        assert workflow_run._apply_blocking_moonspec_gate_to_publish() is False
+        assert workflow_run._attention_required is True
+        assert "draft" in workflow_run._moonspec_draft_publication_body_section().lower()
+
+        # The gate resolves feasibility from the accepted head, so publication
+        # must open the draft against that same head. The read-only
+        # verification step that trips the gate can emit raw branch/headSha
+        # metadata of its own, which `_record_execution_context` mirrors over
+        # the mutable publish context -- publishing that branch would open a
+        # PR for a head the managed push boundary never verified.
+        contaminated = _replay_published_head(case)
+        contaminated._record_execution_context(
+            node_id=case["gateLogicalStepId"],
+            execution_result={
+                "status": "COMPLETED",
+                "outputs": case["contaminatingVerificationStepOutputs"],
+            },
+        )
+        assert (
+            contaminated._publish_context["branch"]
+            == expected["verificationGateContaminatedPublishContextBranch"]
+        )
+        head_branch, base_branch = _resolve_draft_branches(
+            contaminated,
+            case,
+            patched=frozenset(
+                {
+                    RUN_TERMINAL_GATE_PUBLISHED_HEAD_FEASIBILITY_PATCH,
+                    NATIVE_PR_BRANCH_DEFAULTS_PATCH,
+                }
+            ),
+        )
+        assert head_branch == expected["verificationGateDraftHeadBranch"]
+        assert base_branch == expected["verificationGateDraftBaseBranch"]
+
+        # In-flight histories that never recorded the patch keep resolving the
+        # head they always did, so replay stays deterministic.
+        unpatched_head, _ = _resolve_draft_branches(
+            contaminated,
+            case,
+            patched=frozenset({NATIVE_PR_BRANCH_DEFAULTS_PATCH}),
+        )
+        assert (
+            unpatched_head
+            == expected["verificationGateContaminatedPublishContextBranch"]
+        )
+
+    # Definitive negatives stay negative: the run-owned head answers "we do not
+    # know", never "publication was refused".
+    for negative in manifest["preservedNegativeCases"]:
+        refused = _replay_published_head(manifest["verificationGateCases"][0])
+        monkeypatch.setattr(
+            refused,
+            "_patched_or_false_outside_workflow",
+            lambda patch_id: patch_id
+            == RUN_TERMINAL_GATE_PUBLISHED_HEAD_FEASIBILITY_PATCH,
+        )
+        outcome = refused._publication_feasibility(
+            {
+                "outputs": {
+                    "acceptedRepositoryEvidence": negative[
+                        "acceptedRepositoryEvidence"
+                    ]
+                }
+            }
+        )
+        assert outcome["reason"] == negative["reason"]
+        assert outcome["feasible"] is False
 
 
 async def test_completed_batch_turn_is_rejected_at_agent_run_boundary(

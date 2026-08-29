@@ -24,6 +24,7 @@ from moonmind.security.egress_conformance_evidence import (
     verify_evidence_digest,
 )
 from moonmind.config.container_backend_settings import (
+    CACHE_SOURCES_ENV_KEY,
     ContainerBackendReadinessError,
     resolve_container_backend_settings,
 )
@@ -901,6 +902,70 @@ async def test_create_rejects_resources_above_deployment_ceiling(tmp_path) -> No
 
 
 @pytest.mark.asyncio
+async def test_create_preserves_the_callers_shared_memory_request(tmp_path) -> None:
+    """The caller owns shmSize once the deployment ceiling has admitted it."""
+
+    (tmp_path / "art_workspace").mkdir()
+    commands: list[tuple[str, ...]] = []
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        command_runner=_recording_runner(commands),
+    )
+
+    await backend.create_container(
+        _request(
+            tmp_path,
+            resources={"cpuMillis": 1000, "memoryMiB": 512, "shmSize": "8g"},
+        )
+    )
+
+    create = next(c for c in commands if c[0] == "create")
+    assert create[create.index("--shm-size") + 1] == "8g"
+
+
+@pytest.mark.asyncio
+async def test_create_applies_the_deployment_shared_memory_default(tmp_path) -> None:
+    (tmp_path / "art_workspace").mkdir()
+    commands: list[tuple[str, ...]] = []
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        command_runner=_recording_runner(commands),
+    )
+
+    await backend.create_container(_request(tmp_path))
+
+    create = next(c for c in commands if c[0] == "create")
+    assert create[create.index("--shm-size") + 1] == "64m"
+
+
+@pytest.mark.asyncio
+async def test_create_rejects_shared_memory_above_deployment_ceiling(
+    tmp_path,
+) -> None:
+    """Refused, never clamped: the realized value must match the request."""
+
+    (tmp_path / "art_workspace").mkdir()
+    bounded = resolve_container_backend_settings(
+        {"MOONMIND_CONTAINER_BACKEND_MAX_SHM_SIZE_MIB": "1024"}
+    )
+    commands: list[tuple[str, ...]] = []
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        settings=bounded,
+        command_runner=_recording_runner(commands),
+    )
+
+    with pytest.raises(RuntimeError, match="shmSize=8g exceeds the deployment ceiling"):
+        await backend.create_container(
+            _request(
+                tmp_path,
+                resources={"cpuMillis": 1000, "memoryMiB": 512, "shmSize": "8g"},
+            )
+        )
+    assert not [c for c in commands if c[0] == "create"]
+
+
+@pytest.mark.asyncio
 async def test_capacity_lock_is_mutually_exclusive_across_workers(
     tmp_path,
 ) -> None:
@@ -1008,24 +1073,59 @@ async def test_start_serializes_and_admits_within_active_memory_budget(
     lock.release.assert_awaited_once_with(lock.acquire.return_value)
 
 
+#: Two deployment-declared cache sources. MoonMind ships none of its own, so a
+#: cache test must declare what the deployment authorizes.
+PRIMARY_CACHE_REF = "build-cache"
+PRIMARY_CACHE_VOLUME = "build_cache_volume"
+PRIMARY_CACHE_TARGET = "/opt/project/cache"
+SECONDARY_CACHE_REF = "toolchain-metadata"
+SECONDARY_CACHE_VOLUME = "toolchain_metadata_volume"
+SECONDARY_CACHE_TARGET = "/opt/project/metadata"
+
+DECLARED_CACHE_SOURCES_ENV = {
+    CACHE_SOURCES_ENV_KEY: json.dumps(
+        [
+            {
+                "cacheRef": PRIMARY_CACHE_REF,
+                "volumeName": PRIMARY_CACHE_VOLUME,
+                "target": PRIMARY_CACHE_TARGET,
+            },
+            {
+                "cacheRef": SECONDARY_CACHE_REF,
+                "volumeName": SECONDARY_CACHE_VOLUME,
+                "target": SECONDARY_CACHE_TARGET,
+            },
+        ]
+    )
+}
+
+
+def _cache_backend(tmp_path, commands):
+    """A backend whose deployment authorizes the two declared cache sources."""
+
+    return DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        settings=resolve_container_backend_settings(DECLARED_CACHE_SOURCES_ENV),
+        command_runner=_recording_runner(commands),
+    )
+
+
 @pytest.mark.asyncio
 async def test_create_mounts_deployment_authorized_cache_refs(tmp_path) -> None:
     (tmp_path / "art_workspace").mkdir()
     commands: list[tuple[str, ...]] = []
-    backend = DockerContainerJobBackend(
-        workspace_root=tmp_path, command_runner=_recording_runner(commands)
-    )
+    backend = _cache_backend(tmp_path, commands)
     request = _request(
         tmp_path,
         caches=[
             {
-                "cacheRef": "unreal-ccache",
-                "target": "/home/ue4/.ccache",
+                "cacheRef": PRIMARY_CACHE_REF,
+                "target": PRIMARY_CACHE_TARGET,
                 "readOnly": False,
             },
             {
-                "cacheRef": "unreal-ubt",
-                "target": "/home/ue4/.config/Epic/UnrealBuildTool",
+                "cacheRef": SECONDARY_CACHE_REF,
+                "target": SECONDARY_CACHE_TARGET,
                 "readOnly": False,
             },
         ],
@@ -1034,17 +1134,17 @@ async def test_create_mounts_deployment_authorized_cache_refs(tmp_path) -> None:
 
     create = next(command for command in commands if command[0] == "create")
     cache_mounts = [
-        item for item in create if item.startswith("type=volume,src=unreal_")
+        item for item in create if item.startswith("type=volume,src=")
     ]
     assert len(cache_mounts) == 2
     assert any(
-        item.startswith("type=volume,src=unreal_ccache_volume-")
-        and item.endswith(",dst=/home/ue4/.ccache")
+        item.startswith(f"type=volume,src={PRIMARY_CACHE_VOLUME}-")
+        and item.endswith(f",dst={PRIMARY_CACHE_TARGET}")
         for item in cache_mounts
     )
     assert any(
-        item.startswith("type=volume,src=unreal_ubt_volume-")
-        and item.endswith("dst=/home/ue4/.config/Epic/UnrealBuildTool")
+        item.startswith(f"type=volume,src={SECONDARY_CACHE_VOLUME}-")
+        and item.endswith(f"dst={SECONDARY_CACHE_TARGET}")
         for item in cache_mounts
     )
     cache_volume_commands = [
@@ -1059,7 +1159,7 @@ async def test_create_mounts_deployment_authorized_cache_refs(tmp_path) -> None:
         any(item.startswith("moonmind.cache_owner=") for item in command)
         for command in cache_volume_commands
     )
-    assert result.resolved_cache_refs == ("unreal-ccache", "unreal-ubt")
+    assert result.resolved_cache_refs == (PRIMARY_CACHE_REF, SECONDARY_CACHE_REF)
 
 
 @pytest.mark.asyncio
@@ -1069,8 +1169,8 @@ async def test_cache_volume_is_scoped_to_the_authorized_owner(tmp_path) -> None:
     second_commands: list[tuple[str, ...]] = []
     cache = [
         {
-            "cacheRef": "unreal-ccache",
-            "target": "/home/ue4/.ccache",
+            "cacheRef": PRIMARY_CACHE_REF,
+            "target": PRIMARY_CACHE_TARGET,
             "readOnly": False,
         }
     ]
@@ -1083,26 +1183,20 @@ async def test_cache_volume_is_scoped_to_the_authorized_owner(tmp_path) -> None:
         }
     )
 
-    await DockerContainerJobBackend(
-        workspace_root=tmp_path,
-        command_runner=_recording_runner(first_commands),
-    ).create_container(first_request)
-    await DockerContainerJobBackend(
-        workspace_root=tmp_path,
-        command_runner=_recording_runner(second_commands),
-    ).create_container(second_request)
+    await _cache_backend(tmp_path, first_commands).create_container(first_request)
+    await _cache_backend(tmp_path, second_commands).create_container(second_request)
 
     first_mount = next(
         item
         for command in first_commands
         for item in command
-        if item.startswith("type=volume,src=unreal_ccache_volume-")
+        if item.startswith(f"type=volume,src={PRIMARY_CACHE_VOLUME}-")
     )
     second_mount = next(
         item
         for command in second_commands
         for item in command
-        if item.startswith("type=volume,src=unreal_ccache_volume-")
+        if item.startswith(f"type=volume,src={PRIMARY_CACHE_VOLUME}-")
     )
     assert first_mount != second_mount
 
@@ -1117,7 +1211,7 @@ async def test_cache_volume_is_scoped_to_the_authorized_owner(tmp_path) -> None:
         ),
         (
             {
-                "cacheRef": "unreal-ccache",
+                "cacheRef": PRIMARY_CACHE_REF,
                 "target": "/different",
                 "readOnly": False,
             },
@@ -1125,8 +1219,8 @@ async def test_cache_volume_is_scoped_to_the_authorized_owner(tmp_path) -> None:
         ),
         (
             {
-                "cacheRef": "unreal-ccache",
-                "target": "/home/ue4/.ccache",
+                "cacheRef": PRIMARY_CACHE_REF,
+                "target": PRIMARY_CACHE_TARGET,
                 "readOnly": True,
             },
             "requires read-write",
@@ -1137,9 +1231,7 @@ async def test_create_rejects_cache_authority_mismatch(
     tmp_path, cache: dict[str, object], match: str
 ) -> None:
     (tmp_path / "art_workspace").mkdir()
-    backend = DockerContainerJobBackend(
-        workspace_root=tmp_path, command_runner=_recording_runner([])
-    )
+    backend = _cache_backend(tmp_path, [])
     with pytest.raises(RuntimeError, match=match):
         await backend.create_container(_request(tmp_path, caches=[cache]))
 
