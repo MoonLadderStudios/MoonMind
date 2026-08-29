@@ -1,298 +1,317 @@
-# Settings Page
+# Settings Configuration Pages
 
-**Related design documents:** [SettingsSystem.md](../Security/SettingsSystem.md), [SecretsSystem.md](../Security/SecretsSystem.md), [ProviderProfiles.md](../Security/ProviderProfiles.md), [OAuthTerminal.md](../ManagedAgents/OAuthTerminal.md), [ManagedAndExternalAgentExecutionModel.md](../Temporal/ManagedAndExternalAgentExecutionModel.md)
+**Related design documents:** [SettingsSystem.md](../Security/SettingsSystem.md), [SecretsSystem.md](../Security/SecretsSystem.md), [ProviderProfiles.md](../Security/ProviderProfiles.md), [ProviderProfileModelEffortTierSettings.md](./ProviderProfileModelEffortTierSettings.md), [OAuthTerminal.md](../ManagedAgents/OAuthTerminal.md), [DashboardDesignSystem.md](./DashboardDesignSystem.md), [DashboardSPAArchitecture.md](./DashboardSPAArchitecture.md)
 
-Status: **Desired-State UI Contract**
-Owners: MoonMind Engineering
-Last Updated: 2026-05-08
+Status: **Desired-State UI Contract**  
+Owners: MoonMind Engineering  
+Last Updated: 2026-08-28
 
 > [!NOTE]
-> This document supersedes `docs/UI/SettingsTab.md` and should live at `docs/UI/SettingsPage.md`.
-> It defines the MoonMind dashboard contract for the Settings page.
-> The security, persistence, resolution, validation, and authorization contract remains owned by [SettingsSystem.md](../Security/SettingsSystem.md).
+> This document supersedes the single `/settings` page with a three-way tab, radio, or segmented section switcher. The existing Settings dropdown remains the only cross-page navigation surface. Its **Configuration** group exposes the three former Settings sections as separate pages.
+>
+> Security, persistence, resolution, validation, and authorization remain owned by [SettingsSystem.md](../Security/SettingsSystem.md) and the related domain documents.
 
 ---
 
 ## 1. Purpose
 
-The dashboard **Settings** page is the human-facing configuration plane for user, workspace, provider, secret, and operational configuration.
+MoonMind Settings is the human-facing configuration plane for user, workspace, provider, secret, and operational configuration.
 
-Settings keeps the main product surface focused on workflow executions, workflow details, proposals, schedules, runs, and other workflow-adjacent surfaces. Configuration that shapes those workflows belongs under one coherent Settings page rather than being split across unrelated top-level destinations.
+Settings is a family of sibling dashboard pages, not one large page with a second navigation layer.
 
-The Settings page replaces the older split where **Settings**, **Secrets**, and **Workers** could behave like separate product areas.
+The central information-architecture decision is:
 
-The central UI decision is:
+> **Providers & Secrets**, **User / Workspace**, and **Operations** are separate pages in the Settings dropdown's **Configuration** group. None of those pages repeats the three destinations as tabs, radio buttons, segmented controls, pills, cards, a sidebar, or another local page switcher.
 
-> The Settings page must be a **data-driven control plane**, not a manually maintained collection of one-off setting forms.
+This gives every configuration surface a durable URL, page title, loading boundary, authorization state, and browser-history entry. It also removes redundant navigation and lets each page load only the data it owns.
 
-This means:
+The existing rendering decision remains:
 
-- section navigation is stable and product-owned;
-- ordinary user/workspace setting rows are rendered from backend-owned descriptors;
-- effective values, defaults, override state, validation rules, source explanations, and reload semantics are loaded from Settings APIs;
-- provider profiles, managed secrets, OAuth state, and operations are loaded as first-class backend resources;
-- the frontend maintains a small renderer palette for known descriptor control types, not bespoke UI code for every setting key; and
-- adding a new eligible setting should normally require backend catalog metadata and validation, not a new hard-coded React panel.
+> Settings is a **data-driven control plane**, not a manually maintained collection of one-off setting forms.
+
+Ordinary user and workspace settings come from backend descriptors. Provider Profiles, Managed Secrets, OAuth state, and Operations remain specialized backend resources or commands.
 
 ---
 
 ## 2. Scope and Authority
 
-### 2.1 What this UI document owns
+This document owns:
 
-This document owns the Settings page user experience contract:
+- placement of configuration pages in the Settings dropdown;
+- the Configuration group and its ordering;
+- canonical routes and legacy redirects;
+- active destination and dropdown-trigger behavior;
+- shared page-shell rules;
+- page-level loading and failure boundaries;
+- descriptor-driven settings rendering;
+- filtering, editing, preview, save, discard, and reset UX;
+- Provider Profile, Managed Secret, OAuth, and Operations placement;
+- permissions, secret-safe behavior, accessibility, and unsaved-change navigation; and
+- migration and acceptance criteria for removing the old page-local switcher.
 
-- page route and section navigation;
-- page-level layout;
-- data-loading behavior;
-- descriptor-driven rendering rules;
-- supported generic controls;
-- scope switching, filtering, editing, preview, save, and reset UX;
-- source, inheritance, lock, diagnostic, and reload indicators;
-- provider profile, managed secret, OAuth, and operations placement inside Settings;
-- secret-safe display behavior;
-- permission and empty-state UX; and
-- acceptance criteria for adding settings without hard-coding each setting in the UI.
+This document does not redefine backend setting eligibility, resolution, persistence, secret storage, provider execution semantics, operational command semantics, authorization, or server validation.
 
-### 2.2 What this UI document does not own
-
-This document does not redefine:
-
-- setting eligibility rules;
-- setting resolution order;
-- scoped override persistence;
-- secret storage, encryption, decryption, or resolution;
-- provider profile execution semantics;
-- operational command semantics;
-- backend authorization; or
-- server-side validation.
-
-Those contracts remain owned by the Settings System, Secrets System, Provider Profiles, OAuth, Operations, and runtime strategy documents.
-
-### 2.3 Implementation-status note
-
-This is a desired-state UI contract. Current implementation may be partially aligned. Rollout sequencing, migrations, and tactical implementation handoffs belong in MoonSpec artifacts or implementation plans, not in this durable UI contract.
+This is a desired-state contract. The current implementation may still use one Settings component, `?section=` routing, and a segmented or radio-based switcher.
 
 ---
 
 ## 3. Design Principles
 
-### 3.1 Backend-owned truth
+### 3.1 One navigation owner
 
-The backend owns which settings exist, which are exposed, how they are typed, which scopes can edit them, how values are validated, whether values are sensitive, and how effective values are resolved.
+The Settings dropdown owns navigation among configuration pages. A page-local control is valid only when it changes state inside the current page, such as user versus workspace scope, a runtime filter, a category filter, or an operation subview.
 
-The frontend renders descriptors and submits user intent. It must not decide that a backend field is safe to expose merely because that field exists.
+### 3.2 Pathname owns page identity
 
-### 3.2 Data-driven rows, not key-specific forms
+The pathname selects the configuration page. Query parameters may select safe filters or scope within that page. Query parameters must not select among the three configuration pages.
 
-The User / Workspace section must render ordinary settings from catalog descriptors. A setting key is an identity, not a frontend branching mechanism.
+### 3.3 Backend-owned truth
 
-The frontend may switch on descriptor shape such as `type`, `ui`, `constraints`, `options`, `read_only`, and `sensitive`. It should not switch on specific keys such as `workflow.default_runtime` except for intentionally documented transitional exceptions.
+The backend owns which settings exist, which are exposed, their types and scopes, validation, sensitivity, effective values, sources, and application semantics. The frontend renders descriptors and submits intent.
 
-### 3.3 Explicit specialist surfaces
+### 3.4 Data-driven rows
 
-Not every configurable object is an ordinary setting row.
+The User / Workspace page renders ordinary settings from catalog descriptors. The frontend may branch on descriptor shape such as `type`, `ui`, `constraints`, `options`, `read_only`, and `sensitive`. It should not branch on individual setting keys except for documented transitional exceptions.
 
-Provider Profiles, Managed Secrets, OAuth credentials, and Operations controls have specialized semantics. They may use specialized managers, but those managers must still load their state and capabilities from backend APIs instead of embedding hidden product policy in the frontend.
+### 3.5 Explicit specialist surfaces
 
-### 3.4 References over secrets
+Provider Profiles, Managed Secrets, OAuth credentials, and Operations controls are not generic setting rows. They may use specialized managers, but options, capabilities, readiness, and policy constraints should still come from backend APIs.
 
-The Settings page must never render stored secret plaintext. Generic setting overrides must not accept raw credentials. Settings that need sensitive material use SecretRef pickers, provider-profile secret-role bindings, or one-way managed-secret creation/replacement flows.
+### 3.6 References over secrets
 
-### 3.5 Explainability
+Stored secret plaintext is never rendered. Generic settings do not accept raw credentials. Sensitive relationships use SecretRef pickers, provider-profile secret-role bindings, or one-way Managed Secret creation and replacement flows.
 
-Every visible effective value should be understandable from the UI. Users should be able to answer:
+### 3.7 Safe independent failure
 
-- what value is active;
-- where it came from;
-- whether it is inherited or overridden;
-- whether it is locked;
-- what scope controls it;
-- what systems it affects;
-- whether a reload, restart, next workflow execution, or next launch is required; and
-- how to reset it to the inherited value when permitted.
-
-### 3.6 Safe degradation
-
-Unknown descriptor fields must not break the Settings page. Unsupported editable controls should degrade to a read-only row with an actionable diagnostic, or to a backend-provided unsupported-control message. The UI must not silently invent a control for an unknown sensitive field.
+Failure on one configuration page must not make the other two unavailable unless the shared dashboard shell itself is unavailable.
 
 ---
 
 ## 4. Information Architecture
 
-The desired top-level dashboard navigation model is:
+The Settings dropdown retains its existing grouped structure. The configuration portion is:
 
 ```text
-Workflows and workflow-adjacent product surfaces
+Settings dropdown
+  Configuration
+    Providers & Secrets
+    User / Workspace
+    Operations
+```
+
+The three entries are sibling dashboard destinations. They are not sections rendered by a parent Settings page.
+
+### 4.1 Configuration group contract
+
+The dropdown must:
+
+1. render the label `Configuration` once;
+2. place the entries in this order: Providers & Secrets, User / Workspace, Operations;
+3. render every entry as a route link;
+4. expose one active entry with `aria-current="page"` or equivalent route semantics;
+5. close after selection;
+6. support the dashboard's keyboard menu behavior;
+7. render the same group and order in the mobile drawer; and
+8. omit the group label when none of its destinations is visible.
+
+Group membership must be explicit or deterministically derived. The implementation must not attach `Configuration` only to one destination key and accidentally repeat or omit the label when multiple children exist.
+
+### 4.2 Dropdown trigger
+
+When any Configuration page is active, the masthead trigger remains:
+
+```text
 Settings
 ```
 
-Within **Settings**, the dashboard exposes section navigation rather than separate top-level tabs.
+with the Settings icon.
 
-```text
-Settings
-  Providers & Secrets
-  User / Workspace
-  Operations
-```
+It does not expand to `Providers & Secrets` or `User / Workspace`. The active page is communicated by the active menu item, URL, document title, and page header.
 
-### 4.1 Providers & Secrets
+### 4.3 No Settings landing page
 
-This section is the primary configuration surface for runtime and provider access.
-
-It contains:
-
-- Provider Profiles as the durable runtime/provider launch contract;
-- Managed Secrets and secret-health surfaces;
-- SecretRef usage and validation surfaces;
-- bindings between secrets and provider-profile roles;
-- OAuth-backed provider-profile lifecycle entry points when applicable;
-- provider credential health, readiness, and validation feedback; and
-- runtime/provider binding diagnostics.
-
-This section should clearly communicate that provider profiles contain references and launch metadata, managed secrets contain encrypted values or external references, OAuth volumes contain runtime-specific credential state, and readiness is a product of profile validity plus secret/OAuth resolvability.
-
-### 4.2 User / Workspace
-
-This section contains schema-driven settings for user and workspace behavior.
-
-It includes:
-
-- user preferences;
-- personal workflow creation defaults;
-- personal runtime and provider profile defaults;
-- workspace workflow defaults;
-- workspace routing defaults;
-- workspace feature flags;
-- non-secret integration defaults;
-- policy knobs that are safe to expose; and
-- SecretRef bindings that are not provider-profile-specific.
-
-This section is the main descriptor-rendered surface. New eligible settings should appear here by adding backend metadata and validation rather than by adding bespoke UI components for each setting.
-
-### 4.3 Operations
-
-This section contains operational controls and status-backed administrative actions.
-
-It includes:
-
-- worker pause/resume controls;
-- drain and quiesce controls;
-- queue and runtime health summaries;
-- maintenance-mode controls;
-- deployment or runtime update controls where authorized;
-- recent operational audit actions; and
-- safe diagnostic switches.
-
-Operations controls are not ordinary preferences. They are explicit commands or statusful controls that must show current state, authorization, expected effect, confirmation requirements, and audit history.
+The dropdown is the configuration index. MoonMind does not need another page that repeats the same three choices as cards. The bare `/settings` route redirects to the default configuration page.
 
 ---
 
-## 5. Routing
+## 5. Routes
 
-Canonical route:
+### 5.1 Canonical routes
 
-```text
-/settings
-```
+| Destination | Canonical route | Suggested destination key |
+|---|---|---|
+| Providers & Secrets | `/settings/providers-secrets` | `settings-providers-secrets` |
+| User / Workspace | `/settings/user-workspace` | `settings-user-workspace` |
+| Operations | `/settings/operations` | `settings-operations` |
 
-Supported section query model:
+All three destinations belong to the Settings dropdown's Configuration group and use the dashboard's utility-page classification.
 
-```text
-/settings?section=providers-secrets
-/settings?section=user-workspace
-/settings?section=operations
-```
+The route registry may map them to three page modules or one shared bundle with three route-owned components. The user-visible contract is three distinct pages.
 
-The default section should be `providers-secrets` unless product analytics or onboarding requirements justify a different default.
+### 5.2 Default redirect
 
-Legacy routes should redirect into the corresponding Settings section:
+`/settings` redirects with replacement history to `/settings/providers-secrets`.
 
-| Legacy route | Target |
+### 5.3 Legacy redirects
+
+| Legacy route | Canonical target |
 |---|---|
-| `/secrets` | `/settings?section=providers-secrets` |
-| `/workers` | `/settings?section=operations` |
-| older Settings tab aliases | `/settings` |
+| `/settings?section=providers-secrets` | `/settings/providers-secrets` |
+| `/settings?section=user-workspace` | `/settings/user-workspace` |
+| `/settings?section=operations` | `/settings/operations` |
+| `/secrets` | `/settings/providers-secrets` |
+| `/workers` | `/settings/operations` |
+| an unknown older Settings alias | `/settings/providers-secrets` unless a safe mapping exists |
 
-Redirects should preserve relevant query parameters where safe.
+Redirects preserve safe page-relevant query parameters and remove `section`.
+
+### 5.4 Page-local URL state
+
+Page-local filters may use query parameters:
+
+```text
+/settings/providers-secrets?runtime=codex
+/settings/user-workspace?scope=workspace
+/settings/user-workspace?scope=user&q=workflow
+/settings/operations?status=paused
+```
+
+Sensitive values never enter paths, query parameters, browser history, page titles, or navigation telemetry.
+
+### 5.5 Page titles
+
+Recommended document titles are:
+
+```text
+Providers & Secrets | MoonMind
+User / Workspace | MoonMind
+Operations | MoonMind
+```
 
 ---
 
-## 6. Page Shell
-
-The Settings page shell is stable and may be hard-coded because it represents product information architecture rather than individual setting fields.
+## 6. Shared Page Shell
 
 Recommended structure:
 
 ```text
-SettingsPage
+ConfigurationPage
   PageHeader
-  SectionSwitcher
-  SectionStatusSummary
-  SectionContent
+  PageStatusSummary
+  PageContent
+  PageDiagnosticsOrAudit
 ```
 
-### 6.1 Page header
+There is no `SectionSwitcher`, tab list, segmented destination control, destination radio group, or duplicate Settings sidebar.
 
-The header should include:
+### 6.1 Header
 
-- title: `Settings`;
-- short description of the selected section;
-- optional deployment/workspace context;
-- optional global warning when settings persistence, catalog loading, or authorization is degraded; and
-- optional link to diagnostics or audit where authorized.
+Each page header includes:
 
-### 6.2 Section switcher
+- an optional `Settings` or `Configuration` overline;
+- the page-specific title;
+- a short page-specific description;
+- optional deployment or workspace context;
+- a page-scoped warning when persistence, catalog loading, authorization, or operational state is degraded; and
+- optional diagnostic or audit links where authorized.
 
-The switcher should expose exactly the primary Settings sections unless the backend or product configuration intentionally adds another section:
+Required titles are `Providers & Secrets`, `User / Workspace`, and `Operations`.
 
-- Providers & Secrets;
-- User / Workspace;
-- Operations.
+### 6.2 Page-specific status summaries
 
-The switcher may show badges for section-level warnings, such as unresolved SecretRefs, blocked provider profiles, pending reloads, or paused workers.
+| Page | Summary emphasis |
+|---|---|
+| Providers & Secrets | launch readiness, profile validity, secret and OAuth health, blocked profiles |
+| User / Workspace | overrides, pending application, locked settings, validation diagnostics |
+| Operations | worker state, drain or pause status, queue and runtime health, pending commands |
 
-### 6.3 Section content
+Do not load all three pages' detailed datasets to reproduce one global health summary on every route. A compact cross-configuration alert may use a dedicated aggregate endpoint.
 
-Each section should follow the same broad pattern:
+### 6.3 Unsaved changes
 
-1. overview copy;
-2. status/readiness summary;
-3. data-driven tables, generated forms, or command cards;
-4. diagnostics and audit affordances; and
-5. high-risk actions grouped into clearly labeled areas.
+Dropdown navigation is real route navigation. When the current page has unsaved changes:
+
+1. detect the dirty draft;
+2. offer `Stay` and `Discard and leave`;
+3. do not mark the destination active until navigation succeeds;
+4. preserve the draft when navigation is canceled; and
+5. navigate immediately when the page is clean or changes were saved.
 
 ---
 
-## 7. Data Loading Model
+## 7. Page Responsibilities
 
-The Settings page loads configuration through backend APIs. It must not directly read data stores from the browser.
+### 7.1 Providers & Secrets
 
-### 7.1 Data sources by section
+This page contains:
 
-| Section | Primary data loaded by UI | Backend-owned data stores or resolvers |
-|---|---|---|
-| Providers & Secrets | provider profiles, managed secret metadata, OAuth volume state, readiness diagnostics | provider profile records, managed secrets, OAuth credential volume state, secret resolvers |
-| User / Workspace | settings catalog descriptors, effective values, overrides, diagnostics, audit entries | settings registry/catalog, settings override rows, environment/config defaults, settings audit rows, managed secret metadata for SecretRefs |
-| Operations | worker state, queue health, runtime health, operation capabilities, command history | operations state stores, queue/workflow state, deployment state, operational audit/event stores |
+- Provider Profiles as the durable runtime and provider launch contract;
+- model and effort tier policy editing inside the normal Provider Profile editor;
+- Managed Secrets and secret-health surfaces;
+- SecretRef role bindings and validation;
+- OAuth-backed profile lifecycle entry points;
+- provider credential health and readiness; and
+- runtime and provider binding diagnostics.
 
-### 7.2 Initial page load
+The page explains that profiles contain references and launch metadata, Managed Secrets contain encrypted values or external references, OAuth volumes contain runtime-specific credential state, and readiness combines profile validity with secret or OAuth resolvability.
 
-The page may use boot payload data for route context, user identity, or deployment feature flags, but boot payload data must not be the authoritative source for the settings catalog.
+A page-local runtime filter may narrow the visible Provider Profile collection. It must not narrow global readiness counts unless the summary is explicitly labeled as filtered.
 
-When the page loads:
+### 7.2 User / Workspace
 
-1. determine the selected section from the query string;
-2. load the minimum section data needed to render the first screen;
-3. defer expensive diagnostics, audit timelines, and resource usage graphs until the section or row needs them;
-4. show section-level skeletons while data loads; and
-5. preserve section and scope selection across browser navigation.
+This page contains descriptor-driven settings for:
 
-### 7.3 User / Workspace catalog load
+- user preferences;
+- personal workflow-creation defaults;
+- personal runtime and Provider Profile defaults;
+- workspace workflow and routing defaults;
+- workspace feature flags;
+- non-secret integration defaults;
+- safe policy controls; and
+- SecretRef bindings not owned by a Provider Profile.
 
-For descriptor-rendered settings, the UI loads catalog data by section and scope.
+This is the canonical generated-settings surface. Adding an eligible ordinary setting should require backend catalog metadata and validation, not a new hard-coded React row.
 
-Desired APIs:
+The user versus workspace scope switch is a page-local control. It may update `?scope=` and must guard dirty drafts before changing scope.
+
+### 7.3 Operations
+
+This page contains explicit administrative commands and statusful controls for:
+
+- worker pause and resume;
+- drain and quiesce;
+- queue and runtime health;
+- maintenance mode;
+- deployment or runtime updates where authorized;
+- recent operational audit actions; and
+- safe diagnostic switches.
+
+Each command card shows current state, expected impact, permitted actions, disabled reason, confirmation requirements, reason input where required, pending transitions, last actor and time, failure state, and recovery or resume action.
+
+The page title `Operations` is distinct from any broader dropdown group also labeled Operations. The group classifies destinations. This page specifically owns configuration and administration controls.
+
+---
+
+## 8. Data Loading Boundaries
+
+| Page | Primary data |
+|---|---|
+| Providers & Secrets | Provider Profiles, Managed Secret metadata, OAuth state, readiness diagnostics |
+| User / Workspace | catalog descriptors, effective values, scoped overrides, diagnostics, audit metadata |
+| Operations | worker state, queue and runtime health, operation capabilities, command history |
+
+On route load:
+
+1. resolve the page from the pathname;
+2. load only the minimum data needed for that page's first screen;
+3. do not fetch sibling-page collections by default;
+4. defer expensive diagnostics, audit timelines, and graphs until needed;
+5. show route-level and region-level loading states; and
+6. preserve page-local scope and filters across browser navigation.
+
+The backend may continue using `section=user-workspace` as catalog classification. It no longer represents a client-side Settings tab.
+
+Desired generated-settings endpoints remain:
 
 ```http
 GET /api/v1/settings/catalog?section=user-workspace&scope=workspace
@@ -301,43 +320,18 @@ GET /api/v1/settings/effective?scope=workspace
 GET /api/v1/settings/effective?scope=user
 GET /api/v1/settings/diagnostics?scope=workspace
 GET /api/v1/settings/audit?key=workflow.default_runtime
+POST /api/v1/settings/preview
+PATCH /api/v1/settings/workspace
+PATCH /api/v1/settings/user
+DELETE /api/v1/settings/workspace/{key}
+DELETE /api/v1/settings/user/{key}
 ```
-
-The catalog response should contain enough information for the UI to render controls, source explanations, read-only state, diagnostics, and reset affordances without hard-coded per-setting knowledge.
-
-### 7.4 Provider and operations loads
-
-Provider Profiles, Managed Secrets, OAuth flows, and Operations may use specialized endpoints because they are resources and commands, not generic setting rows.
-
-Even specialized managers should load capabilities and constraints from backend responses where possible. For example:
-
-- provider profile forms should load runtime/provider options, required secret roles, allowed materialization modes, model defaults, readiness checks, and validation outcomes;
-- managed secret lists should load metadata, status, validation state, and usage references;
-- OAuth panels should load connection state and permitted actions;
-- operations panels should load current state, permitted commands, confirmation requirements, and recent audit entries.
 
 ---
 
-## 8. Descriptor-Driven User / Workspace UI
+## 9. Descriptor-Driven User / Workspace Contract
 
-The User / Workspace section is the canonical generated-settings surface.
-
-### 8.1 Catalog response shape consumed by the UI
-
-The UI expects descriptors grouped by category.
-
-```yaml
-SettingsCatalogResponse:
-  section: user-workspace
-  scope: user | workspace
-  categories:
-    Workflow:
-      - SettingDescriptor
-    Skills:
-      - SettingDescriptor
-```
-
-Each descriptor supplies the information needed to render and edit a row.
+A descriptor carries enough metadata for the frontend to render and explain a setting without key-specific logic:
 
 ```yaml
 SettingDescriptor:
@@ -345,7 +339,7 @@ SettingDescriptor:
   title: string
   description: string | null
   category: string
-  section: providers-secrets | user-workspace | operations
+  section: user-workspace
   type: boolean | string | integer | number | enum | string_list | object | secret_ref
   ui: toggle | input | number | select | tag_editor | key_value | secret_ref_picker | provider_profile_picker | readonly
   scopes: [user | workspace | system | operator]
@@ -354,665 +348,242 @@ SettingDescriptor:
   override_value: any | null
   source: string
   source_explanation: string
-  options: [SettingOption] | null
-  constraints: SettingConstraints | null
+  options: array | null
+  constraints: object | null
   sensitive: boolean
-  secret_role: string | null
   read_only: boolean
   read_only_reason: string | null
-  requires_reload: boolean
-  requires_worker_restart: boolean
-  requires_process_restart: boolean
   apply_mode: string
   activation_state: string
-  active: boolean
   pending_value: any | null
-  affected_process_or_worker: string | null
-  completion_guidance: string | null
   applies_to: [string]
-  depends_on: [SettingDependency]
-  order: integer
-  audit: SettingAuditPolicy
   value_version: integer
-  diagnostics: [SettingDiagnostic]
+  diagnostics: array
 ```
 
-The exact backend schema may evolve, but the UI contract is stable: descriptors carry display metadata, control metadata, current/effective value, scope/source metadata, validation metadata, reload/application semantics, and diagnostics.
+Control selection follows descriptor shape:
 
-### 8.2 Renderer selection
-
-The generated renderer chooses controls by descriptor metadata, not by setting key.
-
-| Descriptor shape | UI behavior |
+| Descriptor | Control |
 |---|---|
-| `type: boolean` or `ui: toggle` | Toggle switch |
-| `type: enum` or `ui: select` | Select using descriptor `options` |
-| `type: integer`, `type: number`, or `ui: number` | Number input using min/max/step constraints when present |
-| `type: string` or `ui: input` | Text input unless sensitivity rules require a specialized control |
-| `type: string_list` or `ui: tag_editor` | Tag editor or comma-separated list editor |
-| `type: object` or `ui: key_value` | Small structured editor for safe key/value values |
-| `type: secret_ref` or `ui: secret_ref_picker` | SecretRef picker backed by managed-secret metadata and supported SecretRef schemes |
-| `ui: provider_profile_picker` | Provider profile selector backed by provider-profile list/readiness data |
-| `ui: readonly`, `read_only: true`, or unsupported editable control | Read-only display with reason or unsupported-control diagnostic |
+| boolean or `toggle` | Toggle |
+| enum or `select` | Select from backend options |
+| integer, number, or `number` | Constrained number input |
+| string or `input` | Text input unless sensitivity requires a specialist control |
+| string list or `tag_editor` | Tag or list editor |
+| object or `key_value` | Safe structured editor |
+| secret ref or `secret_ref_picker` | SecretRef picker |
+| `provider_profile_picker` | Provider Profile selector using backend data |
+| read-only or unsupported editable type | Read-only value with reason or diagnostic |
 
-The renderer may have specialized components for control types. It should not have specialized components for individual setting keys unless explicitly approved as an exception.
+Every row should expose title, description, control or value, stable key, scope, source, inherited or override state, active or pending state, validation, diagnostics, reset when allowed, application semantics, affected systems, and audit link where authorized.
 
-### 8.3 Row layout
+Filtering should support text search, category, modified-only, read-only, diagnostics, source, pending application, and secret-related filters where authorized. Filtering is never the authorization boundary.
 
-Every descriptor row should show:
+Before save, show changed keys, old and proposed values, validation, target scope, expected versions, affected systems, application requirements, dependency warnings, and redaction behavior. The backend preview is authoritative where available.
 
-- title;
-- description;
-- current control or read-only value;
-- stable setting key;
-- source badge;
-- scope badge;
-- active/pending state;
-- default or inherited explanation when useful;
-- reset action when an override exists and reset is allowed;
-- validation errors;
-- diagnostics;
-- reload/restart/application badge when relevant;
-- affected systems;
-- lock reason when read-only; and
-- audit/change-history link where authorized.
-
-Recommended row structure:
-
-```text
-SettingRow
-  Title + source/scope/application badges
-  Description
-  Source explanation
-  Diagnostics
-  Affected systems chips
-  Control
-  Key + reset/history actions
-```
-
-### 8.4 Scope switching
-
-The User / Workspace section should support scope switching between `workspace` and `user` where authorized.
-
-Scope switching must:
-
-- reload catalog/effective values for the selected scope;
-- discard or clearly preserve unsaved draft changes only with explicit user intent;
-- update source labels and reset behavior;
-- make inheritance visible; and
-- avoid presenting user-level controls that are disallowed by workspace policy.
-
-### 8.5 Filtering and search
-
-The generated settings surface should support:
-
-- free-text search over key, title, description, category, and applicable tags;
-- category filtering;
-- modified-only filtering;
-- read-only filtering;
-- diagnostics/error filtering;
-- source filtering where useful;
-- pending reload/restart filtering; and
-- secret-related filtering where authorized.
-
-Filtering is a UI convenience. It must not be used as the security boundary for hiding unauthorized settings. Unauthorized settings should not be returned by the backend, or they should be returned only as read-only/limited metadata according to backend policy.
-
-### 8.6 Change preview
-
-Before saving one or more settings, the UI should show a change preview containing:
-
-- changed keys;
-- old effective values;
-- new proposed values;
-- validation status;
-- source/scope that will be written;
-- expected versions;
-- affected systems;
-- reload/restart/next-boundary requirements;
-- missing dependency warnings; and
-- audit redaction behavior where relevant.
-
-Where a dedicated preview endpoint exists, the UI should use the backend preview rather than reconstructing full effective-value semantics locally.
-
-Desired preview API:
-
-```http
-POST /api/v1/settings/preview
-```
-
-### 8.7 Save and reset
-
-Saving generated settings uses scoped batch updates.
-
-```http
-PATCH /api/v1/settings/workspace
-PATCH /api/v1/settings/user
-```
-
-The payload should include changed keys, expected versions, and an optional reason.
-
-```json
-{
-  "changes": {
-    "workflow.default_publish_mode": "branch",
-    "skills.canary_percent": 25
-  },
-  "expected_versions": {
-    "workflow.default_publish_mode": 3,
-    "skills.canary_percent": 1
-  },
-  "reason": "Updated from Settings."
-}
-```
-
-Resetting removes the scoped override and returns to the inherited effective value.
-
-```http
-DELETE /api/v1/settings/workspace/{key}
-DELETE /api/v1/settings/user/{key}
-```
-
-The UI must not treat reset as deleting the underlying default, managed secret, provider profile, OAuth volume, or audit history.
-
-### 8.8 Draft state
-
-The UI may keep unsaved changes in local state. Draft state must be keyed by setting key and scope.
-
-Draft state should be cleared when:
-
-- a successful save returns fresh values;
-- the user discards changes;
-- the selected scope changes and the user confirms discard; or
-- the catalog version changes in a way that invalidates the draft.
-
-Draft state should not be persisted to local storage unless a future design explicitly addresses sensitive metadata risk.
+Draft state is keyed by setting key and scope. Clear it after successful save, explicit discard, confirmed scope change, confirmed route departure, or incompatible catalog-version change. Do not persist drafts to local storage without a separate sensitive-metadata design.
 
 ---
 
-## 9. Providers & Secrets UI
+## 10. Permissions and Failure States
 
-Providers & Secrets is specialized, but it should still be data-driven.
+The backend controls authorization. The UI reflects it without treating client checks as a security boundary.
 
-### 9.1 Provider profiles
+Each destination should have an independent state when permissions differ:
 
-Provider Profiles are first-class resources. They are not generic setting overrides.
+- `shown` for meaningful accessible content;
+- `unavailable` when product policy wants a visible explanation; or
+- `hidden` when the destination should not be advertised.
 
-The Provider Profiles manager should load and render:
+The Configuration label appears when at least one child is shown or intentionally unavailable. A direct unauthorized route shows a clear unavailable or forbidden state rather than silently redirecting to a sibling page.
 
-- profile id;
-- runtime;
-- provider;
-- provider label;
-- credential source class;
-- runtime materialization mode;
-- default model and model overrides;
-- SecretRef role bindings;
-- OAuth volume metadata;
-- concurrency and cooldown policy;
-- priority;
-- default profile status;
-- enabled/disabled status;
-- readiness summary; and
-- readiness checks.
-
-Provider profile forms may be descriptor-assisted, but they should not reduce provider profiles to arbitrary key/value editing. Provider profiles carry execution semantics and require specialized validation and readiness display.
-
-### 9.2 Secret role binding
-
-When a provider profile requires a secret, the UI should present a role-aware SecretRef picker.
-
-The picker should show:
-
-- role label;
-- required/optional status;
-- compatible secret types or schemes;
-- available managed secrets;
-- external reference schemes such as `env://` where allowed;
-- selected SecretRef;
-- readiness result; and
-- validation status.
-
-The picker must not show secret plaintext.
-
-### 9.3 Managed secrets
-
-The Managed Secrets UI should let authorized users:
-
-- create managed secrets;
-- replace secret values;
-- rotate secrets;
-- disable secrets;
-- re-enable secrets;
-- delete or tombstone secrets where allowed;
-- validate secrets;
-- inspect usage; and
-- copy SecretRefs.
-
-Managed secret creation and replacement may accept plaintext only as a one-way submission. After save, the UI must clear plaintext inputs and display only metadata.
-
-### 9.4 OAuth credential state
-
-OAuth-backed profiles and credential volumes should show:
-
-- connection status;
-- account label;
-- backing volume or reference metadata;
-- validation timestamp;
-- permitted actions;
-- disconnect or reconnect actions where authorized;
-- failure reason with sensitive details redacted; and
-- launch readiness.
-
-### 9.5 Readiness and diagnostics
-
-Providers & Secrets should include a readiness-oriented summary because users visit this section to make runtimes launchable.
-
-Readiness should combine:
-
-- profile schema validity;
-- required fields;
-- SecretRef resolvability;
-- managed secret status;
-- OAuth status;
-- provider-specific validation;
-- enabled/disabled state;
-- concurrency availability; and
-- cooldown state.
-
-Broken SecretRefs, missing OAuth volumes, disabled secrets, and blocked profiles should appear as clear actionable diagnostics.
-
----
-
-## 10. Operations UI
-
-Operations belongs under Settings for discoverability, but operational controls are not ordinary setting rows.
-
-### 10.1 Operation cards
-
-Operational controls should be represented as command cards or statusful control panels. Each card should load current state and permitted actions from backend operations APIs.
-
-Each operation card should show:
-
-- operation name;
-- current state;
-- command impact;
-- allowed actions;
-- disabled/read-only reason when not allowed;
-- required confirmation;
-- reason input when audit requires it;
-- last action and actor;
-- pending transitions;
-- failure reason; and
-- safe rollback or resume action where available.
-
-### 10.2 Worker controls
-
-Worker pause/resume, drain, and quiesce controls should show:
-
-- whether workers are running, draining, quiesced, or paused;
-- queue depth or related metrics where available;
-- whether the system is drained;
-- pause mode;
-- reason;
-- actor and timestamp of latest action;
-- confirmation text; and
-- resume behavior.
-
-### 10.3 Deployment or runtime update controls
-
-Deployment or runtime update controls should show:
-
-- current configured image/version/build where applicable;
-- running image evidence;
-- target options loaded from backend policy;
-- mutable tag warnings;
-- affected services;
-- update mode;
-- confirmation requirements;
-- recent actions;
-- logs or run detail links where authorized; and
-- rollback eligibility.
-
-### 10.4 Operational audit
-
-Operations cards should surface recent operational audit records in context. Sensitive command logs or raw output should be linked only when authorized and redacted according to backend policy.
-
----
-
-## 11. Source, Inheritance, and Application Semantics
-
-The Settings page should make source and application semantics visible without requiring users to understand the resolver internals.
-
-### 11.1 Source badges
-
-Recommended source labels:
-
-```text
-Default
-Config
-Environment
-Workspace override
-User override
-Provider profile
-Secret reference
-Operator locked
-Migrated override
-Deprecated override
-```
-
-Source labels should come from backend source metadata, normalized for display. Unknown source values should be displayed safely rather than hidden.
-
-### 11.2 Inheritance display
-
-When a setting is inherited, the UI should explain the inherited source. Examples:
-
-- `Using workspace default.`
-- `Using deployment config.`
-- `Using built-in default.`
-- `Overridden for this user.`
-- `Locked by operator policy.`
-
-Reset controls should appear only when an override exists at the selected scope and the current user is authorized to remove it.
-
-### 11.3 Application badges
-
-Settings may apply at different boundaries. The UI should display backend-provided application semantics such as:
-
-- applies immediately;
-- applies on next request;
-- applies on next workflow execution;
-- applies on next launch;
-- requires worker reload;
-- requires process restart; or
-- requires manual operation.
-
-Pending values should be shown when a new value has been accepted but is not yet active.
-
----
-
-## 12. Validation and Error Handling
-
-### 12.1 Client-side validation
-
-The frontend may perform lightweight validation using descriptor metadata:
-
-- required value checks;
-- numeric min/max;
-- enum option membership;
-- string length;
-- simple patterns;
-- SecretRef shape; and
-- obvious type coercion errors.
-
-Client-side validation is a convenience only. It is not authoritative.
-
-### 12.2 Server-side validation
-
-All writes must be validated by the backend using the authoritative setting descriptor, scope, constraints, sensitivity rules, version rules, and authorization policy.
-
-The UI should display structured backend errors without exposing submitted plaintext or sensitive values.
-
-Common settings errors include:
-
-- `unknown_setting`;
-- `setting_not_exposed`;
-- `scope_not_allowed`;
-- `read_only_setting`;
-- `operator_locked`;
-- `invalid_setting_value`;
-- `secret_ref_not_resolvable`;
-- `provider_profile_not_found`;
-- `version_conflict`;
-- `permission_denied`; and
-- `requires_confirmation`.
-
-### 12.3 Version conflicts
-
-When a version conflict occurs, the UI should:
-
-1. stop the save;
-2. reload affected descriptors;
-3. show the user that another change occurred;
-4. allow the user to review the latest value; and
-5. require explicit resubmission.
-
-### 12.4 Diagnostics
-
-Diagnostics should be shown close to the affected row or resource. Security-relevant diagnostics must avoid exposing raw secret values or sensitive payloads.
-
-Diagnostics may include:
-
-- unresolved SecretRef;
-- missing managed secret;
-- disabled or revoked secret;
-- missing provider profile;
-- deprecated setting key;
-- migrated override;
-- unsupported control;
-- pending reload;
-- failed validation; and
-- permission limitation.
-
----
-
-## 13. Secret-Safe Behavior
-
-The Settings page must treat secrets as write-only or reference-only metadata.
-
-### 13.1 Generic settings
-
-Generic setting rows must not accept raw secret values. Secret-like settings must use `secret_ref_picker`, provider-profile secret-role binding, or a specialized managed-secret flow.
-
-A SecretRef such as `db://github-token` or `env://GITHUB_TOKEN` may be displayed when authorized, but the referenced plaintext must not be displayed.
-
-### 13.2 Managed secret plaintext
-
-Managed secret creation and replacement flows may accept plaintext input only for submission. After the request completes, the UI must:
-
-- clear the input;
-- avoid caching the plaintext in component state longer than necessary;
-- avoid placing plaintext in URLs, local storage, or logs;
-- show metadata and validation state instead of the value; and
-- rely on the backend for redaction and audit behavior.
-
-### 13.3 Audit redaction
-
-Audit views should use backend-redacted values. If the user lacks permission to view security-relevant metadata, the audit view should show redacted placeholders and redaction reasons instead of SecretRefs or values.
-
----
-
-## 14. Permissions and Authorization UX
-
-The backend is authoritative for authorization. The UI should reflect permission state without relying on frontend checks as the security boundary.
-
-The Settings page should support separate permission states for:
-
-- reading the settings catalog;
-- reading effective settings;
-- writing user settings;
-- writing workspace settings;
-- reading system/operator settings;
-- reading secret metadata;
-- writing or rotating secrets;
-- managing provider profiles;
-- invoking operations; and
-- reading audit history.
-
-When the user lacks permission, the UI should choose the safest available presentation:
+In-page behavior includes:
 
 | Backend state | UI behavior |
 |---|---|
-| Section not visible | Hide section or show unavailable shell according to product policy |
-| Catalog readable but setting not writable | Render read-only row with reason |
-| Secret metadata not readable | Hide SecretRef metadata or show redacted reference state |
-| Audit not readable | Hide audit link |
-| Operation not invokable | Show current state but disable action with reason |
-| Backend returns permission error | Show structured error and do not retry destructive action automatically |
+| catalog readable, setting not writable | Read-only row with reason |
+| secret metadata not readable | Redacted or hidden reference metadata |
+| audit not readable | No audit link |
+| operation not invokable | Current state visible, action disabled with reason |
+| permission error during mutation | Structured error, no automatic destructive retry |
+
+Loading placeholders must not imply values are default, unset, safe, or healthy. Empty states explain the next authorized action. Failures identify the affected page or region and preserve unrelated content where possible.
 
 ---
 
-## 15. Loading, Empty, and Failure States
+## 11. Secret Safety, Validation, and Explainability
 
-### 15.1 Loading states
+Generic settings never accept raw secret values. Managed Secret creation and replacement may accept plaintext only for one-way submission. After submission, clear the field and display metadata and validation state, not the value.
 
-Use skeletons or compact loading cards for:
+The UI may display an authorized SecretRef such as `db://github-token` or `env://GITHUB_TOKEN`, but never its plaintext target.
 
-- section shell loading;
-- catalog loading;
-- provider profile list loading;
-- managed secret metadata loading;
-- operation state loading;
-- audit loading; and
-- diagnostics loading.
+Client validation may use descriptor metadata for required values, numeric bounds, option membership, length, simple patterns, SecretRef shape, and obvious type errors. Backend validation remains authoritative.
 
-Loading placeholders should not imply that values are default, unset, or safe.
+Source and application labels come from backend metadata. Recommended source labels include Default, Config, Environment, Workspace override, User override, Provider Profile, Secret reference, and Operator locked.
 
-### 15.2 Empty states
-
-Empty states should be actionable:
-
-- no provider profiles: explain how to create or import a profile;
-- no managed secrets: explain SecretRefs and create-secret flow;
-- no user/workspace settings returned: explain that no settings are exposed for this scope or the user lacks permission;
-- no operations available: explain that operations are not configured or not authorized;
-- no audit records: explain that no changes have been recorded.
-
-### 15.3 Failure states
-
-Failure states should identify the affected section or row and preserve unrelated content when possible.
-
-Examples:
-
-- settings catalog unavailable;
-- settings persistence unavailable;
-- provider profile service unavailable;
-- managed secret metadata unavailable;
-- operations state unavailable;
-- audit unavailable; and
-- diagnostics unavailable.
-
-The UI should avoid automatic retries for mutation failures that might duplicate operations.
+The UI explains inherited sources and application boundaries such as immediate, next request, next workflow, next launch, worker reload, process restart, or manual operation. Pending accepted values remain visible until active.
 
 ---
 
-## 16. Extensibility Rules
+## 12. Accessibility
 
-### 16.1 Adding a normal user/workspace setting
+The configuration experience must support:
 
-A new ordinary setting should be added by changing backend metadata and validation.
+- keyboard access to the dropdown, every route link, page-local controls, and dialogs;
+- visible focus and Escape-to-close behavior;
+- consistent destination order on desktop and mobile;
+- one active route exposed with route semantics;
+- focus movement to the new page heading where appropriate;
+- associated labels, descriptions, and errors;
+- no reliance on color alone;
+- confirmation and focus restoration for destructive operations; and
+- readable long keys, SecretRefs, and Provider Profile identifiers.
 
-Expected path:
-
-1. backend defines stable setting key;
-2. backend marks setting explicitly exposed;
-3. backend declares title, description, category, section, scopes, type, UI control, constraints, options, sensitivity, application semantics, and audit policy;
-4. backend wires persistence/resolution as needed;
-5. frontend generic renderer displays it automatically;
-6. tests verify that the catalog row appears and save/reset behavior works.
-
-Frontend changes should be unnecessary unless the setting requires a new generic control type.
-
-### 16.2 Adding a new generic control type
-
-A new generic control type may require frontend work, but it should be reusable across many settings.
-
-A new control type must define:
-
-- descriptor `ui` value;
-- supported `type` or value shape;
-- validation hints;
-- accessibility behavior;
-- read-only behavior;
-- draft serialization;
-- display serialization;
-- error display; and
-- fallback behavior for unsupported browsers or permissions.
-
-### 16.3 Adding provider/secret/operations capabilities
-
-Provider, secret, OAuth, and operations capabilities may require specialized UI because they represent resources or commands. Even then, the frontend should load options, allowed actions, readiness, validation, and policy constraints from backend APIs rather than hard-coding policy in the UI.
-
-### 16.4 Forbidden patterns
-
-The following patterns are not allowed for ordinary settings:
-
-- hard-coding a new setting row in `SettingsPage` for each setting key;
-- duplicating backend defaults in the frontend;
-- accepting raw API keys in a generic setting text input;
-- using environment-variable editing as a generic browser UI;
-- hiding unauthorized settings only through frontend filtering;
-- implementing setting validation only in the frontend;
-- silently falling back when a SecretRef is broken; or
-- treating operations commands as simple boolean preferences.
+The three destination links must not use `role="tab"` or radio semantics. They navigate to documents and behave as links.
 
 ---
 
-## 17. Accessibility and Usability Requirements
+## 13. Extensibility Rules
 
-The Settings page should support:
+Adding a normal user or workspace setting should require:
 
-- keyboard navigation through section switcher, filters, rows, controls, and dialogs;
-- clear focus management after save, reset, validation, and modal close;
-- accessible names for all controls;
-- screen-reader-visible descriptions for badges and diagnostics;
-- form errors associated with the relevant controls;
-- no reliance on color alone for source, status, warning, or error meaning;
-- confirmation dialogs for high-risk operations;
-- cancel/discard paths for unsaved drafts; and
-- compact but readable displays for long keys, SecretRefs, and provider profile identifiers.
+1. a stable backend key;
+2. explicit exposure metadata;
+3. title, description, category, scopes, type, UI control, constraints, options, sensitivity, application semantics, and audit policy;
+4. persistence and resolution where needed; and
+5. catalog and save/reset tests.
 
----
+Frontend work is required only for a new reusable control type.
 
-## 18. Observability and Audit UX
+A fourth Configuration page is justified only when it has a distinct user goal, route identity, permission model, loading boundary, and enough durable content to stand alone. A category or small settings group stays within an existing page.
 
-Settings should make change history discoverable without turning the page into an audit console.
+Forbidden patterns include:
 
-Recommended behavior:
-
-- row-level audit link where authorized;
-- section-level recent changes summary;
-- actor, timestamp, scope, key, reason, and redaction state;
-- old/new values only when the backend permits display;
-- affected systems and application mode where available;
-- no plaintext secret display; and
-- diagnostics link for migration or unresolved-reference issues.
-
-Audit and diagnostics should be loaded on demand when they are not needed for initial rendering.
+- page-local tabs, radio cards, pills, segmented controls, sidebars, or cards that repeat the three destinations;
+- `?section=` as page identity;
+- eager loading of every configuration dataset on every route;
+- one hard-coded React row per setting key;
+- frontend copies of backend defaults or authoritative validation;
+- plaintext credential inputs in generic settings;
+- frontend-only authorization filtering;
+- silent fallback for broken SecretRefs; and
+- boolean-preference treatment for operational commands.
 
 ---
 
-## 19. Acceptance Criteria
+## 14. Implementation Migration
 
-The Settings page design is satisfied when all of the following are true:
+### 14.1 Destination registry
 
-1. The canonical UI document is `docs/UI/SettingsPage.md`; the old `SettingsTab.md` path is removed or replaced by a short redirect note.
-2. The page uses `/settings` with `section` query selection for Providers & Secrets, User / Workspace, and Operations.
-3. The User / Workspace section renders ordinary settings from backend catalog descriptors.
-4. Adding a new supported setting descriptor does not require a new hard-coded row in the frontend.
-5. The frontend chooses generic controls from descriptor metadata such as `type`, `ui`, `options`, and `constraints`.
-6. Effective values, defaults, sources, overrides, version information, diagnostics, and application semantics come from backend responses.
-7. The UI supports scope switching between user and workspace where authorized.
-8. The UI supports search, category filtering, modified/read-only/diagnostic filtering, change preview, save, discard, and reset.
-9. Secret-like settings use SecretRef pickers or managed-secret flows, never generic plaintext settings inputs.
-10. Provider Profiles and Managed Secrets remain first-class resource managers inside Providers & Secrets.
-11. Operations controls remain explicit command cards with confirmation, status, authorization, and audit context.
-12. Permissions are reflected in read-only/hidden/disabled states, but backend authorization remains authoritative.
-13. Unknown or unsupported descriptor controls degrade safely rather than failing the page or exposing unsafe inputs.
-14. Audit and diagnostics are available where authorized and are redacted according to backend policy.
-15. The UI does not duplicate backend defaults, validation rules, source resolution, or secret-safety decisions.
+Replace the single Settings destination with:
 
----
-
-## 20. Migration from `SettingsTab.md`
-
-The old document name implies a narrower tab-level IA artifact. The updated design should use `SettingsPage.md` because Settings is now a full dashboard page and configuration plane.
-
-Recommended migration:
-
-```bash
-git mv docs/UI/SettingsTab.md docs/UI/SettingsPage.md
+```text
+settings-providers-secrets -> /settings/providers-secrets
+settings-user-workspace    -> /settings/user-workspace
+settings-operations        -> /settings/operations
 ```
 
-Then replace the file content with this document.
+All three belong to the Configuration group. Local and server-provided destination registries must stay synchronized. Group membership should be explicit metadata or stable grouping logic.
 
-Any references to `docs/UI/SettingsTab.md` should be updated to `docs/UI/SettingsPage.md`. If external links need a transition period, leave a tiny `SettingsTab.md` stub that points to `SettingsPage.md`, but the canonical document should be `SettingsPage.md`.
+### 14.2 Page boundaries
+
+Recommended decomposition:
+
+```text
+ProvidersSecretsSettingsPage
+  ProvidersSecretsHeader
+  ProvidersSecretsHealthSummary
+  ProviderProfilesManager
+  SecretManager
+  OAuth and token validation surfaces
+
+UserWorkspaceSettingsPage
+  UserWorkspaceHeader
+  UserWorkspaceStatusSummary
+  ScopeSwitcher
+  GeneratedSettingsSection
+  User and workspace identity/preferences surfaces
+
+OperationsSettingsPage
+  OperationsHeader
+  OperationsStatusSummary
+  OperationsSettingsSection
+  Operational audit and diagnostics
+```
+
+The pages may initially share one bundle. They must still be route-owned components and must not mount unrelated managers.
+
+### 14.3 Remove old section state
+
+Remove equivalents of:
+
+- `SETTINGS_SECTIONS`;
+- `SettingsSectionId`;
+- `readSectionFromLocation`;
+- `updateSectionInLocation`;
+- local cross-page `section` state;
+- manual `popstate` handling for section selection;
+- the destination radio group or segmented control;
+- descriptions selected from a local section array; and
+- conditional page rendering selected by `section === ...`.
+
+Normal router matching replaces this state.
+
+Move state to the owning page. Runtime filtering stays on Providers & Secrets. User versus workspace scope stays on User / Workspace. Worker command state stays on Operations.
+
+### 14.4 Required tests
+
+Cover:
+
+- three destination-registry entries;
+- one Configuration label and correct ordering;
+- stable Settings trigger behavior;
+- active state for all three routes;
+- desktop and mobile navigation;
+- `/settings` and every legacy redirect;
+- absence of Settings tab or radio navigation;
+- page-specific data loading and no unrelated manager mounting;
+- Back and Forward behavior;
+- dirty-draft route guards;
+- direct-route permissions; and
+- deep links with page-local filters.
+
+---
+
+## 15. Acceptance Criteria
+
+The design is satisfied when:
+
+1. The existing Settings dropdown contains one Configuration group.
+2. It contains route links for Providers & Secrets, User / Workspace, and Operations in that order.
+3. Each destination has its own canonical `/settings/...` pathname.
+4. `/settings` redirects to `/settings/providers-secrets`.
+5. Legacy `?section=` links redirect to the corresponding canonical page.
+6. No configuration page repeats the destinations as tabs, radio buttons, segmented controls, pills, cards, a sidebar, or another local switcher.
+7. The masthead trigger remains `Settings` with the Settings icon while any Configuration page is active.
+8. Desktop and mobile expose the same group and order.
+9. Each page has its own title, header, loading boundary, authorization state, and failure state.
+10. Each page loads only its required primary datasets by default.
+11. Providers & Secrets keeps Provider Profiles, Managed Secrets, OAuth, tier policy, and readiness as first-class surfaces.
+12. User / Workspace renders ordinary settings from backend descriptors and supports authorized scope switching.
+13. Operations uses explicit statusful command cards with confirmation and audit context.
+14. Secret-like settings use SecretRefs or Managed Secret flows, never generic plaintext inputs.
+15. Route navigation protects unsaved drafts.
+16. Unsupported descriptors degrade safely.
+17. A failure on one page does not break sibling Configuration destinations.
+18. Backend authorization, defaults, validation, source resolution, and secret-safety decisions remain authoritative.
+19. Navigation tests and telemetry use canonical destination keys instead of the removed `section` state.
+
+---
+
+## 16. Decision Summary
+
+- Settings is a configuration namespace and dropdown group, not one page with three tabs.
+- Providers & Secrets, User / Workspace, and Operations are sibling pages.
+- Canonical routes are `/settings/providers-secrets`, `/settings/user-workspace`, and `/settings/operations`.
+- `/settings` redirects to Providers & Secrets.
+- The Settings dropdown is the single cross-page navigation owner.
+- The Settings trigger remains stable on all three pages.
+- Query parameters represent page-local state, not page identity.
+- Every page owns its title, status, authorization, loading, queries, and failures.
+- Existing managers can be reused, but the old local section state and switcher are removed.
