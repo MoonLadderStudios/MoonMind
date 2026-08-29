@@ -410,36 +410,53 @@ class DockerOpencodeAuthJsonMaterializer:
                 code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_GENERATION_FENCED,
             )
         volume = handle.attachments[0].sourceRef
-        code, stdout, stderr = await self._backend.run(
+        # ``run_runtime_command`` redacts secret-shaped command output before
+        # returning it to callers.  The credential runtime label and volume name
+        # are non-secret authority refs, but both are intentionally caught by
+        # that generic redactor.  Returning either raw value (including in an
+        # inspect error) therefore creates false generation fences and prevents
+        # an already-absent volume from being recognized as idempotent success.
+        # Ask Docker's trusted template evaluator for one bounded attestation:
+        # ``owned`` for the exact generation, ``mismatch`` for a conflicting
+        # owner, and empty output when the exact volume is absent.
+        ownership_attestation = (
+            f"{{{{if eq .Name {json.dumps(volume)}}}}}"
+            "{{if and "
+            '(eq (.Label "moonmind.credential_runtime_ref") '
+            f"{json.dumps(handle.credentialRuntimeRef)}) "
+            '(eq (.Label "moonmind.credential_generation") '
+            f"{json.dumps(str(expected_generation))})"
+            "}}owned{{else}}mismatch{{end}}{{end}}"
+        )
+        code, stdout, _stderr = await self._backend.run(
             [
                 "docker",
                 "volume",
-                "inspect",
+                "ls",
+                "--filter",
+                f"name=^{volume}$",
                 "--format",
-                '{{ index .Labels "moonmind.credential_runtime_ref" }}|{{ index .Labels "moonmind.credential_generation" }}',
-                volume,
+                ownership_attestation,
             ]
         )
         if code != 0:
-            detail = (stderr or stdout).decode("utf-8", errors="replace").lower()
-            if "no such volume" in detail or "no such object" in detail:
-                # Already absent is idempotent cleanup success.
-                return CredentialCleanupResult(
-                    cleanupRef=handle.cleanupRef,
-                    removed=True,
-                    evidence={"alreadyAbsent": True},
-                )
             raise HarnessPlatformError(
-                "credential volume cleanup inspection is deferred",
+                "credential volume cleanup attestation is deferred",
                 code=HarnessPlatformFailure.OMNIGENT_CLEANUP_DEFERRED,
             )
-        expected = f"{handle.credentialRuntimeRef}|{expected_generation}"
-        if stdout.decode("utf-8", errors="replace").strip() != expected:
+        observed = stdout.decode("utf-8", errors="replace").strip()
+        if not observed:
+            return CredentialCleanupResult(
+                cleanupRef=handle.cleanupRef,
+                removed=True,
+                evidence={"alreadyAbsent": True},
+            )
+        if observed != "owned":
             raise HarnessPlatformError(
                 "credential volume ownership or generation fence mismatch",
                 code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_GENERATION_FENCED,
             )
-        code, _stdout, stderr = await self._backend.run(
+        code, _stdout, _stderr = await self._backend.run(
             ["docker", "volume", "rm", volume]
         )
         if code != 0:

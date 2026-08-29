@@ -795,8 +795,13 @@ class _DockerBackend:
 
     async def run(self, argv, *, input_bytes=None, timeout_seconds=60.0):
         self.calls.append((list(argv), input_bytes))
-        if argv[1:3] == ["volume", "inspect"]:
-            return 0, f"{self.runtime_ref}|{self.generation}\n".encode(), b""
+        if argv[1:3] == ["volume", "ls"]:
+            ownership_template = argv[argv.index("--format") + 1]
+            attested = (
+                self.runtime_ref in ownership_template
+                and json.dumps(self.generation) in ownership_template
+            )
+            return 0, (b"owned\n" if attested else b"mismatch\n"), b""
         return 0, b"", b""
 
 
@@ -1069,6 +1074,128 @@ async def test_opencode_volume_materialization_transports_secret_only_on_stdin()
     cleanup = await materializer.cleanup(handle, 4)
     assert cleanup.removed is True
     assert backend.calls[-1][0][1:3] == ["volume", "rm"]
+
+
+@pytest.mark.asyncio
+async def test_opencode_cleanup_replay_survives_command_output_redaction() -> None:
+    replay_root = (
+        Path(__file__).resolve().parents[2]
+        / "integration"
+        / "reliability"
+        / "replays"
+        / "omnigent-credential-cleanup-redaction"
+    )
+    manifest = json.loads((replay_root / "manifest.json").read_text())
+    expected = json.loads((replay_root / "expected-outcome.json").read_text())
+
+    class RedactingReplayBackend:
+        def __init__(self) -> None:
+            self.calls: list[list[str]] = []
+
+        async def run(self, argv, *, input_bytes=None, timeout_seconds=60.0):
+            del input_bytes, timeout_seconds
+            command = list(argv)
+            self.calls.append(command)
+            if command[1:3] != ["volume", "ls"]:
+                return 0, b"", b""
+            ownership_template = command[command.index("--format") + 1]
+            if (
+                "{{if and" in ownership_template
+                and manifest["handle"]["credentialRuntimeRef"]
+                in ownership_template
+                and json.dumps(str(manifest["expectedGeneration"]))
+                in ownership_template
+            ):
+                return 0, expected["ownershipAttestation"].encode(), b""
+            return 0, manifest["legacyRedactedInspectOutput"].encode(), b""
+
+    backend = RedactingReplayBackend()
+    handle = CredentialRuntimeHandle.model_validate(manifest["handle"])
+
+    result = await DockerOpencodeAuthJsonMaterializer(backend).cleanup(
+        handle,
+        manifest["expectedGeneration"],
+    )
+
+    assert result.removed is expected["volumeRemoved"]
+    assert expected["profileLeaseReleaseEligible"] is True
+    assert backend.calls[-1][1:3] == ["volume", "rm"]
+    inspect_template = backend.calls[0][backend.calls[0].index("--format") + 1]
+    assert "{{if and" in inspect_template
+    assert "owned{{else}}mismatch" in inspect_template
+
+
+@pytest.mark.asyncio
+async def test_opencode_cleanup_replay_treats_redaction_safe_absence_as_cleaned() -> (
+    None
+):
+    replay_root = (
+        Path(__file__).resolve().parents[2]
+        / "integration"
+        / "reliability"
+        / "replays"
+        / "omnigent-credential-cleanup-redaction"
+    )
+    manifest = json.loads((replay_root / "manifest.json").read_text())
+
+    class MissingVolumeBackend:
+        def __init__(self) -> None:
+            self.calls: list[list[str]] = []
+
+        async def run(self, argv, *, input_bytes=None, timeout_seconds=60.0):
+            del input_bytes, timeout_seconds
+            self.calls.append(list(argv))
+            return 0, b"", b""
+
+    backend = MissingVolumeBackend()
+    handle = CredentialRuntimeHandle.model_validate(manifest["handle"])
+    assert "no such volume" not in manifest["legacyRedactedMissingOutput"].lower()
+
+    result = await DockerOpencodeAuthJsonMaterializer(backend).cleanup(
+        handle,
+        manifest["expectedGeneration"],
+    )
+
+    assert result.removed is True
+    assert result.evidence == {"alreadyAbsent": True}
+    assert len(backend.calls) == 1
+    assert backend.calls[0][1:3] == ["volume", "ls"]
+
+
+@pytest.mark.asyncio
+async def test_opencode_cleanup_boolean_attestation_preserves_generation_fence() -> (
+    None
+):
+    backend = _DockerBackend()
+    backend.runtime_ref = "credential-runtime:sha256:" + "a" * 64
+    backend.generation = "2"
+    handle = CredentialRuntimeHandle.model_validate(
+        {
+            "credentialRuntimeRef": backend.runtime_ref,
+            "providerProfileRef": "opencode-go-default",
+            "providerLeaseRef": "provider-profile-lease:test",
+            "credentialGeneration": 1,
+            "materializerRef": "opencode-auth-json@1",
+            "attachments": [
+                {
+                    "kind": "volume",
+                    "sourceRef": "mm-omnigent-credential-test",
+                    "targetPath": "/run/mm-credentials/opencode",
+                    "accessMode": "read-only",
+                }
+            ],
+            "cleanupRef": "credential-cleanup:sha256:" + "a" * 64,
+        }
+    )
+
+    with pytest.raises(HarnessPlatformError) as exc:
+        await DockerOpencodeAuthJsonMaterializer(backend).cleanup(handle, 1)
+
+    assert (
+        exc.value.code
+        == HarnessPlatformFailure.OMNIGENT_CREDENTIAL_GENERATION_FENCED
+    )
+    assert all(call[0][1:3] != ["volume", "rm"] for call in backend.calls)
 
 
 @pytest.mark.asyncio
