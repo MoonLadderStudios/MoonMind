@@ -18,6 +18,7 @@ from uuid import UUID
 import httpx
 import pytest
 import yaml
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from temporalio import activity
@@ -33,6 +34,7 @@ from api_service.db.models import (
     RecurringWorkflowScheduleType,
     RecurringWorkflowScopeType,
 )
+from api_service.api.routers import executions as executions_router_module
 from api_service.services import omnigent_execution_plan_service
 from api_service.services.omnigent_policies import (
     bootstrap_document,
@@ -5219,6 +5221,41 @@ async def test_omnigent_admission_snapshot_includes_dynamic_remediation_skill() 
     assert [entry.name for entry in selector.include] == expected[
         "resolvedSkillNames"
     ]
+
+
+async def test_exact_rerun_rejects_incomplete_dynamic_skill_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay mm:2eece4f3 at exact-rerun admission."""
+
+    replay_id = "omnigent-exact-rerun-incomplete-skill-snapshot"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    artifact_service = SimpleNamespace(
+        read=AsyncMock(
+            return_value=(
+                SimpleNamespace(artifact_id="art_old_skill_snapshot"),
+                json.dumps(manifest["resolvedSkillSet"]).encode("utf-8"),
+            )
+        )
+    )
+    monkeypatch.setattr(
+        executions_router_module,
+        "get_temporal_artifact_service",
+        lambda _session: artifact_service,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await executions_router_module._validate_exact_rerun_skill_snapshot(
+            session=SimpleNamespace(),
+            user=SimpleNamespace(id=UUID(int=0)),
+            parameters=manifest["initialParameters"],
+        )
+
+    assert exc_info.value.status_code == expected["statusCode"]
+    assert exc_info.value.detail["code"] == expected["code"]
+    assert exc_info.value.detail["missingSkills"] == expected["missingSkills"]
+    assert exc_info.value.detail["nextAction"] == expected["nextAction"]
 
 
 async def test_checkpointless_remediation_keeps_the_verified_repository_branch(

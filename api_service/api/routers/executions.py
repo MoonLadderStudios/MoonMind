@@ -10254,6 +10254,85 @@ async def _exact_rerun_parameters_from_snapshot(
     return parameters
 
 
+async def _validate_exact_rerun_skill_snapshot(
+    *,
+    session: AsyncSession,
+    user: User,
+    parameters: Mapping[str, Any],
+) -> None:
+    """Reject immutable reruns whose admitted Skill snapshot was incomplete."""
+
+    from api_service.services.omnigent_execution_plan_service import (
+        selected_skill_names,
+    )
+    from moonmind.schemas.agent_skill_models import ResolvedSkillSet
+
+    selected = selected_skill_names(parameters)
+    if not selected:
+        return
+
+    def conflict(
+        message: str,
+        *,
+        code: str = "exact_rerun_skill_snapshot_unavailable",
+        **details: Any,
+    ) -> HTTPException:
+        return HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": code,
+                "message": message,
+                "nextAction": "create_fresh_workflow",
+                **details,
+            },
+        )
+
+    snapshot_ref = str(parameters.get("resolvedSkillsetRef") or "").strip()
+    artifact_id = _artifact_id_from_ref(snapshot_ref)
+    if not artifact_id:
+        raise conflict(
+            "Exact rerun cannot verify the original immutable Skill snapshot. "
+            "Create a new workflow to explicitly re-resolve Skill authority."
+        )
+
+    try:
+        artifact_service = get_temporal_artifact_service(session)
+        _artifact, body = await artifact_service.read(
+            artifact_id=artifact_id,
+            principal=str(getattr(user, "id", "") or "system"),
+            allow_restricted_raw=True,
+        )
+        resolved = ResolvedSkillSet.model_validate_json(body)
+    except (PermissionError, TemporalArtifactAuthorizationError) as exc:
+        raise conflict(
+            "Exact rerun is not authorized to read the original immutable "
+            "Skill snapshot."
+        ) from exc
+    except (
+        TemporalArtifactNotFoundError,
+        TemporalArtifactStateError,
+        ValidationError,
+        ValueError,
+        TypeError,
+    ) as exc:
+        raise conflict(
+            "Exact rerun found an invalid original immutable Skill snapshot. "
+            "Create a new workflow to explicitly re-resolve Skill authority."
+        ) from exc
+
+    resolved_names = {entry.skill_name for entry in resolved.skills}
+    missing = [name for name in selected if name not in resolved_names]
+    if missing:
+        raise conflict(
+            "Exact rerun preserves the original immutable Skill snapshot, but "
+            "that snapshot does not contain every Skill declared by the "
+            "authored workflow. Create a new workflow to explicitly re-resolve "
+            "Skill authority.",
+            code="exact_rerun_skill_snapshot_incomplete",
+            missingSkills=missing,
+        )
+
+
 def _merge_workflow_preserving_artifact_instructions(
     artifact_task: Mapping[str, Any],
     parameter_task: Mapping[str, Any],
@@ -17799,6 +17878,12 @@ async def update_execution(
         )
         if exact_snapshot_parameters is not None:
             effective_parameters_patch = exact_snapshot_parameters
+            if isinstance(recorded_plan, Mapping):
+                await _validate_exact_rerun_skill_snapshot(
+                    session=session,
+                    user=user,
+                    parameters=exact_snapshot_parameters,
+                )
 
     try:
         update_result = await service.update_execution(
@@ -18249,7 +18334,13 @@ async def rerun_execution(
     # task dependency edges and recovery metadata from a prior execution.
     initial_params = service._full_rerun_parameters(canonical.parameters or {})
     reserved_workflow_id = f"mm:{_uuid4()}"
-    if not isinstance(initial_params.get("omnigentExecutionPlan"), Mapping):
+    if isinstance(initial_params.get("omnigentExecutionPlan"), Mapping):
+        await _validate_exact_rerun_skill_snapshot(
+            session=session,
+            user=user,
+            parameters=initial_params,
+        )
+    else:
         initial_params = await refresh_managed_bootstrap_snapshot(
             session,
             parameters=initial_params,
