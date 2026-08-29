@@ -50,20 +50,24 @@ from moonmind.omnigent.execution_profiles import (
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from moonmind.omnigent.mounted_tool_preflight import MountedToolPreflightError
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
+from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 from moonmind.omnigent.oauth_hosts import (
     HOST_CLEANUP_CLAIMED_ERROR_CODE,
     HOST_PROFILE_BUSY_ERROR_CODE,
-    OmnigentOAuthHostError,
     OmnigentOAuthHostRepository,
     validate_preflight_result,
 )
 from moonmind.omnigent.policies import compile_policy_snapshot
+from moonmind.omnigent.execution_adapters import DbExecutionPolicyAuthority
+from moonmind.omnigent.execution_ports import ProviderProfileAuthority
+from moonmind.omnigent.codex_execution_decisions import (
+    bind_candidate_workspace,
+    bind_cold_restore_workspace_spec,
+    classify_launch_failure_evidence,
+)
 from moonmind.omnigent.profile_bound_execution import (
     OmnigentProfileBoundExecutionCoordinator,
-    _bind_candidate_workspace,
-    _bind_cold_restore_workspace_spec,
     _compile_persisted_effective_launch,
-    _failure_evidence,
 )
 from moonmind.omnigent.remediation_workspace import RemediationWorkspaceError
 from moonmind.omnigent.workspace_intent import compile_workspace_intent
@@ -155,8 +159,8 @@ def persisted_policy_authority(monkeypatch):
         )
 
     monkeypatch.setattr(
-        OmnigentProfileBoundExecutionCoordinator,
-        "_resolve_policy_snapshot",
+        DbExecutionPolicyAuthority,
+        "resolve_runtime_snapshot",
         resolve,
     )
 
@@ -371,13 +375,13 @@ def test_failure_evidence_classifies_operator_action(
 ) -> None:
     exc = RuntimeError("failed")
     exc.code = code  # type: ignore[attr-defined]
-    assert _failure_evidence(exc) == (code, failure_class, remediation)
+    assert classify_launch_failure_evidence(exc) == (code, failure_class, remediation)
 
 
 def test_failure_evidence_falls_back_when_code_is_none() -> None:
     exc = RuntimeError("failed")
     exc.code = None  # type: ignore[attr-defined]
-    assert _failure_evidence(exc)[0] == "RuntimeError"
+    assert classify_launch_failure_evidence(exc)[0] == "RuntimeError"
 
 
 def test_repository_mutation_requirement_is_explicit_or_implied_by_publish() -> None:
@@ -439,7 +443,7 @@ async def test_remediation_admission_precedes_lease_and_host_mutation() -> None:
         artifact_gateway=object(),
         workspace_owner=workspace_owner,
     )
-    coordinator._resolve_profile = AsyncMock(  # type: ignore[method-assign]
+    coordinator._profile_authority.resolve = AsyncMock(  # type: ignore[method-assign]
         return_value=_launch_ready_profile()
     )
     step_id = "workflow-1:run-1:remediate:execution:2"
@@ -3092,8 +3096,8 @@ async def test_claude_live_recovery_reuses_shared_checkpoint_with_exact_harness(
         execution_runner=runner,
         artifact_gateway=object(),
     )
-    coordinator._resolve_profile = AsyncMock(  # type: ignore[method-assign]
-        return_value=SimpleNamespace(runtime_id="claude_code")
+    coordinator._profile_authority.resolve = AsyncMock(  # type: ignore[method-assign]
+        return_value=_launch_ready_profile(runtimeId="claude_code")
     )
     request = AgentExecutionRequest(
         agentKind="external",
@@ -3159,7 +3163,7 @@ def test_candidate_workspace_authority_binds_exact_durable_restore_refs() -> Non
         }
     )
 
-    bound = _bind_candidate_workspace(request, candidate)
+    bound = bind_candidate_workspace(request, candidate)
 
     assert bound.parameters["candidateWorkspace"] == candidate.model_dump(
         by_alias=True, mode="json"
@@ -3314,7 +3318,7 @@ async def test_cold_restore_intent_materializes_clean_pinned_workspace(tmp_path)
         workspaceSpec={
             "workspaceLocator": {"kind": "sandbox", "workspaceId": workspace_id},
             "repository": str(source),
-            **_bind_cold_restore_workspace_spec(
+            **bind_cold_restore_workspace_spec(
                 {}, restore_material=material, candidate_workspace=candidate
             ),
         },
@@ -3740,21 +3744,8 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
         execution_runner=execute,
         artifact_gateway=object(),
     )
-    coordinator._resolve_profile = AsyncMock(  # type: ignore[method-assign]
-        return_value=SimpleNamespace(
-            enabled=True,
-            auth_state=ProviderProfileAuthState.CONNECTED,
-            disabled_reason=None,
-            max_parallel_runs=1,
-            cooldown_after_429_seconds=900,
-            runtime_id="codex_cli",
-            credential_source=ProviderCredentialSource.OAUTH_VOLUME,
-            runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
-            volume_ref="codex_auth_volume",
-            volume_mount_path="/home/app/.codex",
-            secret_refs={},
-            command_behavior={},
-        )
+    coordinator._profile_authority.resolve = AsyncMock(  # type: ignore[method-assign]
+        return_value=_launch_ready_profile()
     )
     result = await coordinator.execute(
         AgentExecutionRequest(
@@ -4013,24 +4004,11 @@ async def _drive_authority_chain_coordinator(
             validation={"valid": True, "diagnostics": []},
         )
 
-    coordinator._resolve_policy_snapshot = AsyncMock(  # type: ignore[method-assign]
+    coordinator._policy_authority.resolve_runtime_snapshot = AsyncMock(  # type: ignore[method-assign]
         side_effect=_resolve_policy_snapshot
     )
-    coordinator._resolve_profile = AsyncMock(  # type: ignore[method-assign]
-        return_value=SimpleNamespace(
-            enabled=True,
-            auth_state=ProviderProfileAuthState.CONNECTED,
-            disabled_reason=None,
-            max_parallel_runs=1,
-            cooldown_after_429_seconds=900,
-            runtime_id="codex_cli",
-            credential_source=ProviderCredentialSource.OAUTH_VOLUME,
-            runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
-            volume_ref="codex_auth_volume",
-            volume_mount_path="/home/app/.codex",
-            secret_refs={},
-            command_behavior={},
-        )
+    coordinator._profile_authority.resolve = AsyncMock(  # type: ignore[method-assign]
+        return_value=_launch_ready_profile()
     )
     coordinator_result = await coordinator.execute(
         AgentExecutionRequest(
@@ -4554,21 +4532,8 @@ async def test_coordinator_records_runner_preflight_block_before_execution() -> 
         execution_runner=execute,
         artifact_gateway=object(),
     )
-    coordinator._resolve_profile = AsyncMock(  # type: ignore[method-assign]
-        return_value=SimpleNamespace(
-            enabled=True,
-            auth_state=ProviderProfileAuthState.CONNECTED,
-            disabled_reason=None,
-            max_parallel_runs=1,
-            cooldown_after_429_seconds=900,
-            runtime_id="codex_cli",
-            credential_source=ProviderCredentialSource.OAUTH_VOLUME,
-            runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
-            volume_ref="codex_auth_volume",
-            volume_mount_path="/home/app/.codex",
-            secret_refs={},
-            command_behavior={},
-        )
+    coordinator._profile_authority.resolve = AsyncMock(  # type: ignore[method-assign]
+        return_value=_launch_ready_profile()
     )
     coordinator._github_token = AsyncMock(return_value="resolved-token")  # type: ignore[method-assign]
 
@@ -4623,21 +4588,8 @@ async def test_coordinator_records_runner_preflight_block_before_execution() -> 
     assert transitions[-1] == ("terminal", "failed")
 
 
-def _workspace_intent_profile():
-    return SimpleNamespace(
-        enabled=True,
-        auth_state=ProviderProfileAuthState.CONNECTED,
-        disabled_reason=None,
-        max_parallel_runs=1,
-        cooldown_after_429_seconds=900,
-        runtime_id="codex_cli",
-        credential_source=ProviderCredentialSource.OAUTH_VOLUME,
-        runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
-        volume_ref="codex_auth_volume",
-        volume_mount_path="/home/app/.codex",
-        secret_refs={},
-        command_behavior={},
-    )
+def _workspace_intent_profile() -> ProviderProfileAuthority:
+    return _launch_ready_profile()
 
 
 @pytest.mark.asyncio
@@ -4734,7 +4686,7 @@ async def test_coordinator_compiles_durable_workspace_intent_before_host_mutatio
         execution_runner=execute,
         artifact_gateway=object(),
     )
-    coordinator._resolve_profile = AsyncMock(  # type: ignore[method-assign]
+    coordinator._profile_authority.resolve = AsyncMock(  # type: ignore[method-assign]
         return_value=_workspace_intent_profile()
     )
     coordinator._github_token = AsyncMock(return_value="resolved-token")  # type: ignore[method-assign]
@@ -4870,7 +4822,7 @@ async def test_coordinator_fails_closed_on_smuggled_runtime_shortcut() -> None:
         execution_runner=AsyncMock(),
         artifact_gateway=object(),
     )
-    coordinator._resolve_profile = AsyncMock(  # type: ignore[method-assign]
+    coordinator._profile_authority.resolve = AsyncMock(  # type: ignore[method-assign]
         return_value=_workspace_intent_profile()
     )
     coordinator._github_token = AsyncMock(return_value=None)  # type: ignore[method-assign]
@@ -4904,20 +4856,16 @@ async def test_coordinator_fails_closed_on_smuggled_runtime_shortcut() -> None:
     assert prepared is False
 
 
-def _launch_ready_profile():
-    return SimpleNamespace(
-        enabled=True,
-        auth_state=ProviderProfileAuthState.CONNECTED,
-        disabled_reason=None,
-        max_parallel_runs=1,
-        cooldown_after_429_seconds=900,
-        runtime_id="codex_cli",
-        credential_source=ProviderCredentialSource.OAUTH_VOLUME,
-        runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
-        volume_ref="codex_auth_volume",
-        volume_mount_path="/home/app/.codex",
-        secret_refs={},
-        command_behavior={},
+def _launch_ready_profile(**overrides) -> ProviderProfileAuthority:
+    return ProviderProfileAuthority.model_validate(
+        {
+            "profileId": "profile-1",
+            "runtimeId": "codex_cli",
+            "credentialGeneration": 1,
+            "cooldownAfter429Seconds": 900,
+            "launchReady": True,
+            **overrides,
+        }
     )
 
 
@@ -5225,19 +5173,17 @@ async def _run_coordinator_failure_case(
             validation={"valid": True, "diagnostics": []},
         )
 
-    coordinator._resolve_policy_snapshot = AsyncMock(  # type: ignore[method-assign]
+    coordinator._policy_authority.resolve_runtime_snapshot = AsyncMock(  # type: ignore[method-assign]
         side_effect=resolve_policy_snapshot
     )
     if fail_at in {"profile_missing", "profile_validation"}:
-        coordinator._resolve_profile = AsyncMock(side_effect=error)  # type: ignore[method-assign]
+        coordinator._profile_authority.resolve = AsyncMock(side_effect=error)  # type: ignore[method-assign]
     elif fail_at == "profile_readiness":
-        coordinator._resolve_profile = AsyncMock(  # type: ignore[method-assign]
-            return_value=SimpleNamespace(
-                **{**vars(_launch_ready_profile()), "enabled": False}
-            )
+        coordinator._profile_authority.resolve = AsyncMock(  # type: ignore[method-assign]
+            return_value=_launch_ready_profile(launchReady=False)
         )
     else:
-        coordinator._resolve_profile = AsyncMock(  # type: ignore[method-assign]
+        coordinator._profile_authority.resolve = AsyncMock(  # type: ignore[method-assign]
             return_value=_launch_ready_profile()
         )
 

@@ -45,6 +45,16 @@ from api_service.api.execution_principal import (
     resolve_execution_principal,
 )
 from api_service.api.routers.executions import _get_service as _get_execution_service
+from api_service.api.routers.omnigent_bridge_composition import (
+    OmnigentBridgeModeUnsupportedError,
+    build_bridge_session_proxy,
+    build_bridge_session_store,
+    build_embedded_host_facade,
+    build_host_auth_store,
+    evaluate_embedded_host_auth_readiness,
+    resolve_active_host_auth_profile,
+    verify_embedded_host_request,
+)
 from api_service.api.routers.retrieval_gateway import get_capability_registry
 from api_service.auth_providers import get_current_user
 from api_service.db.base import async_session_maker, get_async_session
@@ -74,7 +84,6 @@ from moonmind.omnigent.bridge_embedded import (
     EmbeddedHostRegisterRequest,
     EmbeddedHostSessionEventRequest,
     OmnigentEmbeddedHostProtocolFacade,
-    verify_embedded_host_auth,
 )
 from moonmind.omnigent.bridge_proxy import (
     BridgePrincipalBinding,
@@ -103,7 +112,6 @@ from moonmind.omnigent.host_auth_profile import (
     HostAuthProfileError,
     HostAuthCredentialProfile,
     host_auth_readiness,
-    load_host_auth_profile,
     resolve_host_auth_credentials,
 )
 from moonmind.omnigent.host_auth_store import HostAuthProfileStore
@@ -129,11 +137,9 @@ from moonmind.omnigent.settings import (
     OMNIGENT_DISABLED_MESSAGE,
     build_omnigent_gate,
     resolved_api_token,
-    resolved_default_agent_name,
     resolved_host_runner_token,
     resolved_native_ui_serving_enabled,
     resolved_native_ui_version,
-    resolved_proxy_forward_headers,
     resolved_server_url,
 )
 from moonmind.omnigent.native_outbound_scan import (
@@ -179,7 +185,6 @@ from moonmind.workflows.temporal.artifacts import (
 )
 
 logger = logging.getLogger(__name__)
-from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 
 # The bridge is exposed at the operator-declared mount path (OB-§6, §21.1). The
 # route table and enablement are read from the operator-declared declarative
@@ -199,27 +204,17 @@ def get_bridge_config() -> OmnigentBridgeConfig:
 
 
 def _host_auth_store() -> HostAuthProfileStore:
-    return HostAuthProfileStore(async_session_maker)
+    return build_host_auth_store()
 
 
 async def _active_host_auth_profile() -> HostAuthCredentialProfile:
-    managed = await _host_auth_store().get_active()
-    return managed or load_host_auth_profile()
+    return await resolve_active_host_auth_profile()
 
 
 async def embedded_host_auth_preflight() -> dict[str, Any]:
     """Evaluate the selected embedded contract at the enablement boundary."""
 
-    if (
-        not _BRIDGE_CONFIG.enabled
-        or _BRIDGE_CONFIG.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED
-    ):
-        return {"ready": True, "code": "host_auth_not_selected"}
-    try:
-        profile = await _active_host_auth_profile()
-    except HostAuthProfileError as exc:
-        return {"ready": False, "code": exc.code}
-    return await host_auth_readiness(profile=profile)
+    return await evaluate_embedded_host_auth_readiness(_BRIDGE_CONFIG)
 
 
 router = APIRouter(tags=["Omnigent Bridge"])
@@ -701,45 +696,34 @@ def _get_bridge_proxy(
 ) -> OmnigentBridgeSessionProxy | None:
     """Build the proxy-mode bridge over the configured stock Omnigent Server."""
 
-    if _config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
-        return None
-    if _config.host_protocol_mode != HOST_PROTOCOL_MODE_PROXY:
+    if _config.host_protocol_mode == HOST_PROTOCOL_MODE_PROXY:
+        gate = build_omnigent_gate()
+        if not gate.enabled:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "omnigent_disabled",
+                    "message": (
+                        f"{OMNIGENT_DISABLED_MESSAGE} "
+                        f"(missing: {', '.join(gate.missing)})"
+                    ),
+                },
+            )
+    try:
+        return build_bridge_session_proxy(
+            config=_config, forward_headers=request.headers
+        )
+    except OmnigentBridgeModeUnsupportedError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail={
-                "code": "omnigent_bridge_mode_unsupported",
-                "message": "Unsupported Omnigent bridge host protocol mode.",
-            },
-        )
-    gate = build_omnigent_gate()
-    if not gate.enabled:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "code": "omnigent_disabled",
-                "message": (
-                    f"{OMNIGENT_DISABLED_MESSAGE} (missing: {', '.join(gate.missing)})"
-                ),
-            },
-        )
-    client = OmnigentHttpClient(
-        base_url=resolved_server_url(),
-        api_token=resolved_api_token(),
-        forward_headers=request.headers,
-        upstream_header_allowlist=resolved_proxy_forward_headers(),
-    )
-    return OmnigentBridgeSessionProxy(
-        run_store=OmnigentBridgeSessionStore(async_session_maker),
-        client=client,
-        config=_config,
-        default_agent_name=resolved_default_agent_name(),
-    )
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
 
 
 def _get_bridge_store(
     _config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
 ) -> OmnigentBridgeSessionStore:
-    return OmnigentBridgeSessionStore(async_session_maker)
+    return build_bridge_session_store()
 
 
 async def _require_mode_transition_safe(
@@ -778,10 +762,7 @@ async def _require_mode_transition_safe(
 def _get_embedded_host_facade(
     _config: OmnigentBridgeConfig = Depends(_require_embedded_mode),
 ) -> OmnigentEmbeddedHostProtocolFacade:
-    return OmnigentEmbeddedHostProtocolFacade(
-        run_store=OmnigentBridgeSessionStore(async_session_maker),
-        config=_config,
-    )
+    return build_embedded_host_facade(_config)
 
 
 async def _get_create_embedded_facade(
@@ -790,10 +771,7 @@ async def _get_create_embedded_facade(
     if _config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED:
         return None
     await _require_embedded_mode(_config)
-    return OmnigentEmbeddedHostProtocolFacade(
-        run_store=OmnigentBridgeSessionStore(async_session_maker),
-        config=_config,
-    )
+    return build_embedded_host_facade(_config)
 
 
 def _http_error_from_bridge(exc: OmnigentBridgeError) -> HTTPException:
@@ -823,14 +801,8 @@ async def _embedded_auth_context(
     config: OmnigentBridgeConfig,
 ):
     try:
-        resolved = await resolve_host_auth_credentials(
-            profile=await _active_host_auth_profile()
-        )
-        return verify_embedded_host_auth(
-            headers=request.headers,
-            config=config,
-            configured_credentials=resolved.tokens_by_generation,
-            credential_profile_id=resolved.profile.profile_id,
+        return await verify_embedded_host_request(
+            headers=request.headers, config=config
         )
     except HostAuthProfileError as exc:
         raise HTTPException(
@@ -2729,14 +2701,8 @@ async def embedded_omnigent_host_tunnel(websocket: WebSocket, host_id: str) -> N
         except HTTPException:
             await websocket.close(code=4403)
             return
-        resolved = await resolve_host_auth_credentials(
-            profile=await _active_host_auth_profile()
-        )
-        auth = verify_embedded_host_auth(
-            headers=websocket.headers,
-            config=config,
-            configured_credentials=resolved.tokens_by_generation,
-            credential_profile_id=resolved.profile.profile_id,
+        auth = await verify_embedded_host_request(
+            headers=websocket.headers, config=config
         )
         if host_id != auth.runner_id:
             await websocket.close(code=4403)

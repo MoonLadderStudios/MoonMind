@@ -23,9 +23,9 @@ from moonmind.omnigent.mounted_tool_preflight import (
     MountedToolPreflightError,
     preflight_mounted_tools,
 )
+from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 from moonmind.omnigent.oauth_hosts import (
     HostPreflightFailure,
-    OmnigentOAuthHostError,
     deterministic_host_container_name,
     validate_preflight_result,
 )

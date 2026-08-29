@@ -1,4 +1,13 @@
-"""Concrete, harness-neutral Omnigent host realization boundary."""
+"""Harness-neutral Omnigent host realization use case.
+
+Source issue: MoonLadderStudios/MoonMind#3711.
+
+This is application coordination: it owns the ordering, fencing, and
+cleanup-authority rules for realizing an exact host and depends only on
+the narrow ports in :mod:`moonmind.omnigent.host_ports`. Docker, Compose,
+filesystem, and provider transport implementations are injected by the
+composition root (:mod:`moonmind.omnigent.production`).
+"""
 
 from __future__ import annotations
 
@@ -14,21 +23,19 @@ from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformFailure,
 )
 from moonmind.omnigent.harness_platform.host_classes import HostClass, LaunchPolicy
-from moonmind.omnigent.host_services.attestation import DockerOmnigentHostAttestor
-from moonmind.omnigent.host_services.cleanup import DockerOmnigentHostCleanupService
-from moonmind.omnigent.host_services.egress import OmnigentEgressService
-from moonmind.omnigent.host_services.github_credentials import (
-    OmnigentGithubCredentialService,
-)
-from moonmind.omnigent.host_services.launcher import (
-    DockerOmnigentHostLauncher,
+from moonmind.omnigent.host_ports import (
     HostLaunchSpec,
+    OmnigentEgressAttestationPort,
+    OmnigentGithubCredentialPort,
+    OmnigentHostAttestationPort,
+    OmnigentHostCleanupPort,
+    OmnigentHostLauncherPort,
+    OmnigentHostRegistrationPort,
+    OmnigentMountedToolPort,
+    OmnigentSkillDeliveryPort,
+    OmnigentWorkspaceMaterializationPort,
     host_correlation_identity,
 )
-from moonmind.omnigent.host_services.mounted_tools import OmnigentMountedToolService
-from moonmind.omnigent.host_services.registration import OmnigentHostRegistrationService
-from moonmind.omnigent.host_services.skills import OmnigentSkillDeliveryService
-from moonmind.omnigent.host_services.workspace import OmnigentWorkspaceMaterializer
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
 
@@ -62,15 +69,15 @@ class GenericOmnigentHostRuntime:
     def __init__(
         self,
         *,
-        launcher: DockerOmnigentHostLauncher,
-        workspace_service: OmnigentWorkspaceMaterializer,
-        skill_service: OmnigentSkillDeliveryService,
-        tool_service: OmnigentMountedToolService,
-        github_credential_service: OmnigentGithubCredentialService,
-        egress_service: OmnigentEgressService,
-        registration_waiter: OmnigentHostRegistrationService,
-        host_attestor: DockerOmnigentHostAttestor,
-        cleanup_service: DockerOmnigentHostCleanupService,
+        launcher: OmnigentHostLauncherPort,
+        workspace_service: OmnigentWorkspaceMaterializationPort,
+        skill_service: OmnigentSkillDeliveryPort,
+        tool_service: OmnigentMountedToolPort,
+        github_credential_service: OmnigentGithubCredentialPort,
+        egress_service: OmnigentEgressAttestationPort,
+        registration_waiter: OmnigentHostRegistrationPort,
+        host_attestor: OmnigentHostAttestationPort,
+        cleanup_service: OmnigentHostCleanupPort,
     ) -> None:
         dependencies = (
             launcher,

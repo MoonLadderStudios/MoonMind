@@ -61,10 +61,8 @@ from moonmind.omnigent.host_services.github_credentials import (
     OmnigentGithubCredentialService,
     github_repository_from_request,
 )
-from moonmind.omnigent.host_services.launcher import (
-    DockerOmnigentHostLauncher,
-    HostLaunchSpec,
-)
+from moonmind.omnigent.host_ports import HostLaunchSpec
+from moonmind.omnigent.host_services.launcher import DockerOmnigentHostLauncher
 from moonmind.omnigent.host_services.mounted_tools import (
     OmnigentMountedToolService,
     deployment_mounted_tool_names,

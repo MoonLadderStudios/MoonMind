@@ -8,6 +8,7 @@
 
 ## Related documents
 
+- [`docs/Omnigent/OmnigentModuleArchitecture.md`](./OmnigentModuleArchitecture.md)
 - [`docs/Omnigent/OmnigentAdapter.md`](./OmnigentAdapter.md)
 - [`docs/Omnigent/OmnigentBridge.md`](./OmnigentBridge.md)
 - [`docs/Omnigent/AgentProfiles.md`](./AgentProfiles.md)
@@ -1703,33 +1704,26 @@ The design is realized when:
 
 ## 33. Enforced module dependency boundaries
 
-The settled control plane uses the following one-way ownership boundaries:
-
-| Boundary | Owned modules | May depend on | Must not depend on |
-| --- | --- | --- | --- |
-| Pure reconciliation and authority values | `omnigent/reconciler`, `control_plane/records.py`, `control_plane/identities.py`, immutable harness-platform value modules | Python and validation libraries, other pure value modules | API, SQL, Temporal, HTTP, process, container, filesystem, or environment adapters |
-| Application coordination | `control_plane/turn_commands.py`, `realizers/base.py`, `realizers/generic_host.py` | Pure contracts and injected repository/runtime capabilities | FastAPI, SQLAlchemy, Temporal clients, HTTP clients, Docker clients, or provider-specific harness selection |
-| Persistence | `control_plane/repositories.py`, `harness_platform/stores.py` | Pure records and database models | Router or provider-transport policy |
-| Provider transport and host lifecycle | bridge/execute adapters, `host_runtime.py`, `host_services/`, `provider_leases.py`, `credential_materializers.py` | Application requests, Provider Profile and host interfaces | UI facade policy or plan recompilation |
-| Composition | `production.py`, catalog-readiness and worker activity adapters | Every concrete capability needed to assemble a supported realizer | Harness-name selection or alternate authority semantics |
-| UI facade | API routers and WebSocket adapters | Application services and projections | Direct persistence mutation, provider identity selection, host lifecycle, or credential materialization |
-| Evidence and publication | conformance, acceptance, timeline, and publication adapters | Immutable plan/binding/session refs and observed artifacts | Replacement plan, session, or lifecycle authority |
+The implemented package map, the allowed dependency directions, the narrow port
+inventory, and the bounded boundary exemptions are owned by
+[`docs/Omnigent/OmnigentModuleArchitecture.md`](./OmnigentModuleArchitecture.md).
+That document is canonical declarative and is enforced by
+`tests/unit/omnigent/test_module_architecture.py`; the summary below states only
+the invariants this design depends on.
 
 Dependency direction is from outer adapters toward application coordination and
-pure contracts. Pure modules never import infrastructure. Generic application
-coordination receives infrastructure through the composition boundary and does
-not branch on `codex-native`, `opencode-native`, `pi-native`, Provider Profile
-ids, or model vendors. Deterministic session and turn identities have one owner,
-`control_plane/identities.py`; callers import those functions rather than
-creating alternate authority vocabulary.
+pure contracts. Pure modules never import infrastructure, settings, or the
+environment. Generic application coordination receives infrastructure through
+narrow ports supplied at the composition boundary and does not branch on
+`codex-native`, `opencode-native`, `pi-native`, Provider Profile ids, or model
+vendors; approving a harness is registration data in
+`harness_platform/harness_registry.py`. Deterministic session and turn
+identities have one owner, `control_plane/identities.py`.
 
-The unit architecture contract parses imports and identity definitions. It
-fails when framework or infrastructure imports leak into declared pure or
-application modules, when generic coordination gains a harness-name branch, or
-when canonical identity functions acquire another definition. The existing
-Codex realizer is an explicit replay-visible legacy adapter and remains outside
-the generic-application rule until its evidence-qualified retirement gate
-allows removal.
+The existing Codex realizer is an explicit replay-visible legacy adapter. It and
+every other retained shim are listed with their #3712 retirement owner in
+`moonmind/omnigent/legacy_retirement.py`, alongside the bounded architecture
+exemptions that are still permitted.
 
 ## 34. Document authority and future promotion
 
@@ -1737,4 +1731,9 @@ This design owns the target generic harness-platform model.
 
 The current Codex-specific documents remain authoritative for the existing Codex specialization and its support state. This design extends them. It does not silently supersede their current guarantees.
 
-When the generic platform is implemented, its settled architecture must be promoted into the appropriate Omnigent module architecture and contract documents. This design is then marked Implemented and superseded or removed according to the documentation architecture standard.
+The settled module architecture has been promoted out of this design into
+[`docs/Omnigent/OmnigentModuleArchitecture.md`](./OmnigentModuleArchitecture.md),
+which is canonical declarative and machine-enforced. The remaining sections here
+stay proposed until their target semantics are implemented, at which point they
+are promoted the same way and this design is superseded or removed according to
+the documentation architecture standard.

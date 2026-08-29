@@ -215,8 +215,12 @@ async def test_embedded_preflight_gates_failed_host_auth(monkeypatch) -> None:
             }},
         }),
     )
-    monkeypatch.setitem(
-        embedded_host_auth_preflight.__globals__, "_active_host_auth_profile",
+    composition = importlib.import_module(
+        "api_service.api.routers.omnigent_bridge_composition"
+    )
+    monkeypatch.setattr(
+        composition,
+        "resolve_active_host_auth_profile",
         AsyncMock(
             return_value=HostAuthCredentialProfile(
                 "managed", "env://ABSENT_HOST_TOKEN", 1

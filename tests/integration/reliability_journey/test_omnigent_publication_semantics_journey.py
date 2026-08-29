@@ -26,15 +26,11 @@ from uuid import UUID
 
 import pytest
 
-from api_service.db.models import (
-    ProviderCredentialSource,
-    ProviderProfileAuthState,
-    RuntimeMaterializationMode,
-)
 from moonmind.config.settings import settings
 from moonmind.omnigent.checkpoints import OmnigentCheckpointIdentity
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.omnigent.policies import compile_policy_snapshot
+from moonmind.omnigent.execution_ports import ProviderProfileAuthority
 from moonmind.omnigent.profile_bound_execution import (
     OmnigentProfileBoundExecutionCoordinator,
 )
@@ -629,20 +625,15 @@ async def test_no_publish_preserves_distinct_branch_saved_work_contract(
 # --- Journey 4: coordinator materialization -> cleanup for both host modes --
 
 
-def _profile() -> SimpleNamespace:
-    return SimpleNamespace(
-        enabled=True,
-        auth_state=ProviderProfileAuthState.CONNECTED,
-        disabled_reason=None,
-        max_parallel_runs=1,
-        cooldown_after_429_seconds=900,
-        runtime_id="codex_cli",
-        credential_source=ProviderCredentialSource.OAUTH_VOLUME,
-        runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
-        volume_ref="codex_auth_volume",
-        volume_mount_path="/home/app/.codex",
-        secret_refs={},
-        command_behavior={},
+def _profile() -> ProviderProfileAuthority:
+    return ProviderProfileAuthority.model_validate(
+        {
+            "profileId": "codex",
+            "runtimeId": "codex_cli",
+            "credentialGeneration": 1,
+            "cooldownAfter429Seconds": 900,
+            "launchReady": True,
+        }
     )
 
 
@@ -907,8 +898,10 @@ async def _drive_coordinator_materialization_to_cleanup(
         execution_runner=execute,
         artifact_gateway=object(),
     )
-    coordinator._resolve_profile = AsyncMock(return_value=_profile())
-    coordinator._resolve_policy_snapshot = _resolve_policy.__get__(coordinator)
+    coordinator._profile_authority.resolve = AsyncMock(return_value=_profile())
+    coordinator._policy_authority.resolve_runtime_snapshot = _resolve_policy.__get__(
+        coordinator
+    )
 
     workflow_id = f"mm:wf-3561-coord-{'ondemand' if on_demand else 'static'}"
     step_execution_id = f"{workflow_id}:run:implement:execution:1"

@@ -9,9 +9,9 @@ from moonmind.omnigent.oauth_host_runtime import (
     OmnigentEgressEvidenceRequestIdentity,
     OmnigentOAuthHostRuntime,
 )
+from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 from moonmind.omnigent.oauth_hosts import (
     CLEANUP_CLAIMABLE_HOST_STATES,
-    OmnigentOAuthHostError,
     OmnigentOAuthHostRepository,
 )
 from moonmind.provider_profiles.lease_client import (

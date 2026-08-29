@@ -12,6 +12,7 @@ harness-neutral – they handle Pi via data, not branches.
 
 import os
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -321,3 +322,92 @@ def test_pi_and_opencode_share_same_generic_session_driver():
     # No harness-specific branching in generic driver
     assert 'harness == "opencode' not in lower
     assert 'harness == "qwen' not in lower
+
+
+def test_registering_a_synthetic_harness_needs_no_lifecycle_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Approving a harness is registration data (MoonLadderStudios/MoonMind#3711).
+
+    Registering a synthetic harness must make the canonical session lifecycle
+    resolve its execution target, aliases, Host Class, and materializer with no
+    edit to the activities, the realizer registry, or the generic host runtime.
+    """
+
+    from moonmind.omnigent.harness_platform import harness_registry
+
+    monkeypatch.setattr(
+        harness_registry, "_REGISTRATIONS", dict(harness_registry._REGISTRATIONS)
+    )
+    monkeypatch.setattr(
+        harness_registry, "_ALIASES", dict(harness_registry._ALIASES)
+    )
+
+    before = harness_registry.approved_harness_ids()
+    assert harness_registry.find_harness_registration("qwen-native") is None
+
+    harness_registry.register_harness_product(
+        harness_registry.HarnessProductRegistration.model_validate(
+            {
+                "harnessId": "qwen-native",
+                "aliases": ["qwen"],
+                "executionTargetRef": "omnigent-qwen@1",
+                "hostClassRef": "omnigent-qwen@1",
+                "materializerRef": "omnigent-provider-config@1",
+                "authModel": "omnigent-provider-config",
+            }
+        )
+    )
+
+    assert harness_registry.canonical_harness_id("qwen") == "qwen-native"
+    assert (
+        harness_registry.canonical_harness_id({"id": "qwen-native"}) == "qwen-native"
+    )
+    assert (
+        harness_registry.product_execution_target_ref("qwen-native")
+        == "omnigent-qwen@1"
+    )
+    assert set(harness_registry.approved_harness_ids()) == set(before) | {
+        "qwen-native"
+    }
+
+    # The canonical session lifecycle resolves the new harness through the same
+    # registry call it uses for every other approved harness.
+    lifecycle = Path(
+        "moonmind/workflows/temporal/activities/omnigent_session_activities.py"
+    ).read_text(encoding="utf-8")
+    assert "find_harness_registration" in lifecycle
+    assert "canonical_harness_id" in lifecycle
+    for name in (*before, "qwen-native", "qwen"):
+        assert f'"{name}"' not in lifecycle
+
+
+def test_registering_a_conflicting_harness_alias_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.omnigent.harness_platform import harness_registry
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+
+    monkeypatch.setattr(
+        harness_registry, "_REGISTRATIONS", dict(harness_registry._REGISTRATIONS)
+    )
+    monkeypatch.setattr(
+        harness_registry, "_ALIASES", dict(harness_registry._ALIASES)
+    )
+
+    with pytest.raises(HarnessPlatformError):
+        harness_registry.register_harness_product(
+            harness_registry.HarnessProductRegistration.model_validate(
+                {
+                    "harnessId": "shadow-native",
+                    "aliases": ["codex"],
+                    "executionTargetRef": "omnigent-shadow@1",
+                    "hostClassRef": "omnigent-shadow@1",
+                    "materializerRef": "omnigent-provider-config@1",
+                    "authModel": "omnigent-provider-config",
+                }
+            )
+        )
+
+    with pytest.raises(HarnessPlatformError):
+        harness_registry.harness_registration("unregistered-native")

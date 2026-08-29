@@ -11,7 +11,7 @@ from moonmind.omnigent.execution_profiles import (
     selection_from_request,
     validate_effective_launch_snapshot,
 )
-from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostError
+from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.omnigent.stock_agents import (
     CLAUDE_STOCK_AGENT_NAME,
