@@ -59,6 +59,10 @@ from moonmind.services.skill_resolution import (
     AgentSkillResolver,
     SkillResolutionContext,
 )
+from moonmind.workflows.temporal.remediation_loop import (
+    ToolDescriptor,
+    tool_descriptor_selected_skill,
+)
 from pr_resolver_core import IMPLEMENTATION_CONTRACT
 
 _HARNESS_PRODUCT_CONFIG: dict[str, dict[str, str]] = {
@@ -408,6 +412,19 @@ def _selected_skill_names(initial_parameters: Mapping[str, Any]) -> list[str]:
         if candidate and candidate != "auto" and candidate not in names:
             names.append(candidate)
 
+    def add_remediation_loop_skills(step: Mapping[str, Any]) -> None:
+        """Collect Skills from the typed dynamic remediation contract."""
+
+        annotations = step.get("annotations")
+        if not isinstance(annotations, Mapping):
+            return
+        loop = annotations.get("remediationLoop")
+        if not isinstance(loop, Mapping) or loop.get("kind") != "remediation_loop":
+            return
+        for field_name in ("remediationTool", "verificationTool"):
+            descriptor = ToolDescriptor.model_validate(loop.get(field_name))
+            add(tool_descriptor_selected_skill(descriptor))
+
     selectors = workflow_mapping.get("skills")
     if isinstance(selectors, Mapping):
         for entry in selectors.get("include") or []:
@@ -430,6 +447,7 @@ def _selected_skill_names(initial_parameters: Mapping[str, Any]) -> list[str]:
             and str(step_tool.get("type") or "").lower() == "skill"
         ):
             add(step_tool)
+        add_remediation_loop_skills(step)
     return names
 
 
