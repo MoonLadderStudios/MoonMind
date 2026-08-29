@@ -1,0 +1,7 @@
+{
+  "invariant": "every agent Skill reachable from the admitted workflow is frozen into the immutable run snapshot before execution",
+  "resolvedSkillNames": [
+    "moonspec-verify",
+    "remediate-issue"
+  ]
+}

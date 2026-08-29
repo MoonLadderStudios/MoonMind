@@ -58,6 +58,17 @@ class ToolDescriptor(_Contract):
         return value
 
 
+def tool_descriptor_selected_skill(tool: ToolDescriptor) -> str:
+    """Return the Skill identity materialized by one typed tool descriptor."""
+
+    raw = (
+        tool.inputs["selectedSkill"]
+        if "selectedSkill" in tool.inputs
+        else tool.name
+    )
+    return str(raw or "").strip()
+
+
 class RemediationLoopBudgets(_Contract):
     hard_max_attempts: int = Field(alias="hardMaxAttempts", ge=1)
     max_consecutive_semantic_no_progress: int = Field(
@@ -516,9 +527,13 @@ def materialize_attempt_nodes(
         }
     )
     compiled_remediation_inputs.setdefault(
-        "selectedSkill", spec.remediation_tool.name
+        "selectedSkill",
+        tool_descriptor_selected_skill(spec.remediation_tool),
     )
-    verifier_inputs.setdefault("selectedSkill", spec.verification_tool.name)
+    verifier_inputs.setdefault(
+        "selectedSkill",
+        tool_descriptor_selected_skill(spec.verification_tool),
+    )
     compiled_remediation_inputs.setdefault("repositoryOperation", "write")
     verifier_inputs.setdefault("repositoryOperation", "read")
     compiled_remediation_inputs["runtime"] = dict(runtime_block)

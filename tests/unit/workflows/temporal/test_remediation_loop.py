@@ -11,6 +11,7 @@ from moonmind.workflows.temporal.remediation_loop import (
     capture_remediation_candidate,
     decide_remediation_continuation,
     materialize_attempt_nodes,
+    tool_descriptor_selected_skill,
     project_remediation_loop,
     record_semantic_progress,
     record_verification_evidence,
@@ -77,6 +78,27 @@ def _state(*, attempts: int = 0, evidence_retries: int = 0) -> RemediationLoopSt
             attempts=attempts, evidenceRetries=evidence_retries
         ),
     )
+
+
+def test_tool_descriptor_selected_skill_matches_materialization_contract() -> None:
+    inherited = _spec().remediation_tool
+    explicit = inherited.model_copy(
+        update={
+            "name": "remediate-issue",
+            "inputs": {
+                "instructions": "Fix the remaining verified gaps.",
+                "selectedSkill": "bounded-remediator",
+            },
+        }
+    )
+    named = explicit.model_copy(
+        update={
+            "inputs": {"instructions": "Fix the remaining verified gaps."}
+        }
+    )
+
+    assert tool_descriptor_selected_skill(explicit) == "bounded-remediator"
+    assert tool_descriptor_selected_skill(named) == "remediate-issue"
 
 
 @pytest.mark.parametrize("maximum", [1, 2, 6])
