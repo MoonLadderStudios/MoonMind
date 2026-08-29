@@ -11,7 +11,12 @@
       "steps": [
         {
           "skill": {
-            "id": "moonspec-verify"
+            "id": "moonspec-verify",
+            "args": {
+              "payloadTemplate": {
+                "selectedSkill": "not-current-run-intent"
+              }
+            }
           }
         },
         {
@@ -19,11 +24,9 @@
             "remediationLoop": {
               "kind": "remediation_loop",
               "remediationTool": {
-                "type": "agent_runtime",
-                "name": "auto",
-                "inputs": {
-                  "selectedSkill": "remediate-issue"
-                }
+                "type": "skill",
+                "name": "remediate-issue",
+                "inputs": {}
               },
               "verificationTool": {
                 "type": "agent_runtime",

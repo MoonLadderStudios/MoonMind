@@ -77,19 +77,28 @@ def test_skill_selector_includes_nested_dynamic_execution_skills() -> None:
         {
             "workflow": {
                 "steps": [
-                    {"skill": {"id": "moonspec-verify"}},
+                    {
+                        "skill": {
+                            "id": "moonspec-verify",
+                            "args": {
+                                "payloadTemplate": {
+                                    "selectedSkill": "not-current-run-intent"
+                                }
+                            },
+                        }
+                    },
                     {
                         "annotations": {
                             "remediationLoop": {
                                 "kind": "remediation_loop",
                                 "remediationTool": {
-                                    "type": "agent_runtime",
-                                    "inputs": {
-                                        "selectedSkill": "remediate-issue"
-                                    },
+                                    "type": "skill",
+                                    "name": "remediate-issue",
+                                    "inputs": {},
                                 },
                                 "verificationTool": {
                                     "type": "agent_runtime",
+                                    "name": "auto",
                                     "inputs": {
                                         "selectedSkill": "moonspec-verify"
                                     },
@@ -122,15 +131,30 @@ async def test_admission_persists_nested_dynamic_execution_skills() -> None:
             initial_parameters={
                 "workflow": {
                     "steps": [
-                        {"skill": {"id": "moonspec-verify"}},
+                        {
+                            "skill": {
+                                "id": "moonspec-verify",
+                                "args": {
+                                    "payloadTemplate": {
+                                        "selectedSkill": "not-current-run-intent"
+                                    }
+                                },
+                            }
+                        },
                         {
                             "annotations": {
                                 "remediationLoop": {
                                     "kind": "remediation_loop",
                                     "remediationTool": {
+                                        "type": "skill",
+                                        "name": "remediate-issue",
+                                        "inputs": {},
+                                    },
+                                    "verificationTool": {
                                         "type": "agent_runtime",
+                                        "name": "auto",
                                         "inputs": {
-                                            "selectedSkill": "remediate-issue"
+                                            "selectedSkill": "moonspec-verify"
                                         },
                                     },
                                 }

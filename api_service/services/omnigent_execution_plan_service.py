@@ -59,6 +59,10 @@ from moonmind.services.skill_resolution import (
     AgentSkillResolver,
     SkillResolutionContext,
 )
+from moonmind.workflows.temporal.remediation_loop import (
+    ToolDescriptor,
+    tool_descriptor_selected_skill,
+)
 from pr_resolver_core import IMPLEMENTATION_CONTRACT
 
 _HARNESS_PRODUCT_CONFIG: dict[str, dict[str, str]] = {
@@ -408,17 +412,18 @@ def _selected_skill_names(initial_parameters: Mapping[str, Any]) -> list[str]:
         if candidate and candidate != "auto" and candidate not in names:
             names.append(candidate)
 
-    def add_nested_selected_skills(raw: Any) -> None:
-        """Collect skill intent from workflow-owned dynamic execution specs."""
+    def add_remediation_loop_skills(step: Mapping[str, Any]) -> None:
+        """Collect Skills from the typed dynamic remediation contract."""
 
-        if isinstance(raw, Mapping):
-            add(raw.get("selectedSkill") or raw.get("selected_skill"))
-            for value in raw.values():
-                add_nested_selected_skills(value)
+        annotations = step.get("annotations")
+        if not isinstance(annotations, Mapping):
             return
-        if isinstance(raw, (list, tuple)):
-            for value in raw:
-                add_nested_selected_skills(value)
+        loop = annotations.get("remediationLoop")
+        if not isinstance(loop, Mapping) or loop.get("kind") != "remediation_loop":
+            return
+        for field_name in ("remediationTool", "verificationTool"):
+            descriptor = ToolDescriptor.model_validate(loop.get(field_name))
+            add(tool_descriptor_selected_skill(descriptor))
 
     selectors = workflow_mapping.get("skills")
     if isinstance(selectors, Mapping):
@@ -442,11 +447,7 @@ def _selected_skill_names(initial_parameters: Mapping[str, Any]) -> list[str]:
             and str(step_tool.get("type") or "").lower() == "skill"
         ):
             add(step_tool)
-    # Remediation and other workflow-owned controllers materialize agent steps
-    # after admission. Their canonical skill identity is declared as a nested
-    # selectedSkill, so it must be frozen into the same immutable run snapshot
-    # before any step launches.
-    add_nested_selected_skills(workflow_mapping)
+        add_remediation_loop_skills(step)
     return names
 
 
