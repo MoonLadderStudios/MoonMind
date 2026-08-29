@@ -148,6 +148,35 @@ def test_workdir_rejects_traversal(workdir: str) -> None:
 
 
 @pytest.mark.parametrize(
+    "target",
+    ["/", "/cache/", "/cache//pip", "//cache", "/ca che", "/cache/..", "cache"],
+)
+def test_cache_target_requires_a_normalized_absolute_path(target: str) -> None:
+    """A cache target names one exact mount point, so it must be normalized.
+
+    The deployment declares its approved cache targets and the backend selects
+    a source by matching this value exactly. An un-normalized spelling would
+    describe the same mount point under a name no declaration can match, so the
+    request contract refuses it rather than resolving it later.
+    """
+
+    data = payload()
+    data["spec"]["caches"] = [{"cacheRef": "build-cache", "target": target}]
+    with pytest.raises(ValidationError):
+        ContainerJobSubmitRequest.model_validate(data)
+
+
+def test_cache_target_accepts_a_normalized_absolute_path() -> None:
+    data = payload()
+    data["spec"]["caches"] = [
+        {"cacheRef": "build-cache", "target": "/opt/project/cache", "readOnly": True}
+    ]
+    mount = ContainerJobSubmitRequest.model_validate(data).spec.caches[0]
+    assert mount.target == "/opt/project/cache"
+    assert mount.read_only is True
+
+
+@pytest.mark.parametrize(
     "locator,expected_identity,expected_type",
     [
         (

@@ -313,10 +313,17 @@ Rules:
   opaque ref and an undeclared ref fails closed;
 - a declaration that is not a JSON array of objects, omits `sourceRef`/`image`
   or `cacheRef`, repeats a ref, reuses a MoonMind-reserved ref, names a
-  non-volume, gives a non-absolute cache target, or carries a key outside its
-  documented schema is a configuration error. Every declaration key defaults to
-  the permissive value when omitted, so a misspelled `readOnly` or `pullPolicy`
-  would otherwise weaken the access policy the deployment asked for;
+  non-volume, or carries a key outside its documented schema is a configuration
+  error. Every declaration key defaults to the permissive value when omitted, so
+  a misspelled `readOnly` or `pullPolicy` would otherwise weaken the access
+  policy the deployment asked for;
+- a declared cache `target` is validated by the same public request contract a
+  caller's `CacheMount.target` is: one normalized absolute container path whose
+  every segment is non-empty and carries no `..`. The backend selects a declared
+  source by matching the requested target exactly, so a target only the
+  declaration accepts — a bare `/`, a trailing or doubled slash, a space —
+  would be a cache source no valid job could ever select. It fails at
+  configuration time rather than at the launch boundary;
 - each declaration variable is consumed exactly as supplied and is never merged
   with the compose-derived default, so a deployment that declares an additional
   source repeats every source it intends to keep;

@@ -59,6 +59,20 @@
           "remoteVerified": true
         }
       },
+      "contaminatingVerificationStepOutputs": {
+        "summary": "MoonSpec verification report",
+        "branch": "moonspec-verify-scratch-53e35d1e",
+        "headSha": "b31f0a9e6d2c4718ae5039c8f1720d64a9e3b5c7",
+        "moonSpecVerify": {
+          "schemaVersion": 1,
+          "verdict": "ADDITIONAL_WORK_NEEDED",
+          "confidence": "HIGH",
+          "gateResultRef": "art_01M13KMEQB4J3GA51HD4RMBBSY"
+        }
+      },
+      "publishPayload": {
+        "prBaseBranch": "main"
+      },
       "unverifiedPublishContext": {
         "pushStatus": "pushed",
         "branch": "fetch-github-issue-moonladderstudios-tac-4f8e2aa7",

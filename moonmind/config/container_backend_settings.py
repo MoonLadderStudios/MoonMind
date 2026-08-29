@@ -21,6 +21,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final, Mapping
 
+from pydantic import ValidationError
+
+from moonmind.schemas.container_job_models import CacheMount
+
 #: The only backend kind this deployment supports. A second backend kind
 #: (Podman, containerd, Kubernetes, endpoint pools) is explicitly out of scope.
 SUPPORTED_CONTAINER_BACKEND_KINDS: Final[frozenset[str]] = frozenset({"docker-engine"})
@@ -235,16 +239,23 @@ def _registry_pull_policy(value: object, *, default: str) -> str:
 
 
 def _mount_target(value: object, *, field_name: str) -> str:
+    """Validate a declared mount target against the public request contract.
+
+    The backend selects a deployment cache source by matching a request's
+    ``CacheMount.target`` against this declared target exactly, so any
+    declaration the request contract would reject creates a cache source no
+    valid job can ever select. Validating through ``CacheMount`` itself keeps
+    one canonical normalization rather than a second, looser copy that fails
+    the operator at launch instead of at configuration time.
+    """
+
     normalized = str(value or "").strip()
-    if (
-        not normalized.startswith("/")
-        or len(normalized) > 512
-        or ".." in normalized.split("/")
-    ):
+    try:
+        return CacheMount(cacheRef="declared", target=normalized).target
+    except ValidationError as exc:
         raise ContainerBackendConfigError(
             f"{field_name} must be a normalized absolute container path"
-        )
-    return normalized
+        ) from exc
 
 
 def _declaration_objects(

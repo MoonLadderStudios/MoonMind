@@ -364,6 +364,15 @@ refusals recorded by a step — unauthorized publication, a contaminated
 candidate, or no candidate change — are safety decisions and are never
 overridden by that projection.
 
+The published head that makes the gate feasible is also the head the draft is
+opened against. Native PR branch resolution prefers the run-owned published
+head over every other candidate, because the remaining candidates are mutable
+step metadata: the read-only verification step the gate stops on may itself
+emit `branch` and `headSha`, and the publish context mirrors whichever step
+wrote last. Deriving the publication target separately from the feasibility
+decision would open a draft for a head the managed push boundary never
+remotely verified.
+
 Non-retryable blocking verdicts, including `NO_DETERMINATION`, `BLOCKED`, and `FAILED_UNRECOVERABLE`, block publication without waiting for additional remediation attempts unless the workflow explicitly models the missing evidence as recoverable work inside the same bounded plan.
 
 The gate distinguishes a verifier judgment from a malformed verdict envelope:

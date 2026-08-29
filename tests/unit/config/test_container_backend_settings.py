@@ -6,6 +6,10 @@ import pytest
 
 import json
 
+from pydantic import ValidationError
+
+from moonmind.schemas.container_job_models import CacheMount
+
 from moonmind.config.container_backend_settings import (
     CACHE_SOURCES_ENV_KEY,
     IMAGE_SOURCES_ENV_KEY,
@@ -350,3 +354,45 @@ def test_python_test_recipe_uses_deployment_root_and_optional_max_age(
     assert isinstance(source, LocalImageRecipe)
     assert source.context_root == tmp_path.resolve()
     assert source.max_age_seconds == 3600
+
+
+#: Targets the public ``CacheMount`` request contract refuses. A deployment
+#: that declares one of these creates a cache source no valid job request can
+#: ever select, because the backend matches the declared target exactly.
+UNSELECTABLE_CACHE_TARGETS: tuple[str, ...] = (
+    "/",
+    "/opt/project/cache/",
+    "/opt//project/cache",
+    "//opt/project/cache",
+    "/opt/project cache",
+    "relative/cache",
+    "/opt/../etc",
+)
+
+
+@pytest.mark.parametrize("target", UNSELECTABLE_CACHE_TARGETS)
+def test_declared_cache_target_matches_the_request_contract(target: str) -> None:
+    """A declaration the request contract rejects must fail at configuration.
+
+    Deployment policy and the public job contract have to agree on what a cache
+    target is: the backend selects a declared source by matching a request's
+    ``CacheMount.target`` exactly, so a target only one side accepts is either
+    dead configuration or a mount the operator cannot describe. Failing here
+    keeps the mistake at startup instead of at the launch boundary.
+    """
+
+    with pytest.raises(ContainerBackendConfigError, match="absolute container path"):
+        resolve_container_backend_settings(_declared_env(target=target))
+
+    with pytest.raises(ValidationError):
+        CacheMount(cacheRef=DECLARED_CACHE_REF, target=target)
+
+
+def test_declared_cache_target_accepts_what_a_request_can_select() -> None:
+    target = "/opt/project/cache"
+    source = resolve_container_backend_settings(
+        _declared_env(target=target)
+    ).cache_source(DECLARED_CACHE_REF)
+
+    assert source.target == target
+    assert CacheMount(cacheRef=DECLARED_CACHE_REF, target=target).target == target

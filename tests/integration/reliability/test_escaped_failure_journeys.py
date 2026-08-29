@@ -169,6 +169,7 @@ from moonmind.workflows.temporal.workflows.provider_profile_manager import (
     ProfileSlotState,
 )
 from moonmind.workflows.temporal.workflows.run import (
+    NATIVE_PR_BRANCH_DEFAULTS_PATCH,
     RUN_AGENT_REQUIRED_CAPABILITIES_PROPAGATION_PATCH,
     RUN_HEADLESS_REMEDIATION_VERIFIED_WORKSPACE_PATCH,
     RUN_WORKFLOW_HEADLESS_REMEDIATION_PATCH,
@@ -1502,6 +1503,29 @@ def _replay_published_head(case: dict) -> MoonMindRunWorkflow:
     return replayed
 
 
+def _resolve_draft_branches(
+    workflow_run: MoonMindRunWorkflow,
+    case: dict,
+    *,
+    patched: frozenset[str],
+) -> tuple[str, str]:
+    """Resolve the draft's native PR head and base under one patch set."""
+
+    with pytest.MonkeyPatch.context() as branch_patch:
+        branch_patch.setattr(
+            run_workflow_module.workflow,
+            "patched",
+            lambda patch_id: patch_id in patched,
+        )
+        return workflow_run._resolve_native_pr_branches(
+            parameters={},
+            agent_outputs=case["contaminatingVerificationStepOutputs"],
+            workspace_spec={},
+            last_node_inputs={},
+            publish_payload=case["publishPayload"],
+        )
+
+
 async def test_verification_gate_draft_publishes_run_owned_published_head(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1610,6 +1634,49 @@ async def test_verification_gate_draft_publishes_run_owned_published_head(
         assert workflow_run._apply_blocking_moonspec_gate_to_publish() is False
         assert workflow_run._attention_required is True
         assert "draft" in workflow_run._moonspec_draft_publication_body_section().lower()
+
+        # The gate resolves feasibility from the accepted head, so publication
+        # must open the draft against that same head. The read-only
+        # verification step that trips the gate can emit raw branch/headSha
+        # metadata of its own, which `_record_execution_context` mirrors over
+        # the mutable publish context -- publishing that branch would open a
+        # PR for a head the managed push boundary never verified.
+        contaminated = _replay_published_head(case)
+        contaminated._record_execution_context(
+            node_id=case["gateLogicalStepId"],
+            execution_result={
+                "status": "COMPLETED",
+                "outputs": case["contaminatingVerificationStepOutputs"],
+            },
+        )
+        assert (
+            contaminated._publish_context["branch"]
+            == expected["verificationGateContaminatedPublishContextBranch"]
+        )
+        head_branch, base_branch = _resolve_draft_branches(
+            contaminated,
+            case,
+            patched=frozenset(
+                {
+                    RUN_TERMINAL_GATE_PUBLISHED_HEAD_FEASIBILITY_PATCH,
+                    NATIVE_PR_BRANCH_DEFAULTS_PATCH,
+                }
+            ),
+        )
+        assert head_branch == expected["verificationGateDraftHeadBranch"]
+        assert base_branch == expected["verificationGateDraftBaseBranch"]
+
+        # In-flight histories that never recorded the patch keep resolving the
+        # head they always did, so replay stays deterministic.
+        unpatched_head, _ = _resolve_draft_branches(
+            contaminated,
+            case,
+            patched=frozenset({NATIVE_PR_BRANCH_DEFAULTS_PATCH}),
+        )
+        assert (
+            unpatched_head
+            == expected["verificationGateContaminatedPublishContextBranch"]
+        )
 
     # Definitive negatives stay negative: the run-owned head answers "we do not
     # know", never "publication was refused".

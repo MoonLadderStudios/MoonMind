@@ -9,5 +9,8 @@
   "verificationGateTerminalHandoff": "draft_publication",
   "verificationGateUnpatchedTerminalHandoff": "artifact_backed",
   "draftPullRequestIsDraft": true,
-  "verificationGateUnverifiedFeasibilityReason": "publication_state_ambiguous"
+  "verificationGateUnverifiedFeasibilityReason": "publication_state_ambiguous",
+  "verificationGateContaminatedPublishContextBranch": "moonspec-verify-scratch-53e35d1e",
+  "verificationGateDraftHeadBranch": "fetch-github-issue-moonladderstudios-tac-4f8e2aa7",
+  "verificationGateDraftBaseBranch": "main"
 }

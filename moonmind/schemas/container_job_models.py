@@ -192,8 +192,20 @@ class EnvironmentOverride(ContractModel):
 
 class CacheMount(ContractModel):
     cache_ref: str = Field(alias="cacheRef", min_length=1, max_length=255)
-    target: str = Field(pattern=r"^/[A-Za-z0-9._/@+-]+(?:/[A-Za-z0-9._@+-]+)*$", max_length=512)
+    # A normalized absolute container path: every segment is non-empty, so a
+    # bare ``/``, a trailing slash, and a doubled separator are all refused.
+    # The leading segment previously admitted ``/`` itself, which made the
+    # per-segment group unreachable and accepted un-normalized targets that
+    # the deployment's declared cache target could never match exactly.
+    target: str = Field(pattern=r"^/[A-Za-z0-9._@+-]+(?:/[A-Za-z0-9._@+-]+)*$", max_length=512)
     read_only: bool = Field(False, alias="readOnly")
+
+    @field_validator("target")
+    @classmethod
+    def _target_is_normalized(cls, value: str) -> str:
+        if ".." in value.split("/"):
+            raise ValueError("target must be a normalized absolute container path")
+        return value
 
 
 class ResourceLimits(ContractModel):

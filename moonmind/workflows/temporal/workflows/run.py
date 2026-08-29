@@ -15827,8 +15827,25 @@ class MoonMindRunWorkflow:
         last_node_inputs: Mapping[str, Any],
         publish_payload: Mapping[str, Any],
     ) -> tuple[str, str]:
+        # The accepted published head is the only branch a managed push
+        # boundary remotely verified for this run, and it is recorded branch
+        # and SHA together. Every other head candidate is raw step metadata:
+        # ``_record_execution_context`` mirrors ``branch``/``push_branch`` from
+        # whichever step ran last, so a read-only verifier -- the step the
+        # MoonSpec terminal gate always trips on -- can name a branch that was
+        # never pushed. The gate resolves publication feasibility from the
+        # accepted head, so publication must target that same head rather than
+        # re-deriving one from mutable metadata.
+        accepted_head: str | None = None
+        if self._patched_or_false_outside_workflow(
+            RUN_TERMINAL_GATE_PUBLISHED_HEAD_FEASIBILITY_PATCH
+        ):
+            accepted = self._accepted_published_head()
+            if accepted is not None:
+                accepted_head = accepted[0]
         if workflow.patched(NATIVE_PR_BRANCH_DEFAULTS_PATCH):
             head_candidates = (
+                accepted_head,
                 agent_outputs.get("push_branch"),
                 self._publish_context.get("branch"),
                 agent_outputs.get("branch"),
@@ -15848,6 +15865,7 @@ class MoonMindRunWorkflow:
             )
         else:
             head_candidates = (
+                accepted_head,
                 agent_outputs.get("push_branch"),
                 self._publish_context.get("branch"),
                 agent_outputs.get("branch"),
