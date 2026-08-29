@@ -1,4 +1,4 @@
-"""Regression coverage for the provider profile model tiers migration."""
+"""Regression coverage for the provider profile model tiers migrations."""
 
 from __future__ import annotations
 
@@ -20,6 +20,9 @@ from moonmind.provider_profiles.model_tiers import (
     is_single_legacy_default_model_effort_tier,
     is_single_runtime_default_model_effort_tier,
 )
+
+_REVISION_335 = "api_service.migrations.versions.335_provider_profile_model_tiers"
+_REVISION_365 = "api_service.migrations.versions.365_profile_tier_provenance"
 
 
 class _RecordingOp:
@@ -64,9 +67,7 @@ def _assert_valid_model_tiers_default(column) -> None:
 def test_model_tiers_server_default_compiles_as_valid_postgresql_json(
     monkeypatch,
 ) -> None:
-    migration = importlib.import_module(
-        "api_service.migrations.versions.335_provider_profile_model_tiers"
-    )
+    migration = importlib.import_module(_REVISION_335)
     operations = _RecordingOp()
     monkeypatch.setattr(migration, "op", operations)
 
@@ -114,12 +115,27 @@ class _SqliteMigrationOperations(Operations):
         self.dropped_constraints.append((constraint_name, table_name, str(type_)))
 
 
+def _bind_migration(module_name, connection, monkeypatch):
+    """Bind a revision module to real SQLite operations over ``connection``."""
+
+    migration = importlib.import_module(module_name)
+    operations = _SqliteMigrationOperations(MigrationContext.configure(connection))
+    monkeypatch.setattr(migration, "op", operations)
+    return migration, operations
+
+
 _SEEDED_PROFILES = (
     ("legacy_model_and_effort", "gpt-custom", "xhigh"),
     ("legacy_model_only", "gpt-custom", None),
     ("legacy_effort_only", None, "low"),
     ("no_legacy_defaults", None, None),
 )
+
+
+def _expected_migration_source(default_model, default_effort) -> str:
+    if default_model is not None or default_effort is not None:
+        return LEGACY_DEFAULT_TIER_MIGRATION_SOURCE
+    return RUNTIME_DEFAULT_TIER_MIGRATION_SOURCE
 
 
 def _seed_pre_migration_profiles(connection) -> None:
@@ -165,19 +181,27 @@ def _read_migrated_profiles(connection) -> dict[str, dict[str, object]]:
     }
 
 
-def test_seeded_profiles_backfill_to_one_annotated_tier(monkeypatch) -> None:
-    """MoonLadderStudios/MoonMind#3793: run the migration against seeded profiles."""
-
-    migration = importlib.import_module(
-        "api_service.migrations.versions.335_provider_profile_model_tiers"
+def _write_model_tiers(connection, profile_id, tiers) -> None:
+    connection.execute(
+        sa.text(
+            "UPDATE managed_agent_provider_profiles SET model_tiers = :tiers "
+            "WHERE profile_id = :profile_id"
+        ),
+        {"profile_id": profile_id, "tiers": json.dumps(tiers)},
     )
+
+
+def test_seeded_profiles_backfill_to_one_annotated_tier(monkeypatch) -> None:
+    """MoonLadderStudios/MoonMind#3793: run both revisions against seeded profiles."""
+
     engine = sa.create_engine("sqlite:///:memory:")
     with engine.begin() as connection:
         _seed_pre_migration_profiles(connection)
-        operations = _SqliteMigrationOperations(MigrationContext.configure(connection))
-        monkeypatch.setattr(migration, "op", operations)
 
-        migration.upgrade()
+        revision_335, _ = _bind_migration(_REVISION_335, connection, monkeypatch)
+        revision_335.upgrade()
+        revision_365, _ = _bind_migration(_REVISION_365, connection, monkeypatch)
+        revision_365.upgrade()
 
         migrated = _read_migrated_profiles(connection)
 
@@ -234,27 +258,128 @@ def test_seeded_profiles_backfill_to_one_annotated_tier(monkeypatch) -> None:
         assert default_model_tier == 1
 
 
-def test_seeded_migration_creates_model_tiers_array_check(monkeypatch) -> None:
-    """MoonLadderStudios/MoonMind#3793: both database checks are created."""
+def test_revision_365_stamps_databases_already_migrated_by_335(monkeypatch) -> None:
+    """Databases stamped at 335 or a descendant never re-run 335, so 365 carries
+    the provenance and the array check forward for them."""
 
-    migration = importlib.import_module(
-        "api_service.migrations.versions.335_provider_profile_model_tiers"
-    )
     engine = sa.create_engine("sqlite:///:memory:")
     with engine.begin() as connection:
         _seed_pre_migration_profiles(connection)
-        operations = _SqliteMigrationOperations(MigrationContext.configure(connection))
-        monkeypatch.setattr(migration, "op", operations)
+        revision_335, _ = _bind_migration(_REVISION_335, connection, monkeypatch)
+        revision_335.upgrade()
 
-        migration.upgrade()
+        already_migrated = _read_migrated_profiles(connection)
+        # This is the durable state of every deployment stamped at 335..364.
+        assert all(
+            profile["model_tiers"][0]["annotations"] == {}
+            for profile in already_migrated.values()
+        )
+
+        revision_365, operations = _bind_migration(
+            _REVISION_365, connection, monkeypatch
+        )
+        revision_365.upgrade()
+
+        stamped = _read_migrated_profiles(connection)
+
+    assert operations.created_check_constraints == [
+        (
+            "ck_provider_profiles_model_tiers_array",
+            "managed_agent_provider_profiles",
+            "jsonb_typeof(model_tiers) = 'array' "
+            "AND jsonb_array_length(model_tiers) >= 1",
+        )
+    ]
+
+    for profile_id, default_model, default_effort in _SEEDED_PROFILES:
+        before = already_migrated[profile_id]["model_tiers"][0]
+        after = stamped[profile_id]["model_tiers"][0]
+        assert after["annotations"] == {
+            MODEL_TIER_MIGRATION_ANNOTATION: _expected_migration_source(
+                default_model, default_effort
+            )
+        }
+        # Only the provenance changes; the rest of the migrated tier is preserved.
+        assert {key: value for key, value in after.items() if key != "annotations"} == {
+            key: value for key, value in before.items() if key != "annotations"
+        }
+
+
+def test_revision_365_preserves_operator_authored_tiers(monkeypatch) -> None:
+    """Only the exact un-annotated shape revision 335 wrote is restamped."""
+
+    multi_tier = [
+        {
+            "label": "Legacy default",
+            "model": "gpt-custom",
+            "effort": "xhigh",
+            "parameters": {},
+            "annotations": {},
+        },
+        {
+            "label": "Deep",
+            "model": "gpt-deep",
+            "effort": "high",
+            "parameters": {},
+            "annotations": {},
+        },
+    ]
+    relabelled_tier = [
+        {
+            "label": "Operator default",
+            "model": "gpt-custom",
+            "effort": "xhigh",
+            "parameters": {},
+            "annotations": {},
+        }
+    ]
+    annotated_tier = [
+        {
+            "label": "Runtime default",
+            "model": None,
+            "effort": None,
+            "parameters": {},
+            "annotations": {"owner": "platform"},
+        }
+    ]
+
+    engine = sa.create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        _seed_pre_migration_profiles(connection)
+        revision_335, _ = _bind_migration(_REVISION_335, connection, monkeypatch)
+        revision_335.upgrade()
+
+        _write_model_tiers(connection, "legacy_model_and_effort", multi_tier)
+        _write_model_tiers(connection, "legacy_model_only", relabelled_tier)
+        _write_model_tiers(connection, "legacy_effort_only", annotated_tier)
+
+        revision_365, _ = _bind_migration(_REVISION_365, connection, monkeypatch)
+        revision_365.upgrade()
+
+        after = _read_migrated_profiles(connection)
+
+    assert after["legacy_model_and_effort"]["model_tiers"] == multi_tier
+    assert after["legacy_model_only"]["model_tiers"] == relabelled_tier
+    assert after["legacy_effort_only"]["model_tiers"] == annotated_tier
+    # The untouched profile still carries the 335 shape, so 365 stamps it.
+    assert after["no_legacy_defaults"]["model_tiers"][0]["annotations"] == {
+        MODEL_TIER_MIGRATION_ANNOTATION: RUNTIME_DEFAULT_TIER_MIGRATION_SOURCE
+    }
+
+
+def test_revision_335_creates_only_the_default_tier_check(monkeypatch) -> None:
+    """MoonLadderStudios/MoonMind#3793: the applied revision keeps its own checks."""
+
+    engine = sa.create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        _seed_pre_migration_profiles(connection)
+        revision_335, operations = _bind_migration(
+            _REVISION_335, connection, monkeypatch
+        )
+
+        revision_335.upgrade()
 
         assert operations.created_check_constraints == [
-            (
-                "ck_provider_profiles_model_tiers_array",
-                "managed_agent_provider_profiles",
-                "jsonb_typeof(model_tiers) = 'array' "
-                "AND jsonb_array_length(model_tiers) >= 1",
-            ),
             (
                 "ck_provider_profiles_default_model_tier_positive",
                 "managed_agent_provider_profiles",
@@ -262,16 +387,13 @@ def test_seeded_migration_creates_model_tiers_array_check(monkeypatch) -> None:
             ),
         ]
 
-        migration.downgrade()
+        revision_335.downgrade()
 
+        # Downgrading a database that only ever applied 335 must not try to drop a
+        # constraint that revision never created.
         assert operations.dropped_constraints == [
             (
                 "ck_provider_profiles_default_model_tier_positive",
-                "managed_agent_provider_profiles",
-                "check",
-            ),
-            (
-                "ck_provider_profiles_model_tiers_array",
                 "managed_agent_provider_profiles",
                 "check",
             ),
@@ -283,6 +405,60 @@ def test_seeded_migration_creates_model_tiers_array_check(monkeypatch) -> None:
             )
         }
         assert not ({"model_tiers", "default_model_tier"} & remaining)
+
+
+def test_revision_365_creates_and_drops_the_model_tiers_array_check(
+    monkeypatch,
+) -> None:
+    """MoonLadderStudios/MoonMind#3793: the forward revision owns the array check."""
+
+    engine = sa.create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        _seed_pre_migration_profiles(connection)
+        revision_335, _ = _bind_migration(_REVISION_335, connection, monkeypatch)
+        revision_335.upgrade()
+        revision_365, operations = _bind_migration(
+            _REVISION_365, connection, monkeypatch
+        )
+
+        revision_365.upgrade()
+
+        assert operations.created_check_constraints == [
+            (
+                "ck_provider_profiles_model_tiers_array",
+                "managed_agent_provider_profiles",
+                "jsonb_typeof(model_tiers) = 'array' "
+                "AND jsonb_array_length(model_tiers) >= 1",
+            ),
+        ]
+
+        revision_365.downgrade()
+
+        assert operations.dropped_constraints == [
+            (
+                "ck_provider_profiles_model_tiers_array",
+                "managed_agent_provider_profiles",
+                "check",
+            ),
+        ]
+        reverted = _read_migrated_profiles(connection)
+
+    # Downgrading restores the exact un-annotated tier revision 335 wrote.
+    for profile_id, default_model, default_effort in _SEEDED_PROFILES:
+        label = (
+            "Legacy default"
+            if (default_model is not None or default_effort is not None)
+            else "Runtime default"
+        )
+        assert reverted[profile_id]["model_tiers"] == [
+            {
+                "label": label,
+                "model": default_model,
+                "effort": default_effort,
+                "parameters": {},
+                "annotations": {},
+            }
+        ]
 
 
 def test_orm_table_declares_postgresql_model_tiers_array_check() -> None:
@@ -307,12 +483,27 @@ def test_orm_table_declares_postgresql_model_tiers_array_check() -> None:
     assert "ck_provider_profiles_model_tiers_array" not in sqlite_ddl
 
 
+def test_orm_model_tiers_column_is_jsonb_on_postgresql() -> None:
+    """The array check calls jsonb-only functions, so a PostgreSQL table created
+    from ORM metadata (tests/integration/omnigent/conftest.py::_create_tables)
+    must declare ``model_tiers`` as JSONB, matching the migrated schema."""
+
+    column = ManagedAgentProviderProfile.__table__.c.model_tiers
+
+    postgres_column_ddl = str(
+        CreateColumn(column).compile(dialect=postgresql.dialect())
+    )
+    assert "JSONB" in postgres_column_ddl
+
+    sqlite_column_ddl = str(CreateColumn(column).compile(dialect=sqlite.dialect()))
+    assert "JSONB" not in sqlite_column_ddl
+    assert "JSON" in sqlite_column_ddl
+
+
 def test_migration_provenance_matches_tier_contract() -> None:
     """MoonLadderStudios/MoonMind#3793: migration and contract stay in lockstep."""
 
-    migration = importlib.import_module(
-        "api_service.migrations.versions.335_provider_profile_model_tiers"
-    )
+    migration = importlib.import_module(_REVISION_365)
 
     assert migration.MIGRATED_FROM_ANNOTATION == MODEL_TIER_MIGRATION_ANNOTATION
     assert (

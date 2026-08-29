@@ -3400,7 +3400,10 @@ class ManagedAgentProviderProfile(Base):
     default_model: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     default_effort: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     model_tiers: Mapped[list[dict[str, Any]]] = mapped_column(
-        JSON,
+        # ck_provider_profiles_model_tiers_array calls jsonb-only functions, so
+        # the mapped column must be jsonb on PostgreSQL for metadata-created
+        # schemas to match the migrated deployment schema.
+        _json_variant(),
         nullable=False,
         default=_provider_profile_model_tiers_default,
         server_default=literal_column(
