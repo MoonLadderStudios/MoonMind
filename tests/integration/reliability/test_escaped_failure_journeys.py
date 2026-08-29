@@ -61,6 +61,7 @@ from moonmind.omnigent.execute import (
     run_omnigent_execution,
 )
 from moonmind.omnigent.execution_profiles import compile_effective_launch
+from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from moonmind.omnigent.oauth_host_janitor import OmnigentOAuthHostJanitor
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.omnigent.host_failures import OmnigentOAuthHostError
@@ -70,6 +71,10 @@ from moonmind.omnigent.oauth_hosts import (
 from moonmind.omnigent.codex_execution_decisions import bind_exact_host
 from moonmind.omnigent.profile_bound_execution import (
     OmnigentProfileBoundExecutionCoordinator,
+)
+from moonmind.omnigent.realizers.generic_host import GenericOmnigentHostRealizer
+from moonmind.omnigent.workspace_publication import (
+    OmnigentWorkspacePublicationService,
 )
 from moonmind.omnigent.stock_agents import CODEX_STOCK_AGENT_NAME
 from moonmind.security.egress import (
@@ -6108,3 +6113,222 @@ async def test_checkpoint_branch_turn_restart_matrix_preserves_exact_once_author
         if event_type == "terminal"
     )
     assert last_host_cleanup < last_profile_release < last_terminal
+
+
+def _git(repo: Path, *args: str) -> str:
+    """Run one real git command inside the replayed sandbox workspace."""
+
+    completed = subprocess.run(
+        ["git", "-C", str(repo), *args],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return completed.stdout.strip()
+
+
+def _seed_no_commit_publication_repo(
+    *,
+    workspace_root: Path,
+    workspace_id: str,
+    relative_path: str,
+    starting_branch: str,
+) -> tuple[Path, Path]:
+    """Build a real origin/work pair whose head already equals the remote base."""
+
+    origin = workspace_root / "origin.git"
+    origin.mkdir(parents=True)
+    subprocess.run(
+        ["git", "init", "--bare", "--initial-branch=main", str(origin)],
+        capture_output=True,
+        check=True,
+    )
+    repo = workspace_root / "temporal_sandbox" / workspace_id / relative_path
+    repo.mkdir(parents=True)
+    subprocess.run(
+        ["git", "init", "--initial-branch=main", str(repo)],
+        capture_output=True,
+        check=True,
+    )
+    _git(repo, "config", "user.name", "MoonMind Replay")
+    _git(repo, "config", "user.email", "replay@moonmind.local")
+    (repo / "implemented.txt").write_text("work from earlier steps\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "Earlier steps already implemented and pushed this work")
+    _git(repo, "remote", "add", "origin", str(origin))
+    _git(repo, "push", "origin", "main")
+    # The pull-request handoff step starts on the branch earlier steps published.
+    _git(repo, "checkout", "-B", starting_branch)
+    _git(repo, "push", "origin", starting_branch)
+    _git(repo, "fetch", "origin", "--prune")
+    return repo, origin
+
+
+def _no_commit_publication_request(
+    *,
+    manifest: dict,
+    workspace_id: str,
+) -> AgentExecutionRequest:
+    """Build the exact authored shape the failed handoff step dispatched."""
+
+    correlation_id = manifest["correlationId"]
+    return AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId=correlation_id,
+        idempotencyKey=f"{correlation_id}:publication",
+        workspaceSpec={
+            "repository": manifest["repository"],
+            "startingBranch": manifest["startingBranch"],
+            "targetBranch": manifest["startingBranch"],
+            "workspaceLocator": {
+                "kind": "sandbox",
+                "workspaceId": workspace_id,
+                "relativePath": manifest["workspaceRelativePath"],
+            },
+        },
+        parameters={
+            "publishMode": manifest["publishMode"],
+            "repository": manifest["repository"],
+            "repositoryOperation": "write",
+        },
+    )
+
+
+def _no_commit_publication_realizer(
+    workspace_root: Path,
+) -> GenericOmnigentHostRealizer:
+    """Wire the production publisher into the production generic realizer.
+
+    Only the lifecycle collaborators the publication boundary never touches are
+    sentinels; the publisher and the realizer publish decision are real.
+    """
+
+    async def _unused_resolver(_plan: object) -> tuple[object, object]:
+        raise AssertionError("host resolution is outside the publication boundary")
+
+    async def _unused_session_driver(
+        *_args: object, **_kwargs: object
+    ) -> AgentRunResult:
+        raise AssertionError("session driving is outside the publication boundary")
+
+    return GenericOmnigentHostRealizer(
+        runtime_binding_store=SimpleNamespace(),
+        provider_lease_coordinator=SimpleNamespace(),
+        credential_provisioning_service=SimpleNamespace(),
+        host_lease_repository=SimpleNamespace(),
+        host_runtime=SimpleNamespace(),
+        planned_host_resolver=_unused_resolver,
+        session_driver=_unused_session_driver,
+        session_cleanup_service=SimpleNamespace(),
+        workspace_publisher=OmnigentWorkspacePublicationService(
+            workspace_root=workspace_root
+        ),
+    )
+
+
+async def test_verified_no_commit_publication_reaches_the_workflow_publish_handoff(
+    tmp_path: Path,
+) -> None:
+    """Replay mm:1b45c82b across publisher, generic realizer, and workflow.
+
+    The escaped failure was a pull-request handoff step whose implementation
+    commits were already pushed by earlier steps. The publisher proved the
+    workspace head was exactly the remote base head and returned the canonical
+    ``no_commits`` outcome; the generic realizer rejected it and failed the run
+    with ``OMNIGENT_GENERIC_DISPATCH_FAILED``, stranding the pull request the
+    step had already created.
+
+    This replay drives the real publisher against a real git remote so the
+    exact remote-head proof stays load-bearing, then carries the accepted
+    evidence into the durable workflow publish handoff.
+    """
+
+    replay_id = "omnigent-generic-host-verified-no-commit-publication"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+
+    workspace_root = tmp_path / "agent_jobs"
+    workspace_root.mkdir()
+    correlation_id = manifest["correlationId"]
+    workspace_id = hashlib.sha256(
+        f"{correlation_id}:{correlation_id}".encode("utf-8")
+    ).hexdigest()[:24]
+    starting_branch = manifest["startingBranch"]
+    repo, origin = _seed_no_commit_publication_repo(
+        workspace_root=workspace_root,
+        workspace_id=workspace_id,
+        relative_path=manifest["workspaceRelativePath"],
+        starting_branch=starting_branch,
+    )
+    SandboxWorkspaceRecordStore(workspace_root).ensure(
+        SandboxWorkspaceRecord(
+            workspace_id=workspace_id,
+            workflow_id=correlation_id,
+            step_execution_id=correlation_id,
+            relative_path=manifest["workspaceRelativePath"],
+        )
+    )
+
+    request = _no_commit_publication_request(
+        manifest=manifest, workspace_id=workspace_id
+    )
+    realizer = _no_commit_publication_realizer(workspace_root)
+    # The handoff agent created the pull request and produced no new commits.
+    published = await realizer._publish_repository(
+        request,
+        AgentRunResult(summary="Created the pull request for the pushed work."),
+    )
+
+    assert published.failure_class is expected["resultFailureClass"]
+    assert published.provider_error_code is None
+    assert published.metadata["push_status"] == "no_commits"
+    evidence = published.metadata["acceptedRepositoryEvidence"]
+    for key, value in expected["acceptedRepositoryEvidence"].items():
+        assert evidence[key] == value, key
+    # The recorded head must be the live remote head, not an assumed local one.
+    remote_head = _git(
+        repo, "ls-remote", "origin", f"refs/heads/{starting_branch}"
+    ).split()[0]
+    assert evidence["headSha"] == remote_head == _git(repo, "rev-parse", "HEAD")
+    assert evidence["branch"] == starting_branch
+    assert evidence["baseBranch"] == starting_branch
+
+    # Workflow handoff: the accepted outcome must classify and continue, never
+    # fail the run, so later steps such as the finalize transition still run.
+    parent = MoonMindRunWorkflow()
+    parent._owner_type = "user"
+    parent._owner_id = "generic-no-commit-replay"
+    outputs = dict(published.metadata)
+    feasibility = parent._step_publication_feasibility(SimpleNamespace(outputs=outputs))
+    assert feasibility["feasible"] is expected["publicationFeasible"]
+    assert feasibility["reason"] == expected["publicationFeasibilityReason"]
+    parent._record_publish_result(
+        parameters={"publishMode": manifest["publishMode"]},
+        execution_result=SimpleNamespace(outputs=outputs),
+    )
+    assert parent._publish_status == expected["workflowPublishStatus"]
+
+    # Losing the exact remote-head proof must stay fatal: advance the remote
+    # branch behind the workspace's back so the stale local ref still reports
+    # zero commits ahead while the live remote head no longer matches.
+    bystander = tmp_path / "bystander"
+    subprocess.run(
+        ["git", "clone", str(origin), str(bystander)], capture_output=True, check=True
+    )
+    _git(bystander, "config", "user.name", "MoonMind Replay")
+    _git(bystander, "config", "user.email", "replay@moonmind.local")
+    _git(bystander, "checkout", starting_branch)
+    (bystander / "concurrent.txt").write_text(
+        "moved by another actor\n", encoding="utf-8"
+    )
+    _git(bystander, "add", "-A")
+    _git(bystander, "commit", "-m", "Advance the remote base behind the workspace")
+    _git(bystander, "push", "origin", starting_branch)
+
+    with pytest.raises(HarnessPlatformError) as unverified:
+        await realizer._publish_repository(
+            request,
+            AgentRunResult(summary="Created the pull request for the pushed work."),
+        )
+    assert unverified.value.code == expected["staleRemoteEvidenceFailureCode"]
