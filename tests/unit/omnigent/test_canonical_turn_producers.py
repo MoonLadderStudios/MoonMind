@@ -603,6 +603,37 @@ async def test_non_remediation_dispatch_still_journals_initial(
 
 
 @pytest.mark.asyncio
+async def test_the_delivered_provider_session_is_attached_to_canonical_authority(
+    turn_commands, session_factory, plan
+) -> None:
+    """Settlement must attach the provider session, not only receipt it.
+
+    The realizer bootstraps its canonical session before the provider session
+    exists. Leaving ``provider_session_ref`` empty made every later
+    provider-scoped checkpoint or bridge lookup miss this aggregate and
+    bootstrap a second canonical session for the same provider session.
+    """
+
+    realizer, _ = _realizer(turn_commands, session_factory)
+    request = _request(
+        plan=plan, correlation_id="attach-run", idempotency_key="attach-key"
+    )
+
+    await realizer.execute(request, plan)
+
+    store = OmnigentControlPlaneStore(session_factory)
+    session_id = _session_id("attach-run")
+    async with store.transaction() as repos:
+        session = await repos.sessions.get(session_id)
+        by_scope = await repos.sessions.get_by_scope(
+            "attach-run", "provider-session-1"
+        )
+
+    assert session.provider_session_ref == "provider-session-1"
+    assert by_scope is not None and by_scope.session_id == session_id
+
+
+@pytest.mark.asyncio
 async def test_remediation_broadening_is_bounded_by_the_repaired_attempt(
     turn_commands, session_factory, plan
 ) -> None:

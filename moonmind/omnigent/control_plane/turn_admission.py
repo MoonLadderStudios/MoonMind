@@ -136,7 +136,10 @@ class ImmutableTurnAuthority:
                 "executionRealizerRef": getattr(
                     payload, "executionRealizerRef", None
                 ),
-                "model": getattr(model_config, "model", None),
+                # ``ModelConfig`` names the selected model ``qualifiedId``;
+                # reading ``model`` recorded ``None`` and made the
+                # billing-relevant model dimension unenforceable.
+                "model": getattr(model_config, "qualifiedId", None),
                 "effort": getattr(model_config, "effort", None),
                 "providerProfileId": provider_profile_id,
                 "providerProfileGeneration": provider_profile_generation,
@@ -148,23 +151,6 @@ class ImmutableTurnAuthority:
                 "publishMode": publish_mode,
             },
         )
-
-
-#: Dimensions a remediation attempt may never change. MoonLadderStudios/MoonMind
-#: #3707 AC6: remediation is bounded by the authority of the attempt it repairs,
-#: so harness, execution realizer, Provider Profile, model, workspace, Skill,
-#: launch policy, and publication authority are all off-limits. Changing any of
-#: them is a policy violation, not a routine branch decision.
-REMEDIATION_NON_BROADENING_DIMENSIONS: tuple[str, ...] = (
-    "harnessId",
-    "executionRealizerRef",
-    "providerProfileId",
-    "model",
-    "workspaceIntentRef",
-    "resolvedSkillsRef",
-    "launchPolicyRef",
-    "publishMode",
-)
 
 
 class RemediationAuthorityBroadenedError(RuntimeError):
@@ -185,6 +171,13 @@ def assert_remediation_does_not_broaden(
 ) -> None:
     """Fail closed when a remediation turn changes bounded execution authority.
 
+    MoonLadderStudios/MoonMind#3707 AC6 bounds a remediation attempt by the
+    authority of the attempt it repairs, so *every* immutable dimension is
+    off-limits -- a remediation may not raise model effort, adopt a rotated
+    Provider Profile generation, or retarget another repository or branch any
+    more than it may change harness, model, workspace, Skill, launch, or
+    publication authority.
+
     Dimensions the remediation does not assert are left to the session's
     recorded authority; only an asserted *different* value is a broadening.
     """
@@ -193,7 +186,7 @@ def assert_remediation_does_not_broaden(
         return
     broadened = tuple(
         name
-        for name in REMEDIATION_NON_BROADENING_DIMENSIONS
+        for name in IMMUTABLE_TURN_AUTHORITY_DIMENSIONS
         if requested.dimensions.get(name) is not None
         and recorded.dimensions.get(name) is not None
         and requested.dimensions.get(name) != recorded.dimensions.get(name)
@@ -286,6 +279,15 @@ def evaluate_turn_admission(
         and recorded.execution_plan_ref != requested.execution_plan_ref
     ):
         changed.append("immutable_executionPlanRef_changed")
+    if (
+        recorded.runtime_binding_ref
+        and requested.runtime_binding_ref
+        and recorded.runtime_binding_ref != requested.runtime_binding_ref
+    ):
+        # The runtime binding carries the host, lease, and workspace authority a
+        # turn would reuse. A different binding under the same plan is a changed
+        # authority, not a live reattach.
+        changed.append("immutable_runtimeBindingRef_changed")
     for name in IMMUTABLE_TURN_AUTHORITY_DIMENSIONS:
         recorded_value = recorded.dimensions.get(name)
         requested_value = requested.dimensions.get(name)
@@ -321,7 +323,6 @@ __all__ = [
     "IMMUTABLE_AUTHORITY_METADATA_KEY",
     "IMMUTABLE_TURN_AUTHORITY_DIMENSIONS",
     "ImmutableTurnAuthority",
-    "REMEDIATION_NON_BROADENING_DIMENSIONS",
     "RemediationAuthorityBroadenedError",
     "assert_remediation_does_not_broaden",
     "evaluate_turn_admission",

@@ -735,7 +735,12 @@ async def _record_branch_terminal_meaning(
         canonical_omnigent_session_id,
     )
 
-    session_id = canonical_omnigent_session_id(
+    # Resolve the canonical session exactly the way the branch claim does: the
+    # provider-session scope is authoritative once a realizer has attached its
+    # delivered session, and the deterministic bootstrap identity is only the
+    # fallback for a branch that established the session itself.
+    provider_session_ref = str(omnigent.omnigent_session_id or "")
+    fallback_session_id = canonical_omnigent_session_id(
         workflow_id=str(omnigent.workflow_id),
         step_execution_id=str(omnigent.step_execution_id),
         agent_run_id=str(omnigent.bridge_session_id),
@@ -743,9 +748,18 @@ async def _record_branch_terminal_meaning(
     try:
         store = OmnigentControlPlaneStore(async_session_maker)
         async with store.transaction() as repos:
-            canonical = await repos.sessions.get(session_id)
+            canonical = (
+                await repos.sessions.get_by_scope(
+                    str(omnigent.workflow_id), provider_session_ref
+                )
+                if provider_session_ref
+                else None
+            )
+            if canonical is None:
+                canonical = await repos.sessions.get(fallback_session_id)
             if canonical is None:
                 return
+            session_id = canonical.session_id
             await repos.sessions.bind_runtime_authority(
                 session_id,
                 expected_revision=canonical.revision,

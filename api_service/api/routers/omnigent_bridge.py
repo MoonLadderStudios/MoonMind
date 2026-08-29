@@ -3762,10 +3762,25 @@ async def _claim_facade_message(
                 actor_principal=str(actor) or None,
             )
         except Exception as exc:
+            from moonmind.omnigent.control_plane.turn_admission import (
+                CanonicalTurnAdmissionRejected,
+            )
             from moonmind.omnigent.control_plane.turn_commands import (
                 CanonicalTurnAuthorityUnavailable,
             )
 
+            if isinstance(exc, CanonicalTurnAdmissionRejected):
+                # A refused admission -- notably a session whose cleanup has
+                # completed -- is the same actionable session-not-ready conflict
+                # the provider-session endpoint already returns, not a server
+                # error for Workflow Chat, steering, and facade approvals.
+                raise WorkflowChatFacadeError(
+                    "This session cannot accept the request without a new "
+                    f"session ({exc.decision.value}).",
+                    failure_class="system_error",
+                    status_code=status.HTTP_409_CONFLICT,
+                    code=CODE_SESSION_NOT_READY,
+                ) from exc
             if isinstance(exc, CanonicalTurnAuthorityUnavailable):
                 raise WorkflowChatFacadeError(
                     str(exc),

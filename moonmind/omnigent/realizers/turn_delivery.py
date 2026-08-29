@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Awaitable, Callable
 
+from moonmind.omnigent.control_plane.records import compute_digest
 from moonmind.omnigent.control_plane.turn_admission import (
     CanonicalTurnAdmissionRejected,
 )
@@ -74,6 +75,18 @@ def canonical_turn_source(request: AgentExecutionRequest) -> TurnSource:
     return coerce_turn_source(lineage.source)
 
 
+def instruction_digest(request: AgentExecutionRequest) -> str:
+    """Return the payload digest for a turn that carries no execution plan.
+
+    The unprofiled path has no plan reference to name its instruction, so the
+    admitted request's idempotency identity is the durable digest.
+    """
+
+    return compute_digest(
+        {"idempotencyKey": request.idempotency_key, "agentId": request.agent_id}
+    )
+
+
 def canonical_turn_base_step_execution_id(
     request: AgentExecutionRequest,
 ) -> str | None:
@@ -97,6 +110,12 @@ async def deliver_canonical_turn(
     :func:`canonical_turn_source`; no realizer may name its own source, so a
     remediation attempt cannot be journaled as an initial turn.
 
+    ``plan`` may be ``None`` for the supported unprofiled execution path, which
+    carries no compiled execution plan. Such a turn has no plan-derived
+    immutable authority to assert, but it still mutates the provider, so it
+    claims, owns, fences cleanup, and settles through this same boundary rather
+    than submitting outside it.
+
     ``turn_commands`` may be ``None`` in unit harnesses that do not wire the
     control plane; the operation then runs unwrapped. A rejected admission
     (changed immutable authority, terminal session, completed cleanup) is
@@ -110,6 +129,7 @@ async def deliver_canonical_turn(
 
     turn_source = canonical_turn_source(request)
     workflow_id, step_execution_id = execution_identity(request)
+    execution_plan_ref = getattr(plan, "planRef", None) if plan is not None else None
     try:
         command_claim = await turn_commands.claim(
             workflow_id=workflow_id,
@@ -118,7 +138,7 @@ async def deliver_canonical_turn(
             command_type=command_type,
             turn_source=turn_source,
             idempotency_key=request.idempotency_key,
-            payload_digest=plan.planRef,
+            payload_digest=execution_plan_ref or instruction_digest(request),
             step_execution_id=step_execution_id,
             base_step_execution_id=canonical_turn_base_step_execution_id(request),
             bootstrap=CanonicalSessionBootstrap(
@@ -126,9 +146,11 @@ async def deliver_canonical_turn(
                 step_execution_id=step_execution_id,
                 agent_run_id=request.correlation_id,
                 source_idempotency_key=request.idempotency_key,
-                execution_plan_ref=plan.planRef,
+                execution_plan_ref=execution_plan_ref,
             ),
-            requested_authority=canonical_turn_authority(request, plan),
+            requested_authority=(
+                canonical_turn_authority(request, plan) if plan is not None else None
+            ),
         )
     except CanonicalTurnAdmissionRejected as exc:
         raise HarnessPlatformError(
@@ -159,15 +181,24 @@ async def deliver_canonical_turn(
                 "Failed to park Omnigent turn command as delivery unknown"
             )
         raise
+    provider_session_ref = str(
+        (result.metadata or {}).get("omnigentSessionId") or ""
+    )
     try:
+        # The canonical session was bootstrapped before the provider session
+        # existed. Attach the delivered provider identity under the claim's
+        # fence *before* settlement so provider-scoped checkpoint and bridge
+        # lookups resolve this aggregate instead of bootstrapping a second one.
+        await turn_commands.attach_provider_session(
+            session_id=command_claim.session_id,
+            provider_session_ref=provider_session_ref,
+            fencing_generation=command_claim.fencing_generation,
+        )
         await turn_commands.settle(
             workflow_id=workflow_id,
             idempotency_key=request.idempotency_key,
             outcome=ControlPlaneOutcome.APPLIED,
-            provider_receipt_id=str(
-                (result.metadata or {}).get("omnigentSessionId") or ""
-            )
-            or None,
+            provider_receipt_id=provider_session_ref or None,
             result_ref=str((result.metadata or {}).get("externalStateRef") or "")
             or None,
         )
@@ -189,4 +220,5 @@ __all__ = [
     "canonical_turn_source",
     "deliver_canonical_turn",
     "execution_identity",
+    "instruction_digest",
 ]

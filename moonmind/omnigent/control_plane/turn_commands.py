@@ -153,6 +153,7 @@ class CanonicalTurnCommandService:
         turn_source: Any,
         idempotency_key: str,
         payload_digest: str,
+        session_id: str | None = None,
         step_execution_id: str | None = None,
         base_step_execution_id: str | None = None,
         bootstrap: CanonicalSessionBootstrap | None = None,
@@ -174,6 +175,7 @@ class CanonicalTurnCommandService:
                 turn_source=turn_source,
                 idempotency_key=idempotency_key,
                 payload_digest=payload_digest,
+                session_id=session_id,
                 step_execution_id=step_execution_id,
                 base_step_execution_id=base_step_execution_id,
                 bootstrap=bootstrap,
@@ -195,6 +197,7 @@ class CanonicalTurnCommandService:
         turn_source: Any,
         idempotency_key: str,
         payload_digest: str,
+        session_id: str | None = None,
         step_execution_id: str | None = None,
         base_step_execution_id: str | None = None,
         bootstrap: CanonicalSessionBootstrap | None = None,
@@ -204,14 +207,22 @@ class CanonicalTurnCommandService:
         branch_capable: bool = True,
         fence_cleanup: bool = True,
     ) -> CanonicalTurnCommandClaim:
-        """Claim within an existing application transaction."""
+        """Claim within an existing application transaction.
+
+        ``session_id`` is the already-authorized canonical locator an adapter
+        that owns one session (the session supervisor) supplies directly. It is
+        still verified against ``workflow_id`` below, exactly like every other
+        locator, so naming a session is not a way to escape workflow authority.
+        """
 
         source = coerce_turn_source(turn_source)
         canonical_key = canonical_turn_command_key(workflow_id, idempotency_key)
         claim_token = canonical_turn_claim_token(canonical_key)
         session = None
         bootstrap_turn = None
-        if chat_binding_id:
+        if session_id:
+            session = await repos.sessions.get(session_id)
+        if session is None and chat_binding_id:
             alias = await repos.chat_binding_aliases.resolve(chat_binding_id)
             if alias is not None and alias.resolves:
                 session = await repos.sessions.get(str(alias.session_id))
@@ -222,12 +233,12 @@ class CanonicalTurnCommandService:
                 workflow_id, provider_session_ref
             )
         if session is None and bootstrap is not None:
-            session_id = canonical_omnigent_session_id(
+            bootstrap_session_id = canonical_omnigent_session_id(
                 workflow_id=workflow_id,
                 step_execution_id=bootstrap.step_execution_id,
                 agent_run_id=bootstrap.agent_run_id,
             )
-            existing_session = await repos.sessions.get(session_id)
+            existing_session = await repos.sessions.get(bootstrap_session_id)
             if existing_session is not None:
                 if (
                     existing_session.moonmind_workflow_id != workflow_id
@@ -242,10 +253,10 @@ class CanonicalTurnCommandService:
                     )
                 session = existing_session
             else:
-                first_turn_id = canonical_omnigent_turn_attempt_id(session_id)
+                first_turn_id = canonical_omnigent_turn_attempt_id(bootstrap_session_id)
                 try:
                     await repos.sessions.create(
-                        session_id=session_id,
+                        session_id=bootstrap_session_id,
                         moonmind_workflow_id=workflow_id,
                         provider=bootstrap.provider,
                         provider_session_ref=provider_session_ref or None,
@@ -263,7 +274,7 @@ class CanonicalTurnCommandService:
                     # primary key while this transaction waits on PostgreSQL's
                     # unique index. The savepoint leaves this transaction usable;
                     # converge on the winner and verify it below.
-                    session = await repos.sessions.get(session_id)
+                    session = await repos.sessions.get(bootstrap_session_id)
                     if session is None:
                         raise
                     if (
@@ -280,14 +291,14 @@ class CanonicalTurnCommandService:
                     if chat_binding_id:
                         await repos.chat_binding_aliases.register(
                             chat_binding_id=chat_binding_id,
-                            session_id=session_id,
+                            session_id=bootstrap_session_id,
                         )
                     bootstrapping_instruction = (
                         bootstrap.source_idempotency_key == idempotency_key
                     )
                     bootstrap_turn = await repos.turn_attempts.create(
                         turn_attempt_id=first_turn_id,
-                        session_id=session_id,
+                        session_id=bootstrap_session_id,
                         idempotency_key=(
                             "omnigent-bootstrap:"
                             + canonical_turn_command_key(
@@ -312,7 +323,7 @@ class CanonicalTurnCommandService:
                         ),
                     )
                     session = await repos.sessions.update_lifecycle(
-                        session_id,
+                        bootstrap_session_id,
                         expected_revision=1,
                         expected_fencing_generation=0,
                         active_turn_attempt_id=first_turn_id,
@@ -362,6 +373,26 @@ class CanonicalTurnCommandService:
             # safely reusable: return the explicit typed decision *before* any
             # provider mutation instead of silently rewriting the old session.
             raise CanonicalTurnAdmissionRejected(admission)
+        if (
+            requested_authority is not None
+            and _recorded_session_authority(session) is None
+        ):
+            # The first instruction to assert authority for a session that
+            # predates the record converges onto it -- and must *persist* it
+            # under the session fence. Otherwise every later instruction reaches
+            # the same "no recorded authority" branch and a changed model,
+            # Provider Profile, repository, Skill set, or publication authority
+            # is silently accepted instead of requiring a branch.
+            session = await repos.sessions.bind_runtime_authority(
+                session.session_id,
+                expected_revision=session.revision,
+                expected_fencing_generation=session.fencing_generation,
+                metadata_patch={
+                    IMMUTABLE_AUTHORITY_METADATA_KEY: (
+                        requested_authority.as_metadata()
+                    )
+                },
+            )
         if chat_binding_id:
             await repos.chat_binding_aliases.register(
                 chat_binding_id=chat_binding_id,
@@ -501,13 +532,34 @@ class CanonicalTurnCommandService:
     ) -> SessionResumeOutcome | None:
         """Return the typed admission decision for reusing ``session``.
 
-        The recorded execution plan and runtime binding come from durable
-        session authority (#3706), never from the caller: an instruction may
+        Durable terminality is decided first and for every source, because a
+        terminal session may not be reopened by an instruction that happens to
+        assert no authority. Only then does the immutable comparison apply: the
+        recorded execution plan and runtime binding come from durable session
+        authority (#3706), never from the caller, since an instruction may
         request authority but cannot attest it. Instructions that do not assert
         an immutable authority set (``requested_authority is None``) skip the
         comparison and keep the session's recorded authority unchanged.
+
+        ``None`` means "admitted"; the caller persists a first asserted
+        authority onto a session that predates the record.
         """
 
+        if session.is_terminal:
+            # Durable terminality is decided *before* the optional-authority
+            # shortcut. Bridge chat, steering, approval, and checkpoint-branch
+            # callers supply no ``requested_authority``; skipping this decision
+            # let the claim create a turn and reach ``update_lifecycle``, which
+            # raises ``TerminalSessionOverwriteError`` instead of returning the
+            # documented branch/new-session outcome.
+            return evaluate_turn_admission(
+                recorded=None,
+                requested=None,
+                session_terminal=True,
+                # Final session terminality is durable: no source may reopen it.
+                session_resumable=False,
+                branch_capable=branch_capable,
+            )
         if requested_authority is None:
             return None
         recorded = _recorded_session_authority(session)
@@ -533,10 +585,6 @@ class CanonicalTurnCommandService:
         return evaluate_turn_admission(
             recorded=recorded,
             requested=requested_authority,
-            session_terminal=session.is_terminal,
-            # Final session terminality is durable: no source may reopen it.
-            # A checkpoint resume of a terminal session branches instead.
-            session_resumable=False,
             runtime_authority_current=runtime_authority_current,
             branch_capable=branch_capable,
             cleanup_complete=cleanup_complete,
@@ -595,6 +643,39 @@ class CanonicalTurnCommandService:
                             expected_fencing_generation=session.fencing_generation,
                         )
             return delivered.outcome
+
+    async def attach_provider_session(
+        self,
+        *,
+        session_id: str,
+        provider_session_ref: str,
+        fencing_generation: int,
+    ) -> None:
+        """Attach the delivered provider session under the claim's fence.
+
+        A realizer bootstraps its canonical session before the provider session
+        exists, so the durable aggregate starts with an empty
+        ``provider_session_ref``. Recording the returned identifier only as a
+        command receipt leaves provider-scoped checkpoint and bridge lookups
+        unable to resolve this session, which lets a later instruction bootstrap
+        a *second* canonical aggregate for the same provider session.
+        """
+
+        if not provider_session_ref:
+            return
+        async with self._store.transaction() as repos:
+            session = await repos.sessions.get(session_id)
+            if session is None:
+                raise CanonicalTurnAuthorityUnavailable(
+                    "provider session attachment lost its canonical session "
+                    "authority"
+                )
+            await repos.sessions.attach_provider_session(
+                session_id,
+                provider_session_ref,
+                expected_revision=session.revision,
+                expected_fencing_generation=fencing_generation,
+            )
 
     async def bind_runtime_authority(
         self,

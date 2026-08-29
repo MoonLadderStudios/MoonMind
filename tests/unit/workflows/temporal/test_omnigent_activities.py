@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+import pytest_asyncio
 from temporalio.testing import ActivityEnvironment
 
 from moonmind.omnigent import execute as omnigent_execute_module
@@ -26,6 +27,30 @@ from moonmind.workflows.temporal.activities.omnigent_activities import (
     _try_generic_realizer_dispatch,
     omnigent_execute_activity,
 )
+
+
+@pytest_asyncio.fixture()
+async def isolated_control_plane(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    """Bind the canonical control plane to a per-test SQLite database.
+
+    ``integration.omnigent.execute`` now claims a canonical turn command on every
+    execution path, so a test that drives the activity must not write to (or read
+    stale commands from) the ambient application database.
+    """
+
+    import api_service.db.base as db_base
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from api_service.db.models import Base
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/control_plane.db")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    monkeypatch.setattr(db_base, "async_session_maker", session_factory)
+    yield session_factory
+    await engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -304,7 +329,7 @@ def test_checkpoint_recovery_decision_ignores_caller_availability_assertions() -
 @pytest.mark.asyncio
 @patch("moonmind.omnigent.execute.run_omnigent_execution")
 async def test_omnigent_execute_activity_delegates(
-    mock_run, monkeypatch: pytest.MonkeyPatch
+    mock_run, monkeypatch: pytest.MonkeyPatch, isolated_control_plane
 ):
     expected_result = AgentRunResult(summary="done", output_refs=[])
     heartbeats: list[tuple[object, ...]] = []
@@ -971,3 +996,67 @@ async def test_profile_bound_activity_coordinator_claims_canonical_continuations
     assert cleanup is not None and cleanup.generation >= 1
 
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_unprofiled_execute_claims_the_canonical_turn_boundary(
+    monkeypatch: pytest.MonkeyPatch, isolated_control_plane
+) -> None:
+    """The unprofiled path mutates the provider, so it claims like every other.
+
+    A request with no ``executionProfileRef`` is not realizer-dispatched and
+    never reaches the coordinator, yet ``run_omnigent_execution`` creates a
+    provider session and posts its first message. Before this boundary it did so
+    with no command claim, no immutable admission, no owner check, and no
+    cleanup fence.
+    """
+
+    from moonmind.omnigent.control_plane import (
+        OmnigentControlPlaneStore,
+        TurnSource,
+    )
+    from moonmind.omnigent.control_plane.identities import (
+        canonical_omnigent_session_id,
+    )
+
+    session_factory = isolated_control_plane
+
+    expected_result = AgentRunResult(
+        summary="unprofiled path",
+        output_refs=[],
+        metadata={"omnigentSessionId": "provider-session-unprofiled"},
+    )
+
+    async def fake_run(*_args, **_kwargs):
+        return expected_result
+
+    monkeypatch.setattr(omnigent_execute_module, "run_omnigent_execution", fake_run)
+
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="unprofiled-run",
+        idempotencyKey="unprofiled-key",
+    )
+
+    result = await ActivityEnvironment().run(omnigent_execute_activity, request)
+
+    assert result == expected_result
+    session_id = canonical_omnigent_session_id(
+        workflow_id="unprofiled-run",
+        step_execution_id="unprofiled-run",
+        agent_run_id="unprofiled-run",
+    )
+    store = OmnigentControlPlaneStore(session_factory)
+    async with store.transaction() as repos:
+        session = await repos.sessions.get(session_id)
+        turns = await repos.turn_attempts.list_for_session(session_id)
+        commands = await repos.commands.list_for_session(session_id)
+        cleanup = await repos.cleanup.get(session_id)
+
+    assert [turn.lineage_kind for turn in turns] == [TurnSource.INITIAL.value]
+    assert len(commands) == 1
+    # The admitted turn fenced incompatible cleanup before the provider mutation
+    # and the delivered provider session is attached to canonical authority.
+    assert cleanup is not None and cleanup.generation >= 1
+    assert session.provider_session_ref == "provider-session-unprofiled"

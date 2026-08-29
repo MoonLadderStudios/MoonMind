@@ -103,10 +103,11 @@ mutation it:
 2. verifies the caller's principal against the session's recorded owner;
 3. loads the recorded execution plan and runtime binding from durable session
    authority and compares them against the authority the caller requests;
-4. refuses a remediation turn that broadens harness, execution realizer,
-   Provider Profile, model, workspace, Skill, launch policy, or publication
-   authority, comparing against the authority of the attempt it repairs (see
-   **What bounds a remediation turn** below);
+4. refuses a remediation turn that broadens *any* immutable dimension —
+   harness, execution realizer, Provider Profile and its credential generation,
+   model, effort, repository, branch, workspace, Skill, launch policy, or
+   publication authority — comparing against the authority of the attempt it
+   repairs (see **What bounds a remediation turn** below);
 5. records a distinct `OmnigentTurnAttempt` and one command-journal entry
    carrying source kind, instruction digest, idempotency identity, expected
    revision, fencing generation, delivery state, and terminal evidence refs;
@@ -204,6 +205,31 @@ The race is therefore resolved in one direction:
   credentials whose lease was already released, and the caller cold-restores or
   branches instead.
 
+That fence is only real because every production teardown owner claims the *same*
+aggregate. `moonmind/omnigent/control_plane/cleanup_authority.py` owns that one
+claim, and both owners hold it before releasing anything and settle it after the
+last release:
+
+- the legacy session supervisor (`omnigent.stop_provider_session`,
+  `omnigent.stop_host`, `omnigent.release_leases`), and
+- the generic Omnigent host realizer, for both in-band cleanup and janitor
+  recovery.
+
+An owner that cannot win the claim performs no destructive step, and an owner
+whose generation was advanced by an admitted turn cannot report cleanup complete.
+Host-lease and OAuth-host compare-and-swaps remain each owner's own concurrency
+control; they are not a substitute for the shared claim.
+
+## Signal-driven continuations
+
+`submit_authorized_continuation` is an ordinary instruction source. The
+`omnigent.persist_signal_intents` Activity claims it through
+`CanonicalTurnCommandService.claim_with_repositories`, so it receives the same
+command-journal entry, immutable-authority comparison, principal verification,
+and cleanup fence as every other source. The signal names its `requestId` and
+durable `instructionRef`; the boundary derives the turn-attempt identity, because
+an instruction may request authority but never attests it.
+
 ## Harness neutrality
 
 The canonical turn service contains no Codex-versus-OpenCode lifecycle branches.
@@ -215,10 +241,19 @@ from the recorded execution plan by
 than harness-specific state.
 
 Codex reaches the coordinator through two production entrypoints — the realizer
-registry and `integration.omnigent.execute` for requests carrying no execution
-plan and no Agent Profile ref. Both construct
+registry and `integration.omnigent.execute` for profile-bound requests carrying
+no execution plan and no Agent Profile ref. Both construct
 `OmnigentProfileBoundExecutionCoordinator` with the canonical turn service, so
 neither has a repository continuation that submits outside the boundary.
+
+`integration.omnigent.execute` also serves the unprofiled path, for requests
+with no `executionProfileRef`. That path compiles no execution plan, so it
+asserts no plan-derived immutable authority, but it still creates a provider
+session and posts its first message. It therefore runs inside the same
+`deliver_canonical_turn` wrapper, which claims the command, requires an owned
+claim, fences cleanup, attaches the delivered provider session, and settles.
+No production Omnigent execution path mutates the provider outside this
+boundary.
 
 ## Non-goals
 

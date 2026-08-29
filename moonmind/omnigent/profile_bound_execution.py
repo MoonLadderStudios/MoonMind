@@ -969,7 +969,7 @@ class OmnigentProfileBoundExecutionCoordinator:
             else None
         )
         try:
-            return await self._turn_commands.claim(
+            claim = await self._turn_commands.claim(
                 workflow_id=workflow_id,
                 provider_session_ref="",
                 chat_binding_id=None,
@@ -993,6 +993,18 @@ class OmnigentProfileBoundExecutionCoordinator:
                 f"{exc.decision.value}; the canonical session was not mutated",
                 code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
             ) from exc
+        if not claim.owns_delivery:
+            # ``ALREADY_APPLIED``, ``FENCING_CONFLICT``, and ``NOT_OWNER`` all
+            # mean this attempt does not own the provider-facing side effect.
+            # Returning the claim anyway submitted the continuation regardless
+            # and could duplicate a billed provider turn on an activity replay
+            # of an already-settled command.
+            raise HarnessPlatformError(
+                "repository continuation command is already settled or owned; "
+                "reconciliation is required",
+                code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+            )
+        return claim
 
     async def _settle_continuation_turn(
         self,

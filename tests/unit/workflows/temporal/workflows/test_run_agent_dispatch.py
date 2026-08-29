@@ -4856,8 +4856,13 @@ class TestCanonicalTurnLineage(unittest.TestCase):
         """
 
         import ast
+        import importlib
 
-        import moonmind.workflows.temporal.workflows.run as run_module
+        # Resolve the module object without a second import style for a module
+        # this file already imports names from.
+        run_module = importlib.import_module(
+            "moonmind.workflows.temporal.workflows.run"
+        )
 
         tree = ast.parse(inspect.getsource(run_module))
         builders: list[str] = []

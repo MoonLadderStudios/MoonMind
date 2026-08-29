@@ -667,10 +667,26 @@ async def _omnigent_execute_activity(
         return generic_dispatch
 
     if not request.execution_profile_ref:
-        return await run_omnigent_execution(
-            request,
-            artifact_gateway=artifact_gateway,
-            run_store=run_store,
+        # The supported unprofiled path still creates a provider session and
+        # posts its first message, so it claims the same canonical turn command
+        # every other execution path claims (#3707 §1). Without this it mutated
+        # the provider with no command claim, immutable admission, owner check,
+        # or cleanup fence. It carries no compiled plan, so it asserts no
+        # plan-derived immutable authority.
+        from moonmind.omnigent.realizers.turn_delivery import deliver_canonical_turn
+
+        return await deliver_canonical_turn(
+            CanonicalTurnCommandService(
+                OmnigentControlPlaneStore(async_session_maker)
+            ),
+            request=request,
+            plan=None,
+            command_type="execute_unprofiled_request",
+            operation=lambda: run_omnigent_execution(
+                request,
+                artifact_gateway=artifact_gateway,
+                run_store=run_store,
+            ),
         )
 
     async with httpx.AsyncClient() as http_client:
@@ -717,11 +733,12 @@ async def _omnigent_execute_activity(
                 restorer=ManagedServiceRemediationRestorer(restore_service),
                 head_loader=ArtifactRemediationHeadLoader(artifact_service),
             ),
-            # This activity still reaches the coordinator directly whenever the
-            # request carries no executionPlanRef and no agentProfileRef, so it
-            # must own the same canonical turn boundary the realizer-dispatched
-            # path owns (#3707 §1). Without it every repository continuation on
-            # this path would submit outside the boundary and fence no cleanup.
+            # This activity still reaches the coordinator directly whenever a
+            # profile-bound request carries no executionPlanRef and no
+            # agentProfileRef, so it must own the same canonical turn boundary
+            # the realizer-dispatched path owns (#3707 §1). Without it every
+            # repository continuation on this path would submit outside the
+            # boundary and fence no cleanup.
             turn_command_service=CanonicalTurnCommandService(
                 OmnigentControlPlaneStore(async_session_maker)
             ),

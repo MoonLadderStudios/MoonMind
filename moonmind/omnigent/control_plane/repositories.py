@@ -450,6 +450,32 @@ class SessionRepository(_RepositoryBase):
         row = (await self._session.execute(stmt)).scalar_one_or_none()
         return _session_record(row) if row is not None else None
 
+    async def get_by_provider_session(
+        self, provider_session_ref: str
+    ) -> Optional[SessionRecord]:
+        """Return the one canonical session holding this provider attachment.
+
+        Recovery owners know the provider session but not the workflow scope, so
+        this resolves the aggregate the turn boundary attached. Provider session
+        identifiers are provider-generated and unique; more than one match is
+        ambiguous authority and fails closed rather than picking a session.
+        """
+
+        if not provider_session_ref:
+            return None
+        stmt = select(OmnigentSession).where(
+            OmnigentSession.provider_session_ref == provider_session_ref
+        )
+        rows = (await self._session.execute(stmt)).scalars().all()
+        if not rows:
+            return None
+        if len(rows) > 1:
+            raise ConflictingSessionAuthorityError(
+                "provider session "
+                f"{provider_session_ref!r} resolves multiple canonical sessions"
+            )
+        return _session_record(rows[0])
+
     async def get_by_step_execution(
         self, moonmind_workflow_id: str, step_execution_id: str
     ) -> Optional[SessionRecord]:

@@ -15,6 +15,8 @@ steering, approval response, checkpoint resume, linked branch -- must use:
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 import pytest_asyncio
 from sqlalchemy import text
@@ -34,12 +36,16 @@ from moonmind.omnigent.control_plane import (
     distinct_terminal_meanings,
     terminal_meaning_patch,
 )
+from moonmind.omnigent.control_plane.cleanup_authority import (
+    CanonicalCleanupAuthority,
+)
 from moonmind.omnigent.control_plane.turn_admission import (
+    IMMUTABLE_AUTHORITY_METADATA_KEY,
     IMMUTABLE_TURN_AUTHORITY_DIMENSIONS,
-    REMEDIATION_NON_BROADENING_DIMENSIONS,
     CanonicalTurnAdmissionRejected,
     ImmutableTurnAuthority,
     RemediationAuthorityBroadenedError,
+    assert_remediation_does_not_broaden,
     evaluate_turn_admission,
 )
 from moonmind.omnigent.control_plane.turn_commands import (
@@ -53,7 +59,12 @@ from moonmind.omnigent.control_plane.turn_sources import (
     UnknownTurnSourceError,
     coerce_turn_source,
 )
+from moonmind.omnigent.harness_platform.execution_plan import ModelConfig
+from moonmind.omnigent.realizers.generic_host import _GENERIC_HOST_CLEANUP_OWNER
 from moonmind.omnigent.resume_decision import SessionResumeDecision
+from moonmind.workflows.temporal.activities.omnigent_session_activities import (
+    _SESSION_SUPERVISOR_CLEANUP_OWNER,
+)
 
 
 WORKFLOW_ID = "wf-3707"
@@ -562,6 +573,59 @@ def test_missing_branch_evidence_escalates_to_new_session_required() -> None:
     assert outcome.requires_new_authority is True
 
 
+def test_changed_runtime_binding_is_never_a_live_reattach() -> None:
+    """The runtime binding is immutable authority, not an incidental pointer.
+
+    Two bindings under the same execution plan carry different host, lease, and
+    workspace authority, so reattaching across them would reuse a runtime the
+    session never recorded.
+    """
+
+    outcome = evaluate_turn_admission(
+        recorded=_authority(runtime_binding_ref="binding-1"),
+        requested=_authority(runtime_binding_ref="binding-2"),
+    )
+    assert outcome.decision is SessionResumeDecision.BRANCH_REQUIRED
+    assert "immutable_runtimeBindingRef_changed" in outcome.reason_codes
+
+
+def test_an_unasserted_runtime_binding_keeps_the_recorded_authority() -> None:
+    outcome = evaluate_turn_admission(
+        recorded=_authority(runtime_binding_ref="binding-1"),
+        requested=_authority(runtime_binding_ref=None),
+    )
+    assert outcome.decision is SessionResumeDecision.LIVE_REATTACH
+
+
+def test_execution_plan_projection_reads_the_qualified_model_id() -> None:
+    """``ModelConfig`` names the selected model ``qualifiedId``.
+
+    Projecting ``model`` recorded ``None`` on both sides of the guard, so a
+    billing-relevant model change could never be detected.
+    """
+
+    plan = SimpleNamespace(
+        planRef="plan:sha256:" + "b" * 64,
+        payload=SimpleNamespace(
+            harnessId="codex",
+            executionRealizerRef="codex-profile-bound@1",
+            modelConfig=ModelConfig(
+                qualifiedId="anthropic/claude-opus-5",
+                effort="high",
+                modelConfigDigest="sha256:" + "c" * 64,
+            ),
+            workspaceIntentRef="workspace-1",
+            resolvedSkills="skills-1",
+            launchPolicyRef="launch-1",
+        ),
+    )
+
+    authority = ImmutableTurnAuthority.from_execution_plan(plan)
+
+    assert authority.dimensions["model"] == "anthropic/claude-opus-5"
+    assert authority.dimensions["effort"] == "high"
+
+
 def test_live_reattach_requires_current_runtime_authority() -> None:
     live = evaluate_turn_admission(recorded=_authority(), requested=_authority())
     assert live.decision is SessionResumeDecision.LIVE_REATTACH
@@ -575,23 +639,11 @@ def test_live_reattach_requires_current_runtime_authority() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "dimension",
-    [
-        "harnessId",
-        "providerProfileId",
-        "model",
-        "workspaceIntentRef",
-        "resolvedSkillsRef",
-        "launchPolicyRef",
-        "publishMode",
-    ],
-)
+@pytest.mark.parametrize("dimension", IMMUTABLE_TURN_AUTHORITY_DIMENSIONS)
 async def test_remediation_cannot_broaden_bounded_authority(
     service, session_factory, dimension: str
 ) -> None:
-    """Remediation may not widen harness, profile, model, workspace, Skill,
-    launch, or publication authority."""
+    """Remediation may not widen any immutable execution authority dimension."""
 
     claim = await _claim(
         service,
@@ -722,20 +774,107 @@ async def test_remediation_without_a_recorded_base_has_nothing_to_broaden(
     assert claim.outcome is ControlPlaneOutcome.APPLIED
 
 
-def test_remediation_non_broadening_covers_every_named_dimension() -> None:
-    assert set(REMEDIATION_NON_BROADENING_DIMENSIONS) == {
-        "harnessId",
-        "executionRealizerRef",
-        "providerProfileId",
-        "model",
-        "workspaceIntentRef",
-        "resolvedSkillsRef",
-        "launchPolicyRef",
-        "publishMode",
-    }
-    assert set(REMEDIATION_NON_BROADENING_DIMENSIONS) <= set(
-        IMMUTABLE_TURN_AUTHORITY_DIMENSIONS
+@pytest.mark.asyncio
+async def test_a_terminal_session_is_refused_even_without_asserted_authority(
+    service, session_factory
+) -> None:
+    """Bridge chat, steering, approval, and branch callers assert no authority.
+
+    Skipping the terminal decision for them let the claim create a turn and hit
+    ``TerminalSessionOverwriteError`` -- an unhandled bridge error -- instead of
+    the documented typed branch outcome.
+    """
+
+    claim = await _claim(
+        service, idempotency_key="run-1", turn_source=TurnSource.INITIAL
     )
+    store = OmnigentControlPlaneStore(session_factory)
+    async with store.transaction() as repos:
+        session = await repos.sessions.get(claim.session_id)
+        await repos.sessions.mark_terminal(
+            claim.session_id,
+            terminal_state="completed",
+            expected_revision=session.revision,
+            expected_fencing_generation=session.fencing_generation,
+        )
+        before = await repos.turn_attempts.count_for_session(claim.session_id)
+
+    with pytest.raises(CanonicalTurnAdmissionRejected) as excinfo:
+        await _claim(
+            service,
+            idempotency_key="run-1:chat:1",
+            turn_source=TurnSource.WORKFLOW_CHAT,
+            requested_authority=None,
+        )
+
+    assert excinfo.value.decision is SessionResumeDecision.BRANCH_REQUIRED
+    assert "session_terminal" in excinfo.value.outcome.reason_codes
+    async with store.transaction() as repos:
+        assert await repos.turn_attempts.count_for_session(claim.session_id) == before
+
+
+@pytest.mark.asyncio
+async def test_the_first_asserted_authority_is_persisted_for_legacy_sessions(
+    service, session_factory
+) -> None:
+    """A converged legacy session must record the authority it converged onto.
+
+    Migration 366 does not backfill ``immutableTurnAuthority``, so without a
+    durable write every later instruction re-enters the same convergence branch
+    and a changed model, profile, repository, Skill, or publication authority is
+    silently accepted instead of requiring a branch.
+    """
+
+    legacy = await _claim(
+        service,
+        idempotency_key="run-1",
+        turn_source=TurnSource.INITIAL,
+        requested_authority=None,
+    )
+    store = OmnigentControlPlaneStore(session_factory)
+    async with store.transaction() as repos:
+        session = await repos.sessions.get(legacy.session_id)
+    assert IMMUTABLE_AUTHORITY_METADATA_KEY not in session.metadata
+
+    await _claim(
+        service,
+        idempotency_key="run-1:chat:1",
+        turn_source=TurnSource.WORKFLOW_CHAT,
+        requested_authority=_authority(),
+    )
+
+    async with store.transaction() as repos:
+        session = await repos.sessions.get(legacy.session_id)
+    assert (
+        session.metadata[IMMUTABLE_AUTHORITY_METADATA_KEY]
+        == _authority().as_metadata()
+    )
+
+    with pytest.raises(CanonicalTurnAdmissionRejected) as excinfo:
+        await _claim(
+            service,
+            idempotency_key="run-1:chat:2",
+            turn_source=TurnSource.WORKFLOW_CHAT,
+            requested_authority=_authority(dimensions={"model": "changed"}),
+        )
+    assert "immutable_model_changed" in excinfo.value.outcome.reason_codes
+
+
+def test_remediation_is_bounded_by_every_immutable_dimension() -> None:
+    """AC6 bounds remediation by the whole immutable set, not a subset.
+
+    A subset silently allowed a remediation to raise effort, adopt a rotated
+    Provider Profile generation, or retarget another repository or branch.
+    """
+
+    recorded = _authority()
+    for dimension in IMMUTABLE_TURN_AUTHORITY_DIMENSIONS:
+        with pytest.raises(RemediationAuthorityBroadenedError) as excinfo:
+            assert_remediation_does_not_broaden(
+                recorded=recorded,
+                requested=_authority(dimensions={dimension: "broadened"}),
+            )
+        assert excinfo.value.broadened == (dimension,)
 
 
 def test_incomplete_asserted_authority_fails_closed_when_required() -> None:
@@ -749,6 +888,102 @@ def test_incomplete_asserted_authority_fails_closed_when_required() -> None:
 
 
 # --- Cleanup coordination tests ----------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_every_production_cleanup_owner_shares_this_aggregate(
+    service, session_factory
+) -> None:
+    """The teardown owners production actually runs claim *this* row.
+
+    ``fence_for_turn`` only fences a real janitor when the owners that release
+    hosts, credentials, and provider sessions hold this claim. Both production
+    owners -- the legacy session supervisor and the generic host realizer --
+    resolve their claim through :class:`CanonicalCleanupAuthority`, so a second
+    owner is refused while the first holds it.
+    """
+
+    claim = await _claim(
+        service, idempotency_key="run-1", turn_source=TurnSource.INITIAL
+    )
+    authority = CanonicalCleanupAuthority(OmnigentControlPlaneStore(session_factory))
+
+    supervisor = await authority.claim(
+        claim.session_id, owner_class=_SESSION_SUPERVISOR_CLEANUP_OWNER
+    )
+    assert supervisor is not None
+    # The same owner's next destructive step resumes its own claim.
+    assert (
+        await authority.claim(
+            claim.session_id, owner_class=_SESSION_SUPERVISOR_CLEANUP_OWNER
+        )
+    ).generation == supervisor.generation
+    # A second production owner is refused while that claim is live.
+    assert (
+        await authority.claim(
+            claim.session_id, owner_class=_GENERIC_HOST_CLEANUP_OWNER
+        )
+        is None
+    )
+    assert await authority.complete(supervisor) is True
+
+    async with OmnigentControlPlaneStore(session_factory).transaction() as repos:
+        cleanup = await repos.cleanup.get(claim.session_id)
+    assert cleanup.state == CLEANUP_STATE_COMPLETE
+
+
+@pytest.mark.asyncio
+async def test_an_admitted_turn_fences_the_shared_cleanup_owner(
+    service, session_factory
+) -> None:
+    """A turn admitted after the claim stops that owner completing cleanup.
+
+    This is the whole point of advancing the cleanup generation: the janitor
+    that already released nothing irreversible cannot report the replacement
+    generation as cleaned.
+    """
+
+    claim = await _claim(
+        service, idempotency_key="run-1", turn_source=TurnSource.INITIAL
+    )
+    authority = CanonicalCleanupAuthority(OmnigentControlPlaneStore(session_factory))
+    janitor = await authority.claim(
+        claim.session_id, owner_class=_GENERIC_HOST_CLEANUP_OWNER
+    )
+    assert janitor is not None
+
+    await _claim(
+        service,
+        idempotency_key="run-1:continuation:1",
+        turn_source=TurnSource.REPOSITORY_CONTINUATION,
+    )
+
+    assert await authority.complete(janitor) is False
+    async with OmnigentControlPlaneStore(session_factory).transaction() as repos:
+        cleanup = await repos.cleanup.get(claim.session_id)
+    assert cleanup.state != CLEANUP_STATE_COMPLETE
+
+
+@pytest.mark.asyncio
+async def test_recovery_resolves_its_session_through_the_attached_provider(
+    service, session_factory
+) -> None:
+    """A recovery scan knows the provider session, not the workflow scope."""
+
+    claim = await _claim(
+        service, idempotency_key="run-1", turn_source=TurnSource.INITIAL
+    )
+    await service.attach_provider_session(
+        session_id=claim.session_id,
+        provider_session_ref="provider-session-77",
+        fencing_generation=claim.fencing_generation,
+    )
+    authority = CanonicalCleanupAuthority(OmnigentControlPlaneStore(session_factory))
+
+    assert await authority.resolve_session_id("provider-session-77") == (
+        claim.session_id
+    )
+    assert await authority.resolve_session_id("provider-session-unknown") == ""
 
 
 @pytest.mark.asyncio
