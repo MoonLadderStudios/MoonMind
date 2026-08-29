@@ -1,0 +1,18 @@
+{
+  "invariant": "a remotely verified no-commit publication is canonical terminal repository evidence that continues into the durable workflow publish handoff, and is never reported as a generic dispatch failure",
+  "acceptedRepositoryEvidence": {
+    "schemaVersion": "accepted-repository-evidence/v1",
+    "pushStatus": "no_commits",
+    "commitsAheadOfBase": 0,
+    "repositoryChanged": false,
+    "publicationAuthorized": true,
+    "candidateContaminated": false,
+    "remoteVerified": true,
+    "authority": "omnigent.generic_host_execution"
+  },
+  "resultFailureClass": null,
+  "publicationFeasibilityReason": "no_candidate_change",
+  "publicationFeasible": false,
+  "workflowPublishStatus": "skipped",
+  "staleRemoteEvidenceFailureCode": "OMNIGENT_REPOSITORY_PUBLICATION_UNVERIFIED"
+}
