@@ -20,6 +20,9 @@ from moonmind.omnigent.credential_materializers import (
     OmnigentCredentialProvisioningService,
     build_default_credential_materializer_registry,
 )
+from moonmind.omnigent.control_plane.cleanup_authority import (
+    CanonicalCleanupAuthority,
+)
 from moonmind.omnigent.control_plane.repositories import OmnigentControlPlaneStore
 from moonmind.omnigent.control_plane.turn_commands import CanonicalTurnCommandService
 from moonmind.omnigent.execute import run_omnigent_execution
@@ -286,9 +289,21 @@ def build_generic_omnigent_execution_services(
         turn_command_service=CanonicalTurnCommandService(
             OmnigentControlPlaneStore(session_factory)
         ),
+        # Host, credential, and provider-session teardown shares the canonical
+        # cleanup aggregate an admitted turn fences (#3707 §4).
+        cleanup_authority=CanonicalCleanupAuthority(
+            OmnigentControlPlaneStore(session_factory)
+        ),
     )
     registry = OmnigentExecutionRealizerRegistry()
-    registry.register(CodexProfileBoundRealizer(session_factory=session_factory))
+    registry.register(
+        CodexProfileBoundRealizer(
+            session_factory=session_factory,
+            turn_command_service=CanonicalTurnCommandService(
+                OmnigentControlPlaneStore(session_factory)
+            ),
+        )
+    )
     registry.register(realizer)
     return GenericOmnigentExecutionServices(
         planning_service=planning,

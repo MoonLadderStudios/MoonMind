@@ -24,6 +24,10 @@ from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
 )
+from moonmind.omnigent.realizers.turn_delivery import (
+    deliver_canonical_turn,
+    execution_identity as _execution_identity,
+)
 from moonmind.omnigent.runtime_bindings import (
     RuntimeBindingSessionAuthoritySink,
     RuntimeBindingState,
@@ -36,14 +40,12 @@ from moonmind.schemas.temporal_activity_models import AcceptedRepositoryEvidence
 
 logger = logging.getLogger(__name__)
 
+#: The generic host realizer is one cleanup owner of a canonical session.
+_GENERIC_HOST_CLEANUP_OWNER = "omnigent_generic_host"
 
-def _execution_identity(request: AgentExecutionRequest) -> tuple[str, str]:
-    if request.step_execution is not None:
-        return (
-            request.step_execution.workflow_id,
-            request.step_execution.step_execution_id,
-        )
-    return request.correlation_id, request.correlation_id
+#: Distinguishes "this owner lost the shared cleanup claim" from "no control
+#: plane is wired", which must stay runnable in unit harnesses.
+_CLEANUP_NOT_OWNED = object()
 
 
 class GenericOmnigentHostRealizer:
@@ -65,6 +67,7 @@ class GenericOmnigentHostRealizer:
         workspace_publisher: Any,
         artifact_gateway: Any | None = None,
         turn_command_service: Any | None = None,
+        cleanup_authority: Any | None = None,
         heartbeat_interval_seconds: float = 60.0,
         heartbeat_ttl_seconds: int = 900,
     ) -> None:
@@ -95,6 +98,12 @@ class GenericOmnigentHostRealizer:
         self._workspace_publisher = workspace_publisher
         self._artifacts = artifact_gateway
         self._turn_commands = turn_command_service
+        # The generic host is one cleanup owner of a canonical session. It shares
+        # the control-plane cleanup aggregate with the legacy session supervisor
+        # so an admitted turn's cleanup fence applies to a real janitor
+        # (#3707 §4). ``None`` keeps unit harnesses that do not wire the control
+        # plane runnable, exactly like ``turn_command_service``.
+        self._cleanup_authority = cleanup_authority
         if heartbeat_interval_seconds <= 0 or heartbeat_ttl_seconds <= 0:
             raise ValueError("generic host heartbeat interval and TTL must be positive")
         self._heartbeat_interval = heartbeat_interval_seconds
@@ -126,83 +135,13 @@ class GenericOmnigentHostRealizer:
                 )
             return AgentRunResult.model_validate(completed.terminalResult)
 
-        command_claim = None
-        workflow_id, step_execution_id = _execution_identity(request)
-        if self._turn_commands is not None:
-            from moonmind.omnigent.control_plane.turn_commands import (
-                CanonicalSessionBootstrap,
-            )
-
-            command_claim = await self._turn_commands.claim(
-                workflow_id=workflow_id,
-                provider_session_ref="",
-                chat_binding_id=None,
-                command_type="execute_admitted_plan",
-                idempotency_key=request.idempotency_key,
-                payload_digest=plan.planRef,
-                step_execution_id=step_execution_id,
-                bootstrap=CanonicalSessionBootstrap(
-                    provider="omnigent",
-                    step_execution_id=step_execution_id,
-                    agent_run_id=request.correlation_id,
-                    source_idempotency_key=request.idempotency_key,
-                    execution_plan_ref=plan.planRef,
-                ),
-            )
-            if not command_claim.owns_delivery:
-                raise HarnessPlatformError(
-                    "canonical turn command is already settled or owned; reconciliation is required",
-                    code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
-                )
-        try:
-            result = await self._execute_lifecycle(request, plan)
-        except BaseException:
-            if command_claim is not None:
-                from moonmind.omnigent.control_plane.records import (
-                    ControlPlaneOutcome,
-                )
-
-                try:
-                    await self._turn_commands.settle(
-                        workflow_id=workflow_id,
-                        idempotency_key=request.idempotency_key,
-                        outcome=ControlPlaneOutcome.DELIVERY_UNKNOWN,
-                    )
-                except Exception:
-                    logger.exception(
-                        "Failed to park generic Omnigent command as delivery unknown"
-                    )
-            raise
-        if command_claim is not None:
-            from moonmind.omnigent.control_plane.records import ControlPlaneOutcome
-
-            try:
-                await self._turn_commands.settle(
-                    workflow_id=workflow_id,
-                    idempotency_key=request.idempotency_key,
-                    outcome=ControlPlaneOutcome.APPLIED,
-                    provider_receipt_id=str(
-                        (result.metadata or {}).get("omnigentSessionId") or ""
-                    )
-                    or None,
-                    result_ref=str(
-                        (result.metadata or {}).get("externalStateRef") or ""
-                    )
-                    or None,
-                )
-            except Exception:
-                logger.exception(
-                    "Generic Omnigent command settlement remains pending"
-                )
-                result = result.model_copy(
-                    update={
-                        "metadata": {
-                            **(result.metadata or {}),
-                            "canonicalCommandSettlementDeferred": True,
-                        }
-                    }
-                )
-        return result
+        return await deliver_canonical_turn(
+            self._turn_commands,
+            request=request,
+            plan=plan,
+            command_type="execute_admitted_plan",
+            operation=lambda: self._execute_lifecycle(request, plan),
+        )
 
     async def _execute_lifecycle(
         self,
@@ -690,6 +629,17 @@ class GenericOmnigentHostRealizer:
         if binding.state is RuntimeBindingState.cleaned:
             return binding, host_lease
 
+        cleanup_claim = await self._claim_canonical_cleanup(
+            self._canonical_session_id(request)
+        )
+        if cleanup_claim is _CLEANUP_NOT_OWNED:
+            # Another owner holds this session's cleanup, or an admitted turn
+            # already completed it: releasing the host, credentials, or provider
+            # session here would race a live owner.
+            raise HarnessPlatformError(
+                "canonical cleanup authority is owned by another janitor",
+                code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+            )
         cleanup_evidence: dict[str, Any] = {}
         if binding.omnigentSessionId:
             cleanup_evidence["session"] = await self._session_cleanup.drain(
@@ -732,6 +682,7 @@ class GenericOmnigentHostRealizer:
             )
         # Provider capacity releases after all credential-consuming state.
         await self._provider_leases.release_all(acquired)
+        await self._complete_canonical_cleanup(cleanup_claim)
         attestation_refs = dict(binding.attestationRefs)
         if evidence_ref:
             attestation_refs["cleanupAttestationRef"] = evidence_ref
@@ -741,6 +692,49 @@ class GenericOmnigentHostRealizer:
             updates={"attestationRefs": attestation_refs},
         )
         return binding, host_lease
+
+    def _canonical_session_id(self, request: AgentExecutionRequest) -> str:
+        """Return the canonical session this realizer's turn bootstrapped."""
+
+        from moonmind.omnigent.control_plane.identities import (
+            canonical_omnigent_session_id,
+        )
+
+        workflow_id, step_execution_id = _execution_identity(request)
+        return canonical_omnigent_session_id(
+            workflow_id=workflow_id,
+            step_execution_id=step_execution_id,
+            agent_run_id=request.correlation_id,
+        )
+
+    async def _recovered_session_id(self, binding: StableRuntimeBinding) -> str:
+        """Resolve the canonical session a recovery scan is about to clean up.
+
+        Recovery has no admitted request, so it resolves the session through the
+        provider session the turn boundary attached to it. A binding with no
+        attached provider session never reached a canonical turn.
+        """
+
+        if self._cleanup_authority is None or not binding.omnigentSessionId:
+            return ""
+        return await self._cleanup_authority.resolve_session_id(
+            binding.omnigentSessionId
+        )
+
+    async def _claim_canonical_cleanup(self, session_id: str) -> Any:
+        """Return the shared cleanup claim, or the not-owned sentinel."""
+
+        if self._cleanup_authority is None or not session_id:
+            return None
+        claim = await self._cleanup_authority.claim(
+            session_id, owner_class=_GENERIC_HOST_CLEANUP_OWNER
+        )
+        return claim if claim is not None else _CLEANUP_NOT_OWNED
+
+    async def _complete_canonical_cleanup(self, claim: Any) -> None:
+        if claim is None or self._cleanup_authority is None:
+            return
+        await self._cleanup_authority.complete(claim)
 
     async def _update_binding(
         self,
@@ -922,6 +916,16 @@ class GenericOmnigentHostRealizer:
         cleanup_handles = await self._credentials.load_cleanup_handles(
             binding.providerLeases, binding.credentialRuntimeHandles
         )
+        cleanup_claim = await self._claim_canonical_cleanup(
+            await self._recovered_session_id(binding)
+        )
+        if cleanup_claim is _CLEANUP_NOT_OWNED:
+            # Recovery must not release a host or credentials that a live
+            # cleanup owner -- or a newly admitted turn -- now owns.
+            raise HarnessPlatformError(
+                "canonical cleanup authority is owned by another janitor",
+                code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+            )
         if host_lease is not None and host_lease.status != "cleaned":
             if binding.omnigentSessionId:
                 await self._session_cleanup.drain(binding.omnigentSessionId)
@@ -940,6 +944,7 @@ class GenericOmnigentHostRealizer:
         await self._host_runtime.cleanup_authorities(binding.cleanupAuthorityRefs)
         await self._credentials.cleanup_all(cleanup_handles)
         await self._provider_leases.release_from_binding(binding.providerLeases)
+        await self._complete_canonical_cleanup(cleanup_claim)
         await self._runtime_bindings.update(
             binding.bindingId,
             expected_revision=binding.revision,

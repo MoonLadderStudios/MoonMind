@@ -40,6 +40,7 @@ with workflow.unsafe.imports_passed_through():
         OwnerIdentity,
     )
     from moonmind.workloads.tool_bridge import CONTAINER_RUN_JOB_TOOL
+    from moonmind.omnigent.control_plane.turn_sources import TurnSource
     from moonmind.schemas.managed_session_models import (
         CodexManagedSessionBinding,
         CodexManagedSessionClearRequest,
@@ -748,6 +749,12 @@ RUN_OMNIGENT_EXECUTION_PLAN_REF_PATCH = (
 RUN_AGENT_REQUIRED_CAPABILITIES_PROPAGATION_PATCH = (
     "run-agent-required-capabilities-propagation-v1"
 )
+# The launching controller attests the closed canonical turn source and the Step
+# Execution a remediation attempt repairs (#3707).  This adds a field to the
+# AgentRun request payload and therefore requires a replay gate: an in-flight
+# child workflow started before the cutover carries no lineage and stays an
+# ``initial`` turn.
+RUN_CANONICAL_TURN_LINEAGE_PATCH = "run-canonical-turn-lineage-v1"
 RUN_EXECUTION_FANOUT_AUTHORIZATION_PATCH = "run-execution-fanout-authorization-v1"
 # Resolved Skill metadata is the launch-time capability authority.  Plans may
 # have been compiled from an older registry projection, so merge the immutable
@@ -1497,6 +1504,10 @@ class MoonMindRunWorkflow:
         # attempts inherit it so ``auto`` loop tools never reach adapter routing.
         self._remediation_loop_runtime: dict[str, Any] | None = None
         self._remediation_loop_continuation: dict[str, Any] | None = None
+        # Controller-attested canonical turn lineage per logical step (#3707).
+        # Compact and deterministic: the workflow is the only authority that can
+        # say which closed turn source a Step Execution launches under.
+        self._canonical_turn_lineage_by_step: dict[str, dict[str, Any]] = {}
         self._original_input_payload: dict[str, Any] = {}
         self._moonspec_environment_blocked_publish_action_snapshot: str = "fail"
         self._moonspec_draft_publication_reason: Optional[str] = None
@@ -7474,6 +7485,59 @@ class MoonMindRunWorkflow:
             self._remediation_workspace_head
         )
 
+    def _record_canonical_turn_lineage(
+        self,
+        *,
+        node: Mapping[str, Any],
+        node_id: str,
+    ) -> dict[str, Any] | None:
+        """Attest the closed canonical turn source this Step Execution launches.
+
+        MoonLadderStudios/MoonMind#3707 requires every instruction that reaches
+        an existing Omnigent session to name one closed source, and requires a
+        remediation attempt to be admitted against the authority of the attempt
+        it repairs. The launching controller is the only authority that can make
+        either statement: an execution realizer must not name its own source,
+        and a plan node must not be able to claim remediation authority.
+
+        The attestation is therefore derived here from workflow-owned state
+        only: the admitted remediation loop plus the loop head the workflow owns.
+        A node that merely *looks* like a remediation step without loop state
+        backing it carries no lineage and launches as the instruction that
+        establishes its own canonical session.
+        """
+
+        self._canonical_turn_lineage_by_step.pop(node_id, None)
+        if not self._is_moonspec_remediation_step(node):
+            return None
+        state = self._remediation_loop_state
+        if state is None:
+            return None
+        attempt, _ = self._moonspec_remediation_attempt_metadata(node)
+        annotations = self._node_annotations_mapping(node)
+        loop_id = str(annotations.get("remediationLoopId") or "").strip()
+        if loop_id and loop_id != state.loop_id:
+            # The node belongs to another loop; the admitted controller cannot
+            # attest it, so it does not get remediation authority.
+            return None
+        if attempt is None or attempt != state.attempt_ordinal:
+            return None
+        head = self._remediation_workspace_head
+        base_step_execution_id = None
+        if head is not None and head.loop_id == state.loop_id:
+            # The loop head names the Step Execution whose candidate this
+            # attempt continues -- exactly the attempt being repaired. Its
+            # durable authority, not this attempt's own request, bounds the turn.
+            base_step_execution_id = head.head_step_execution_id
+        lineage: dict[str, Any] = {
+            "schemaVersion": "canonical-turn-lineage/v1",
+            "source": TurnSource.REMEDIATION.value,
+        }
+        if base_step_execution_id:
+            lineage["baseStepExecutionId"] = base_step_execution_id
+        self._canonical_turn_lineage_by_step[node_id] = lineage
+        return dict(lineage)
+
     def _inject_remediation_verification_baseline(
         self,
         *,
@@ -11663,6 +11727,7 @@ class MoonMindRunWorkflow:
                         node=node,
                         node_inputs=node_inputs,
                     )
+                    self._record_canonical_turn_lineage(node=node, node_id=node_id)
                 except (RemediationHeadError, ValidationError) as exc:
                     # These authority and contract checks run before the Step
                     # Execution is launched, so nothing else would attribute the
@@ -14742,6 +14807,7 @@ class MoonMindRunWorkflow:
                     node_inputs=node_inputs,
                 ),
             )
+            self._record_canonical_turn_lineage(node=node, node_id=node_id)
             request = self._build_agent_execution_request(
                 node_inputs=dict(node_inputs),
                 node_id=node_id,
@@ -20281,6 +20347,22 @@ class MoonMindRunWorkflow:
         ):
             step_execution_payload["omnigentExecutionPlan"] = dict(
                 omnigent_execution_plan
+            )
+        # Canonical turn lineage is controller-produced authority (#3707): the
+        # closed source and the Step Execution a remediation repairs come from
+        # workflow-owned loop state via ``_record_canonical_turn_lineage``.
+        # A plan- or browser-authored value would let a request claim its own
+        # source, so it is refused rather than merged.
+        if node_inputs.get("canonicalTurnLineage") is not None:
+            raise ValueError(
+                "canonicalTurnLineage must come from workflow-owned controller state"
+            )
+        canonical_turn_lineage = self._canonical_turn_lineage_by_step.get(node_id)
+        if canonical_turn_lineage is not None and self._workflow_patch_enabled(
+            RUN_CANONICAL_TURN_LINEAGE_PATCH
+        ):
+            step_execution_payload["canonicalTurnLineage"] = dict(
+                canonical_turn_lineage
             )
         if attempt_context.retrieval_manifest_ref:
             step_execution_payload["retrievalManifestRef"] = (

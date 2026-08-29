@@ -168,6 +168,129 @@ CLEANUP_STATES: frozenset[str] = frozenset(
 )
 
 
+# --- Distinct terminal meanings (MoonLadderStudios/MoonMind#3707) ------------
+
+
+class TerminalMeaning(str, Enum):
+    """The closed set of independently terminal planes around one session.
+
+    Source: MoonLadderStudios/MoonMind#3707 §3. These outcomes are *not*
+    interchangeable: a completed turn attempt does not terminalize the session,
+    a terminal Workflow does not erase the session's historical-read authority,
+    and completed cleanup is not a session outcome. Each plane records its own
+    terminal state so a projection can report them side by side instead of
+    collapsing them into one "done".
+    """
+
+    TURN_ATTEMPT = "turn_attempt"
+    PROVIDER_SESSION = "provider_session"
+    AGENT_RUN = "agent_run"
+    STEP_EXECUTION = "step_execution"
+    WORKFLOW = "workflow"
+    REMEDIATION_CONTROLLER = "remediation_controller"
+    BRANCH = "branch"
+    CLEANUP = "cleanup"
+
+
+TERMINAL_MEANINGS: frozenset[str] = frozenset(
+    member.value for member in TerminalMeaning
+)
+
+#: Session-metadata key holding the terminal state of planes that are owned
+#: outside the canonical session aggregate (AgentRun, Step Execution, Workflow,
+#: remediation controller, branch).
+TERMINAL_MEANING_METADATA_KEY = "terminalMeanings"
+
+#: Planes whose terminal state lives on the canonical session/turn/cleanup
+#: aggregates themselves rather than in the metadata map.
+_AGGREGATE_OWNED_MEANINGS: frozenset[TerminalMeaning] = frozenset(
+    {
+        TerminalMeaning.TURN_ATTEMPT,
+        TerminalMeaning.PROVIDER_SESSION,
+        TerminalMeaning.CLEANUP,
+    }
+)
+
+
+class UnknownTerminalMeaningError(RuntimeError):
+    """Raised when a plane outside the closed terminal vocabulary is recorded."""
+
+    def __init__(self, value: Any) -> None:
+        self.value = value
+        super().__init__(
+            f"{value!r} is not a supported terminal meaning "
+            f"(supported: {sorted(TERMINAL_MEANINGS)})"
+        )
+
+
+def coerce_terminal_meaning(value: Any) -> TerminalMeaning:
+    """Return the closed :class:`TerminalMeaning` for ``value`` or fail closed."""
+
+    if isinstance(value, TerminalMeaning):
+        return value
+    if isinstance(value, str) and value.strip().lower() in TERMINAL_MEANINGS:
+        return TerminalMeaning(value.strip().lower())
+    raise UnknownTerminalMeaningError(value)
+
+
+def terminal_meaning_patch(
+    meaning: Any, *, state: str, evidence_ref: Optional[str] = None
+) -> dict[str, Any]:
+    """Return the metadata patch recording one plane's terminal state.
+
+    The patch key is namespaced per plane, so recording a branch terminal can
+    never overwrite the Workflow's or the remediation controller's, and none of
+    them touch ``SessionRecord.terminal_state``.
+    """
+
+    plane = coerce_terminal_meaning(meaning)
+    if plane in _AGGREGATE_OWNED_MEANINGS:
+        raise UnknownTerminalMeaningError(
+            f"{plane.value} terminality is owned by a durable aggregate, "
+            "not by session metadata"
+        )
+    entry: dict[str, Any] = {"state": str(state)[:64]}
+    if evidence_ref:
+        entry["evidenceRef"] = str(evidence_ref)[:1024]
+    return {f"{TERMINAL_MEANING_METADATA_KEY}:{plane.value}": entry}
+
+
+def distinct_terminal_meanings(
+    *,
+    session: Any,
+    active_turn: Any = None,
+    cleanup: Any = None,
+) -> dict[str, Optional[str]]:
+    """Project every terminal plane independently from durable records.
+
+    A ``None`` value means "this plane has not reached a terminal state", which
+    is deliberately distinct from a terminal state that happens to be a failure.
+    """
+
+    metadata = dict(getattr(session, "metadata", None) or {})
+    projected: dict[str, Optional[str]] = {}
+    for plane in TerminalMeaning:
+        if plane is TerminalMeaning.TURN_ATTEMPT:
+            projected[plane.value] = (
+                getattr(active_turn, "terminal_state", None)
+                if active_turn is not None
+                else None
+            )
+        elif plane is TerminalMeaning.PROVIDER_SESSION:
+            projected[plane.value] = getattr(session, "terminal_state", None)
+        elif plane is TerminalMeaning.CLEANUP:
+            state = getattr(cleanup, "state", None)
+            projected[plane.value] = (
+                CLEANUP_STATE_COMPLETE if state == CLEANUP_STATE_COMPLETE else None
+            )
+        else:
+            entry = metadata.get(f"{TERMINAL_MEANING_METADATA_KEY}:{plane.value}")
+            projected[plane.value] = (
+                str(entry.get("state")) if isinstance(entry, dict) else None
+            )
+    return projected
+
+
 # --- Errors ------------------------------------------------------------------
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import re
 from datetime import UTC, timedelta
 from typing import Any, Mapping
@@ -40,6 +41,8 @@ with workflow.unsafe.imports_passed_through():
         ARTIFACTS_TASK_QUEUE,
         SANDBOX_TASK_QUEUE,
     )
+
+logger = logging.getLogger(__name__)
 
 WORKFLOW_NAME = "MoonMind.CheckpointBranchTurn"
 SCHEMA_VERSION = "checkpoint-branch-turn-execution/v1"
@@ -707,6 +710,72 @@ async def mark_checkpoint_branch_turn_running(payload: Mapping[str, Any]) -> Non
         await session.commit()
 
 
+async def _record_branch_terminal_meaning(
+    *,
+    checkpoint: Any,
+    outcome: str,
+    evidence_ref: str | None,
+) -> None:
+    """Record branch terminality on the canonical session's distinct plane.
+
+    Source: MoonLadderStudios/MoonMind#3707 §3. Uses the metadata patch so the
+    write is fenced by the canonical session's current revision/generation and
+    cannot overwrite ``SessionRecord.terminal_state``.
+    """
+
+    omnigent = getattr(checkpoint, "omnigent", None) if checkpoint else None
+    if omnigent is None:
+        return
+    from moonmind.omnigent.control_plane import (
+        OmnigentControlPlaneStore,
+        TerminalMeaning,
+        terminal_meaning_patch,
+    )
+    from moonmind.omnigent.control_plane.identities import (
+        canonical_omnigent_session_id,
+    )
+
+    # Resolve the canonical session exactly the way the branch claim does: the
+    # provider-session scope is authoritative once a realizer has attached its
+    # delivered session, and the deterministic bootstrap identity is only the
+    # fallback for a branch that established the session itself.
+    provider_session_ref = str(omnigent.omnigent_session_id or "")
+    fallback_session_id = canonical_omnigent_session_id(
+        workflow_id=str(omnigent.workflow_id),
+        step_execution_id=str(omnigent.step_execution_id),
+        agent_run_id=str(omnigent.bridge_session_id),
+    )
+    try:
+        store = OmnigentControlPlaneStore(async_session_maker)
+        async with store.transaction() as repos:
+            canonical = (
+                await repos.sessions.get_by_scope(
+                    str(omnigent.workflow_id), provider_session_ref
+                )
+                if provider_session_ref
+                else None
+            )
+            if canonical is None:
+                canonical = await repos.sessions.get(fallback_session_id)
+            if canonical is None:
+                return
+            session_id = canonical.session_id
+            await repos.sessions.bind_runtime_authority(
+                session_id,
+                expected_revision=canonical.revision,
+                expected_fencing_generation=canonical.fencing_generation,
+                metadata_patch=terminal_meaning_patch(
+                    TerminalMeaning.BRANCH,
+                    state=outcome,
+                    evidence_ref=evidence_ref,
+                ),
+            )
+    except Exception:
+        logger.exception(
+            "branch terminal meaning was not recorded on the canonical session"
+        )
+
+
 @activity.defn(name="checkpoint_branch.turn.persist_terminal")
 async def persist_checkpoint_branch_turn_terminal(
     payload: Mapping[str, Any],
@@ -982,6 +1051,14 @@ async def persist_checkpoint_branch_turn_terminal(
             terminal_ref=terminal_ref,
             output_refs=safe_output_refs,
             terminal_disposition=disposition,
+        )
+        # Branch terminality is its own plane (#3707 §3): recording it must not
+        # terminalize the canonical session, erase its historical-read
+        # authority, or be confused with cleanup completion.
+        await _record_branch_terminal_meaning(
+            checkpoint=checkpoint_model,
+            outcome=outcome,
+            evidence_ref=diagnostics_ref,
         )
         await session.commit()
         return {
