@@ -20,6 +20,10 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 __all__ = [
+    "MIGRATED_FROM_ANNOTATION",
+    "LEGACY_DEFAULT_MIGRATION_SOURCE",
+    "RUNTIME_DEFAULT_MIGRATION_SOURCE",
+    "MODEL_TIERS_ARRAY_CHECK",
     "revision",
     "down_revision",
     "branch_labels",
@@ -35,6 +39,14 @@ def _json_type() -> sa.types.TypeEngine:
 
 _DEFAULT_MODEL_TIERS = (
     """'[{"label":"Runtime default","model":null,"effort":null,"parameters":{},"annotations":{}}]'"""
+)
+
+MIGRATED_FROM_ANNOTATION = "migratedFrom"
+LEGACY_DEFAULT_MIGRATION_SOURCE = "default_model_default_effort"
+RUNTIME_DEFAULT_MIGRATION_SOURCE = "runtime_default"
+
+MODEL_TIERS_ARRAY_CHECK = (
+    "jsonb_typeof(model_tiers) = 'array' AND jsonb_array_length(model_tiers) >= 1"
 )
 
 profiles_table = table(
@@ -86,7 +98,9 @@ def upgrade() -> None:
                     "model": row.default_model,
                     "effort": row.default_effort,
                     "parameters": {},
-                    "annotations": {},
+                    "annotations": {
+                        MIGRATED_FROM_ANNOTATION: LEGACY_DEFAULT_MIGRATION_SOURCE
+                    },
                 }
             ]
         else:
@@ -96,7 +110,9 @@ def upgrade() -> None:
                     "model": None,
                     "effort": None,
                     "parameters": {},
-                    "annotations": {},
+                    "annotations": {
+                        MIGRATED_FROM_ANNOTATION: RUNTIME_DEFAULT_MIGRATION_SOURCE
+                    },
                 }
             ]
         bind.execute(
@@ -105,6 +121,11 @@ def upgrade() -> None:
             .values(model_tiers=tiers, default_model_tier=1)
         )
 
+    op.create_check_constraint(
+        "ck_provider_profiles_model_tiers_array",
+        "managed_agent_provider_profiles",
+        MODEL_TIERS_ARRAY_CHECK,
+    )
     op.create_check_constraint(
         "ck_provider_profiles_default_model_tier_positive",
         "managed_agent_provider_profiles",
@@ -115,6 +136,11 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_constraint(
         "ck_provider_profiles_default_model_tier_positive",
+        "managed_agent_provider_profiles",
+        type_="check",
+    )
+    op.drop_constraint(
+        "ck_provider_profiles_model_tiers_array",
         "managed_agent_provider_profiles",
         type_="check",
     )

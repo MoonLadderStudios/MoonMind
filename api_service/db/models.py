@@ -3357,6 +3357,13 @@ class ManagedAgentProviderProfile(Base):
             ")",
             name="ck_provider_profiles_last_auth_method",
         ),
+        # PostgreSQL-only: the JSON array/length rule is expressed with jsonb
+        # functions, so it is emitted for the deployment backend that supports it.
+        CheckConstraint(
+            "jsonb_typeof(model_tiers) = 'array' "
+            "AND jsonb_array_length(model_tiers) >= 1",
+            name="ck_provider_profiles_model_tiers_array",
+        ).ddl_if(dialect="postgresql"),
         CheckConstraint(
             "default_model_tier >= 1",
             name="ck_provider_profiles_default_model_tier_positive",

@@ -70,6 +70,27 @@ class ProviderModelEffortTier(BaseModel):
         return value
 
 
+MODEL_TIER_MIGRATION_ANNOTATION = "migratedFrom"
+"""Annotation key stamping the provenance of a migration-backfilled tier."""
+
+LEGACY_DEFAULT_TIER_MIGRATION_SOURCE = "default_model_default_effort"
+"""``migratedFrom`` value for tiers backfilled from legacy model/effort defaults."""
+
+RUNTIME_DEFAULT_TIER_MIGRATION_SOURCE = "runtime_default"
+"""``migratedFrom`` value for tiers backfilled for profiles without legacy defaults."""
+
+
+def _carries_only_migration_provenance(annotations: Any, *, source: str) -> bool:
+    """Return True when annotations are empty or only the migration provenance mark."""
+
+    resolved = annotations or {}
+    if not isinstance(resolved, Mapping):
+        return False
+    if not resolved:
+        return True
+    return dict(resolved) == {MODEL_TIER_MIGRATION_ANNOTATION: source}
+
+
 def runtime_default_model_effort_tier() -> dict[str, Any]:
     return {
         "label": "Runtime default",
@@ -105,7 +126,35 @@ def is_single_runtime_default_model_effort_tier(model_tiers: Any) -> bool:
         and tier.get("model") is None
         and tier.get("effort") is None
         and (tier.get("parameters") or {}) == {}
-        and (tier.get("annotations") or {}) == {}
+        and _carries_only_migration_provenance(
+            tier.get("annotations"),
+            source=RUNTIME_DEFAULT_TIER_MIGRATION_SOURCE,
+        )
+    )
+
+
+def is_single_legacy_default_model_effort_tier(
+    model_tiers: Any,
+    *,
+    legacy_default_model: str | None,
+    legacy_default_effort: str | None,
+) -> bool:
+    """Return True for a lone tier still mirroring the profile's legacy defaults."""
+
+    if not isinstance(model_tiers, list) or len(model_tiers) != 1:
+        return False
+    tier = model_tiers[0]
+    if not isinstance(tier, Mapping):
+        return False
+    return (
+        tier.get("label") == "Legacy default"
+        and tier.get("model") == legacy_default_model
+        and tier.get("effort") == legacy_default_effort
+        and (tier.get("parameters") or {}) == {}
+        and _carries_only_migration_provenance(
+            tier.get("annotations"),
+            source=LEGACY_DEFAULT_TIER_MIGRATION_SOURCE,
+        )
     )
 
 
