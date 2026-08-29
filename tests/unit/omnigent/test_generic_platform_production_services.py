@@ -1580,7 +1580,9 @@ async def _generic_publication_harness(
         assert authorization["hostLeaseRef"]
         await asyncio.sleep(0.03)
         events.append("message-completed")
-        return AgentRunResult(summary="done")
+        return AgentRunResult(
+            summary="done", metadata={"omnigentSessionId": "session-1"}
+        )
 
     class SessionCleanup:
         async def drain(self, session_id):
@@ -1597,7 +1599,16 @@ async def _generic_publication_harness(
         async def claim(self, **kwargs):
             assert kwargs["payload_digest"] == _plan("opencode-go/model").planRef
             events.append("command-claimed")
-            return SimpleNamespace(owns_delivery=True)
+            return SimpleNamespace(
+                owns_delivery=True, session_id="oms_generic", fencing_generation=1
+            )
+
+        async def attach_provider_session(self, **kwargs):
+            # The delivered provider session becomes canonical authority before
+            # settlement, so provider-scoped lookups resolve this aggregate.
+            events.append(
+                f"provider-session-attached:{kwargs['provider_session_ref']}"
+            )
 
         async def settle(self, **kwargs):
             events.append(f"command-settled:{kwargs['outcome'].value}")
@@ -1687,6 +1698,12 @@ async def test_generic_realizer_persists_authority_and_releases_provider_last() 
     assert events[-1] == "command-settled:applied"
     assert events.index("command-claimed") < events.index("provider-acquired")
     assert events.index("provider-released") < events.index("command-settled:applied")
+    # The delivered provider session is attached to canonical authority before
+    # settlement, so a later provider-scoped lookup resolves this aggregate
+    # instead of bootstrapping a second one.
+    assert events.index(
+        "provider-session-attached:session-1"
+    ) < events.index("command-settled:applied")
     assert events.index("host-cleaned") < events.index("credentials-cleaned")
     assert events.index("workspace-published") < events.index("host-cleaned")
     assert events.index("credentials-cleaned") < events.index("provider-released")

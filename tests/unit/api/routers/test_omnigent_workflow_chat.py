@@ -22,7 +22,9 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from api_service.api.routers.omnigent_bridge import (
+    CODE_SESSION_NOT_READY,
     WORKFLOW_CHAT_BINDINGS_MOUNT_PATH,
+    WorkflowChatFacadeError,
     _get_bridge_proxy,
     _get_bridge_store,
     _get_create_embedded_facade,
@@ -41,6 +43,13 @@ from moonmind.omnigent.bridge_config import (
 )
 from moonmind.omnigent.effective_capabilities import CAPABILITY_NAMES
 from moonmind.omnigent.control_plane.records import ControlPlaneOutcome
+from moonmind.omnigent.control_plane.turn_admission import (
+    CanonicalTurnAdmissionRejected,
+)
+from moonmind.omnigent.resume_decision import (
+    SessionResumeDecision,
+    SessionResumeOutcome,
+)
 from moonmind.omnigent.settings import resolved_proxy_forward_headers
 from moonmind.omnigent.workflow_chat_facade import (
     CAP_CONTROL_UNSUPPORTED,
@@ -2122,6 +2131,45 @@ async def test_canonical_settlement_suppresses_facade_ledger_redelivery() -> Non
     )
 
     assert claimed is False
+    assert store.lifecycle == []
+
+
+@pytest.mark.asyncio
+async def test_canonical_admission_rejection_is_a_session_not_ready_conflict() -> None:
+    """A refused admission is actionable, not a Workflow Chat server error.
+
+    The canonical claim raises ``CanonicalTurnAdmissionRejected`` when the
+    session cannot accept the turn -- notably once cleanup has completed. Only
+    ``CanonicalTurnAuthorityUnavailable`` was translated, so chat messages,
+    steering frames, and facade approvals surfaced a 500 instead of the typed
+    409 the provider-session endpoint already returns.
+    """
+
+    store = _FakeStore()
+
+    async def claim_canonical_turn_command(**_kwargs: Any) -> Any:
+        raise CanonicalTurnAdmissionRejected(
+            SessionResumeOutcome(
+                decision=SessionResumeDecision.COLD_RESTORE,
+                reason_codes=("cleanup_complete",),
+            )
+        )
+
+    store.claim_canonical_turn_command = claim_canonical_turn_command  # type: ignore[attr-defined]
+
+    with pytest.raises(WorkflowChatFacadeError) as excinfo:
+        await _claim_facade_message(
+            store=store,  # type: ignore[arg-type]
+            row=_row(),
+            event_type="message",
+            actor="operator",
+            idempotency_key="cleanup-complete-1",
+            payload_digest="sha256:" + "a" * 64,
+        )
+
+    assert excinfo.value.status_code == 409
+    assert excinfo.value.code == CODE_SESSION_NOT_READY
+    assert "cold_restore" in str(excinfo.value)
     assert store.lifecycle == []
 
 

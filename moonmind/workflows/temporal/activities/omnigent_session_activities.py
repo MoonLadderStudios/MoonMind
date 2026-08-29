@@ -16,6 +16,9 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Mapping
 from uuid import NAMESPACE_URL, uuid5
 
+from moonmind.omnigent.control_plane.cleanup_authority import (
+    CanonicalCleanupAuthority,
+)
 from moonmind.omnigent.harness_platform.harness_registry import (
     canonical_harness_id,
     find_harness_registration,
@@ -2011,6 +2014,30 @@ async def omnigent_persist_decision_activity(
     return {"decisionId": decision_id, "commandId": command_id}
 
 
+#: The legacy session supervisor is one cleanup owner of a canonical session.
+#: It shares the control-plane cleanup aggregate with the generic host realizer
+#: so an admitted turn's ``fence_for_turn`` fences a real janitor (#3707 §4).
+_SESSION_SUPERVISOR_CLEANUP_OWNER = "omnigent_session_supervisor"
+
+
+async def _claim_canonical_cleanup(session_id: str) -> Any:
+    """Return this owner's shared cleanup claim, or ``None`` when it lost it.
+
+    Every destructive step of the supervisor's cleanup sequence re-claims the
+    same deterministic token: the claim is idempotent for its own owner, so the
+    sequence resumes, while a live claim held by another janitor -- or cleanup
+    that is already complete -- refuses the step instead of releasing a host,
+    credential lease, or provider session a different owner now owns.
+    """
+
+    from api_service.db.base import async_session_maker
+    from moonmind.omnigent.control_plane import OmnigentControlPlaneStore
+
+    return await CanonicalCleanupAuthority(
+        OmnigentControlPlaneStore(async_session_maker)
+    ).claim(session_id, owner_class=_SESSION_SUPERVISOR_CLEANUP_OWNER)
+
+
 async def _claim_host_cleanup_authority(hosts: Any, host_lease_ref: str) -> Any:
     """Fence host cleanup, or return ``None`` when another owner won it.
 
@@ -2225,7 +2252,15 @@ async def omnigent_persist_signal_intents_activity(
         FencingConflictError,
         OmnigentControlPlaneStore,
         RevisionConflictError,
+        TurnSource,
+        coerce_turn_source,
         compute_digest,
+    )
+    from moonmind.omnigent.control_plane.identities import (
+        canonical_turn_command_key,
+    )
+    from moonmind.omnigent.control_plane.turn_commands import (
+        CanonicalTurnCommandService,
     )
 
     request = OmnigentPersistSignalsRequest.model_validate(payload)
@@ -2300,13 +2335,27 @@ async def omnigent_persist_signal_intents_activity(
                     )
                 )
             elif kind == "submit_authorized_continuation":
-                turn_id = str(signal.get("turnAttemptId") or "").strip()
                 instruction_ref = str(signal.get("instructionRef") or "").strip()
-                turn = await repos.turn_attempts.get(turn_id) if turn_id else None
+                request_id = str(signal.get("requestId") or "").strip()
+                # The canonical command journal is the durable record of this
+                # continuation, so replay convergence is decided from it rather
+                # than from an attempt identity the signal names.
+                recorded = (
+                    await repos.commands.get_by_idempotency_key(
+                        canonical_turn_command_key(
+                            str(session.moonmind_workflow_id), request_id
+                        )
+                    )
+                    if request_id
+                    else None
+                )
+                recorded_turn_id = (
+                    str(recorded.turn_attempt_id) if recorded is not None else ""
+                )
                 already_applied = already_applied and bool(
-                    turn is not None
-                    and session.active_turn_attempt_id == turn_id
-                    and session.metadata.get(f"turnInstructionRef:{turn_id}")
+                    recorded_turn_id
+                    and session.active_turn_attempt_id == recorded_turn_id
+                    and session.metadata.get(f"turnInstructionRef:{recorded_turn_id}")
                     == instruction_ref
                 )
             else:
@@ -2342,25 +2391,41 @@ async def omnigent_persist_signal_intents_activity(
                     )
                 applied += 1
             elif kind == "submit_authorized_continuation":
-                turn_id = str(signal.get("turnAttemptId") or "").strip()
                 instruction_ref = str(signal.get("instructionRef") or "").strip()
                 request_id = str(signal.get("requestId") or "").strip()
-                if not turn_id or not instruction_ref or not request_id:
+                if not instruction_ref or not request_id:
                     raise ValueError("continuation signal is missing compact authority")
-                await repos.turn_attempts.create(
-                    turn_attempt_id=turn_id,
+                # The turn source is the closed #3707 vocabulary. In-flight
+                # histories predate the field, so an omitted source resolves to
+                # the repository continuation it always represented; an unknown
+                # value fails closed rather than writing free-form lineage.
+                signal_source = coerce_turn_source(
+                    signal.get("turnSource")
+                    or TurnSource.REPOSITORY_CONTINUATION
+                )
+                # The signal-driven continuation is an ordinary instruction
+                # source, so it claims through the shared canonical command
+                # service instead of creating a turn attempt directly. Only that
+                # boundary journals the command, compares immutable authority,
+                # verifies the owning principal, and fences incompatible
+                # cleanup; an instruction may name its request and instruction
+                # refs but never attests its own turn identity.
+                claim = await CanonicalTurnCommandService(
+                    store
+                ).claim_with_repositories(
+                    repos,
+                    workflow_id=str(session.moonmind_workflow_id),
+                    provider_session_ref=str(session.provider_session_ref or ""),
+                    chat_binding_id=session.chat_binding_id,
                     session_id=request.session_id,
+                    command_type="submit_authorized_continuation",
+                    turn_source=signal_source,
                     idempotency_key=request_id,
-                    lineage_kind="continuation",
-                    parent_turn_attempt_id=session.active_turn_attempt_id,
-                    instruction_digest=compute_digest(instruction_ref),
+                    payload_digest=compute_digest(instruction_ref),
+                    step_execution_id=session.step_execution_id,
                 )
-                session = await repos.sessions.update_lifecycle(
-                    request.session_id,
-                    expected_revision=session.revision,
-                    expected_fencing_generation=session.fencing_generation,
-                    active_turn_attempt_id=turn_id,
-                )
+                turn_id = claim.turn_attempt_id
+                session = await repos.sessions.get(request.session_id)
                 session = await repos.sessions.bind_runtime_authority(
                     request.session_id,
                     expected_revision=session.revision,
@@ -4804,6 +4869,8 @@ async def omnigent_stop_provider_session_activity(
         session = await repos.sessions.get(request.session_id)
     if session is None:
         raise KeyError(request.session_id)
+    if await _claim_canonical_cleanup(request.session_id) is None:
+        return {"commandId": request.command_id, "outcome": "cleanup_not_owned"}
     if session.provider_session_ref:
         http_client, client = await _omnigent_client_context()
         try:
@@ -4844,6 +4911,8 @@ async def omnigent_stop_host_activity(payload: Mapping[str, Any]) -> dict[str, A
         session = await repos.sessions.get(request.session_id)
     if session is None:
         raise KeyError(request.session_id)
+    if await _claim_canonical_cleanup(request.session_id) is None:
+        return {"commandId": request.command_id, "outcome": "cleanup_not_owned"}
     cleanup_evidence: Mapping[str, Any] = {}
     plan = (
         await _load_verified_execution_plan(request.omnigent_execution_plan)
@@ -4945,6 +5014,9 @@ async def omnigent_release_leases_activity(
         raise KeyError(request.session_id)
     if session.cleanup_state not in {"host_stopped", "leases_released", "complete"}:
         raise ValueError("host cleanup must complete before Provider Profile release")
+    cleanup_claim = await _claim_canonical_cleanup(request.session_id)
+    if cleanup_claim is None:
+        return {"commandId": request.command_id, "outcome": "cleanup_not_owned"}
     runtime_store = None
     runtime_state = None
     if request.omnigent_execution_plan is not None:
@@ -5016,6 +5088,13 @@ async def omnigent_release_leases_activity(
         )
     if updated is not None:
         settled["revision"] = updated.revision
+    # Provider capacity was the last thing this owner released, so settle the
+    # shared cleanup aggregate. A turn admitted since the claim advanced the
+    # generation and fences this completion, which is exactly the outcome the
+    # canonical boundary promises.
+    settled["cleanupComplete"] = await CanonicalCleanupAuthority(store).complete(
+        cleanup_claim
+    )
     return settled
 
 

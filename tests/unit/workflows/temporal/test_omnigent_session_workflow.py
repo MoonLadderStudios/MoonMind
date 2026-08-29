@@ -1811,15 +1811,35 @@ async def test_stop_host_does_not_run_cleanup_it_did_not_win(
         fencing_generation=1,
     )
     claims: list[dict[str, object]] = []
+    cleanup_claims: list[dict[str, object]] = []
 
     class FakeSessions:
         async def get(self, _session_id: str) -> object:
             return session
 
+    class FakeCleanup:
+        async def claim_cleanup(
+            self, session_id: str, *, owner_class: str, claim_token: str
+        ) -> object:
+            # The supervisor shares the canonical cleanup aggregate with the
+            # generic host realizer, so a destructive step only runs when this
+            # owner holds the claim (#3707 §4).
+            cleanup_claims.append(
+                {
+                    "sessionId": session_id,
+                    "ownerClass": owner_class,
+                    "claimToken": claim_token,
+                }
+            )
+            return SimpleNamespace(
+                outcome=control_plane_module.ControlPlaneOutcome.APPLIED,
+                record=SimpleNamespace(generation=1),
+            )
+
     class FakeStore:
         @asynccontextmanager
         async def transaction(self):
-            yield SimpleNamespace(sessions=FakeSessions())
+            yield SimpleNamespace(sessions=FakeSessions(), cleanup=FakeCleanup())
 
     class FakeHosts:
         def __init__(self, _session_factory: object) -> None:
@@ -1879,6 +1899,11 @@ async def test_stop_host_does_not_run_cleanup_it_did_not_win(
     assert len(claims) == 3
     assert claims[0]["expected_status"] == "draining"
     assert "expected_last_heartbeat_at" in claims[0]
+    # The supervisor first won the shared canonical cleanup claim; without it an
+    # admitted turn's cleanup fence would have nothing to fence.
+    assert [entry["ownerClass"] for entry in cleanup_claims] == [
+        omnigent_session_activities._SESSION_SUPERVISOR_CLEANUP_OWNER
+    ]
 
 
 @pytest.mark.asyncio
@@ -2026,3 +2051,118 @@ async def test_profile_lease_request_carries_owning_workflow_authority(
             }
         )
     assert captured["releasedLeaseId"] == "profile-lease-1"
+
+
+@pytest.mark.asyncio
+async def test_signal_continuation_claims_through_the_canonical_command_service(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """`submit_authorized_continuation` is an ordinary canonical turn source.
+
+    Creating the turn attempt directly let the session workflow advance
+    `active_turn_attempt_id` with no command-journal entry, no immutable
+    comparison, and no cleanup fence -- a production continuation path outside
+    the supposedly canonical boundary (#3707 §1).
+    """
+
+    import api_service.db.base as db_base
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from api_service.db.models import Base
+    from moonmind.omnigent.control_plane import (
+        OmnigentControlPlaneStore,
+        TurnSource,
+    )
+    from moonmind.omnigent.control_plane.identities import (
+        canonical_turn_command_key,
+    )
+    from moonmind.omnigent.control_plane.turn_commands import (
+        CanonicalSessionBootstrap,
+        CanonicalTurnCommandService,
+    )
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/signal_turns.db")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    monkeypatch.setattr(db_base, "async_session_maker", session_factory)
+
+    store = OmnigentControlPlaneStore(session_factory)
+    commands = CanonicalTurnCommandService(store)
+    initial = await commands.claim(
+        workflow_id="wf-signal",
+        provider_session_ref="",
+        chat_binding_id=None,
+        command_type="execute_admitted_plan",
+        turn_source=TurnSource.INITIAL,
+        idempotency_key="run-1",
+        payload_digest="sha256:" + "d" * 64,
+        step_execution_id="step-signal",
+        bootstrap=CanonicalSessionBootstrap(
+            provider="omnigent",
+            step_execution_id="step-signal",
+            agent_run_id="agent-signal",
+            source_idempotency_key="run-1",
+        ),
+    )
+
+    async with store.transaction() as repos:
+        session = await repos.sessions.get(initial.session_id)
+        cleanup_before = await repos.cleanup.get(initial.session_id)
+
+    payload = {
+        "sessionId": initial.session_id,
+        "compiledExecutionIntentRef": "art_intent_signal",
+        "compiledExecutionIntentDigest": "sha256:" + "a" * 64,
+        "expectedRevision": session.revision,
+        "fencingGeneration": session.fencing_generation,
+        "signals": [
+            {
+                "kind": "submit_authorized_continuation",
+                "payload": {
+                    "requestId": "continuation-request-1",
+                    "instructionRef": "artifact://instruction/1",
+                },
+            }
+        ],
+    }
+
+    persist_signals = (
+        omnigent_session_activities.omnigent_persist_signal_intents_activity
+    )
+    assert (await persist_signals(payload))["appliedIntentCount"] == 1
+
+    canonical_key = canonical_turn_command_key("wf-signal", "continuation-request-1")
+    async with store.transaction() as repos:
+        command = await repos.commands.get_by_idempotency_key(canonical_key)
+        turns = await repos.turn_attempts.list_for_session(initial.session_id)
+        session = await repos.sessions.get(initial.session_id)
+        cleanup_after = await repos.cleanup.get(initial.session_id)
+
+    assert command is not None
+    assert session.active_turn_attempt_id == command.turn_attempt_id
+    assert [turn.lineage_kind for turn in turns] == [
+        TurnSource.INITIAL.value,
+        TurnSource.REPOSITORY_CONTINUATION.value,
+    ]
+    assert (
+        session.metadata[f"turnInstructionRef:{command.turn_attempt_id}"]
+        == "artifact://instruction/1"
+    )
+    # The admitted signal turn fenced incompatible cleanup before publishing.
+    assert cleanup_after.generation > (
+        cleanup_before.generation if cleanup_before is not None else 0
+    )
+
+    # Redelivery of the same signal converges on the command journal instead of
+    # publishing a second turn attempt.
+    payload["expectedRevision"] = session.revision
+    payload["fencingGeneration"] = session.fencing_generation
+    assert (await persist_signals(payload))["appliedIntentCount"] == 1
+    async with store.transaction() as repos:
+        assert len(
+            await repos.turn_attempts.list_for_session(initial.session_id)
+        ) == 2
+
+    await engine.dispose()

@@ -40,6 +40,7 @@ from moonmind.omnigent.bridge_store import (
     bridge_failure_class,
     coalesce_bridge_status,
 )
+from moonmind.omnigent.control_plane.turn_sources import TurnSource
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     AgentRuntimeStepExecutionLaunch,
@@ -151,6 +152,7 @@ async def test_generic_profile_authorization_persists_plan_and_binding(store) ->
     claim = await store.claim_canonical_turn_command(
         row=row,
         command_type="message",
+        turn_source=TurnSource.WORKFLOW_CHAT,
         idempotency_key="generic-follow-up",
         payload_digest="sha256:" + "6" * 64,
     )
@@ -482,8 +484,11 @@ async def test_egress_cleanup_authority_survives_newer_continuation_row(store) -
     )
 
     # The production repository-publication continuation owns a new bridge row
-    # while deliberately reusing the same host lease. It must not hide the
-    # launch row's immutable cleanup authority from a later janitor process.
+    # while deliberately reusing the same host lease. The bridge row is host and
+    # egress evidence only -- canonical session/turn authority is owned by the
+    # control plane, where every continuation is a distinct turn attempt on one
+    # canonical session (#3707). The new row must not hide the launch row's
+    # immutable cleanup authority from a later janitor process.
     await store.bind_profile_authorization(request=continuation, **authorization)
 
     authority = await store.get_egress_cleanup_authority(

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import time
 from collections.abc import Awaitable, Callable, Mapping
@@ -29,7 +30,7 @@ from moonmind.omnigent.codex_execution_decisions import (
 from moonmind.omnigent.checkpoints import (
     CandidateWorkspaceAuthority,
     OmnigentCheckpointIdentity,
-    OmnigentRecoveryMode,
+    SessionResumeDecision,
     materialize_cold_restore_inputs,
     recovery_mode,
     validate_cold_restore_target,
@@ -43,6 +44,7 @@ from moonmind.omnigent.execution_ports import (
     ProviderProfileAuthorityPort,
 )
 from moonmind.omnigent.control_plane import metrics as control_plane_metrics
+from moonmind.omnigent.control_plane.records import compute_digest
 from moonmind.omnigent.control_plane import spans as control_plane_spans
 from moonmind.omnigent.remediation_workspace import (
     RemediationWorkspaceBinding,
@@ -130,6 +132,15 @@ already complete. Finish the implementation, run the relevant tests, and leave
 the repository changes ready for MoonMind's publisher. Only finish when the
 original task is complete.
 """
+
+#: Instruction digest for the fixed continuation prompt. Every continuation
+#: carries the same instruction, so the digest is stable and the turn identity
+#: comes from the continuation's distinct idempotency key.
+_REPOSITORY_PUBLICATION_CONTINUATION_DIGEST = compute_digest(
+    _REPOSITORY_PUBLICATION_CONTINUATION_PROMPT
+)
+
+logger = logging.getLogger(__name__)
 
 
 def _trusted_no_commit_repository_policy(
@@ -288,6 +299,7 @@ class OmnigentProfileBoundExecutionCoordinator:
         provider_profile_authority: ProviderProfileAuthorityPort | None = None,
         policy_authority: ExecutionPolicyAuthorityPort | None = None,
         execution_attempts: ExecutionAttemptPort | None = None,
+        turn_command_service: Any | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._lease_client = lease_client
@@ -331,6 +343,7 @@ class OmnigentProfileBoundExecutionCoordinator:
         self._profile_authority = provider_profile_authority
         self._policy_authority = policy_authority
         self._attempts = execution_attempts
+        self._turn_commands = turn_command_service
 
     @staticmethod
     def _canonical_digest(value: Mapping[str, Any]) -> str:
@@ -551,6 +564,127 @@ class OmnigentProfileBoundExecutionCoordinator:
                     ignore_errors=True,
                 )
                 await asyncio.sleep(retry_after)
+
+    async def _claim_continuation_turn(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        source_request: AgentExecutionRequest,
+        workflow_id: str,
+        step_execution_id: str | None,
+        recorded_plan: OmnigentExecutionPlanEnvelope | None,
+        provider_profile_id: str,
+        credential_generation: int | None,
+        runtime_binding_ref: str | None,
+    ) -> Any:
+        """Admit one repository continuation through the canonical boundary.
+
+        Repository-output continuations used to allocate their own bridge row and
+        never produced a canonical turn attempt, which made them an independent
+        submission path (#3707 §1). They now claim the same fenced turn command
+        every other instruction source uses: one canonical session, one chat
+        binding, one immutable execution plan, and a distinct turn-attempt
+        identity per continuation.
+        """
+
+        if self._turn_commands is None:
+            return None
+        from moonmind.omnigent.control_plane.turn_admission import (
+            CanonicalTurnAdmissionRejected,
+        )
+        from moonmind.omnigent.control_plane.turn_commands import (
+            CanonicalSessionBootstrap,
+        )
+        from moonmind.omnigent.control_plane.turn_sources import TurnSource
+        from moonmind.omnigent.turn_authority import canonical_turn_authority
+
+        plan_ref = recorded_plan.planRef if recorded_plan is not None else None
+        requested_authority = (
+            canonical_turn_authority(
+                request,
+                recorded_plan,
+                runtime_binding_ref=runtime_binding_ref,
+                provider_profile_id=provider_profile_id or None,
+                provider_profile_generation=credential_generation,
+            )
+            if recorded_plan is not None
+            else None
+        )
+        try:
+            claim = await self._turn_commands.claim(
+                workflow_id=workflow_id,
+                provider_session_ref="",
+                chat_binding_id=None,
+                command_type="repository_output_continuation",
+                turn_source=TurnSource.REPOSITORY_CONTINUATION,
+                idempotency_key=request.idempotency_key,
+                payload_digest=_REPOSITORY_PUBLICATION_CONTINUATION_DIGEST,
+                step_execution_id=step_execution_id,
+                bootstrap=CanonicalSessionBootstrap(
+                    provider="omnigent",
+                    step_execution_id=step_execution_id or source_request.correlation_id,
+                    agent_run_id=source_request.correlation_id,
+                    source_idempotency_key=source_request.idempotency_key,
+                    execution_plan_ref=plan_ref,
+                ),
+                requested_authority=requested_authority,
+            )
+        except CanonicalTurnAdmissionRejected as exc:
+            raise HarnessPlatformError(
+                "repository continuation admission returned "
+                f"{exc.decision.value}; the canonical session was not mutated",
+                code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+            ) from exc
+        if not claim.owns_delivery:
+            # ``ALREADY_APPLIED``, ``FENCING_CONFLICT``, and ``NOT_OWNER`` all
+            # mean this attempt does not own the provider-facing side effect.
+            # Returning the claim anyway submitted the continuation regardless
+            # and could duplicate a billed provider turn on an activity replay
+            # of an already-settled command.
+            raise HarnessPlatformError(
+                "repository continuation command is already settled or owned; "
+                "reconciliation is required",
+                code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+            )
+        return claim
+
+    async def _settle_continuation_turn(
+        self,
+        *,
+        claim: Any,
+        workflow_id: str,
+        idempotency_key: str,
+        result: AgentRunResult,
+    ) -> None:
+        """Settle the continuation's canonical command with its real outcome."""
+
+        if claim is None or self._turn_commands is None:
+            return
+        from moonmind.omnigent.control_plane.records import ControlPlaneOutcome
+
+        outcome = (
+            ControlPlaneOutcome.DELIVERY_UNKNOWN
+            if result.failure_class is not None
+            else ControlPlaneOutcome.APPLIED
+        )
+        try:
+            await self._turn_commands.settle(
+                workflow_id=workflow_id,
+                idempotency_key=idempotency_key,
+                outcome=outcome,
+                provider_receipt_id=str(
+                    (result.metadata or {}).get("omnigentSessionId") or ""
+                )
+                or None,
+                result_ref=str(
+                    (result.metadata or {}).get("externalStateRef") or ""
+                )
+                or None,
+            )
+        except Exception:
+            logger.exception(
+                "Omnigent repository continuation command settlement remains pending"
+            )
 
     async def execute(self, request: AgentExecutionRequest) -> AgentRunResult:
         recorded_plan = self._require_recorded_plan_request(request)
@@ -1701,6 +1835,20 @@ class OmnigentProfileBoundExecutionCoordinator:
                             )
                         },
                     )
+                    # Every repository continuation is a distinct canonical
+                    # turn attempt on the *same* canonical session (#3707 AC1/
+                    # AC2). Claiming before any provider mutation also fences
+                    # incompatible cleanup for this generation.
+                    continuation_claim = await self._claim_continuation_turn(
+                        request=continuation_request,
+                        source_request=request,
+                        workflow_id=workflow_id,
+                        step_execution_id=step_execution_id,
+                        recorded_plan=recorded_plan,
+                        provider_profile_id=profile_id,
+                        credential_generation=host_lease.credential_generation,
+                        runtime_binding_ref=runtime_binding_ref,
+                    )
                     continuation_bridge = (
                         await self._run_store.bind_profile_authorization(
                             request=continuation_request,
@@ -1756,6 +1904,12 @@ class OmnigentProfileBoundExecutionCoordinator:
                         ),
                     )
                     result = collect_deferred_bridge_terminal(continuation_result)
+                    await self._settle_continuation_turn(
+                        claim=continuation_claim,
+                        workflow_id=workflow_id,
+                        idempotency_key=continuation_request.idempotency_key,
+                        result=result,
+                    )
                     await emit(
                         continuation_stage,
                         "failed" if result.failure_class else "completed",
@@ -2480,7 +2634,7 @@ class OmnigentProfileBoundExecutionCoordinator:
             session_valid=session_valid,
             first_message_consistent=first_message_consistent,
         )
-        if mode == OmnigentRecoveryMode.LIVE_REATTACH:
+        if mode == SessionResumeDecision.LIVE_REATTACH:
             if request.execution_profile_ref != checkpoint.provider_profile_id:
                 raise ValueError("live reattach Provider Profile mismatch")
             profile = await self._profile_authority.resolve(

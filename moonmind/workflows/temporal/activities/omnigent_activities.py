@@ -58,6 +58,30 @@ class _OnDemandTemporalArtifactService:
         return await self._invoke("write_complete", artifact_id=artifact_id, **kwargs)
 
 
+def _checkpoint_branch_capable(recovery: dict[str, Any]) -> bool:
+    """Return whether the checkpoint carries branch-capable evidence.
+
+    Branching is only an honest answer when the checkpoint's own validation says
+    a branch can be created. Absent that evidence the caller must admit a brand
+    new canonical session instead (#3707 §5).
+    """
+
+    checkpoint = recovery.get("omnigentCheckpoint")
+    if not isinstance(checkpoint, dict):
+        # No checkpoint evidence is supplied at all; the historical contract
+        # treats immutable-input changes as branch-required and the branch
+        # execution path validates the evidence before any mutation.
+        return True
+    validation = checkpoint.get("validation")
+    if not isinstance(validation, dict):
+        return False
+    return bool(
+        validation.get("branchCreationAvailable")
+        if "branchCreationAvailable" in validation
+        else validation.get("branch_creation_available")
+    )
+
+
 def _checkpoint_recovery_decision(
     recovery: dict[str, Any],
     *,
@@ -67,42 +91,55 @@ def _checkpoint_recovery_decision(
 ) -> dict[str, Any]:
     """Classify recovery from bounded, caller-independent authority evidence.
 
-    The decision is intentionally compact so the request/history can retain the
-    exact terminal rationale without persisting mutable host details. Immutable
-    input changes always win over live/cold availability.
+    The decision is one typed :class:`SessionResumeOutcome` from the closed
+    #3707 vocabulary, projected into the compact history-safe payload. Immutable
+    input changes always win over live/cold availability; when the checkpoint
+    carries no branch-capable evidence, a changed dimension escalates from
+    ``branch_required`` to ``new_session_required`` instead of silently
+    branching from evidence that does not exist.
     """
 
+    from moonmind.omnigent.resume_decision import (
+        SessionResumeDecision,
+        SessionResumeOutcome,
+    )
+
+    branch_capable = _checkpoint_branch_capable(recovery)
     source = recovery.get("immutableSource")
     requested = recovery.get("immutableRequested")
     if not isinstance(source, dict) or not isinstance(requested, dict):
-        return {
-            "recoveryAction": "resume_unavailable",
-            "reasonCodes": ["immutable_authority_missing"],
-        }
+        return SessionResumeOutcome(
+            decision=SessionResumeDecision.RESUME_UNAVAILABLE,
+            reason_codes=("immutable_authority_missing",),
+        ).as_payload()
     missing = [
         dimension
         for dimension in _IMMUTABLE_RECOVERY_DIMENSIONS
         if dimension not in source or dimension not in requested
     ]
     if missing:
-        return {
-            "recoveryAction": "resume_unavailable",
-            "reasonCodes": [
-                f"immutable_{dimension}_missing" for dimension in missing[:20]
-            ],
-        }
+        return SessionResumeOutcome(
+            decision=SessionResumeDecision.RESUME_UNAVAILABLE,
+            reason_codes=tuple(
+                f"immutable_{dimension}_missing" for dimension in missing
+            ),
+        ).as_payload()
     changed = [
         dimension
         for dimension in _IMMUTABLE_RECOVERY_DIMENSIONS
         if source[dimension] != requested[dimension]
     ]
     if changed:
-        return {
-            "recoveryAction": "branch_required",
-            "reasonCodes": [
-                f"immutable_{dimension}_changed" for dimension in changed[:20]
-            ],
-        }
+        return SessionResumeOutcome(
+            decision=(
+                SessionResumeDecision.BRANCH_REQUIRED
+                if branch_capable
+                else SessionResumeDecision.NEW_SESSION_REQUIRED
+            ),
+            reason_codes=tuple(
+                f"immutable_{dimension}_changed" for dimension in changed
+            ),
+        ).as_payload()
     # Availability is authority-sensitive and must be supplied by the trusted
     # Activity after it has re-resolved current profile, lease, host, session,
     # cursor, and first-message state.  Payload booleans are deliberately
@@ -119,22 +156,25 @@ def _checkpoint_recovery_decision(
         == live_authority.get("checkpoint_credential_generation")
     )
     if live_valid:
-        return {
-            "recoveryAction": "live_reattach",
-            "reasonCodes": ["all_authority_valid"],
-        }
+        return SessionResumeOutcome(
+            decision=SessionResumeDecision.LIVE_REATTACH,
+            reason_codes=("all_authority_valid",),
+        ).as_payload()
     if cold_restore_authorized is True:
-        return {
-            "recoveryAction": "cold_restore",
-            "reasonCodes": ["live_authority_unavailable"],
-        }
+        return SessionResumeOutcome(
+            decision=SessionResumeDecision.COLD_RESTORE,
+            reason_codes=("live_authority_unavailable",),
+        ).as_payload()
     reasons = recovery.get("unavailableReasonCodes")
     bounded_reasons = (
-        [str(reason)[:120] for reason in reasons[:20]]
+        tuple(str(reason) for reason in reasons)
         if isinstance(reasons, list) and reasons
-        else ["checkpoint_authority_unavailable"]
+        else ("checkpoint_authority_unavailable",)
     )
-    return {"recoveryAction": "resume_unavailable", "reasonCodes": bounded_reasons}
+    return SessionResumeOutcome(
+        decision=SessionResumeDecision.RESUME_UNAVAILABLE,
+        reason_codes=bounded_reasons,
+    ).as_payload()
 
 
 def _checkpoint_recovery_from_request(request: AgentExecutionRequest):
@@ -589,6 +629,10 @@ async def _omnigent_execute_activity(
         TemporalOmnigentArtifactGateway,
     )
     from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
+    from moonmind.omnigent.control_plane import OmnigentControlPlaneStore
+    from moonmind.omnigent.control_plane.turn_commands import (
+        CanonicalTurnCommandService,
+    )
     from moonmind.omnigent.execute import run_omnigent_execution
     from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
     from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
@@ -623,10 +667,26 @@ async def _omnigent_execute_activity(
         return generic_dispatch
 
     if not request.execution_profile_ref:
-        return await run_omnigent_execution(
-            request,
-            artifact_gateway=artifact_gateway,
-            run_store=run_store,
+        # The supported unprofiled path still creates a provider session and
+        # posts its first message, so it claims the same canonical turn command
+        # every other execution path claims (#3707 §1). Without this it mutated
+        # the provider with no command claim, immutable admission, owner check,
+        # or cleanup fence. It carries no compiled plan, so it asserts no
+        # plan-derived immutable authority.
+        from moonmind.omnigent.realizers.turn_delivery import deliver_canonical_turn
+
+        return await deliver_canonical_turn(
+            CanonicalTurnCommandService(
+                OmnigentControlPlaneStore(async_session_maker)
+            ),
+            request=request,
+            plan=None,
+            command_type="execute_unprofiled_request",
+            operation=lambda: run_omnigent_execution(
+                request,
+                artifact_gateway=artifact_gateway,
+                run_store=run_store,
+            ),
         )
 
     async with httpx.AsyncClient() as http_client:
@@ -672,6 +732,15 @@ async def _omnigent_execute_activity(
                 workspace_root,
                 restorer=ManagedServiceRemediationRestorer(restore_service),
                 head_loader=ArtifactRemediationHeadLoader(artifact_service),
+            ),
+            # This activity still reaches the coordinator directly whenever a
+            # profile-bound request carries no executionPlanRef and no
+            # agentProfileRef, so it must own the same canonical turn boundary
+            # the realizer-dispatched path owns (#3707 §1). Without it every
+            # repository continuation on this path would submit outside the
+            # boundary and fence no cleanup.
+            turn_command_service=CanonicalTurnCommandService(
+                OmnigentControlPlaneStore(async_session_maker)
             ),
         )
         recovery_inputs = _checkpoint_recovery_from_request(request)
