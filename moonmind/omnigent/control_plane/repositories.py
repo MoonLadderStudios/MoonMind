@@ -68,6 +68,7 @@ from .records import (
     TurnIdempotencyConflictError,
     ensure_supported_schema_version,
 )
+from .turn_sources import ensure_valid_turn_source
 
 _UNSET: Any = object()
 
@@ -1267,6 +1268,12 @@ class TurnAttemptRepository(_RepositoryBase):
         provider_marker: Optional[str] = None,
         state: str = TURN_STATE_PREPARED,
     ) -> TurnAttemptRecord:
+        # Validate against the closed, versioned source vocabulary
+        # (MoonLadderStudios/MoonMind#3707). Historical aliases are normalized by
+        # the vocabulary module so rolling upgrades remain compatible.
+        from .turn_sources import normalize_turn_source
+
+        lineage_kind = normalize_turn_source(lineage_kind)
         existing = await self.get_by_idempotency_key(idempotency_key)
         if existing is not None:
             if (

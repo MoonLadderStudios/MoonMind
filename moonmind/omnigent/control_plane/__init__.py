@@ -114,11 +114,33 @@ from .repositories import (
     SessionRepository,
     TurnAttemptRepository,
 )
+from .resume_decisions import (
+    ResumeDecision,
+    RESUME_DECISIONS,
+    RESUME_DECISION_VERSION,
+    ensure_valid_resume_decision,
+)
 from .turn_commands import (
     CanonicalSessionBootstrap,
     CanonicalTurnAuthorityUnavailable,
     CanonicalTurnCommandClaim,
     CanonicalTurnCommandService,
+)
+from .turn_sources import (
+    TURN_SOURCES,
+    TURN_SOURCE_APPROVAL_RESPONSE,
+    TURN_SOURCE_CHECKPOINT_RESUME,
+    TURN_SOURCE_CONTINUATION,
+    TURN_SOURCE_INITIAL,
+    TURN_SOURCE_LINKED_BRANCH,
+    TURN_SOURCE_REMEDIATION,
+    TURN_SOURCE_REPOSITORY_CONTINUATION,
+    TURN_SOURCE_STEERING,
+    TURN_SOURCE_VERSION,
+    TURN_SOURCE_WORKFLOW_CHAT,
+    TURN_SOURCES as TURN_SOURCE_VOCABULARY,
+    ensure_valid_turn_source,
+    normalize_turn_source,
 )
 
 __all__ = [
@@ -220,4 +242,24 @@ __all__ = [
     "ReadinessInputs",
     "ReadinessState",
     "evaluate_admission_readiness",
+    # turn-source vocabulary (MoonLadderStudios/MoonMind#3707)
+    "TURN_SOURCE_APPROVAL_RESPONSE",
+    "TURN_SOURCE_CHECKPOINT_RESUME",
+    "TURN_SOURCE_CONTINUATION",
+    "TURN_SOURCE_INITIAL",
+    "TURN_SOURCE_LINKED_BRANCH",
+    "TURN_SOURCE_REMEDIATION",
+    "TURN_SOURCE_REPOSITORY_CONTINUATION",
+    "TURN_SOURCE_STEERING",
+    "TURN_SOURCE_VERSION",
+    "TURN_SOURCE_VOCABULARY",
+    "TURN_SOURCE_WORKFLOW_CHAT",
+    "TURN_SOURCES",
+    "ensure_valid_turn_source",
+    "normalize_turn_source",
+    # resume decisions (MoonLadderStudios/MoonMind#3707 §5)
+    "ResumeDecision",
+    "RESUME_DECISIONS",
+    "RESUME_DECISION_VERSION",
+    "ensure_valid_resume_decision",
 ]

@@ -28,6 +28,17 @@ from .records import (
     TURN_STATE_ACCEPTED,
     TURN_STATE_DELIVERY_UNKNOWN,
 )
+from .turn_sources import (
+    TURN_SOURCE_APPROVAL_RESPONSE,
+    TURN_SOURCE_CHECKPOINT_RESUME,
+    TURN_SOURCE_LINKED_BRANCH,
+    TURN_SOURCE_REMEDIATION,
+    TURN_SOURCE_REPOSITORY_CONTINUATION,
+    TURN_SOURCE_STEERING,
+    TURN_SOURCE_WORKFLOW_CHAT,
+    TURN_SOURCES,
+    ensure_valid_turn_source,
+)
 
 
 class CanonicalTurnAuthorityUnavailable(RuntimeError):
@@ -62,16 +73,32 @@ class CanonicalSessionBootstrap:
 
 
 def _lineage_kind(command_type: str) -> str:
+    """Map a transport command type to the closed turn-source vocabulary."""
+
     normalized = command_type.strip().lower().replace(".", "_")
     if "remediation" in normalized:
-        return "remediation"
-    if "checkpoint" in normalized or "branch" in normalized:
-        return "checkpoint_resume"
+        return TURN_SOURCE_REMEDIATION
+    if "checkpoint" in normalized:
+        return TURN_SOURCE_CHECKPOINT_RESUME
+    if "linked_branch" in normalized or "linked-branch" in normalized:
+        return TURN_SOURCE_LINKED_BRANCH
     if "approval" in normalized or "elicitation" in normalized:
-        return "approval"
+        return TURN_SOURCE_APPROVAL_RESPONSE
     if "steer" in normalized or "interrupt" in normalized or "stop" in normalized:
-        return "steering"
-    return "continuation"
+        return TURN_SOURCE_STEERING
+    if "workflow_chat" in normalized or normalized in {"message", "user_message"}:
+        return TURN_SOURCE_WORKFLOW_CHAT
+    if "repository_continuation" in normalized or "repo_continuation" in normalized:
+        return TURN_SOURCE_REPOSITORY_CONTINUATION
+    # Branch-specific commands map to checkpoint_resume; generic continuations
+    # keep the legacy canonical ``continuation`` for rolling compatibility.
+    if "branch" in normalized:
+        return TURN_SOURCE_CHECKPOINT_RESUME
+    candidate = "continuation"
+    # Validate against the closed vocabulary so an invented source cannot bypass
+    # the canonical boundary.
+    ensure_valid_turn_source(candidate)
+    return candidate
 
 
 class CanonicalTurnCommandService:
