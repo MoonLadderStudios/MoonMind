@@ -320,6 +320,10 @@ Rules:
 - each declaration variable is consumed exactly as supplied and is never merged
   with the compose-derived default, so a deployment that declares an additional
   source repeats every source it intends to keep;
+- both declarations must reach every process that resolves them. The API admits
+  a request by resolving its `imageSourceRef` before it creates durable job
+  identity, and the agent-runtime worker launches it, so a ref declared only on
+  the worker is rejected as unconfigured before the request reaches Temporal;
 - `resources.shmSize` is caller-owned. It is refused when it exceeds
   `MOONMIND_CONTAINER_BACKEND_MAX_SHM_SIZE_MIB` (default: the memory ceiling)
   rather than clamped, so the realized value always matches the request; an

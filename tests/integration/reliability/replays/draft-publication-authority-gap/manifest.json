@@ -41,7 +41,25 @@
           "gateResultRef": "art_01M13KMEQB4J3GA51HD4RMBBSY"
         }
       },
-      "publishContext": {
+      "remediationStepOutputs": {
+        "summary": "Applied MoonSpec remediation",
+        "push_status": "pushed",
+        "push_branch": "fetch-github-issue-moonladderstudios-tac-4f8e2aa7",
+        "push_base_ref": "origin/main",
+        "push_head_sha": "5c1837fa677aff381af09601f8d86055f0eccbcd",
+        "push_commit_count": 2,
+        "acceptedRepositoryEvidence": {
+          "schemaVersion": "accepted-repository-evidence/v1",
+          "pushStatus": "pushed",
+          "branch": "fetch-github-issue-moonladderstudios-tac-4f8e2aa7",
+          "baseBranch": "origin/main",
+          "headSha": "5c1837fa677aff381af09601f8d86055f0eccbcd",
+          "commitsAheadOfBase": 2,
+          "repositoryChanged": true,
+          "remoteVerified": true
+        }
+      },
+      "unverifiedPublishContext": {
         "pushStatus": "pushed",
         "branch": "fetch-github-issue-moonladderstudios-tac-4f8e2aa7",
         "baseRef": "origin/main",

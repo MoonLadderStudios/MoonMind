@@ -4373,6 +4373,65 @@ class MoonMindRunWorkflow:
             return None
         return branch, head_sha
 
+    def _accepted_published_head(self) -> tuple[str, str] | None:
+        """Return the ``(branch, headSha)`` a managed push boundary accepted.
+
+        ``_publish_context`` mirrors raw ``branch``, ``headSha``, and
+        ``pushStatus`` keys from every step's metadata. ``fetch_result`` strips
+        forged ``acceptedRepositoryEvidence`` objects but leaves those raw keys
+        intact, so a read-only verifier -- or any other non-publishing step --
+        can populate all three without a remote head ever having been verified,
+        and successive steps can leave a mixed tuple behind by overwriting only
+        one of them. Read the atomic projection recorded from accepted evidence
+        instead, so the terminal gate's draft publication is only ever offered
+        a head the managed push boundary itself produced.
+        """
+
+        head = self._publish_context.get("acceptedPublishedHead")
+        if not isinstance(head, Mapping):
+            return None
+        branch = _normalize_git_branch_ref(head.get("branch"))
+        head_sha = self._coerce_text(head.get("headSha"), max_chars=80)
+        if not branch or not head_sha:
+            return None
+        return branch, head_sha
+
+    def _record_accepted_published_head(self, outputs: Mapping[str, Any]) -> None:
+        """Project one step's accepted repository evidence as the run's head.
+
+        Only the managed git-push boundary emits accepted repository evidence,
+        so this is the run's authoritative answer to "a verified remote head
+        exists". Branch and head SHA are recorded together, never key by key.
+        """
+
+        evidence = outputs.get("acceptedRepositoryEvidence")
+        if not isinstance(evidence, Mapping):
+            evidence = outputs.get("accepted_repository_evidence")
+        if not isinstance(evidence, Mapping):
+            return
+        if (
+            evidence.get("publicationAuthorized") is False
+            or evidence.get("candidateContaminated") is True
+        ):
+            # A definitive refusal from the publish boundary retires the
+            # projection rather than leaving an earlier head to answer for it.
+            self._publish_context.pop("acceptedPublishedHead", None)
+            return
+        push_status = str(evidence.get("pushStatus") or "").strip().lower()
+        if push_status not in {"pushed", "published"}:
+            return
+        branch = _normalize_git_branch_ref(evidence.get("branch"))
+        head_sha = self._coerce_text(
+            evidence.get("headSha") or evidence.get("head_sha"),
+            max_chars=80,
+        )
+        if not branch or not head_sha:
+            return
+        self._publish_context["acceptedPublishedHead"] = {
+            "branch": branch,
+            "headSha": head_sha,
+        }
+
     def _published_branch_remediation_workspace_spec(
         self,
         *,
@@ -16515,6 +16574,7 @@ class MoonMindRunWorkflow:
         )
         if head_sha:
             self._publish_context["headSha"] = head_sha
+        self._record_accepted_published_head(outputs)
 
         self._record_report_result(execution_result)
 
@@ -16951,7 +17011,7 @@ class MoonMindRunWorkflow:
             and self._patched_or_false_outside_workflow(
                 RUN_TERMINAL_GATE_PUBLISHED_HEAD_FEASIBILITY_PATCH
             )
-            and self._workflow_verified_published_head() is not None
+            and self._accepted_published_head() is not None
         ):
             return PublicationFeasibility(
                 feasible=True,

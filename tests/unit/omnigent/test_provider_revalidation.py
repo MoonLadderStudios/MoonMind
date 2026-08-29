@@ -584,6 +584,62 @@ async def test_unavailable_maintenance_lease_defers_the_pass(
 
 
 @pytest.mark.asyncio
+async def test_lease_failures_never_consume_the_revalidation_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Lease contention is not a provider verdict, so it must stay retryable.
+
+    ``acquire_credential_maintenance_guard`` fails on maintainer contention and
+    on transient Temporal/profile-manager errors, and no provider probe runs in
+    either case. Charging those to ``MAX_REVALIDATION_ATTEMPTS`` would let three
+    of them mark the identity exhausted, after which the reconciler skips the
+    profile entirely until its credential or host image changes.
+    """
+
+    from moonmind.omnigent.bootstrap.provider_revalidation import (
+        MAX_REVALIDATION_ATTEMPTS,
+        REVALIDATION_FAILURE_KEY,
+        revalidation_is_exhausted,
+    )
+
+    _install_stubs(monkeypatch, acquire_error=RuntimeError("profile is busy"))
+    rows = [_profile()]
+
+    for _ in range(MAX_REVALIDATION_ATTEMPTS + 1):
+        outcome = await reconcile_opencode_provider_readiness(
+            session_factory=_session_factory(rows), controller=_Controller()
+        )
+        assert outcome.deferred == ("opencode-go-default",)
+
+    assert REVALIDATION_FAILURE_KEY not in (rows[0].command_behavior or {})
+    assert not revalidation_is_exhausted(rows[0], image_refs=(CURRENT_IMAGE,))
+
+    # The full budget is intact, so the very next pass still probes the
+    # provider once the lease is available again.
+    probed: list[str] = []
+
+    async def validate(profile, image_ref, _lease, _kwargs):
+        probed.append(profile.profile_id)
+        return {
+            "schemaVersion": "moonmind.provider-model-catalog-evidence.v1",
+            "models": [{"qualifiedId": "opencode-go/muse-spark-1.2-contributor"}],
+            "imageRef": image_ref,
+            "runtimeVersions": {"opencode": "1.18.11"},
+            "materializerRef": "opencode-auth-json@1",
+            "validatedAt": datetime.now(UTC).isoformat(),
+            "credentialGeneration": profile.credential_generation,
+        }
+
+    _install_stubs(monkeypatch, validate=validate)
+    outcome = await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory(rows), controller=_Controller()
+    )
+
+    assert probed == ["opencode-go-default"]
+    assert outcome.refreshed == ("opencode-go-default",)
+
+
+@pytest.mark.asyncio
 async def test_missing_pinned_image_defers_instead_of_recording_evidence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

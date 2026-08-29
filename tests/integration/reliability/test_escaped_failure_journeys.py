@@ -1484,6 +1484,24 @@ async def test_verified_remediation_push_reaches_draft_publication_handoff() -> 
         ) == expected["terminalHandoff"]
 
 
+def _replay_published_head(case: dict) -> MoonMindRunWorkflow:
+    """Replay the managed push boundary that earned the run's published head.
+
+    Only ``acceptedRepositoryEvidence`` proves a remote head, so the run must
+    record it through the same production path a real remediation step takes.
+    """
+
+    replayed = MoonMindRunWorkflow()
+    replayed._record_execution_context(
+        node_id=case["gateLogicalStepId"],
+        execution_result={
+            "status": "COMPLETED",
+            "outputs": case["remediationStepOutputs"],
+        },
+    )
+    return replayed
+
+
 async def test_verification_gate_draft_publishes_run_owned_published_head(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1507,16 +1525,30 @@ async def test_verification_gate_draft_publishes_run_owned_published_head(
 
         # The verification step's own evidence is inconclusive, before and
         # after the fix. That classification is correct for the step.
-        step_scoped = MoonMindRunWorkflow()
-        step_scoped._publish_context.update(case["publishContext"])
+        step_scoped = _replay_published_head(case)
         assert step_scoped._step_publication_feasibility(execution_result)[
             "reason"
         ] == expected["verificationGateStepFeasibilityReason"]
 
+        # Raw push keys a non-publishing step left in the publish context are
+        # not accepted evidence, so they never upgrade the gate on their own.
+        unverified = MoonMindRunWorkflow()
+        unverified._publish_context.update(case["unverifiedPublishContext"])
+        monkeypatch.setattr(
+            unverified,
+            "_patched_or_false_outside_workflow",
+            lambda patch_id: patch_id
+            == RUN_TERMINAL_GATE_PUBLISHED_HEAD_FEASIBILITY_PATCH,
+        )
+        unverified_feasibility = unverified._publication_feasibility(execution_result)
+        assert unverified_feasibility["feasible"] is False
+        assert unverified_feasibility["reason"] == expected[
+            "verificationGateUnverifiedFeasibilityReason"
+        ]
+
         # In-flight histories that never recorded the patch keep replaying the
         # previous artifact-backed handoff.
-        unpatched = MoonMindRunWorkflow()
-        unpatched._publish_context.update(case["publishContext"])
+        unpatched = _replay_published_head(case)
         monkeypatch.setattr(
             unpatched, "_patched_or_false_outside_workflow", lambda _: False
         )
@@ -1533,8 +1565,7 @@ async def test_verification_gate_draft_publishes_run_owned_published_head(
 
         # New histories resolve feasibility for the run, so the pushed
         # remediation head reaches the draft publication handoff.
-        workflow_run = MoonMindRunWorkflow()
-        workflow_run._publish_context.update(case["publishContext"])
+        workflow_run = _replay_published_head(case)
         monkeypatch.setattr(
             workflow_run,
             "_patched_or_false_outside_workflow",
@@ -1583,10 +1614,7 @@ async def test_verification_gate_draft_publishes_run_owned_published_head(
     # Definitive negatives stay negative: the run-owned head answers "we do not
     # know", never "publication was refused".
     for negative in manifest["preservedNegativeCases"]:
-        refused = MoonMindRunWorkflow()
-        refused._publish_context.update(
-            manifest["verificationGateCases"][0]["publishContext"]
-        )
+        refused = _replay_published_head(manifest["verificationGateCases"][0])
         monkeypatch.setattr(
             refused,
             "_patched_or_false_outside_workflow",

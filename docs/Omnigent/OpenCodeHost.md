@@ -204,7 +204,9 @@ wait. This is what keeps a provider outage or a revoked key from launching a
 Docker-backed probe on every background pass for as long as the deployment
 runs. Reconnecting the credential or re-pinning the host image is a new
 identity, so it restores the full attempt budget without a separate reset
-action.
+action. Only a probe the provider actually answered spends an attempt: when the
+credential maintenance lease cannot be acquired, no probe ran, so the pass
+defers with its budget intact.
 
 ## Agent Profile
 

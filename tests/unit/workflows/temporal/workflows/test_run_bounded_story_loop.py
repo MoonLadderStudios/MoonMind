@@ -1416,7 +1416,30 @@ _VERIFICATION_STEP_RESULT = {
         "moonSpecVerify": {"schemaVersion": 1, "verdict": "ADDITIONAL_WORK_NEEDED"},
     },
 }
-_VERIFIED_PUBLISHED_HEAD = {
+# Only the managed git-push boundary emits accepted repository evidence, so it
+# is the run's sole authority for "a verified remote head exists". The raw
+# ``branch``/``headSha``/``pushStatus`` keys below survive on any step's
+# metadata, including a read-only verifier's, and prove nothing on their own.
+_ACCEPTED_PUSH_STEP_OUTPUTS = {
+    "summary": "Applied MoonSpec remediation",
+    "push_status": "pushed",
+    "push_branch": "fetch-github-issue-moonladderstudios-tac-4f8e2aa7",
+    "push_base_ref": "origin/main",
+    "push_head_sha": "5c1837fa677aff381af09601f8d86055f0eccbcd",
+    "push_commit_count": 2,
+    "acceptedRepositoryEvidence": {
+        "schemaVersion": "accepted-repository-evidence/v1",
+        "pushStatus": "pushed",
+        "branch": "fetch-github-issue-moonladderstudios-tac-4f8e2aa7",
+        "baseBranch": "origin/main",
+        "headSha": "5c1837fa677aff381af09601f8d86055f0eccbcd",
+        "commitsAheadOfBase": 2,
+        "repositoryChanged": True,
+        "remoteVerified": True,
+    },
+}
+_ACCEPTED_EVIDENCE = _ACCEPTED_PUSH_STEP_OUTPUTS["acceptedRepositoryEvidence"]
+_UNVERIFIED_PUBLISH_CONTEXT = {
     "pushStatus": "pushed",
     "branch": "fetch-github-issue-moonladderstudios-tac-4f8e2aa7",
     "baseRef": "origin/main",
@@ -1430,11 +1453,9 @@ def _gate_workflow(
     *,
     published_head_feasibility: bool,
     publish_context: dict[str, Any] | None = None,
+    accepted_step_outputs: dict[str, Any] | None = _ACCEPTED_PUSH_STEP_OUTPUTS,
 ) -> MoonMindRunWorkflow:
     workflow = MoonMindRunWorkflow()
-    workflow._publish_context.update(
-        _VERIFIED_PUBLISHED_HEAD if publish_context is None else publish_context
-    )
     enabled = (
         {RUN_TERMINAL_GATE_PUBLISHED_HEAD_FEASIBILITY_PATCH}
         if published_head_feasibility
@@ -1443,6 +1464,13 @@ def _gate_workflow(
     monkeypatch.setattr(
         run_module.workflow, "patched", lambda patch_id: patch_id in enabled
     )
+    if accepted_step_outputs is not None:
+        workflow._record_execution_context(
+            node_id="issue-implementation-remediation:3",
+            execution_result={"status": "COMPLETED", "outputs": accepted_step_outputs},
+        )
+    if publish_context is not None:
+        workflow._publish_context.update(publish_context)
     return workflow
 
 
@@ -1495,34 +1523,86 @@ def test_terminal_gate_keeps_artifact_handoff_for_unpatched_histories(
 
 
 @pytest.mark.parametrize(
-    ("publish_context", "expected_reason"),
+    "accepted_evidence",
     [
-        ({}, "publication_state_ambiguous"),
-        (
-            {**_VERIFIED_PUBLISHED_HEAD, "pushStatus": "failed"},
-            "publication_state_ambiguous",
-        ),
-        (
-            {"pushStatus": "pushed", "branch": "feature/x"},
-            "publication_state_ambiguous",
-        ),
+        None,
+        {**_ACCEPTED_EVIDENCE, "pushStatus": "failed"},
+        {**_ACCEPTED_EVIDENCE, "headSha": ""},
+        {**_ACCEPTED_EVIDENCE, "branch": ""},
     ],
-    ids=["no-published-head", "push-failed", "missing-head-sha"],
+    ids=["no-published-head", "push-failed", "missing-head-sha", "missing-branch"],
 )
 def test_terminal_gate_requires_a_verified_published_head(
     monkeypatch: pytest.MonkeyPatch,
-    publish_context: dict[str, Any],
-    expected_reason: str,
+    accepted_evidence: dict[str, Any] | None,
 ) -> None:
+    outputs = None
+    if accepted_evidence is not None:
+        outputs = {
+            **_ACCEPTED_PUSH_STEP_OUTPUTS,
+            "acceptedRepositoryEvidence": accepted_evidence,
+        }
     workflow = _gate_workflow(
         monkeypatch,
         published_head_feasibility=True,
-        publish_context=publish_context,
+        accepted_step_outputs=outputs,
     )
 
     feasibility = workflow._publication_feasibility(_VERIFICATION_STEP_RESULT)
     assert feasibility["feasible"] is False
-    assert feasibility["reason"] == expected_reason
+    assert feasibility["reason"] == "publication_state_ambiguous"
+
+
+def test_terminal_gate_ignores_unverified_publish_context_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Raw push metadata from a non-publishing step is not accepted evidence.
+
+    ``fetch_result`` strips forged ``acceptedRepositoryEvidence`` objects but
+    leaves raw ``push_status``/``branch``/``headSha`` keys intact, and
+    ``_record_execution_context`` promotes those into ``_publish_context``.
+    Upgrading the gate from them would attempt a draft PR for a head the
+    managed push boundary never verified.
+    """
+
+    workflow = _gate_workflow(
+        monkeypatch,
+        published_head_feasibility=True,
+        publish_context=_UNVERIFIED_PUBLISH_CONTEXT,
+        accepted_step_outputs=None,
+    )
+
+    assert workflow._workflow_verified_published_head() is not None
+    assert workflow._accepted_published_head() is None
+
+    feasibility = workflow._publication_feasibility(_VERIFICATION_STEP_RESULT)
+    assert feasibility["feasible"] is False
+    assert feasibility["reason"] == "publication_state_ambiguous"
+
+
+def test_accepted_published_head_is_recorded_as_one_tuple(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A later read-only step must not overwrite half of the verified head."""
+
+    workflow = _gate_workflow(monkeypatch, published_head_feasibility=True)
+    assert workflow._accepted_published_head() == (
+        "fetch-github-issue-moonladderstudios-tac-4f8e2aa7",
+        "5c1837fa677aff381af09601f8d86055f0eccbcd",
+    )
+
+    workflow._record_execution_context(
+        node_id="issue-implementation-verification:3",
+        execution_result={
+            "status": "COMPLETED",
+            "outputs": {"branch": "unverified/other", "head_sha": "0" * 40},
+        },
+    )
+
+    assert workflow._accepted_published_head() == (
+        "fetch-github-issue-moonladderstudios-tac-4f8e2aa7",
+        "5c1837fa677aff381af09601f8d86055f0eccbcd",
+    )
 
 
 @pytest.mark.parametrize(

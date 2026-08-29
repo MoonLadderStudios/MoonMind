@@ -353,12 +353,16 @@ Publication feasibility at that gate is a property of the **run**, not of the
 step the gate stopped on. A MoonSpec verification step is read-only: it
 reports a verdict and publishes nothing, so it never carries accepted
 repository evidence of its own. When the stopping step's evidence is merely
-inconclusive, the terminal gate defers to the run-owned published head
-(`pushStatus: pushed` plus branch and head SHA in publish context), which a
-prior step established through authoritative accepted repository evidence.
-Definitive refusals recorded by a step — unauthorized publication, a
-contaminated candidate, or no candidate change — are safety decisions and are
-never overridden by that projection.
+inconclusive, the terminal gate defers to the run-owned published head — the
+branch and head SHA a prior step established through authoritative
+`acceptedRepositoryEvidence`, recorded as one atomic projection. Raw
+`pushStatus`, `branch`, and `headSha` keys that any step's metadata may carry
+are not that evidence: `agent_runtime.fetch_result` strips forged accepted
+evidence objects but leaves those raw keys intact, so only the managed push
+boundary's own evidence can make the gate publication-feasible. Definitive
+refusals recorded by a step — unauthorized publication, a contaminated
+candidate, or no candidate change — are safety decisions and are never
+overridden by that projection.
 
 Non-retryable blocking verdicts, including `NO_DETERMINATION`, `BLOCKED`, and `FAILED_UNRECOVERABLE`, block publication without waiting for additional remediation attempts unless the workflow explicitly models the missing evidence as recoverable work inside the same bounded plan.
 

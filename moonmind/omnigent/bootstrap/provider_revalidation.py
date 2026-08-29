@@ -456,6 +456,8 @@ async def _revalidate_stale_evidence(
     evidence for an image other than the one the deployment selects. Once the
     recorded attempt budget is exhausted for that identity the profile stops
     being probed at all and is reported as an operator-actionable deferral.
+    Only an attempt the provider answered spends that budget: a pass that never
+    acquired the credential maintenance lease defers with the budget intact.
     """
 
     from moonmind.omnigent.opencode_runtime_validation import (
@@ -502,8 +504,6 @@ async def _revalidate_stale_evidence(
     for row in pending:
         profile_id = row.profile_id
         operation_id = uuid4().hex
-        guard = None
-        evidence: dict[str, Any] | None = None
         try:
             guard = await acquire_credential_maintenance_guard(
                 runtime_id=OPENCODE_RUNTIME_ID,
@@ -515,6 +515,28 @@ async def _revalidate_stale_evidence(
                     "ownerIsWorkflow": False,
                 },
             )
+        except Exception as exc:
+            # The maintenance lease is a MoonMind-side authority handoff, not a
+            # provider verdict: contention with another maintainer, or a
+            # transient Temporal/profile-manager error, means no probe ran.
+            # Charging it to MAX_REVALIDATION_ATTEMPTS would let three such
+            # deferrals retire a credential the provider never rejected, and
+            # `revalidation_is_exhausted` would then skip the profile until its
+            # credential or host image changes. Preserve the budget and defer to
+            # the startup maintainer's own retry interval.
+            deferred.append(profile_id)
+            logger.warning(
+                "OpenCode Provider Profile re-validation could not acquire the "
+                "credential maintenance lease; the attempt budget is preserved: "
+                "profile_id=%s image_ref=%s error=%s",
+                profile_id,
+                image_ref,
+                exc,
+            )
+            continue
+
+        evidence: dict[str, Any] | None = None
+        try:
             evidence = await OpenCodeProviderRuntimeValidationService(
                 session_factory=session_factory,
                 resolver=resolver,
@@ -530,15 +552,14 @@ async def _revalidate_stale_evidence(
                 exc,
             )
         finally:
-            if guard is not None:
-                try:
-                    await guard.release()
-                except Exception:
-                    logger.warning(
-                        "OpenCode re-validation lease release failed: profile_id=%s",
-                        profile_id,
-                        exc_info=True,
-                    )
+            try:
+                await guard.release()
+            except Exception:
+                logger.warning(
+                    "OpenCode re-validation lease release failed: profile_id=%s",
+                    profile_id,
+                    exc_info=True,
+                )
         if evidence is None:
             await _record_revalidation_failure(
                 session_factory=session_factory,
