@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -306,16 +306,22 @@ async def test_opencode_exact_host_model_options_fail_closed_without_diagnostics
     assert "sensitive context" not in str(exc.value)
 
 
-def test_planning_model_evidence_is_bound_to_generation_and_host_image() -> None:
+def _evidence_provider(*, validated_at: datetime | None = None) -> SimpleNamespace:
     image_ref = "ghcr.io/moonmind/opencode@sha256:" + "a" * 64
-    provider = SimpleNamespace(
+    return SimpleNamespace(
         credential_generation=4,
         model_catalog_evidence_json={
             "credentialGeneration": 4,
             "imageRef": image_ref,
             "models": [{"qualifiedId": "opencode-go/model"}],
+            "validatedAt": (validated_at or datetime.now(UTC)).isoformat(),
         },
     )
+
+
+def test_planning_model_evidence_is_bound_to_generation_and_host_image() -> None:
+    image_ref = "ghcr.io/moonmind/opencode@sha256:" + "a" * 64
+    provider = _evidence_provider()
     OmnigentExecutionPlanningService._verify_model_evidence(
         provider,
         "opencode-go/model",
@@ -339,6 +345,53 @@ def test_planning_model_evidence_is_bound_to_generation_and_host_image() -> None
             expected_image_ref="ghcr.io/moonmind/opencode@sha256:" + "b" * 64,
         )
     assert wrong_image.value.code == HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE
+
+
+def test_planning_rejects_a_model_catalog_older_than_the_refresh_interval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Identity alone would launch from the first catalog ever observed.
+
+    A healthy deployment never changes its credential generation or host image
+    digest on its own, so pre-session planning has to enforce the same
+    observation interval the bootstrap reconciler refreshes on. Otherwise it
+    keeps admitting -- and launching -- a model the provider may have removed.
+    """
+
+    # Exercise the documented default: the interval applies with no env value.
+    monkeypatch.delenv("OPENCODE_MODEL_CATALOG_MAX_AGE_HOURS", raising=False)
+    image_ref = "ghcr.io/moonmind/opencode@sha256:" + "a" * 64
+    expired = _evidence_provider(validated_at=datetime.now(UTC) - timedelta(hours=9))
+
+    with pytest.raises(HarnessPlatformError) as stale:
+        OmnigentExecutionPlanningService._verify_model_evidence(
+            expired,
+            "opencode-go/model",
+            expected_image_ref=image_ref,
+        )
+    assert stale.value.code == HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE
+    assert "refresh interval" in str(stale.value)
+
+    # The interval is deployment-configurable, and ``0`` restores identity-only
+    # staleness at this boundary exactly as it does at the reconciler.
+    monkeypatch.setenv("OPENCODE_MODEL_CATALOG_MAX_AGE_HOURS", "0")
+    OmnigentExecutionPlanningService._verify_model_evidence(
+        expired,
+        "opencode-go/model",
+        expected_image_ref=image_ref,
+    )
+
+    # An observation that cannot say when it was taken is never admitted.
+    monkeypatch.delenv("OPENCODE_MODEL_CATALOG_MAX_AGE_HOURS")
+    undated = _evidence_provider()
+    undated.model_catalog_evidence_json.pop("validatedAt")
+    with pytest.raises(HarnessPlatformError) as undatable:
+        OmnigentExecutionPlanningService._verify_model_evidence(
+            undated,
+            "opencode-go/model",
+            expected_image_ref=image_ref,
+        )
+    assert undatable.value.code == HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE
 
 
 class _Session:

@@ -170,22 +170,43 @@ without another operator action. Set it to `0` to re-probe only on an identity
 change. A pass that has just observed the catalog is judged on identity alone;
 the interval decides when to re-probe, not whether a fresh observation counts.
 
-Readiness, planning, and smoke admission all reject evidence that belongs to any
-other image or generation, so re-pulling or rebuilding the OpenCode host image
-invalidates every previously validated Provider Profile.
+Readiness, planning, and smoke admission all apply both questions: they reject
+evidence that belongs to any other image or generation, and they reject an
+observation older than the interval. Re-pulling or rebuilding the OpenCode host
+image therefore invalidates every previously validated Provider Profile, and an
+expired catalog stops advertising and launching targets until a refresh
+succeeds instead of admitting a model the provider may have removed.
+
+An observation stamped further than a small clock-skew tolerance into the
+future is rejected the same way. A VM snapshot restore or a backward host-clock
+correction would otherwise give the observation a negative age that satisfies
+any interval for as long as the timestamp stays ahead, keeping an old catalog
+authoritative well past its expiry.
 
 MoonMind therefore re-validates automatically. The Omnigent bootstrap
 reconciliation pass re-runs the pinned-runtime validation above for every
 enabled, connected OpenCode Provider Profile whose evidence no longer matches
 the currently pinned image or has aged past the catalog interval, using the
-already-enrolled `opencode_api_key` SecretRef. No new credential is requested, no image is substituted, and a
-credential the runtime rejects keeps its previous evidence and stays connected.
+already-enrolled `opencode_api_key` SecretRef. No new credential is requested,
+no image is substituted, and a credential the runtime rejects keeps its previous
+evidence and stays connected.
 Fresh catalog evidence is retained when the credential remains valid but the
 configured default model has rotated out, while readiness stays deferred rather
 than silently selecting a replacement.
 While a profile is waiting for that pass, Workflow Create reports
 `provider_runtime_revalidation_pending` rather than asking the operator to
 reconnect a profile that is already connected.
+
+That wait is bounded. Re-validation gets `MAX_REVALIDATION_ATTEMPTS` tries per
+credential generation and host image; once they are spent, the reconciler stops
+probing the provider for that identity and readiness stops reporting a pending
+wait. This is what keeps a provider outage or a revoked key from launching a
+Docker-backed probe on every background pass for as long as the deployment
+runs. Reconnecting the credential or re-pinning the host image is a new
+identity, so it restores the full attempt budget without a separate reset
+action. Only a probe the provider actually answered spends an attempt: when the
+credential maintenance lease cannot be acquired, no probe ran, so the pass
+defers with its budget intact.
 
 ## Agent Profile
 

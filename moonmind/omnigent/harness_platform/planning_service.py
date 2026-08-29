@@ -681,6 +681,10 @@ class OmnigentExecutionPlanningService:
         *,
         expected_image_ref: str,
     ) -> None:
+        from moonmind.omnigent.bootstrap.provider_revalidation import (
+            evidence_observation_is_current,
+        )
+
         evidence = provider.model_catalog_evidence_json
         if not isinstance(evidence, Mapping):
             raise HarnessPlatformError(
@@ -699,6 +703,18 @@ class OmnigentExecutionPlanningService:
         if str(evidence.get("imageRef") or "") != expected_image_ref:
             raise HarnessPlatformError(
                 "Provider Profile model evidence belongs to a different host image",
+                code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,
+            )
+        if not evidence_observation_is_current(evidence):
+            # The credential generation and image digest of a healthy
+            # deployment never change on their own, so identity alone would let
+            # this boundary launch from the first catalog it ever observed --
+            # including a model the provider has since removed. The bootstrap
+            # reconciler re-probes on the same interval; refusing here is what
+            # makes that refresh authoritative instead of advisory.
+            raise HarnessPlatformError(
+                "Provider Profile model evidence is older than the configured "
+                "model catalog refresh interval",
                 code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,
             )
         raw_models = evidence.get("models")

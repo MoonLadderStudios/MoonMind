@@ -8,5 +8,6 @@
   "verificationGateRunFeasibilityReason": "verified_remote_head",
   "verificationGateTerminalHandoff": "draft_publication",
   "verificationGateUnpatchedTerminalHandoff": "artifact_backed",
-  "draftPullRequestIsDraft": true
+  "draftPullRequestIsDraft": true,
+  "verificationGateUnverifiedFeasibilityReason": "publication_state_ambiguous"
 }

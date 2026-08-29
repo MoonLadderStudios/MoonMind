@@ -100,6 +100,7 @@ from moonmind.security.egress_conformance_evidence import (
 from moonmind.schemas.workload_models import (
     WORKLOAD_GPU_VENDORS,
     WorkloadGpuRequest,
+    parse_size_bytes,
 )
 from moonmind.schemas.workspace_locator_models import (
     ExternalStateLocator,
@@ -669,6 +670,16 @@ class DockerContainerJobBackend:
                     ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED,
                     f"{name}={requested} exceeds the deployment ceiling {ceiling} "
                     "and cannot be raised by a caller",
+                )
+        requested_shm = spec.resources.shm_size
+        if requested_shm is not None:
+            requested_shm_mib = parse_size_bytes(requested_shm) / (1024 * 1024)
+            if requested_shm_mib > ceilings.max_shm_size_mib:
+                raise ContainerJobBackendError(
+                    ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED,
+                    f"shmSize={requested_shm} exceeds the deployment ceiling "
+                    f"{ceilings.max_shm_size_mib}MiB and cannot be raised by a "
+                    "caller",
                 )
         gpu = spec.resources.gpu
         if gpu is not None and ceilings.max_gpu_count is not None:
@@ -2028,7 +2039,10 @@ class DockerContainerJobBackend:
             "--memory",
             f"{spec.resources.memory_mib}m",
             "--shm-size",
-            f"{self._settings.shm_size_mib}m",
+            # The caller owns this resource once the deployment ceiling has
+            # admitted it; the deployment default only applies when the request
+            # omits it.
+            spec.resources.shm_size or f"{self._settings.shm_size_mib}m",
             "--pids-limit",
             str(spec.resources.pids),
             "--workdir",

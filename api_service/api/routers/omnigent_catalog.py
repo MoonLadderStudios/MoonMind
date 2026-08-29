@@ -420,23 +420,12 @@ def _revalidation_is_exhausted(provider: Any, selected_classes: Any) -> bool:
     """
 
     from moonmind.omnigent.bootstrap.provider_revalidation import (
-        REVALIDATION_FAILURE_KEY,
+        revalidation_is_exhausted,
     )
 
-    behavior = getattr(provider, "command_behavior", None) or {}
-    record = behavior.get(REVALIDATION_FAILURE_KEY)
-    if not isinstance(record, dict) or record.get("exhausted") is not True:
-        return False
-    try:
-        generation = int(record.get("credentialGeneration") or 0)
-    except (TypeError, ValueError):
-        return False
-    if generation != int(provider.credential_generation):
-        # A rotated credential has not been attempted yet.
-        return False
-    return str(record.get("imageRef") or "") in {
-        item.imageRef for item in selected_classes
-    }
+    return revalidation_is_exhausted(
+        provider, image_refs={item.imageRef for item in selected_classes}
+    )
 
 
 def _valid_server_url(value: str) -> bool:
@@ -1548,6 +1537,9 @@ async def get_omnigent_execution_readiness(
 
     from api_service.db.base import async_session_maker
     from api_service.db.models import OmnigentAgentProfile, OmnigentAgentProfileVersion
+    from moonmind.omnigent.bootstrap.provider_revalidation import (
+        evidence_observation_is_current,
+    )
     from moonmind.omnigent.harness_platform.agent_profile import validate_agent_profile
     from moonmind.omnigent.harness_platform.catalog import (
         TrustState,
@@ -1707,17 +1699,25 @@ async def get_omnigent_execution_readiness(
                 evidence_generation = int(evidence.get("credentialGeneration") or 0)
             except (TypeError, ValueError):
                 evidence_generation = 0
-            if evidence_generation != int(provider.credential_generation) or str(
-                evidence.get("imageRef") or ""
-            ) not in {item.imageRef for item in selected_classes}:
+            if (
+                evidence_generation != int(provider.credential_generation)
+                or str(evidence.get("imageRef") or "")
+                not in {item.imageRef for item in selected_classes}
+                # An observation older than the configured catalog interval no
+                # longer describes the provider's current models, so it cannot
+                # advertise a target either. The reconciler re-probes it on the
+                # same bounded schedule as image and credential staleness.
+                or not evidence_observation_is_current(evidence)
+            ):
                 if evidence and not _revalidation_is_exhausted(
                     provider, selected_classes
                 ):
                     # The credential is enrolled and connected; only its
                     # runtime-backed evidence trails the currently pinned host
-                    # image or credential generation. The bootstrap reconciler
-                    # re-validates it against the exact selected image, so this
-                    # is a bounded wait rather than a reconnect.
+                    # image, the credential generation, or the catalog
+                    # interval. The bootstrap reconciler re-validates it
+                    # against the exact selected image, so this is a bounded
+                    # wait rather than a reconnect.
                     revalidating.append(provider.profile_id)
                 continue
             observed_models = {

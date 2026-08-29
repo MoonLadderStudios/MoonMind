@@ -12602,6 +12602,8 @@ export interface components {
              */
             pids: number;
             gpu?: components["schemas"]["WorkloadGpuRequest"] | null;
+            /** Shmsize */
+            shmSize?: string | null;
         };
         /**
          * ResourceListResponse
