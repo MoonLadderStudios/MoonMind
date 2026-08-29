@@ -634,6 +634,94 @@ async def test_remediation_within_the_same_authority_is_admitted(service) -> Non
     assert remediation.outcome is ControlPlaneOutcome.APPLIED
 
 
+#: A remediation attempt runs as its own Step Execution, so it bootstraps its
+#: own canonical session and cannot be bounded by that session's own metadata.
+ATTEMPT_STEP_EXECUTION_ID = "step-3707:remediation:1"
+
+
+async def _bootstrapping_remediation_claim(
+    service: CanonicalTurnCommandService,
+    *,
+    base_step_execution_id: str | None,
+    requested_authority,
+):
+    """Claim a remediation turn that establishes its own canonical session."""
+
+    return await service.claim(
+        workflow_id=WORKFLOW_ID,
+        provider_session_ref="",
+        chat_binding_id=None,
+        command_type="submit_instruction",
+        turn_source=TurnSource.REMEDIATION,
+        idempotency_key="run-1:remediation:1",
+        payload_digest="sha256:" + "d" * 64,
+        step_execution_id=ATTEMPT_STEP_EXECUTION_ID,
+        base_step_execution_id=base_step_execution_id,
+        bootstrap=_bootstrap(
+            step_execution_id=ATTEMPT_STEP_EXECUTION_ID,
+            source_idempotency_key="run-1:remediation:1",
+        ),
+        requested_authority=requested_authority,
+    )
+
+
+@pytest.mark.asyncio
+async def test_bootstrapping_remediation_is_bounded_by_the_named_base(
+    service,
+) -> None:
+    """AC6 compares against the repaired Step Execution's durable record."""
+
+    await _claim(
+        service,
+        idempotency_key="run-1",
+        turn_source=TurnSource.INITIAL,
+        chat_binding_id=None,
+        requested_authority=_authority(),
+    )
+
+    with pytest.raises(RemediationAuthorityBroadenedError) as excinfo:
+        await _bootstrapping_remediation_claim(
+            service,
+            base_step_execution_id=STEP_EXECUTION_ID,
+            requested_authority=_authority(dimensions={"publishMode": "broadened"}),
+        )
+
+    assert "publishMode" in excinfo.value.broadened
+
+
+@pytest.mark.asyncio
+async def test_a_bootstrapping_remediation_is_never_its_own_bound(service) -> None:
+    """The claim's own bootstrap copy can never satisfy the AC6 comparison.
+
+    Naming the claiming Step Execution as its own base would make the guard
+    compare the request with the metadata it just wrote, which is exactly the
+    vacuous check this boundary must not perform.
+    """
+
+    claim = await _bootstrapping_remediation_claim(
+        service,
+        base_step_execution_id=ATTEMPT_STEP_EXECUTION_ID,
+        requested_authority=_authority(dimensions={"publishMode": "broadened"}),
+    )
+
+    assert claim.outcome is ControlPlaneOutcome.APPLIED
+
+
+@pytest.mark.asyncio
+async def test_remediation_without_a_recorded_base_has_nothing_to_broaden(
+    service,
+) -> None:
+    """A repaired Step Execution that never opened a session records no bound."""
+
+    claim = await _bootstrapping_remediation_claim(
+        service,
+        base_step_execution_id="step-3707:never-canonicalized",
+        requested_authority=_authority(dimensions={"publishMode": "broadened"}),
+    )
+
+    assert claim.outcome is ControlPlaneOutcome.APPLIED
+
+
 def test_remediation_non_broadening_covers_every_named_dimension() -> None:
     assert set(REMEDIATION_NON_BROADENING_DIMENSIONS) == {
         "harnessId",

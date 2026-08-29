@@ -61,10 +61,17 @@ No producer names its own source as a literal. The source is derived from typed
 request authority at the boundary the producer already uses:
 
 - `moonmind/omnigent/realizers/turn_delivery.py` derives it with
-  `canonical_turn_source(request)` for both execution realizers. A request
-  carrying controller-produced `remediationWorkspace` authority is a
-  `remediation` turn; `workflows/run.py` refuses any plan- or browser-authored
-  value for that field, so its presence is the capability, not a hint.
+  `canonical_turn_source(request)` for both execution realizers. The source comes
+  from `stepExecution.canonicalTurnLineage`, the launching controller's typed
+  attestation. `workflows/run.py` builds that block in
+  `_record_canonical_turn_lineage` from workflow-owned remediation-loop state
+  only — an admitted loop, its current attempt ordinal, and its recorded head —
+  and refuses any plan- or browser-authored `canonicalTurnLineage`, so its
+  presence is the capability, not a hint. A node whose annotations merely *look*
+  like a remediation attempt carries no lineage unless the admitted loop
+  controller attests that attempt. Emitting the block into the AgentRun request
+  is gated by the `run-canonical-turn-lineage-v1` replay patch, so an AgentRun
+  started before the cutover carries no lineage and remains an `initial` turn.
 - `api_service/api/routers/omnigent_bridge.py` maps native Workflow Chat control
   types to `workflow_chat`, `approval_response`, or `steering` by exhaustive
   membership.
@@ -98,7 +105,8 @@ mutation it:
    authority and compares them against the authority the caller requests;
 4. refuses a remediation turn that broadens harness, execution realizer,
    Provider Profile, model, workspace, Skill, launch policy, or publication
-   authority;
+   authority, comparing against the authority of the attempt it repairs (see
+   **What bounds a remediation turn** below);
 5. records a distinct `OmnigentTurnAttempt` and one command-journal entry
    carrying source kind, instruction digest, idempotency identity, expected
    revision, fencing generation, delivery state, and terminal evidence refs;
@@ -107,6 +115,37 @@ mutation it:
 An instruction may *request* authority but never attests it: recorded authority
 comes only from durable session state. A dimension the instruction does not
 assert is not a request to change it and leaves the session's authority intact.
+
+### What bounds a remediation turn
+
+Each remediation attempt of a workflow-owned loop is materialized as its own
+logical step, so it launches its own Step Execution and therefore bootstraps its
+own canonical session. Two designs could make AC6 meaningful; MoonMind takes the
+second:
+
+- *Rejected:* resolve the remediation turn onto the repaired attempt's canonical
+  session. Each attempt is a distinct AgentRun with its own provider-session
+  attachment, and one canonical session owns exactly one such attachment, so
+  reusing the prior attempt's session would collapse two provider sessions onto
+  one aggregate and break the Step Execution ↔ session identity the bootstrap
+  already enforces.
+- *Chosen:* compare the requested authority against the loop's recorded base
+  authority. `canonicalTurnLineage.baseStepExecutionId` names the Step Execution
+  whose candidate the attempt continues — the loop head's
+  `headStepExecutionId`, which is the original implementation step for the first
+  attempt and the previous attempt afterwards. `CanonicalTurnCommandService`
+  loads that Step Execution's canonical session
+  (`SessionRepository.get_by_step_execution`) and uses *its* durable
+  `immutableTurnAuthority` as the bound.
+
+The instruction names the base identity; it never attests the base authority. A
+claim that bootstrapped the session it is claiming against is never its own
+bound — otherwise the guard would compare the request with the metadata it just
+wrote. A turn that joins an *existing* session is still bounded by that session's
+own durable record. When the repaired Step Execution never established a
+canonical session, there is no prior Omnigent authority to broaden and the turn
+is admitted; that is an absence of recorded authority, not a comparison against
+the claim itself.
 
 ## One typed resume decision
 

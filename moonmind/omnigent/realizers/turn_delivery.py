@@ -19,7 +19,10 @@ from moonmind.omnigent.control_plane.turn_admission import (
     CanonicalTurnAdmissionRejected,
 )
 from moonmind.omnigent.control_plane.turn_commands import CanonicalSessionBootstrap
-from moonmind.omnigent.control_plane.turn_sources import TurnSource
+from moonmind.omnigent.control_plane.turn_sources import (
+    TurnSource,
+    coerce_turn_source,
+)
 from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
@@ -42,20 +45,42 @@ def execution_identity(request: AgentExecutionRequest) -> tuple[str, str]:
     return request.correlation_id, request.correlation_id
 
 
+def _canonical_turn_lineage(request: AgentExecutionRequest) -> Any | None:
+    """Return the controller-attested lineage this launch carries, if any."""
+
+    if request.step_execution is None:
+        return None
+    return request.step_execution.canonical_turn_lineage
+
+
 def canonical_turn_source(request: AgentExecutionRequest) -> TurnSource:
     """Return the closed turn source the admitted request actually carries.
 
     The source is derived from typed request authority, never from a harness,
-    realizer, or Skill name (#3707). ``remediationWorkspace`` is
-    controller-produced remediation authority -- ``workflows/run.py`` refuses any
-    plan- or browser-authored value -- so its presence *is* the remediation
-    capability. Naming it here is what makes the AC6 non-broadening guard
-    reachable on a real remediation attempt instead of only in tests.
+    realizer, or Skill name (#3707). ``stepExecution.canonicalTurnLineage`` is
+    the launching controller's attestation -- ``workflows/run.py`` builds it from
+    workflow-owned loop state and refuses any plan- or browser-authored value --
+    so its presence *is* the capability. Deriving the source here is what makes
+    the AC6 non-broadening guard reachable on a real remediation attempt instead
+    of only in tests.
+
+    A launch that carries no lineage is the instruction that establishes its
+    canonical session.
     """
 
-    if request.remediation_workspace is not None:
-        return TurnSource.REMEDIATION
-    return TurnSource.INITIAL
+    lineage = _canonical_turn_lineage(request)
+    if lineage is None:
+        return TurnSource.INITIAL
+    return coerce_turn_source(lineage.source)
+
+
+def canonical_turn_base_step_execution_id(
+    request: AgentExecutionRequest,
+) -> str | None:
+    """Return the Step Execution whose durable authority bounds this turn."""
+
+    lineage = _canonical_turn_lineage(request)
+    return None if lineage is None else lineage.base_step_execution_id
 
 
 async def deliver_canonical_turn(
@@ -95,6 +120,7 @@ async def deliver_canonical_turn(
             idempotency_key=request.idempotency_key,
             payload_digest=plan.planRef,
             step_execution_id=step_execution_id,
+            base_step_execution_id=canonical_turn_base_step_execution_id(request),
             bootstrap=CanonicalSessionBootstrap(
                 provider="omnigent",
                 step_execution_id=step_execution_id,
@@ -159,6 +185,7 @@ async def deliver_canonical_turn(
 
 
 __all__ = [
+    "canonical_turn_base_step_execution_id",
     "canonical_turn_source",
     "deliver_canonical_turn",
     "execution_identity",

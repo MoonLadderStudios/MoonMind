@@ -450,6 +450,34 @@ class SessionRepository(_RepositoryBase):
         row = (await self._session.execute(stmt)).scalar_one_or_none()
         return _session_record(row) if row is not None else None
 
+    async def get_by_step_execution(
+        self, moonmind_workflow_id: str, step_execution_id: str
+    ) -> Optional[SessionRecord]:
+        """Return the canonical session a prior Step Execution established.
+
+        A remediation turn is bounded by the authority of the attempt it
+        repairs, and that attempt is named by its Step Execution identity rather
+        than by a session id the instruction could forge. A Step Execution may
+        legitimately own more than one canonical session (a later agent run for
+        the same execution), so the *earliest* row is returned: the authority a
+        remediation may not broaden is the one first established, not whichever
+        row happens to sort last.
+        """
+
+        if not moonmind_workflow_id or not step_execution_id:
+            return None
+        stmt = (
+            select(OmnigentSession)
+            .where(
+                OmnigentSession.moonmind_workflow_id == moonmind_workflow_id,
+                OmnigentSession.step_execution_id == step_execution_id,
+            )
+            .order_by(OmnigentSession.created_at, OmnigentSession.session_id)
+            .limit(1)
+        )
+        row = (await self._session.execute(stmt)).scalars().first()
+        return _session_record(row) if row is not None else None
+
     async def get_by_chat_binding(self, chat_binding_id: str) -> Optional[SessionRecord]:
         stmt = select(OmnigentSession).where(
             OmnigentSession.chat_binding_id == chat_binding_id

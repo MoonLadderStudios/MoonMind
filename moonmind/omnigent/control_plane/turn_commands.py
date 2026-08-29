@@ -97,6 +97,28 @@ def _bootstrap_metadata(
     return metadata
 
 
+def _recorded_session_authority(session: Any) -> ImmutableTurnAuthority | None:
+    """Return the immutable authority durably recorded for ``session``.
+
+    The session's own plan and runtime-binding pointers win over the metadata
+    projection: those columns are advanced under the session's fence, so they
+    are the more current statement of the same authority.
+    """
+
+    recorded = ImmutableTurnAuthority.from_metadata(
+        (session.metadata or {}).get(IMMUTABLE_AUTHORITY_METADATA_KEY)
+    )
+    if recorded is None:
+        return None
+    return ImmutableTurnAuthority(
+        execution_plan_ref=(session.execution_plan_ref or recorded.execution_plan_ref),
+        runtime_binding_ref=(
+            session.runtime_binding_ref or recorded.runtime_binding_ref
+        ),
+        dimensions=recorded.dimensions,
+    )
+
+
 def _verify_owner_principal(session: Any, actor_principal: str | None) -> None:
     """Fail closed before mutation when another principal owns this session."""
 
@@ -132,6 +154,7 @@ class CanonicalTurnCommandService:
         idempotency_key: str,
         payload_digest: str,
         step_execution_id: str | None = None,
+        base_step_execution_id: str | None = None,
         bootstrap: CanonicalSessionBootstrap | None = None,
         requested_authority: ImmutableTurnAuthority | None = None,
         actor_principal: str | None = None,
@@ -152,6 +175,7 @@ class CanonicalTurnCommandService:
                 idempotency_key=idempotency_key,
                 payload_digest=payload_digest,
                 step_execution_id=step_execution_id,
+                base_step_execution_id=base_step_execution_id,
                 bootstrap=bootstrap,
                 requested_authority=requested_authority,
                 actor_principal=actor_principal,
@@ -172,6 +196,7 @@ class CanonicalTurnCommandService:
         idempotency_key: str,
         payload_digest: str,
         step_execution_id: str | None = None,
+        base_step_execution_id: str | None = None,
         bootstrap: CanonicalSessionBootstrap | None = None,
         requested_authority: ImmutableTurnAuthority | None = None,
         actor_principal: str | None = None,
@@ -320,6 +345,14 @@ class CanonicalTurnCommandService:
             session,
             source=source,
             requested_authority=requested_authority,
+            base_authority=await self._base_authority(
+                repos,
+                source=source,
+                workflow_id=workflow_id,
+                base_step_execution_id=base_step_execution_id,
+                session=session,
+            ),
+            bootstrapped_by_this_claim=bootstrap_turn is not None,
             runtime_authority_current=runtime_authority_current,
             branch_capable=branch_capable,
             cleanup_complete=cleanup_complete,
@@ -423,12 +456,45 @@ class CanonicalTurnCommandService:
             fencing_generation=command.fencing_generation,
         )
 
+    async def _base_authority(
+        self,
+        repos: Any,
+        *,
+        source: TurnSource,
+        workflow_id: str,
+        base_step_execution_id: str | None,
+        session: Any,
+    ) -> ImmutableTurnAuthority | None:
+        """Load the durable authority of the Step Execution a turn repairs.
+
+        A remediation attempt runs as its own Step Execution and therefore
+        bootstraps its own canonical session; comparing its requested authority
+        against that session's metadata would compare the claim with the copy it
+        just wrote. The bound must come from the *other* durable aggregate the
+        controller names, so this resolves the base Step Execution's canonical
+        session and refuses to treat the claiming session as its own base.
+
+        The instruction names the base identity; it never attests the base
+        authority, which is read from durable session state.
+        """
+
+        if source is not TurnSource.REMEDIATION or not base_step_execution_id:
+            return None
+        base_session = await repos.sessions.get_by_step_execution(
+            workflow_id, base_step_execution_id
+        )
+        if base_session is None or base_session.session_id == session.session_id:
+            return None
+        return _recorded_session_authority(base_session)
+
     def _admit(
         self,
         session: Any,
         *,
         source: TurnSource,
         requested_authority: ImmutableTurnAuthority | None,
+        base_authority: ImmutableTurnAuthority | None = None,
+        bootstrapped_by_this_claim: bool = False,
         runtime_authority_current: bool,
         branch_capable: bool,
         cleanup_complete: bool,
@@ -444,28 +510,26 @@ class CanonicalTurnCommandService:
 
         if requested_authority is None:
             return None
-        recorded = ImmutableTurnAuthority.from_metadata(
-            (session.metadata or {}).get(IMMUTABLE_AUTHORITY_METADATA_KEY)
-        )
+        recorded = _recorded_session_authority(session)
+        if source is TurnSource.REMEDIATION:
+            # Remediation is bounded by the authority of the attempt it repairs
+            # (#3707 AC6). Broadening is a policy violation, not a branch.
+            #
+            # A claim that just bootstrapped this session wrote ``recorded``
+            # itself, so comparing against it would compare the claim with its
+            # own copy. Such a turn is bounded only by the base Step Execution
+            # the controller named; a turn that joins an existing session is
+            # bounded by that session's durable record.
+            bound = base_authority
+            if bound is None and not bootstrapped_by_this_claim:
+                bound = recorded
+            assert_remediation_does_not_broaden(
+                recorded=bound, requested=requested_authority
+            )
         if recorded is None:
             # First instruction to assert authority for a session that predates
             # the record converges onto it rather than failing an admitted run.
             return None
-        recorded = ImmutableTurnAuthority(
-            execution_plan_ref=(
-                session.execution_plan_ref or recorded.execution_plan_ref
-            ),
-            runtime_binding_ref=(
-                session.runtime_binding_ref or recorded.runtime_binding_ref
-            ),
-            dimensions=recorded.dimensions,
-        )
-        if source is TurnSource.REMEDIATION:
-            # Remediation is bounded by the authority of the attempt it repairs
-            # (#3707 AC6). Broadening is a policy violation, not a branch.
-            assert_remediation_does_not_broaden(
-                recorded=recorded, requested=requested_authority
-            )
         return evaluate_turn_admission(
             recorded=recorded,
             requested=requested_authority,

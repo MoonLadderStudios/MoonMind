@@ -366,6 +366,49 @@ class OmnigentExecutionPlanBinding(BaseModel):
         return self
 
 
+class CanonicalTurnLineage(BaseModel):
+    """Controller-attested canonical turn lineage for one Step Execution.
+
+    Source: MoonLadderStudios/MoonMind#3707 ([Omnigent control plane 7/11]).
+
+    The launching controller is the only authority that can say which closed
+    turn source an execution carries and which prior Step Execution it repairs.
+    Realizers never name their own source, and ``workflows/run.py`` refuses any
+    plan- or browser-authored value for this block, so its presence *is* the
+    capability rather than a hint.
+
+    ``baseStepExecutionId`` names the Step Execution whose durable authority
+    bounds this turn. The turn boundary *loads* that authority from the base
+    Step Execution's canonical session; the instruction may name the base but
+    can never attest its authority.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
+
+    schema_version: Literal["canonical-turn-lineage/v1"] = Field(
+        "canonical-turn-lineage/v1", alias="schemaVersion"
+    )
+    source: str = Field(..., min_length=1)
+    base_step_execution_id: str | None = Field(None, alias="baseStepExecutionId")
+
+    @field_validator("source", mode="after")
+    @classmethod
+    def _closed_vocabulary_only(cls, value: str) -> str:
+        from moonmind.omnigent.control_plane.turn_sources import coerce_turn_source
+
+        # Fails closed on any value outside the closed, versioned vocabulary.
+        return coerce_turn_source(value).value
+
+    @field_validator("base_step_execution_id", mode="after")
+    @classmethod
+    def _base_step_execution_id_is_concrete(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return require_non_blank(
+            value, field_name="canonicalTurnLineage.baseStepExecutionId"
+        )
+
+
 class AgentRuntimeStepExecutionLaunch(BaseModel):
     """Compact adapter-visible launch envelope for one Step Execution."""
 
@@ -392,6 +435,9 @@ class AgentRuntimeStepExecutionLaunch(BaseModel):
     resolved_skillset_ref: str | None = Field(None, alias="resolvedSkillsetRef")
     omnigent_execution_plan: OmnigentExecutionPlanBinding | None = Field(
         None, alias="omnigentExecutionPlan"
+    )
+    canonical_turn_lineage: CanonicalTurnLineage | None = Field(
+        None, alias="canonicalTurnLineage"
     )
     runtime_selection: dict[str, Any] = Field(
         default_factory=dict, alias="runtimeSelection"
@@ -2268,6 +2314,7 @@ __all__ = [
     "evaluate_execution_budget",
     "resolve_execution_budget",
     "AgentExecutionRequest",
+    "CanonicalTurnLineage",
     "OmnigentExecutionPlanBinding",
     "AgentKind",
     "ExternalExecutionStyle",
