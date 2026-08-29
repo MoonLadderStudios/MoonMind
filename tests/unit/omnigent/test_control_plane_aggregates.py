@@ -43,6 +43,7 @@ from moonmind.omnigent.control_plane import (
     plan_backfill,
     run_backfill,
 )
+from moonmind.omnigent.control_plane.turn_sources import TurnSource
 from moonmind.omnigent.control_plane.turn_commands import (
     CanonicalSessionBootstrap,
     CanonicalTurnCommandService,
@@ -803,7 +804,7 @@ async def test_continuation_turn_reuses_session_without_new_binding(store) -> No
             turn_attempt_id="t2",
             session_id="s1",
             idempotency_key="idem-2",
-            lineage_kind="continuation",
+            lineage_kind=TurnSource.REPOSITORY_CONTINUATION,
             parent_turn_attempt_id="t1",
         )
         refreshed = await repos.sessions.get("s1")
@@ -850,7 +851,7 @@ async def test_workflow_chat_uses_canonical_turn_and_command_authority(
         alias = await repos.chat_binding_aliases.resolve("browser-chat-binding")
     assert current is not None and current.terminal_state is None
     assert current.active_turn_attempt_id == claim.turn_attempt_id
-    assert turn is not None and turn.lineage_kind == "continuation"
+    assert turn is not None and turn.lineage_kind == "repository_continuation"
     assert turn.parent_turn_attempt_id == initial.turn_attempt_id
     assert command is not None and command.status == "claimed"
     assert alias is not None and alias.session_id == session.session_id
@@ -1158,7 +1159,7 @@ async def test_backfill_seven_rows_one_provider_session(session_factory) -> None
     assert report.turn_attempts_written == 7
     lineages = [t.lineage_kind for t in report.plan.turn_attempts]
     assert lineages.count("initial") == 1
-    assert lineages.count("continuation") == 6
+    assert lineages.count("repository_continuation") == 6
 
     session_id = report.plan.sessions[0].session_id
     store = OmnigentControlPlaneStore(session_factory)

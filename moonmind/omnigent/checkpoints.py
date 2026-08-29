@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import hashlib
 from datetime import datetime
-from enum import Enum
 from typing import TYPE_CHECKING, Any, Callable, Literal, Mapping
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+# One typed decision boundary is shared by checkpoint recovery, canonical turn
+# admission, and the session supervisor (#3707 §5). ``resume_decision`` is a leaf
+# module so importing it here cannot create a control-plane import cycle.
+from moonmind.omnigent.resume_decision import SessionResumeDecision
 
 # ``WorkspaceLocator`` lives in ``moonmind.schemas``, whose package ``__init__``
 # imports ``moonmind.schemas.temporal_models``, which in turn imports this module
@@ -37,11 +41,6 @@ _ARTIFACT_FIELDS = {
     "instructionRef",
     "contextRef",
 }
-
-
-class OmnigentRecoveryMode(str, Enum):
-    LIVE_REATTACH = "live_reattach"
-    COLD_RESTORE = "cold_restore"
 
 
 class OmnigentCheckpointValidation(BaseModel):
@@ -480,7 +479,7 @@ def recovery_mode(
     host_registered: bool,
     session_valid: bool,
     first_message_consistent: bool,
-) -> OmnigentRecoveryMode:
+) -> SessionResumeDecision:
     """Select live reattach only when every original authority is still valid."""
 
     provider_active = bool(provider_lease and provider_lease.get("active"))
@@ -522,8 +521,8 @@ def recovery_mode(
             checkpoint.omnigent_session_id,
         )
     ):
-        return OmnigentRecoveryMode.LIVE_REATTACH
-    return OmnigentRecoveryMode.COLD_RESTORE
+        return SessionResumeDecision.LIVE_REATTACH
+    return SessionResumeDecision.COLD_RESTORE
 
 
 def validate_cold_restore_target(
@@ -566,7 +565,7 @@ __all__ = [
     "CandidateWorkspaceAuthority",
     "OmnigentCheckpointIdentity",
     "OmnigentCheckpointValidation",
-    "OmnigentRecoveryMode",
+    "SessionResumeDecision",
     "OmnigentRestoreMaterial",
     "materialize_cold_restore_inputs",
     "recovery_mode",

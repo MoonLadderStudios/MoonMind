@@ -68,6 +68,7 @@ from .records import (
     TurnIdempotencyConflictError,
     ensure_supported_schema_version,
 )
+from .turn_sources import TurnSource, coerce_turn_source
 
 _UNSET: Any = object()
 
@@ -1259,7 +1260,7 @@ class TurnAttemptRepository(_RepositoryBase):
         turn_attempt_id: str,
         session_id: str,
         idempotency_key: str,
-        lineage_kind: str = "instruction",
+        lineage_kind: Any = TurnSource.INITIAL,
         step_execution_id: Optional[str] = None,
         parent_turn_attempt_id: Optional[str] = None,
         remediation_of_turn_attempt_id: Optional[str] = None,
@@ -1267,6 +1268,9 @@ class TurnAttemptRepository(_RepositoryBase):
         provider_marker: Optional[str] = None,
         state: str = TURN_STATE_PREPARED,
     ) -> TurnAttemptRecord:
+        # The turn source is a closed, versioned vocabulary (#3707): an
+        # unrecognized value fails closed instead of being coerced.
+        source = coerce_turn_source(lineage_kind)
         existing = await self.get_by_idempotency_key(idempotency_key)
         if existing is not None:
             if (
@@ -1283,7 +1287,7 @@ class TurnAttemptRepository(_RepositoryBase):
             turn_attempt_id=turn_attempt_id,
             session_id=session_id,
             idempotency_key=idempotency_key,
-            lineage_kind=lineage_kind,
+            lineage_kind=source.value,
             step_execution_id=step_execution_id,
             parent_turn_attempt_id=parent_turn_attempt_id,
             remediation_of_turn_attempt_id=remediation_of_turn_attempt_id,
@@ -2624,6 +2628,47 @@ class CleanupAuthorityRepository(_RepositoryBase):
         await self._session.refresh(row)
         return CasResult(ControlPlaneOutcome.APPLIED, _cleanup_record(row))
 
+    async def fence_for_turn(
+        self,
+        session_id: str,
+        *,
+        owner_class: str,
+    ) -> CasResult:
+        """Fence incompatible cleanup before a turn mutates the provider.
+
+        Source: MoonLadderStudios/MoonMind#3707 §4. Continuation, remediation,
+        and chat admission all race host cleanup, credential-materializer
+        cleanup, Provider Profile release, and janitor recovery. The race is
+        resolved deterministically in one direction: an *admitted* turn always
+        advances the cleanup generation, so an outstanding janitor claim is
+        fenced out at completion (it can no longer delete the replacement
+        generation) while a janitor that has not yet claimed simply claims the
+        newer generation after the turn.
+
+        Completed cleanup is a distinct terminal meaning and is never reopened:
+        the turn is refused with :attr:`IMMUTABLE_AUTHORITY_CONFLICT` so the
+        caller cold-restores or branches instead of consuming released
+        credentials.
+        """
+
+        row = await self._load_for_update(session_id)
+        if row.state == CLEANUP_STATE_COMPLETE:
+            return CasResult(
+                ControlPlaneOutcome.IMMUTABLE_AUTHORITY_CONFLICT,
+                _cleanup_record(row),
+            )
+        row.state = CLEANUP_STATE_UNCLAIMED
+        row.owner_class = owner_class
+        row.claim_token = None
+        row.fenced_host_generation = None
+        row.fenced_profile_generation = None
+        row.fenced_provider_epoch = None
+        row.generation = row.generation + 1
+        row.revision = row.revision + 1
+        await self._session.flush()
+        await self._session.refresh(row)
+        return CasResult(ControlPlaneOutcome.APPLIED, _cleanup_record(row))
+
     async def record_janitor_handoff(
         self,
         session_id: str,
@@ -2819,7 +2864,7 @@ class OmnigentControlPlaneStore:
                 turn_attempt_id=first_turn_attempt_id,
                 session_id=session_id,
                 idempotency_key=first_turn_idempotency_key,
-                lineage_kind="initial",
+                lineage_kind=TurnSource.INITIAL,
                 step_execution_id=step_execution_id,
                 instruction_digest=instruction_digest,
             )

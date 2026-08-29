@@ -39,6 +39,8 @@ from moonmind.omnigent.bridge_proxy import (
     BridgeSessionEventRequest,
     OmnigentBridgeError,
 )
+from moonmind.omnigent.control_plane.records import ControlPlaneOutcome
+from moonmind.omnigent.control_plane.turn_sources import TurnSource
 from moonmind.omnigent.effective_capabilities import CAPABILITY_NAMES
 from moonmind.omnigent.host_auth_profile import (
     HostAuthCredentialProfile,
@@ -318,6 +320,7 @@ class _FakeProxy:
         self.deleted: list[str] = []
         self.create_error: OmnigentBridgeError | None = None
         self.stream_error: OmnigentBridgeError | None = None
+        self.resolve_elicitation_error: OmnigentBridgeError | None = None
         # By default a read resolves to the mm:w1 owner used across the tests;
         # pass ``session_owner=None`` to simulate a session the bridge does not
         # own, or an explicit binding to simulate a foreign owner.
@@ -386,6 +389,8 @@ class _FakeProxy:
                 "payload": payload,
             }
         )
+        if self.resolve_elicitation_error is not None:
+            raise self.resolve_elicitation_error
         return {"ok": True, "elicitationId": elicitation_id}
 
     async def list_agents(self):
@@ -439,6 +444,8 @@ class _FakeStore:
         self.appended_events: list[dict[str, Any]] = []
         self.lifecycle_events: list[dict[str, Any]] = []
         self.claims: set[str] = set()
+        self.canonical_claims: list[dict[str, Any]] = []
+        self.canonical_settlements: list[dict[str, Any]] = []
 
     async def active_host_protocol_modes(self, *, exclude_idempotency_key=None):
         self.excluded_idempotency_key = exclude_idempotency_key
@@ -464,6 +471,54 @@ class _FakeStore:
 
     async def get_session_by_provider_session_id(self, session_id: str):
         return self._session() if session_id == "sess-77" else None
+
+    async def claim_canonical_turn_command(
+        self,
+        *,
+        row: Any,
+        command_type: str,
+        turn_source: Any,
+        idempotency_key: str,
+        payload_digest: str,
+        actor_principal: str | None = None,
+    ):
+        """Record the canonical turn claim every mutation must make (#3707)."""
+
+        self.canonical_claims.append(
+            {
+                "commandType": command_type,
+                "turnSource": getattr(turn_source, "value", turn_source),
+                "idempotencyKey": idempotency_key,
+                "payloadDigest": payload_digest,
+                "actorPrincipal": actor_principal,
+            }
+        )
+        return SimpleNamespace(
+            outcome=ControlPlaneOutcome.APPLIED,
+            owns_delivery=True,
+            session_id="oms-77",
+            turn_attempt_id=f"ota-{len(self.canonical_claims)}",
+            command_id=f"ocm-{len(self.canonical_claims)}",
+            idempotency_key=idempotency_key,
+        )
+
+    async def settle_canonical_turn_command(
+        self,
+        *,
+        workflow_id: str,
+        idempotency_key: str,
+        outcome: Any,
+        provider_receipt_id: str | None = None,
+        result_ref: str | None = None,
+    ):
+        self.canonical_settlements.append(
+            {
+                "workflowId": workflow_id,
+                "idempotencyKey": idempotency_key,
+                "outcome": outcome,
+            }
+        )
+        return outcome
 
     async def get_session_by_chat_binding_id(self, chat_binding_id: str):
         return self._session() if chat_binding_id == "chatb-77" else None
@@ -1209,7 +1264,8 @@ def test_post_event_unknown_session_is_not_found() -> None:
 
 
 def test_resolve_elicitation_authorizes_and_delegates() -> None:
-    client, proxy, _ = _build()
+    store = _FakeStore()
+    client, proxy, _ = _build(store=store)
     resp = client.post(_ELICITATION_RESOLVE_PATH, json={"answer": "yes"})
     assert resp.status_code == 200
     assert resp.json() == {"ok": True, "elicitationId": "el-1"}
@@ -1220,6 +1276,32 @@ def test_resolve_elicitation_authorizes_and_delegates() -> None:
             "payload": {"answer": "yes"},
         }
     ]
+    # The approval response is an ordinary canonical turn, not an independent
+    # bridge authority (#3707 §1).
+    assert [claim["turnSource"] for claim in store.canonical_claims] == [
+        TurnSource.APPROVAL_RESPONSE.value
+    ]
+    assert store.canonical_claims[0]["idempotencyKey"] == (
+        "elicitation:sess-77:el-1"
+    )
+    assert [
+        settlement["outcome"] for settlement in store.canonical_settlements
+    ] == [ControlPlaneOutcome.APPLIED]
+
+
+def test_resolve_elicitation_parks_delivery_ambiguity_on_provider_failure() -> None:
+    store = _FakeStore()
+    client, proxy, _ = _build(store=store)
+    proxy.resolve_elicitation_error = OmnigentBridgeError(
+        "upstream unavailable", status_code=502
+    )
+
+    resp = client.post(_ELICITATION_RESOLVE_PATH, json={"answer": "yes"})
+
+    assert resp.status_code == 502
+    assert [
+        settlement["outcome"] for settlement in store.canonical_settlements
+    ] == [ControlPlaneOutcome.DELIVERY_UNKNOWN]
 
 
 def test_resolve_elicitation_reports_structured_error_when_mode_has_no_facade() -> None:

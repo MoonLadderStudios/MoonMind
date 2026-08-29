@@ -35,11 +35,36 @@ class CodexProfileBoundRealizer:
         *,
         session_factory: Any | None = None,
         coordinator_factory: Any | None = None,
+        turn_command_service: Any | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._coordinator_factory = coordinator_factory
+        self._turn_commands = turn_command_service
 
     async def execute(
+        self,
+        request: AgentExecutionRequest,
+        plan: OmnigentExecutionPlanEnvelope,
+    ) -> AgentRunResult:
+        """Fence one canonical turn command around the Codex lifecycle.
+
+        Codex and the generic Omnigent host share exactly one session and turn
+        ownership model (#3707 AC10); only the wrapped lifecycle differs.
+        """
+
+        from moonmind.omnigent.realizers.turn_delivery import (
+            deliver_canonical_turn,
+        )
+
+        return await deliver_canonical_turn(
+            self._turn_commands,
+            request=request,
+            plan=plan,
+            command_type="execute_admitted_plan",
+            operation=lambda: self._execute_lifecycle(request, plan),
+        )
+
+    async def _execute_lifecycle(
         self,
         request: AgentExecutionRequest,
         plan: OmnigentExecutionPlanEnvelope,
@@ -120,6 +145,9 @@ class CodexProfileBoundRealizer:
                 execution_runner=run_omnigent_execution,
                 artifact_gateway=artifact_gateway,
                 execution_plan=plan,
+                # Repository continuations submit through the same canonical
+                # turn boundary as the initial turn (#3707 §1).
+                turn_command_service=self._turn_commands,
             )
             result = await coordinator.execute(request)
             return await self._bind_result_authority(

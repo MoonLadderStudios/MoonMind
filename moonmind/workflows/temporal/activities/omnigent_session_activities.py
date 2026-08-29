@@ -2229,6 +2229,8 @@ async def omnigent_persist_signal_intents_activity(
         FencingConflictError,
         OmnigentControlPlaneStore,
         RevisionConflictError,
+        TurnSource,
+        coerce_turn_source,
         compute_digest,
     )
 
@@ -2351,11 +2353,19 @@ async def omnigent_persist_signal_intents_activity(
                 request_id = str(signal.get("requestId") or "").strip()
                 if not turn_id or not instruction_ref or not request_id:
                     raise ValueError("continuation signal is missing compact authority")
+                # The turn source is the closed #3707 vocabulary. In-flight
+                # histories predate the field, so an omitted source resolves to
+                # the repository continuation it always represented; an unknown
+                # value fails closed rather than writing free-form lineage.
+                signal_source = coerce_turn_source(
+                    signal.get("turnSource")
+                    or TurnSource.REPOSITORY_CONTINUATION
+                )
                 await repos.turn_attempts.create(
                     turn_attempt_id=turn_id,
                     session_id=request.session_id,
                     idempotency_key=request_id,
-                    lineage_kind="continuation",
+                    lineage_kind=signal_source,
                     parent_turn_attempt_id=session.active_turn_attempt_id,
                     instruction_digest=compute_digest(instruction_ref),
                 )

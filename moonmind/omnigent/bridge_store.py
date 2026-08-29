@@ -440,13 +440,18 @@ class OmnigentBridgeSessionStore:
         *,
         row: Any,
         command_type: str,
+        turn_source: Any,
         idempotency_key: str,
         payload_digest: str,
+        actor_principal: str | None = None,
     ) -> Any:
         """Claim the shared #3701 session/turn/command authority.
 
         The bridge store supplies only persistence composition.  Turn semantics
         remain in the transport-neutral control-plane application service.
+        ``turn_source`` names the closed #3707 vocabulary entry the caller is
+        submitting under; it changes authorization and evidence, never the
+        command, idempotency, fencing, or terminality model.
         """
 
         from moonmind.omnigent.control_plane.turn_commands import (
@@ -461,9 +466,11 @@ class OmnigentBridgeSessionStore:
             provider_session_ref=str(row.omnigent_session_id or ""),
             chat_binding_id=str(row.chat_binding_id or "") or None,
             command_type=command_type,
+            turn_source=turn_source,
             idempotency_key=idempotency_key,
             payload_digest=payload_digest,
             step_execution_id=str(row.step_execution_id or "") or None,
+            actor_principal=actor_principal,
             bootstrap=CanonicalSessionBootstrap(
                 provider=str(row.provider),
                 step_execution_id=str(row.step_execution_id or row.bridge_session_id),
@@ -471,6 +478,7 @@ class OmnigentBridgeSessionStore:
                 source_idempotency_key=str(row.idempotency_key),
                 execution_plan_ref=str(launch.get("executionPlanRef") or "")
                 or None,
+                owner_principal=actor_principal,
             ),
         )
 

@@ -36,6 +36,7 @@ from api_service.db.models import OmnigentBridgeSession, OmnigentBridgeSessionEv
 
 from .records import compute_digest
 from .repositories import ControlPlaneRepositories
+from .turn_sources import TurnSource
 
 # Sentinel used only for deterministic sorting when created_at is NULL.
 _EPOCH_SENTINEL = datetime.min.replace(tzinfo=timezone.utc)
@@ -264,7 +265,11 @@ async def plan_backfill(session: AsyncSession) -> BackfillPlan:
         )
 
         for index, member in enumerate(members):
-            lineage = "initial" if index == 0 else "continuation"
+            lineage = (
+                TurnSource.INITIAL.value
+                if index == 0
+                else TurnSource.REPOSITORY_CONTINUATION.value
+            )
             plan.turn_attempts.append(
                 PlannedTurnAttempt(
                     turn_attempt_id=_turn_attempt_id(member.bridge_session_id),

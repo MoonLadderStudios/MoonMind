@@ -140,6 +140,79 @@ def test_checkpoint_recovery_decision_requires_branch_for_immutable_change(
     }
 
 
+def test_checkpoint_recovery_decision_requires_new_session_without_branch_evidence() -> None:
+    """Changed authority with no branch-capable evidence escalates (#3707 §5)."""
+
+    immutable = {
+        "instructionDigest": "sha256:instructions",
+        "runtimeId": "omnigent",
+        "model": "default",
+        "effort": "medium",
+        "providerProfileId": "profile-1",
+        "launchPolicyRef": "artifact://policy/1",
+        "repositoryBranch": "main",
+        "publishMode": "none",
+    }
+
+    assert _checkpoint_recovery_decision(
+        {
+            "immutableSource": immutable,
+            "immutableRequested": {**immutable, "model": "changed"},
+            "omnigentCheckpoint": {
+                "validation": {"branchCreationAvailable": False},
+            },
+        }
+    ) == {
+        "recoveryAction": "new_session_required",
+        "reasonCodes": ["immutable_model_changed"],
+    }
+    assert _checkpoint_recovery_decision(
+        {
+            "immutableSource": immutable,
+            "immutableRequested": {**immutable, "model": "changed"},
+            "omnigentCheckpoint": {
+                "validation": {"branchCreationAvailable": True},
+            },
+        }
+    ) == {
+        "recoveryAction": "branch_required",
+        "reasonCodes": ["immutable_model_changed"],
+    }
+
+
+def test_checkpoint_recovery_decision_uses_the_closed_resume_vocabulary() -> None:
+    """Every emitted action is a member of the one typed decision boundary."""
+
+    from moonmind.omnigent.resume_decision import SESSION_RESUME_DECISIONS
+
+    immutable = {
+        "instructionDigest": "sha256:instructions",
+        "runtimeId": "omnigent",
+        "model": "default",
+        "effort": "medium",
+        "providerProfileId": "profile-1",
+        "launchPolicyRef": "artifact://policy/1",
+        "repositoryBranch": "main",
+        "publishMode": "none",
+    }
+    emitted = {
+        _checkpoint_recovery_decision({})["recoveryAction"],
+        _checkpoint_recovery_decision(
+            {
+                "immutableSource": immutable,
+                "immutableRequested": {**immutable, "model": "changed"},
+            }
+        )["recoveryAction"],
+        _checkpoint_recovery_decision(
+            {"immutableSource": immutable, "immutableRequested": immutable},
+            cold_restore_authorized=True,
+        )["recoveryAction"],
+    }
+    assert emitted <= SESSION_RESUME_DECISIONS
+    assert "branch_required" in emitted
+    assert "cold_restore" in emitted
+
+
 def test_checkpoint_recovery_decision_fails_closed_without_authoritative_snapshot() -> None:
     decision = _checkpoint_recovery_decision(
         {"liveReattachAvailable": True, "coldRestoreAvailable": True}

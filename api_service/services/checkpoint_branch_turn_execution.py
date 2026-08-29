@@ -975,6 +975,7 @@ class CheckpointBranchTurnExecutionOwner:
             CanonicalSessionBootstrap,
             CanonicalTurnCommandService,
         )
+        from moonmind.omnigent.control_plane.turn_sources import TurnSource
         from moonmind.omnigent.control_plane.repositories import (
             ControlPlaneRepositories,
             OmnigentControlPlaneStore,
@@ -992,6 +993,7 @@ class CheckpointBranchTurnExecutionOwner:
             ),
             chat_binding_id=None,
             command_type="checkpoint_branch_resume",
+            turn_source=TurnSource.CHECKPOINT_RESUME,
             idempotency_key=turn.idempotency_key,
             payload_digest=turn.instruction_digest,
             step_execution_id=checkpoint.omnigent.step_execution_id,

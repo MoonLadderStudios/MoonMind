@@ -864,6 +864,15 @@ class OmnigentTurnAttempt(Base):
         ),
         Index("ix_omnigent_turn_attempts_session", "session_id"),
         Index("ix_omnigent_turn_attempts_state", "state"),
+        # The canonical turn-source vocabulary is closed and versioned (#3707);
+        # the durable boundary refuses any value outside it.
+        CheckConstraint(
+            "lineage_kind IN ("
+            "'initial', 'repository_continuation', 'remediation', "
+            "'workflow_chat', 'steering', 'approval_response', "
+            "'checkpoint_resume', 'linked_branch')",
+            name="ck_omnigent_turn_attempts_lineage_kind",
+        ),
     )
 
     turn_attempt_id: Mapped[str] = mapped_column(String(255), primary_key=True)
@@ -879,7 +888,7 @@ class OmnigentTurnAttempt(Base):
     # Step Execution and remediation / continuation lineage.
     step_execution_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     lineage_kind: Mapped[str] = mapped_column(
-        String(32), nullable=False, default="instruction", server_default="instruction"
+        String(32), nullable=False, default="initial", server_default="initial"
     )
     parent_turn_attempt_id: Mapped[Optional[str]] = mapped_column(
         String(255), nullable=True

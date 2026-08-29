@@ -288,7 +288,14 @@ def build_generic_omnigent_execution_services(
         ),
     )
     registry = OmnigentExecutionRealizerRegistry()
-    registry.register(CodexProfileBoundRealizer(session_factory=session_factory))
+    registry.register(
+        CodexProfileBoundRealizer(
+            session_factory=session_factory,
+            turn_command_service=CanonicalTurnCommandService(
+                OmnigentControlPlaneStore(session_factory)
+            ),
+        )
+    )
     registry.register(realizer)
     return GenericOmnigentExecutionServices(
         planning_service=planning,

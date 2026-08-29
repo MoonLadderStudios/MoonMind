@@ -90,6 +90,7 @@ from moonmind.omnigent.bridge_store import (
     OmnigentBridgeSessionStore,
     OmnigentIdempotencyError,
 )
+from moonmind.omnigent.control_plane.turn_sources import TurnSource
 from moonmind.omnigent.embedded_evidence import (
     EmbeddedEvidenceError,
     validate_embedded_evidence,
@@ -2188,6 +2189,113 @@ async def _apply_owned_session_control(
     return await proxy.post_event(session_id=session_id, event=payload)
 
 
+async def _claim_owned_session_turn(
+    *,
+    store: OmnigentBridgeSessionStore,
+    session_id: str,
+    event_type: str,
+    turn_source: TurnSource,
+    actor: str,
+    idempotency_key: str,
+    payload_digest: str,
+) -> dict[str, Any] | None:
+    """Claim one canonical turn command for a provider-session-scoped mutation.
+
+    Source: MoonLadderStudios/MoonMind#3707 §1. The provider-session surface is
+    an ordinary instruction source, not an independent bridge authority: it
+    resolves the same canonical session, records a distinct turn attempt, and
+    fences incompatible cleanup before the provider is mutated. Sessions with no
+    canonical projection yet (legacy proxy sessions without a bridge row) are not
+    blocked -- there is no canonical authority to preserve.
+    """
+
+    row = await store.get_session_by_provider_session_id(session_id)
+    if row is None:
+        return None
+    from moonmind.omnigent.control_plane.records import ControlPlaneOutcome
+    from moonmind.omnigent.control_plane.turn_admission import (
+        CanonicalTurnAdmissionRejected,
+    )
+    from moonmind.omnigent.control_plane.turn_commands import (
+        CanonicalTurnAuthorityUnavailable,
+    )
+
+    try:
+        claim = await store.claim_canonical_turn_command(
+            row=row,
+            command_type=event_type,
+            turn_source=turn_source,
+            idempotency_key=idempotency_key,
+            payload_digest=payload_digest,
+            actor_principal=str(actor) or None,
+        )
+    except CanonicalTurnAdmissionRejected as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": CODE_SESSION_NOT_READY,
+                "message": (
+                    "This session cannot accept the request without a new "
+                    f"session ({exc.decision.value})."
+                ),
+            },
+        ) from exc
+    except CanonicalTurnAuthorityUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": CODE_SESSION_NOT_READY,
+                "message": "The canonical session authority is unavailable.",
+            },
+        ) from exc
+    if claim.outcome is ControlPlaneOutcome.ALREADY_APPLIED:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": CODE_SESSION_NOT_READY,
+                "message": "This request was already delivered to the provider.",
+            },
+        )
+    if claim.outcome is not ControlPlaneOutcome.APPLIED:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": CODE_SESSION_NOT_READY,
+                "message": "The canonical turn command is owned by another delivery.",
+            },
+        )
+    return {
+        "workflowId": str(getattr(row, "moonmind_workflow_id", "") or ""),
+        "idempotencyKey": idempotency_key,
+    }
+
+
+async def _settle_owned_session_turn(
+    *,
+    store: OmnigentBridgeSessionStore,
+    claim: Mapping[str, Any] | None,
+    delivered: bool,
+) -> None:
+    """Settle the canonical command with the outcome that actually occurred."""
+
+    if not claim:
+        return
+    from moonmind.omnigent.control_plane.records import ControlPlaneOutcome
+
+    try:
+        await store.settle_canonical_turn_command(
+            workflow_id=str(claim["workflowId"]),
+            idempotency_key=str(claim["idempotencyKey"]),
+            outcome=(
+                ControlPlaneOutcome.APPLIED
+                if delivered
+                else ControlPlaneOutcome.DELIVERY_UNKNOWN
+            ),
+        )
+    except Exception:
+        logger.exception("Canonical Omnigent turn settlement remains pending")
+
+
 @router.post(
     _ROUTES.resolve_elicitation,
     response_model=OmnigentOperationResponse,
@@ -2204,6 +2312,7 @@ async def resolve_omnigent_elicitation(
     embedded: OmnigentEmbeddedHostProtocolFacade | None = Depends(
         _get_create_embedded_facade
     ),
+    store: OmnigentBridgeSessionStore = Depends(_get_bridge_store),
 ) -> dict[str, Any]:
     """Resolve a pending Omnigent elicitation through the bridge surface."""
 
@@ -2224,8 +2333,20 @@ async def resolve_omnigent_elicitation(
         service=service,
         proxy=facade,
     )
+    # An approval response is a canonical turn like any other instruction
+    # source (#3707 §1): claim the fenced turn command before the provider
+    # mutation so this surface cannot become an independent bridge authority.
+    claimed = await _claim_owned_session_turn(
+        store=store,
+        session_id=session_id,
+        event_type="resolve_elicitation",
+        turn_source=TurnSource.APPROVAL_RESPONSE,
+        actor=str(user.id),
+        idempotency_key=f"elicitation:{session_id}:{elicitation_id}",
+        payload_digest=canonical_payload_digest(payload or {}),
+    )
     try:
-        return await facade.resolve_elicitation(
+        result = await facade.resolve_elicitation(
             session_id=session_id,
             elicitation_id=elicitation_id,
             payload=payload,
@@ -2236,7 +2357,17 @@ async def resolve_omnigent_elicitation(
             ),
         )
     except OmnigentBridgeError as exc:
+        await _settle_owned_session_turn(
+            store=store, claim=claimed, delivered=False
+        )
         raise _http_error_from_bridge(exc) from exc
+    except BaseException:
+        await _settle_owned_session_turn(
+            store=store, claim=claimed, delivered=False
+        )
+        raise
+    await _settle_owned_session_turn(store=store, claim=claimed, delivered=True)
+    return result
 
 
 @router.get(
@@ -3569,6 +3700,27 @@ def _mutation_preconditions(body: Mapping[str, Any] | None) -> dict[str, Any]:
     }
 
 
+#: Explicit control-type -> closed canonical turn source (#3707). Instruction
+#: bearing controls are Workflow Chat turns and elicitation resolution is an
+#: approval response; every other native control is session-directed steering.
+#: The mapping is exhaustive by construction (no substring matching): unmapped
+#: control types are steering because they direct the session rather than submit
+#: new instruction text.
+_INSTRUCTION_CONTROL_TYPES: frozenset[str] = frozenset(
+    {"message", "user.message", "workflow_chat_message"}
+)
+_APPROVAL_CONTROL_TYPES: frozenset[str] = frozenset({"resolve_elicitation"})
+
+
+def _native_turn_source(event_type: str) -> "TurnSource":
+    normalized = str(event_type or "").strip().lower()
+    if normalized in _INSTRUCTION_CONTROL_TYPES:
+        return TurnSource.WORKFLOW_CHAT
+    if normalized in _APPROVAL_CONTROL_TYPES:
+        return TurnSource.APPROVAL_RESPONSE
+    return TurnSource.STEERING
+
+
 async def _claim_facade_message(
     *,
     store: OmnigentBridgeSessionStore,
@@ -3577,6 +3729,7 @@ async def _claim_facade_message(
     actor: str,
     idempotency_key: str,
     payload_digest: str,
+    turn_source: "TurnSource | None" = None,
     scan_evidence: NativeScanEvidence | None = None,
     request_time: str | None = None,
     request_preconditions: Mapping[str, Any] | None = None,
@@ -3603,8 +3756,10 @@ async def _claim_facade_message(
             claim = await canonical_claim(
                 row=row,
                 command_type=event_type,
+                turn_source=turn_source or _native_turn_source(event_type),
                 idempotency_key=idempotency_key,
                 payload_digest=payload_digest,
+                actor_principal=str(actor) or None,
             )
         except Exception as exc:
             from moonmind.omnigent.control_plane.turn_commands import (
@@ -5257,6 +5412,7 @@ async def _dispatch_workflow_chat_facade(
             store=store,
             row=fresh_row,
             event_type="resolve_elicitation",
+            turn_source=TurnSource.APPROVAL_RESPONSE,
             actor=str(user.id),
             idempotency_key=elicitation_key,
             payload_digest=elicitation_scan_evidence.payload_digest,
@@ -5999,6 +6155,11 @@ async def workflow_chat_binding_facade_ws(
                 store=store,
                 row=refreshed,
                 event_type=f"{operation}_frame",
+                # The pinned WebSocket classes are terminal attach/input/resize,
+                # dictation, and the session update stream. None of them submit
+                # chat instruction text, so each frame is session-directed
+                # steering in the closed #3707 vocabulary.
+                turn_source=TurnSource.STEERING,
                 actor=str(user.id),
                 idempotency_key=frame_key,
                 payload_digest=evidence.payload_digest,

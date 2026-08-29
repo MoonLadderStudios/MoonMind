@@ -24,6 +24,11 @@ from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
 )
+from moonmind.omnigent.control_plane.turn_sources import TurnSource
+from moonmind.omnigent.realizers.turn_delivery import (
+    deliver_canonical_turn,
+    execution_identity as _execution_identity,
+)
 from moonmind.omnigent.runtime_bindings import (
     RuntimeBindingSessionAuthoritySink,
     RuntimeBindingState,
@@ -35,15 +40,6 @@ from moonmind.schemas.temporal_activity_models import AcceptedRepositoryEvidence
 
 
 logger = logging.getLogger(__name__)
-
-
-def _execution_identity(request: AgentExecutionRequest) -> tuple[str, str]:
-    if request.step_execution is not None:
-        return (
-            request.step_execution.workflow_id,
-            request.step_execution.step_execution_id,
-        )
-    return request.correlation_id, request.correlation_id
 
 
 class GenericOmnigentHostRealizer:
@@ -126,83 +122,14 @@ class GenericOmnigentHostRealizer:
                 )
             return AgentRunResult.model_validate(completed.terminalResult)
 
-        command_claim = None
-        workflow_id, step_execution_id = _execution_identity(request)
-        if self._turn_commands is not None:
-            from moonmind.omnigent.control_plane.turn_commands import (
-                CanonicalSessionBootstrap,
-            )
-
-            command_claim = await self._turn_commands.claim(
-                workflow_id=workflow_id,
-                provider_session_ref="",
-                chat_binding_id=None,
-                command_type="execute_admitted_plan",
-                idempotency_key=request.idempotency_key,
-                payload_digest=plan.planRef,
-                step_execution_id=step_execution_id,
-                bootstrap=CanonicalSessionBootstrap(
-                    provider="omnigent",
-                    step_execution_id=step_execution_id,
-                    agent_run_id=request.correlation_id,
-                    source_idempotency_key=request.idempotency_key,
-                    execution_plan_ref=plan.planRef,
-                ),
-            )
-            if not command_claim.owns_delivery:
-                raise HarnessPlatformError(
-                    "canonical turn command is already settled or owned; reconciliation is required",
-                    code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
-                )
-        try:
-            result = await self._execute_lifecycle(request, plan)
-        except BaseException:
-            if command_claim is not None:
-                from moonmind.omnigent.control_plane.records import (
-                    ControlPlaneOutcome,
-                )
-
-                try:
-                    await self._turn_commands.settle(
-                        workflow_id=workflow_id,
-                        idempotency_key=request.idempotency_key,
-                        outcome=ControlPlaneOutcome.DELIVERY_UNKNOWN,
-                    )
-                except Exception:
-                    logger.exception(
-                        "Failed to park generic Omnigent command as delivery unknown"
-                    )
-            raise
-        if command_claim is not None:
-            from moonmind.omnigent.control_plane.records import ControlPlaneOutcome
-
-            try:
-                await self._turn_commands.settle(
-                    workflow_id=workflow_id,
-                    idempotency_key=request.idempotency_key,
-                    outcome=ControlPlaneOutcome.APPLIED,
-                    provider_receipt_id=str(
-                        (result.metadata or {}).get("omnigentSessionId") or ""
-                    )
-                    or None,
-                    result_ref=str(
-                        (result.metadata or {}).get("externalStateRef") or ""
-                    )
-                    or None,
-                )
-            except Exception:
-                logger.exception(
-                    "Generic Omnigent command settlement remains pending"
-                )
-                result = result.model_copy(
-                    update={
-                        "metadata": {
-                            **(result.metadata or {}),
-                            "canonicalCommandSettlementDeferred": True,
-                        }
-                    }
-                )
-        return result
+        return await deliver_canonical_turn(
+            self._turn_commands,
+            request=request,
+            plan=plan,
+            command_type="execute_admitted_plan",
+            turn_source=TurnSource.INITIAL,
+            operation=lambda: self._execute_lifecycle(request, plan),
+        )
 
     async def _execute_lifecycle(
         self,
