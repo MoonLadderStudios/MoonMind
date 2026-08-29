@@ -1,0 +1,41 @@
+{
+  "incidentWorkflowId": "mm:88694a58-7938-4a87-9381-39b92cb498d5",
+  "failureShapeId": "omnigent-remediation-skill-snapshot",
+  "boundary": "workflow admission to immutable resolved Skill snapshot",
+  "escapedFailure": {
+    "message": "selected skill 'remediate-issue' was not resolved into the agent skill snapshot",
+    "cause": "admission collected direct workflow and step Skills but omitted the nested remediationTool selectedSkill that the controller materialized after verification"
+  },
+  "initialParameters": {
+    "workflow": {
+      "steps": [
+        {
+          "skill": {
+            "id": "moonspec-verify"
+          }
+        },
+        {
+          "annotations": {
+            "remediationLoop": {
+              "kind": "remediation_loop",
+              "remediationTool": {
+                "type": "agent_runtime",
+                "name": "auto",
+                "inputs": {
+                  "selectedSkill": "remediate-issue"
+                }
+              },
+              "verificationTool": {
+                "type": "agent_runtime",
+                "name": "auto",
+                "inputs": {
+                  "selectedSkill": "moonspec-verify"
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

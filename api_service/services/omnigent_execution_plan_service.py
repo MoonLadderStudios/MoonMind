@@ -408,6 +408,18 @@ def _selected_skill_names(initial_parameters: Mapping[str, Any]) -> list[str]:
         if candidate and candidate != "auto" and candidate not in names:
             names.append(candidate)
 
+    def add_nested_selected_skills(raw: Any) -> None:
+        """Collect skill intent from workflow-owned dynamic execution specs."""
+
+        if isinstance(raw, Mapping):
+            add(raw.get("selectedSkill") or raw.get("selected_skill"))
+            for value in raw.values():
+                add_nested_selected_skills(value)
+            return
+        if isinstance(raw, (list, tuple)):
+            for value in raw:
+                add_nested_selected_skills(value)
+
     selectors = workflow_mapping.get("skills")
     if isinstance(selectors, Mapping):
         for entry in selectors.get("include") or []:
@@ -430,6 +442,11 @@ def _selected_skill_names(initial_parameters: Mapping[str, Any]) -> list[str]:
             and str(step_tool.get("type") or "").lower() == "skill"
         ):
             add(step_tool)
+    # Remediation and other workflow-owned controllers materialize agent steps
+    # after admission. Their canonical skill identity is declared as a nested
+    # selectedSkill, so it must be frozen into the same immutable run snapshot
+    # before any step launches.
+    add_nested_selected_skills(workflow_mapping)
     return names
 
 

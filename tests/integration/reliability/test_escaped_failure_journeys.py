@@ -33,6 +33,7 @@ from api_service.db.models import (
     RecurringWorkflowScheduleType,
     RecurringWorkflowScopeType,
 )
+from api_service.services import omnigent_execution_plan_service
 from api_service.services.omnigent_policies import (
     bootstrap_document,
     seed_bootstrap_policies,
@@ -5202,6 +5203,22 @@ async def test_remediation_attempt_receives_authoritative_verifier_evidence(
     )
     assert request.parameters["gateResultRef"] == expected["gateResultRef"]
     assert request.parameters["remainingWorkRef"] == expected["remainingWorkRef"]
+
+
+async def test_omnigent_admission_snapshot_includes_dynamic_remediation_skill() -> None:
+    """Replay mm:88694a58 at workflow admission before remediation launch."""
+
+    replay_id = "omnigent-remediation-skill-snapshot"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+
+    selector = omnigent_execution_plan_service._skill_selector(
+        manifest["initialParameters"]
+    )
+
+    assert [entry.name for entry in selector.include] == expected[
+        "resolvedSkillNames"
+    ]
 
 
 async def test_checkpointless_remediation_keeps_the_verified_repository_branch(

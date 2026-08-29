@@ -72,6 +72,88 @@ class _PlanStore:
         return envelope
 
 
+def test_skill_selector_includes_nested_dynamic_execution_skills() -> None:
+    selector = service._skill_selector(
+        {
+            "workflow": {
+                "steps": [
+                    {"skill": {"id": "moonspec-verify"}},
+                    {
+                        "annotations": {
+                            "remediationLoop": {
+                                "kind": "remediation_loop",
+                                "remediationTool": {
+                                    "type": "agent_runtime",
+                                    "inputs": {
+                                        "selectedSkill": "remediate-issue"
+                                    },
+                                },
+                                "verificationTool": {
+                                    "type": "agent_runtime",
+                                    "inputs": {
+                                        "selectedSkill": "moonspec-verify"
+                                    },
+                                },
+                            }
+                        }
+                    },
+                ]
+            }
+        }
+    )
+
+    assert [entry.name for entry in selector.include] == [
+        "moonspec-verify",
+        "remediate-issue",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_admission_persists_nested_dynamic_execution_skills() -> None:
+    artifacts = _ArtifactService()
+
+    resolved, manifest_ref, _manifest_digest, content_refs = (
+        await service._resolve_and_persist_skills(
+            session_factory=object(),
+            artifact_service=artifacts,
+            principal="user-1",
+            workflow_id="mm:remediation-skill-snapshot",
+            task_input_snapshot_digest="sha256:" + "1" * 64,
+            initial_parameters={
+                "workflow": {
+                    "steps": [
+                        {"skill": {"id": "moonspec-verify"}},
+                        {
+                            "annotations": {
+                                "remediationLoop": {
+                                    "kind": "remediation_loop",
+                                    "remediationTool": {
+                                        "type": "agent_runtime",
+                                        "inputs": {
+                                            "selectedSkill": "remediate-issue"
+                                        },
+                                    },
+                                }
+                            }
+                        },
+                    ]
+                }
+            },
+        )
+    )
+
+    assert [entry.skill_name for entry in resolved.skills] == [
+        "moonspec-verify",
+        "remediate-issue",
+    ]
+    manifest = json.loads(artifacts.payloads[manifest_ref])
+    assert [entry["skill_name"] for entry in manifest["skills"]] == [
+        "moonspec-verify",
+        "remediate-issue",
+    ]
+    assert len(content_refs) == 2
+
+
 def _snapshot(*, harness: str, policy: str, provider_id: str) -> dict:
     return {
         "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
