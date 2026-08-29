@@ -1,0 +1,25 @@
+{
+  "incidentWorkflowId": "resolver:pr:3813:head:3ed9a9172bf1:h:fa6d87bd58b265c0:1",
+  "observedFailure": "OMNIGENT_CREDENTIAL_GENERATION_FENCED retained the sole Provider Profile lease after successful host cleanup",
+  "legacyRedactedInspectOutput": "credential-runtime=[REDACTED]\n",
+  "legacyRedactedMissingOutput": "Error response from daemon: get mm-omnigent-credential-f215c6c6d91c80e054d13247b31e6557=[REDACTED] such volume\n",
+  "expectedGeneration": 1,
+  "handle": {
+    "credentialRuntimeRef": "credential-runtime:sha256:f215c6c6d91c80e054d13247b31e6557b6b9676f2a991453bd8c68d3e77a32c1",
+    "providerProfileRef": "opencode-go-default",
+    "providerLeaseRef": "provider-profile-lease:profile-lease:execution_omnigent:b8fa3668e86495146015a5f289c41051",
+    "credentialGeneration": 1,
+    "materializerRef": "opencode-auth-json@1",
+    "attachments": [
+      {
+        "kind": "volume",
+        "sourceRef": "mm-omnigent-credential-f215c6c6d91c80e054d13247b31e6557",
+        "targetPath": "/run/mm-credentials/opencode",
+        "accessMode": "read-only"
+      }
+    ],
+    "cleanupRef": "credential-cleanup:sha256:f215c6c6d91c80e054d13247b31e6557b6b9676f2a991453bd8c68d3e77a32c1",
+    "attestationRef": "artifact:incident-credential-attestation",
+    "hostOwned": false
+  }
+}
