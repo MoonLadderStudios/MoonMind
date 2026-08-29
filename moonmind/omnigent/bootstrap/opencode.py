@@ -5,10 +5,15 @@ from __future__ import annotations
 import re
 from typing import Any
 
-# Official model ID per OpenCode docs
+# Official model IDs per OpenCode docs
 DEFAULT_OPENCODE_MODEL_DISPLAY = "Muse Spark 1.2 Contributor"
 DEFAULT_OPENCODE_PROVIDER_ID = "muse-spark-1.2-contributor"
 DEFAULT_OPENCODE_QUALIFIED = f"opencode-go/{DEFAULT_OPENCODE_PROVIDER_ID}"
+
+# Zen free tier — available via OpenCode Zen provider
+ZEN_FREE_MODEL_DISPLAY = "Muse Spark 1.2 Free"
+ZEN_FREE_PROVIDER_ID = "muse-spark-1.2-free"
+ZEN_FREE_QUALIFIED = f"opencode-zen/{ZEN_FREE_PROVIDER_ID}"
 
 # Friendly name normalization: case-insensitive, punctuation-insensitive
 def normalize_model_display(name: str) -> str:
@@ -30,6 +35,26 @@ _MODEL_ALIASES = {
         "displayName": DEFAULT_OPENCODE_MODEL_DISPLAY,
         "providerModelId": DEFAULT_OPENCODE_PROVIDER_ID,
         "qualifiedId": DEFAULT_OPENCODE_QUALIFIED,
+    },
+    normalize_model_display(ZEN_FREE_MODEL_DISPLAY): {
+        "displayName": ZEN_FREE_MODEL_DISPLAY,
+        "providerModelId": ZEN_FREE_PROVIDER_ID,
+        "qualifiedId": ZEN_FREE_QUALIFIED,
+    },
+    normalize_model_display("muse-spark-1.2-free"): {
+        "displayName": ZEN_FREE_MODEL_DISPLAY,
+        "providerModelId": ZEN_FREE_PROVIDER_ID,
+        "qualifiedId": ZEN_FREE_QUALIFIED,
+    },
+    normalize_model_display(ZEN_FREE_QUALIFIED): {
+        "displayName": ZEN_FREE_MODEL_DISPLAY,
+        "providerModelId": ZEN_FREE_PROVIDER_ID,
+        "qualifiedId": ZEN_FREE_QUALIFIED,
+    },
+    normalize_model_display("opencode-zen/muse-spark-1.2-free"): {
+        "displayName": ZEN_FREE_MODEL_DISPLAY,
+        "providerModelId": ZEN_FREE_PROVIDER_ID,
+        "qualifiedId": ZEN_FREE_QUALIFIED,
     },
 }
 
@@ -63,7 +88,7 @@ def resolve_model_by_display(
         if (
             available_models is None
             and separator
-            and provider_prefix == "opencode-go"
+            and provider_prefix.startswith("opencode-")
             and provider_model_id
         ):
             # Bootstrap resolves images before live credential-scoped model

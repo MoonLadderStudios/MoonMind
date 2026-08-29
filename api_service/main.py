@@ -1379,6 +1379,119 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "last_auth_method": ProviderProfileAuthMethod.SECRET_REF,
         })
 
+    # OpenCode Zen Free — default provider profile, created unless explicitly disabled.
+    # Respects the same kill-switches as the generic Omnigent host plane so
+    # `MOONMIND_OMNIGENT_OPENCODE_ENABLED=false` or `MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED=false`
+    # suppresses the default. When `OPENCODE_API_KEY` is present the profile is
+    # seeded as enabled/connected; otherwise a disabled placeholder is created
+    # so the Settings UI can show "Not connected" and the operator can add the
+    # key via the normal `use_api_key` flow.
+    from moonmind.omnigent.settings import generic_host_enabled, opencode_support_enabled
+
+    if opencode_support_enabled() and generic_host_enabled():
+        if os.environ.get("OPENCODE_API_KEY"):
+            _DEFAULT_PROFILES.append({
+                "profile_id": "opencode-zen-free",
+                "runtime_id": "opencode",
+                "is_default": False,
+                "provider_id": "opencode-zen",
+                "provider_label": "OpenCode Zen",
+                "default_model": "opencode-zen/muse-spark-1.2-free",
+                "default_effort": "xhigh",
+                "model_tiers": [
+                    {
+                        "label": "Muse Spark 1.2 Free",
+                        "model": "opencode-zen/muse-spark-1.2-free",
+                        "effort": "xhigh",
+                        "parameters": {},
+                        "annotations": {},
+                    }
+                ],
+                "default_model_tier": 1,
+                "credential_source": ProviderCredentialSource.SECRET_REF,
+                "runtime_materialization_mode": RuntimeMaterializationMode.COMPOSITE,
+                "secret_refs": {
+                    "opencode_api_key": "env://OPENCODE_API_KEY",
+                },
+                "clear_env_keys": [
+                    "OPENCODE_AUTH_CONTENT",
+                    "OPENCODE_CONFIG",
+                    "OPENCODE_CONFIG_CONTENT",
+                    "OPENAI_API_KEY",
+                    "ANTHROPIC_API_KEY",
+                ],
+                "env_template": {},
+                "volume_ref": None,
+                "volume_mount_path": None,
+                "account_label": "OpenCode Zen Free (auto-seeded)",
+                "enabled": True,
+                "auth_state": ProviderProfileAuthState.CONNECTED,
+                "disabled_reason": None,
+                "tags": ["api-key", "opencode", "zen"],
+                "command_behavior": {
+                    "auth_strategy": "opencode_auth_json",
+                    "auth_state": "connected",
+                    "auth_actions": ["use_api_key"],
+                    "auth_status_label": "OpenCode Zen API key ready",
+                    "auth_readiness": {
+                        "connected": True,
+                        "backing_secret_exists": True,
+                        "launch_ready": True,
+                    },
+                },
+                "last_auth_method": ProviderProfileAuthMethod.SECRET_REF,
+            })
+        else:
+            _DEFAULT_PROFILES.append({
+                "profile_id": "opencode-zen-free",
+                "runtime_id": "opencode",
+                "is_default": False,
+                "provider_id": "opencode-zen",
+                "provider_label": "OpenCode Zen",
+                "default_model": "opencode-zen/muse-spark-1.2-free",
+                "default_effort": "xhigh",
+                "model_tiers": [
+                    {
+                        "label": "Muse Spark 1.2 Free",
+                        "model": "opencode-zen/muse-spark-1.2-free",
+                        "effort": "xhigh",
+                        "parameters": {},
+                        "annotations": {},
+                    }
+                ],
+                "default_model_tier": 1,
+                "credential_source": ProviderCredentialSource.NONE,
+                "runtime_materialization_mode": RuntimeMaterializationMode.COMPOSITE,
+                "secret_refs": {},
+                "clear_env_keys": [
+                    "OPENCODE_AUTH_CONTENT",
+                    "OPENCODE_CONFIG",
+                    "OPENCODE_CONFIG_CONTENT",
+                    "OPENAI_API_KEY",
+                    "ANTHROPIC_API_KEY",
+                ],
+                "env_template": {},
+                "volume_ref": None,
+                "volume_mount_path": None,
+                "account_label": "OpenCode Zen Free",
+                "enabled": False,
+                "auth_state": ProviderProfileAuthState.NOT_CONFIGURED,
+                "disabled_reason": ProviderProfileDisabledReason.MISSING_CREDENTIALS,
+                "tags": ["api-key", "opencode", "zen"],
+                "command_behavior": {
+                    "auth_strategy": "opencode_auth_json",
+                    "auth_state": "not_configured",
+                    "auth_actions": ["use_api_key"],
+                    "auth_status_label": "Not connected",
+                    "auth_readiness": {
+                        "connected": False,
+                        "backing_secret_exists": False,
+                        "launch_ready": False,
+                    },
+                },
+                "last_auth_method": None,
+            })
+
     seeded: list[str] = []
     try:
         async with get_async_session_context() as session:
@@ -1582,6 +1695,93 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     existing_by_id[profile_id].update(updates)
                     needs_commit = True
 
+            # Reconcile opencode-zen-free when OPENCODE_API_KEY is added or removed
+            # after the initial seed. The disabled placeholder uses credential_source=NONE;
+            # the enabled profile uses SECRET_REF with env://OPENCODE_API_KEY.
+            zen_profile_id = "opencode-zen-free"
+            zen_current = existing_by_id.get(zen_profile_id)
+            if zen_current is not None:
+                zen_configured = bool(os.environ.get("OPENCODE_API_KEY"))
+                zen_updates: dict[str, Any] = {}
+                if zen_configured:
+                    # Upgrade disabled placeholder to enabled
+                    if not zen_current.get("enabled") or zen_current.get(
+                        "auth_state"
+                    ) != ProviderProfileAuthState.CONNECTED:
+                        zen_updates = {
+                            "credential_source": ProviderCredentialSource.SECRET_REF,
+                            "runtime_materialization_mode": RuntimeMaterializationMode.COMPOSITE,
+                            "secret_refs": {"opencode_api_key": "env://OPENCODE_API_KEY"},
+                            "clear_env_keys": [
+                                "OPENCODE_AUTH_CONTENT",
+                                "OPENCODE_CONFIG",
+                                "OPENCODE_CONFIG_CONTENT",
+                                "OPENAI_API_KEY",
+                                "ANTHROPIC_API_KEY",
+                            ],
+                            "env_template": {},
+                            "enabled": True,
+                            "auth_state": ProviderProfileAuthState.CONNECTED,
+                            "disabled_reason": None,
+                            "command_behavior": {
+                                "auth_strategy": "opencode_auth_json",
+                                "auth_state": "connected",
+                                "auth_actions": ["use_api_key"],
+                                "auth_status_label": "OpenCode Zen API key ready",
+                                "auth_readiness": {
+                                    "connected": True,
+                                    "backing_secret_exists": True,
+                                    "launch_ready": True,
+                                },
+                            },
+                            "last_auth_method": ProviderProfileAuthMethod.SECRET_REF,
+                        }
+                        zen_updates = {
+                            k: v
+                            for k, v in zen_updates.items()
+                            if zen_current.get(k) != v
+                        }
+                else:
+                    # Downgrade enabled profile to disabled placeholder when key is removed
+                    secret_refs = zen_current.get("secret_refs") or {}
+                    uses_env_ref = any(
+                        str(v or "").strip() == "env://OPENCODE_API_KEY"
+                        for v in secret_refs.values()
+                    )
+                    if uses_env_ref and zen_current.get("enabled"):
+                        zen_updates = {
+                            "credential_source": ProviderCredentialSource.NONE,
+                            "secret_refs": {},
+                            "enabled": False,
+                            "auth_state": ProviderProfileAuthState.NOT_CONFIGURED,
+                            "disabled_reason": ProviderProfileDisabledReason.MISSING_CREDENTIALS,
+                            "command_behavior": {
+                                "auth_strategy": "opencode_auth_json",
+                                "auth_state": "not_configured",
+                                "auth_actions": ["use_api_key"],
+                                "auth_status_label": "Not connected",
+                                "auth_readiness": {
+                                    "connected": False,
+                                    "backing_secret_exists": False,
+                                    "launch_ready": False,
+                                },
+                            },
+                            "last_auth_method": None,
+                        }
+                        zen_updates = {
+                            k: v
+                            for k, v in zen_updates.items()
+                            if zen_current.get(k) != v
+                        }
+                if zen_updates:
+                    await session.execute(
+                        update(ManagedAgentProviderProfile)
+                        .where(ManagedAgentProviderProfile.profile_id == zen_profile_id)
+                        .values(**zen_updates)
+                    )
+                    existing_by_id[zen_profile_id].update(zen_updates)
+                    needs_commit = True
+
             to_insert = [p for p in _DEFAULT_PROFILES if p["profile_id"] not in existing_ids]
 
             for profile_def in _DEFAULT_PROFILES:
@@ -1667,6 +1867,9 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     provider_id=profile_def["provider_id"],
                     provider_label=profile_def.get("provider_label"),
                     default_model=profile_def.get("default_model"),
+                    default_effort=profile_def.get("default_effort"),
+                    model_tiers=profile_def.get("model_tiers"),
+                    default_model_tier=profile_def.get("default_model_tier", 1),
                     model_overrides=profile_def.get("model_overrides"),
                     credential_source=profile_def["credential_source"],
                     runtime_materialization_mode=profile_def["runtime_materialization_mode"],

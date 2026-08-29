@@ -968,7 +968,7 @@ async def setup_provider_api_key(
         )
         raise HTTPException(status_code=422, detail="API key validation failed.")
 
-    is_opencode = mapping.provider_id in {"opencode-go", "opencode"}
+    is_opencode = mapping.provider_id in {"opencode-go", "opencode", "opencode-zen"}
     if not is_opencode:
         try:
             await validate_provider_api_key(profile.provider_id, api_key)
@@ -1509,6 +1509,36 @@ _API_KEY_MAPPINGS: dict[tuple[str, str], _ApiKeyMapping] = {
         auth_strategy="opencode_auth_json",
         ready_label="OpenCode Go API key ready",
     ),
+    ("opencode", "opencode-zen"): _ApiKeyMapping(
+        runtime_id="opencode",
+        provider_id="opencode-zen",
+        secret_role="opencode_api_key",
+        env_key="OPENCODE_API_KEY",
+        clear_env_keys=(
+            "OPENCODE_AUTH_CONTENT",
+            "OPENCODE_CONFIG",
+            "OPENCODE_CONFIG_CONTENT",
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+        ),
+        auth_strategy="opencode_auth_json",
+        ready_label="OpenCode Zen API key ready",
+    ),
+    ("opencode", "opencode"): _ApiKeyMapping(
+        runtime_id="opencode",
+        provider_id="opencode",
+        secret_role="opencode_api_key",
+        env_key="OPENCODE_API_KEY",
+        clear_env_keys=(
+            "OPENCODE_AUTH_CONTENT",
+            "OPENCODE_CONFIG",
+            "OPENCODE_CONFIG_CONTENT",
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+        ),
+        auth_strategy="opencode_auth_json",
+        ready_label="OpenCode API key ready",
+    ),
 }
 
 
@@ -1555,8 +1585,8 @@ def _looks_like_provider_api_key(mapping: _ApiKeyMapping, api_key: str) -> bool:
         return api_key.startswith("sk-ant-") and len(api_key) >= 12
     if mapping.provider_id == "openai":
         return api_key.startswith("sk-") and len(api_key) >= 12
-    if mapping.provider_id in {"opencode-go", "opencode"}:
-        # OpenCode Go API keys are provider-specific; accept common prefixes
+    if mapping.provider_id in {"opencode-go", "opencode", "opencode-zen"}:
+        # OpenCode API keys are provider-specific; accept common prefixes
         # but require minimum entropy to avoid trivial values.
         return len(api_key.strip()) >= 12 and " " not in api_key.strip()
     return False
@@ -1747,7 +1777,7 @@ async def validate_provider_api_key(provider_id: str, api_key: str) -> None:
     if provider_id == "openai":
         await _validate_openai_api_key(api_key)
         return
-    if provider_id in {"opencode-go", "opencode"}:
+    if provider_id in {"opencode-go", "opencode", "opencode-zen"}:
         raise HTTPException(
             status_code=422,
             detail="OpenCode validation requires the pinned Provider Profile runtime path.",

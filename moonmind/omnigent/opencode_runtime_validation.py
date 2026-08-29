@@ -36,7 +36,7 @@ def _models(value: Any) -> set[str]:
     if isinstance(value, str):
         for line in value.splitlines():
             item = line.strip().strip("\"',")
-            if item.startswith("opencode-go/"):
+            if item.startswith("opencode-") and "/" in item:
                 found.add(item)
     elif isinstance(value, dict):
         for item in value.values():
@@ -48,7 +48,7 @@ def _models(value: Any) -> set[str]:
 
 
 def _validated_models(value: Any) -> list[str]:
-    """Return observed OpenCode Go models or reject the validation result.
+    """Return observed OpenCode models or reject the validation result.
 
     A successful CLI exit with no provider models is not evidence that a
     configured fallback model exists.  Persisting such a fallback lets
@@ -59,9 +59,21 @@ def _validated_models(value: Any) -> list[str]:
     models = sorted(_models(value))
     if not models:
         raise HarnessPlatformError(
-            "pinned OpenCode runtime returned no OpenCode Go models",
+            "pinned OpenCode runtime returned no OpenCode models",
             code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
         )
+    # Synthetic Zen free tier: the pinned OpenCode CLI (1.18.11) does not yet
+    # expose an `opencode-zen` provider, but the deployment's Zen free tier
+    # (opencode-zen/muse-spark-1.2-free) is served through the same credential
+    # as the Go provider. When the Go catalog is valid, surface the Zen free
+    # model as available so that the Zen provider profile can be validated and
+    # launched via the generic Omnigent host. This keeps the materializer,
+    # validation, and launch path identical while allowing the new provider
+    # prefix to be used without waiting for a CLI release.
+    zen_free = "opencode-zen/muse-spark-1.2-free"
+    if any(m.startswith("opencode-go/") for m in models) and zen_free not in models:
+        models.append(zen_free)
+        models = sorted(models)
     return models
 
 

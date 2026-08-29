@@ -1051,7 +1051,7 @@ async def get_omnigent_codex_catalog_readiness(
             runtime_id == "opencode"
             and credential_source == "secret_ref"
             and materialization in {"composite", "api_key_env", "config_bundle"}
-            and row.provider_id in {"opencode-go", "opencode"}
+            and row.provider_id in {"opencode-go", "opencode", "opencode-zen"}
         )
         if compatible and readiness["launch_ready"] and (not busy or queue_when_busy):
             eligible_by_runtime[runtime_id] = eligible_by_runtime.get(runtime_id, 0) + 1

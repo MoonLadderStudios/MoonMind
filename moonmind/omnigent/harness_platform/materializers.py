@@ -25,6 +25,8 @@ OPENCODE_AUTH_FILE_MODE = 0o600
 OPENCODE_AUTH_UID = 1000
 OPENCODE_AUTH_GID = 1000
 OPENCODE_PROVIDER_KEY = "opencode-go"
+OPENCODE_ZEN_PROVIDER_KEY = "opencode-zen"
+OPENCODE_PROVIDER_KEYS = (OPENCODE_PROVIDER_KEY, OPENCODE_ZEN_PROVIDER_KEY)
 OPENCODE_SUPPORTED_VERSION_RANGE = (  # inclusive lower, exclusive upper
     "1.17.7",
     "1.19.0",
@@ -119,6 +121,8 @@ BUILTIN_MATERIALIZERS: dict[str, CredentialMaterializer] = {}
 
 _PROVIDER_MATERIALIZER_REFS: dict[tuple[str, str], str] = {
     ("opencode", "opencode-go"): "opencode-auth-json@1",
+    ("opencode", "opencode-zen"): "opencode-auth-json@1",
+    ("opencode", "opencode"): "opencode-auth-json@1",
     ("codex_cli", "openai"): "codex-oauth-home@1",
     ("omnigent", "anthropic"): "omnigent-provider-config@1",
     ("omnigent", "openai"): "omnigent-provider-config@1",
@@ -314,27 +318,43 @@ def _assert_no_forbidden_ambient_env() -> None:
         )
 
 
-def _opencode_auth_json_payload(*, api_key: str) -> dict[str, Any]:
+def _opencode_auth_json_payload(
+    *, api_key: str, provider_key: str | None = None
+) -> dict[str, Any]:
     """Exact OpenCode credential structure for the pinned version.
 
     Verified against opencode-ai 1.18.x auth.json shape:
-    The provider key is `opencode-go` and the file contains the API key
-    under that key. This is the only secret-bearing structure; all
-    diagnostics, handles, and logs must remain secret-free.
+    The provider key is `opencode-go` (and `opencode-zen` for the Zen free tier)
+    and the file contains the API key under that key. This is the only
+    secret-bearing structure; all diagnostics, handles, and logs must remain
+    secret-free.
     """
     if not api_key or not api_key.strip():
         raise HarnessPlatformError(
             "api_key is required for opencode-auth-json",
             code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
         )
-    # The exact structure required by pinned opencode-ai@1.18.x: { "opencode-go": { "type": "api", "key": "..." } }
-    # Pinned source uses `key`, not `apiKey`. Use canonical provider-keyed form.
-    return {OPENCODE_PROVIDER_KEY: {"type": "api", "key": api_key.strip()}}
+    key = api_key.strip()
+    if provider_key is not None:
+        if provider_key not in OPENCODE_PROVIDER_KEYS:
+            raise HarnessPlatformError(
+                f"unsupported OpenCode provider key {provider_key!r}",
+                code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+            )
+        return {provider_key: {"type": "api", "key": key}}
+    # Default: write both provider keys with the same API key so that a single
+    # credential grants access to both opencode-go and opencode-zen models.
+    # This preserves backward compatibility while enabling the Zen free tier.
+    return {
+        provider: {"type": "api", "key": key} for provider in OPENCODE_PROVIDER_KEYS
+    }
 
 
-def build_opencode_auth_json_bytes(*, api_key: str) -> bytes:
+def build_opencode_auth_json_bytes(
+    *, api_key: str, provider_key: str | None = None
+) -> bytes:
     """Return canonical JSON bytes for auth.json without touching filesystem."""
-    payload = _opencode_auth_json_payload(api_key=api_key)
+    payload = _opencode_auth_json_payload(api_key=api_key, provider_key=provider_key)
     return json.dumps(
         payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
     ).encode("utf-8")

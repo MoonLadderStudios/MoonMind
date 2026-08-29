@@ -313,9 +313,10 @@ class DockerOpencodeAuthJsonMaterializer:
                     'test "$(stat -c %u:%g /credential/auth.json)" = 1000:1000; ',
                     'test "$(stat -c %a /credential/auth.json)" = 600; ',
                     'test "$(cat /credential/.moonmind-generation)" = "$1"; ',
-                    'python3 -c \'import json; d=json.load(open("/credential/auth.json")); ',
-                    'assert set(d)=={"opencode-go"}; assert d["opencode-go"]["type"]=="api"; ',
-                    'assert isinstance(d["opencode-go"]["key"],str) and d["opencode-go"]["key"]\'',
+                    'python3 -c \'import json; d=json.load(open("/credential/auth.json")); '
+                    'assert set(d).issubset({"opencode-go","opencode-zen"}) and len(d)>=1; '
+                    'assert all(v.get("type")=="api" and isinstance(v.get("key"),str) and v.get("key") for v in d.values()); '
+                    'assert "opencode-go" in d or "opencode-zen" in d\'',
                 )
             )
             await self._run(

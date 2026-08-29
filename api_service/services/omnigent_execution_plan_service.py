@@ -249,9 +249,9 @@ async def _resolve_runtime_policy_snapshot(
                 boundaries["execution"] = execution
                 # Replace every remaining Codex provider identity.
                 if "providerProfile" in boundaries and isinstance(boundaries["providerProfile"], dict):
-                    boundaries["providerProfile"]["compatibleProviders"] = ["opencode-go"]
+                    boundaries["providerProfile"]["compatibleProviders"] = ["opencode-go", "opencode-zen"]
                 else:
-                    boundaries["providerProfile"] = {"compatibleProviders": ["opencode-go"]}
+                    boundaries["providerProfile"] = {"compatibleProviders": ["opencode-go", "opencode-zen"]}
                 # Deep sweep: replace any lingering Codex strings that survived the shallow copy
                 def _deep_replace_codex(obj: Any) -> Any:
                     if isinstance(obj, dict):
@@ -281,7 +281,7 @@ async def _resolve_runtime_policy_snapshot(
                 boundaries["execution"]["profileRef"] = "omnigent-opencode@1"
                 boundaries["execution"]["agentIdentities"] = ["opencode"]
                 boundaries.get("execution", {}).pop("compatibleProviders", None)
-                boundaries["providerProfile"]["compatibleProviders"] = ["opencode-go"]
+                boundaries["providerProfile"]["compatibleProviders"] = ["opencode-go", "opencode-zen"]
                 host = boundaries.get("host", {})
                 # Use resolved opencode image if available
                 opencode_ref = os.getenv("OMNIGENT_OPENCODE_HOST_IMAGE_REF", "").strip()
