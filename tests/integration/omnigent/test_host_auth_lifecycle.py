@@ -8,7 +8,7 @@ from datetime import timedelta
 import pytest
 
 from api_service.db.base import async_session_maker
-from moonmind.omnigent.host_auth_profile import (
+from moonmind.omnigent.host_auth_contracts import (
     HostAuthCredentialProfile,
     rotate_host_auth_profile,
 )

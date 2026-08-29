@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostError
+from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.schemas.workspace_locator_models import (
     WorkspaceLocatorResolutionError,

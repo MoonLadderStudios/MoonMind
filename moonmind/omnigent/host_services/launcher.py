@@ -7,77 +7,15 @@ import os
 from typing import Any
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-
 from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
 )
 from moonmind.omnigent.harness_platform.host_classes import HostClass, LaunchPolicy
+from moonmind.omnigent.host_ports import HostLaunchSpec, host_correlation_identity
 from moonmind.omnigent.host_services.docker_backend import DockerCommandBackend
 from moonmind.omnigent.host_services.runtime_scripts import OmnigentRuntimeScriptService
 from moonmind.security.egress import omnigent_proxy_env
-
-
-class HostLaunchSpec(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    schemaVersion: str = Field(
-        "moonmind.omnigent-host-launch.v1", alias="schemaVersion"
-    )
-    executionPlanRef: str = Field(alias="executionPlanRef")
-    stepExecutionId: str = Field(
-        alias="stepExecutionId",
-        pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,510}[A-Za-z0-9]$",
-    )
-    runtimeBindingId: str = Field(alias="runtimeBindingId")
-    hostLeaseRef: str = Field(alias="hostLeaseRef")
-    hostLeaseGeneration: int = Field(alias="hostLeaseGeneration", ge=1)
-    hostClassRef: str = Field(alias="hostClassRef")
-    imageRef: str = Field(alias="imageRef")
-    serverEndpointRef: str = Field(alias="serverEndpointRef")
-    serverUrl: str = Field(alias="serverUrl")
-    networkRef: str = Field(alias="networkRef")
-    limits: dict[str, int]
-    runtime: dict[str, Any]
-    correlationName: str = Field(alias="correlationName")
-    workspaceAttachment: dict[str, Any] = Field(alias="workspaceAttachment")
-    skillAttachment: dict[str, Any] = Field(alias="skillAttachment")
-    toolAttachments: tuple[dict[str, Any], ...] = Field(
-        default_factory=tuple, alias="toolAttachments"
-    )
-    credentialAttachments: tuple[dict[str, Any], ...] = Field(
-        default_factory=tuple, alias="credentialAttachments"
-    )
-    githubCredentialAttachment: dict[str, Any] | None = Field(
-        None, alias="githubCredentialAttachment"
-    )
-    controlAttachment: dict[str, Any] | None = Field(None, alias="controlAttachment")
-    stateAttachment: dict[str, Any] = Field(alias="stateAttachment")
-    labels: dict[str, str]
-
-    @model_validator(mode="after")
-    def secret_free(self) -> "HostLaunchSpec":
-        forbidden = {"secret", "password", "token", "apikey", "api_key", "key"}
-        payload = self.model_dump(by_alias=True, mode="json")
-
-        def walk(value: Any) -> None:
-            if isinstance(value, dict):
-                for key, item in value.items():
-                    if str(key).lower() in forbidden:
-                        raise ValueError(f"HostLaunchSpec contains forbidden key {key}")
-                    walk(item)
-            elif isinstance(value, list):
-                for item in value:
-                    walk(item)
-
-        walk(payload)
-        return self
-
-
-def host_correlation_identity(host_lease_ref: str) -> str:
-    digest = hashlib.sha256(host_lease_ref.encode("utf-8")).hexdigest()[:24]
-    return f"mm-host-{digest}"
 
 
 class DockerOmnigentHostLauncher:

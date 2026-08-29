@@ -42,7 +42,7 @@ from moonmind.omnigent.bridge_proxy import (
 from moonmind.omnigent.control_plane.records import ControlPlaneOutcome
 from moonmind.omnigent.control_plane.turn_sources import TurnSource
 from moonmind.omnigent.effective_capabilities import CAPABILITY_NAMES
-from moonmind.omnigent.host_auth_profile import (
+from moonmind.omnigent.host_auth_contracts import (
     HostAuthCredentialProfile,
     HostAuthProfileError,
 )
@@ -217,8 +217,12 @@ async def test_embedded_preflight_gates_failed_host_auth(monkeypatch) -> None:
             }},
         }),
     )
-    monkeypatch.setitem(
-        embedded_host_auth_preflight.__globals__, "_active_host_auth_profile",
+    composition = importlib.import_module(
+        "api_service.api.routers.omnigent_bridge_composition"
+    )
+    monkeypatch.setattr(
+        composition,
+        "resolve_active_host_auth_profile",
         AsyncMock(
             return_value=HostAuthCredentialProfile(
                 "managed", "env://ABSENT_HOST_TOKEN", 1
@@ -257,8 +261,10 @@ def test_embedded_readiness_stays_gated_when_artifacts_are_invalid(monkeypatch) 
 
     monkeypatch.setattr(module, "_resolve_embedded_evidence", invalid)
     monkeypatch.setattr(
-        module,
-        "_active_host_auth_profile",
+        importlib.import_module(
+            "api_service.api.routers.omnigent_bridge_composition"
+        ),
+        "resolve_active_host_auth_profile",
         AsyncMock(
             side_effect=HostAuthProfileError(
                 "host authentication is unavailable",

@@ -14,6 +14,7 @@ from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api_service.api.routers import omnigent_bridge as bridge_router
+from api_service.api.routers import omnigent_bridge_composition as bridge_composition
 from api_service.db.models import OmnigentHostAuthProfileRecord
 from moonmind.omnigent.bridge_artifacts import OmnigentArtifactGateway, capture_artifact_json
 from moonmind.omnigent.bridge_security import redact_raw_events
@@ -23,7 +24,7 @@ from moonmind.omnigent.host_auth_adapter import (
     OmnigentHostAuthAdapter,
     UpstreamHostAuthError,
 )
-from moonmind.omnigent.host_auth_profile import (
+from moonmind.omnigent.host_auth_contracts import (
     HostAuthCredentialProfile,
     HostAuthProfileError,
     ResolvedHostAuthCredentials,
@@ -144,9 +145,9 @@ async def test_operator_api_serialization_and_failures_never_return_secret_body(
 ) -> None:
     store, _ = host_auth_store
     sentinel = "sentinel-host-secret-never-returned"
-    monkeypatch.setattr(bridge_router, "_host_auth_store", lambda: store)
+    monkeypatch.setattr(bridge_composition, "build_host_auth_store", lambda: store)
     monkeypatch.setattr(
-        bridge_router,
+        bridge_composition,
         "resolve_host_auth_credentials",
         AsyncMock(
             return_value=ResolvedHostAuthCredentials(
@@ -165,7 +166,7 @@ async def test_operator_api_serialization_and_failures_never_return_secret_body(
     assert "currentSecretRef" not in result
 
     monkeypatch.setattr(
-        bridge_router,
+        bridge_composition,
         "resolve_host_auth_credentials",
         AsyncMock(
             side_effect=HostAuthProfileError(
@@ -188,9 +189,9 @@ async def test_operator_api_serialization_and_failures_never_return_secret_body(
 async def test_operator_profile_put_is_initial_only(monkeypatch, host_auth_store) -> None:
     store, _ = host_auth_store
     await store.put(HostAuthCredentialProfile("managed", "env://HOST_ONE", 2))
-    monkeypatch.setattr(bridge_router, "_host_auth_store", lambda: store)
+    monkeypatch.setattr(bridge_composition, "build_host_auth_store", lambda: store)
     monkeypatch.setattr(
-        bridge_router,
+        bridge_composition,
         "resolve_host_auth_credentials",
         AsyncMock(return_value=ResolvedHostAuthCredentials(
             HostAuthCredentialProfile("managed", "env://HOST_STALE", 1), {1: "stale"}
@@ -258,7 +259,9 @@ async def test_websocket_profile_failure_close_code_matrix(
         bridge_router, "_require_embedded_mode", AsyncMock(return_value=_embedded_config())
     )
     monkeypatch.setattr(
-        bridge_router, "_active_host_auth_profile", AsyncMock(side_effect=failure)
+        bridge_composition,
+        "resolve_active_host_auth_profile",
+        AsyncMock(side_effect=failure),
     )
     await bridge_router.embedded_omnigent_host_tunnel(socket, "host")
     assert socket.closes == [(expected_code, failure.code)]
@@ -291,7 +294,9 @@ async def test_http_websocket_profile_failure_retryability_matrix(
     """Profile failures retain stable HTTP/WS retry interpretations."""
 
     monkeypatch.setattr(
-        bridge_router, "_active_host_auth_profile", AsyncMock(side_effect=failure)
+        bridge_composition,
+        "resolve_active_host_auth_profile",
+        AsyncMock(side_effect=failure),
     )
     with pytest.raises(HTTPException) as http_exc:
         await bridge_router._embedded_auth_context(
@@ -330,10 +335,12 @@ async def test_connected_tunnel_is_drained_immediately_after_revocation(monkeypa
         bridge_router, "_require_embedded_mode", AsyncMock(return_value=_embedded_config())
     )
     monkeypatch.setattr(
-        bridge_router, "_active_host_auth_profile", AsyncMock(return_value=profile)
+        bridge_composition,
+        "resolve_active_host_auth_profile",
+        AsyncMock(return_value=profile),
     )
     monkeypatch.setattr(
-        bridge_router,
+        bridge_composition,
         "resolve_host_auth_credentials",
         AsyncMock(
             side_effect=[
@@ -345,11 +352,115 @@ async def test_connected_tunnel_is_drained_immediately_after_revocation(monkeypa
     monkeypatch.setattr(bridge_router.embedded_host_channels, "connect", lambda **_: channel)
     monkeypatch.setattr(bridge_router.embedded_host_channels, "disconnect", lambda _: None)
     monkeypatch.setattr(
-        bridge_router, "OmnigentEmbeddedHostProtocolFacade", lambda **_: facade
+        bridge_router, "build_embedded_host_facade", lambda _config: facade
     )
     await bridge_router.embedded_omnigent_host_tunnel(socket, runner_id)
     assert socket.accepted is True
     assert socket.closes == [(4403, "host_auth_revoked")]
+    facade.disconnect_host.assert_awaited_once()
+
+
+class _UnrelatedHostFrame:
+    """A host frame that is not the runner-exit frame."""
+
+
+class _RunnerExitedHostFrame:
+    """Stands in for the adapter's terminal runner-exit frame class."""
+
+
+class _FrameSocket(_HandshakeSocket):
+    """A connected tunnel that replays a bounded sequence of host frames."""
+
+    def __init__(self, headers, frames) -> None:
+        super().__init__(headers)
+        self._frames = list(frames)
+        self.delivered: list[str] = []
+
+    async def receive_text(self):
+        frame = self._frames.pop(0)
+        self.delivered.append(frame)
+        return frame
+
+
+@pytest.mark.asyncio
+async def test_connected_tunnel_drains_when_the_handshake_generation_is_rotated_away(
+    monkeypatch,
+) -> None:
+    """Per-frame authority is re-resolved through the production composition op.
+
+    The handshake generation stays authoritative only while the durable profile
+    still lists it. This drives the real
+    ``connected_host_frame_is_authorized`` operation: only the durable profile
+    read and the SecretRef resolution beneath it are hermetic, so a router that
+    stopped re-resolving per frame would keep the tunnel open and fail here.
+    """
+
+    current = HostAuthCredentialProfile("managed", "env://HOST", 3)
+    rotated = HostAuthCredentialProfile("managed", "env://HOST_NEXT", 4)
+    auth = SimpleNamespace(
+        runner_id="host",
+        credential_profile_id="managed",
+        credential_generation=3,
+    )
+    socket = _FrameSocket(_Headers({}), ["first-frame", "second-frame"])
+    facade = SimpleNamespace(
+        disconnect_host=AsyncMock(), record_runner_exit=AsyncMock()
+    )
+    accepted: list[str] = []
+    channel = SimpleNamespace(
+        accept_host_frame=lambda text: accepted.append(text)
+        or _UnrelatedHostFrame(),
+        adapter=SimpleNamespace(
+            frames=SimpleNamespace(HostRunnerExitedFrame=_RunnerExitedHostFrame)
+        ),
+    )
+    monkeypatch.setattr(bridge_router, "get_bridge_config", _embedded_config)
+    monkeypatch.setattr(
+        bridge_router,
+        "_require_embedded_mode",
+        AsyncMock(return_value=_embedded_config()),
+    )
+    monkeypatch.setattr(
+        bridge_router, "verify_embedded_host_request", AsyncMock(return_value=auth)
+    )
+    monkeypatch.setattr(
+        bridge_router, "build_embedded_host_facade", lambda _config: facade
+    )
+    monkeypatch.setattr(
+        bridge_composition,
+        "resolve_active_host_auth_profile",
+        AsyncMock(side_effect=[current, rotated]),
+    )
+    monkeypatch.setattr(
+        bridge_composition,
+        "resolve_host_auth_credentials",
+        AsyncMock(
+            side_effect=[
+                ResolvedHostAuthCredentials(current, {3: "generation-three"}),
+                ResolvedHostAuthCredentials(rotated, {4: "generation-four"}),
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        bridge_router.embedded_host_channels, "connect", lambda **_: channel
+    )
+    monkeypatch.setattr(
+        bridge_router.embedded_host_channels, "disconnect", lambda _: None
+    )
+    monkeypatch.setattr(
+        bridge_router.embedded_host_channels,
+        "revoke_runner_binding",
+        lambda _runner_id: None,
+    )
+
+    await bridge_router.embedded_omnigent_host_tunnel(socket, "host")
+
+    assert socket.accepted is True
+    # The first frame was still inside the handshake generation.
+    assert accepted == ["first-frame"]
+    # The second frame is refused because generation 3 is no longer resolvable.
+    assert socket.delivered == ["first-frame", "second-frame"]
+    assert socket.closes == [(4403, None)]
     facade.disconnect_host.assert_awaited_once()
 
 
@@ -505,10 +616,12 @@ async def test_pinned_upstream_http_websocket_rejection_parity(
     assert ws_code == 4401
 
     monkeypatch.setattr(
-        bridge_router, "_active_host_auth_profile", AsyncMock(return_value=profile)
+        bridge_composition,
+        "resolve_active_host_auth_profile",
+        AsyncMock(return_value=profile),
     )
     monkeypatch.setattr(
-        bridge_router,
+        bridge_composition,
         "resolve_host_auth_credentials",
         AsyncMock(return_value=resolved),
     )

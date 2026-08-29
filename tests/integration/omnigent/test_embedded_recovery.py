@@ -46,8 +46,8 @@ from moonmind.omnigent.bridge_store import (
 from moonmind.omnigent.execute import OmnigentSessionStillRunningError
 from moonmind.omnigent.oauth_host_janitor import OmnigentOAuthHostJanitor
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
+from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 from moonmind.omnigent.oauth_hosts import (
-    OmnigentOAuthHostError,
     OmnigentOAuthHostRepository,
 )
 from moonmind.omnigent.profile_bound_execution import (

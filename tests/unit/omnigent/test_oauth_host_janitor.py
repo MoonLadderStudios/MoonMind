@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from moonmind.omnigent.oauth_host_janitor import OmnigentOAuthHostJanitor
-from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostError
+from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 from moonmind.omnigent.harness_platform.stores import InMemoryRuntimeBindingStore
 
 

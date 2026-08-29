@@ -151,6 +151,19 @@ class OmnigentRuntimeBindingStore(Protocol):
     ) -> OmnigentRuntimeBinding: pass  # noqa
 
 
+def strip_workflow_authored_realizer(compile_kwargs: dict[str, Any]) -> None:
+    """Remove any caller-authored ``executionRealizerRef`` before compilation.
+
+    Realizer selection is trusted-planner authority. Every execution-plan store
+    applies this rule so a hermetic double and a deployed adapter cannot differ
+    on which caller input reaches the compiler
+    (MoonLadderStudios/MoonMind#3711).
+    """
+
+    compile_kwargs.pop("execution_realizer_ref", None)
+    compile_kwargs.pop("executionRealizerRef", None)
+
+
 class InMemoryExecutionPlanStore:
     """Hermetic store for tests and local dev without DB."""
 
@@ -179,9 +192,7 @@ class InMemoryExecutionPlanStore:
         compile_fn: Any,
         compile_kwargs: dict[str, Any],
     ) -> OmnigentExecutionPlanEnvelope:
-        # Workflow input must not author executionRealizerRef – strip so trusted planner selects
-        compile_kwargs.pop("execution_realizer_ref", None)
-        compile_kwargs.pop("executionRealizerRef", None)
+        strip_workflow_authored_realizer(compile_kwargs)
         envelope: OmnigentExecutionPlanEnvelope = compile_fn(**compile_kwargs)
         existing = self._plans.get(envelope.planRef)
         if existing is not None:
@@ -623,6 +634,7 @@ class DbExecutionPlanStore:
         compile_fn: Any,
         compile_kwargs: dict[str, Any],
     ) -> OmnigentExecutionPlanEnvelope:
+        strip_workflow_authored_realizer(compile_kwargs)
         envelope: OmnigentExecutionPlanEnvelope = compile_fn(**compile_kwargs)
         existing = await self.load(envelope.planRef)
         if existing is not None:
@@ -708,6 +720,7 @@ class SessionExecutionPlanStore:
         compile_fn: Any,
         compile_kwargs: dict[str, Any],
     ) -> OmnigentExecutionPlanEnvelope:
+        strip_workflow_authored_realizer(compile_kwargs)
         envelope = compile_fn(**compile_kwargs)
         existing = await self.load(envelope.planRef)
         if existing is not None:

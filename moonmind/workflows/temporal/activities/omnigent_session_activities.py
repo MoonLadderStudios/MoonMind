@@ -19,6 +19,10 @@ from uuid import NAMESPACE_URL, uuid5
 from moonmind.omnigent.control_plane.cleanup_authority import (
     CanonicalCleanupAuthority,
 )
+from moonmind.omnigent.harness_platform.harness_registry import (
+    canonical_harness_id,
+    find_harness_registration,
+)
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     AgentRunResult,
@@ -551,13 +555,10 @@ async def _reconstruct_plan_bound_request(
     resolved_skillset_ref = str(
         plan.payload.resolvedSkills.get("resolvedSkillSetRef") or ""
     ).removeprefix("artifact:")
-    execution_target = {
-        "codex-native": "omnigent-codex@1",
-        "opencode-native": "omnigent-opencode@1",
-        "pi-native": "omnigent-pi@1",
-    }.get(plan.payload.harnessId)
-    if not execution_target:
+    registration = find_harness_registration(plan.payload.harnessId)
+    if registration is None:
         raise ValueError("execution plan harness lacks a product execution target")
+    execution_target = registration.executionTargetRef
     agent_source = plan.payload.agentSource
     source_kind = str(agent_source.get("kind") or "").strip()
     if source_kind == "upstream":
@@ -864,12 +865,7 @@ async def _load_verified_execution_plan(binding: OmnigentExecutionPlanBinding):
     if isinstance(raw_snapshot_harness, Mapping):
         # Generic (v2) documents carry the harness as an object with its id.
         raw_snapshot_harness = raw_snapshot_harness.get("id")
-    snapshot_harness = str(raw_snapshot_harness or "").strip().lower()
-    snapshot_harness = {
-        "codex": "codex-native",
-        "opencode": "opencode-native",
-        "pi": "pi-native",
-    }.get(snapshot_harness, snapshot_harness)
+    snapshot_harness = canonical_harness_id(raw_snapshot_harness)
     if snapshot_harness != persisted.payload.harnessId:
         raise ValueError("Agent Profile artifact conflicts with planned harness")
     profile_source = profile_document.get("source")
@@ -2800,7 +2796,11 @@ async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str,
         FencingScope,
         OmnigentControlPlaneStore,
     )
-    from moonmind.omnigent.execution_profiles import PROFILES, selection_from_request
+    from moonmind.omnigent.execution_profiles import (
+        PROFILES,
+        default_execution_profile_ref_for_runtime,
+        selection_from_request,
+    )
     from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
     from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
     from moonmind.omnigent.profile_bound_execution import (
@@ -2852,21 +2852,19 @@ async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str,
     hosts = OmnigentOAuthHostRepository(async_session_maker)
     binding = await hosts.get_binding_for_profile(session.provider_profile_id)
     runtime_id = str(session.metadata.get("providerRuntimeId") or "codex_cli")
-    provider_slug = {
-        "claude_code": "claude",
-        "opencode": "opencode",
-    }.get(runtime_id, "codex")
+    runtime_execution_profile_ref = default_execution_profile_ref_for_runtime(
+        runtime_id
+    )
     requested_target, requested_policy = selection_from_request(
         agent_request.parameters
     )
     if execution_plan is not None:
-        planned_profile_ref = {
-            "codex-native": "omnigent-codex@1",
-            "opencode-native": "omnigent-opencode@1",
-        }.get(execution_plan.payload.harnessId)
-        if planned_profile_ref is None:
+        planned_registration = find_harness_registration(
+            execution_plan.payload.harnessId
+        )
+        if planned_registration is None:
             raise ValueError("planned harness has no product execution profile")
-        execution_profile_ref = planned_profile_ref
+        execution_profile_ref = planned_registration.executionTargetRef
         launch_policy_ref = execution_plan.payload.launchPolicyRef
         if requested_target and requested_target != execution_profile_ref:
             raise ValueError("authored host selection conflicts with execution plan")
@@ -2880,7 +2878,7 @@ async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str,
     elif binding is not None:
         execution_profile_ref = str(
             binding.execution_profile_ref
-            or f"omnigent-{provider_slug}@1"
+            or runtime_execution_profile_ref
         )
         launch_policy_ref = str(
             binding.launch_policy_ref
@@ -2891,7 +2889,7 @@ async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str,
             raise ValueError("authored host selection conflicts with durable binding")
     else:
         execution_profile_ref = (
-            requested_target or f"omnigent-{provider_slug}@1"
+            requested_target or runtime_execution_profile_ref
         )
         launch_policy_ref = (
             requested_policy or PROFILES[execution_profile_ref].default_policy_ref
@@ -3698,10 +3696,10 @@ async def omnigent_heartbeat_host_lease_activity(
 
     from api_service.db.base import async_session_maker
     from moonmind.omnigent.control_plane import OmnigentControlPlaneStore
+    from moonmind.omnigent.host_failures import OmnigentOAuthHostError
     from moonmind.omnigent.oauth_hosts import (
         HEARTBEAT_HOST_STATES,
         HOST_CLEANUP_CLAIMED_ERROR_CODE,
-        OmnigentOAuthHostError,
         OmnigentOAuthHostRepository,
     )
 

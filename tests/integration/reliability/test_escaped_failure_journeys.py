@@ -64,13 +64,13 @@ from moonmind.omnigent.execution_profiles import compile_effective_launch
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from moonmind.omnigent.oauth_host_janitor import OmnigentOAuthHostJanitor
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
+from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 from moonmind.omnigent.oauth_hosts import (
     HOST_PROFILE_BUSY_ERROR_CODE,
-    OmnigentOAuthHostError,
 )
+from moonmind.omnigent.codex_execution_decisions import bind_exact_host
 from moonmind.omnigent.profile_bound_execution import (
     OmnigentProfileBoundExecutionCoordinator,
-    _bind_exact_host,
 )
 from moonmind.omnigent.realizers.generic_host import GenericOmnigentHostRealizer
 from moonmind.omnigent.workspace_publication import (
@@ -1050,7 +1050,7 @@ async def test_pr_resolver_child_compiles_bindable_stock_agent_identity(
     async def reject_upload(_bundle_ref: str):
         raise AssertionError("stock identity resolution must not upload a bundle")
 
-    bound_request = _bind_exact_host(
+    bound_request = bind_exact_host(
         request,
         host_id="host-stock-replay",
         workspace_path="/workspaces/run",
@@ -5553,7 +5553,7 @@ async def test_omnigent_profile_bound_skill_activation_replay() -> None:
             }
         },
     )
-    request = _bind_exact_host(
+    request = bind_exact_host(
         request,
         host_id="host-replay",
         workspace_path="/workspaces/run",

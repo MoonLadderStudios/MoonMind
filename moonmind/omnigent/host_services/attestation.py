@@ -15,7 +15,7 @@ from moonmind.omnigent.host_services.docker_backend import DockerCommandBackend
 from moonmind.omnigent.host_services.github_credentials import (
     github_repository_from_request,
 )
-from moonmind.omnigent.host_services.launcher import HostLaunchSpec
+from moonmind.omnigent.host_ports import HostLaunchSpec
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.security.egress import (
     OMNIGENT_EGRESS_PROFILE,

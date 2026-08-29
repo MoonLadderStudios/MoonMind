@@ -7,7 +7,7 @@ import hashlib
 import json
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, model_validator
 from sqlalchemy import select, update
@@ -293,6 +293,42 @@ def evolve_binding(
     data["state"] = target.value
     data["heartbeatAt"] = datetime.now(UTC)
     return _binding(data)
+
+
+@runtime_checkable
+class StableRuntimeBindingStore(Protocol):
+    """Persist and CAS-fence the stable runtime-binding aggregate.
+
+    Source issue: MoonLadderStudios/MoonMind#3711 (required work 2). Both the
+    hermetic and the database implementation are held to one shared behavior
+    contract, so a test double cannot diverge on creation idempotency, revision
+    fencing, or the conflict vocabulary a caller must handle.
+    """
+
+    async def get(self, binding_id: str) -> "StableRuntimeBinding | None": ...
+
+    async def create_initial(
+        self,
+        *,
+        execution_plan_ref: str,
+        idempotency_key: str,
+        provider_leases: dict[str, dict[str, Any]],
+    ) -> "StableRuntimeBinding": ...
+
+    async def update(
+        self,
+        binding_id: str,
+        *,
+        expected_revision: int,
+        expected_fencing_generation: int,
+        state: "RuntimeBindingState | None" = None,
+        updates: dict[str, Any] | None = None,
+        increment_fence: bool = False,
+    ) -> "StableRuntimeBinding": ...
+
+    async def list_recoverable(
+        self, *, stale_before: datetime
+    ) -> tuple["StableRuntimeBinding", ...]: ...
 
 
 class InMemoryStableRuntimeBindingStore:
@@ -605,6 +641,7 @@ __all__ = [
     "RuntimeBindingSessionAuthoritySink",
     "RuntimeBindingState",
     "StableRuntimeBinding",
+    "StableRuntimeBindingStore",
     "create_stable_runtime_binding",
     "evolve_binding",
     "stable_binding_id",

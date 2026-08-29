@@ -111,9 +111,9 @@ async def oauth_session_revalidate_bound_host(
 
     from api_service.db.base import async_session_maker
     from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
+    from moonmind.omnigent.host_failures import OmnigentOAuthHostError
     from moonmind.omnigent.oauth_hosts import (
         HostPreflightFailure,
-        OmnigentOAuthHostError,
         OmnigentOAuthHostRepository,
     )
     from moonmind.omnigent.settings import (

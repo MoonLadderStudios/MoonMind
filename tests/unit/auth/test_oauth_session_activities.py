@@ -23,9 +23,9 @@ from api_service.db.models import (
     ProviderProfileAuthState,
     RuntimeMaterializationMode,
 )
+from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 from moonmind.omnigent.oauth_hosts import (
     HostPreflightFailure,
-    OmnigentOAuthHostError,
 )
 from moonmind.provider_profiles.lease_client import (
     CredentialLeasePurpose,
