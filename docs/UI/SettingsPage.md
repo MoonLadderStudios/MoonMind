@@ -1,6 +1,6 @@
 # Settings Configuration Pages
 
-**Related design documents:** [SettingsSystem.md](../Security/SettingsSystem.md), [SecretsSystem.md](../Security/SecretsSystem.md), [ProviderProfiles.md](../Security/ProviderProfiles.md), [ProviderProfileModelEffortTierSettings.md](./ProviderProfileModelEffortTierSettings.md), [OAuthTerminal.md](../ManagedAgents/OAuthTerminal.md), [DashboardDesignSystem.md](./DashboardDesignSystem.md), [DashboardSPAArchitecture.md](./DashboardSPAArchitecture.md)
+**Related design documents:** [SettingsSystem.md](../Security/SettingsSystem.md), [SecretsSystem.md](../Security/SecretsSystem.md), [ProviderProfiles.md](../Security/ProviderProfiles.md), [ProviderProfileCreation.md](./ProviderProfileCreation.md), [ProviderProfileModelEffortTierSettings.md](./ProviderProfileModelEffortTierSettings.md), [OAuthTerminal.md](../ManagedAgents/OAuthTerminal.md), [DashboardDesignSystem.md](./DashboardDesignSystem.md), [DashboardSPAArchitecture.md](./DashboardSPAArchitecture.md)
 
 Status: **Desired-State UI Contract**  
 Owners: MoonMind Engineering  
@@ -49,6 +49,8 @@ This document owns:
 - permissions, secret-safe behavior, accessibility, and unsaved-change navigation; and
 - migration and acceptance criteria for removing the old page-local switcher.
 
+The detailed Provider Profile create and edit form is owned by [ProviderProfileCreation.md](./ProviderProfileCreation.md). Model and effort tier editing is owned by [ProviderProfileModelEffortTierSettings.md](./ProviderProfileModelEffortTierSettings.md).
+
 This document does not redefine backend setting eligibility, resolution, persistence, secret storage, provider execution semantics, operational command semantics, authorization, or server validation.
 
 This is a desired-state contract. The current implementation may still use one Settings component, `?section=` routing, and a segmented or radio-based switcher.
@@ -69,6 +71,8 @@ The pathname selects the configuration page. Query parameters may select safe fi
 
 The backend owns which settings exist, which are exposed, their types and scopes, validation, sensitivity, effective values, sources, and application semantics. The frontend renders descriptors and submits intent.
 
+Provider Profile creation follows the same rule. Runtime, provider, authentication, and creation capabilities determine backend-owned presets. The browser must not assume one materialization strategy for every provider.
+
 ### 3.4 Data-driven rows
 
 The User / Workspace page renders ordinary settings from catalog descriptors. The frontend may branch on descriptor shape such as `type`, `ui`, `constraints`, `options`, `read_only`, and `sensitive`. It should not branch on individual setting keys except for documented transitional exceptions.
@@ -77,11 +81,17 @@ The User / Workspace page renders ordinary settings from catalog descriptors. Th
 
 Provider Profiles, Managed Secrets, OAuth credentials, and Operations controls are not generic setting rows. They may use specialized managers, but options, capabilities, readiness, and policy constraints should still come from backend APIs.
 
-### 3.6 References over secrets
+### 3.6 Progressive disclosure
+
+Forms should lead with understandable choices and hide low-level implementation details until requested.
+
+For Provider Profile creation, credential connection remains visible, while raw SecretRefs, volume metadata, materialization details, secondary rate-limit controls, routing metadata, and launch shaping belong behind `Show advanced options`. Max parallel runs remains visible.
+
+### 3.7 References over secrets
 
 Stored secret plaintext is never rendered. Generic settings do not accept raw credentials. Sensitive relationships use SecretRef pickers, provider-profile secret-role bindings, or one-way Managed Secret creation and replacement flows.
 
-### 3.7 Safe independent failure
+### 3.8 Safe independent failure
 
 Failure on one configuration page must not make the other two unavailable unless the shared dashboard shell itself is unavailable.
 
@@ -257,6 +267,44 @@ The page explains that profiles contain references and launch metadata, Managed 
 
 A page-local runtime filter may narrow the visible Provider Profile collection. It must not narrow global readiness counts unless the summary is explicitly labeled as filtered.
 
+#### 7.1.1 Provider Profile creation
+
+Provider Profile creation uses progressive disclosure as defined by [ProviderProfileCreation.md](./ProviderProfileCreation.md).
+
+The standard form keeps these user-facing decisions visible:
+
+- Profile ID, with an auto-generated suggestion and review before creation;
+- runtime;
+- provider;
+- optional account label;
+- high-level authentication method and connection action;
+- model and effort tier policy;
+- max parallel runs; and
+- optional `Use as runtime default` intent when readiness permits.
+
+One unchecked `Show advanced options` checkbox reveals:
+
+- credential source and materialization metadata;
+- structured SecretRef bindings;
+- volume reference and mount metadata;
+- cooldown after provider 429 responses;
+- rate-limit policy;
+- command behavior;
+- routing tags and priority; and
+- launch-shaping diagnostics.
+
+Credential setup itself does not disappear behind the checkbox. OAuth and API-key actions remain visible, while low-level credential plumbing stays advanced or system-generated.
+
+`clear_env_keys` is backend-owned launch-safety metadata. The normal Settings UI may display it read-only, but must not present a freeform textarea as an ordinary preference.
+
+Creation must use backend presets or omit untouched advanced values. It must not blindly submit global React defaults. A profile with required missing credentials is saved disabled, while successful guided setup may enable it when policy permits.
+
+#### 7.1.2 Provider Profile edit behavior
+
+On edit, advanced options start expanded when the profile has non-default, unknown, incompatible, or invalid advanced values. Otherwise they may start collapsed with an effective-policy summary.
+
+Collapsing the region preserves every draft value. A validation error targeting a hidden field automatically expands the region and moves focus to the affected control.
+
 ### 7.2 User / Workspace
 
 This page contains descriptor-driven settings for:
@@ -296,7 +344,7 @@ The page title `Operations` is distinct from any broader dropdown group also lab
 
 | Page | Primary data |
 |---|---|
-| Providers & Secrets | Provider Profiles, Managed Secret metadata, OAuth state, readiness diagnostics |
+| Providers & Secrets | Provider Profiles, Managed Secret metadata, OAuth state, readiness diagnostics, profile creation presets |
 | User / Workspace | catalog descriptors, effective values, scoped overrides, diagnostics, audit metadata |
 | Operations | worker state, queue and runtime health, operation capabilities, command history |
 
@@ -417,6 +465,8 @@ Generic settings never accept raw secret values. Managed Secret creation and rep
 
 The UI may display an authorized SecretRef such as `db://github-token` or `env://GITHUB_TOKEN`, but never its plaintext target.
 
+Provider Profile advanced fields use role-aware SecretRef controls rather than raw JSON as the primary UX. OAuth volume identifiers and paths are normally generated or imported through dedicated backend-supported flows.
+
 Client validation may use descriptor metadata for required values, numeric bounds, option membership, length, simple patterns, SecretRef shape, and obvious type errors. Backend validation remains authoritative.
 
 Source and application labels come from backend metadata. Recommended source labels include Default, Config, Environment, Workspace override, User override, Provider Profile, Secret reference, and Operator locked.
@@ -441,6 +491,8 @@ The configuration experience must support:
 
 The three destination links must not use `role="tab"` or radio semantics. They navigate to documents and behave as links.
 
+The Provider Profile `Show advanced options` control is a native checkbox connected to an expandable form region. It is local form state, not cross-page navigation.
+
 ---
 
 ## 13. Extensibility Rules
@@ -464,7 +516,11 @@ Forbidden patterns include:
 - eager loading of every configuration dataset on every route;
 - one hard-coded React row per setting key;
 - frontend copies of backend defaults or authoritative validation;
+- unconditional client-side `enabled: true` for a credential-required Provider Profile;
+- a global fallback credential source or materialization mode for every provider;
 - plaintext credential inputs in generic settings;
+- raw SecretRef JSON as the primary credential setup UX;
+- freeform `clear_env_keys` as an ordinary Provider Profile preference;
 - frontend-only authorization filtering;
 - silent fallback for broken SecretRefs; and
 - boolean-preference treatment for operational commands.
@@ -531,7 +587,34 @@ Normal router matching replaces this state.
 
 Move state to the owning page. Runtime filtering stays on Providers & Secrets. User versus workspace scope stays on User / Workspace. Worker command state stays on Operations.
 
-### 14.4 Required tests
+### 14.4 Provider Profile form migration
+
+Refactor the current form into:
+
+```text
+ProviderProfileForm
+  StandardProfileFields
+  ProviderProfileAuthenticationSetup
+  ProviderProfileTierSection
+  MaxParallelRunsField
+  ProviderProfileAdvancedToggle
+  ProviderProfileAdvancedRegion
+```
+
+Migration rules:
+
+1. Move Account label into the standard identity group.
+2. Keep credential connection status and setup actions visible.
+3. Derive credential source and materialization mode from backend capabilities for guided paths.
+4. Move Credentials & Volumes behind advanced options.
+5. Move cooldown and rate-limit policy behind advanced options.
+6. Keep max parallel runs visible.
+7. Keep command behavior, tags, and priority advanced.
+8. Replace editable Clear env keys with backend-generated read-only launch-safety metadata for normal profiles.
+9. Remove unconditional client-side enablement from creation.
+10. Preserve and reveal non-default or invalid advanced fields during edit.
+
+### 14.5 Required tests
 
 Cover:
 
@@ -545,8 +628,13 @@ Cover:
 - page-specific data loading and no unrelated manager mounting;
 - Back and Forward behavior;
 - dirty-draft route guards;
-- direct-route permissions; and
-- deep links with page-local filters.
+- direct-route permissions;
+- deep links with page-local filters;
+- collapsed Provider Profile advanced options on create;
+- visible max parallel runs;
+- backend-owned creation presets and activation;
+- automatic advanced expansion for hidden errors; and
+- preservation of advanced drafts while collapsed.
 
 ---
 
@@ -565,14 +653,22 @@ The design is satisfied when:
 9. Each page has its own title, header, loading boundary, authorization state, and failure state.
 10. Each page loads only its required primary datasets by default.
 11. Providers & Secrets keeps Provider Profiles, Managed Secrets, OAuth, tier policy, and readiness as first-class surfaces.
-12. User / Workspace renders ordinary settings from backend descriptors and supports authorized scope switching.
-13. Operations uses explicit statusful command cards with confirmation and audit context.
-14. Secret-like settings use SecretRefs or Managed Secret flows, never generic plaintext inputs.
-15. Route navigation protects unsaved drafts.
-16. Unsupported descriptors degrade safely.
-17. A failure on one page does not break sibling Configuration destinations.
-18. Backend authorization, defaults, validation, source resolution, and secret-safety decisions remain authoritative.
-19. Navigation tests and telemetry use canonical destination keys instead of the removed `section` state.
+12. Provider Profile creation starts with one collapsed `Show advanced options` control.
+13. Credentials & Volumes, cooldown, rate-limit policy, command behavior, tags, and priority are advanced.
+14. Max parallel runs remains visible in the standard Provider Profile form.
+15. Account label remains a visible user-facing identity aid.
+16. Credential connection remains visible while credential implementation details stay advanced or system-generated.
+17. Clear environment keys are backend-owned launch-safety metadata.
+18. Provider Profile creation uses contextual backend presets or omission rather than global frontend guesses.
+19. A credential-required profile is not silently created enabled without successful setup.
+20. User / Workspace renders ordinary settings from backend descriptors and supports authorized scope switching.
+21. Operations uses explicit statusful command cards with confirmation and audit context.
+22. Secret-like settings use SecretRefs or Managed Secret flows, never generic plaintext inputs.
+23. Route navigation protects unsaved drafts.
+24. Unsupported descriptors degrade safely.
+25. A failure on one page does not break sibling Configuration destinations.
+26. Backend authorization, defaults, validation, source resolution, and secret-safety decisions remain authoritative.
+27. Navigation tests and telemetry use canonical destination keys instead of the removed `section` state.
 
 ---
 
@@ -586,4 +682,9 @@ The design is satisfied when:
 - The Settings trigger remains stable on all three pages.
 - Query parameters represent page-local state, not page identity.
 - Every page owns its title, status, authorization, loading, queries, and failures.
+- Provider Profile creation uses one collapsed advanced-options region.
+- Max parallel runs remains visible.
+- Credential plumbing, volumes, secondary rate limits, routing metadata, and launch shaping are advanced or backend-derived.
+- Account label remains visible.
+- Enabled state follows successful credential activation and policy.
 - Existing managers can be reused, but the old local section state and switcher are removed.
