@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import select, update
 
 from api_service.db.models import OmnigentHostAuthProfileRecord
-from moonmind.omnigent.host_auth_profile import (
+from moonmind.omnigent.host_auth_contracts import (
     HostAuthCredentialProfile,
     profile_from_metadata,
     profile_persistence_metadata,

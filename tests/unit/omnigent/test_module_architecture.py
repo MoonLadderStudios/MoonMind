@@ -37,6 +37,7 @@ RESPONSIBILITY_MODULES: dict[str, tuple[str, ...]] = {
         "moonmind/omnigent/harness_platform/harness_registry.py",
         "moonmind/omnigent/codex_execution_decisions.py",
         "moonmind/omnigent/execution_ports.py",
+        "moonmind/omnigent/host_auth_contracts.py",
         "moonmind/omnigent/host_failures.py",
         "moonmind/omnigent/host_ports.py",
     ),
@@ -65,6 +66,7 @@ RESPONSIBILITY_MODULES: dict[str, tuple[str, ...]] = {
         "moonmind/omnigent/harness_platform/materializers.py",
     ),
     "composition": (
+        "api_service/api/routers/omnigent_bridge_composition.py",
         "api_service/api/routers/omnigent_catalog.py",
         "moonmind/workflows/temporal/activities/omnigent_activities.py",
         "moonmind/workflows/temporal/activities/omnigent_session_activities.py",
@@ -147,6 +149,19 @@ CONTAINER_AND_PROCESS_OWNERS = (
     "moonmind/omnigent/production.py",
 )
 
+# A raw container-runtime argument vector is container authority even when it
+# is shelled out instead of imported. Building one belongs to a host adapter;
+# an Omnigent module that assembles its own ``docker`` command has taken
+# authority that ``host_services/`` owns.
+CONTAINER_COMMAND_LITERALS = ("docker", "docker-compose")
+CONTAINER_COMMAND_OWNERS = (
+    "moonmind/omnigent/host_services/",
+    "moonmind/omnigent/bootstrap/",
+    "moonmind/omnigent/credential_materializers.py",
+    "moonmind/omnigent/opencode_runtime_validation.py",
+    "moonmind/omnigent/production.py",
+)
+
 # Deployment configuration is resolved at the composition/infrastructure
 # boundary. Declared decision, coordination, persistence, UI, and evidence
 # modules receive it as data.
@@ -174,11 +189,24 @@ PROVIDER_NATIVE_LITERALS = (
     "claude_code",
 )
 
-OMNIGENT_ROUTERS = tuple(
+_ALL_OMNIGENT_ROUTER_MODULES = tuple(
     sorted(
         str(path.relative_to(REPO_ROOT))
         for path in (REPO_ROOT / "api_service/api/routers").glob("omnigent*.py")
     )
+)
+
+# The composition root is the one module under ``routers/`` whose job is to name
+# concrete stores, transports, facades, and credential profiles. Excluding it
+# from the route-handler rules is what makes those rules meaningful: every other
+# omnigent router must reach that capability through this module.
+OMNIGENT_ROUTER_COMPOSITION_MODULES = (
+    "api_service/api/routers/omnigent_bridge_composition.py",
+)
+OMNIGENT_ROUTERS = tuple(
+    path
+    for path in _ALL_OMNIGENT_ROUTER_MODULES
+    if path not in OMNIGENT_ROUTER_COMPOSITION_MODULES
 )
 FORBIDDEN_ROUTER_SIDE_EFFECT_IMPORTS = (
     "docker",
@@ -190,6 +218,26 @@ FORBIDDEN_ROUTER_SIDE_EFFECT_IMPORTS = (
     "moonmind.omnigent.harness_platform.materializers",
     "moonmind.omnigent.profile_bound_execution",
     "moonmind.omnigent.harness_platform.planner",
+    "moonmind.omnigent.host_auth_profile",
+    "moonmind.omnigent.host_auth_store",
+)
+
+# Concrete persistence, credential, and durable-session constructors. A route
+# handler may *name* these types — annotations, dependency signatures, and the
+# error vocabulary it maps to HTTP are route contract — but calling them binds
+# the handler to one backing implementation and puts a database session, a
+# SecretRef read, or a lifecycle transition inside route scope. Deciding which
+# implementation backs a call is composition.
+FORBIDDEN_ROUTER_SIDE_EFFECT_CALLS = (
+    "OmnigentBridgeSessionStore",
+    "OmnigentEmbeddedHostProtocolFacade",
+    "HostAuthProfileStore",
+    "TemporalArtifactRepository",
+    "TemporalArtifactService",
+    "async_session_maker",
+    "host_auth_readiness",
+    "load_host_auth_profile",
+    "resolve_host_auth_credentials",
 )
 
 # Hermetic doubles and acceptance fixtures are test-owned. A production module
@@ -269,6 +317,52 @@ def _string_literals(relative_path: str) -> tuple[str, ...]:
         and isinstance(node.value, str)
         and id(node) not in docstrings
     )
+
+
+def _called_names_from_tree(tree: ast.AST) -> tuple[str, ...]:
+    """Return every simple or attribute callee name invoked in a tree.
+
+    Annotations, ``Depends`` signatures, and ``except`` clauses name a type
+    without calling it, so they never appear here. That is the discrimination
+    the router rule needs: naming a store type is route contract, building one
+    is composition.
+    """
+
+    called: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Name):
+            called.append(func.id)
+        elif isinstance(func, ast.Attribute):
+            called.append(func.attr)
+    return tuple(called)
+
+
+def _called_names(relative_path: str) -> tuple[str, ...]:
+    return _called_names_from_tree(_tree(relative_path))
+
+
+def _container_command_literals_from_tree(tree: ast.AST) -> tuple[str, ...]:
+    """Return container-runtime executables invoked as a call argument."""
+
+    found: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        # A command is passed either as leading varargs or as one argv sequence.
+        candidates: list[ast.expr] = list(node.args)
+        for argument in node.args:
+            if isinstance(argument, (ast.List, ast.Tuple)):
+                candidates.extend(argument.elts)
+        for argument in candidates:
+            if (
+                isinstance(argument, ast.Constant)
+                and argument.value in CONTAINER_COMMAND_LITERALS
+            ):
+                found.append(argument.value)
+    return tuple(found)
 
 
 def _reads_environment(relative_path: str) -> str | None:
@@ -532,6 +626,40 @@ def test_container_and_process_authority_stays_in_host_adapters(
     )
 
 
+def _omnigent_modules() -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            str(path.relative_to(REPO_ROOT))
+            for path in (REPO_ROOT / "moonmind/omnigent").rglob("*.py")
+        )
+    )
+
+
+@pytest.mark.parametrize("relative_path", _omnigent_modules())
+def test_raw_container_commands_belong_to_host_adapters(relative_path: str) -> None:
+    if not _container_command_literals_from_tree(_tree(relative_path)):
+        return
+    if relative_path.startswith(CONTAINER_COMMAND_OWNERS):
+        return
+    allowed = _exception_modules("adapter_issues_no_raw_container_command")
+    assert relative_path in allowed, (
+        f"{relative_path} assembles a container-runtime command itself; move it "
+        "behind a host_services adapter, or register a bounded exemption that "
+        "names the #3712 retirement path owning its removal"
+    )
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        'await self._run("docker", "rm", "-f", name, check=False)',
+        'run(["docker-compose", "up"])',
+    ),
+)
+def test_raw_container_command_negative_fixtures(source: str) -> None:
+    assert _container_command_literals_from_tree(ast.parse(source))
+
+
 @pytest.mark.parametrize(
     "relative_path", _declared_modules(*CONFIGURATION_FREE_RESPONSIBILITIES)
 )
@@ -578,6 +706,47 @@ def test_routers_have_no_provider_host_or_credential_side_effects(
     assert not leaked, (
         f"{relative_path} performs provider, Docker, credential, or lifecycle "
         f"work via {leaked}; call one application or facade operation instead"
+    )
+
+
+@pytest.mark.parametrize("relative_path", OMNIGENT_ROUTERS)
+def test_routers_do_not_construct_persistence_or_credential_adapters(
+    relative_path: str,
+) -> None:
+    """A route handler may name these types; only composition may build them."""
+
+    allowed = _exception_modules("router_builds_no_persistence_or_credential_adapter")
+    constructed = sorted(
+        {
+            name
+            for name in _called_names(relative_path)
+            if name in FORBIDDEN_ROUTER_SIDE_EFFECT_CALLS
+        }
+    )
+    if constructed and relative_path in allowed:
+        return
+    assert not constructed, (
+        f"{relative_path} constructs or invokes {constructed} in route scope; "
+        "select the backing implementation in "
+        f"{OMNIGENT_ROUTER_COMPOSITION_MODULES[0]} and call one operation"
+    )
+
+
+def test_router_composition_root_is_declared_and_singular() -> None:
+    """The exclusion list may not quietly grow into a second router layer."""
+
+    for path in OMNIGENT_ROUTER_COMPOSITION_MODULES:
+        assert (REPO_ROOT / path).is_file()
+        assert path in _ALL_OMNIGENT_ROUTER_MODULES
+    assert set(OMNIGENT_ROUTER_COMPOSITION_MODULES) <= set(
+        RESPONSIBILITY_MODULES["composition"]
+    )
+    # Every other omnigent router is held to the route-handler rules.
+    assert set(OMNIGENT_ROUTERS) == set(_ALL_OMNIGENT_ROUTER_MODULES) - set(
+        OMNIGENT_ROUTER_COMPOSITION_MODULES
+    )
+    assert not any(
+        path.endswith("_composition.py") for path in OMNIGENT_ROUTERS
     )
 
 
@@ -647,6 +816,64 @@ def test_container_and_process_leakage_negative_fixtures(source: str) -> None:
         if imported.split(".")[0] in CONTAINER_AND_PROCESS_MODULES
     ]
     assert leaked
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        "from moonmind.omnigent.host_auth_profile import resolve_host_auth_credentials",
+        "from moonmind.omnigent.host_auth_store import HostAuthProfileStore",
+        "from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime",
+    ),
+)
+def test_router_side_effect_import_negative_fixtures(source: str) -> None:
+    leaked = [
+        imported
+        for imported in _imports_from_tree(ast.parse(source))
+        if imported.startswith(FORBIDDEN_ROUTER_SIDE_EFFECT_IMPORTS)
+    ]
+    assert leaked
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        "store = OmnigentBridgeSessionStore(async_session_maker)",
+        "facade = OmnigentEmbeddedHostProtocolFacade(run_store=store, config=config)",
+        "profile = await resolve_host_auth_credentials(profile=candidate)",
+        "auth = await host_auth_readiness(profile=profile)",
+        "durable = HostAuthProfileStore(async_session_maker)",
+        "service = TemporalArtifactService(TemporalArtifactRepository(session))",
+    ),
+)
+def test_router_adapter_construction_negative_fixtures(source: str) -> None:
+    """Each fixture is a route-scope construction the rule must reject."""
+
+    constructed = [
+        name
+        for name in _called_names_from_tree(ast.parse(source))
+        if name in FORBIDDEN_ROUTER_SIDE_EFFECT_CALLS
+    ]
+    assert constructed
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        "def handler(store: OmnigentBridgeSessionStore = Depends(_get_store)): ...",
+        "def project(store: OmnigentBridgeSessionStore) -> dict: ...",
+        "async def handler(facade: OmnigentEmbeddedHostProtocolFacade | None): ...",
+    ),
+)
+def test_router_may_name_adapter_types_without_constructing_them(source: str) -> None:
+    """Naming the type in a signature is route contract, not composition."""
+
+    constructed = [
+        name
+        for name in _called_names_from_tree(ast.parse(source))
+        if name in FORBIDDEN_ROUTER_SIDE_EFFECT_CALLS
+    ]
+    assert not constructed
 
 
 @pytest.mark.parametrize(

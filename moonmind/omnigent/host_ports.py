@@ -16,6 +16,7 @@ without importing this module and stay usable outside MoonMind.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -212,12 +213,86 @@ class OmnigentHostCleanupPort(Protocol):
     ) -> dict[str, Any]: ...
 
 
+@runtime_checkable
+class OmnigentHostContainerInventoryPort(Protocol):
+    """Observe and reclaim label-owned host containers and their volumes.
+
+    Orphan discovery and reclamation are a separate concern from realizing a
+    host for a run: the janitor needs them without any ability to prepare a
+    host, publish a workspace, or read a provider session. Every operation is
+    ownership-scoped — an unlabeled or foreign container is refused, never
+    silently reclaimed.
+    """
+
+    async def container_exists(self, container_name: str) -> bool: ...
+
+    async def list_managed_containers(self) -> list[str]: ...
+
+    async def managed_container_host_lease_ref(
+        self, container_name: str
+    ) -> str | None: ...
+
+    async def remove_container(self, container_name: str) -> None: ...
+
+    async def assert_container_owned(
+        self, *, container_name: str, lease_id: str
+    ) -> None: ...
+
+
+@runtime_checkable
+class OmnigentHostReleasePort(Protocol):
+    """Release one host's capacity and publish its terminal cleanup evidence."""
+
+    async def stop_host(
+        self,
+        *,
+        binding: Any,
+        host_lease: Any,
+        effective_launch: Mapping[str, Any] | None = None,
+        egress_evidence: Mapping[str, Any] | None = None,
+        launch_evidence_ref: str | None = None,
+        evidence_request: Any | None = None,
+        artifact_gateway: Any | None = None,
+    ) -> dict[str, Any]: ...
+
+
+@runtime_checkable
+class OmnigentStaticHostReleasePort(Protocol):
+    """Stop the static credential consumer when no host lease is active.
+
+    Separate from :class:`OmnigentHostReleasePort`: releasing a leased host and
+    stopping the deployment's static credential consumer are different
+    authorities with different preconditions.
+    """
+
+    async def stop_static_host(self, *, binding: Any | None = None) -> None: ...
+
+
+@runtime_checkable
+class OmnigentHostReclamationPorts(
+    OmnigentHostContainerInventoryPort,
+    OmnigentHostReleasePort,
+    OmnigentStaticHostReleasePort,
+    Protocol,
+):
+    """The two capabilities a janitor needs: observe orphans, release capacity.
+
+    A dependency-set declaration, not a third capability. The janitor must not
+    be able to prepare a host, publish a workspace, or read a provider session,
+    so it depends on these ports rather than on a concrete host runtime class.
+    """
+
+
 __all__ = [
     "HostLaunchSpec",
     "OmnigentEgressAttestationPort",
     "OmnigentGithubCredentialPort",
     "OmnigentHostAttestationPort",
     "OmnigentHostCleanupPort",
+    "OmnigentHostContainerInventoryPort",
+    "OmnigentHostReclamationPorts",
+    "OmnigentHostReleasePort",
+    "OmnigentStaticHostReleasePort",
     "OmnigentHostLauncherPort",
     "OmnigentHostRegistrationPort",
     "OmnigentMountedToolPort",

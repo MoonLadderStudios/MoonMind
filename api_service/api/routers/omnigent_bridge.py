@@ -46,26 +46,29 @@ from api_service.api.execution_principal import (
 )
 from api_service.api.routers.executions import _get_service as _get_execution_service
 from api_service.api.routers.omnigent_bridge_composition import (
+    HostAuthProfileConflictError,
     OmnigentBridgeModeUnsupportedError,
+    bridge_artifact_service,
     build_bridge_session_proxy,
     build_bridge_session_store,
     build_embedded_host_facade,
-    build_host_auth_store,
+    configure_active_host_auth_profile,
+    connected_host_frame_is_authorized,
+    evaluate_active_host_auth_readiness,
     evaluate_embedded_host_auth_readiness,
-    resolve_active_host_auth_profile,
+    project_upstream_inventory,
+    project_upstream_inventory_failure,
+    resolve_default_bridge_policy_snapshot,
+    revoke_active_host_auth_profile,
+    rotate_active_host_auth_profile,
     verify_embedded_host_request,
 )
 from api_service.api.routers.retrieval_gateway import get_capability_registry
 from api_service.auth_providers import get_current_user
-from api_service.db.base import async_session_maker, get_async_session
+from api_service.db.base import get_async_session
 from api_service.db.models import User
 from api_service.retrieval_capabilities import RetrievalCapabilityRegistry
-from api_service.services.omnigent_agent_profile_service import (
-    record_upstream_sync_failure,
-    synchronize_upstream_inventory,
-)
 from api_service.services.omnigent_policies import (
-    OmnigentPolicyService,
     PolicyConflict,
     PolicyNotFound,
 )
@@ -108,13 +111,10 @@ from moonmind.omnigent.embedded_host_channel import (
     embedded_host_channels,
 )
 from moonmind.omnigent.host_protocol_adapter import UpstreamHostProtocolError
-from moonmind.omnigent.host_auth_profile import (
-    HostAuthProfileError,
+from moonmind.omnigent.host_auth_contracts import (
     HostAuthCredentialProfile,
-    host_auth_readiness,
-    resolve_host_auth_credentials,
+    HostAuthProfileError,
 )
-from moonmind.omnigent.host_auth_store import HostAuthProfileStore
 from moonmind.omnigent.native_ui import (
     NATIVE_UI_MOUNT_PREFIX,
     NATIVE_UI_ROUTE_FEATURE_VERSION,
@@ -179,10 +179,6 @@ from moonmind.utils.build_info import resolve_moonmind_build_id
 from moonmind.workflows.adapters.omnigent_agent_adapter import (
     OmnigentAgentSelection,
 )
-from moonmind.workflows.temporal.artifacts import (
-    TemporalArtifactRepository,
-    TemporalArtifactService,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -201,14 +197,6 @@ def get_bridge_config() -> OmnigentBridgeConfig:
     """Return the resolved, immutable bridge configuration."""
 
     return _BRIDGE_CONFIG
-
-
-def _host_auth_store() -> HostAuthProfileStore:
-    return build_host_auth_store()
-
-
-async def _active_host_auth_profile() -> HostAuthCredentialProfile:
-    return await resolve_active_host_auth_profile()
 
 
 async def embedded_host_auth_preflight() -> dict[str, Any]:
@@ -356,11 +344,7 @@ async def get_omnigent_bridge_readiness(
                 config, policy_authority=policy_authority
             )
         )
-        try:
-            profile = await _active_host_auth_profile()
-            auth = await host_auth_readiness(profile=profile)
-        except HostAuthProfileError as exc:
-            auth = {"ready": False, "code": exc.code}
+        auth = await evaluate_active_host_auth_readiness()
         readiness["hostAuthentication"] = auth
         if not auth["ready"]:
             readiness["conformanceState"] = "gated"
@@ -559,8 +543,7 @@ async def _resolve_embedded_evidence(
             key: {"status": "failed", "reason": "moonmind_build_identity_missing"}
             for key in _EMBEDDED_EVIDENCE_SLOTS
         }
-    async with async_session_maker() as session:
-        service = TemporalArtifactService(TemporalArtifactRepository(session))
+    async with bridge_artifact_service() as service:
         for key, (claim_type, attribute) in _EMBEDDED_EVIDENCE_SLOTS.items():
             try:
                 artifact_id = _artifact_id_from_evidence_ref(
@@ -607,10 +590,7 @@ async def _resolve_bridge_policy_authority() -> dict[str, Any]:
     """Fail closed unless the bridge's persisted default authority is usable."""
 
     try:
-        async with async_session_maker() as session:
-            return await OmnigentPolicyService(
-                session
-            ).resolve_default_runtime_snapshot("omnigent-codex")
+        return await resolve_default_bridge_policy_snapshot()
     except (PolicyConflict, PolicyNotFound) as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2237,13 +2217,11 @@ async def list_omnigent_agents(
             raise OmnigentBridgeError("Unsupported bridge mode", status_code=501)
         agents = await facade.list_agents()
         try:
-            async with async_session_maker() as session:
-                await synchronize_upstream_inventory(
-                    session,
-                    endpoint_ref="default",
-                    bridge_mode=str(config.host_protocol_mode),
-                    inventory=agents,
-                )
+            await project_upstream_inventory(
+                endpoint_ref="default",
+                bridge_mode=str(config.host_protocol_mode),
+                inventory=agents,
+            )
         except Exception:
             # Projection evidence is auxiliary to the authenticated inventory
             # response and must not overwrite primary bridge success.
@@ -2251,13 +2229,11 @@ async def list_omnigent_agents(
         return agents
     except OmnigentBridgeError as exc:
         try:
-            async with async_session_maker() as session:
-                await record_upstream_sync_failure(
-                    session,
-                    endpoint_ref="default",
-                    bridge_mode=str(config.host_protocol_mode),
-                    error=str(exc),
-                )
+            await project_upstream_inventory_failure(
+                endpoint_ref="default",
+                bridge_mode=str(config.host_protocol_mode),
+                error=str(exc),
+            )
         except Exception:
             logger.exception("Failed to record Omnigent inventory sync failure")
         raise _http_error_from_bridge(exc) from exc
@@ -2589,6 +2565,12 @@ def _host_auth_http_error(exc: HostAuthProfileError) -> HTTPException:
     )
 
 
+def _host_auth_conflict_error(exc: HostAuthProfileConflictError) -> HTTPException:
+    """Durable-state conflicts are always 409; they never resolve a secret."""
+
+    return HTTPException(status_code=409, detail={"code": exc.code})
+
+
 @router.put("/host-auth/profile", response_model=dict)
 async def put_embedded_host_auth_profile(
     payload: HostAuthProfilePutRequest,
@@ -2603,20 +2585,11 @@ async def put_embedded_host_auth_profile(
         current_generation=payload.current_generation,
     )
     try:
-        await resolve_host_auth_credentials(profile=candidate)
+        stored = await configure_active_host_auth_profile(candidate)
     except HostAuthProfileError as exc:
         raise _host_auth_http_error(exc) from exc
-    store = _host_auth_store()
-    if await store.get_active() is not None:
-        raise HTTPException(
-            status_code=409, detail={"code": "host_auth_already_configured"}
-        )
-    try:
-        stored = await store.put(candidate, expected_generation=0)
-    except RuntimeError as exc:
-        raise HTTPException(
-            status_code=409, detail={"code": "host_auth_already_configured"}
-        ) from exc
+    except HostAuthProfileConflictError as exc:
+        raise _host_auth_conflict_error(exc) from exc
     return stored.metadata()
 
 
@@ -2628,29 +2601,15 @@ async def rotate_embedded_host_auth_profile(
     """Validate a new generation before atomically replacing durable metadata."""
 
     _require_host_auth_operator(user)
-    store = _host_auth_store()
-    current = await store.get_active()
-    if current is None:
-        raise HTTPException(status_code=409, detail={"code": "host_auth_unconfigured"})
-    from moonmind.omnigent.host_auth_profile import rotate_host_auth_profile
-
     try:
-        candidate = rotate_host_auth_profile(
-            current,
+        stored = await rotate_active_host_auth_profile(
             new_secret_ref=payload.new_secret_ref,
             overlap=timedelta(seconds=payload.overlap_seconds),
         )
-        await resolve_host_auth_credentials(profile=candidate)
     except HostAuthProfileError as exc:
         raise _host_auth_http_error(exc) from exc
-    try:
-        stored = await store.put(
-            candidate, expected_generation=current.current_generation
-        )
-    except RuntimeError as exc:
-        raise HTTPException(
-            status_code=409, detail={"code": "host_auth_generation_conflict"}
-        ) from exc
+    except HostAuthProfileConflictError as exc:
+        raise _host_auth_conflict_error(exc) from exc
     return stored.metadata()
 
 
@@ -2660,11 +2619,9 @@ async def revoke_embedded_host_auth_profile(
 ) -> dict[str, Any]:
     _require_host_auth_operator(user)
     try:
-        stored = await _host_auth_store().revoke()
-    except LookupError as exc:
-        raise HTTPException(
-            status_code=409, detail={"code": "host_auth_unconfigured"}
-        ) from exc
+        stored = await revoke_active_host_auth_profile()
+    except HostAuthProfileConflictError as exc:
+        raise _host_auth_conflict_error(exc) from exc
     return stored.metadata()
 
 
@@ -2720,21 +2677,13 @@ async def embedded_omnigent_host_tunnel(websocket: WebSocket, host_id: str) -> N
     channel = embedded_host_channels.connect(
         host_id=host_id, send_text=websocket.send_text
     )
-    facade = OmnigentEmbeddedHostProtocolFacade(
-        run_store=OmnigentBridgeSessionStore(async_session_maker), config=config
-    )
+    facade = build_embedded_host_facade(config)
     try:
         while True:
             frame_text = await websocket.receive_text()
             # Re-resolve safe profile state for every frame so immediate
             # revocation and overlap expiry drain already-connected tunnels.
-            active = await resolve_host_auth_credentials(
-                profile=await _active_host_auth_profile()
-            )
-            if (
-                active.profile.profile_id != auth.credential_profile_id
-                or auth.credential_generation not in active.tokens_by_generation
-            ):
+            if not await connected_host_frame_is_authorized(auth):
                 await websocket.close(code=4403)
                 break
             frame = channel.accept_host_frame(frame_text)
@@ -2776,7 +2725,7 @@ async def embedded_omnigent_runner_tunnel(websocket: WebSocket, runner_id: str) 
         await websocket.close(code=4403)
         return
     try:
-        store = OmnigentBridgeSessionStore(async_session_maker)
+        store = build_bridge_session_store()
         binding = await store.get_active_session_by_runner_identity(runner_id)
         if (
             binding is None
@@ -2814,9 +2763,7 @@ async def embedded_omnigent_runner_tunnel(websocket: WebSocket, runner_id: str) 
             send_text=websocket.send_text,
             hello_text=await websocket.receive_text(),
         )
-        facade = OmnigentEmbeddedHostProtocolFacade(
-            run_store=OmnigentBridgeSessionStore(async_session_maker), config=config
-        )
+        facade = build_embedded_host_facade(config)
         await facade.record_runner_tunnel_ready(runner_id=runner_id)
         while True:
             channel.accept_frame(await websocket.receive_text())
@@ -2827,9 +2774,7 @@ async def embedded_omnigent_runner_tunnel(websocket: WebSocket, runner_id: str) 
     finally:
         if channel is not None:
             embedded_host_channels.disconnect_runner(channel)
-            facade = OmnigentEmbeddedHostProtocolFacade(
-                run_store=OmnigentBridgeSessionStore(async_session_maker), config=config
-            )
+            facade = build_embedded_host_facade(config)
             try:
                 await facade.record_runner_tunnel_disconnected(runner_id=runner_id)
             except (EmbeddedHostChannelError, OmnigentIdempotencyError):

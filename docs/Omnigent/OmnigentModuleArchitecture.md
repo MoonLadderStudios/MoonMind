@@ -39,6 +39,7 @@ dependency direction.
 | `moonmind/omnigent/harness_platform/` value modules (`agent_profile`, `attestation`, `capabilities`, `catalog`, `credential_bindings`, `execution_plan`, `failures`, `harness_registry`, `runtime_binding`, `skills`, `support`) | Immutable schemas, capability/support decisions, approved-harness registration data | Pure |
 | `moonmind/omnigent/codex_execution_decisions.py` | Launch classification, budget authority, request identity, and authored-request binding for the legacy Codex realizer | Pure |
 | `moonmind/omnigent/host_failures.py` | Host failure vocabulary | Pure |
+| `moonmind/omnigent/host_auth_contracts.py` | Embedded host-auth profile, failure, and rotation vocabulary | Pure |
 | `moonmind/omnigent/host_ports.py`, `execution_ports.py` | Narrow ports for host realization and profile-bound execution | Pure |
 | `moonmind/omnigent/control_plane/turn_commands.py` | Canonical turn command use case | Application |
 | `moonmind/omnigent/host_runtime.py` | Harness-neutral host realization and cleanup use case | Application |
@@ -46,7 +47,8 @@ dependency direction.
 | `moonmind/omnigent/control_plane/repositories.py` | Session, turn, observation, command, decision, alias, cleanup-authority persistence | Persistence |
 | `moonmind/omnigent/harness_platform/stores.py` | Execution-plan, plan-usage, and runtime-binding persistence | Persistence |
 | `moonmind/omnigent/execution_adapters.py` | Provider Profile authority, execution policy snapshot, and Temporal attempt adapters | Persistence |
-| `moonmind/omnigent/host_services/` | Docker/Compose launcher, workspace, skills, mounted tools, GitHub credentials, egress, registration, attestation, cleanup | Adapter |
+| `moonmind/omnigent/host_services/` | Docker/Compose launcher, workspace, skills, mounted tools, GitHub credentials, egress, registration, attestation, cleanup, legacy host container inventory | Adapter |
+| `moonmind/omnigent/host_auth_profile.py`, `host_auth_store.py` | Embedded host-auth SecretRef resolution, readiness projection, durable profile row | Adapter |
 | `moonmind/omnigent/harness_platform/materializers.py`, `credential_materializers.py` | Credential materializer descriptors and provisioning | Adapter |
 | `moonmind/omnigent/bridge_*.py`, `execute.py`, `oauth_host_runtime.py`, `profile_bound_execution.py` | Replay-visible legacy Codex transport, session driver, host lifecycle, and coordinator | Adapter (legacy) |
 | `moonmind/omnigent/workspace_publication.py`, `bridge_artifacts.py`, `remediation_workspace.py` | Workspace publication, artifact/evidence, checkpoint adapters | Adapter |
@@ -88,7 +90,18 @@ Additional enforced rules:
   normalized at adapter boundaries and never appears in pure, application,
   persistence, UI, or evidence modules.
 - Routers perform no Docker, provider, credential-materialization, or
-  lifecycle-coordination work.
+  lifecycle-coordination work. A route handler may *name* a store, facade, or
+  host-auth type — annotations, dependency signatures, and the error vocabulary
+  it maps to HTTP are route contract — but may not construct one, open a
+  database session, or resolve a credential. Selecting the backing
+  implementation is composition and lives in
+  `api_service/api/routers/omnigent_bridge_composition.py`, the one router-layer
+  module excluded from the route-handler rules.
+- Container authority is a raw `docker`/`docker-compose` argument vector as much
+  as it is a Docker SDK import. Assembling one is owned by `host_services/`,
+  `bootstrap/`, `credential_materializers.py`,
+  `opencode_runtime_validation.py`, and `production.py`; every other Omnigent
+  module needs a bounded exemption that names its #3712 retirement path.
 - Deterministic session/turn identity has one owner,
   `control_plane/identities.py`.
 - Production modules never import test doubles or acceptance fixtures.
@@ -101,27 +114,46 @@ Additional enforced rules:
 Ports are narrow and single-concern. There is no broad "client", "store",
 "coordinator", or "runtime" interface that owns unrelated concerns.
 
-| Concern | Port | Implementations |
-| --- | --- | --- |
-| Execution-plan storage | `harness_platform/stores.py::OmnigentExecutionPlanStore` | in-memory, DB, API-transaction |
-| Plan usage / retry identity | `harness_platform/stores.py::OmnigentExecutionPlanUsageStore` | in-memory, DB |
-| Runtime-binding persistence | `harness_platform/stores.py::OmnigentRuntimeBindingStore` | in-memory, DB |
-| Stable runtime binding | `runtime_bindings.py` store protocol | in-memory, DB |
-| Harness catalog observation | `harness_platform/catalog_service.py::OmnigentHarnessCatalogRepository` | in-memory, DB |
-| Provider inventory | `harness_platform/catalog_service.py::OmnigentInventoryClient` | HTTP client, fake |
-| Host realization and cleanup | `host_ports.py` (`launcher`, `registration`, `attestation`, `cleanup`) | Docker adapters, test doubles |
-| Workspace, skills, tools, GitHub credentials, egress | `host_ports.py` | `host_services/` adapters |
-| Host leases | `host_leases.py::OmnigentHostLeaseRepository` | in-memory, DB |
-| Provider Profile leases | `provider_leases.py::ProviderLeaseClient` | lease client, fake |
-| Credential materialization | `harness_platform/materializers.py`, `credential_materializers.py` | per-materializer descriptors |
-| Provider Profile authority, policy snapshot, attempt ordinal | `execution_ports.py` | `execution_adapters.py` |
-| Workspace checkpoint/restore | `remediation_workspace.py` owner protocol | sandbox owner, test double |
-| Secret resolution | `secret_resolution.py` | root resolver chain |
+`Coverage` is what `tests/unit/omnigent/test_adapter_contracts.py` enforces
+today. **Paired** means one shared behavior contract runs across the hermetic
+and the deployed implementation, so a test double cannot diverge on
+idempotency, fencing, or conflict vocabulary. **Conformance** means the
+deployed implementation is machine-checked against the declared port so the two
+cannot drift apart, without a second implementation to pair against.
 
-`tests/unit/omnigent/test_adapter_contracts.py` runs one shared behavior
-contract per port across the hermetic implementation and the deployed
-implementation, so a test double cannot diverge on idempotency, fencing, or
-conflict vocabulary.
+| Concern | Port | Implementations | Coverage |
+| --- | --- | --- | --- |
+| Execution-plan storage | `harness_platform/stores.py::OmnigentExecutionPlanStore` | in-memory, DB, API-transaction | Paired |
+| Plan usage / retry identity | `harness_platform/stores.py::OmnigentExecutionPlanUsageStore` | in-memory, DB | Paired |
+| Runtime-binding persistence | `harness_platform/stores.py::OmnigentRuntimeBindingStore` | in-memory, DB | Paired |
+| Stable runtime binding | `runtime_bindings.py::StableRuntimeBindingStore` | in-memory, DB | Behavior contract on in-memory; DB is conformance-only |
+| Harness catalog observation | `harness_platform/catalog_service.py::OmnigentHarnessCatalogRepository` | in-memory, DB | Paired |
+| Provider inventory | `harness_platform/catalog_service.py::OmnigentInventoryClient` | `OmnigentHttpClient` | Conformance |
+| Host realization and cleanup | `host_ports.py` (`launcher`, `registration`, `attestation`, `cleanup`) | Docker adapters, test doubles | Conformance |
+| Legacy host container inventory and reclamation | `host_ports.py::OmnigentHostContainerInventoryPort` | `host_services/legacy_host_containers.py`, hermetic double | Paired |
+| Host preparation, workspace publication, provider session inspection, host release | `execution_ports.py`, `host_ports.py::OmnigentHostReleasePort` | `oauth_host_runtime.py` | Conformance + signature drift |
+| Workspace, skills, tools, GitHub credentials, egress | `host_ports.py` | `host_services/` adapters | Conformance |
+| Host leases | `host_leases.py::OmnigentHostLeaseRepository` | in-memory, DB | Paired |
+| Provider Profile leases | `provider_leases.py::ProviderLeaseClient` | `ProviderProfileLeaseClient` | Conformance |
+| Credential materialization | `harness_platform/materializers.py`, `credential_materializers.py` | per-materializer descriptors | Paired (descriptor contract) |
+| Provider Profile authority, policy snapshot, attempt ordinal | `execution_ports.py` | `execution_adapters.py` | Conformance |
+| Workspace checkpoint/restore | `remediation_workspace.py::RemediationWorkspaceOwner` | `SandboxRemediationWorkspaceOwner` | Conformance |
+| Secret resolution | `secret_resolution.py::SecretResolver` | root resolver chain | Conformance |
+
+The stable runtime binding store recomputes its snapshot digest from the
+persisted row. The shared contract fixture is SQLite, which returns
+`DateTime(timezone=True)` columns as naive datetimes, so that digest can only be
+reproduced against PostgreSQL; the DB implementation is therefore
+conformance-checked here and behavior-verified against a real PostgreSQL
+deployment.
+
+The legacy Codex host adapter satisfies four separate ports — host preparation,
+workspace publication, provider session inspection, and host release — each with
+a declared signature rather than an untyped `**kwargs` payload. The contract
+suite fails if a port reunifies those capabilities, reopens `**kwargs`, or
+drifts away from the adapter's signature. `ProfileBoundHostPorts` and
+`OmnigentHostReclamationPorts` declare *dependency sets* over those ports; a
+contract asserts they add no capability of their own.
 
 ## 5. Compatibility shims and their retirement owners
 
@@ -139,6 +171,7 @@ retire each one.
 | `native_ui_compat.py` chat projection | `omnigent.legacy.native_ui_compat` | base criteria + native chat acceptance |
 | `cutover.py` Codex-through-Omnigent selection | `omnigent.legacy.codex_cutover_selection` | base #3712 criteria pass |
 | `omnigent_catalog.py` in-handler readiness projection reading the materializer descriptor registry | `omnigent.legacy.native_ui_compat` | the readiness projection moves behind an application service |
+| `oauth_host_runtime.py` raw Docker/Compose launch, mount, credential-volume, and egress argument vectors | `omnigent.legacy.profile_bound_execution` | the replay-visible coordinator retires; moving the launch argument vector would change what in-flight histories were started with |
 
 Temporary supervisor rollout flags are listed in `TEMPORARY_ROLLOUT_FLAGS` with
 their retirement trigger, so a rollout flag cannot become a permanent alternate

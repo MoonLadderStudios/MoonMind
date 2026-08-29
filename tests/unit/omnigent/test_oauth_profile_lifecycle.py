@@ -617,7 +617,7 @@ async def test_credential_mount_preflight_runs_provider_login_without_execution_
 async def test_static_host_cleanup_removes_lease_owned_credential_validator() -> None:
     runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
     runtime._container_present = AsyncMock(side_effect=[True, False])
-    runtime._assert_container_owned = AsyncMock()
+    runtime.assert_container_owned = AsyncMock()
     runtime._run = AsyncMock(return_value=(0, "", ""))
     runtime.stop_static_host = AsyncMock()
 
@@ -627,8 +627,8 @@ async def test_static_host_cleanup_removes_lease_owned_credential_validator() ->
     result = await runtime.stop_host(binding=_binding(), host_lease=lease)
 
     assert result["cleanupResult"] == "drained_owned_static_host"
-    runtime._assert_container_owned.assert_awaited_once_with(
-        "mm-omnigent-host-host-lease-1", "host-lease-1"
+    runtime.assert_container_owned.assert_awaited_once_with(
+        container_name="mm-omnigent-host-host-lease-1", lease_id="host-lease-1"
     )
     runtime._run.assert_awaited_once_with(
         "docker",
@@ -2374,7 +2374,7 @@ async def test_stop_host_publishes_resolvable_terminal_egress_and_cleanup_author
     runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace(), workspace_root=tmp_path)
     runtime._run = AsyncMock(return_value=(0, "", ""))
     runtime.container_exists = AsyncMock(return_value=True)
-    runtime._assert_container_owned = AsyncMock()
+    runtime.assert_container_owned = AsyncMock()
     runtime._container_present = AsyncMock(return_value=False)
     runtime._volume_present = AsyncMock(return_value=False)
     binding = _binding().model_copy(

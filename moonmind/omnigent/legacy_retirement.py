@@ -199,6 +199,22 @@ ARCHITECTURE_BOUNDARY_EXCEPTIONS: tuple[ArchitectureBoundaryException, ...] = (
         ),
         retirementPathId="omnigent.legacy.profile_bound_execution",
     ),
+    ArchitectureBoundaryException(
+        exceptionId="omnigent.exception.oauth_host_runtime_raw_container_commands",
+        module="moonmind/omnigent/oauth_host_runtime.py",
+        rule="adapter_issues_no_raw_container_command",
+        reason=(
+            "The retained Codex host lifecycle still assembles its own Docker "
+            "and Compose argument vectors for launch, mount, credential-volume, "
+            "and egress attestation. Container/volume inventory and reclamation "
+            "already moved to host_services/legacy_host_containers.py behind "
+            "OmnigentHostContainerInventoryPort; the launch path stays here "
+            "until the replay-visible coordinator retires, because moving it "
+            "would change the launch argument vector that in-flight histories "
+            "were started with."
+        ),
+        retirementPathId="omnigent.legacy.profile_bound_execution",
+    ),
 )
 
 

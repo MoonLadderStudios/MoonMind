@@ -68,10 +68,6 @@ from moonmind.omnigent.exact_artifact_conformance import (
     assert_exact_artifact_evidence,
 )
 from moonmind.omnigent.execution_profiles import POLICIES, PROFILES
-from moonmind.omnigent.host_auth_profile import (
-    HostAuthProfileError,
-    host_auth_readiness,
-)
 from moonmind.omnigent.live_verification_health import (
     LiveVerificationHealthError,
     assert_live_health_projection,
@@ -86,11 +82,11 @@ from moonmind.omnigent.settings import (
 from moonmind.utils.logging import redact_sensitive_payload
 
 from .omnigent_bridge import (
-    _active_host_auth_profile,
     _compatibility_diagnostics,
     _resolve_embedded_evidence,
     get_bridge_config,
 )
+from .omnigent_bridge_composition import evaluate_active_host_auth_readiness
 
 router = APIRouter(prefix="/api/omnigent", tags=["Omnigent Catalog"])
 
@@ -979,10 +975,7 @@ async def get_omnigent_codex_catalog_readiness(
         deployment_reasons.append(_reason("bridge_endpoint_not_ready"))
     auth: dict[str, Any] | None = None
     if config.enabled and config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
-        try:
-            auth = await host_auth_readiness(profile=await _active_host_auth_profile())
-        except HostAuthProfileError:
-            auth = {"ready": False}
+        auth = await evaluate_active_host_auth_readiness()
         if not auth.get("ready"):
             deployment_reasons.append(_reason("host_auth_unavailable"))
 

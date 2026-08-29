@@ -5,9 +5,9 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from moonmind.omnigent.host_ports import OmnigentHostReclamationPorts
 from moonmind.omnigent.oauth_host_runtime import (
     OmnigentEgressEvidenceRequestIdentity,
-    OmnigentOAuthHostRuntime,
 )
 from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 from moonmind.omnigent.oauth_hosts import (
@@ -27,7 +27,7 @@ class OmnigentOAuthHostJanitor:
         self,
         *,
         repository: OmnigentOAuthHostRepository,
-        runtime: OmnigentOAuthHostRuntime,
+        runtime: OmnigentHostReclamationPorts,
         client: OmnigentHttpClient,
         run_store: Any | None = None,
         lease_client: ProviderProfileLeaseClient | None = None,

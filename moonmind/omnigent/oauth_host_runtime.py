@@ -24,6 +24,9 @@ from moonmind.omnigent.mounted_tool_preflight import (
     preflight_mounted_tools,
 )
 from moonmind.omnigent.host_failures import OmnigentOAuthHostError
+from moonmind.omnigent.host_services.legacy_host_containers import (
+    LegacyOmnigentHostContainerService,
+)
 from moonmind.omnigent.oauth_hosts import (
     HostPreflightFailure,
     deterministic_host_container_name,
@@ -343,6 +346,12 @@ class OmnigentOAuthHostRuntime:
             Path(source_root_text).resolve() if source_root_text else None
         )
         self._lore_repository_adapter = lore_repository_adapter
+        # Container/volume inventory and reclamation is its own narrow port
+        # (OmnigentHostContainerInventoryPort). The janitor consumes that
+        # capability without any ability to prepare a host or read a session.
+        self._containers = LegacyOmnigentHostContainerService(
+            run_command=lambda *args, **kwargs: self._run(*args, **kwargs)
+        )
         # Bounded, non-sensitive evidence of the most recent workspace resolution,
         # surfaced through the preflight result for Workflow Detail. Never carries
         # credentials, raw daemon paths, or unbounded command output.
@@ -433,7 +442,9 @@ class OmnigentOAuthHostRuntime:
             host_lease.lease_id
         )
         if await self._container_present(container_name):
-            await self._assert_container_owned(container_name, host_lease.lease_id)
+            await self.assert_container_owned(
+                container_name=container_name, lease_id=host_lease.lease_id
+            )
             await self._run("docker", "rm", "-f", container_name, check=False)
             if await self._container_present(container_name):
                 raise OmnigentOAuthHostError(
@@ -1950,7 +1961,9 @@ class OmnigentOAuthHostRuntime:
         if not binding.host_launch_profile_ref:
             container_name = host_lease.container_name
             if container_name and await self._container_present(container_name):
-                await self._assert_container_owned(container_name, host_lease.lease_id)
+                await self.assert_container_owned(
+                    container_name=container_name, lease_id=host_lease.lease_id
+                )
                 await self._run("docker", "rm", "-f", container_name, check=False)
             await self.stop_static_host(binding=binding)
             cleanup_result = "drained_owned_static_host"
@@ -1973,7 +1986,9 @@ class OmnigentOAuthHostRuntime:
             )
             attachment_identity = attachment_identity or container_name
             if await self.container_exists(container_name):
-                await self._assert_container_owned(container_name, host_lease.lease_id)
+                await self.assert_container_owned(
+                    container_name=container_name, lease_id=host_lease.lease_id
+                )
             await self._run(
                 "docker", "stop", "--time", "20", container_name, check=False
             )
@@ -2104,120 +2119,24 @@ class OmnigentOAuthHostRuntime:
             )
 
     async def container_exists(self, container_name: str) -> bool:
-        result = await self._run(
-            "docker",
-            "inspect",
-            "--format",
-            "{{.State.Running}}",
-            container_name,
-            check=False,
-        )
-        return result[0] == 0 and result[1].strip() == "true"
+        return await self._containers.container_exists(container_name)
 
     async def _container_present(self, container_name: str) -> bool:
-        result = await self._run(
-            "docker",
-            "inspect",
-            "--format",
-            "{{.Id}}",
-            container_name,
-            check=False,
-        )
-        return result[0] == 0 and bool(result[1].strip())
+        return await self._containers.container_present(container_name)
 
     async def _volume_present(self, volume_name: str) -> bool:
-        result = await self._run(
-            "docker",
-            "volume",
-            "inspect",
-            "--format",
-            "{{.Name}}",
-            volume_name,
-            check=False,
-        )
-        return result[0] == 0 and bool(result[1].strip())
+        return await self._containers.volume_present(volume_name)
 
     async def list_managed_containers(self) -> list[str]:
-        result = await self._run(
-            "docker",
-            "ps",
-            "-a",
-            "--filter",
-            "label=moonmind.kind=omnigent-oauth-host",
-            "--format",
-            "{{.Names}}",
-            check=False,
-        )
-        if result[0] != 0:
-            return []
-        return [line.strip() for line in result[1].splitlines() if line.strip()]
+        return await self._containers.list_managed_containers()
 
     async def managed_container_host_lease_ref(self, container_name: str) -> str | None:
         """Return the durable lease identity carried by a managed container."""
 
-        result = await self._run(
-            "docker",
-            "inspect",
-            "--format",
-            (
-                '{{index .Config.Labels "moonmind.kind"}}|'
-                '{{index .Config.Labels "moonmind.host_lease_id"}}'
-            ),
-            container_name,
-            check=False,
-        )
-        if result[0] != 0:
-            return None
-        kind, separator, lease_ref = result[1].strip().partition("|")
-        if not separator or kind != "omnigent-oauth-host":
-            raise OmnigentOAuthHostError(
-                "refusing to inspect a container outside Omnigent ownership",
-                code="OMNIGENT_HOST_OWNERSHIP_MISMATCH",
-            )
-        return lease_ref.strip() or None
+        return await self._containers.managed_container_host_lease_ref(container_name)
 
     async def remove_container(self, container_name: str) -> None:
-        # Janitor discovery is label-scoped; never accept an arbitrary name.
-        result = await self._run(
-            "docker",
-            "inspect",
-            "--format",
-            '{{index .Config.Labels "moonmind.kind"}}',
-            container_name,
-            check=False,
-        )
-        if result[0] != 0:
-            return
-        if result[1].strip() != "omnigent-oauth-host":
-            raise OmnigentOAuthHostError(
-                "refusing to remove a container outside Omnigent ownership",
-                code="OMNIGENT_HOST_OWNERSHIP_MISMATCH",
-            )
-        await self._run("docker", "rm", "-f", container_name, check=False)
-        await self._run(
-            "docker", "volume", "rm", "-f", f"{container_name}-state", check=False
-        )
-        await self._run(
-            "docker", "volume", "rm", "-f", f"{container_name}-artifacts", check=False
-        )
-        await self._run(
-            "docker", "volume", "rm", "-f", f"{container_name}-cache", check=False
-        )
-        remaining_container = await self._container_present(container_name)
-        remaining_volumes = [
-            name
-            for name in (
-                f"{container_name}-state",
-                f"{container_name}-artifacts",
-                f"{container_name}-cache",
-            )
-            if await self._volume_present(name)
-        ]
-        if remaining_container or remaining_volumes:
-            raise OmnigentOAuthHostError(
-                "orphaned Omnigent host cleanup could not be reconciled",
-                code="OMNIGENT_HOST_CLEANUP_INCOMPLETE",
-            )
+        await self._containers.remove_container(container_name)
 
     async def _launch_on_demand(
         self,
@@ -2235,7 +2154,9 @@ class OmnigentOAuthHostRuntime:
         egress_attestation: EgressAttestation,
     ) -> None:
         if await self.container_exists(container_name):
-            await self._assert_container_owned(container_name, host_lease.lease_id)
+            await self.assert_container_owned(
+                container_name=container_name, lease_id=host_lease.lease_id
+            )
             return
         mount = binding.credential_mount_ref
         adapter = self._runtime_adapter(binding)
@@ -2562,20 +2483,12 @@ class OmnigentOAuthHostRuntime:
             )
         return environment
 
-    async def _assert_container_owned(self, container_name: str, lease_id: str) -> None:
-        result = await self._run(
-            "docker",
-            "inspect",
-            "--format",
-            '{{index .Config.Labels "moonmind.host_lease_id"}}',
-            container_name,
-            check=False,
+    async def assert_container_owned(
+        self, *, container_name: str, lease_id: str
+    ) -> None:
+        await self._containers.assert_container_owned(
+            container_name=container_name, lease_id=lease_id
         )
-        if result[0] != 0 or result[1].strip() != lease_id:
-            raise OmnigentOAuthHostError(
-                "container does not belong to the current host lease",
-                code="OMNIGENT_HOST_OWNERSHIP_MISMATCH",
-            )
 
     async def _discover_upstream_path(self, image_ref: str) -> str:
         """Read the selected image's PATH without replacing image-specific entries."""

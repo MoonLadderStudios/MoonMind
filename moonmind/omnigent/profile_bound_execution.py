@@ -39,7 +39,7 @@ from moonmind.omnigent.execution_ports import (
     ExecutionAttemptPort,
     ExecutionPolicyAuthorityPort,
     ExecutionPolicyAuthorityUnavailableError,
-    ProfileBoundHostRuntimePort,
+    ProfileBoundHostPorts,
     ProviderProfileAuthorityPort,
 )
 from moonmind.omnigent.control_plane import metrics as control_plane_metrics
@@ -278,7 +278,7 @@ class OmnigentProfileBoundExecutionCoordinator:
         session_factory: Callable[[], Any],
         lease_client: ProviderProfileLeaseClient,
         host_repository: OmnigentOAuthHostRepository,
-        host_runtime: ProfileBoundHostRuntimePort,
+        host_runtime: ProfileBoundHostPorts,
         run_store: OmnigentBridgeSessionStore,
         execution_runner: ExecutionRunner,
         artifact_gateway: Any,
@@ -292,7 +292,12 @@ class OmnigentProfileBoundExecutionCoordinator:
         self._session_factory = session_factory
         self._lease_client = lease_client
         self._hosts = host_repository
-        self._runtime = host_runtime
+        # Four separate host capabilities, held separately. A deployment may
+        # bind them to one adapter; the coordinator never depends on that.
+        self._host_preparation = host_runtime
+        self._workspace_publication = host_runtime
+        self._session_inspection = host_runtime
+        self._host_release = host_runtime
         self._run_store = run_store
         self._execute = execution_runner
         self._artifact_gateway = artifact_gateway
@@ -1104,7 +1109,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 if remediation_resolution is not None
                 else workspace_intent.workspace_locator_payload()
             )
-            preflight_operation = self._runtime.prepare_host(
+            preflight_operation = self._host_preparation.prepare_host(
                 binding=binding,
                 host_lease=host_lease,
                 workspace_key=(
@@ -1474,7 +1479,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                         (result.metadata or {}).get("omnigentSessionId") or ""
                     ).strip()
                     try:
-                        completion = await self._runtime.inspect_session_completion(
+                        completion = await self._session_inspection.inspect_session_completion(
                             session_id
                         )
                     except Exception as exc:
@@ -1523,7 +1528,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                                 runtime=provider_runtime,
                                 attempt_ordinal=self._attempts.current_attempt(),
                             ):
-                                publication = await self._runtime.publish_workspace(
+                                publication = await self._workspace_publication.publish_workspace(
                                     workspace_locator=workspace_locator_payload or {},
                                     current_workflow_id=workflow_id,
                                     current_step_execution_id=(
@@ -2096,7 +2101,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                             runtime=provider_runtime,
                             host_mode=effective_launch.get("hostMode"),
                         ):
-                            cleanup_evidence = await self._runtime.stop_host(
+                            cleanup_evidence = await self._host_release.stop_host(
                                 binding=binding,
                                 host_lease=host_lease,
                                 effective_launch=effective_launch,
