@@ -8,6 +8,13 @@
     "cause": "exact rerun reused a pre-fix immutable snapshot without proving that it covered every Skill reachable from the authored workflow"
   },
   "initialParameters": {
+    "omnigentExecutionPlan": {
+      "planRef": "omnigent-execution-plan:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "planDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "planArtifactRef": "art_old_plan",
+      "taskInputSnapshotRef": "art_old_input",
+      "taskInputSnapshotDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
     "resolvedSkillsetRef": "art_old_skill_snapshot",
     "workflow": {
       "steps": [

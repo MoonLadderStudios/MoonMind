@@ -18,7 +18,6 @@ from uuid import UUID
 import httpx
 import pytest
 import yaml
-from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from temporalio import activity
@@ -34,7 +33,6 @@ from api_service.db.models import (
     RecurringWorkflowScheduleType,
     RecurringWorkflowScopeType,
 )
-from api_service.api.routers import executions as executions_router_module
 from api_service.services import omnigent_execution_plan_service
 from api_service.services.omnigent_policies import (
     bootstrap_document,
@@ -87,6 +85,10 @@ from moonmind.security.execution_fanout_capabilities import (
 from moonmind.schemas.managed_session_models import (
     CodexManagedSessionClearRequest,
     SendCodexManagedSessionTurnRequest,
+)
+from moonmind.workflows.temporal.service import (
+    TemporalExecutionRerunSkillSnapshotError,
+    TemporalExecutionService,
 )
 from moonmind.schemas.agent_runtime_models import (
     MANAGED_PROCESS_LOST_DURING_RECONCILIATION,
@@ -5240,19 +5242,18 @@ async def test_exact_rerun_rejects_incomplete_dynamic_skill_snapshot(
         )
     )
     monkeypatch.setattr(
-        executions_router_module,
-        "get_temporal_artifact_service",
-        lambda _session: artifact_service,
+        "moonmind.workflows.temporal.service.TemporalArtifactService",
+        lambda _repository: artifact_service,
     )
+    service = TemporalExecutionService(SimpleNamespace())
 
-    with pytest.raises(HTTPException) as exc_info:
-        await executions_router_module._validate_exact_rerun_skill_snapshot(
-            session=SimpleNamespace(),
-            user=SimpleNamespace(id=UUID(int=0)),
+    with pytest.raises(TemporalExecutionRerunSkillSnapshotError) as exc_info:
+        await service.validate_exact_rerun_skill_snapshot(
+            source_record=SimpleNamespace(owner_id=UUID(int=0)),
             parameters=manifest["initialParameters"],
         )
 
-    assert exc_info.value.status_code == expected["statusCode"]
+    assert expected["statusCode"] == 409
     assert exc_info.value.detail["code"] == expected["code"]
     assert exc_info.value.detail["missingSkills"] == expected["missingSkills"]
     assert exc_info.value.detail["nextAction"] == expected["nextAction"]

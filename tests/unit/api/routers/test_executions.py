@@ -125,7 +125,10 @@ from moonmind.schemas.temporal_models import (
     UpdateExecutionRequest,
 )
 from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
-from moonmind.workflows.temporal.service import TemporalExecutionService
+from moonmind.workflows.temporal.service import (
+    TemporalExecutionRerunSkillSnapshotError,
+    TemporalExecutionService,
+)
 from moonmind.services.control_stop_continuation import (
     ControlStopContinuationReservation,
 )
@@ -14280,47 +14283,33 @@ def test_exact_rerun_rejects_incomplete_dynamic_skill_snapshot(
     )
     artifact_service = SimpleNamespace(
         read=AsyncMock(
-            side_effect=[
-                (
-                    SimpleNamespace(artifact_id="art_authoritative_input"),
-                    json.dumps(
-                        {
-                            "snapshotVersion": 1,
-                            "draft": {
-                                "targetRuntime": "omnigent",
-                                "workflow": workflow,
-                            },
-                        }
-                    ).encode("utf-8"),
-                ),
-                (
-                    SimpleNamespace(artifact_id="art_old_skill_snapshot"),
-                    json.dumps(
-                        {
-                            "snapshot_id": "skillset_old",
-                            "deployment_id": "mm:88694a58",
-                            "resolved_at": "2026-08-29T05:09:07Z",
-                            "skills": [
-                                {
-                                    "skill_name": "moonspec-verify",
-                                    "format": "bundle",
-                                    "content_ref": "art_verify_bundle",
-                                    "content_digest": "sha256:" + "c" * 64,
-                                    "provenance": {
-                                        "source_kind": "built_in",
-                                        "source_path": "/app/.agents/skills/moonspec-verify",
-                                    },
-                                }
-                            ],
-                        }
-                    ).encode("utf-8"),
-                ),
-            ]
+            return_value=(
+                SimpleNamespace(artifact_id="art_authoritative_input"),
+                json.dumps(
+                    {
+                        "snapshotVersion": 1,
+                        "draft": {
+                            "targetRuntime": "omnigent",
+                            "workflow": workflow,
+                        },
+                    }
+                ).encode("utf-8"),
+            )
         )
     )
     monkeypatch.setattr(
         "api_service.api.routers.executions.get_temporal_artifact_service",
         lambda _session: artifact_service,
+    )
+    service.update_execution.side_effect = (
+        TemporalExecutionRerunSkillSnapshotError(
+            "Exact rerun preserves the original immutable Skill snapshot, but "
+            "that snapshot does not contain every Skill declared by the "
+            "authored workflow. Create a new workflow to explicitly re-resolve "
+            "Skill authority.",
+            code="exact_rerun_skill_snapshot_incomplete",
+            missing_skills=["remediate-issue"],
+        )
     )
 
     with TestClient(app) as test_client:
@@ -14341,21 +14330,15 @@ def test_exact_rerun_rejects_incomplete_dynamic_skill_snapshot(
         "missingSkills": ["remediate-issue"],
         "nextAction": "create_fresh_workflow",
     }
-    artifact_service.read.assert_has_awaits(
-        [
-            call(
-                artifact_id="art_authoritative_input",
-                principal=str(user.id),
-                allow_restricted_raw=True,
-            ),
-            call(
-                artifact_id="art_old_skill_snapshot",
-                principal=str(user.id),
-                allow_restricted_raw=True,
-            ),
-        ]
+    artifact_service.read.assert_awaited_once_with(
+        artifact_id="art_authoritative_input",
+        principal=str(user.id),
+        allow_restricted_raw=True,
     )
-    service.update_execution.assert_not_awaited()
+    service.update_execution.assert_awaited_once()
+    assert service.update_execution.await_args.kwargs["parameters_patch"][
+        "resolvedSkillsetRef"
+    ] == "art_old_skill_snapshot"
 
 
 def test_task_input_snapshot_artifact_id_strips_input_prefix_without_scheme() -> None:
