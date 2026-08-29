@@ -850,7 +850,7 @@ async def test_workflow_chat_uses_canonical_turn_and_command_authority(
         alias = await repos.chat_binding_aliases.resolve("browser-chat-binding")
     assert current is not None and current.terminal_state is None
     assert current.active_turn_attempt_id == claim.turn_attempt_id
-    assert turn is not None and turn.lineage_kind == "continuation"
+    assert turn is not None and turn.lineage_kind == "workflow_chat"
     assert turn.parent_turn_attempt_id == initial.turn_attempt_id
     assert command is not None and command.status == "claimed"
     assert alias is not None and alias.session_id == session.session_id

@@ -120,6 +120,15 @@ from .turn_commands import (
     CanonicalTurnCommandClaim,
     CanonicalTurnCommandService,
 )
+from .turn_sources import (
+    TURN_SOURCE_KINDS,
+    TURN_SOURCE_SCHEMA,
+    TURN_SOURCE_VERSION,
+    is_valid_turn_source,
+    normalize_turn_source,
+    turn_source_for_command_type,
+    validate_turn_source,
+)
 
 __all__ = [
     "ALIAS_STATE_ACTIVE",
@@ -141,6 +150,13 @@ __all__ = [
     "CanonicalSessionBootstrap",
     "CanonicalTurnCommandClaim",
     "CanonicalTurnCommandService",
+    "TURN_SOURCE_KINDS",
+    "TURN_SOURCE_SCHEMA",
+    "TURN_SOURCE_VERSION",
+    "is_valid_turn_source",
+    "normalize_turn_source",
+    "turn_source_for_command_type",
+    "validate_turn_source",
     "CONFLICT_OUTCOMES",
     "CURRENT_SCHEMA_VERSION",
     "SUPPORTED_SCHEMA_VERSIONS",

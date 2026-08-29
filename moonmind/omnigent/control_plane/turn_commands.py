@@ -28,6 +28,14 @@ from .records import (
     TURN_STATE_ACCEPTED,
     TURN_STATE_DELIVERY_UNKNOWN,
 )
+from .turn_sources import (
+    TURN_SOURCE_KINDS,
+    TURN_SOURCE_SCHEMA,
+    TURN_SOURCE_VERSION,
+    normalize_turn_source,
+    turn_source_for_command_type,
+    validate_turn_source,
+)
 
 
 class CanonicalTurnAuthorityUnavailable(RuntimeError):
@@ -61,17 +69,28 @@ class CanonicalSessionBootstrap:
     execution_plan_ref: str | None = None
 
 
-def _lineage_kind(command_type: str) -> str:
-    normalized = command_type.strip().lower().replace(".", "_")
-    if "remediation" in normalized:
-        return "remediation"
-    if "checkpoint" in normalized or "branch" in normalized:
-        return "checkpoint_resume"
-    if "approval" in normalized or "elicitation" in normalized:
-        return "approval"
-    if "steer" in normalized or "interrupt" in normalized or "stop" in normalized:
-        return "steering"
-    return "continuation"
+def _lineage_kind(command_type: str, *, explicit_source: str | None = None) -> str:
+    """Map a command or explicit source to the closed turn-source vocabulary.
+
+    When an explicit source is supplied it is validated strictly against the
+    versioned vocabulary (#3707).  Otherwise the migration heuristic derives a
+    closed kind from the free-form command type so that historical callers
+    cannot invent a new authority outside the vocabulary.  The function never
+    returns an open-ended string — every branch resolves to one of
+    :data:`TURN_SOURCE_KINDS`.
+    """
+
+    if explicit_source is not None:
+        candidate = str(explicit_source).strip()
+        if candidate:
+            return validate_turn_source(candidate)
+    # Fallback heuristic for callers that have not yet migrated to an explicit
+    # source.  The derived value is always one of the closed kinds and is
+    # versioned by :data:`TURN_SOURCE_SCHEMA`.
+    derived = turn_source_for_command_type(command_type)
+    # Normalize aliases (e.g. legacy "continuation" / "approval") to their
+    # canonical closed forms before persisting.
+    return normalize_turn_source(derived) if derived else "repository_continuation"
 
 
 class CanonicalTurnCommandService:
@@ -95,6 +114,7 @@ class CanonicalTurnCommandService:
         payload_digest: str,
         step_execution_id: str | None = None,
         bootstrap: CanonicalSessionBootstrap | None = None,
+        turn_source: str | None = None,
     ) -> CanonicalTurnCommandClaim:
         """Claim current fenced authority before an external side effect."""
 
@@ -109,6 +129,7 @@ class CanonicalTurnCommandService:
                 payload_digest=payload_digest,
                 step_execution_id=step_execution_id,
                 bootstrap=bootstrap,
+                turn_source=turn_source,
             )
 
     async def claim_with_repositories(
@@ -123,6 +144,7 @@ class CanonicalTurnCommandService:
         payload_digest: str,
         step_execution_id: str | None = None,
         bootstrap: CanonicalSessionBootstrap | None = None,
+        turn_source: str | None = None,
     ) -> CanonicalTurnCommandClaim:
         """Claim within an existing application transaction."""
 
@@ -254,7 +276,9 @@ class CanonicalTurnCommandService:
                     turn_attempt_id=turn_id,
                     session_id=session.session_id,
                     idempotency_key=f"omnigent-turn:{idempotency_key}",
-                    lineage_kind=_lineage_kind(command_type),
+                    lineage_kind=_lineage_kind(
+                        command_type, explicit_source=turn_source
+                    ),
                     step_execution_id=step_execution_id,
                     parent_turn_attempt_id=session.active_turn_attempt_id,
                     instruction_digest=payload_digest,
