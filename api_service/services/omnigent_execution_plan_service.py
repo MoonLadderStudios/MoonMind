@@ -398,7 +398,7 @@ class PersistedOmnigentExecutionPlan:
     resolved_skillset_digest: str
 
 
-def _selected_skill_names(initial_parameters: Mapping[str, Any]) -> list[str]:
+def selected_skill_names(initial_parameters: Mapping[str, Any]) -> list[str]:
     """Collect the workflow's MoonMind Skill intent for one run snapshot."""
 
     workflow = initial_parameters.get("workflow")
@@ -463,7 +463,7 @@ def _skill_selector(initial_parameters: Mapping[str, Any]) -> SkillSelector:
             if str(value or "").strip()
         }
     )
-    selected = _selected_skill_names(initial_parameters)
+    selected = selected_skill_names(initial_parameters)
     conflict = sorted(set(selected).intersection(excluded))
     if conflict:
         raise ValueError(
@@ -1240,5 +1240,6 @@ __all__ = [
     "PersistedOmnigentExecutionPlan",
     "compile_and_persist_execution_plan",
     "persist_json_artifact",
+    "selected_skill_names",
     "load_protected_execution_support_evidence",
 ]

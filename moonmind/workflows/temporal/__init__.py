@@ -122,6 +122,7 @@ from moonmind.workflows.temporal.service import (
     TemporalExecutionListResult,
     TemporalExecutionNotFoundError,
     TemporalExecutionRecoveryCheckpointError,
+    TemporalExecutionRerunSkillSnapshotError,
     TemporalExecutionService,
     TemporalExecutionValidationError,
 )
@@ -210,6 +211,7 @@ __all__ = [
     "TemporalExecutionListResult",
     "TemporalExecutionNotFoundError",
     "TemporalExecutionRecoveryCheckpointError",
+    "TemporalExecutionRerunSkillSnapshotError",
     "TemporalExecutionService",
     "TemporalExecutionValidationError",
     "TemporalIntegrationActivities",

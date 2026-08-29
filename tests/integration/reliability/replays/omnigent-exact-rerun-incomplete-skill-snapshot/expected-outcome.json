@@ -1,0 +1,9 @@
+{
+  "invariant": "an exact rerun proves its immutable Skill snapshot covers every Skill reachable from the authored workflow before scheduling execution",
+  "statusCode": 409,
+  "code": "exact_rerun_skill_snapshot_incomplete",
+  "missingSkills": [
+    "remediate-issue"
+  ],
+  "nextAction": "create_fresh_workflow"
+}

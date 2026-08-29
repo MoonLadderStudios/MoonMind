@@ -217,6 +217,7 @@ from moonmind.workflows.temporal import (
     TemporalExecutionCancelUndeliverableError,
     TemporalExecutionNotFoundError,
     TemporalExecutionRecoveryCheckpointError,
+    TemporalExecutionRerunSkillSnapshotError,
     TemporalExecutionService,
     TemporalExecutionValidationError,
     build_manifest_status_snapshot,
@@ -17814,6 +17815,11 @@ async def update_execution(
             node_ids=payload.node_ids,
             idempotency_key=payload.idempotency_key,
         )
+    except TemporalExecutionRerunSkillSnapshotError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=exc.detail,
+        ) from exc
     except TemporalExecutionValidationError as exc:
         if is_task_editing_update:
             _emit_task_editing_metric(
@@ -18249,7 +18255,18 @@ async def rerun_execution(
     # task dependency edges and recovery metadata from a prior execution.
     initial_params = service._full_rerun_parameters(canonical.parameters or {})
     reserved_workflow_id = f"mm:{_uuid4()}"
-    if not isinstance(initial_params.get("omnigentExecutionPlan"), Mapping):
+    if isinstance(initial_params.get("omnigentExecutionPlan"), Mapping):
+        try:
+            await service.validate_exact_rerun_skill_snapshot(
+                source_record=canonical,
+                parameters=initial_params,
+            )
+        except TemporalExecutionRerunSkillSnapshotError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=exc.detail,
+            ) from exc
+    else:
         initial_params = await refresh_managed_bootstrap_snapshot(
             session,
             parameters=initial_params,

@@ -86,6 +86,10 @@ from moonmind.schemas.managed_session_models import (
     CodexManagedSessionClearRequest,
     SendCodexManagedSessionTurnRequest,
 )
+from moonmind.workflows.temporal.service import (
+    TemporalExecutionRerunSkillSnapshotError,
+    TemporalExecutionService,
+)
 from moonmind.schemas.agent_runtime_models import (
     MANAGED_PROCESS_LOST_DURING_RECONCILIATION,
     AgentExecutionRequest,
@@ -5219,6 +5223,40 @@ async def test_omnigent_admission_snapshot_includes_dynamic_remediation_skill() 
     assert [entry.name for entry in selector.include] == expected[
         "resolvedSkillNames"
     ]
+
+
+async def test_exact_rerun_rejects_incomplete_dynamic_skill_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay mm:2eece4f3 at exact-rerun admission."""
+
+    replay_id = "omnigent-exact-rerun-incomplete-skill-snapshot"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    artifact_service = SimpleNamespace(
+        read=AsyncMock(
+            return_value=(
+                SimpleNamespace(artifact_id="art_old_skill_snapshot"),
+                json.dumps(manifest["resolvedSkillSet"]).encode("utf-8"),
+            )
+        )
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.service.TemporalArtifactService",
+        lambda _repository: artifact_service,
+    )
+    service = TemporalExecutionService(SimpleNamespace())
+
+    with pytest.raises(TemporalExecutionRerunSkillSnapshotError) as exc_info:
+        await service.validate_exact_rerun_skill_snapshot(
+            source_record=SimpleNamespace(owner_id=UUID(int=0)),
+            parameters=manifest["initialParameters"],
+        )
+
+    assert expected["statusCode"] == 409
+    assert exc_info.value.detail["code"] == expected["code"]
+    assert exc_info.value.detail["missingSkills"] == expected["missingSkills"]
+    assert exc_info.value.detail["nextAction"] == expected["nextAction"]
 
 
 async def test_checkpointless_remediation_keeps_the_verified_repository_branch(
