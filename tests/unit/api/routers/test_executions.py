@@ -7086,6 +7086,7 @@ def test_create_task_shaped_execution_records_tier_preview_mismatch() -> None:
         get=AsyncMock(
             return_value=SimpleNamespace(
                 profile_id="codex-provider-profile",
+                profile_version=42,
                 runtime_id="codex_cli",
                 default_model="legacy-default",
                 default_model_tier=1,
@@ -7122,11 +7123,10 @@ def test_create_task_shaped_execution_records_tier_preview_mismatch() -> None:
                             "providerProfile": "codex-provider-profile",
                             "modelTier": 2,
                             "tierPreview": {
-                                "requestedTier": 2,
-                                "effectiveTier": 2,
-                                "model": "codex-implement-stale",
+                                "profileId": "codex-provider-profile",
+                                "profileVersion": 41,
+                                "model": "codex-implement-current",
                                 "effort": "high",
-                                "fallbackReason": None,
                             },
                         },
                     },
@@ -7141,6 +7141,12 @@ def test_create_task_shaped_execution_records_tier_preview_mismatch() -> None:
     assert initial_parameters["model"] == "codex-implement-current"
     assert initial_parameters["effort"] == "high"
     assert initial_parameters["modelSource"] == "requested_tier"
+    assert initial_parameters["tierPreview"] == {
+        "profileId": "codex-provider-profile",
+        "profileVersion": 41,
+        "model": "codex-implement-current",
+        "effort": "high",
+    }
     assert initial_parameters["modelTierResolution"] == {
         "requestedModelTier": 2,
         "effectiveModelTier": 2,
@@ -7847,6 +7853,12 @@ def test_mm1171_create_execution_preserves_runtime_tier_intent(
                         "profileSelector": {"providerId": "openai"},
                         "modelTier": 2,
                         "tierFallback": "clamp",
+                        "tierPreview": {
+                            "profileId": "codex-openai",
+                            "profileVersion": 17,
+                            "model": "gpt-5.5",
+                            "effort": "high",
+                        },
                     },
                     "steps": [
                         {
@@ -7857,6 +7869,12 @@ def test_mm1171_create_execution_preserves_runtime_tier_intent(
                                 "profileSelector": {"providerId": "openai"},
                                 "modelTier": 3,
                                 "tierFallback": "strict",
+                                "tierPreview": {
+                                    "profileId": "codex-openai",
+                                    "profileVersion": 17,
+                                    "model": "gpt-5.5",
+                                    "effort": "xhigh",
+                                },
                             },
                         }
                     ],
@@ -7876,6 +7894,13 @@ def test_mm1171_create_execution_preserves_runtime_tier_intent(
     assert workflow_runtime["profileSelector"] == {"providerId": "openai"}
     assert workflow_runtime["modelTier"] == 2
     assert workflow_runtime["tierFallback"] == "clamp"
+    assert workflow_runtime["tierPreview"] == {
+        "profileId": "codex-openai",
+        "profileVersion": 17,
+        "model": "gpt-5.5",
+        "effort": "high",
+    }
+    assert initial_parameters["tierPreview"] == workflow_runtime["tierPreview"]
     assert "requestedModel" not in workflow_runtime
     assert "model" not in workflow_runtime
 
@@ -7884,6 +7909,12 @@ def test_mm1171_create_execution_preserves_runtime_tier_intent(
     assert step_runtime["profileSelector"] == {"providerId": "openai"}
     assert step_runtime["modelTier"] == 3
     assert step_runtime["tierFallback"] == "strict"
+    assert step_runtime["tierPreview"] == {
+        "profileId": "codex-openai",
+        "profileVersion": 17,
+        "model": "gpt-5.5",
+        "effort": "xhigh",
+    }
     assert "requestedModel" not in step_runtime
 
 
@@ -7960,6 +7991,33 @@ def test_mm1171_create_execution_rejects_invalid_runtime_tier_intent(
 
     assert response.status_code == 422
     assert "hardOverrideAudit" in response.json()["detail"]["message"]
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "targetRuntime": "codex_cli",
+                "workflow": {
+                    "title": "Reject malformed preview",
+                    "instructions": "Run a workflow.",
+                    "runtime": {
+                        "modelTier": 1,
+                        "tierPreview": {
+                            "profileId": "codex-default",
+                            "profileVersion": {"revision": 1},
+                            "model": "gpt-5.5",
+                            "effort": "high",
+                        },
+                    },
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "tierPreview.profileVersion" in response.json()["detail"]["message"]
 
 
 def test_mm1171_create_execution_rejects_below_range_runtime_tier_intent(

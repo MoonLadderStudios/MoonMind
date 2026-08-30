@@ -804,6 +804,7 @@ async def test_launch_resolves_raw_model_tier_and_emits_after_spool_reset(
                 assert recorded["requestedModelTier"] == 2
                 assert recorded["resolvedModel"] == "gpt-tier-2"
                 assert recorded["effortApplicationStatus"] == "not_supported"
+                assert recorded["previewMismatch"] is True
 
     class _FakeProcess:
         pid = 1175
@@ -834,11 +835,21 @@ async def test_launch_resolves_raw_model_tier_and_emits_after_spool_reset(
         run_id="run-raw-tier",
         request=_make_request(
             instruction_ref="Implement the issue",
-            parameters={"modelTier": 2, "tierFallback": "clamp"},
+            parameters={
+                "modelTier": 2,
+                "tierFallback": "clamp",
+                "tierPreview": {
+                    "profileId": "codex-profile",
+                    "profileVersion": 6,
+                    "model": "gpt-tier-2",
+                    "effort": "xhigh",
+                },
+            },
         ),
         profile=_make_profile(
             runtime_id="codex",
             profile_id="codex-profile",
+            profile_version=7,
             model_tiers=[
                 {"label": "Fast", "model": "gpt-tier-1", "effort": "medium"},
                 {"label": "Deep", "model": "gpt-tier-2", "effort": "xhigh"},

@@ -19,6 +19,7 @@ from pydantic import (
 )
 
 from moonmind.config.settings import settings
+from moonmind.runtime_intent import RuntimeTierPreview
 from moonmind.services.skill_resolution import (
     extract_publish_metadata_from_skill_markdown,
     extract_required_capabilities_from_skill_markdown,
@@ -1319,6 +1320,7 @@ class WorkflowRuntimeSelection(BaseModel):
     )
     model_tier: int | None = Field(None, alias="modelTier", ge=1)
     tier_fallback: str | None = Field(None, alias="tierFallback")
+    tier_preview: RuntimeTierPreview | None = Field(None, alias="tierPreview")
 
     @field_validator("mode", mode="before")
     @classmethod

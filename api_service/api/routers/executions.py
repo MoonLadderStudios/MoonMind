@@ -8401,6 +8401,9 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
             for key in ("modelTier", "tierFallback"):
                 if key in validated_runtime:
                     normalized_runtime[key] = validated_runtime[key]
+            tier_preview = validated_runtime.get("tierPreview")
+            if isinstance(tier_preview, Mapping):
+                normalized_runtime["tierPreview"] = dict(tier_preview)
             for key in ("profileSelector", "hardOverrideAudit"):
                 value = validated_runtime.get(key)
                 if isinstance(value, Mapping):
@@ -11303,6 +11306,8 @@ async def _create_execution_from_workflow_request(
         initial_parameters["modelTier"] = runtime_payload.get("modelTier")
     if "tierFallback" in runtime_payload:
         initial_parameters["tierFallback"] = runtime_payload.get("tierFallback")
+    if isinstance(runtime_payload.get("tierPreview"), Mapping):
+        initial_parameters["tierPreview"] = dict(runtime_payload["tierPreview"])
     if isinstance(runtime_payload.get("profileSelector"), Mapping):
         initial_parameters["profileSelector"] = dict(
             runtime_payload["profileSelector"]

@@ -2117,6 +2117,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         )
         return ManagedRuntimeProfile(
             profileId=launch_context.profile_id,
+            profileVersion=profile.get("profile_version"),
             runtimeId=runtime_id,
             providerId=profile.get("provider_id"),
             providerLabel=profile.get("provider_label"),

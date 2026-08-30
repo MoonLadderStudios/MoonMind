@@ -247,6 +247,8 @@ class TestPrecedenceOrder:
 class TestResolveModelEffortTiers:
     def _profile(self, **overrides):
         profile = {
+            "profile_id": "codex-profile",
+            "profile_version": 42,
             "enabled": True,
             "auth_state": "connected",
             "default_model": None,
@@ -360,6 +362,8 @@ class TestResolveModelEffortTiers:
             profile=self._profile(),
             requested_model_tier=2,
             advisory_preview={
+                "profileId": "codex-profile",
+                "profileVersion": 42,
                 "requestedTier": 2,
                 "effectiveTier": 2,
                 "model": "stale-model",
@@ -371,6 +375,47 @@ class TestResolveModelEffortTiers:
 
         assert resolved.preview_mismatch is True
         assert resolved.as_metadata()["previewMismatch"] is True
+
+    def test_matching_advisory_preview_profile_identity_is_not_a_mismatch(self):
+        resolved = resolve_model_effort(
+            runtime_id="codex_cli",
+            profile=self._profile(),
+            requested_model_tier=2,
+            advisory_preview={
+                "profileId": "codex-profile",
+                "profileVersion": 42,
+                "model": "tier-2-model",
+                "effort": "high",
+            },
+            env={},
+        )
+
+        assert resolved.preview_mismatch is False
+
+    @pytest.mark.parametrize(
+        ("identity_field", "stale_value"),
+        [("profileId", "other-profile"), ("profileVersion", 41)],
+    )
+    def test_advisory_preview_profile_identity_mismatch_is_detected(
+        self, identity_field, stale_value
+    ):
+        advisory_preview = {
+            "profileId": "codex-profile",
+            "profileVersion": 42,
+            "model": "tier-2-model",
+            "effort": "high",
+        }
+        advisory_preview[identity_field] = stale_value
+
+        resolved = resolve_model_effort(
+            runtime_id="codex_cli",
+            profile=self._profile(),
+            requested_model_tier=2,
+            advisory_preview=advisory_preview,
+            env={},
+        )
+
+        assert resolved.preview_mismatch is True
 
     def test_advisory_preview_can_resolve_non_launch_ready_profile(self):
         resolved = resolve_model_effort(
