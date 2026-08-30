@@ -598,43 +598,76 @@ def _dashboard_destination_info() -> list[dict[str, object]]:
     return [destination.to_ui_info() for destination in DASHBOARD_DESTINATIONS]
 
 
-def _settings_destination_features(permissions: set[str]) -> dict[str, bool]:
-    permission_groups = {
-        "settingsProvidersSecrets": (
-            {"provider_profiles.read", "secrets.metadata.read"},
+_SETTINGS_DESTINATION_PERMISSIONS: dict[
+    str, tuple[str, frozenset[str], frozenset[str]]
+] = {
+    "settings-providers-secrets": (
+        "settingsProvidersSecrets",
+        frozenset(
+            {
+                "provider_profiles.read",
+                "secrets.metadata.read",
+                "settings.effective.read",
+            }
+        ),
+        frozenset(
             {
                 "provider_profiles.write",
                 "secrets.value.write",
                 "secrets.rotate",
                 "secrets.disable",
                 "secrets.delete",
-            },
+            }
         ),
-        "settingsUserWorkspace": (
-            {
-                "settings.catalog.read",
-                "settings.effective.read",
-                "settings.system.read",
-                "settings.audit.read",
-            },
+    ),
+    "settings-user-workspace": (
+        "settingsUserWorkspace",
+        frozenset({"settings.catalog.read"}),
+        frozenset(
             {
                 "settings.user.write",
                 "settings.workspace.write",
                 "settings.system.write",
-            },
+            }
         ),
-        "settingsOperations": (
-            {"operations.read"},
-            {"operations.invoke"},
-        ),
-    }
+    ),
+    "settings-operations": (
+        "settingsOperations",
+        frozenset({"operations.read"}),
+        frozenset({"operations.invoke"}),
+    ),
+}
+
+
+def _settings_destination_features(permissions: set[str]) -> dict[str, bool]:
     features: dict[str, bool] = {}
-    for capability_key, (read_permissions, mutation_permissions) in permission_groups.items():
+    for (
+        capability_key,
+        read_permissions,
+        mutation_permissions,
+    ) in _SETTINGS_DESTINATION_PERMISSIONS.values():
         if permissions & read_permissions:
             features[capability_key] = True
         elif permissions & mutation_permissions:
             features[capability_key] = False
     return features
+
+
+def _settings_redirect_path(user: User, preferred_destination_key: str) -> str:
+    permissions = settings_permissions_for_user(user)
+    ordered_destination_keys = (
+        preferred_destination_key,
+        *(
+            key
+            for key in _SETTINGS_DESTINATION_PERMISSIONS
+            if key != preferred_destination_key
+        ),
+    )
+    for destination_key in ordered_destination_keys:
+        _, read_permissions, _ = _SETTINGS_DESTINATION_PERMISSIONS[destination_key]
+        if permissions & read_permissions:
+            return _dashboard_destination(destination_key).canonical_path
+    return "/settings"
 
 
 def _is_extensionless_collection_route(request: Request, destination_keys: set[str]) -> bool:
@@ -1266,7 +1299,10 @@ async def secrets_route(
     _user: User = Depends(get_current_user()),
 ) -> RedirectResponse:
     """Redirect the legacy secrets page to its canonical Settings route."""
-    return RedirectResponse(url="/settings/providers-secrets", status_code=307)
+    return RedirectResponse(
+        url=_settings_redirect_path(_user, "settings-providers-secrets"),
+        status_code=307,
+    )
 
 
 @router.get("/workflows", name="workflow_console_root", response_class=HTMLResponse)
@@ -1435,7 +1471,10 @@ async def task_workers_route(
     _user: User = Depends(get_current_user()),
 ) -> RedirectResponse:
     """Redirect the legacy workers page to its canonical Settings route."""
-    return RedirectResponse(url="/settings/operations", status_code=307)
+    return RedirectResponse(
+        url=_settings_redirect_path(_user, "settings-operations"),
+        status_code=307,
+    )
 
 
 @router.get("/settings", response_class=HTMLResponse)

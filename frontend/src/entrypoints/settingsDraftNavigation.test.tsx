@@ -179,6 +179,77 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
     await waitFor(() => expect(window.location.pathname).toBe('/settings/operations'));
   });
 
+  it('protects and discards a Managed Secret draft before route navigation', async () => {
+    window.history.replaceState({}, '', '/settings/providers-secrets');
+    renderWithClient(
+      <BrowserRouter>
+        <ProvidersSecretsSettingsPage
+          payload={{
+            page: 'settings-providers-secrets',
+            apiBase: '/api',
+            initialData: {
+              settingsPermissions: ['provider_profiles.read', 'secrets.metadata.read'],
+            },
+          } as BootPayload}
+        />
+      </BrowserRouter>,
+    );
+
+    const slug = await screen.findByLabelText('Secret slug') as HTMLInputElement;
+    fireEvent.change(slug, { target: { value: 'draft-secret' } });
+
+    const link = destinationLink('/settings/operations');
+    fireEvent.click(link);
+    expect(screen.getByRole('dialog', { name: 'Unsaved changes' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stay' }));
+    expect(slug.value).toBe('draft-secret');
+
+    fireEvent.click(link);
+    fireEvent.click(screen.getByRole('button', { name: 'Discard and leave' }));
+    await waitFor(() => expect(window.location.pathname).toBe('/settings/operations'));
+    expect(slug.value).toBe('');
+  });
+
+  it('keeps the unsaved-changes dialog keyboard-modal and restores focus on Escape', async () => {
+    window.history.replaceState({}, '', '/settings/user-workspace?scope=workspace');
+    renderWithClient(
+      <BrowserRouter>
+        <UserWorkspaceSettingsPage
+          payload={{
+            page: 'settings-user-workspace',
+            apiBase: '/api',
+            initialData: {
+              settingsPermissions: ['settings.catalog.read', 'settings.workspace.write'],
+            },
+          } as BootPayload}
+        />
+      </BrowserRouter>,
+    );
+
+    fireEvent.change(await screen.findByLabelText('Default Publish Mode'), {
+      target: { value: 'branch' },
+    });
+    const link = destinationLink('/settings/operations');
+    link.focus();
+    fireEvent.click(link);
+
+    const dialog = screen.getByRole('dialog', { name: 'Unsaved changes' });
+    const stay = screen.getByRole('button', { name: 'Stay' });
+    const discard = screen.getByRole('button', { name: 'Discard and leave' });
+    await waitFor(() => expect(document.activeElement).toBe(stay));
+
+    fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(discard);
+    fireEvent.keyDown(dialog, { key: 'Tab' });
+    expect(document.activeElement).toBe(stay);
+
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Unsaved changes' })).toBeNull());
+    expect(document.activeElement).toBe(link);
+    expect(window.location.pathname).toBe('/settings/user-workspace');
+  });
+
   it('restores page-local scope across Back and Forward navigation', async () => {
     window.history.replaceState({}, '', '/settings/user-workspace?scope=workspace');
     renderWithClient(
@@ -234,6 +305,9 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
     expect(await screen.findByRole('dialog', { name: 'Unsaved changes' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Discard and leave' }));
     await waitFor(() => expect(window.location.pathname).toBe('/settings/providers-secrets'));
+
+    act(() => window.history.forward());
+    await waitFor(() => expect(window.location.pathname).toBe('/settings/user-workspace'));
   });
 
   it('restores the Provider Profile runtime filter across Back and Forward navigation', async () => {
