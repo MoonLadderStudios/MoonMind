@@ -51,7 +51,10 @@ from moonmind.utils.logging import (
     redact_profile_file_templates,
     redact_sensitive_payload,
 )
-from moonmind.workflows.executions.model_resolver import resolve_model_effort
+from moonmind.workflows.executions.model_resolver import (
+    RequestedModelTierUnavailableError,
+    resolve_model_effort,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -925,6 +928,16 @@ async def preview_model_tiers(
                 tier_fallback=step.tier_fallback or "clamp",
                 require_launch_ready=False,
             )
+        except RequestedModelTierUnavailableError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": exc.code,
+                    "message": str(exc),
+                    "requestedModelTier": exc.requested_model_tier,
+                    "configuredTierCount": exc.configured_tier_count,
+                },
+            ) from exc
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         items.append(
