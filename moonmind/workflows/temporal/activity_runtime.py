@@ -13258,12 +13258,13 @@ class TemporalAgentRuntimeActivities:
         # A successful pr-resolver contract already requires the portable Skill
         # to write its canonical publish_result.json companion. Preserve that
         # exact file as the parent workflow's auto-publish evidence instead of
-        # forcing a second publisher to infer the merge from assistant prose.
+        # forcing a second publisher to infer the merge or verified no-op from
+        # assistant prose.
         if (
             evaluation.satisfied
             and metadata["terminalContractId"] == "pr_resolver_terminal.v1"
             and metadata.get("mergeAutomationDisposition")
-            in {"merged", "already_merged"}
+            in {"merged", "already_merged", "review_clean"}
         ):
             publish_source = resolve_terminal_evidence_source(
                 {"relativePath": "artifacts/publish_result.json"},
