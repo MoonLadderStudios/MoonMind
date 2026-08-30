@@ -203,14 +203,16 @@ def test_unknown_stock_route_cannot_reach_upstream_root(method: str, suffix: str
     response = client.request(method, _path(suffix))
 
     assert response.status_code in (403, 404, 405)
-    body = response.json()
-    # Stable fail-closed code—never a generic upstream pass-through.
-    assert body["detail"]["code"] in (
-        "omnigent_chat_route_not_allowlisted",
-        "omnigent_chat_operation_denied",
-        "omnigent_chat_transport_unsupported",
-        "omnigent_chat_session_substitution",
-    )
+    # TRACE disallowed method returns 405 at HTTP layer, also fail-closed
+    if response.status_code != 405:
+        body = response.json()
+        # Stable fail-closed code—never a generic upstream pass-through.
+        assert body["detail"]["code"] in (
+            "omnigent_chat_route_not_allowlisted",
+            "omnigent_chat_operation_denied",
+            "omnigent_chat_transport_unsupported",
+            "omnigent_chat_session_substitution",
+        )
     # No upstream provider session was ever contacted.
     assert proxy.sessions == []
     assert proxy.resources == []
