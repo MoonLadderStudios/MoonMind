@@ -78,6 +78,74 @@ def _make_store(tmp_path: Path) -> ManagedRunStore:
     return ManagedRunStore(tmp_path / "run_store")
 
 
+def _tier_policy_launch_payload() -> dict[str, Any]:
+    return {
+        "run_id": "in-flight-tierless-run",
+        "request": {
+            "agentKind": "managed",
+            "agentId": "codex_cli",
+            "correlationId": "tier-policy-compatibility",
+            "idempotencyKey": "in-flight-tierless-run",
+        },
+        "profile": {
+            "runtimeId": "codex_cli",
+            "commandTemplate": ["codex", "run"],
+            "defaultModel": "o4-mini",
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("profile_tier_policy_version", "require_model_tiers"),
+    [(None, False), (1, True)],
+)
+async def test_agent_runtime_launch_versions_profile_tier_policy_boundary(
+    profile_tier_policy_version: int | None,
+    require_model_tiers: bool,
+) -> None:
+    record = SimpleNamespace(
+        model_dump=lambda **_kwargs: {
+            "runId": "in-flight-tierless-run",
+            "status": "launching",
+        }
+    )
+    launcher = SimpleNamespace(
+        launch=AsyncMock(return_value=(record, None, [], []))
+    )
+    activities = TemporalAgentRuntimeActivities(
+        run_launcher=launcher,
+        run_supervisor=object(),
+    )
+    payload = _tier_policy_launch_payload()
+    if profile_tier_policy_version is not None:
+        payload["profile_tier_policy_version"] = profile_tier_policy_version
+
+    result = await activities.agent_runtime_launch(payload)
+
+    assert result["status"] == "launching"
+    assert launcher.launch.await_args.kwargs["require_model_tiers"] is (
+        require_model_tiers
+    )
+
+
+async def test_agent_runtime_launch_rejects_unknown_profile_tier_policy_version() -> None:
+    launcher = SimpleNamespace(launch=AsyncMock())
+    activities = TemporalAgentRuntimeActivities(
+        run_launcher=launcher,
+        run_supervisor=object(),
+    )
+    payload = _tier_policy_launch_payload()
+    payload["profile_tier_policy_version"] = 2
+
+    with pytest.raises(
+        TemporalActivityRuntimeError,
+        match="profile_tier_policy_version must be 1",
+    ):
+        await activities.agent_runtime_launch(payload)
+
+    launcher.launch.assert_not_awaited()
+
+
 class _StaticArtifactService:
     def __init__(self, payloads: dict[str, bytes]) -> None:
         self._payloads = payloads

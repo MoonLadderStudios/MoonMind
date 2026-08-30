@@ -405,6 +405,7 @@ async def test_long_running_launch_is_visible_through_observability_routes(
                 "print('omega', flush=True)"
             ),
         ],
+        modelTiers=[{"label": "Runtime default"}],
         workspaceMode="shared",
     )
 

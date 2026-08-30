@@ -65,8 +65,7 @@ class ProviderModelEffortTier(BaseModel):
     def _reject_raw_credential_keys(
         cls, value: dict[str, Any]
     ) -> dict[str, Any]:
-        if _contains_sensitive_key(value):
-            raise ValueError("tier metadata must not contain raw credential-like keys")
+        ensure_tier_metadata_is_credential_free(value)
         return value
 
 
@@ -210,6 +209,13 @@ def coerce_model_effort_tier_policy(
     if normalized_default < 1 or normalized_default > len(normalized):
         raise ValueError("default_model_tier must be within configured model_tiers")
     return normalized, normalized_default
+
+
+def ensure_tier_metadata_is_credential_free(value: Any) -> None:
+    """Reject credential-like keys or values in tier-controlled metadata."""
+
+    if _contains_sensitive_key(value):
+        raise ValueError("tier metadata must not contain raw credential-like keys")
 
 
 def _contains_sensitive_key(value: Any) -> bool:
