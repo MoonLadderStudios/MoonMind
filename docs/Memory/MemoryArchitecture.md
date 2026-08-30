@@ -8,7 +8,7 @@ This desired-state document now assumes MoonMind's current Temporal-first bridge
 
 ## 1) Goals
 
-MoonMind memory exists to make agent runs faster, safer, and more repeatable:
+MoonMind memory exists to make agent runs faster, more secure, and more repeatable:
 
 - Assemble **more usable context than fits in a single context window** by composing planning + history + long-term memory + document RAG into a scoped “context pack”.
 - **Reduce repeat failures** by surfacing “what happened last time” (similar runs, error signatures, fix patterns) *before* a worker executes.

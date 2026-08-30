@@ -12,8 +12,8 @@
 Temporal reliability depends on more than Python type hints. Every workflow/activity/message boundary is also a serialized wire contract and, for workflows, a replayed history contract. MoonMind therefore treats type safety in Temporal as a combination of:
 
 1. static typing at author time
-2. validation and serialization safety at runtime
-3. compatibility safety across in-flight histories and deployments
+2. validation and serialization correctness at runtime
+3. compatibility guarantees across in-flight histories and deployments
 
 This document is normative. Temporary shims may exist for compatibility, but new code must follow the desired-state rules here.
 
@@ -55,7 +55,7 @@ MoonMind standardizes on **Pydantic v2** models for Temporal boundary I/O. Use d
 
 ### 3.4 The data converter is part of the contract
 
-Type safety is incomplete if models only exist inside workflow or activity bodies. Temporal clients and workers must share the same data-converter policy so the wire shape matches the annotated shape.
+Type security is incomplete if models only exist inside workflow or activity bodies. Temporal clients and workers must share the same data-converter policy so the wire shape matches the annotated shape.
 
 The desired default is:
 
@@ -69,7 +69,7 @@ A cleaner model is not enough reason to break replay or in-flight executions. Ev
 
 ### 3.6 Determinism remains the workflow rule
 
-Type safety does not move nondeterminism into workflows. It only makes boundaries explicit. Network calls, clocks, subprocesses, filesystem I/O, provider inspection, and mutable external-state reads stay in Activities.
+Type security does not move nondeterminism into workflows. It only makes boundaries explicit. Network calls, clocks, subprocesses, filesystem I/O, provider inspection, and mutable external-state reads stay in Activities.
 
 ---
 
@@ -130,7 +130,7 @@ If an Activity must continue to accept legacy dict payloads for replay or in-fli
 - exist only at the public entry boundary
 - validate/coerce immediately into the canonical model
 - be documented as compatibility behavior, not permanent business logic
-- be removed only after replay/in-flight safety is addressed
+- be removed only after replay/in-flight compatibility is addressed
 
 ---
 
@@ -249,7 +249,7 @@ Unsafe changes requiring explicit migration planning:
 - changing a workflow’s message ordering or branching in a replay-visible way
 - changing activity/workflow names in place
 
-### 10.2 Workflow code changes need deployment safety
+### 10.2 Workflow code changes need deployment integrity
 
 When workflow code changes affect replay-visible behavior, protect rollout with Worker Versioning or patching. Type-safety refactors are not exempt from determinism rules.
 
@@ -261,7 +261,7 @@ If old and new shapes must coexist, the dual-read/normalize step happens at the 
 
 ## 11. Testing and tooling requirements
 
-Type safety is not considered complete without verification at four layers.
+Type security is not considered complete without verification at four layers.
 
 ### 11.1 Schema tests
 

@@ -525,7 +525,7 @@ Examples:
 | 3 | 2 | 2 | `requested_tier_above_configured_range` |
 | 0 | 3 | 1 | `requested_tier_below_configured_range` |
 
-API validation should reject tier values lower than 1. Runtime clamping is still required as a defensive safety net.
+API validation should reject tier values lower than 1. Runtime clamping is still required as a defensive fallback guard.
 
 ### 9.4 Strict fallback mode
 

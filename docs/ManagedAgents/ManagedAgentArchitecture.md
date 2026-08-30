@@ -234,7 +234,7 @@ current implementation target is the existing system Docker host or proxy. Its
 image store survives session and workflow completion, so images acquired by one
 job are reusable by later workflows.
 
-MoonMind preserves safety through an API boundary rather than by giving the
+MoonMind preserves security through an API boundary rather than by giving the
 managed runtime a private daemon. Authentication, authorization, logical
 workspace resolution, resource ceilings, registry credentials, labels, cleanup,
 and durable evidence remain MoonMind-owned.

@@ -9,7 +9,7 @@ Canonical for: the create and edit experience for Provider Profiles on the **Pro
 **Related design documents:** [Settings Configuration Pages](./SettingsPage.md), [Provider Profiles](../Security/ProviderProfiles.md), [Provider Profile Model and Effort Tier Settings](./ProviderProfileModelEffortTierSettings.md), [Secrets System](../Security/SecretsSystem.md), [OAuth Terminal](../ManagedAgents/OAuthTerminal.md), [Dashboard Design System](./DashboardDesignSystem.md)
 
 > [!NOTE]
-> This document simplifies the Provider Profile form through progressive disclosure. It does not weaken the Provider Profile execution contract. The backend remains authoritative for safe creation presets, validation, credential activation, runtime materialization, and launch readiness.
+> This document simplifies the Provider Profile form through progressive disclosure. It does not weaken the Provider Profile execution contract. The backend remains authoritative for validated creation presets, validation, credential activation, runtime materialization, and launch readiness.
 
 ---
 
@@ -39,7 +39,7 @@ The creation experience must:
 6. avoid creating a profile that appears enabled when credential setup is incomplete;
 7. expose model and effort tier policy as a core profile decision rather than burying it with launch internals;
 8. protect existing advanced values during edit, collapse, validation failure, and save; and
-9. fail safely when no valid creation preset exists for a runtime, provider, and authentication combination.
+9. fail closed when no valid creation preset exists for a runtime, provider, and authentication combination.
 
 ---
 
@@ -51,7 +51,7 @@ This design does not:
 - let the browser invent provider-specific materialization policy;
 - hide credential connection status or the action needed to connect a provider;
 - store raw credentials in the Provider Profile form;
-- treat a missing safe preset as permission to guess `secret_ref` plus `api_key_env`;
+- treat a missing validated preset as permission to guess `secret_ref` plus `api_key_env`;
 - move model and effort resolution authority into the browser;
 - make `clear_env_keys` a casual user-authored preference; or
 - remove advanced fields from the edit or inspection experience.
@@ -97,7 +97,7 @@ A future separate display-name field may allow the technical ID to move behind a
 
 ### 4.2 Runtime and provider
 
-Runtime and provider remain visible and required. They determine the available authentication methods, model capabilities, creation preset, and safe materialization strategy.
+Runtime and provider remain visible and required. They determine the available authentication methods, model capabilities, creation preset, and approved materialization strategy.
 
 Use backend-provided choices rather than unrestricted text fields when the relevant catalog exists. Existing unknown values remain inspectable during edit.
 
@@ -205,7 +205,7 @@ When advanced overrides exist:
 Custom volume · cooldown 600 seconds · tags configured
 ```
 
-The summary uses normalized backend metadata. It does not infer safety from blank browser fields.
+The summary uses normalized backend metadata. It does not infer security posture from blank browser fields.
 
 ### 5.4 Draft preservation
 
@@ -246,7 +246,7 @@ Resetting an advanced field to its recommended value should be an explicit field
 | `command_behavior` | Expert launch-shaping options | Omit or `null`, unless the backend strategy supplies required behavior. |
 | User routing tags | Advanced routing metadata | Empty user tag list. Backend-owned system tags are derived separately. |
 | `priority` | Advanced selector ordering | Omit. Backend default is `100`. |
-| `clear_env_keys` | Do not expose as a normal editable advanced preference. Show backend-generated values as read-only launch-safety metadata. | Backend runtime and provider strategy. It may not be safely empty for a known profile type. |
+| `clear_env_keys` | Do not expose as a normal editable advanced preference. Show backend-generated values as read-only launch-security metadata. | Backend runtime and provider strategy. It may not be empty without weakening isolation for a known profile type. |
 
 ### 6.3 Fields that should not merely be hidden
 
@@ -266,7 +266,7 @@ For known runtime and provider strategies, the backend must generate and validat
 
 #### Enabled state
 
-Enabled state follows credential activation and policy. Hiding a client-side `Enabled` checkbox while still submitting `true` would not simplify the experience safely. The create workflow must stop submitting unconditional enablement and let the backend return activation state.
+Enabled state follows credential activation and policy. Hiding a client-side `Enabled` checkbox while still submitting `true` would not simplify the experience without weakening activation controls. The create workflow must stop submitting unconditional enablement and let the backend return activation state.
 
 ---
 
@@ -280,7 +280,7 @@ The frontend may display a suggested value before save, but it must retain the v
 
 ### 7.2 Creation preset
 
-The backend should expose enough metadata for the UI to render the standard form and advanced summary safely.
+The backend should expose enough metadata for the UI to render the standard form and advanced summary securely and predictably.
 
 Conceptual response:
 
@@ -325,9 +325,9 @@ ProviderProfileCreationPreset:
 
 The exact endpoint and schema may share an existing capabilities surface. The durable UI requirement is that the backend supplies coherent values, editability, source, lock reason, and diagnostics.
 
-### 7.3 No safe preset
+### 7.3 No validated preset
 
-When no safe preset exists for the selected runtime, provider, and authentication method, the UI must not guess.
+When no validated preset exists for the selected runtime, provider, and authentication method, the UI must not guess.
 
 It should do one of the following based on backend capability:
 
@@ -535,7 +535,7 @@ validateProviderProfileDraft
 
 - Advanced options are collapsed on create.
 - Runtime, provider, account label, authentication, tier policy, max parallel runs, and runtime-default selection remain available.
-- A safe preset supplies the advanced summary.
+- A validated preset supplies the advanced summary.
 - Untouched advanced values are omitted or submitted according to the backend contract.
 - Profile creation never defaults to enabled when required credentials are missing.
 - Successful guided credential setup enables the profile when policy permits.
@@ -592,14 +592,14 @@ The design is correctly implemented when:
 8. Max parallel runs remains outside advanced options.
 9. Command behavior, routing tags, priority, and other current Advanced Options fields remain behind the control.
 10. Account label is treated as a user-facing identity field rather than an advanced launch option.
-11. Clear environment keys are backend-generated launch-safety metadata, not a normal freeform preference.
+11. Clear environment keys are backend-generated launch-security metadata, not a normal freeform preference.
 12. Untouched advanced values use backend presets or omission instead of duplicated React defaults.
 13. A profile without required validated credentials is not silently created as enabled.
 14. Existing non-default, invalid, or unknown advanced configuration is conspicuous during edit.
 15. Collapsing advanced options never loses draft data.
 16. Hidden validation errors automatically reveal the affected controls.
 17. No secret plaintext appears in the profile payload, URL, summary, or saved UI state.
-18. A missing safe creation preset never falls back to a guessed materialization contract.
+18. A missing validated creation preset never falls back to a guessed materialization contract.
 
 ---
 
@@ -613,6 +613,6 @@ The design is correctly implemented when:
 - Credential source and materialization mode are derived from the selected setup method.
 - Command behavior, tags, and priority remain advanced.
 - Account label moves into the standard identity experience.
-- Clear environment keys become backend-owned, read-only launch-safety metadata.
+- Clear environment keys become backend-owned, read-only launch-security metadata.
 - Enabled state follows credential activation and policy instead of a default-true creation checkbox.
 - Backend presets and omission replace global frontend guesses.

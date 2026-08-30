@@ -12,7 +12,7 @@ compatibility path. Claude-through-Omnigent parity is deferred.
 **Purpose:** Top-level architecture for MoonMind's Temporal-native agent orchestration model, including managed runtimes, managed sessions, Omnigent hosts, external agents, artifacts, provider profiles, and API-governed container jobs.
 
 MoonMind is an open-source platform for orchestrating leading AI coding agents
-and automation systems while adding resiliency, safety, context delivery,
+and automation systems while adding resiliency, security, context delivery,
 provider-profile routing, durable workflows, and artifact-first observability.
 
 MoonMind currently has two concrete managed-runtime centers of gravity:

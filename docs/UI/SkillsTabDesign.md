@@ -140,4 +140,4 @@ Rules:
 ## 7. Security
 
 - Reject path traversal in `name` (`../`, absolute paths).
-- Render Markdown with the same safety posture as other user-editable dashboard content.
+- Render Markdown with the same security posture as other user-editable dashboard content.

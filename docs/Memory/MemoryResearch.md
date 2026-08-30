@@ -77,7 +77,7 @@ This taxonomy reflects widely used strategies in production systems and notable 
 - Pros: High signal-to-noise; supports organization-wide alignment; easy to reuse across agents.
 - Cons: Requires governance to prevent drift and contradictions; can become stale without refresh policies.
 **Scalability/latency/cost:** Very scalable with vector DB + filtering; cost dominated by embedding and reranking.
-**Security:** Can be safer than episodic logs if content is curated and scrubbed.
+**Security:** Can be more secure than episodic logs if content is curated and scrubbed.
 
 ### Working memory and context window augmentation
 
@@ -462,7 +462,7 @@ Game studios operate under strong IP constraints. Memory systems amplify risk be
  - retrieved context before prompt assembly.
 - Keep raw secrets in a dedicated secret manager; in memory objects store only opaque handles.
 
-**Retrieval safety**
+**Retrieval security**
 - Separate “retrieved content” from “instructions” in the prompt template (system prompt explicitly states retrieved text is *data*, not instructions).
 - Add a filtering stage that removes:
  - credential-like patterns,

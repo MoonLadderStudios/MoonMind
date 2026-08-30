@@ -217,7 +217,7 @@ For one logical idempotency key, the coordinator follows this order:
 12. Persist session identity.
 13. Resolve the immutable, policy-scoped initial `ContextPack` through the
     MoonMind gateway (or an explicitly authorized degraded mode), persist it
-    behind a ref, and compose the single bounded safety-framed first message.
+    behind a ref, and compose the single bounded security-framed first message.
 14. Persist the exact composed-message ref and compact retrieval evidence, then
     calculate the first-message digest and post through the existing
     idempotency boundary.

@@ -613,7 +613,7 @@ The tool captures and stores:
 
 The before state is written to an immutable artifact.
 
-## 10.4 Pull images and check runner safety
+## 10.4 Pull images and check runner integrity
 
 The tool runs the equivalent of:
 
@@ -631,7 +631,7 @@ mutating persisted desired deployment state.
 ## 10.5 Persist desired image
 
 The tool writes the desired image reference into the allowlisted deployment env
-file or equivalent deployment-state store after runner safety checks pass and
+file or equivalent deployment-state store after runner integrity checks pass and
 before Compose commands resolve image variables for service recreation.
 
 The tool must not edit arbitrary files selected by the caller. If service
@@ -1046,4 +1046,4 @@ MoonMind should expose Docker Compose deployment updates as a small, safe, audit
 
 The operator experience is simple: choose the target image, choose the update mode, provide a reason, and start the update. The backend handles policy, locking, Docker Compose execution, verification, and artifacts.
 
-The architectural boundary is equally important: this is an executable deployment-control tool, not an agent skill and not an arbitrary shell surface. That boundary keeps the UX simple while preserving the safety required for a feature that can restart and replace the MoonMind deployment itself.
+The architectural boundary is equally important: this is an executable deployment-control tool, not an agent skill and not an arbitrary shell surface. That boundary keeps the UX simple while preserving the security required for a feature that can restart and replace the MoonMind deployment itself.

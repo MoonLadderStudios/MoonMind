@@ -208,7 +208,7 @@ Stale or duplicate dependency-resolution signals must be ignored:
 * a non-success terminal observation with the same `resolvedAt` as the prerequisite's already-recorded `lastFailedAt` does not increment `failureCount`,
 * a non-success terminal signal that arrives after the prerequisite is already recorded as `satisfied`, `satisfied_after_rerun`, or `bypassed` is a no-op and never reverts the prior resolution.
 
-### 4.7 Continue-As-New and replay safety
+### 4.7 Continue-As-New and replay compatibility
 
 Dependency behavior must be safe across replay and Continue-As-New.
 

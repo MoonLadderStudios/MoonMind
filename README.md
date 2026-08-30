@@ -134,6 +134,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for local setup, validation commands, tes
 
 ## License
 
-MoonMind is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for copyright and attribution notices.
+MoonMind is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for the full license text and [NOTICE](NOTICE) for copyright and attribution notices.
 
 MoonMind includes Omnigent as a Git submodule at `omnigent/`. Omnigent is separately licensed by the Omnigent project under Apache License 2.0. After running `git submodule update --init --recursive`, see `omnigent/LICENSE` and `omnigent/NOTICE` for its license and attribution notices. Other submodules retain their own upstream licenses.

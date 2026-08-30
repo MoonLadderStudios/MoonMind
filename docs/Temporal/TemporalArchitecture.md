@@ -335,7 +335,7 @@ True agent-runtime Activities must return canonical runtime contracts directly:
 
 Provider-specific data belongs in canonical `metadata`, not in alternate top-level provider-shaped workflow payloads. Workflow code should not reconstruct canonical contracts from raw provider responses.
 
-### 6.10 Type safety is part of the architecture
+### 6.10 Type security is part of the architecture
 
 Temporal boundary payloads are durable contracts.
 
@@ -345,7 +345,7 @@ Rules:
 - New Temporal boundaries should use one structured request model and one structured response model where applicable.
 - Compatibility dict-shaped shims may exist at the edge, but they must validate/coerce immediately into canonical models.
 - Continue-As-New input is a first-class continuation contract, not a scratch dict.
-- Additive evolution is preferred. Non-additive changes require replay safety, compatibility shims, or a controlled cutover.
+- Additive evolution is preferred. Non-additive changes require replay compatibility, compatibility shims, or a controlled cutover.
 
 ---
 
@@ -935,7 +935,7 @@ Forward-compatible rule:
 - If MoonMind adopts Temporal Worker Versioning / Worker Deployment routing in the future, this document should be updated to make Build ID rollout, drain, rollback, and compatibility windows first-class.
 - Until then, do not write architecture text that assumes server-side Worker Versioning is available in MoonMind deployments.
 
-Required deployment safety:
+Required deployment integrity:
 
 - Never remove or rename Update/Signal handlers while histories may reference them without a compatibility plan.
 - Prefer new Activity Types for incompatible Activity contract changes.
@@ -1158,7 +1158,7 @@ Required testing layers:
 10. Failure injection for provider outages, rate limits, artifact failures, worker restarts, and callback duplicates.
 11. Worker topology tests that verify fleet registration, routing, forbidden capabilities, and helper-activity scope.
 
-Changes to workflow code that can affect replay-visible behavior must not be merged solely because unit tests pass. They require replay safety, compatibility planning, or an explicit cutover decision.
+Changes to workflow code that can affect replay-visible behavior must not be merged solely because unit tests pass. They require replay compatibility, compatibility planning, or an explicit cutover decision.
 
 ---
 

@@ -186,7 +186,7 @@ Evaluate strategy quality (not generic style):
 - Appropriate use of existing infrastructure.
 - Avoidance of speculative infrastructure.
 
-Do not expand this into ownership, audience, success criteria, assumptions, non-goals, risk, or agent-safety reviews.
+Do not expand this into ownership, audience, success criteria, assumptions, non-goals, risk, or agent-security reviews.
 
 ### F. Merge recommendation
 

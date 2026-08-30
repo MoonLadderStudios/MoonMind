@@ -329,7 +329,7 @@ The delivery record stores:
 24. decision actor and note, when decided
 25. sanitized delivery error, when delivery fails
 
-The delivery record is an audit, idempotency, and execution-safety record. It is not a human review page.
+The delivery record is an audit, idempotency, and execution-integrity record. It is not a human review page.
 
 ---
 

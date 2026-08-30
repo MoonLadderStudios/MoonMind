@@ -12,7 +12,7 @@
 | providers | `moonmind_provider_requests`, `moonmind_usage_attribution_coverage_ratio` | outcome/runtime_family | profiles | provider/cost dashboard |
 | Omnigent | `moonmind_omnigent_session_start_seconds`, `moonmind_omnigent_event_lag_seconds` | outcome/runtime_family | runtime | bridge/host dashboard |
 | artifacts/operator | `moonmind_artifact_operations`, `moonmind_observability_stream_lag_seconds` | outcome/component | artifacts/operator | artifact/Live Logs/Chat |
-| safety | `moonmind_policy_decisions` | outcome | security | intervention dashboard |
+| security | `moonmind_policy_decisions` | outcome | security | intervention dashboard |
 
 Durations use seconds and deployments choose histogram buckets that contain the SLO boundary. Ratios range from zero to one. Existing StatsD names are migration inputs only. A rename requires a tombstone containing the old and replacement names, dual-emission release, dashboard-parity evidence, retention window, and removal release.
 

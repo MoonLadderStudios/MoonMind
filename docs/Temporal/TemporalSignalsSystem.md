@@ -445,7 +445,7 @@ Benefits:
 - forward-compatible field addition,
 - simpler validation,
 - less ambiguity across Python handler signatures,
-- safer replay compatibility when evolving fields with defaults.
+- more secure replay compatibility when evolving fields with defaults.
 
 ### 7.2 Artifact References for Large Content
 
@@ -534,7 +534,7 @@ Examples:
 
 ---
 
-## 10. Continue-As-New and In-Flight Safety
+## 10. Continue-As-New and In-Flight Compatibility
 
 Signal-aware workflows must preserve the minimum state needed to remain correct across Continue-As-New and worker restarts.
 
@@ -559,7 +559,7 @@ When signal contracts change, MoonMind must protect in-flight executions by eith
 To protect in-flight workflow histories during the transition to this desired-state contract without violating the strict "no internal compatibility wrappers" policy:
 
 1. **Explicit Versioned Cutover**: Rather than introducing temporary translation layers, dynamic signal handlers, or `workflow.patched(...)` multi-type wrappers, changes to Temporal-facing contracts (such as `MoonMind.UserWorkflow` control aliases, `child_state_changed` positional arguments, or raw dict payloads in `ProviderProfileManager`) MUST be deployed via an explicit versioned cutover plan (e.g., bumping the Temporal Task Queue or renaming the workflow).
-2. **Old Executions**: Existing in-flight executions will continue to run to completion on older workers tied to the legacy task queue, ensuring safety without polluting the new codebase with backward-compatibility logic.
+2. **Old Executions**: Existing in-flight executions will continue to run to completion on older workers tied to the legacy task queue, ensuring security without polluting the new codebase with backward-compatibility logic.
 
 ---
 
@@ -611,7 +611,7 @@ Minimum expectations:
 3. start-time and wait-state tests for `reschedule` and deferred execution paths,
 4. callback and polling race tests for `ExternalEvent`,
 5. lease-manager tests covering duplicate request/release/cooldown behavior,
-6. Continue-As-New or restart-safety coverage when signal-relevant state persists across long runs.
+6. Continue-As-New or restart compatibility coverage when signal-relevant state persists across long runs.
 
 ---
 
@@ -623,6 +623,6 @@ The Temporal Signals System is in its desired state when all of the following ar
 - `MoonMind.UserWorkflow` uses Signals only for asynchronous events and scheduling wait control,
 - acknowledged execution edits are handled through Updates,
 - callback ingestion, workflow coordination, and singleton manager signaling all use compact, explicit payloads,
-- dedupe and replay safety rules are enforced for signal families that can repeat,
+- dedupe and replay compatibility rules are enforced for signal families that can repeat,
 - signal-driven state transitions remain visible through search attributes, memo, and execution projections,
 - tmp implementation-tracking material can eventually be removed without losing the stable contract.

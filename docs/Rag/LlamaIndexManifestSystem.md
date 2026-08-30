@@ -41,7 +41,7 @@ We need repeatable, auditable, **declarative** pipelines for bringing text/code 
 * **Separate the “what” from the “how”**: teams describe data sources, transforms, and retrieval settings in YAML; runtime decides whether to run locally, via Temporal, or on a schedule.
 * **Reproducibility**: manifests versioned in Git; runs are observable and produce artifacts.
 * **Extensibility**: new readers, vector stores, and evaluators plug in behind a stable schema.
-* **Safety**: consistent redaction, token scoping, and incremental re‑index rules.
+* **Security**: consistent redaction, token scoping, and incremental re‑index rules.
 
 **Non‑goals:** UI/visual analytics, long‑form prompt engineering, or model evaluation beyond retrieval/evidence metrics.
 

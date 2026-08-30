@@ -257,7 +257,7 @@ Persisted surfaces that may contain legacy no-changes aliases:
 | `finish_summary_json.publish.reasonCode` and related JSON payloads | `no_changes` | Finish-summary compatibility rewrites to `no_commit` when the publish reason is repository-publication absence. |
 | Memo `finishSummary` / `finish_summary` payloads | `NO_CHANGES` or `no_changes` nested values | Projection sync repairs memo-derived summaries before storing projection fields or returning API payloads. |
 
-Replay and in-flight safety:
+Replay and in-flight compatibility:
 
 - Existing Temporal histories may replay terminal-state payloads or memo/search-attribute values containing legacy aliases. Those values are accepted only through the named compatibility helpers above.
 - New workflow code must emit `no_commit`, `NO_COMMIT`, and publish `reasonCode=no_commit` directly.

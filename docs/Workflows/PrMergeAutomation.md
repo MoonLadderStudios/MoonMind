@@ -44,7 +44,7 @@ This also aligns with the Temporal-side lifecycle model: workflows orchestrate, 
 - Ensure merge automation is durably awaited before the parent workflow reaches terminal success.
 - Avoid a fixed-delay merge strategy; use a **state-based gate** instead.
 - Reuse MoonMind's existing execution substrate for `pr-resolver` rather than duplicating skill-execution plumbing.
-- Preserve observability, cancellation, artifact output, and replay safety.
+- Preserve observability, cancellation, artifact output, and replay compatibility.
 
 ---
 
@@ -525,7 +525,7 @@ No new `mm_state` is required for v1.
 
 ### 11.3.1 Purpose
 
-A pull request is only safe to merge when the automated reviewer has reviewed
+A pull request may be merged only when the automated reviewer has reviewed
 the revision that is actually being merged. Every commit MoonMind pushes
 invalidates the previous review, so a merge gate that accepts *any* historical
 provider result would merge unreviewed code immediately after remediation.
@@ -949,7 +949,7 @@ failure rather than asking the gate to continue.
 ## 15. Resolver Skill Authority
 
 The merge-automation gate decides only when to launch or relaunch the resolver
-child. It must not decide that the PR is safe to merge. The resolved
+child. It must not decide that the PR is authorized to merge. The resolved
 `pr-resolver` Skill is the sole authority for head-SHA rules, review-comment
 retrieval and freshness, required-check completeness, blocker classification,
 remediation selection, and the final merge attempt.

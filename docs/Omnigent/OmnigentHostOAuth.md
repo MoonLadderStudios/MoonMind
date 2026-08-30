@@ -6,7 +6,7 @@
 **Last updated:** 2026-08-28  
 **Authority:** Provider Profile, OAuth materialization, host binding, generation fencing, readiness, cleanup, and migration contract for OAuth-backed Omnigent harnesses
 
-Implementation progress belongs in the roadmap, issues, and pull requests. This document defines the durable desired state and the safety invariants that every OAuth-backed Omnigent launch must enforce.
+Implementation progress belongs in the roadmap, issues, and pull requests. This document defines the durable desired state and the security invariants that every OAuth-backed Omnigent launch must enforce.
 
 ## Related documents
 
@@ -85,7 +85,7 @@ It does not define a token broker, raw-token export, workflow-authored mounts, s
 5. **OAuth capacity is one globally per Provider Profile.** Direct, legacy Omnigent, generic Omnigent, validation, repair, reconnect, rotation, and disconnect share the same capacity ledger.
 6. **One acquired generation governs one consumer.** A stale host cannot continue after credential replacement or reconnect advances the generation.
 7. **Host registration credentials are separate.** Provider OAuth never authenticates the host to the Omnigent server.
-8. **Only safe references cross durable boundaries.** Plans, runtime bindings, Temporal history, artifacts, checkpoints, and diagnostics contain ids, refs, generations, digests, and bounded status only.
+8. **Only bounded references cross durable boundaries.** Plans, runtime bindings, Temporal history, artifacts, checkpoints, and diagnostics contain ids, refs, generations, digests, and bounded status only.
 9. **Static and on-demand modes share one contract.** Host mode changes realization, not credential or lifecycle semantics.
 10. **One shared image does not share credentials.** A host gets only the selected runtime's credential bundle.
 11. **Generic lifecycle, specific adapter.** Runtime-specific code is limited to credential materialization, bounded runtime probes, and capability normalization.
@@ -156,7 +156,7 @@ The following boundaries enforce it:
 | Generation reconciliation | Fence every host and retry using an older generation |
 | Cleanup | Stop all credential consumers before releasing capacity |
 
-Concurrency above one requires a separate provider-specific design proving safe mutable-state ownership. It is not an operator-tunable default.
+Concurrency above one requires a separate provider-specific design proving validated mutable-state ownership. It is not an operator-tunable default.
 
 ## 6. Credential ownership model
 
@@ -207,11 +207,11 @@ credentialGeneration: 7
 ownership: profile_owned
 attachments:
   - kind: volume
-    sourceRef: <safe-volume-ref>
+    sourceRef: <bounded-volume-ref>
     targetPath: /home/app/.codex
     accessMode: read-write
 runtimeEnvironment: {}
-cleanupRef: <safe-cleanup-ref>
+cleanupRef: <bounded-cleanup-ref>
 ```
 
 A materializer must:
@@ -500,7 +500,7 @@ Run cleanup may not remove:
 
 A janitor acts only from durable cleanup authority and current fencing generations. Provider Profile release remains last even when cleanup requires retries.
 
-## 19. Secret-safe evidence
+## 19. Credential-redacted evidence
 
 Durable evidence may contain:
 

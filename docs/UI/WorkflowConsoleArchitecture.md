@@ -389,7 +389,7 @@ The dashboard should resolve detail routes in this order:
 
 1. canonical server-side source mapping / execution index
 2. explicit `?source=temporal` override when present
-3. temporary fallback heuristics only as an implementation safety net
+3. temporary fallback heuristics only as an implementation fallback guard
 
 The long-term goal is server-side canonical source resolution, not route-level guesswork.
 

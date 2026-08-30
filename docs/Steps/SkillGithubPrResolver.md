@@ -119,7 +119,7 @@ free-form instructions.
 | `finalizeMaxElapsedSeconds` | int         |     7200 | Hard wall-clock cap for one orchestration run.                                                                                      |
 
 The Skill enforces these values in its own loop. MoonMind's runtime timeout and
-intervention policies remain an outer safety envelope and do not replace the
+intervention policies remain an outer security envelope and do not replace the
 Skill's retry semantics.
 
 ### 4.2 Outputs
@@ -315,7 +315,7 @@ Include in result:
 
 ---
 
-## 11. Safety Gates
+## 11. Security Gates
 
 * Working tree must be clean at start.
 * Loop guard: `maxIterations` stops repeated "fix → re-evaluate" loops.
