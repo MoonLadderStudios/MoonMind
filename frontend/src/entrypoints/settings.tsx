@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties, type ReactElement } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { BootPayload } from '../boot/parseBootPayload';
 import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
@@ -23,62 +23,6 @@ import { resetDashboardPreferences } from '../utils/dashboardPreferences';
 // never offered as a Provider Profile runtime filter.
 const NON_PROFILE_OWNING_RUNTIMES = new Set(['omnigent']);
 
-function ProvidersKeyIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      aria-hidden="true"
-      focusable="false"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <circle cx="8" cy="14" r="3.5" />
-      <path d="M10.5 12L20 4" />
-      <path d="M17 7l2 2" />
-      <path d="M14 10l2 2" />
-    </svg>
-  );
-}
-
-function UserWorkspaceIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      aria-hidden="true"
-      focusable="false"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <circle cx="12" cy="8" r="3.5" />
-      <path d="M5 20c0-3.5 3-6 7-6s7 2.5 7 6" />
-    </svg>
-  );
-}
-
-function OperationsGearIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      aria-hidden="true"
-      focusable="false"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <circle cx="12" cy="12" r="3" />
-      <path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1" />
-    </svg>
-  );
-}
-
 interface ProfileData {
   id?: string | number;
   email?: string;
@@ -101,57 +45,93 @@ interface SecretsListResponse {
   items: SecretMetadata[];
 }
 
-const SETTINGS_SECTIONS: ReadonlyArray<{
+const SETTINGS_PAGES: ReadonlyArray<{
   id: 'providers-secrets' | 'user-workspace' | 'operations';
+  path: string;
   label: string;
   description: string;
-  Icon: () => ReactElement;
+  readPermissions: readonly string[];
 }> = [
   {
     id: 'providers-secrets',
+    path: '/settings/providers-secrets',
     label: 'Providers & Secrets',
     description:
       'Configure provider profiles, managed secrets, and the bindings that make runtimes launchable.',
-    Icon: ProvidersKeyIcon,
+    readPermissions: ['provider_profiles.read', 'secrets.metadata.read'],
   },
   {
     id: 'user-workspace',
+    path: '/settings/user-workspace',
     label: 'User / Workspace',
     description:
       'Hold user-scoped and workspace-scoped settings as the dashboard exposes more of the broader configuration model.',
-    Icon: UserWorkspaceIcon,
+    readPermissions: [
+      'settings.catalog.read',
+      'settings.effective.read',
+      'settings.system.read',
+      'settings.audit.read',
+    ],
   },
   {
     id: 'operations',
+    path: '/settings/operations',
     label: 'Operations',
     description:
       'Keep worker pause, drain, quiesce, and related operational controls under Settings.',
-    Icon: OperationsGearIcon,
+    readPermissions: ['operations.read'],
   },
 ] as const;
 
-type SettingsSectionId = (typeof SETTINGS_SECTIONS)[number]['id'];
+type SettingsPageDefinition = (typeof SETTINGS_PAGES)[number];
 
-function isSettingsSection(value: string | null): value is SettingsSectionId {
-  return SETTINGS_SECTIONS.some((section) => section.id === value);
+function canReadSettingsPage(
+  page: SettingsPageDefinition,
+  permissions: ReadonlySet<string>,
+): boolean {
+  return page.readPermissions.some((permission) => permissions.has(permission));
 }
 
-function readSectionFromLocation(): SettingsSectionId {
-  const params = new URLSearchParams(window.location.search);
-  const section = params.get('section');
-  return isSettingsSection(section) ? section : 'providers-secrets';
-}
-
-function updateSectionInLocation(section: SettingsSectionId): void {
-  const url = new URL(window.location.href);
-  url.searchParams.set('section', section);
-  window.history.pushState({}, '', url.toString());
+function resolveSettingsPage(
+  pathname: string,
+  permissions: ReadonlySet<string>,
+): {
+  page: SettingsPageDefinition | null;
+  accessible: boolean;
+  replacementPath: string | null;
+} {
+  const normalized = pathname.length > 1 && pathname.endsWith('/')
+    ? pathname.slice(0, -1)
+    : pathname;
+  const exactPage = SETTINGS_PAGES.find(({ path }) => path === normalized) ?? null;
+  if (exactPage) {
+    return {
+      page: exactPage,
+      accessible: canReadSettingsPage(exactPage, permissions),
+      replacementPath: pathname === exactPage.path ? null : exactPage.path,
+    };
+  }
+  const defaultPage = SETTINGS_PAGES.find((page) => canReadSettingsPage(page, permissions)) ?? null;
+  return {
+    page: defaultPage,
+    accessible: defaultPage !== null,
+    replacementPath: defaultPage?.path ?? null,
+  };
 }
 
 export function SettingsPage({ payload }: { payload: BootPayload }) {
   const queryClient = useQueryClient();
   const [notice, setNotice] = useState<Notice | null>(null);
-  const [section, setSection] = useState<SettingsSectionId>(() => readSectionFromLocation());
+  const settingsPermissions = new Set(
+    ((payload.initialData as { settingsPermissions?: string[] } | undefined)
+      ?.settingsPermissions ?? []),
+  );
+  const {
+    page: currentPage,
+    accessible: pageAccessible,
+    replacementPath,
+  } = resolveSettingsPage(window.location.pathname, settingsPermissions);
+  const section = currentPage?.id ?? null;
   // Settings is the administrative exception to runtime-scoped Provider Profile
   // selection: it enters on the All-runtimes view and can narrow the table to a
   // single runtime without narrowing global configuration health.
@@ -173,24 +153,32 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
   const defaultTaskModelByRuntime: Record<string, string> =
     runtimeSystemConfig.defaultTaskModelByRuntime ?? {};
   const supportedRuntimes: string[] = runtimeSystemConfig.supportedRuntimes ?? [];
-  const settingsPermissions = new Set(
-    ((payload.initialData as { settingsPermissions?: string[] } | undefined)
-      ?.settingsPermissions ?? []),
-  );
+  const canReadProviderProfiles = settingsPermissions.has('provider_profiles.read');
+  const canReadSecrets = settingsPermissions.has('secrets.metadata.read');
+  const canReadSettingsCatalog = settingsPermissions.has('settings.catalog.read');
   const canWriteProviderProfiles = settingsPermissions.has('provider_profiles.write');
   const canRunGithubTokenProbe = settingsPermissions.has('settings.effective.read');
 
   useEffect(() => {
-    const handlePopState = () => {
-      setSection(readSectionFromLocation());
-      setNotice(null);
-    };
+    if (!replacementPath) {
+      return;
+    }
+    const target = `${replacementPath}${window.location.search}${window.location.hash}`;
+    const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    if (target === current) {
+      return;
+    }
+    window.history.replaceState(window.history.state, '', target);
+    window.dispatchEvent(new PopStateEvent('popstate', { state: window.history.state }));
+  }, [replacementPath]);
 
-    window.addEventListener('popstate', handlePopState);
+  useEffect(() => {
+    const previousTitle = document.title;
+    document.title = `${currentPage?.label ?? 'Configuration unavailable'} | MoonMind`;
     return () => {
-      window.removeEventListener('popstate', handlePopState);
+      document.title = previousTitle;
     };
-  }, []);
+  }, [currentPage?.label]);
 
   const { data: profile, isLoading, isError } = useQuery<ProfileData>({
     queryKey: ['profile'],
@@ -206,7 +194,7 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
       }
       return response.json();
     },
-    enabled: section === 'user-workspace',
+    enabled: section === 'user-workspace' && pageAccessible,
   });
 
   const {
@@ -224,6 +212,7 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
       }
       return response.json();
     },
+    enabled: section === 'providers-secrets' && pageAccessible && canReadSecrets,
   });
 
   const {
@@ -241,6 +230,7 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
       }
       return response.json();
     },
+    enabled: section === 'providers-secrets' && pageAccessible && canReadProviderProfiles,
   });
 
   // The complete collection stays the single source for configuration health so
@@ -270,19 +260,6 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
           (profile) => profile.runtime_id === providerProfileRuntimeFilter,
         );
 
-  const fallbackSection = SETTINGS_SECTIONS[0]!;
-  const currentSection =
-    SETTINGS_SECTIONS.find((candidate) => candidate.id === section) ?? fallbackSection;
-
-  const handleSelectSection = (nextSection: SettingsSectionId) => {
-    if (nextSection === section) {
-      return;
-    }
-    updateSectionInLocation(nextSection);
-    setSection(nextSection);
-    setNotice(null);
-  };
-
   return (
     <div className="settings-page mx-auto w-full space-y-6 px-4 py-6 sm:px-6 lg:px-8">
       <header className="rounded-[2rem] border border-mm-border/80 bg-transparent px-6 py-6 shadow-sm">
@@ -290,60 +267,26 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
           <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500 dark:text-slate-400">
             Dashboard Settings
           </p>
-          <h2 className="text-3xl font-semibold tracking-tight text-slate-950 dark:text-white">Settings</h2>
-          <p className="max-w-3xl text-sm text-slate-600 dark:text-slate-400">{currentSection.description}</p>
+          <h2 className="text-3xl font-semibold tracking-tight text-slate-950 dark:text-white">
+            {currentPage?.label ?? 'Configuration unavailable'}
+          </h2>
+          <p className="max-w-3xl text-sm text-slate-600 dark:text-slate-400">
+            {currentPage?.description ?? 'No Configuration destination is available for this account.'}
+          </p>
         </div>
       </header>
 
-      <ConfigurationHealthSummary
-        providerProfiles={allProviderProfiles}
-        secrets={secretsData?.items ?? []}
-        isLoading={areProfilesLoading || areSecretsLoading}
-        isError={areProfilesErrored || areSecretsErrored}
-        workerPauseConfig={workerPauseConfig}
-        canWriteProviderProfiles={canWriteProviderProfiles}
-        canRunGithubTokenProbe={canRunGithubTokenProbe}
-      />
+      {!pageAccessible ? (
+        <section
+          role="status"
+          aria-label="Configuration unavailable"
+          className="rounded-3xl border border-amber-200 bg-amber-50 p-6 text-sm text-amber-900 shadow-sm dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-100"
+        >
+          This Configuration page is unavailable for your current permissions. No protected page data was requested.
+        </section>
+      ) : null}
 
-      <section className="rounded-[2rem] border border-mm-border/80 bg-transparent p-3 shadow-sm">
-        <fieldset className="segmented-control-field">
-          <legend className="sr-only">Settings Section</legend>
-          <div
-            className="segmented-control"
-            data-intensity="loud"
-            style={{
-              '--segmented-control-count': SETTINGS_SECTIONS.length,
-            } as CSSProperties}
-          >
-            {SETTINGS_SECTIONS.map((candidate) => {
-              const Icon = candidate.Icon;
-              return (
-                <label
-                  key={candidate.id}
-                  className="segmented-control-item"
-                  title={candidate.description}
-                >
-                  <input
-                    type="radio"
-                    name="settings-section"
-                    value={candidate.id}
-                    checked={candidate.id === section}
-                    onChange={() => handleSelectSection(candidate.id)}
-                  />
-                  <span className="segmented-control-item-icon">
-                    <Icon />
-                  </span>
-                  <span className="segmented-control-item-label">
-                    {candidate.label}
-                  </span>
-                </label>
-              );
-            })}
-          </div>
-        </fieldset>
-      </section>
-
-      {notice ? (
+      {pageAccessible && notice ? (
         <div
           className={`rounded-3xl border px-5 py-4 text-sm shadow-sm ${
             notice.level === 'error'
@@ -355,12 +298,25 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
         </div>
       ) : null}
 
-      {section === 'providers-secrets' ? (
+      {pageAccessible && section === 'providers-secrets' ? (
         <div className="space-y-6">
+          {canReadProviderProfiles && canReadSecrets ? (
+            <ConfigurationHealthSummary
+              providerProfiles={allProviderProfiles}
+              secrets={secretsData?.items ?? []}
+              isLoading={areProfilesLoading || areSecretsLoading}
+              isError={areProfilesErrored || areSecretsErrored}
+              workerPauseConfig={workerPauseConfig}
+              includeWorkerState={false}
+              canWriteProviderProfiles={canWriteProviderProfiles}
+              canRunGithubTokenProbe={canRunGithubTokenProbe}
+            />
+          ) : null}
+
           <section className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
             <div className="grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
               <div className="space-y-2">
-                <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Providers & Secrets</h3>
+                <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Provider profile and secret management</h3>
                 <p className="text-sm text-slate-600 dark:text-slate-400">
                   Provider profiles are the durable runtime and provider launch contract.
                   Managed secrets back those profiles without re-exposing raw credential
@@ -375,7 +331,11 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
             </div>
           </section>
 
-          {areProfilesLoading ? (
+          {!canReadProviderProfiles ? (
+            <div className="rounded-3xl border border-amber-200 bg-amber-50 p-6 text-sm text-amber-900 shadow-sm dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-100">
+              Provider profiles are unavailable for your current permissions.
+            </div>
+          ) : areProfilesLoading ? (
             <LoadingPlaceholder
               surface="settings"
               region="provider profiles"
@@ -407,7 +367,11 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
             />
           )}
 
-          {areSecretsLoading ? (
+          {!canReadSecrets ? (
+            <div className="rounded-3xl border border-amber-200 bg-amber-50 p-6 text-sm text-amber-900 shadow-sm dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-100">
+              Managed secrets are unavailable for your current permissions.
+            </div>
+          ) : areSecretsLoading ? (
             <LoadingPlaceholder
               surface="settings"
               region="managed secrets"
@@ -435,9 +399,15 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
         </div>
       ) : null}
 
-      {section === 'user-workspace' ? (
+      {pageAccessible && section === 'user-workspace' ? (
         <div className="space-y-6">
-          <GeneratedSettingsSection />
+          {canReadSettingsCatalog ? (
+            <GeneratedSettingsSection />
+          ) : (
+            <section className="rounded-3xl border border-amber-200 bg-amber-50 p-6 text-sm text-amber-900 shadow-sm dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-100">
+              The settings catalog is unavailable for your current permissions.
+            </section>
+          )}
 
           <section className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
             <h3 className="text-base font-semibold text-slate-900 dark:text-white">
@@ -495,7 +465,7 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
         </div>
       ) : null}
 
-      {section === 'operations' ? (
+      {pageAccessible && section === 'operations' ? (
         <OperationsSettingsSection workerPauseConfig={workerPauseConfig} />
       ) : null}
     </div>

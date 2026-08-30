@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
-import { fireEvent, screen, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { renderWithClient } from '../utils/test-utils';
@@ -10,12 +10,20 @@ describe('Settings Entrypoint', () => {
   const mockPayload: BootPayload = {
     page: 'settings',
     apiBase: '/api',
+    initialData: {
+      settingsPermissions: [
+        'provider_profiles.read',
+        'secrets.metadata.read',
+        'settings.catalog.read',
+        'operations.read',
+      ],
+    },
   };
 
   let fetchSpy: MockInstance;
 
   beforeEach(() => {
-    window.history.pushState({}, 'Settings', '/settings?section=providers-secrets');
+    window.history.pushState({}, 'Settings', '/settings/providers-secrets');
     fetchSpy = vi.spyOn(window, 'fetch').mockReturnValue(new Promise(() => {}) as Promise<Response>);
   });
 
@@ -25,7 +33,7 @@ describe('Settings Entrypoint', () => {
   });
 
   it('MM-1185 resets collection layouts and remembered identities from Settings', () => {
-    window.history.replaceState({}, 'Settings', '/settings?section=user-workspace');
+    window.history.replaceState({}, 'Settings', '/settings/user-workspace');
     updateDashboardPreferences({
       workflowListDisplayMode: 'hidden',
       lastSelectedWorkflowId: 'workflow-one',
@@ -46,11 +54,138 @@ describe('Settings Entrypoint', () => {
   it('renders page-matched scoped placeholders for provider profiles and managed secrets', () => {
     renderWithClient(<SettingsPage payload={mockPayload} />);
 
-    expect(screen.getByRole('heading', { name: 'Settings' })).toBeTruthy();
-    expect(screen.getByRole('heading', { name: 'Providers & Secrets' })).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 2, name: 'Providers & Secrets' })).toBeTruthy();
     expect(screen.getByText('Settings provider profiles loading placeholder').closest('[role="status"]')).toBeTruthy();
     expect(screen.getByText('Settings managed secrets loading placeholder').closest('[role="status"]')).toBeTruthy();
     expect(screen.getAllByTestId('loading-placeholder-table').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it.each([
+    ['/settings/providers-secrets', 'Providers & Secrets'],
+    ['/settings/user-workspace', 'User / Workspace'],
+    ['/settings/operations', 'Operations'],
+  ])('MoonLadderStudios/MoonMind#3817 gives %s route-owned identity without local navigation', (path, label) => {
+    window.history.replaceState({}, 'Settings', path);
+    renderWithClient(<SettingsPage payload={mockPayload} />);
+
+    expect(screen.getByRole('heading', { level: 2, name: label })).toBeTruthy();
+    expect(document.title).toBe(`${label} | MoonMind`);
+    expect(screen.queryByRole('radio')).toBeNull();
+    expect(screen.queryByRole('tab')).toBeNull();
+    expect(document.querySelector('.settings-page .segmented-control')).toBeNull();
+  });
+
+  it('resolves bare Settings to the first readable destination with replacement history', async () => {
+    window.history.replaceState({}, 'Settings', '/settings');
+    renderWithClient(
+      <SettingsPage
+        payload={{
+          page: 'settings',
+          apiBase: '/api',
+          initialData: { settingsPermissions: ['operations.read'] },
+        }}
+      />,
+    );
+
+    expect(screen.getByRole('heading', { level: 2, name: 'Operations' })).toBeTruthy();
+    await waitFor(() => expect(window.location.pathname).toBe('/settings/operations'));
+  });
+
+  it('normalizes an unknown Settings alias through the authorized default destination', async () => {
+    window.history.replaceState({}, 'Settings', '/settings/provider-profiles');
+    renderWithClient(
+      <SettingsPage
+        payload={{
+          page: 'settings',
+          apiBase: '/api',
+          initialData: { settingsPermissions: ['settings.catalog.read'] },
+        }}
+      />,
+    );
+
+    expect(screen.getByRole('heading', { level: 2, name: 'User / Workspace' })).toBeTruthy();
+    await waitFor(() => expect(window.location.pathname).toBe('/settings/user-workspace'));
+  });
+
+  it('shows direct unauthorized destinations without mounting protected page content', () => {
+    window.history.replaceState({}, 'Settings', '/settings/providers-secrets');
+    renderWithClient(
+      <SettingsPage
+        payload={{
+          page: 'settings',
+          apiBase: '/api',
+          initialData: { settingsPermissions: ['operations.read'] },
+        }}
+      />,
+    );
+
+    expect(screen.getByRole('heading', { level: 2, name: 'Providers & Secrets' })).toBeTruthy();
+    expect(screen.getByRole('status', { name: 'Configuration unavailable' })).toBeTruthy();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(window.location.pathname).toBe('/settings/providers-secrets');
+  });
+
+  it('renders the unavailable default state when no Configuration page is readable', () => {
+    window.history.replaceState({}, 'Settings', '/settings');
+    renderWithClient(
+      <SettingsPage
+        payload={{
+          page: 'settings',
+          apiBase: '/api',
+          initialData: { settingsPermissions: ['operations.invoke'] },
+        }}
+      />,
+    );
+
+    expect(screen.getByRole('heading', { level: 2, name: 'Configuration unavailable' })).toBeTruthy();
+    expect(screen.getByRole('status', { name: 'Configuration unavailable' })).toBeTruthy();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(window.location.pathname).toBe('/settings');
+  });
+
+  it('does not request provider or secret datasets from another Settings page', () => {
+    window.history.replaceState({}, 'Settings', '/settings/operations');
+    renderWithClient(
+      <SettingsPage
+        payload={{
+          page: 'settings',
+          apiBase: '/api',
+          initialData: { settingsPermissions: ['operations.read'] },
+        }}
+      />,
+    );
+
+    const requestedUrls = fetchSpy.mock.calls.map(([input]) => String(input));
+    expect(requestedUrls).not.toContain('/api/v1/provider-profiles');
+    expect(requestedUrls).not.toContain('/api/v1/secrets');
+    expect(screen.queryByLabelText('Configuration health summary')).toBeNull();
+  });
+
+  it('does not request Operations data from the Providers & Secrets summary', async () => {
+    window.history.replaceState({}, 'Settings', '/settings/providers-secrets');
+    renderWithClient(
+      <SettingsPage
+        payload={{
+          page: 'settings',
+          apiBase: '/api',
+          initialData: {
+            settingsPermissions: ['provider_profiles.read', 'secrets.metadata.read'],
+            workerPause: {
+              get: '/api/system/worker-pause',
+              post: '/api/system/worker-pause',
+              shardHealth: '/api/v1/operations/codex/shards',
+            },
+          },
+        }}
+      />,
+    );
+
+    await waitFor(() => {
+      const requestedUrls = fetchSpy.mock.calls.map(([input]) => String(input));
+      expect(requestedUrls).toContain('/api/v1/provider-profiles');
+      expect(requestedUrls).toContain('/api/v1/secrets');
+    });
+    expect(fetchSpy.mock.calls.map(([input]) => String(input))).not.toContain('/api/system/worker-pause');
   });
 });
 
@@ -79,7 +214,11 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Provider Profile runtime filt
     page: 'settings',
     apiBase: '/api',
     initialData: {
-      settingsPermissions: ['provider_profiles.write'],
+      settingsPermissions: [
+        'provider_profiles.read',
+        'provider_profiles.write',
+        'secrets.metadata.read',
+      ],
       runtimeConfig: {
         system: {
           // `omnigent` is a facade, never a Provider Profile owner, so it must
@@ -93,7 +232,7 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Provider Profile runtime filt
   let fetchSpy: MockInstance;
 
   beforeEach(() => {
-    window.history.pushState({}, 'Settings', '/settings?section=providers-secrets');
+    window.history.pushState({}, 'Settings', '/settings/providers-secrets');
     fetchSpy = vi.spyOn(window, 'fetch').mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.startsWith('/api/v1/provider-profiles')) {

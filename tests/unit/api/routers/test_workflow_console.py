@@ -96,11 +96,16 @@ def _write_dashboard_test_manifest(root: Path) -> Path:
 @contextmanager
 def _client_with_mock_service(
     monkeypatch: pytest.MonkeyPatch | None = None,
+    user_settings_permissions: set[str] | None = None,
 ) -> Iterator[tuple[TestClient, AsyncMock]]:
     app = FastAPI()
     app.include_router(router)
 
-    mock_user = SimpleNamespace(id=uuid4(), email="dashboard@example.com")
+    mock_user = SimpleNamespace(
+        id=uuid4(),
+        email="dashboard@example.com",
+        settings_permissions=user_settings_permissions or set(),
+    )
     mock_service = AsyncMock()
     mock_service.list_jobs_page.return_value = SimpleNamespace(
         items=tuple(),
@@ -213,7 +218,9 @@ def test_dashboard_destination_registry_matches_registered_spa_routes() -> None:
         "/workflows/new",
         "/schedules",
         "/skills",
-        "/settings",
+        "/settings/providers-secrets",
+        "/settings/user-workspace",
+        "/settings/operations",
         "/manifests",
         "/omnigent/agents",
         "/omnigent/policies",
@@ -338,10 +345,25 @@ def test_dashboard_ui_info_endpoint_exposes_spa_boundary(client: TestClient) -> 
         "settings.catalog.read" in payload["settingsPermissions"]
     )
     assert payload["features"]["manifests"] is True
+    assert {
+        "settingsProvidersSecrets",
+        "settingsUserWorkspace",
+        "settingsOperations",
+    }.isdisjoint(payload["features"])
     assert payload["destinations"] == [
         destination.to_ui_info() for destination in DASHBOARD_DESTINATIONS
     ]
-    assert len({item["canonicalPath"] for item in payload["destinations"]}) == 10
+    assert len({item["canonicalPath"] for item in payload["destinations"]}) == 12
+    configuration_destinations = [
+        item
+        for item in payload["destinations"]
+        if item.get("menuGroupKey") == "configuration"
+    ]
+    assert [item["key"] for item in configuration_destinations] == [
+        "settings-providers-secrets",
+        "settings-user-workspace",
+        "settings-operations",
+    ]
     skills_destination = next(
         item for item in payload["destinations"] if item["key"] == "skills"
     )
@@ -419,6 +441,36 @@ def test_dashboard_ui_info_endpoint_exposes_spa_boundary(client: TestClient) -> 
         assert 'id="dashboard-alerts-root"' not in response.text
         assert "marked.min.js" not in response.text
         assert "__moonmind_customElementsDefineGuard" not in response.text
+
+
+def test_dashboard_ui_info_scopes_configuration_destinations_to_permissions() -> None:
+    with _client_with_mock_service(
+        user_settings_permissions={"settings.catalog.read", "operations.read"}
+    ) as (client, _mock_service):
+        response = client.get("/api/ui/info")
+
+    assert response.status_code == 200
+    features = response.json()["features"]
+    assert "settingsProvidersSecrets" not in features
+    assert features["settingsUserWorkspace"] is True
+    assert features["settingsOperations"] is True
+
+
+def test_dashboard_ui_info_marks_mutation_only_configuration_destinations_unavailable() -> None:
+    with _client_with_mock_service(
+        user_settings_permissions={
+            "provider_profiles.write",
+            "settings.workspace.write",
+            "operations.invoke",
+        }
+    ) as (client, _mock_service):
+        response = client.get("/api/ui/info")
+
+    assert response.status_code == 200
+    features = response.json()["features"]
+    assert features["settingsProvidersSecrets"] is False
+    assert features["settingsUserWorkspace"] is False
+    assert features["settingsOperations"] is False
 
 
 def test_index_health_route_uses_index_health_boot_payload(client: TestClient) -> None:
@@ -642,11 +694,11 @@ def test_legacy_settings_subroutes_redirect_to_unified_settings(
 ) -> None:
     workers = client.get("/workers", follow_redirects=False)
     assert workers.status_code == 307
-    assert workers.headers["location"] == "/settings?section=operations"
+    assert workers.headers["location"] == "/settings/operations"
 
     secrets = client.get("/secrets", follow_redirects=False)
     assert secrets.status_code == 307
-    assert secrets.headers["location"] == "/settings?section=providers-secrets"
+    assert secrets.headers["location"] == "/settings/providers-secrets"
 
 
 def test_react_tasks_list_and_detail_boot_exclude_route_specific_config(

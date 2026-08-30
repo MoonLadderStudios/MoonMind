@@ -985,7 +985,7 @@ function AppShell({
               Workers: Running
             </span>
             <span className="worker-pause-reason" data-worker-pause-reason />
-            <Link className="worker-pause-manage" to="/settings?section=operations" data-worker-pause-manage>
+            <Link className="worker-pause-manage" to="/settings/operations" data-worker-pause-manage>
               Manage operations
             </Link>
           </p>

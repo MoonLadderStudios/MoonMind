@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  DASHBOARD_DESTINATION_GROUPS,
   DASHBOARD_DESTINATIONS,
   DASHBOARD_REACT_ROUTE_PATHS,
   destinationState,
@@ -16,13 +17,29 @@ describe('dashboard route resolution', () => {
   it('keeps one canonical typed inventory for every major destination', () => {
     expect(DASHBOARD_DESTINATIONS.map(({ key }) => key)).toEqual([
       'workflows', 'create', 'recurring', 'skills', 'manifests',
-      'omnigent-agents', 'omnigent-policies', 'remediation', 'artifacts', 'settings',
+      'omnigent-agents', 'omnigent-policies', 'remediation', 'artifacts',
+      'settings-providers-secrets', 'settings-user-workspace', 'settings-operations',
     ]);
-    expect(new Set(DASHBOARD_DESTINATIONS.map(({ canonicalPath }) => canonicalPath)).size).toBe(10);
+    expect(new Set(DASHBOARD_DESTINATIONS.map(({ canonicalPath }) => canonicalPath)).size).toBe(12);
     expect(DASHBOARD_REACT_ROUTE_PATHS).toEqual(
-      Array.from(new Set(DASHBOARD_DESTINATIONS.flatMap(({ pathPatterns }) => pathPatterns))),
+      Array.from(new Set([
+        ...DASHBOARD_DESTINATIONS.flatMap(({ pathPatterns }) => pathPatterns),
+        '/settings',
+        '/settings/*',
+      ])),
     );
     expect(DASHBOARD_DESTINATIONS.find(({ key }) => key === 'skills')?.displayMode).toBe('skills-list');
+    expect(DASHBOARD_DESTINATION_GROUPS).toContainEqual({
+      key: 'configuration',
+      label: 'Configuration',
+      triggerLabel: 'Settings',
+      triggerIconKey: 'settings',
+      destinationKeys: [
+        'settings-providers-secrets',
+        'settings-user-workspace',
+        'settings-operations',
+      ],
+    });
   });
 
   it('derives shown, hidden, and unavailable states from capability data', () => {
@@ -40,7 +57,8 @@ describe('dashboard route resolution', () => {
       'workflows', 'create',
     ]);
     expect(visibleSystemDestinations(info).map(({ key }) => key)).toEqual([
-      'recurring', 'skills', 'manifests', 'omnigent-agents', 'remediation', 'artifacts', 'settings',
+      'recurring', 'skills', 'manifests', 'omnigent-agents', 'remediation', 'artifacts',
+      'settings-providers-secrets', 'settings-user-workspace', 'settings-operations',
     ]);
   });
 
@@ -56,7 +74,9 @@ describe('dashboard route resolution', () => {
     ['/artifacts/run/1', 'artifacts'],
     ['/observability/run/1', 'artifacts'],
     ['/remediations/mm:1', 'remediation'],
-    ['/settings/providers', 'settings'],
+    ['/settings/providers-secrets', 'settings-providers-secrets'],
+    ['/settings/user-workspace', 'settings-user-workspace'],
+    ['/settings/operations', 'settings-operations'],
     ['/schedules', 'recurring'],
     ['/schedules/nightly%3Abuild', 'recurring'],
     ['/skills', 'skills'],
@@ -80,6 +100,14 @@ describe('dashboard route resolution', () => {
     'resolves the extensionless collection deep link %s',
     (path) => expect(resolveDashboardRoute(path)).not.toBeNull(),
   );
+  it('routes extensionless Settings aliases through the Settings page for normalization', () => {
+    expect(DASHBOARD_REACT_ROUTE_PATHS).toContain('/settings/*');
+    expect(resolveDashboardRoute('/settings/provider-profiles')).toEqual({
+      page: 'settings',
+      dataWidePanel: true,
+      currentPath: '/settings/provider-profiles',
+    });
+  });
   it.each(['/omnigent/agents', '/omnigent/policies'])(
     'resolves the %s inventory route independently',
     (path) => {

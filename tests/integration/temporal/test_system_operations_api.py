@@ -78,7 +78,7 @@ def test_worker_pause_route_matches_settings_runtime_contract(
                 app.dependency_overrides[dependency.call] = _override_user
     try:
         with TestClient(app) as client:
-            settings_page = client.get("/settings?section=operations")
+            settings_page = client.get("/settings/operations")
             snapshot = client.get("/api/system/worker-pause")
             command = client.post(
                 "/api/system/worker-pause",

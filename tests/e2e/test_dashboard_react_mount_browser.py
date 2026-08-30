@@ -60,8 +60,8 @@ def server():
     "path,expected_text",
     [
         ("/workflows", "Workflows"),
-        ("/settings?section=operations", "Operations"),
-        ("/settings?section=providers-secrets", "Provider Profiles"),
+        ("/settings/operations", "Operations"),
+        ("/settings/providers-secrets", "Provider Profiles"),
     ],
 )
 def test_react_page_shows_app_content(server, path: str, expected_text: str) -> None:

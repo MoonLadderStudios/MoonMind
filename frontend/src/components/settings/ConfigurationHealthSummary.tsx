@@ -270,6 +270,7 @@ export interface ConfigurationHealthSummaryProps {
   isLoading?: boolean;
   isError?: boolean;
   workerPauseConfig: WorkerPauseConfig | null;
+  includeWorkerState?: boolean;
   canWriteProviderProfiles: boolean;
   canRunGithubTokenProbe: boolean;
 }
@@ -280,10 +281,11 @@ export function ConfigurationHealthSummary({
   isLoading = false,
   isError = false,
   workerPauseConfig,
+  includeWorkerState = true,
   canWriteProviderProfiles,
   canRunGithubTokenProbe,
 }: ConfigurationHealthSummaryProps) {
-  const workerPauseConfigured = workerPauseConfig !== null;
+  const workerPauseConfigured = !includeWorkerState || workerPauseConfig !== null;
 
   const { data: workerState } = useQuery<WorkerStateSnapshot>({
     queryKey: ['workers-snapshot'],
@@ -299,7 +301,7 @@ export function ConfigurationHealthSummary({
       }
       return (await response.json()) as WorkerStateSnapshot;
     },
-    enabled: workerPauseConfigured && Boolean(workerPauseConfig?.get),
+    enabled: includeWorkerState && workerPauseConfigured && Boolean(workerPauseConfig?.get),
   });
 
   if (isLoading) {
@@ -370,7 +372,7 @@ export function ConfigurationHealthSummary({
         </span>
       </div>
 
-      <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className={`mt-5 grid gap-4 sm:grid-cols-2 ${includeWorkerState ? 'lg:grid-cols-4' : 'lg:grid-cols-3'}`}>
         <MetricTile
           label="Provider profiles"
           value={String(summary.providerProfileCount)}
@@ -393,7 +395,7 @@ export function ConfigurationHealthSummary({
           }
           tone={summary.brokenSecretCount > 0 ? 'warning' : 'default'}
         />
-        <MetricTile label="Worker state" value={workerStateLabel} />
+        {includeWorkerState ? <MetricTile label="Worker state" value={workerStateLabel} /> : null}
       </div>
 
       {summary.warnings.length > 0 ? (

@@ -178,6 +178,11 @@ describe('dashboard masthead brand styles', () => {
     expect(cssRuleBlock('.dashboard-system-trigger.active::after')).toContain(
       'background: rgb(var(--mm-accent));',
     );
+    const unavailableDestination = cssRuleBlock(
+      '.route-nav .dashboard-system-destination-unavailable',
+    );
+    expect(unavailableDestination).toContain('color: rgb(var(--mm-muted) / 0.78);');
+    expect(unavailableDestination).toContain('cursor: not-allowed;');
     expect(dashboardCss).toMatch(
       /@media \(max-width: 1180px\)\s*\{[\s\S]*\.dashboard-system-menu\s*\{[^}]*display:\s*none;[\s\S]*\.dashboard-system-inline\s*\{[^}]*display:\s*block;/s,
     );

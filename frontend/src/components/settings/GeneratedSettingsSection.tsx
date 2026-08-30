@@ -1,5 +1,9 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  SETTINGS_ROUTE_CHANGE_REQUEST_EVENT,
+  type SettingsRouteChangeRequestDetail,
+} from '../../lib/settingsRouteGuard';
 
 type SettingScope = 'workspace' | 'user';
 
@@ -385,6 +389,51 @@ export function GeneratedSettingsSection() {
 
   const pendingChanges = Object.values(pending);
   const hasInvalidChange = pendingChanges.some((change) => !change.valid);
+
+  useEffect(() => {
+    if (pendingChanges.length === 0) {
+      return undefined;
+    }
+    const handleRouteChangeRequest = (event: Event) => {
+      if (!(event instanceof CustomEvent)) {
+        return;
+      }
+      const detail = event.detail as SettingsRouteChangeRequestDetail | undefined;
+      if (!detail?.href) {
+        return;
+      }
+      const destination = new URL(detail.href, window.location.href);
+      const current = new URL(window.location.href);
+      if (
+        destination.pathname === current.pathname &&
+        destination.search === current.search &&
+        destination.hash === current.hash
+      ) {
+        return;
+      }
+      if (!window.confirm(
+        'Discard unsaved Settings changes and leave this page? Select OK to discard and leave, or Cancel to stay.',
+      )) {
+        event.preventDefault();
+      }
+    };
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener(
+      SETTINGS_ROUTE_CHANGE_REQUEST_EVENT,
+      handleRouteChangeRequest,
+    );
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener(
+        SETTINGS_ROUTE_CHANGE_REQUEST_EVENT,
+        handleRouteChangeRequest,
+      );
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [pendingChanges.length]);
 
   const updatePending = (descriptor: SettingDescriptor, raw: string | boolean) => {
     const next = coerceInputValue(descriptor, raw);

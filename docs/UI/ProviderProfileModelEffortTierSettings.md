@@ -192,7 +192,7 @@ The editor must state that saved profile policy affects future resolution. Exist
 The canonical route remains:
 
 ```text
-/settings?section=providers-secrets
+/settings/providers-secrets
 ```
 
 No new top-level Settings section is required.
