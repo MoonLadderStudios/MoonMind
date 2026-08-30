@@ -7086,6 +7086,7 @@ def test_create_task_shaped_execution_records_tier_preview_mismatch() -> None:
         get=AsyncMock(
             return_value=SimpleNamespace(
                 profile_id="codex-provider-profile",
+                profile_version=42,
                 runtime_id="codex_cli",
                 default_model="legacy-default",
                 default_model_tier=1,
@@ -7122,11 +7123,10 @@ def test_create_task_shaped_execution_records_tier_preview_mismatch() -> None:
                             "providerProfile": "codex-provider-profile",
                             "modelTier": 2,
                             "tierPreview": {
-                                "requestedTier": 2,
-                                "effectiveTier": 2,
-                                "model": "codex-implement-stale",
+                                "profileId": "codex-provider-profile",
+                                "profileVersion": 41,
+                                "model": "codex-implement-current",
                                 "effort": "high",
-                                "fallbackReason": None,
                             },
                         },
                     },
@@ -7141,6 +7141,12 @@ def test_create_task_shaped_execution_records_tier_preview_mismatch() -> None:
     assert initial_parameters["model"] == "codex-implement-current"
     assert initial_parameters["effort"] == "high"
     assert initial_parameters["modelSource"] == "requested_tier"
+    assert initial_parameters["tierPreview"] == {
+        "profileId": "codex-provider-profile",
+        "profileVersion": 41,
+        "model": "codex-implement-current",
+        "effort": "high",
+    }
     assert initial_parameters["modelTierResolution"] == {
         "requestedModelTier": 2,
         "effectiveModelTier": 2,
@@ -7154,6 +7160,72 @@ def test_create_task_shaped_execution_records_tier_preview_mismatch() -> None:
         "previewMismatch": True,
         "providerProfileId": "codex-provider-profile",
     }
+    app.dependency_overrides.clear()
+
+
+def test_create_task_shaped_execution_defers_selector_preview_comparison() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    mock_service.create_execution.return_value = _build_execution_record()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    default_profile = SimpleNamespace(
+        profile_id="codex-default",
+        profile_version=11,
+        runtime_id="codex_cli",
+        provider_id="openrouter",
+        default_model_tier=1,
+        model_tiers=[
+            {
+                "label": "Default",
+                "model": "default-model",
+                "effort": "medium",
+            }
+        ],
+    )
+    scalar_result = SimpleNamespace(first=lambda: default_profile)
+    app.dependency_overrides[get_async_session] = lambda: SimpleNamespace(
+        execute=AsyncMock(
+            return_value=SimpleNamespace(scalars=lambda: scalar_result)
+        )
+    )
+    _override_temporal_client(app)
+    _override_user_dependencies(app, is_superuser=False)
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "workflow",
+                "payload": {
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "targetRuntime": "codex",
+                    "workflow": {
+                        "instructions": "Use the selector-owned tier preview.",
+                        "runtime": {
+                            "mode": "codex",
+                            "profileSelector": {"providerId": "openai"},
+                            "modelTier": 1,
+                            "tierPreview": {
+                                "profileId": "codex-openai",
+                                "profileVersion": 17,
+                                "model": "selected-model",
+                                "effort": "high",
+                            },
+                        },
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 201
+    initial_parameters = mock_service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["modelTierResolution"]["providerProfileId"] == (
+        "codex-default"
+    )
+    assert initial_parameters["modelTierResolution"]["previewMismatch"] is False
     app.dependency_overrides.clear()
 
 
@@ -7847,6 +7919,12 @@ def test_mm1171_create_execution_preserves_runtime_tier_intent(
                         "profileSelector": {"providerId": "openai"},
                         "modelTier": 2,
                         "tierFallback": "clamp",
+                        "tierPreview": {
+                            "profileId": "codex-openai",
+                            "profileVersion": 17,
+                            "model": "gpt-5.5",
+                            "effort": "high",
+                        },
                     },
                     "steps": [
                         {
@@ -7857,6 +7935,12 @@ def test_mm1171_create_execution_preserves_runtime_tier_intent(
                                 "profileSelector": {"providerId": "openai"},
                                 "modelTier": 3,
                                 "tierFallback": "strict",
+                                "tierPreview": {
+                                    "profileId": "codex-openai",
+                                    "profileVersion": 17,
+                                    "model": "gpt-5.5",
+                                    "effort": "xhigh",
+                                },
                             },
                         }
                     ],
@@ -7876,6 +7960,13 @@ def test_mm1171_create_execution_preserves_runtime_tier_intent(
     assert workflow_runtime["profileSelector"] == {"providerId": "openai"}
     assert workflow_runtime["modelTier"] == 2
     assert workflow_runtime["tierFallback"] == "clamp"
+    assert workflow_runtime["tierPreview"] == {
+        "profileId": "codex-openai",
+        "profileVersion": 17,
+        "model": "gpt-5.5",
+        "effort": "high",
+    }
+    assert initial_parameters["tierPreview"] == workflow_runtime["tierPreview"]
     assert "requestedModel" not in workflow_runtime
     assert "model" not in workflow_runtime
 
@@ -7884,6 +7975,12 @@ def test_mm1171_create_execution_preserves_runtime_tier_intent(
     assert step_runtime["profileSelector"] == {"providerId": "openai"}
     assert step_runtime["modelTier"] == 3
     assert step_runtime["tierFallback"] == "strict"
+    assert step_runtime["tierPreview"] == {
+        "profileId": "codex-openai",
+        "profileVersion": 17,
+        "model": "gpt-5.5",
+        "effort": "xhigh",
+    }
     assert "requestedModel" not in step_runtime
 
 
@@ -7960,6 +8057,33 @@ def test_mm1171_create_execution_rejects_invalid_runtime_tier_intent(
 
     assert response.status_code == 422
     assert "hardOverrideAudit" in response.json()["detail"]["message"]
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "targetRuntime": "codex_cli",
+                "workflow": {
+                    "title": "Reject malformed preview",
+                    "instructions": "Run a workflow.",
+                    "runtime": {
+                        "modelTier": 1,
+                        "tierPreview": {
+                            "profileId": "codex-default",
+                            "profileVersion": {"revision": 1},
+                            "model": "gpt-5.5",
+                            "effort": "high",
+                        },
+                    },
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "tierPreview.profileVersion" in response.json()["detail"]["message"]
 
 
 def test_mm1171_create_execution_rejects_below_range_runtime_tier_intent(
@@ -10441,6 +10565,63 @@ def test_recurring_target_preserves_omnigent_selection_in_initial_parameters() -
     assert target["initialParameters"]["workflow"]["runtime"] == {
         "mode": "omnigent",
         "executionProfileRef": "codex-oauth-profile",
+    }
+
+
+@pytest.mark.asyncio
+async def test_recurring_target_persists_normalized_tier_previews() -> None:
+    request_payload = {
+        "targetRuntime": "codex_cli",
+        "workflow": {
+            "instructions": "Run nightly with normalized preview evidence.",
+            "runtime": {
+                "mode": "codex_cli",
+                "modelTier": 1,
+                "tierPreview": {
+                    "profileId": "  codex-default  ",
+                    "profileVersion": "  version-17  ",
+                    "model": "  gpt-current  ",
+                    "effort": "  high  ",
+                },
+            },
+            "steps": [
+                {
+                    "id": "review",
+                    "runtime": {
+                        "modelTier": 2,
+                        "tierPreview": {
+                            "profileId": "  codex-default  ",
+                            "profileVersion": "  version-17  ",
+                            "model": "  gpt-review  ",
+                            "effort": "  xhigh  ",
+                        },
+                    },
+                }
+            ],
+        },
+    }
+
+    runtime_metadata = await _resolve_recurring_runtime_metadata(
+        request_payload,
+        session=None,
+    )
+    target = _build_recurring_target(
+        request_payload,
+        runtime_metadata=runtime_metadata,
+    )
+
+    stored_workflow = target["initialParameters"]["workflow"]
+    assert stored_workflow["runtime"]["tierPreview"] == {
+        "profileId": "codex-default",
+        "profileVersion": "version-17",
+        "model": "gpt-current",
+        "effort": "high",
+    }
+    assert stored_workflow["steps"][0]["runtime"]["tierPreview"] == {
+        "profileId": "codex-default",
+        "profileVersion": "version-17",
+        "model": "gpt-review",
+        "effort": "xhigh",
     }
 
 

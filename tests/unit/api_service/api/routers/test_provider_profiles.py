@@ -903,8 +903,12 @@ async def test_provider_profile_model_tier_preview_returns_advisory_resolution(
 
     assert create_response.status_code == 201
     assert preview_response.status_code == 200
-    assert preview_response.json() == {
+    preview_payload = preview_response.json()
+    assert isinstance(preview_payload["profileVersion"], str)
+    assert preview_payload["profileVersion"]
+    assert preview_payload == {
         "profileId": profile_id,
+        "profileVersion": preview_payload["profileVersion"],
         "advisory": True,
         "items": [
             {

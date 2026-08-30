@@ -3921,7 +3921,21 @@ async def test_start_reuses_existing_workflow_scoped_session_without_launching(
 
     adapter = CodexSessionAdapter(
         profile_fetcher=_fake_profiles(
-            [{"profile_id": "codex-default", "credential_source": "secret_ref"}]
+            [
+                {
+                    "profile_id": "codex-default",
+                    "profile_version": 22,
+                    "credential_source": "secret_ref",
+                    "model_tiers": [
+                        {
+                            "label": "Current",
+                            "model": "gpt-current",
+                            "effort": "xhigh",
+                        }
+                    ],
+                    "default_model_tier": 1,
+                }
+            ]
         ),
         slot_requester=_async_noop,
         slot_releaser=_async_noop,
@@ -3957,8 +3971,26 @@ async def test_start_reuses_existing_workflow_scoped_session_without_launching(
     request.parameters["_moonmindActiveSkillsDir"] = (
         "/work/runtime/skills_active/snapshot-retry"
     )
-    request.parameters["model"] = "gpt-5.3-codex-spark"
-    request.parameters["effort"] = "xhigh"
+    request.parameters.update(
+        {
+            "modelTier": 1,
+            "model": "gpt-stale",
+            "effort": "low",
+            "tierPreview": {
+                "profileId": "codex-default",
+                "profileVersion": 22,
+                "model": "gpt-current",
+                "effort": "xhigh",
+            },
+            "modelTierResolution": {
+                "providerProfileId": "codex-old",
+                "resolvedModel": "gpt-stale",
+                "resolvedEffort": "low",
+                "effortSource": "requested_tier",
+                "previewMismatch": True,
+            },
+        }
+    )
 
     handle = await adapter.start(request)
 
@@ -3972,8 +4004,12 @@ async def test_start_reuses_existing_workflow_scoped_session_without_launching(
             "wf-user-1:run-user-1:queue-github-issues:execution:2"
         ),
     }
-    assert send_turn_calls[0].model == "gpt-5.3-codex-spark"
+    assert send_turn_calls[0].model == "gpt-current"
     assert send_turn_calls[0].effort == "xhigh"
+    assert request.parameters["modelTierResolution"]["providerProfileId"] == (
+        "codex-default"
+    )
+    assert request.parameters["modelTierResolution"]["previewMismatch"] is False
     assert request.parameters["_moonmindActiveSkillsDir"] == (
         "/work/runtime/skills_active/snapshot-retry"
     )

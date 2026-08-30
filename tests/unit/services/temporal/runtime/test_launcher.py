@@ -804,6 +804,7 @@ async def test_launch_resolves_raw_model_tier_and_emits_after_spool_reset(
                 assert recorded["requestedModelTier"] == 2
                 assert recorded["resolvedModel"] == "gpt-tier-2"
                 assert recorded["effortApplicationStatus"] == "not_supported"
+                assert recorded["previewMismatch"] is True
 
     class _FakeProcess:
         pid = 1175
@@ -834,11 +835,21 @@ async def test_launch_resolves_raw_model_tier_and_emits_after_spool_reset(
         run_id="run-raw-tier",
         request=_make_request(
             instruction_ref="Implement the issue",
-            parameters={"modelTier": 2, "tierFallback": "clamp"},
+            parameters={
+                "modelTier": 2,
+                "tierFallback": "clamp",
+                "tierPreview": {
+                    "profileId": "codex-profile",
+                    "profileVersion": 6,
+                    "model": "gpt-tier-2",
+                    "effort": "xhigh",
+                },
+            },
         ),
         profile=_make_profile(
             runtime_id="codex",
             profile_id="codex-profile",
+            profile_version=7,
             model_tiers=[
                 {"label": "Fast", "model": "gpt-tier-1", "effort": "medium"},
                 {"label": "Deep", "model": "gpt-tier-2", "effort": "xhigh"},
@@ -1197,6 +1208,59 @@ def test_apply_resolved_tier_policy_preserves_original_tier_intent():
     assert request.parameters["output_format"] == "strict_json"
     resolution = request.parameters["metadata"]["moonmind"]["modelEffortResolution"]
     assert resolution["effectiveModelTier"] == 1
+
+
+def test_apply_resolved_tier_policy_replaces_stale_admission_resolution():
+    profile = _make_profile(
+        profile_id="codex-current",
+        profile_version=22,
+        runtime_id="codex_cli",
+        enabled=True,
+        authState="connected",
+        disabledReason=None,
+        model_tiers=[
+            {
+                "label": "Current",
+                "model": "current-model",
+                "effort": "xhigh",
+            }
+        ],
+        default_model_tier=1,
+    )
+    request = _make_request(
+        parameters={
+            "modelTier": 1,
+            "model": "stale-model",
+            "effort": "low",
+            "tierPreview": {
+                "profileId": "codex-current",
+                "profileVersion": 22,
+                "model": "current-model",
+                "effort": "xhigh",
+            },
+            "modelTierResolution": {
+                "providerProfileId": "codex-old",
+                "resolvedModel": "stale-model",
+                "resolvedEffort": "low",
+                "effortSource": "requested_tier",
+                "previewMismatch": True,
+            },
+        }
+    )
+
+    ManagedRuntimeLauncher._apply_resolved_tier_policy(
+        request=request,
+        profile=profile,
+        strategy=None,
+    )
+
+    assert request.parameters["model"] == "current-model"
+    assert request.parameters["effort"] == "xhigh"
+    assert request.parameters["modelTierResolution"] == {
+        **request.parameters["metadata"]["moonmind"]["modelEffortResolution"],
+        "providerProfileId": "codex-current",
+    }
+    assert request.parameters["modelTierResolution"]["previewMismatch"] is False
 
 
 @pytest.mark.parametrize(
