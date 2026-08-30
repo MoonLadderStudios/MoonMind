@@ -15,16 +15,12 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
-from api_service.db.models import (
-    ProviderCredentialSource,
-    ProviderProfileAuthState,
-    RuntimeMaterializationMode,
-)
 from moonmind.omnigent.checkpoints import (
     CandidateWorkspaceAuthority,
     OmnigentCheckpointIdentity,
     validate_branch_identity,
 )
+from moonmind.omnigent.execution_ports import ProviderProfileAuthority
 from moonmind.omnigent.policies import compile_policy_snapshot
 from moonmind.omnigent.profile_bound_execution import (
     OmnigentProfileBoundExecutionCoordinator,
@@ -548,27 +544,22 @@ async def execute_checkpoint_branch_request(
         artifact_gateway=object(),
     )
 
-    async def resolve_profile(_profile_id: str):
-        return SimpleNamespace(
-            enabled=True,
-            auth_state=ProviderProfileAuthState.CONNECTED,
-            disabled_reason=None,
-            max_parallel_runs=1,
-            cooldown_after_429_seconds=900,
-            runtime_id="codex_cli",
-            credential_source=ProviderCredentialSource.OAUTH_VOLUME,
-            runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
-            volume_ref="codex_auth_volume",
-            volume_mount_path="/home/app/.codex",
-            secret_refs={},
-            command_behavior={},
+    async def resolve_profile(_profile_id: str) -> ProviderProfileAuthority:
+        return ProviderProfileAuthority.model_validate(
+            {
+                "profileId": "profile-1",
+                "runtimeId": "codex_cli",
+                "credentialGeneration": 1,
+                "cooldownAfter429Seconds": 900,
+                "launchReady": True,
+            }
         )
 
     async def resolve_policy(_policy_ref: str) -> dict[str, Any]:
         return policy
 
-    coordinator._resolve_profile = resolve_profile  # type: ignore[method-assign]
-    coordinator._resolve_policy_snapshot = resolve_policy  # type: ignore[method-assign]
+    coordinator._profile_authority.resolve = resolve_profile
+    coordinator._policy_authority.resolve_runtime_snapshot = resolve_policy
     return await coordinator.branch_from_checkpoint(
         request=request,
         checkpoint=checkpoint,

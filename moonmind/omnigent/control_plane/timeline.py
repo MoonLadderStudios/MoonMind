@@ -35,6 +35,7 @@ from .records import (
     TurnAttemptRecord,
     COMMAND_STATE_CLAIMED,
     COMMAND_STATE_DELIVERY_UNKNOWN,
+    distinct_terminal_meanings,
 )
 from .spans import _FORBIDDEN_VALUE_PATTERNS, MAX_ATTRIBUTE_VALUE_LEN
 
@@ -181,6 +182,10 @@ class SessionTimeline:
     # terminal / cleanup
     terminal_state: Optional[str]
     terminal_evidence_ref: Optional[str]
+    # Every terminal plane, reported independently (#3707 §3). A completed turn
+    # attempt, a terminal Workflow, a terminal branch, and completed cleanup are
+    # separate facts; the projection never collapses them into one "done".
+    terminal_meanings: dict[str, Optional[str]]
     cleanup_state: str
     janitor_state: Optional[str]
     workspace_publication_state: Optional[str]
@@ -270,6 +275,7 @@ class SessionTimeline:
                 "state": self.terminal_state,
                 "evidenceRef": self.terminal_evidence_ref,
                 "evidenceLink": self.terminal_evidence_link,
+                "meanings": dict(self.terminal_meanings),
             },
             "cleanup": {"state": self.cleanup_state, "janitorState": self.janitor_state},
             "workspacePublicationState": self.workspace_publication_state,
@@ -490,6 +496,9 @@ def build_timeline(
         active_command=command_summary,
         terminal_state=session.terminal_state,
         terminal_evidence_ref=safe_timeline_ref(session.terminal_evidence_ref),
+        terminal_meanings=distinct_terminal_meanings(
+            session=session, active_turn=active_turn, cleanup=cleanup
+        ),
         cleanup_state=session.cleanup_state,
         janitor_state=janitor_state,
         workspace_publication_state=workspace_state if isinstance(workspace_state, str) else None,

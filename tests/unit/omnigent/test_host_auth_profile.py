@@ -9,16 +9,18 @@ from moonmind.omnigent.bridge_config import (
     parse_bridge_config,
 )
 from moonmind.omnigent.bridge_embedded import verify_embedded_host_auth
-from moonmind.omnigent.host_auth_profile import (
+from moonmind.omnigent.host_auth_contracts import (
     HostAuthCredentialProfile,
     HostAuthProfileError,
     MAX_ROTATION_OVERLAP,
-    load_host_auth_profile,
     profile_from_metadata,
     profile_persistence_metadata,
-    resolve_host_auth_credentials,
     revoke_host_auth_profile,
     rotate_host_auth_profile,
+)
+from moonmind.omnigent.host_auth_profile import (
+    load_host_auth_profile,
+    resolve_host_auth_credentials,
 )
 from moonmind.omnigent.host_auth_adapter import PINNED_PROTOCOL_PROFILE
 

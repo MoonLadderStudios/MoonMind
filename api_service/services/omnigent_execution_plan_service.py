@@ -63,35 +63,43 @@ from moonmind.workflows.temporal.remediation_loop import (
     ToolDescriptor,
     tool_descriptor_selected_skill,
 )
+from moonmind.omnigent.harness_platform.harness_registry import (
+    canonical_harness_id,
+    find_harness_registration,
+    harness_registration,
+)
 from pr_resolver_core import IMPLEMENTATION_CONTRACT
 
-_HARNESS_PRODUCT_CONFIG: dict[str, dict[str, str]] = {
-    "codex-native": {
-        "hostClassRef": "omnigent-codex-current@1",
-        "implementationDigest": "sha256:" + "e" * 64,
-        "materializerRef": "codex-oauth-home@1",
-        "authModel": "oauth_volume",
-        "integrationMode": "native-server",
-    },
-    "opencode-native": {
-        "hostClassRef": "omnigent-opencode@1",
-        "implementationDigest": "sha256:" + "a" * 64,
-        "materializerRef": "opencode-auth-json@1",
-        "authModel": "own-auth",
-        "integrationMode": "native-server",
-    },
-    "pi-native": {
-        "hostClassRef": "omnigent-pi@1",
-        "implementationDigest": "sha256:" + "c" * 64,
-        "materializerRef": "omnigent-provider-config@1",
-        "authModel": "omnigent-provider-config",
-        "integrationMode": "native-server",
-    },
+# Hermetic fixture digests for the approved harnesses. Every other product
+# authority ref comes from the one harness registration registry
+# (MoonLadderStudios/MoonMind#3711); only the placeholder implementation digest
+# is fixture data, because a real digest requires a synchronized catalog.
+_HARNESS_FIXTURE_IMPLEMENTATION_DIGESTS: dict[str, str] = {
+    "codex-native": "sha256:" + "e" * 64,
+    "opencode-native": "sha256:" + "a" * 64,
+    "pi-native": "sha256:" + "c" * 64,
 }
 
-# Keep hard-coded config only as a fallback for hermetic unit tests that do
-# not have a real catalog. Production planning uses the synchronized catalog
-# and resolved deployment state as authoritative authority.
+
+def _fixture_harness_config(harness_id: str) -> dict[str, str] | None:
+    """Return bounded fixture config for a hermetic caller without a catalog.
+
+    Production planning uses the synchronized catalog and resolved deployment
+    state as authoritative authority; this path exists only so unit tests can
+    compile a plan without catalog storage.
+    """
+
+    registration = find_harness_registration(harness_id)
+    digest = _HARNESS_FIXTURE_IMPLEMENTATION_DIGESTS.get(harness_id)
+    if registration is None or digest is None:
+        return None
+    return {
+        "hostClassRef": registration.hostClassRef,
+        "implementationDigest": digest,
+        "materializerRef": registration.materializerRef,
+        "authModel": registration.authModel,
+        "integrationMode": registration.integrationMode,
+    }
 
 
 def _json_bytes(value: Mapping[str, Any]) -> bytes:
@@ -117,19 +125,6 @@ def _image_digest(image_ref: object, *, field_name: str) -> str:
     if not separator or len(digest) != 64:
         raise ValueError(f"{field_name} must be digest-pinned")
     return "sha256:" + digest
-
-
-def _normalize_harness_id(value: Any) -> str:
-    if isinstance(value, dict):
-        # V2 profile stores harness as {id, catalogRef, implementationRef}
-        value = value.get("id") or value.get("harnessId") or value.get("harness_id") or ""
-    normalized = str(value or "").strip().lower()
-    aliases = {
-        "codex": "codex-native",
-        "opencode": "opencode-native",
-        "pi": "pi-native",
-    }
-    return aliases.get(normalized, normalized)
 
 
 async def _try_load_real_harness_config(
@@ -179,24 +174,14 @@ async def _try_load_real_harness_config(
             return None
         implementation_digest = harness_record.implementation.digest
         # Derive materializer/auth/integration from catalog capabilities
-        auth_model = harness_record.capabilities.authModel or (
-            "own-auth" if harness_id == "opencode-native" else "oauth_volume"
+        registration = harness_registration(harness_id)
+        auth_model = harness_record.capabilities.authModel or registration.authModel
+        integration_mode = (
+            harness_record.capabilities.integrationMode
+            or registration.integrationMode
         )
-        integration_mode = harness_record.capabilities.integrationMode or "native-server"
-        # Materializer mapping
-        materializer_map = {
-            "opencode-native": "opencode-auth-json@1",
-            "codex-native": "codex-oauth-home@1",
-            "pi-native": "omnigent-provider-config@1",
-        }
-        materializer = materializer_map.get(harness_id, "opencode-auth-json@1")
-        # Host class ref derived from harness
-        host_map = {
-            "opencode-native": "omnigent-opencode@1",
-            "codex-native": "omnigent-codex-current@1",
-            "pi-native": "omnigent-pi@1",
-        }
-        host_ref = host_map.get(harness_id, "omnigent-opencode@1")
+        materializer = registration.materializerRef
+        host_ref = registration.hostClassRef
         return {
             "hostClassRef": host_ref,
             "implementationDigest": implementation_digest,
@@ -398,7 +383,7 @@ class PersistedOmnigentExecutionPlan:
     resolved_skillset_digest: str
 
 
-def _selected_skill_names(initial_parameters: Mapping[str, Any]) -> list[str]:
+def selected_skill_names(initial_parameters: Mapping[str, Any]) -> list[str]:
     """Collect the workflow's MoonMind Skill intent for one run snapshot."""
 
     workflow = initial_parameters.get("workflow")
@@ -463,7 +448,7 @@ def _skill_selector(initial_parameters: Mapping[str, Any]) -> SkillSelector:
             if str(value or "").strip()
         }
     )
-    selected = _selected_skill_names(initial_parameters)
+    selected = selected_skill_names(initial_parameters)
     conflict = sorted(set(selected).intersection(excluded))
     if conflict:
         raise ValueError(
@@ -703,14 +688,14 @@ async def compile_and_persist_execution_plan(
     document = agent_profile_snapshot.get("document")
     if not isinstance(document, Mapping):
         raise ValueError("Agent Profile snapshot document is unavailable")
-    harness_id = _normalize_harness_id(document.get("harness"))
+    harness_id = canonical_harness_id(document.get("harness"))
     # Prefer real synchronized catalog authority; fall back to hard-coded for tests
     real_config = await _try_load_real_harness_config(
         harness_id=harness_id,
         agent_profile_snapshot=agent_profile_snapshot,
         session_factory=session_factory,
     )
-    config = real_config or _HARNESS_PRODUCT_CONFIG.get(harness_id)
+    config = real_config or _fixture_harness_config(harness_id)
     if config is None:
         raise ValueError(f"unsupported trusted Omnigent harness: {harness_id!r}")
     exact_catalog = real_config.get("_catalogSnapshot") if real_config else None
@@ -1240,5 +1225,6 @@ __all__ = [
     "PersistedOmnigentExecutionPlan",
     "compile_and_persist_execution_plan",
     "persist_json_artifact",
+    "selected_skill_names",
     "load_protected_execution_support_evidence",
 ]

@@ -61,10 +61,8 @@ from moonmind.omnigent.host_services.github_credentials import (
     OmnigentGithubCredentialService,
     github_repository_from_request,
 )
-from moonmind.omnigent.host_services.launcher import (
-    DockerOmnigentHostLauncher,
-    HostLaunchSpec,
-)
+from moonmind.omnigent.host_ports import HostLaunchSpec
+from moonmind.omnigent.host_services.launcher import DockerOmnigentHostLauncher
 from moonmind.omnigent.host_services.mounted_tools import (
     OmnigentMountedToolService,
     deployment_mounted_tool_names,
@@ -1397,8 +1395,11 @@ async def test_host_cleanup_claim_fences_a_stale_activity() -> None:
     )
 
 
-@pytest.mark.asyncio
-async def test_generic_realizer_persists_authority_and_releases_provider_last() -> None:
+async def _generic_publication_harness(
+    publication: dict[str, object],
+) -> SimpleNamespace:
+    """Build the real generic-host realizer around one publication outcome."""
+
     events: list[str] = []
 
     class CountingRuntimeBindings(InMemoryStableRuntimeBindingStore):
@@ -1579,7 +1580,9 @@ async def test_generic_realizer_persists_authority_and_releases_provider_last() 
         assert authorization["hostLeaseRef"]
         await asyncio.sleep(0.03)
         events.append("message-completed")
-        return AgentRunResult(summary="done")
+        return AgentRunResult(
+            summary="done", metadata={"omnigentSessionId": "session-1"}
+        )
 
     class SessionCleanup:
         async def drain(self, session_id):
@@ -1590,20 +1593,22 @@ async def test_generic_realizer_persists_authority_and_releases_provider_last() 
     class WorkspacePublisher:
         async def publish_request_workspace(self, **_kwargs):
             events.append("workspace-published")
-            return {
-                "push_status": "pushed",
-                "push_branch": "moonmind-job-test",
-                "push_base_branch": "main",
-                "push_head_sha": "a" * 40,
-                "push_commit_count": 1,
-                "remote_verified": True,
-            }
+            return dict(publication)
 
     class TurnCommands:
         async def claim(self, **kwargs):
             assert kwargs["payload_digest"] == _plan("opencode-go/model").planRef
             events.append("command-claimed")
-            return SimpleNamespace(owns_delivery=True)
+            return SimpleNamespace(
+                owns_delivery=True, session_id="oms_generic", fencing_generation=1
+            )
+
+        async def attach_provider_session(self, **kwargs):
+            # The delivered provider session becomes canonical authority before
+            # settlement, so provider-scoped lookups resolve this aggregate.
+            events.append(
+                f"provider-session-attached:{kwargs['provider_session_ref']}"
+            )
 
         async def settle(self, **kwargs):
             events.append(f"command-settled:{kwargs['outcome'].value}")
@@ -1640,6 +1645,45 @@ async def test_generic_realizer_persists_authority_and_releases_provider_last() 
             },
         }
     )
+    return SimpleNamespace(
+        realizer=realizer,
+        publish_request=publish_request,
+        events=events,
+        runtime_store=runtime_store,
+        host_leases=host_leases,
+    )
+
+
+_PUSHED_PUBLICATION: dict[str, object] = {
+    "push_status": "pushed",
+    "push_branch": "moonmind-job-test",
+    "push_base_branch": "main",
+    "push_head_sha": "a" * 40,
+    "push_commit_count": 1,
+    "remote_verified": True,
+}
+
+# The publisher already proved the workspace head is exactly the remote base
+# head, so a step that legitimately adds no commits lost no repository work.
+_NO_COMMIT_PUBLICATION: dict[str, object] = {
+    "push_status": "no_commits",
+    "push_branch": "moonmind-job-test",
+    "push_base_branch": "moonmind-job-test",
+    "push_head_sha": "b" * 40,
+    "push_commit_count": 0,
+    "remote_verified": True,
+}
+
+
+@pytest.mark.asyncio
+async def test_generic_realizer_persists_authority_and_releases_provider_last() -> None:
+    harness = await _generic_publication_harness(_PUSHED_PUBLICATION)
+    realizer = harness.realizer
+    publish_request = harness.publish_request
+    events = harness.events
+    runtime_store = harness.runtime_store
+    host_leases = harness.host_leases
+
     result = await realizer.execute(publish_request, _plan("opencode-go/model"))
 
     assert result.summary == "done"
@@ -1654,17 +1698,93 @@ async def test_generic_realizer_persists_authority_and_releases_provider_last() 
     assert events[-1] == "command-settled:applied"
     assert events.index("command-claimed") < events.index("provider-acquired")
     assert events.index("provider-released") < events.index("command-settled:applied")
+    # The delivered provider session is attached to canonical authority before
+    # settlement, so a later provider-scoped lookup resolves this aggregate
+    # instead of bootstrapping a second one.
+    assert events.index(
+        "provider-session-attached:session-1"
+    ) < events.index("command-settled:applied")
     assert events.index("host-cleaned") < events.index("credentials-cleaned")
     assert events.index("workspace-published") < events.index("host-cleaned")
     assert events.index("credentials-cleaned") < events.index("provider-released")
     assert host_leases.heartbeat_count >= 1
     assert runtime_store.heartbeat_count >= 1
 
+    assert result.metadata["push_status"] == "pushed"
+    assert result.metadata["acceptedRepositoryEvidence"] == {
+        "schemaVersion": "accepted-repository-evidence/v1",
+        "pushStatus": "pushed",
+        "branch": "moonmind-job-test",
+        "baseBranch": "main",
+        "headSha": "a" * 40,
+        "commitsAheadOfBase": 1,
+        "repositoryChanged": True,
+        "publicationAuthorized": True,
+        "candidateContaminated": False,
+        "remoteVerified": True,
+        "authority": "omnigent.generic_host_execution",
+    }
+
     first_execution_events = tuple(events)
     replay = await realizer.execute(publish_request, _plan("opencode-go/model"))
 
     assert replay.summary == "done"
     assert events[len(first_execution_events) :] == []
+
+
+@pytest.mark.asyncio
+async def test_generic_realizer_accepts_remotely_verified_no_commit_publication() -> (
+    None
+):
+    """A verified no-commit step is a terminal outcome, not a dispatch failure.
+
+    Publication steps such as a pull-request handoff legitimately add no
+    commits because earlier steps already pushed the work. The durable
+    workflow -- not this realizer -- owns whether that satisfies the step's
+    publish contract.
+    """
+
+    harness = await _generic_publication_harness(_NO_COMMIT_PUBLICATION)
+
+    result = await harness.realizer.execute(
+        harness.publish_request, _plan("opencode-go/model")
+    )
+
+    assert result.failure_class is None
+    assert result.provider_error_code is None
+    assert result.metadata["push_status"] == "no_commits"
+    assert result.metadata["acceptedRepositoryEvidence"] == {
+        "schemaVersion": "accepted-repository-evidence/v1",
+        "pushStatus": "no_commits",
+        "branch": "moonmind-job-test",
+        "baseBranch": "moonmind-job-test",
+        "headSha": "b" * 40,
+        "commitsAheadOfBase": 0,
+        "repositoryChanged": False,
+        "publicationAuthorized": True,
+        "candidateContaminated": False,
+        "remoteVerified": True,
+        "authority": "omnigent.generic_host_execution",
+    }
+    # Terminal success must still release every fenced authority in order.
+    assert harness.events[-1] == "command-settled:applied"
+    assert harness.events.index("workspace-published") < harness.events.index(
+        "host-cleaned"
+    )
+
+
+@pytest.mark.asyncio
+async def test_generic_realizer_rejects_unverified_repository_publication() -> None:
+    """Only remotely verified publication outcomes may release the workspace."""
+
+    harness = await _generic_publication_harness({"push_status": "skipped"})
+
+    with pytest.raises(HarnessPlatformError) as excinfo:
+        await harness.realizer.execute(
+            harness.publish_request, _plan("opencode-go/model")
+        )
+
+    assert excinfo.value.code == "OMNIGENT_REPOSITORY_OUTPUT_MISSING"
 
 
 @pytest.mark.asyncio

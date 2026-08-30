@@ -26,6 +26,7 @@ from moonmind.schemas.agent_skill_models import (
 )
 from moonmind.workflows.temporal.workflows.run import (
     RUN_AGENT_REQUIRED_CAPABILITIES_PROPAGATION_PATCH,
+    RUN_CANONICAL_TURN_LINEAGE_PATCH,
     RUN_ASSESSMENT_ATTACHMENT_HANDOFF_PATCH,
     RUN_ASSESSMENT_PARAMETER_INJECTION_PATCH,
     RUN_AUTO_PUBLISH_TERMINAL_CONTRACT_PATCH,
@@ -4595,3 +4596,295 @@ class TestEnsureAssessmentParameters(unittest.TestCase):
             "2b3b49127a73785807b32ea7f2cc4deee376fdc0",
         )
         self.assertEqual(wf._publish_context["baseRef"], "main")
+
+
+class TestCanonicalTurnLineage(unittest.TestCase):
+    """The run workflow is the only authority that names a canonical turn source.
+
+    Source: MoonLadderStudios/MoonMind#3707 ([Omnigent control plane 7/11]).
+    An execution realizer must not name its own source, and a plan node must not
+    be able to claim remediation authority, so the attestation is derived here
+    from workflow-owned remediation-loop state alone.
+    """
+
+    WORKFLOW_ID = "test-wf-id"
+    RUN_ID = "test-run-id"
+    LOOP_ID = "issue-implementation-remediation"
+    BASE_STEP_EXECUTION_ID = "test-wf-id:test-run-id:implement:execution:1"
+
+    class _MockInfo:
+        workflow_id = "test-wf-id"
+        run_id = "test-run-id"
+
+    def _spec(self):
+        from moonmind.workflows.temporal.remediation_loop import RemediationLoopSpec
+
+        return RemediationLoopSpec.model_validate(
+            {
+                "kind": "remediation_loop",
+                "loopId": self.LOOP_ID,
+                "remediationTool": {
+                    "type": "skill",
+                    "name": "auto",
+                    "inputs": {"instructions": "Fix the remaining verified gaps."},
+                },
+                "verificationTool": {
+                    "type": "skill",
+                    "name": "moonspec-verify",
+                    "inputs": {"instructions": "Verify the remediated candidate."},
+                },
+                "workspacePolicy": "continue_from_loop_head",
+                "budgets": {"hardMaxAttempts": 3},
+                "terminalPolicy": {
+                    "fullyImplemented": "advance",
+                    "additionalWorkNeeded": "continue_when_allowed",
+                    "blocked": "stop",
+                    "noDetermination": "retry_evidence_or_stop",
+                    "failedUnrecoverable": "stop",
+                },
+                "sideEffectPolicy": "workflow_owned",
+                "publicationPolicy": "evaluate_after_terminal",
+            }
+        )
+
+    def _attempt_node(self, *, ordinal: int = 1):
+        from moonmind.workflows.temporal.remediation_loop import (
+            materialize_attempt_nodes,
+        )
+
+        remediation, _verification = materialize_attempt_nodes(
+            spec=self._spec(),
+            workflow_id=self.WORKFLOW_ID,
+            run_id=self.RUN_ID,
+            ordinal=ordinal,
+            workspace_head_ref="artifact://loop-head/1",
+            runtime={"mode": "omnigent", "executionProfileRef": "codex-profile"},
+        )
+        return remediation
+
+    def _workflow(self, *, attempt_ordinal: int = 1, head_step_execution_id=...):
+        from moonmind.workflows.temporal.remediation_loop import (
+            ConsumedRemediationBudgets,
+            RemediationLoopPhase,
+            RemediationLoopState,
+        )
+        from moonmind.workflows.temporal.remediation_workspace_head import (
+            RemediationWorkspaceHead,
+        )
+
+        wf = MoonMindRunWorkflow()
+        wf._remediation_loop_spec = self._spec()
+        wf._remediation_loop_state = RemediationLoopState(
+            loopId=self.LOOP_ID,
+            attemptOrdinal=attempt_ordinal,
+            phase=RemediationLoopPhase.REMEDIATION_RUNNING,
+            consumedBudgets=ConsumedRemediationBudgets(attempts=attempt_ordinal),
+        )
+        if head_step_execution_id is not None:
+            wf._remediation_workspace_head = RemediationWorkspaceHead(
+                loopId=self.LOOP_ID,
+                branchRef=f"checkpoint-branch:{self.LOOP_ID}",
+                rootCheckpointRef="artifact://workspace/C0",
+                rootWorkspaceDigest="sha256:" + "a" * 64,
+                headCheckpointRef="artifact://workspace/C0",
+                headWorkspaceDigest="sha256:" + "a" * 64,
+                headStepExecutionId=(
+                    self.BASE_STEP_EXECUTION_ID
+                    if head_step_execution_id is ...
+                    else head_step_execution_id
+                ),
+                headAttemptOrdinal=0,
+                headVersion=1,
+            )
+        return wf
+
+    def _record(self, wf, node):
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=self._MockInfo(),
+        ):
+            return wf._record_canonical_turn_lineage(
+                node=node, node_id=str(node["id"])
+            )
+
+    def _build(self, wf, node, *, lineage_patch_enabled: bool = True):
+        node_id = str(node["id"])
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=self._MockInfo(),
+        ), patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            side_effect=lambda patch_id: (
+                lineage_patch_enabled
+                and patch_id == RUN_CANONICAL_TURN_LINEAGE_PATCH
+            ),
+        ):
+            wf._record_canonical_turn_lineage(node=node, node_id=node_id)
+            return wf._build_agent_execution_request(
+                node_inputs=dict(node["inputs"]),
+                node_id=node_id,
+                tool_name="omnigent",
+                step_execution=1,
+            )
+
+    def test_attempt_lineage_names_the_repaired_step_execution(self) -> None:
+        node = self._attempt_node()
+        lineage = self._record(self._workflow(), node)
+
+        self.assertEqual(
+            lineage,
+            {
+                "schemaVersion": "canonical-turn-lineage/v1",
+                "source": "remediation",
+                "baseStepExecutionId": self.BASE_STEP_EXECUTION_ID,
+            },
+        )
+
+    def test_lineage_requires_workflow_owned_loop_state(self) -> None:
+        wf = MoonMindRunWorkflow()
+        wf._remediation_loop_state = None
+
+        self.assertIsNone(self._record(wf, self._attempt_node()))
+
+    def test_lineage_refuses_an_attempt_from_another_loop(self) -> None:
+        node = self._attempt_node()
+        node["annotations"]["remediationLoopId"] = "another-loop"
+
+        self.assertIsNone(self._record(self._workflow(), node))
+
+    def test_lineage_requires_the_admitted_attempt_ordinal(self) -> None:
+        node = self._attempt_node(ordinal=2)
+
+        self.assertIsNone(self._record(self._workflow(attempt_ordinal=1), node))
+
+    def test_headless_attempt_names_its_source_without_a_base(self) -> None:
+        """A loop with no recorded head has no prior authority to compare."""
+
+        lineage = self._record(
+            self._workflow(head_step_execution_id=None), self._attempt_node()
+        )
+
+        self.assertEqual(
+            lineage,
+            {
+                "schemaVersion": "canonical-turn-lineage/v1",
+                "source": "remediation",
+            },
+        )
+
+    def test_build_request_emits_only_controller_produced_lineage(self) -> None:
+        request = self._build(self._workflow(), self._attempt_node())
+
+        lineage = request.step_execution.canonical_turn_lineage
+        assert lineage is not None
+        self.assertEqual(lineage.source, "remediation")
+        self.assertEqual(
+            lineage.base_step_execution_id, self.BASE_STEP_EXECUTION_ID
+        )
+        # The dead remediation-workspace seam is not what makes this a
+        # remediation turn; no production dispatch populates it.
+        self.assertIsNone(request.remediation_workspace)
+
+        # The attestation has to survive the Temporal payload boundary between
+        # the run workflow and the AgentRun child workflow that consumes it.
+        round_tripped = AgentExecutionRequest.model_validate(
+            request.model_dump(by_alias=True, mode="json")
+        )
+        self.assertEqual(
+            round_tripped.step_execution.canonical_turn_lineage, lineage
+        )
+
+    def test_build_request_rejects_plan_authored_lineage(self) -> None:
+        wf = self._workflow()
+        node = self._attempt_node()
+        node_inputs = dict(node["inputs"])
+        node_inputs["canonicalTurnLineage"] = {
+            "schemaVersion": "canonical-turn-lineage/v1",
+            "source": "initial",
+        }
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=self._MockInfo(),
+        ), self.assertRaisesRegex(ValueError, "workflow-owned controller state"):
+            wf._build_agent_execution_request(
+                node_inputs=node_inputs,
+                node_id=str(node["id"]),
+                tool_name="omnigent",
+                step_execution=1,
+            )
+
+    def test_lineage_payload_field_is_replay_patch_guarded(self) -> None:
+        """An in-flight AgentRun started before the cutover carries no lineage.
+
+        The request payload gains a field, so the emission is gated. The
+        pre-cutover shape must still validate and still resolve to the source
+        that establishes a canonical session.
+        """
+
+        self.assertEqual(
+            RUN_CANONICAL_TURN_LINEAGE_PATCH, "run-canonical-turn-lineage-v1"
+        )
+        source = inspect.getsource(
+            MoonMindRunWorkflow._build_agent_execution_request
+        )
+        guard_index = source.index("RUN_CANONICAL_TURN_LINEAGE_PATCH")
+        emit_index = source.index(
+            'step_execution_payload["canonicalTurnLineage"]', guard_index
+        )
+        self.assertLess(guard_index, emit_index)
+
+        from moonmind.omnigent.control_plane.turn_sources import TurnSource
+        from moonmind.omnigent.realizers.turn_delivery import (
+            canonical_turn_base_step_execution_id,
+            canonical_turn_source,
+        )
+
+        request = self._build(
+            self._workflow(), self._attempt_node(), lineage_patch_enabled=False
+        )
+        self.assertIsNone(request.step_execution.canonical_turn_lineage)
+        self.assertIs(canonical_turn_source(request), TurnSource.INITIAL)
+        self.assertIsNone(canonical_turn_base_step_execution_id(request))
+
+    def test_every_request_build_site_attests_its_turn_lineage(self) -> None:
+        """A dispatch site that forgets the attestation is the escaped defect.
+
+        RW-1 shipped a derivation no production caller ever fed. This asserts
+        structurally that every function which builds an agent execution request
+        also records the controller attestation for that Step Execution.
+        """
+
+        import ast
+        import importlib
+
+        # Resolve the module object without a second import style for a module
+        # this file already imports names from.
+        run_module = importlib.import_module(
+            "moonmind.workflows.temporal.workflows.run"
+        )
+
+        tree = ast.parse(inspect.getsource(run_module))
+        builders: list[str] = []
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            calls = {
+                child.func.attr
+                for child in ast.walk(node)
+                if isinstance(child, ast.Call)
+                and isinstance(child.func, ast.Attribute)
+            }
+            if "_build_agent_execution_request" not in calls:
+                continue
+            builders.append(node.name)
+            self.assertIn(
+                "_record_canonical_turn_lineage",
+                calls,
+                f"{node.name} builds an agent execution request without "
+                "attesting its canonical turn lineage",
+            )
+        self.assertEqual(
+            sorted(builders),
+            ["_reexecute_jira_blocker_agent_runtime", "_run_execution_stage"],
+        )

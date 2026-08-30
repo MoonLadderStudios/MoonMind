@@ -23,11 +23,9 @@ from moonmind.omnigent.execution_profiles import (
     PROFILES,
     compile_effective_launch,
 )
-from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostError
+from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 from moonmind.omnigent.policies import compile_policy_snapshot
-from moonmind.omnigent.profile_bound_execution import (
-    OmnigentProfileBoundExecutionCoordinator,
-)
+from moonmind.omnigent.execution_adapters import DbExecutionPolicyAuthority
 from moonmind.schemas.workspace_locator_models import (
     SandboxWorkspaceLocator,
     WorkspaceLocatorResolutionError,
@@ -73,8 +71,8 @@ def persisted_policy_authority(monkeypatch):
         )
 
     monkeypatch.setattr(
-        OmnigentProfileBoundExecutionCoordinator,
-        "_resolve_policy_snapshot",
+        DbExecutionPolicyAuthority,
+        "resolve_runtime_snapshot",
         resolve,
     )
 

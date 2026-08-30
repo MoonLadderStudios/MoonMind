@@ -14,7 +14,7 @@ from typing import Any, Literal, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostError
+from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 from moonmind.omnigent.stock_agents import (
     CLAUDE_STOCK_AGENT_NAME,
     CODEX_STOCK_AGENT_NAME,
@@ -243,6 +243,21 @@ PROFILES = {
         ),
     )
 }
+
+
+def default_execution_profile_ref_for_runtime(runtime_id: str) -> str:
+    """Return the built-in execution profile bound to a provider runtime.
+
+    Source issue: MoonLadderStudios/MoonMind#3711. The runtime-to-product
+    mapping is catalog data, so lifecycle code resolves it here instead of
+    rebuilding a provider-slug string comparison.
+    """
+
+    normalized = str(runtime_id or "").strip()
+    for profile in PROFILES.values():
+        if profile.enabled and profile.provider_runtime == normalized:
+            return profile.ref
+    return "omnigent-codex@1"
 
 
 def public_execution_catalog() -> dict[str, Any]:

@@ -8,6 +8,9 @@ from moonmind.omnigent.host_services.github_credentials import (
     OmnigentGithubCredentialService,
 )
 from moonmind.omnigent.host_services.launcher import DockerOmnigentHostLauncher
+from moonmind.omnigent.host_services.legacy_host_containers import (
+    LegacyOmnigentHostContainerService,
+)
 from moonmind.omnigent.host_services.mounted_tools import OmnigentMountedToolService
 from moonmind.omnigent.host_services.registration import OmnigentHostRegistrationService
 from moonmind.omnigent.host_services.runtime_scripts import OmnigentRuntimeScriptService
@@ -19,6 +22,7 @@ __all__ = [
     "DockerOmnigentHostAttestor",
     "DockerOmnigentHostCleanupService",
     "DockerOmnigentHostLauncher",
+    "LegacyOmnigentHostContainerService",
     "OmnigentEgressService",
     "OmnigentGithubCredentialService",
     "OmnigentHostRegistrationService",

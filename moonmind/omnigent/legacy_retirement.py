@@ -153,6 +153,99 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
 )
 
 
+class ArchitectureBoundaryException(BaseModel):
+    """One bounded, documented exemption from an enforced module boundary.
+
+    Source issue: MoonLadderStudios/MoonMind#3711 (required work 6). An
+    exemption is only acceptable while a named legacy path in
+    :data:`RETIREMENT_INVENTORY` still owns the coupled behavior, so every
+    exception names the ``pathId`` whose #3712 criteria retire it.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
+
+    exception_id: str = Field(alias="exceptionId")
+    module: str
+    rule: str
+    reason: str
+    retirement_path_id: str = Field(alias="retirementPathId")
+
+
+# The complete set of enforced-boundary exemptions. Adding one requires naming
+# the legacy path that owns its removal; the architecture contract fails when an
+# exemption has no owning retirement path.
+ARCHITECTURE_BOUNDARY_EXCEPTIONS: tuple[ArchitectureBoundaryException, ...] = (
+    ArchitectureBoundaryException(
+        exceptionId="omnigent.exception.catalog_router_materializer_descriptor",
+        module="api_service/api/routers/omnigent_catalog.py",
+        rule="router_has_no_credential_or_host_lifecycle_import",
+        reason=(
+            "Generic execution-target readiness is still projected inside the "
+            "route handler and reads the credential materializer descriptor "
+            "registry for a provider's materializer ref. The lookup is a pure "
+            "name resolution and performs no materialization side effect."
+        ),
+        retirementPathId="omnigent.legacy.native_ui_compat",
+    ),
+    ArchitectureBoundaryException(
+        exceptionId="omnigent.exception.profile_bound_coordinator_default_ports",
+        module="moonmind/omnigent/profile_bound_execution.py",
+        rule="application_receives_infrastructure_at_composition_boundary",
+        reason=(
+            "The replay-visible Codex coordinator selects its production "
+            "Provider Profile, policy, and attempt adapters when a caller "
+            "omits them, so existing histories keep the same deployment "
+            "adapters instead of a second execution path."
+        ),
+        retirementPathId="omnigent.legacy.profile_bound_execution",
+    ),
+    ArchitectureBoundaryException(
+        exceptionId="omnigent.exception.oauth_host_runtime_raw_container_commands",
+        module="moonmind/omnigent/oauth_host_runtime.py",
+        rule="adapter_issues_no_raw_container_command",
+        reason=(
+            "The retained Codex host lifecycle still assembles its own Docker "
+            "and Compose argument vectors for launch, mount, credential-volume, "
+            "and egress attestation. Container/volume inventory and reclamation "
+            "already moved to host_services/legacy_host_containers.py behind "
+            "OmnigentHostContainerInventoryPort; the launch path stays here "
+            "until the replay-visible coordinator retires, because moving it "
+            "would change the launch argument vector that in-flight histories "
+            "were started with."
+        ),
+        retirementPathId="omnigent.legacy.profile_bound_execution",
+    ),
+)
+
+
+def assert_architecture_exceptions_are_owned(
+    exceptions: tuple[ArchitectureBoundaryException, ...] = (
+        ARCHITECTURE_BOUNDARY_EXCEPTIONS
+    ),
+    inventory: tuple[LegacyPathRecord, ...] = RETIREMENT_INVENTORY,
+) -> None:
+    """Every boundary exemption must name a real legacy path and be bounded."""
+
+    known = {path.path_id for path in inventory}
+    seen: set[str] = set()
+    for exception in exceptions:
+        if exception.exception_id in seen:
+            raise RetirementGuardError(
+                f"duplicate architecture exception {exception.exception_id!r}"
+            )
+        seen.add(exception.exception_id)
+        if exception.retirement_path_id not in known:
+            raise RetirementGuardError(
+                f"architecture exception {exception.exception_id!r} names "
+                f"unknown retirement path {exception.retirement_path_id!r}"
+            )
+        if not str(exception.reason or "").strip():
+            raise RetirementGuardError(
+                f"architecture exception {exception.exception_id!r} has no "
+                "documented reason"
+            )
+
+
 # Temporary rollout flags introduced by this issue. Each maps to the trigger that
 # permits its removal. Their presence here is what keeps them from becoming a
 # permanent alternate architecture: the retirement test asserts every temporary
@@ -282,6 +375,9 @@ def assert_temporary_flags_have_retirement(
 
 
 __all__ = [
+    "ARCHITECTURE_BOUNDARY_EXCEPTIONS",
+    "ArchitectureBoundaryException",
+    "assert_architecture_exceptions_are_owned",
     "RETIREMENT_CONTRACT_VERSION",
     "RetirementCriterion",
     "LegacyPathRecord",

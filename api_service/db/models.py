@@ -864,6 +864,15 @@ class OmnigentTurnAttempt(Base):
         ),
         Index("ix_omnigent_turn_attempts_session", "session_id"),
         Index("ix_omnigent_turn_attempts_state", "state"),
+        # The canonical turn-source vocabulary is closed and versioned (#3707);
+        # the durable boundary refuses any value outside it.
+        CheckConstraint(
+            "lineage_kind IN ("
+            "'initial', 'repository_continuation', 'remediation', "
+            "'workflow_chat', 'steering', 'approval_response', "
+            "'checkpoint_resume', 'linked_branch')",
+            name="ck_omnigent_turn_attempts_lineage_kind",
+        ),
     )
 
     turn_attempt_id: Mapped[str] = mapped_column(String(255), primary_key=True)
@@ -879,7 +888,7 @@ class OmnigentTurnAttempt(Base):
     # Step Execution and remediation / continuation lineage.
     step_execution_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     lineage_kind: Mapped[str] = mapped_column(
-        String(32), nullable=False, default="instruction", server_default="instruction"
+        String(32), nullable=False, default="initial", server_default="initial"
     )
     parent_turn_attempt_id: Mapped[Optional[str]] = mapped_column(
         String(255), nullable=True
@@ -3357,6 +3366,13 @@ class ManagedAgentProviderProfile(Base):
             ")",
             name="ck_provider_profiles_last_auth_method",
         ),
+        # PostgreSQL-only: the JSON array/length rule is expressed with jsonb
+        # functions, so it is emitted for the deployment backend that supports it.
+        CheckConstraint(
+            "jsonb_typeof(model_tiers) = 'array' "
+            "AND jsonb_array_length(model_tiers) >= 1",
+            name="ck_provider_profiles_model_tiers_array",
+        ).ddl_if(dialect="postgresql"),
         CheckConstraint(
             "default_model_tier >= 1",
             name="ck_provider_profiles_default_model_tier_positive",
@@ -3393,7 +3409,10 @@ class ManagedAgentProviderProfile(Base):
     default_model: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     default_effort: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     model_tiers: Mapped[list[dict[str, Any]]] = mapped_column(
-        JSON,
+        # ck_provider_profiles_model_tiers_array calls jsonb-only functions, so
+        # the mapped column must be jsonb on PostgreSQL for metadata-created
+        # schemas to match the migrated deployment schema.
+        _json_variant(),
         nullable=False,
         default=_provider_profile_model_tiers_default,
         server_default=literal_column(

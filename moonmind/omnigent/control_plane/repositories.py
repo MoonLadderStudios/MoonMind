@@ -68,6 +68,7 @@ from .records import (
     TurnIdempotencyConflictError,
     ensure_supported_schema_version,
 )
+from .turn_sources import TurnSource, coerce_turn_source
 
 _UNSET: Any = object()
 
@@ -447,6 +448,60 @@ class SessionRepository(_RepositoryBase):
             OmnigentSession.provider_session_ref == provider_session_ref,
         )
         row = (await self._session.execute(stmt)).scalar_one_or_none()
+        return _session_record(row) if row is not None else None
+
+    async def get_by_provider_session(
+        self, provider_session_ref: str
+    ) -> Optional[SessionRecord]:
+        """Return the one canonical session holding this provider attachment.
+
+        Recovery owners know the provider session but not the workflow scope, so
+        this resolves the aggregate the turn boundary attached. Provider session
+        identifiers are provider-generated and unique; more than one match is
+        ambiguous authority and fails closed rather than picking a session.
+        """
+
+        if not provider_session_ref:
+            return None
+        stmt = select(OmnigentSession).where(
+            OmnigentSession.provider_session_ref == provider_session_ref
+        )
+        rows = (await self._session.execute(stmt)).scalars().all()
+        if not rows:
+            return None
+        if len(rows) > 1:
+            raise ConflictingSessionAuthorityError(
+                "provider session "
+                f"{provider_session_ref!r} resolves multiple canonical sessions"
+            )
+        return _session_record(rows[0])
+
+    async def get_by_step_execution(
+        self, moonmind_workflow_id: str, step_execution_id: str
+    ) -> Optional[SessionRecord]:
+        """Return the canonical session a prior Step Execution established.
+
+        A remediation turn is bounded by the authority of the attempt it
+        repairs, and that attempt is named by its Step Execution identity rather
+        than by a session id the instruction could forge. A Step Execution may
+        legitimately own more than one canonical session (a later agent run for
+        the same execution), so the *earliest* row is returned: the authority a
+        remediation may not broaden is the one first established, not whichever
+        row happens to sort last.
+        """
+
+        if not moonmind_workflow_id or not step_execution_id:
+            return None
+        stmt = (
+            select(OmnigentSession)
+            .where(
+                OmnigentSession.moonmind_workflow_id == moonmind_workflow_id,
+                OmnigentSession.step_execution_id == step_execution_id,
+            )
+            .order_by(OmnigentSession.created_at, OmnigentSession.session_id)
+            .limit(1)
+        )
+        row = (await self._session.execute(stmt)).scalars().first()
         return _session_record(row) if row is not None else None
 
     async def get_by_chat_binding(self, chat_binding_id: str) -> Optional[SessionRecord]:
@@ -1259,7 +1314,7 @@ class TurnAttemptRepository(_RepositoryBase):
         turn_attempt_id: str,
         session_id: str,
         idempotency_key: str,
-        lineage_kind: str = "instruction",
+        lineage_kind: Any = TurnSource.INITIAL,
         step_execution_id: Optional[str] = None,
         parent_turn_attempt_id: Optional[str] = None,
         remediation_of_turn_attempt_id: Optional[str] = None,
@@ -1267,6 +1322,9 @@ class TurnAttemptRepository(_RepositoryBase):
         provider_marker: Optional[str] = None,
         state: str = TURN_STATE_PREPARED,
     ) -> TurnAttemptRecord:
+        # The turn source is a closed, versioned vocabulary (#3707): an
+        # unrecognized value fails closed instead of being coerced.
+        source = coerce_turn_source(lineage_kind)
         existing = await self.get_by_idempotency_key(idempotency_key)
         if existing is not None:
             if (
@@ -1283,7 +1341,7 @@ class TurnAttemptRepository(_RepositoryBase):
             turn_attempt_id=turn_attempt_id,
             session_id=session_id,
             idempotency_key=idempotency_key,
-            lineage_kind=lineage_kind,
+            lineage_kind=source.value,
             step_execution_id=step_execution_id,
             parent_turn_attempt_id=parent_turn_attempt_id,
             remediation_of_turn_attempt_id=remediation_of_turn_attempt_id,
@@ -2624,6 +2682,47 @@ class CleanupAuthorityRepository(_RepositoryBase):
         await self._session.refresh(row)
         return CasResult(ControlPlaneOutcome.APPLIED, _cleanup_record(row))
 
+    async def fence_for_turn(
+        self,
+        session_id: str,
+        *,
+        owner_class: str,
+    ) -> CasResult:
+        """Fence incompatible cleanup before a turn mutates the provider.
+
+        Source: MoonLadderStudios/MoonMind#3707 §4. Continuation, remediation,
+        and chat admission all race host cleanup, credential-materializer
+        cleanup, Provider Profile release, and janitor recovery. The race is
+        resolved deterministically in one direction: an *admitted* turn always
+        advances the cleanup generation, so an outstanding janitor claim is
+        fenced out at completion (it can no longer delete the replacement
+        generation) while a janitor that has not yet claimed simply claims the
+        newer generation after the turn.
+
+        Completed cleanup is a distinct terminal meaning and is never reopened:
+        the turn is refused with :attr:`IMMUTABLE_AUTHORITY_CONFLICT` so the
+        caller cold-restores or branches instead of consuming released
+        credentials.
+        """
+
+        row = await self._load_for_update(session_id)
+        if row.state == CLEANUP_STATE_COMPLETE:
+            return CasResult(
+                ControlPlaneOutcome.IMMUTABLE_AUTHORITY_CONFLICT,
+                _cleanup_record(row),
+            )
+        row.state = CLEANUP_STATE_UNCLAIMED
+        row.owner_class = owner_class
+        row.claim_token = None
+        row.fenced_host_generation = None
+        row.fenced_profile_generation = None
+        row.fenced_provider_epoch = None
+        row.generation = row.generation + 1
+        row.revision = row.revision + 1
+        await self._session.flush()
+        await self._session.refresh(row)
+        return CasResult(ControlPlaneOutcome.APPLIED, _cleanup_record(row))
+
     async def record_janitor_handoff(
         self,
         session_id: str,
@@ -2819,7 +2918,7 @@ class OmnigentControlPlaneStore:
                 turn_attempt_id=first_turn_attempt_id,
                 session_id=session_id,
                 idempotency_key=first_turn_idempotency_key,
-                lineage_kind="initial",
+                lineage_kind=TurnSource.INITIAL,
                 step_execution_id=step_execution_id,
                 instruction_digest=instruction_digest,
             )

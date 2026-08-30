@@ -1,0 +1,22 @@
+{
+  "incidentWorkflowId": "mm:1b45c82b-275f-4e4d-ae1a-1bba30e218ff",
+  "failureShapeId": "omnigent-generic-host-verified-no-commit-publication",
+  "boundary": "generic Omnigent host repository publication to durable workflow publish handoff",
+  "escapedFailure": {
+    "message": "generic Omnigent execution produced no publishable repository output",
+    "providerErrorCode": "OMNIGENT_GENERIC_DISPATCH_FAILED",
+    "retryRecommendation": "contact_administrator",
+    "cause": "the generic host realizer required push_status 'pushed' and rejected the canonical remotely verified 'no_commits' publication, so a pull-request handoff step whose implementation commits were already pushed by earlier steps failed the run instead of continuing into the durable workflow publish handoff"
+  },
+  "failedLogicalStepId": "tpl:github-issue-implement:08:a328c02c",
+  "stepRole": "pull-request-handoff",
+  "repository": "MoonLadderStudios/MoonMind",
+  "startingBranch": "moonmind-job-28556e59",
+  "publishMode": "pr",
+  "workspaceRelativePath": "repo",
+  "correlationId": "mm-replay-1b45c82b-generic-no-commit",
+  "sideEffectsStrandedByFailure": [
+    "pull request created by the step agent",
+    "issue transition left in progress by the skipped finalize step"
+  ]
+}

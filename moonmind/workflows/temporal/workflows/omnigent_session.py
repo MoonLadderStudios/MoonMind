@@ -953,10 +953,11 @@ class MoonMindOmnigentSessionWorkflow:
 
     @workflow.signal(name="submit_authorized_continuation")
     def submit_authorized_turn(self, payload: OmnigentSessionSignal) -> None:
-        if not payload.turn_attempt_id or not payload.instruction_ref:
-            raise ValueError(
-                "authorized continuation requires turnAttemptId and instructionRef"
-            )
+        # The instruction names its request and its durable instruction ref; the
+        # canonical turn-command boundary derives the turn-attempt identity
+        # (#3707). A signaler cannot attest a turn identity of its own.
+        if not payload.instruction_ref:
+            raise ValueError("authorized continuation requires instructionRef")
         self._turn_attempt_count += 1
         self._queue_signal_intent("submit_authorized_continuation", payload)
 

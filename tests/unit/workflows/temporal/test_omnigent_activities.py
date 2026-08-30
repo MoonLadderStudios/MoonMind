@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+import pytest_asyncio
 from temporalio.testing import ActivityEnvironment
 
 from moonmind.omnigent import execute as omnigent_execute_module
@@ -26,6 +27,30 @@ from moonmind.workflows.temporal.activities.omnigent_activities import (
     _try_generic_realizer_dispatch,
     omnigent_execute_activity,
 )
+
+
+@pytest_asyncio.fixture()
+async def isolated_control_plane(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    """Bind the canonical control plane to a per-test SQLite database.
+
+    ``integration.omnigent.execute`` now claims a canonical turn command on every
+    execution path, so a test that drives the activity must not write to (or read
+    stale commands from) the ambient application database.
+    """
+
+    import api_service.db.base as db_base
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from api_service.db.models import Base
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/control_plane.db")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    monkeypatch.setattr(db_base, "async_session_maker", session_factory)
+    yield session_factory
+    await engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -140,6 +165,79 @@ def test_checkpoint_recovery_decision_requires_branch_for_immutable_change(
     }
 
 
+def test_checkpoint_recovery_decision_requires_new_session_without_branch_evidence() -> None:
+    """Changed authority with no branch-capable evidence escalates (#3707 §5)."""
+
+    immutable = {
+        "instructionDigest": "sha256:instructions",
+        "runtimeId": "omnigent",
+        "model": "default",
+        "effort": "medium",
+        "providerProfileId": "profile-1",
+        "launchPolicyRef": "artifact://policy/1",
+        "repositoryBranch": "main",
+        "publishMode": "none",
+    }
+
+    assert _checkpoint_recovery_decision(
+        {
+            "immutableSource": immutable,
+            "immutableRequested": {**immutable, "model": "changed"},
+            "omnigentCheckpoint": {
+                "validation": {"branchCreationAvailable": False},
+            },
+        }
+    ) == {
+        "recoveryAction": "new_session_required",
+        "reasonCodes": ["immutable_model_changed"],
+    }
+    assert _checkpoint_recovery_decision(
+        {
+            "immutableSource": immutable,
+            "immutableRequested": {**immutable, "model": "changed"},
+            "omnigentCheckpoint": {
+                "validation": {"branchCreationAvailable": True},
+            },
+        }
+    ) == {
+        "recoveryAction": "branch_required",
+        "reasonCodes": ["immutable_model_changed"],
+    }
+
+
+def test_checkpoint_recovery_decision_uses_the_closed_resume_vocabulary() -> None:
+    """Every emitted action is a member of the one typed decision boundary."""
+
+    from moonmind.omnigent.resume_decision import SESSION_RESUME_DECISIONS
+
+    immutable = {
+        "instructionDigest": "sha256:instructions",
+        "runtimeId": "omnigent",
+        "model": "default",
+        "effort": "medium",
+        "providerProfileId": "profile-1",
+        "launchPolicyRef": "artifact://policy/1",
+        "repositoryBranch": "main",
+        "publishMode": "none",
+    }
+    emitted = {
+        _checkpoint_recovery_decision({})["recoveryAction"],
+        _checkpoint_recovery_decision(
+            {
+                "immutableSource": immutable,
+                "immutableRequested": {**immutable, "model": "changed"},
+            }
+        )["recoveryAction"],
+        _checkpoint_recovery_decision(
+            {"immutableSource": immutable, "immutableRequested": immutable},
+            cold_restore_authorized=True,
+        )["recoveryAction"],
+    }
+    assert emitted <= SESSION_RESUME_DECISIONS
+    assert "branch_required" in emitted
+    assert "cold_restore" in emitted
+
+
 def test_checkpoint_recovery_decision_fails_closed_without_authoritative_snapshot() -> None:
     decision = _checkpoint_recovery_decision(
         {"liveReattachAvailable": True, "coldRestoreAvailable": True}
@@ -231,7 +329,7 @@ def test_checkpoint_recovery_decision_ignores_caller_availability_assertions() -
 @pytest.mark.asyncio
 @patch("moonmind.omnigent.execute.run_omnigent_execution")
 async def test_omnigent_execute_activity_delegates(
-    mock_run, monkeypatch: pytest.MonkeyPatch
+    mock_run, monkeypatch: pytest.MonkeyPatch, isolated_control_plane
 ):
     expected_result = AgentRunResult(summary="done", output_refs=[])
     heartbeats: list[tuple[object, ...]] = []
@@ -787,3 +885,178 @@ async def test_live_recovery_authority_fails_closed_for_ambiguous_or_mismatched_
 
 async def _async_value(value):
     return value
+
+
+@pytest.mark.asyncio
+async def test_profile_bound_activity_coordinator_claims_canonical_continuations(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """The legacy coordinator path owns the canonical turn boundary (#3707 §1).
+
+    A profile-bound Codex request that carries no execution plan and no Agent
+    Profile ref is not realizer-dispatched: ``_try_generic_realizer_dispatch``
+    returns ``None`` and this activity builds the coordinator directly. That
+    construction must inject the canonical turn service, or every repository
+    continuation on this path submits outside the boundary and fences no
+    cleanup.
+
+    This drives the real activity, captures the coordinator it actually built,
+    and then exercises that coordinator's real continuation-claim method against
+    a real control-plane store.
+    """
+
+    import api_service.db.base as db_base
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from api_service.db.models import Base
+    from moonmind.omnigent import profile_bound_execution as pbe_module
+    from moonmind.omnigent.control_plane import (
+        OmnigentControlPlaneStore,
+        TurnSource,
+    )
+    from moonmind.omnigent.control_plane.identities import (
+        canonical_omnigent_session_id,
+    )
+    from moonmind.omnigent.control_plane.turn_commands import (
+        CanonicalTurnCommandService,
+    )
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/legacy_path.db")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    monkeypatch.setattr(db_base, "async_session_maker", session_factory)
+
+    built: list[object] = []
+    expected_result = AgentRunResult(summary="legacy path", output_refs=[])
+
+    class CapturingCoordinator(pbe_module.OmnigentProfileBoundExecutionCoordinator):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            built.append(self)
+
+        async def execute(self, request):
+            return expected_result
+
+    monkeypatch.setattr(
+        pbe_module,
+        "OmnigentProfileBoundExecutionCoordinator",
+        CapturingCoordinator,
+    )
+
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="legacy-run",
+        idempotencyKey="legacy-key",
+        executionProfileRef="codex-profile-1",
+        parameters={"publishMode": "none"},
+    )
+
+    result = await ActivityEnvironment().run(omnigent_execute_activity, request)
+
+    assert result == expected_result
+    assert len(built) == 1
+    coordinator = built[0]
+    # The activity-built coordinator owns the canonical turn service.
+    assert isinstance(coordinator._turn_commands, CanonicalTurnCommandService)
+
+    # Drive the coordinator's real continuation admission.
+    continuation = request.model_copy(
+        deep=True,
+        update={"idempotency_key": f"{request.idempotency_key}:repository-continuation:1"},
+    )
+    claim = await coordinator._claim_continuation_turn(
+        request=continuation,
+        source_request=request,
+        workflow_id="legacy-run",
+        step_execution_id="legacy-step",
+        recorded_plan=None,
+        provider_profile_id="codex-profile-1",
+        credential_generation=1,
+        runtime_binding_ref=None,
+    )
+    assert claim is not None
+
+    expected_session_id = canonical_omnigent_session_id(
+        workflow_id="legacy-run",
+        step_execution_id="legacy-step",
+        agent_run_id="legacy-run",
+    )
+    assert claim.session_id == expected_session_id
+
+    store = OmnigentControlPlaneStore(session_factory)
+    async with store.transaction() as repos:
+        turns = await repos.turn_attempts.list_for_session(expected_session_id)
+        cleanup = await repos.cleanup.get(expected_session_id)
+    lineages = [turn.lineage_kind for turn in turns]
+    assert TurnSource.REPOSITORY_CONTINUATION.value in lineages
+    # The admitted continuation fenced incompatible cleanup before mutation.
+    assert cleanup is not None and cleanup.generation >= 1
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_unprofiled_execute_claims_the_canonical_turn_boundary(
+    monkeypatch: pytest.MonkeyPatch, isolated_control_plane
+) -> None:
+    """The unprofiled path mutates the provider, so it claims like every other.
+
+    A request with no ``executionProfileRef`` is not realizer-dispatched and
+    never reaches the coordinator, yet ``run_omnigent_execution`` creates a
+    provider session and posts its first message. Before this boundary it did so
+    with no command claim, no immutable admission, no owner check, and no
+    cleanup fence.
+    """
+
+    from moonmind.omnigent.control_plane import (
+        OmnigentControlPlaneStore,
+        TurnSource,
+    )
+    from moonmind.omnigent.control_plane.identities import (
+        canonical_omnigent_session_id,
+    )
+
+    session_factory = isolated_control_plane
+
+    expected_result = AgentRunResult(
+        summary="unprofiled path",
+        output_refs=[],
+        metadata={"omnigentSessionId": "provider-session-unprofiled"},
+    )
+
+    async def fake_run(*_args, **_kwargs):
+        return expected_result
+
+    monkeypatch.setattr(omnigent_execute_module, "run_omnigent_execution", fake_run)
+
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="unprofiled-run",
+        idempotencyKey="unprofiled-key",
+    )
+
+    result = await ActivityEnvironment().run(omnigent_execute_activity, request)
+
+    assert result == expected_result
+    session_id = canonical_omnigent_session_id(
+        workflow_id="unprofiled-run",
+        step_execution_id="unprofiled-run",
+        agent_run_id="unprofiled-run",
+    )
+    store = OmnigentControlPlaneStore(session_factory)
+    async with store.transaction() as repos:
+        session = await repos.sessions.get(session_id)
+        turns = await repos.turn_attempts.list_for_session(session_id)
+        commands = await repos.commands.list_for_session(session_id)
+        cleanup = await repos.cleanup.get(session_id)
+
+    assert [turn.lineage_kind for turn in turns] == [TurnSource.INITIAL.value]
+    assert len(commands) == 1
+    # The admitted turn fenced incompatible cleanup before the provider mutation
+    # and the delivered provider session is attached to canonical authority.
+    assert cleanup is not None and cleanup.generation >= 1
+    assert session.provider_session_ref == "provider-session-unprofiled"

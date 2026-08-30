@@ -51,6 +51,7 @@ from moonmind.config.settings import settings
 from moonmind.workflows.temporal.service import (
     TemporalExecutionNotFoundError,
     TemporalExecutionRecoveryCheckpointError,
+    TemporalExecutionRerunSkillSnapshotError,
     TemporalExecutionService,
     TemporalExecutionValidationError,
     _get_managed_session_store_root,
@@ -171,6 +172,82 @@ def _assert_calls_in_order(mock, *expected_calls) -> None:
 
 def _valid_user_workflow_parameters() -> dict[str, object]:
     return {"workflow": {"instructions": "Test workflow fixture."}}
+
+
+def _historical_omnigent_rerun_parameters(
+    *, malformed_remediation_loop: bool = False
+) -> dict[str, object]:
+    remediation_loop: dict[str, object] = {
+        "kind": "remediation_loop",
+        "loopId": "issue-implementation-remediation",
+        "remediationTool": {
+            "type": "agent_runtime",
+            "name": "auto",
+            "inputs": {"selectedSkill": "remediate-issue"},
+        },
+        "verificationTool": {
+            "type": "agent_runtime",
+            "name": "auto",
+            "inputs": {"selectedSkill": "moonspec-verify"},
+        },
+        "workspacePolicy": "continue_from_loop_head",
+        "budgets": {"hardMaxAttempts": 6},
+        "terminalPolicy": {
+            "fullyImplemented": "advance",
+            "additionalWorkNeeded": "continue_when_allowed",
+            "blocked": "stop",
+            "noDetermination": "retry_evidence_or_stop",
+            "failedUnrecoverable": "stop",
+        },
+        "sideEffectPolicy": "workflow_owned",
+        "publicationPolicy": "evaluate_after_terminal",
+    }
+    if malformed_remediation_loop:
+        remediation_loop.pop("verificationTool")
+    return {
+        "targetRuntime": "omnigent",
+        "workflow": {
+            "runtime": {"mode": "omnigent"},
+            "steps": [
+                {"id": "verify", "skill": {"id": "moonspec-verify"}},
+                {
+                    "id": "remediation-loop",
+                    "skill": {"id": "auto"},
+                    "annotations": {"remediationLoop": remediation_loop},
+                },
+            ],
+        },
+        "resolvedSkillsetRef": "art_old_skill_snapshot",
+        "omnigentExecutionPlan": {
+            "planRef": "omnigent-execution-plan:sha256:" + "a" * 64,
+            "planDigest": "sha256:" + "a" * 64,
+            "planArtifactRef": "art_old_plan",
+            "taskInputSnapshotRef": "art_old_input",
+            "taskInputSnapshotDigest": "sha256:" + "b" * 64,
+        },
+    }
+
+
+def _incomplete_resolved_skillset_bytes() -> bytes:
+    return json.dumps(
+        {
+            "snapshot_id": "skillset_old",
+            "deployment_id": "mm:88694a58",
+            "resolved_at": "2026-08-29T05:09:07Z",
+            "skills": [
+                {
+                    "skill_name": "moonspec-verify",
+                    "format": "bundle",
+                    "content_ref": "art_verify_bundle",
+                    "content_digest": "sha256:" + "c" * 64,
+                    "provenance": {
+                        "source_kind": "built_in",
+                        "source_path": "/app/.agents/skills/moonspec-verify",
+                    },
+                }
+            ],
+        }
+    ).encode("utf-8")
 
 
 @pytest.mark.asyncio
@@ -4046,6 +4123,173 @@ async def test_request_rerun_uses_continue_as_new_same_workflow_id(
             },
         }
         assert refreshed.search_attributes["mm_continue_as_new_cause"] == "manual_rerun"
+
+
+@pytest.mark.asyncio
+async def test_request_rerun_rejects_incomplete_skill_snapshot_at_shared_boundary(
+    tmp_path, mock_client_adapter, monkeypatch
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        owner_id = uuid4()
+        created = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=owner_id,
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters=_valid_user_workflow_parameters(),
+            idempotency_key=None,
+        )
+        canonical = await session.get(
+            TemporalExecutionCanonicalRecord, created.workflow_id
+        )
+        assert canonical is not None
+        canonical.parameters = _historical_omnigent_rerun_parameters()
+        await session.commit()
+        artifact_service = SimpleNamespace(
+            read=AsyncMock(
+                return_value=(
+                    SimpleNamespace(artifact_id="art_old_skill_snapshot"),
+                    _incomplete_resolved_skillset_bytes(),
+                )
+            )
+        )
+        monkeypatch.setattr(
+            "moonmind.workflows.temporal.service.TemporalArtifactService",
+            lambda _repository: artifact_service,
+        )
+        mock_client_adapter.update_workflow.reset_mock()
+
+        with pytest.raises(TemporalExecutionRerunSkillSnapshotError) as exc_info:
+            await service.update_execution(
+                workflow_id=created.workflow_id,
+                update_name="RequestRerun",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                parameters_patch=None,
+                title=None,
+                new_manifest_artifact_ref=None,
+                mode=None,
+                max_concurrency=None,
+                node_ids=None,
+                idempotency_key="rerun-incomplete-snapshot",
+            )
+
+        assert exc_info.value.detail == {
+            "code": "exact_rerun_skill_snapshot_incomplete",
+            "message": (
+                "Exact rerun preserves the original immutable Skill snapshot, but "
+                "that snapshot does not contain every Skill declared by the "
+                "authored workflow. Create a new workflow to explicitly re-resolve "
+                "Skill authority."
+            ),
+            "nextAction": "create_fresh_workflow",
+            "missingSkills": ["remediate-issue"],
+        }
+        artifact_service.read.assert_awaited_once_with(
+            artifact_id="art_old_skill_snapshot",
+            principal=str(owner_id),
+            allow_restricted_raw=True,
+        )
+        mock_client_adapter.update_workflow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_create_fresh_rerun_rejects_incomplete_skill_snapshot(
+    tmp_path, mock_client_adapter, monkeypatch
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        created = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters=_valid_user_workflow_parameters(),
+            idempotency_key=None,
+        )
+        canonical = await session.get(
+            TemporalExecutionCanonicalRecord, created.workflow_id
+        )
+        assert canonical is not None
+        canonical.parameters = _historical_omnigent_rerun_parameters()
+        await session.commit()
+        artifact_service = SimpleNamespace(
+            read=AsyncMock(
+                return_value=(
+                    SimpleNamespace(artifact_id="art_old_skill_snapshot"),
+                    _incomplete_resolved_skillset_bytes(),
+                )
+            )
+        )
+        monkeypatch.setattr(
+            "moonmind.workflows.temporal.service.TemporalArtifactService",
+            lambda _repository: artifact_service,
+        )
+        mock_client_adapter.start_workflow.reset_mock()
+
+        with pytest.raises(TemporalExecutionRerunSkillSnapshotError):
+            await service.create_fresh_rerun_execution(
+                workflow_id=created.workflow_id,
+                idempotency_key="fresh-rerun-incomplete-snapshot",
+            )
+
+        mock_client_adapter.start_workflow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_request_rerun_converts_malformed_stored_skill_selector_to_conflict(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        created = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters=_valid_user_workflow_parameters(),
+            idempotency_key=None,
+        )
+        canonical = await session.get(
+            TemporalExecutionCanonicalRecord, created.workflow_id
+        )
+        assert canonical is not None
+        canonical.parameters = _historical_omnigent_rerun_parameters(
+            malformed_remediation_loop=True
+        )
+        await session.commit()
+        mock_client_adapter.update_workflow.reset_mock()
+
+        with pytest.raises(TemporalExecutionRerunSkillSnapshotError) as exc_info:
+            await service.update_execution(
+                workflow_id=created.workflow_id,
+                update_name="RequestRerun",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                parameters_patch=None,
+                title=None,
+                new_manifest_artifact_ref=None,
+                mode=None,
+                max_concurrency=None,
+                node_ids=None,
+                idempotency_key="rerun-malformed-selector",
+            )
+
+        assert exc_info.value.detail["code"] == (
+            "exact_rerun_skill_snapshot_unavailable"
+        )
+        assert exc_info.value.detail["nextAction"] == "create_fresh_workflow"
+        mock_client_adapter.update_workflow.assert_not_awaited()
 
 @pytest.mark.asyncio
 async def test_request_rerun_creates_fresh_execution_for_terminal_execution(
