@@ -314,6 +314,9 @@ AGENT_RUN_STRUCTURED_PROVIDER_FAILURE_PATCH_ID = (
 AGENT_RUN_PROVIDER_COOLDOWN_EXPONENTIAL_BACKOFF_PATCH_ID = (
     "agent-run-provider-cooldown-exponential-backoff-v1"
 )
+AGENT_RUN_SELECTED_MODEL_CAPACITY_RETRY_PATCH_ID = (
+    "agent-run-selected-model-capacity-retry-v1"
+)
 AGENT_RUN_MANAGED_NO_PROGRESS_RECONCILIATION_PATCH_ID = (
     "agent-run-managed-no-progress-reconciliation-v1"
 )
@@ -2027,7 +2030,12 @@ class MoonMindAgentRun:
                 mode="json",
                 by_alias=True,
             )
-        classification = classify_provider_failure(summary)
+        classification = classify_provider_failure(
+            summary,
+            include_selected_model_capacity=workflow.patched(
+                AGENT_RUN_SELECTED_MODEL_CAPACITY_RETRY_PATCH_ID
+            ),
+        )
         provider_failure_event = build_provider_failure_event(
             classification=classification,
         )
@@ -5341,6 +5349,9 @@ class MoonMindAgentRun:
                             ),
                             replace_existing_on_resume_mismatch=(
                                 replace_existing_on_resume_mismatch
+                            ),
+                            selected_model_capacity_retry_enabled=workflow.patched(
+                                AGENT_RUN_SELECTED_MODEL_CAPACITY_RETRY_PATCH_ID
                             ),
                         )
                     else:

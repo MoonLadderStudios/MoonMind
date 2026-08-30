@@ -49,8 +49,11 @@ _RATE_LIMIT_MARKERS = (
     "send a request to your admin",
 )
 
-_CAPACITY_MARKERS = (
+_SELECTED_MODEL_CAPACITY_MARKERS = (
     "model is at capacity",
+)
+
+_CAPACITY_MARKERS = (
     "http 500",
     "http 502",
     "http 503",
@@ -201,6 +204,8 @@ class ProviderFailureEvent:
 
 def classify_provider_failure(
     reason: Any,
+    *,
+    include_selected_model_capacity: bool = True,
 ) -> ProviderFailureClassification | None:
     """Return structured metadata for provider failures that need policy handling.
 
@@ -236,7 +241,12 @@ def classify_provider_failure(
             reason=rendered,
             provider_error_class=PROVIDER_ERROR_CLASS_RATE_LIMIT,
         )
-    if any(marker in normalized for marker in _CAPACITY_MARKERS):
+    selected_model_at_capacity = include_selected_model_capacity and any(
+        marker in normalized for marker in _SELECTED_MODEL_CAPACITY_MARKERS
+    )
+    if selected_model_at_capacity or any(
+        marker in normalized for marker in _CAPACITY_MARKERS
+    ):
         return ProviderFailureClassification(
             failure_class="integration_error",
             provider_error_code=PROVIDER_CAPACITY_ERROR_CODE,
@@ -505,6 +515,7 @@ def provider_failure_search_markers() -> tuple[str, ...]:
                 *_AUTH_FAILURE_MARKERS,
                 *_CREDENTIAL_SCOPE_MARKERS,
                 *_RATE_LIMIT_MARKERS,
+                *_SELECTED_MODEL_CAPACITY_MARKERS,
                 *_CAPACITY_MARKERS,
             )
         )

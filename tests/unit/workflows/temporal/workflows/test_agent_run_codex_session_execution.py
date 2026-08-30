@@ -2416,6 +2416,36 @@ async def test_agent_run_managed_session_start_runtime_error_truncates_summary(
     assert result.summary.endswith("...")
     assert result.summary.startswith("managed start failed: ")
 
+@pytest.mark.parametrize(
+    ("patch_enabled", "expected_failure_class", "expected_provider_error_code"),
+    [
+        (False, "execution_error", None),
+        (True, "integration_error", "provider_capacity"),
+    ],
+)
+async def test_managed_start_capacity_retry_preserves_pre_patch_replay(
+    monkeypatch: pytest.MonkeyPatch,
+    patch_enabled: bool,
+    expected_failure_class: str,
+    expected_provider_error_code: str | None,
+) -> None:
+    patch_id = agent_run_module.AGENT_RUN_SELECTED_MODEL_CAPACITY_RETRY_PATCH_ID
+    monkeypatch.setattr(
+        agent_run_module.workflow,
+        "patched",
+        lambda candidate: patch_enabled if candidate == patch_id else True,
+    )
+
+    result = MoonMindAgentRun()._managed_start_failure_result(
+        request=_managed_session_request(),
+        error=RuntimeError(
+            "Selected model is at capacity. Please try a different model."
+        ),
+    )
+
+    assert result.failure_class == expected_failure_class
+    assert result.provider_error_code == expected_provider_error_code
+
 async def _run_default_profile_cooldown_retry_case(
     monkeypatch: pytest.MonkeyPatch,
     *,

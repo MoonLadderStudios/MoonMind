@@ -42,6 +42,14 @@ def test_classifies_selected_model_at_capacity_as_provider_capacity() -> None:
     assert result.provider_error_code == "provider_capacity"
     assert result.retry_recommendation == "retry_after_cooldown"
 
+def test_selected_model_capacity_classification_can_preserve_workflow_replay() -> None:
+    result = classify_provider_failure(
+        "Selected model is at capacity. Please try a different model.",
+        include_selected_model_capacity=False,
+    )
+
+    assert result is None
+
 def test_classifies_http_500_as_provider_capacity() -> None:
     result = classify_provider_failure("http 500")
 
