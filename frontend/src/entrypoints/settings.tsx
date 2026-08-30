@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties, type ReactElement } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { BootPayload } from '../boot/parseBootPayload';
 import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
@@ -23,62 +23,6 @@ import { resetDashboardPreferences } from '../utils/dashboardPreferences';
 // never offered as a Provider Profile runtime filter.
 const NON_PROFILE_OWNING_RUNTIMES = new Set(['omnigent']);
 
-function ProvidersKeyIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      aria-hidden="true"
-      focusable="false"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <circle cx="8" cy="14" r="3.5" />
-      <path d="M10.5 12L20 4" />
-      <path d="M17 7l2 2" />
-      <path d="M14 10l2 2" />
-    </svg>
-  );
-}
-
-function UserWorkspaceIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      aria-hidden="true"
-      focusable="false"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <circle cx="12" cy="8" r="3.5" />
-      <path d="M5 20c0-3.5 3-6 7-6s7 2.5 7 6" />
-    </svg>
-  );
-}
-
-function OperationsGearIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      aria-hidden="true"
-      focusable="false"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <circle cx="12" cy="12" r="3" />
-      <path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1" />
-    </svg>
-  );
-}
-
 interface ProfileData {
   id?: string | number;
   email?: string;
@@ -101,57 +45,47 @@ interface SecretsListResponse {
   items: SecretMetadata[];
 }
 
-const SETTINGS_SECTIONS: ReadonlyArray<{
+const SETTINGS_PAGES: ReadonlyArray<{
   id: 'providers-secrets' | 'user-workspace' | 'operations';
+  path: string;
   label: string;
   description: string;
-  Icon: () => ReactElement;
 }> = [
   {
     id: 'providers-secrets',
+    path: '/settings/providers-secrets',
     label: 'Providers & Secrets',
     description:
       'Configure provider profiles, managed secrets, and the bindings that make runtimes launchable.',
-    Icon: ProvidersKeyIcon,
   },
   {
     id: 'user-workspace',
+    path: '/settings/user-workspace',
     label: 'User / Workspace',
     description:
       'Hold user-scoped and workspace-scoped settings as the dashboard exposes more of the broader configuration model.',
-    Icon: UserWorkspaceIcon,
   },
   {
     id: 'operations',
+    path: '/settings/operations',
     label: 'Operations',
     description:
       'Keep worker pause, drain, quiesce, and related operational controls under Settings.',
-    Icon: OperationsGearIcon,
   },
 ] as const;
 
-type SettingsSectionId = (typeof SETTINGS_SECTIONS)[number]['id'];
-
-function isSettingsSection(value: string | null): value is SettingsSectionId {
-  return SETTINGS_SECTIONS.some((section) => section.id === value);
-}
-
-function readSectionFromLocation(): SettingsSectionId {
-  const params = new URLSearchParams(window.location.search);
-  const section = params.get('section');
-  return isSettingsSection(section) ? section : 'providers-secrets';
-}
-
-function updateSectionInLocation(section: SettingsSectionId): void {
-  const url = new URL(window.location.href);
-  url.searchParams.set('section', section);
-  window.history.pushState({}, '', url.toString());
+function settingsPageForPath(pathname: string): (typeof SETTINGS_PAGES)[number] {
+  const normalized = pathname.length > 1 && pathname.endsWith('/')
+    ? pathname.slice(0, -1)
+    : pathname;
+  return SETTINGS_PAGES.find(({ path }) => path === normalized) ?? SETTINGS_PAGES[0]!;
 }
 
 export function SettingsPage({ payload }: { payload: BootPayload }) {
   const queryClient = useQueryClient();
   const [notice, setNotice] = useState<Notice | null>(null);
-  const [section, setSection] = useState<SettingsSectionId>(() => readSectionFromLocation());
+  const currentPage = settingsPageForPath(window.location.pathname);
+  const section = currentPage.id;
   // Settings is the administrative exception to runtime-scoped Provider Profile
   // selection: it enters on the All-runtimes view and can narrow the table to a
   // single runtime without narrowing global configuration health.
@@ -181,16 +115,12 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
   const canRunGithubTokenProbe = settingsPermissions.has('settings.effective.read');
 
   useEffect(() => {
-    const handlePopState = () => {
-      setSection(readSectionFromLocation());
-      setNotice(null);
-    };
-
-    window.addEventListener('popstate', handlePopState);
+    const previousTitle = document.title;
+    document.title = `${currentPage.label} | MoonMind`;
     return () => {
-      window.removeEventListener('popstate', handlePopState);
+      document.title = previousTitle;
     };
-  }, []);
+  }, [currentPage.label]);
 
   const { data: profile, isLoading, isError } = useQuery<ProfileData>({
     queryKey: ['profile'],
@@ -270,19 +200,6 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
           (profile) => profile.runtime_id === providerProfileRuntimeFilter,
         );
 
-  const fallbackSection = SETTINGS_SECTIONS[0]!;
-  const currentSection =
-    SETTINGS_SECTIONS.find((candidate) => candidate.id === section) ?? fallbackSection;
-
-  const handleSelectSection = (nextSection: SettingsSectionId) => {
-    if (nextSection === section) {
-      return;
-    }
-    updateSectionInLocation(nextSection);
-    setSection(nextSection);
-    setNotice(null);
-  };
-
   return (
     <div className="settings-page mx-auto w-full space-y-6 px-4 py-6 sm:px-6 lg:px-8">
       <header className="rounded-[2rem] border border-mm-border/80 bg-transparent px-6 py-6 shadow-sm">
@@ -290,8 +207,8 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
           <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500 dark:text-slate-400">
             Dashboard Settings
           </p>
-          <h2 className="text-3xl font-semibold tracking-tight text-slate-950 dark:text-white">Settings</h2>
-          <p className="max-w-3xl text-sm text-slate-600 dark:text-slate-400">{currentSection.description}</p>
+          <h2 className="text-3xl font-semibold tracking-tight text-slate-950 dark:text-white">{currentPage.label}</h2>
+          <p className="max-w-3xl text-sm text-slate-600 dark:text-slate-400">{currentPage.description}</p>
         </div>
       </header>
 
@@ -304,44 +221,6 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
         canWriteProviderProfiles={canWriteProviderProfiles}
         canRunGithubTokenProbe={canRunGithubTokenProbe}
       />
-
-      <section className="rounded-[2rem] border border-mm-border/80 bg-transparent p-3 shadow-sm">
-        <fieldset className="segmented-control-field">
-          <legend className="sr-only">Settings Section</legend>
-          <div
-            className="segmented-control"
-            data-intensity="loud"
-            style={{
-              '--segmented-control-count': SETTINGS_SECTIONS.length,
-            } as CSSProperties}
-          >
-            {SETTINGS_SECTIONS.map((candidate) => {
-              const Icon = candidate.Icon;
-              return (
-                <label
-                  key={candidate.id}
-                  className="segmented-control-item"
-                  title={candidate.description}
-                >
-                  <input
-                    type="radio"
-                    name="settings-section"
-                    value={candidate.id}
-                    checked={candidate.id === section}
-                    onChange={() => handleSelectSection(candidate.id)}
-                  />
-                  <span className="segmented-control-item-icon">
-                    <Icon />
-                  </span>
-                  <span className="segmented-control-item-label">
-                    {candidate.label}
-                  </span>
-                </label>
-              );
-            })}
-          </div>
-        </fieldset>
-      </section>
 
       {notice ? (
         <div
@@ -360,7 +239,7 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
           <section className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
             <div className="grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
               <div className="space-y-2">
-                <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Providers & Secrets</h3>
+                <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Provider profile and secret management</h3>
                 <p className="text-sm text-slate-600 dark:text-slate-400">
                   Provider profiles are the durable runtime and provider launch contract.
                   Managed secrets back those profiles without re-exposing raw credential

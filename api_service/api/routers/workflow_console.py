@@ -116,6 +116,7 @@ class DashboardDestination:
     capability_key: str
     endpoint_key: str | None = None
     display_mode: str | None = None
+    menu_group_key: str | None = None
     page: str = "dashboard"
     data_wide_panel: bool = True
 
@@ -134,6 +135,8 @@ class DashboardDestination:
             payload["endpointKey"] = self.endpoint_key
         if self.display_mode is not None:
             payload["displayMode"] = self.display_mode
+        if self.menu_group_key is not None:
+            payload["menuGroupKey"] = self.menu_group_key
         return payload
 
 
@@ -253,15 +256,42 @@ DASHBOARD_DESTINATIONS: tuple[DashboardDestination, ...] = (
         page="artifacts",
     ),
     DashboardDestination(
-        key="settings",
-        label="Settings",
+        key="settings-providers-secrets",
+        label="Providers & Secrets",
         icon_key="settings",
-        canonical_path="/settings",
-        path_patterns=("/settings/*",),
+        canonical_path="/settings/providers-secrets",
+        path_patterns=("/settings/providers-secrets",),
         navigation_group="system",
         page_classification="utility",
-        capability_key="settings",
+        capability_key="settingsProvidersSecrets",
         endpoint_key="settings",
+        menu_group_key="configuration",
+        page="settings",
+    ),
+    DashboardDestination(
+        key="settings-user-workspace",
+        label="User / Workspace",
+        icon_key="settings",
+        canonical_path="/settings/user-workspace",
+        path_patterns=("/settings/user-workspace",),
+        navigation_group="system",
+        page_classification="utility",
+        capability_key="settingsUserWorkspace",
+        endpoint_key="settings",
+        menu_group_key="configuration",
+        page="settings",
+    ),
+    DashboardDestination(
+        key="settings-operations",
+        label="Operations",
+        icon_key="settings",
+        canonical_path="/settings/operations",
+        path_patterns=("/settings/operations",),
+        navigation_group="system",
+        page_classification="utility",
+        capability_key="settingsOperations",
+        endpoint_key="settings",
+        menu_group_key="configuration",
         page="settings",
     ),
 )
@@ -566,6 +596,38 @@ def _dashboard_destination(key: str) -> DashboardDestination:
 
 def _dashboard_destination_info() -> list[dict[str, object]]:
     return [destination.to_ui_info() for destination in DASHBOARD_DESTINATIONS]
+
+
+def _settings_destination_features(permissions: set[str]) -> dict[str, bool]:
+    permission_groups = {
+        "settingsProvidersSecrets": {
+            "provider_profiles.read",
+            "provider_profiles.write",
+            "secrets.metadata.read",
+            "secrets.value.write",
+            "secrets.rotate",
+            "secrets.disable",
+            "secrets.delete",
+        },
+        "settingsUserWorkspace": {
+            "settings.catalog.read",
+            "settings.effective.read",
+            "settings.user.write",
+            "settings.workspace.write",
+            "settings.system.read",
+            "settings.system.write",
+            "settings.audit.read",
+        },
+        "settingsOperations": {
+            "operations.read",
+            "operations.invoke",
+        },
+    }
+    return {
+        capability_key: True
+        for capability_key, required_permissions in permission_groups.items()
+        if permissions & required_permissions
+    }
 
 
 def _is_extensionless_collection_route(request: Request, destination_keys: set[str]) -> bool:
@@ -1376,11 +1438,11 @@ async def task_settings_route(
     _user: User = Depends(get_current_user()),
 ) -> HTMLResponse:
     """Serve the React-powered settings page."""
-    destination = _dashboard_destination("settings")
+    destination = _dashboard_destination("settings-providers-secrets")
     return await _render_react_page(
         request,
         destination.page,
-        destination.canonical_path,
+        request.url.path,
         data_wide_panel=destination.data_wide_panel,
         session=session,
         user=_user,
@@ -1593,7 +1655,7 @@ async def get_dashboard_ui_info(
             "artifacts": True,
             "schedules": True,
             "skills": True,
-            "settings": True,
+            **_settings_destination_features(settings_permissions),
             "manifests": True,
             "oauthTerminal": True,
             "remediationCollection": True,

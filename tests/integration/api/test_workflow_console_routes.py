@@ -87,7 +87,15 @@ async def async_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Async
         "VITE_MANIFEST_PATH", str(_write_dashboard_test_manifest(tmp_path))
     )
 
-    mock_user = SimpleNamespace(id=uuid4(), email="workflow-routes@example.com")
+    mock_user = SimpleNamespace(
+        id=uuid4(),
+        email="workflow-routes@example.com",
+        settings_permissions={
+            "provider_profiles.read",
+            "settings.catalog.read",
+            "operations.read",
+        },
+    )
     for dependency in _resolve_user_dependency_overrides():
         app.dependency_overrides[dependency] = lambda mock_user=mock_user: mock_user
     app.dependency_overrides[get_async_session] = lambda: None
@@ -140,7 +148,9 @@ async def test_supported_workflow_routes_render_console_shell(
         "/skills",
         "/skills/local/editor",
         "/settings",
-        "/settings/provider-profiles",
+        "/settings/providers-secrets",
+        "/settings/user-workspace",
+        "/settings/operations",
         "/manifests",
         "/manifests/default-workflow",
         "/oauth-terminal",
@@ -171,7 +181,9 @@ async def test_ui_info_endpoint_exposes_spa_capabilities_and_endpoints(
     assert payload["app"] == "moonmind"
     assert payload["apiBase"] == "/api"
     assert payload["features"]["workflowList"] is True
-    assert payload["features"]["settings"] is True
+    assert payload["features"]["settingsProvidersSecrets"] is True
+    assert payload["features"]["settingsUserWorkspace"] is True
+    assert payload["features"]["settingsOperations"] is True
     assert payload["endpoints"]["workflows"] == "/api/executions"
     assert payload["endpoints"]["workflowDetail"] == "/api/executions/{workflowId}"
     assert "dashboardConfig" in payload

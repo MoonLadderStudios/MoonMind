@@ -15,7 +15,7 @@ describe('Settings Entrypoint', () => {
   let fetchSpy: MockInstance;
 
   beforeEach(() => {
-    window.history.pushState({}, 'Settings', '/settings?section=providers-secrets');
+    window.history.pushState({}, 'Settings', '/settings/providers-secrets');
     fetchSpy = vi.spyOn(window, 'fetch').mockReturnValue(new Promise(() => {}) as Promise<Response>);
   });
 
@@ -25,7 +25,7 @@ describe('Settings Entrypoint', () => {
   });
 
   it('MM-1185 resets collection layouts and remembered identities from Settings', () => {
-    window.history.replaceState({}, 'Settings', '/settings?section=user-workspace');
+    window.history.replaceState({}, 'Settings', '/settings/user-workspace');
     updateDashboardPreferences({
       workflowListDisplayMode: 'hidden',
       lastSelectedWorkflowId: 'workflow-one',
@@ -46,11 +46,25 @@ describe('Settings Entrypoint', () => {
   it('renders page-matched scoped placeholders for provider profiles and managed secrets', () => {
     renderWithClient(<SettingsPage payload={mockPayload} />);
 
-    expect(screen.getByRole('heading', { name: 'Settings' })).toBeTruthy();
-    expect(screen.getByRole('heading', { name: 'Providers & Secrets' })).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 2, name: 'Providers & Secrets' })).toBeTruthy();
     expect(screen.getByText('Settings provider profiles loading placeholder').closest('[role="status"]')).toBeTruthy();
     expect(screen.getByText('Settings managed secrets loading placeholder').closest('[role="status"]')).toBeTruthy();
     expect(screen.getAllByTestId('loading-placeholder-table').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it.each([
+    ['/settings/providers-secrets', 'Providers & Secrets'],
+    ['/settings/user-workspace', 'User / Workspace'],
+    ['/settings/operations', 'Operations'],
+  ])('MoonLadderStudios/MoonMind#3817 gives %s route-owned identity without local navigation', (path, label) => {
+    window.history.replaceState({}, 'Settings', path);
+    renderWithClient(<SettingsPage payload={mockPayload} />);
+
+    expect(screen.getByRole('heading', { level: 2, name: label })).toBeTruthy();
+    expect(document.title).toBe(`${label} | MoonMind`);
+    expect(screen.queryByRole('radio')).toBeNull();
+    expect(screen.queryByRole('tab')).toBeNull();
+    expect(document.querySelector('.settings-page .segmented-control')).toBeNull();
   });
 });
 
@@ -93,7 +107,7 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Provider Profile runtime filt
   let fetchSpy: MockInstance;
 
   beforeEach(() => {
-    window.history.pushState({}, 'Settings', '/settings?section=providers-secrets');
+    window.history.pushState({}, 'Settings', '/settings/providers-secrets');
     fetchSpy = vi.spyOn(window, 'fetch').mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.startsWith('/api/v1/provider-profiles')) {

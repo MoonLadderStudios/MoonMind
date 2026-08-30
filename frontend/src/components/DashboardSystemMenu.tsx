@@ -3,9 +3,13 @@ import { Archive, Bot, ChevronDown, Moon, Rows3, Settings, ShieldCheck, Sparkles
 import { NavLink, useLocation } from 'react-router-dom';
 
 import {
+  DASHBOARD_DESTINATION_GROUPS,
+  destinationGroupForDestination,
   destinationForPath,
-  visibleSystemDestinations,
+  destinationState,
+  exposedSystemDestinations,
   type DashboardDestination,
+  type DashboardDestinationState,
   type DashboardIconKey,
   type DashboardUiInfo,
 } from '../lib/dashboardRoutes';
@@ -26,15 +30,28 @@ const SECTION_LABELS: Record<string, string> = {
   manifests: 'Data & evidence',
   'omnigent-agents': 'Omnigent',
   remediation: 'Operations',
-  settings: 'Configuration',
 };
 
-function DestinationLink({ destination, onSelect, menuItem = true }: {
+function DestinationLink({ destination, state, onSelect, menuItem = true }: {
   destination: DashboardDestination;
+  state: DashboardDestinationState;
   onSelect: () => void;
   menuItem?: boolean;
 }) {
   const Icon = ICONS[destination.iconKey] ?? Settings;
+  if (state === 'unavailable') {
+    return (
+      <span
+        role={menuItem ? 'menuitem' : undefined}
+        aria-disabled="true"
+        className="dashboard-system-destination-unavailable"
+      >
+        <Icon size={16} className="route-nav-icon" aria-hidden="true" />
+        {destination.label}
+        <span className="sr-only"> unavailable</span>
+      </span>
+    );
+  }
   return (
     <NavLink
       to={destination.canonicalPath}
@@ -48,19 +65,75 @@ function DestinationLink({ destination, onSelect, menuItem = true }: {
   );
 }
 
-function DestinationSections({ destinations, onSelect, menuItems = true }: {
+function DestinationSection({
+  destinations,
+  label,
+  uiInfo,
+  onSelect,
+  menuItems,
+}: {
   destinations: DashboardDestination[];
+  label?: string | undefined;
+  uiInfo: DashboardUiInfo | null;
+  onSelect: () => void;
+  menuItems: boolean;
+}) {
+  return (
+    <div className="dashboard-system-menu-section">
+      {label ? <div className="dashboard-system-menu-label">{label}</div> : null}
+      {destinations.map((destination) => (
+        <DestinationLink
+          key={destination.key}
+          destination={destination}
+          state={destinationState(destination, uiInfo)}
+          onSelect={onSelect}
+          menuItem={menuItems}
+        />
+      ))}
+    </div>
+  );
+}
+
+function DestinationSections({ destinations, uiInfo, onSelect, menuItems = true }: {
+  destinations: DashboardDestination[];
+  uiInfo: DashboardUiInfo | null;
   onSelect: () => void;
   menuItems?: boolean;
 }) {
-  return destinations.map((destination) => {
+  const destinationByKey = new Map(destinations.map((destination) => [destination.key, destination]));
+  const renderedGroups = new Set<string>();
+  return destinations.flatMap((destination) => {
+    const group = destinationGroupForDestination(destination);
+    if (group) {
+      if (renderedGroups.has(group.key)) return [];
+      renderedGroups.add(group.key);
+      const children = group.destinationKeys.flatMap((key) => {
+        const child = destinationByKey.get(key);
+        return child ? [child] : [];
+      });
+      if (children.length === 0) return [];
+      return [(
+        <DestinationSection
+          key={group.key}
+          destinations={children}
+          label={group.label}
+          uiInfo={uiInfo}
+          onSelect={onSelect}
+          menuItems={menuItems}
+        />
+      )];
+    }
     const sectionLabel = SECTION_LABELS[destination.key];
-    return (
-      <div className="dashboard-system-menu-section" key={destination.key}>
-        {sectionLabel ? <div className="dashboard-system-menu-label">{sectionLabel}</div> : null}
-        <DestinationLink destination={destination} onSelect={onSelect} menuItem={menuItems} />
-      </div>
-    );
+    return [(
+      <DestinationSection
+        key={destination.key}
+        destinations={[destination]}
+        label={sectionLabel}
+        uiInfo={uiInfo}
+        onSelect={onSelect}
+        menuItems={menuItems}
+      />
+    )];
   });
 }
 
@@ -72,13 +145,21 @@ export function DashboardSystemMenu({ uiInfo, mobileDrawerOpen }: {
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const location = useLocation();
-  const destinations = visibleSystemDestinations(uiInfo);
+  const destinations = exposedSystemDestinations(uiInfo);
   const activeDestination = destinationForPath(location.pathname);
-  const active = Boolean(activeDestination && activeDestination.navigationGroup !== 'primary');
-  // When a System destination is active, the trigger takes on that selection's
-  // one-word label and icon (e.g. "Skills") instead of the generic "System".
-  const triggerLabel = active && activeDestination ? activeDestination.label : 'System';
-  const TriggerIcon = active && activeDestination ? (ICONS[activeDestination.iconKey] ?? Settings) : Settings;
+  const activeDestinationGroup = destinationGroupForDestination(activeDestination) ?? (
+    location.pathname.replace(/\/$/, '') === '/settings'
+      ? DASHBOARD_DESTINATION_GROUPS.find(({ key }) => key === 'configuration') ?? null
+      : null
+  );
+  const active = Boolean(
+    activeDestinationGroup || (activeDestination && activeDestination.navigationGroup !== 'primary'),
+  );
+  const triggerLabel = activeDestinationGroup?.triggerLabel ?? (
+    active && activeDestination ? activeDestination.label : 'System'
+  );
+  const triggerIconKey = activeDestinationGroup?.triggerIconKey ?? activeDestination?.iconKey;
+  const TriggerIcon = active && triggerIconKey ? (ICONS[triggerIconKey] ?? Settings) : Settings;
 
   useEffect(() => setOpen(false), [location.pathname, location.search]);
 
@@ -94,7 +175,9 @@ export function DashboardSystemMenu({ uiInfo, mobileDrawerOpen }: {
   if (destinations.length === 0) return null;
 
   const items = () => Array.from(
-    rootRef.current?.querySelectorAll<HTMLAnchorElement>('.dashboard-system-popover [role="menuitem"]') ?? [],
+    rootRef.current?.querySelectorAll<HTMLElement>(
+      '.dashboard-system-popover [role="menuitem"]:not([aria-disabled="true"])',
+    ) ?? [],
   );
   const focusAt = (index: number) => items()[index]?.focus();
   const handleTriggerKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
@@ -105,7 +188,7 @@ export function DashboardSystemMenu({ uiInfo, mobileDrawerOpen }: {
   };
   const handleMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const menuItems = items();
-    const current = menuItems.indexOf(document.activeElement as HTMLAnchorElement);
+    const current = menuItems.indexOf(document.activeElement as HTMLElement);
     let next: number | null = null;
     if (event.key === 'Escape') {
       event.preventDefault();
@@ -147,14 +230,19 @@ export function DashboardSystemMenu({ uiInfo, mobileDrawerOpen }: {
         </button>
         {open ? (
           <div className="dashboard-system-popover" role="menu" aria-label="System" onKeyDown={handleMenuKeyDown}>
-            <DestinationSections destinations={destinations} onSelect={() => setOpen(false)} />
+            <DestinationSections destinations={destinations} uiInfo={uiInfo} onSelect={() => setOpen(false)} />
           </div>
         ) : null}
       </div>
       {mobileDrawerOpen ? (
         <div className="dashboard-system-inline" aria-label="System destinations">
           <div className="dashboard-system-inline-heading">System</div>
-          <DestinationSections destinations={destinations} onSelect={() => undefined} menuItems={false} />
+          <DestinationSections
+            destinations={destinations}
+            uiInfo={uiInfo}
+            onSelect={() => undefined}
+            menuItems={false}
+          />
         </div>
       ) : null}
     </>
