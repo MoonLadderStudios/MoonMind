@@ -28,40 +28,7 @@ _SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+.*$")
 _CATALOG_REF_RE = re.compile(r"^omnigent-harness-catalog:sha256:[0-9a-f]{64}$")
 _IMPL_REF_RE = re.compile(r"^omnigent-harness-implementation:sha256:[0-9a-f]{64}$")
 _SAFE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
-
-
-def _default_allowed_freshness_seconds() -> int:
-    """Return the allowed catalog freshness window.
-
-    The harness catalog is an immutable snapshot of the Omnigent endpoint's
-    inventory. It is synchronized on API startup and should be refreshed
-    periodically, but a local deployment that is idle for a few hours should
-    not fail planning because the catalog is 3-4 hours old. The default of
-    24 hours keeps the freshness gate meaningful for detecting a truly stale
-    endpoint (e.g., multi-day outage) while allowing a typical local
-    deployment to remain launchable without a restart.
-
-    Operators can override via ``MOONMIND_HARNESS_CATALOG_MAX_AGE_SECONDS``:
-    - unset/empty → 86400 (24h)
-    - 0 → no limit (allow any age, not recommended for production)
-    - positive integer → explicit window
-    """
-
-    import os
-
-    raw = os.getenv("MOONMIND_HARNESS_CATALOG_MAX_AGE_SECONDS", "").strip()
-    if not raw:
-        return 86400  # 24 hours
-    try:
-        value = int(raw)
-        if value < 0:
-            raise ValueError
-        return value
-    except ValueError:
-        return 86400
-
-
-_ALLOWED_FRESHNESS_SECONDS = _default_allowed_freshness_seconds()  # evaluated at import, but assert_catalog_fresh re-evaluates via helper for config changes without restart
+_ALLOWED_FRESHNESS_SECONDS = 86400  # 24 hours
 
 
 class TrustState(StrEnum):
@@ -234,18 +201,10 @@ def assert_catalog_fresh(
     snapshot: HarnessCatalogSnapshot,
     *,
     now: datetime | None = None,
-    max_age_seconds: int | None = None,
+    max_age_seconds: int = _ALLOWED_FRESHNESS_SECONDS,
     allow_stale_offline: bool = False,
 ) -> None:
     if allow_stale_offline:
-        return
-    effective_max = (
-        max_age_seconds
-        if max_age_seconds is not None
-        else _default_allowed_freshness_seconds()
-    )
-    # 0 means no limit (operator override for air-gapped or long-idle deployments)
-    if effective_max == 0:
         return
     current = now or datetime.now(UTC)
     age = (current - snapshot.observedAt).total_seconds()
@@ -254,9 +213,9 @@ def assert_catalog_fresh(
             "catalog snapshot observedAt is in the future",
             code=HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_STALE,
         )
-    if age > effective_max:
+    if age > max_age_seconds:
         raise HarnessPlatformError(
-            f"catalog snapshot is stale: {age:.0f}s > {effective_max}s",
+            f"catalog snapshot is stale: {age:.0f}s > {max_age_seconds}s",
             code=HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_STALE,
         )
 
