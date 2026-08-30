@@ -248,6 +248,9 @@ def resolve_model_effort(
             advisory_preview,
         )
 
+    if requested_tier is not None and requested_tier < 1:
+        raise ValueError("modelTier must be an integer greater than or equal to 1")
+
     runtime_model, runtime_effort = _runtime_defaults(
         runtime_id,
         workflow_settings=workflow_settings,
@@ -382,9 +385,7 @@ def _normalize_requested_tier(value: int | None) -> int | None:
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError("modelTier must be an integer greater than or equal to 1")
-    if value < 1:
-        raise ValueError("modelTier must be an integer greater than or equal to 1")
+        raise ValueError("modelTier must be an integer")
     return value
 
 
@@ -416,6 +417,8 @@ def _resolve_effective_tier(
 
     if fallback_reason and tier_fallback == _FALLBACK_STRICT:
         raise ValueError("requested_model_tier_unavailable")
+    if fallback_reason is None and requested_tier is None:
+        fallback_reason = _MODEL_SOURCE_PROFILE_DEFAULT_TIER
 
     return max(1, min(raw_tier, tier_count)), fallback_reason, source
 
