@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -13,6 +15,8 @@ from sqlalchemy import UniqueConstraint, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import selectinload, sessionmaker
 
+from api_service.api.routers import executions as executions_module
+from api_service.api.schemas import CreateJobRequest
 from api_service.db.models import (
     Base,
     ManagedAgentProviderProfile,
@@ -31,7 +35,7 @@ from api_service.services.presets.catalog import (
 )
 from api_service.services.presets.save import PresetSaveService
 from moonmind.config.settings import settings
-from moonmind.workflows.executions.model_resolver import resolve_model_effort
+from moonmind.workflows.temporal.service import TemporalExecutionService
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 from tests.helpers.step_type_payloads import preset_step, skill_step, tool_step
 
@@ -177,6 +181,7 @@ async def test_github_issue_3796_preset_tier_resolves_per_profile_policy(tmp_pat
             runtime_id="codex_cli",
             provider_id="openai",
             enabled=True,
+            is_default=True,
             auth_state=ProviderProfileAuthState.CONNECTED,
             model_tiers=[
                 {"label": "Plan", "model": "codex-plan", "effort": "medium"},
@@ -193,6 +198,7 @@ async def test_github_issue_3796_preset_tier_resolves_per_profile_policy(tmp_pat
             runtime_id="claude_code",
             provider_id="anthropic",
             enabled=True,
+            is_default=True,
             auth_state=ProviderProfileAuthState.CONNECTED,
             model_tiers=[
                 {"label": "Plan", "model": "claude-plan", "effort": "low"},
@@ -206,38 +212,44 @@ async def test_github_issue_3796_preset_tier_resolves_per_profile_policy(tmp_pat
         ),
     ]
 
-    async with template_db(tmp_path) as session_maker:
-        async with session_maker() as session:
-            service = PresetCatalogService(session)
-            await service.create_template(
-                slug="portable-tiered-workflow",
-                title="Portable Tiered Workflow",
-                description="One tier-based preset for differing profile policies.",
-                scope="personal",
-                scope_ref=str(user_id),
-                tags=["runtime"],
-                inputs_schema=[],
-                steps=[
-                    {
-                        "title": "Implement",
-                        "instructions": "Implement the issue.",
-                        "skill": {
-                            "id": "auto",
-                            "runtime": {
-                                "modelTier": 2,
-                                "tierFallback": "strict",
-                            },
-                        },
-                    }
-                ],
-                annotations={},
-                required_capabilities=[],
-                created_by=user_id,
-            )
+    original_backend = settings.workflow.temporal_artifact_backend
+    original_root = settings.workflow.temporal_artifact_root
+    settings.workflow.temporal_artifact_backend = "local_fs"
+    settings.workflow.temporal_artifact_root = str(tmp_path / "artifacts")
 
-            outcomes = []
-            for profile in profiles:
-                expanded = await service.expand_template(
+    async with template_db(tmp_path) as session_maker:
+        try:
+            async with session_maker() as session:
+                session.add_all(profiles)
+                await session.commit()
+
+                catalog = PresetCatalogService(session)
+                await catalog.create_template(
+                    slug="portable-tiered-workflow",
+                    title="Portable Tiered Workflow",
+                    description="One tier-based preset for differing profile policies.",
+                    scope="personal",
+                    scope_ref=str(user_id),
+                    tags=["runtime"],
+                    inputs_schema=[],
+                    steps=[
+                        {
+                            "title": "Implement",
+                            "instructions": "Implement the issue.",
+                            "skill": {
+                                "id": "auto",
+                                "runtime": {
+                                    "modelTier": 2,
+                                    "tierFallback": "strict",
+                                },
+                            },
+                        }
+                    ],
+                    annotations={},
+                    required_capabilities=[],
+                    created_by=user_id,
+                )
+                expanded = await catalog.expand_template(
                     slug="portable-tiered-workflow",
                     scope="personal",
                     scope_ref=str(user_id),
@@ -245,26 +257,81 @@ async def test_github_issue_3796_preset_tier_resolves_per_profile_policy(tmp_pat
                     context={},
                     options=ExpandOptions(should_enforce_step_limit=True),
                 )
-                runtime = expanded["steps"][0]["skill"]["runtime"]
+                authored_runtime = expanded["steps"][0]["skill"]["runtime"]
+                assert authored_runtime == {
+                    "modelTier": 2,
+                    "tierFallback": "strict",
+                }
+                assert expanded["steps"][0]["runtime"] == authored_runtime
+                assert "model" not in authored_runtime
+                assert "effort" not in authored_runtime
 
-                assert runtime == {"modelTier": 2, "tierFallback": "strict"}
-                assert expanded["steps"][0]["runtime"] == runtime
-                assert "model" not in runtime
-                assert "effort" not in runtime
-
-                resolved = resolve_model_effort(
-                    runtime_id=profile.runtime_id,
-                    profile=profile,
-                    requested_model_tier=runtime["modelTier"],
-                    tier_fallback=runtime["tierFallback"],
-                    env={},
+                execution_service = TemporalExecutionService(session)
+                execution_service._client_adapter.start_workflow = AsyncMock(
+                    side_effect=[
+                        SimpleNamespace(run_id="run-portable-codex"),
+                        SimpleNamespace(run_id="run-portable-claude"),
+                    ]
                 )
-                outcomes.append((resolved.model, resolved.effort))
+                user = SimpleNamespace(
+                    id=user_id,
+                    email="mm3796@example.com",
+                    is_active=True,
+                    is_superuser=False,
+                    roles=[],
+                )
+                outcomes = []
+                for profile in profiles:
+                    created = (
+                        await executions_module._create_execution_from_workflow_request(
+                            request=CreateJobRequest.model_validate(
+                                {
+                                    "type": "workflow",
+                                    "payload": {
+                                        "repository": "MoonLadderStudios/MoonMind",
+                                        "targetRuntime": profile.runtime_id,
+                                        "workflow": deepcopy(expanded),
+                                    },
+                                }
+                            ),
+                            service=execution_service,
+                            user=user,
+                            session=session,
+                            principal_context={},
+                        )
+                    )
+                    launch_runtime = created.input_parameters["workflow"]["steps"][
+                        0
+                    ]["runtime"]
+                    outcomes.append(
+                        (
+                            launch_runtime["profileId"],
+                            launch_runtime["model"],
+                            launch_runtime["effort"],
+                            launch_runtime["modelTierResolution"][
+                                "providerProfileId"
+                            ],
+                        )
+                    )
 
-    assert outcomes == [
-        ("codex-implementation", "xhigh"),
-        ("claude-implementation", "high"),
-    ]
+                assert outcomes == [
+                    (
+                        "portable-codex",
+                        "codex-implementation",
+                        "xhigh",
+                        "portable-codex",
+                    ),
+                    (
+                        "portable-claude",
+                        "claude-implementation",
+                        "high",
+                        "portable-claude",
+                    ),
+                ]
+                assert execution_service._client_adapter.start_workflow.await_count == 2
+        finally:
+            settings.workflow.temporal_artifact_backend = original_backend
+            settings.workflow.temporal_artifact_root = original_root
 
 
 async def test_mm1171_preset_runtime_rejects_invalid_tier_values(tmp_path):
