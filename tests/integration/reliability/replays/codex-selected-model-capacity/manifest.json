@@ -1,0 +1,13 @@
+{
+  "failureShapeId": "codex-selected-model-capacity",
+  "incidentWorkflowId": "mm:6508e9bb-7de6-5cdc-87b6-824d16272053",
+  "runtime": "codex_cli",
+  "profileId": "codex_openai_oauth",
+  "profileSnapshot": {
+    "cooldown_after_429_seconds": 900
+  },
+  "model": "gpt-5.6-sol",
+  "providerReason": "Selected model is at capacity. Please try a different model.",
+  "escapedFailure": "unclassified_selected_model_capacity",
+  "invariant": "Temporary selected-model capacity is classified as provider capacity and enters the profile cooldown retry path without changing model or credential authority"
+}

@@ -1276,6 +1276,8 @@ If another compatible launch-ready profile exists, the run may continue on a dif
 
 Claude Code and Codex CLI rate limits must be reported against the selected provider profile whenever the failure can be attributed to that profile. The `AgentRun` should release the current slot, report cooldown, and retry through the same profile selector unless the request required an exact profile. If no compatible profile is available, the run waits in `awaiting_slot`.
 
+Temporary provider or selected-model capacity exhaustion follows the same default cooldown path as provider rate limits. MoonMind preserves the requested model and credential authority, releases the profile slot, and retries after the profile cooldown with bounded exponential backoff rather than silently selecting a different model or credential source.
+
 The slot-release + cooldown path is gated by provider error classification. Runtime strategies must classify provider rate-limit signals as `failure_class="integration_error"` with `provider_error_code="429"`, or an equivalent retry recommendation that asks the orchestration layer to wait for provider cooldown instead of retrying immediately.
 
 ---

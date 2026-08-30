@@ -50,6 +50,7 @@ _RATE_LIMIT_MARKERS = (
 )
 
 _CAPACITY_MARKERS = (
+    "model is at capacity",
     "http 500",
     "http 502",
     "http 503",

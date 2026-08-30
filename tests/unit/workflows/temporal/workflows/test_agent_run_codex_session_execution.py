@@ -2420,6 +2420,8 @@ async def _run_default_profile_cooldown_retry_case(
     monkeypatch: pytest.MonkeyPatch,
     *,
     sticky_patch_enabled: bool,
+    capacity_failure_count: int = 1,
+    cooldown_seconds: int = 0,
 ) -> tuple[
     AgentRunResult,
     list[str | None],
@@ -2436,7 +2438,9 @@ async def _run_default_profile_cooldown_retry_case(
             providerErrorCode="provider_capacity",
             retryRecommendation="retry_after_cooldown",
             summary="provider capacity",
-        ),
+        )
+        for _ in range(capacity_failure_count)
+    ] + [
         AgentRunResult(summary="Recovered on pinned profile."),
     ]
 
@@ -2505,12 +2509,12 @@ async def _run_default_profile_cooldown_retry_case(
     ) -> int:
         run._profile_snapshots = {
             "codex_openrouter_qwen36_plus": {
-                "cooldown_after_429_seconds": 0,
+                "cooldown_after_429_seconds": cooldown_seconds,
                 "enabled": True,
                 "is_default": False,
             },
             "codex-default": {
-                "cooldown_after_429_seconds": 0,
+                "cooldown_after_429_seconds": cooldown_seconds,
                 "enabled": True,
                 "is_default": True,
             },
@@ -2585,6 +2589,27 @@ async def test_agent_run_pins_default_profile_after_provider_cooldown_retry(
             },
         ),
     ]
+
+
+async def test_agent_run_retries_provider_capacity_three_times_with_default_backoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, ensure_profile_refs, _selectors, manager_signals = (
+        await _run_default_profile_cooldown_retry_case(
+            monkeypatch,
+            sticky_patch_enabled=True,
+            capacity_failure_count=3,
+            cooldown_seconds=900,
+        )
+    )
+
+    assert result.summary == "Recovered on pinned profile."
+    assert ensure_profile_refs == ["codex-default"] * 4
+    assert [
+        payload["cooldown_seconds"]
+        for signal_name, payload in manager_signals
+        if signal_name == "report_cooldown"
+    ] == [900, 1800, 3600]
 
 
 async def test_agent_run_replays_legacy_default_fallback_retry_when_patch_unset(

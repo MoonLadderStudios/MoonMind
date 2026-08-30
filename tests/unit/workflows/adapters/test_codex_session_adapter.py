@@ -2596,17 +2596,32 @@ async def test_start_does_not_clear_session_for_codex_usage_limit_failure(
     assert result.metadata["turnMetadata"]["failureClass"] == "integration_error"
 
 
+@pytest.mark.parametrize(
+    ("reason", "raw_marker", "summary_contains_raw_marker"),
+    [
+        (
+            "provider emitted verbose diagnostics "
+            + ("x" * 5000)
+            + " http 503 high demand",
+            "high demand",
+            False,
+        ),
+        (
+            "Selected model is at capacity. Please try a different model.",
+            "at capacity",
+            True,
+        ),
+    ],
+)
 async def test_start_classifies_codex_provider_capacity_failure_and_publishes_artifacts(
     tmp_path: Path,
+    reason: str,
+    raw_marker: str,
+    summary_contains_raw_marker: bool,
 ) -> None:
     binding = _binding()
     workspace_path = tmp_path / "agent_jobs" / binding.agent_run_id / "repo"
     run_store = ManagedRunStore(tmp_path / "managed_runs")
-    reason = (
-        "provider emitted verbose diagnostics "
-        + ("x" * 5000)
-        + " http 503 high demand"
-    )
 
     async def _load_snapshot(_workflow_id: str) -> CodexManagedSessionSnapshot:
         return _snapshot(binding=binding)
@@ -2672,7 +2687,7 @@ async def test_start_classifies_codex_provider_capacity_failure_and_publishes_ar
     assert result.failure_class == "integration_error"
     assert result.provider_error_code == "provider_capacity"
     assert result.retry_recommendation == "retry_after_cooldown"
-    assert "high demand" not in result.summary
+    assert (raw_marker in result.summary) is summary_contains_raw_marker
     assert result.output_refs == [
         "artifact:turn-output",
         "artifact:stdout",
@@ -2685,10 +2700,10 @@ async def test_start_classifies_codex_provider_capacity_failure_and_publishes_ar
     provider_failure = result.metadata["providerFailure"]
     assert provider_failure["providerErrorCode"] == "provider_capacity"
     # MM-882: the adapter emits the canonical structured failure envelope with a
-    # distinct sanitized summary and no raw provider text ("high demand").
+    # distinct sanitized summary and no raw provider text.
     assert provider_failure["providerErrorClass"] == "capacity"
     assert provider_failure["retryRecommendation"] == "retry_after_cooldown"
-    assert "high demand" not in provider_failure["sanitizedSummary"].lower()
+    assert raw_marker not in provider_failure["sanitizedSummary"].lower()
     assert "reason" not in provider_failure
     assert result.metadata["profileId"] == "codex-default"
 
