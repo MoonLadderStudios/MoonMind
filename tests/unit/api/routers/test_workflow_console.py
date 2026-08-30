@@ -637,16 +637,16 @@ def test_proposal_review_routes_are_not_dashboard_surfaces(client: TestClient) -
         assert response.status_code == 404
 
 
-def test_legacy_settings_subroutes_redirect_to_unified_settings(
+def test_legacy_settings_subroutes_redirect_to_canonical_routes(
     client: TestClient,
 ) -> None:
     workers = client.get("/workers", follow_redirects=False)
     assert workers.status_code == 307
-    assert workers.headers["location"] == "/settings?section=operations"
+    assert workers.headers["location"] == "/settings/operations"
 
     secrets = client.get("/secrets", follow_redirects=False)
     assert secrets.status_code == 307
-    assert secrets.headers["location"] == "/settings?section=providers-secrets"
+    assert secrets.headers["location"] == "/settings/providers-secrets"
 
 
 def test_react_tasks_list_and_detail_boot_exclude_route_specific_config(

@@ -154,7 +154,7 @@ If a React route renders structurally correct HTML but spacing, grids, or layout
 | `/oauth-terminal` | OAuth terminal sessions (xterm.js lives here only) |
 | `/index-health` | Index health page |
 
-Convenience redirects: `/secrets` → `/settings?section=providers-secrets`, `/workers` → `/settings?section=operations`, `/manifests/new` → `/manifests`.
+Convenience redirects: `/secrets` → `/settings/providers-secrets`, `/workers` → `/settings/operations`, `/manifests/new` → `/manifests`.
 
 Rules:
 

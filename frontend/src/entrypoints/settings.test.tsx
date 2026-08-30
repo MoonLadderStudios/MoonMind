@@ -1,21 +1,37 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { fireEvent, screen, within } from '@testing-library/react';
+import { BrowserRouter } from 'react-router-dom';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { renderWithClient } from '../utils/test-utils';
-import { SettingsPage } from './settings';
+import { ProvidersSecretsSettingsPage, UserWorkspaceSettingsPage } from './settings';
 import { readDashboardPreferences, updateDashboardPreferences } from '../utils/dashboardPreferences';
+
+const renderProvidersPage = (payload: BootPayload) => renderWithClient(
+  <BrowserRouter><ProvidersSecretsSettingsPage payload={payload} /></BrowserRouter>,
+);
+
+const renderUserWorkspacePage = (payload: BootPayload) => renderWithClient(
+  <BrowserRouter><UserWorkspaceSettingsPage payload={payload} /></BrowserRouter>,
+);
 
 describe('Settings Entrypoint', () => {
   const mockPayload: BootPayload = {
-    page: 'settings',
+    page: 'settings-providers-secrets',
     apiBase: '/api',
+    initialData: {
+      settingsPermissions: [
+        'provider_profiles.read',
+        'secrets.metadata.read',
+        'settings.catalog.read',
+      ],
+    },
   };
 
   let fetchSpy: MockInstance;
 
   beforeEach(() => {
-    window.history.pushState({}, 'Settings', '/settings?section=providers-secrets');
+    window.history.pushState({}, 'Settings', '/settings/providers-secrets');
     fetchSpy = vi.spyOn(window, 'fetch').mockReturnValue(new Promise(() => {}) as Promise<Response>);
   });
 
@@ -25,14 +41,14 @@ describe('Settings Entrypoint', () => {
   });
 
   it('MM-1185 resets collection layouts and remembered identities from Settings', () => {
-    window.history.replaceState({}, 'Settings', '/settings?section=user-workspace');
+    window.history.replaceState({}, 'Settings', '/settings/user-workspace?scope=workspace');
     updateDashboardPreferences({
       workflowListDisplayMode: 'hidden',
       lastSelectedWorkflowId: 'workflow-one',
       recurringListDisplayMode: 'hidden',
       lastSelectedDefinitionId: 'schedule-one',
     });
-    renderWithClient(<SettingsPage payload={mockPayload} />);
+    renderUserWorkspacePage(mockPayload);
 
     fireEvent.click(screen.getByRole('button', { name: 'Reset dashboard preferences' }));
 
@@ -44,9 +60,8 @@ describe('Settings Entrypoint', () => {
   });
 
   it('renders page-matched scoped placeholders for provider profiles and managed secrets', () => {
-    renderWithClient(<SettingsPage payload={mockPayload} />);
+    renderProvidersPage(mockPayload);
 
-    expect(screen.getByRole('heading', { name: 'Settings' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Providers & Secrets' })).toBeTruthy();
     expect(screen.getByText('Settings provider profiles loading placeholder').closest('[role="status"]')).toBeTruthy();
     expect(screen.getByText('Settings managed secrets loading placeholder').closest('[role="status"]')).toBeTruthy();
@@ -76,10 +91,14 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Provider Profile runtime filt
   };
 
   const payloadWithRuntimes: BootPayload = {
-    page: 'settings',
+    page: 'settings-providers-secrets',
     apiBase: '/api',
     initialData: {
-      settingsPermissions: ['provider_profiles.write'],
+      settingsPermissions: [
+        'provider_profiles.read',
+        'provider_profiles.write',
+        'secrets.metadata.read',
+      ],
       runtimeConfig: {
         system: {
           // `omnigent` is a facade, never a Provider Profile owner, so it must
@@ -93,7 +112,7 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Provider Profile runtime filt
   let fetchSpy: MockInstance;
 
   beforeEach(() => {
-    window.history.pushState({}, 'Settings', '/settings?section=providers-secrets');
+    window.history.pushState({}, 'Settings', '/settings/providers-secrets');
     fetchSpy = vi.spyOn(window, 'fetch').mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.startsWith('/api/v1/provider-profiles')) {
@@ -134,7 +153,7 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Provider Profile runtime filt
   }
 
   it('fetches the complete Provider Profile collection and defaults to All runtimes', async () => {
-    renderWithClient(<SettingsPage payload={payloadWithRuntimes} />);
+    renderProvidersPage(payloadWithRuntimes);
 
     await screen.findByRole('heading', { name: 'Provider Profiles' });
 
@@ -152,7 +171,7 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Provider Profile runtime filt
   });
 
   it('offers one option per available runtime using canonical IDs and formatted labels', async () => {
-    renderWithClient(<SettingsPage payload={payloadWithRuntimes} />);
+    renderProvidersPage(payloadWithRuntimes);
 
     await screen.findByRole('heading', { name: 'Provider Profiles' });
 
@@ -174,7 +193,7 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Provider Profile runtime filt
   });
 
   it('shows only matching rows while the global health summary keeps every loaded profile', async () => {
-    renderWithClient(<SettingsPage payload={payloadWithRuntimes} />);
+    renderProvidersPage(payloadWithRuntimes);
 
     await screen.findByRole('heading', { name: 'Provider Profiles' });
 
@@ -201,7 +220,7 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Provider Profile runtime filt
   });
 
   it('prefills the create form runtime from the active filter without touching an existing runtime', async () => {
-    renderWithClient(<SettingsPage payload={payloadWithRuntimes} />);
+    renderProvidersPage(payloadWithRuntimes);
 
     await screen.findByRole('heading', { name: 'Provider Profiles' });
 
@@ -221,7 +240,7 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Provider Profile runtime filt
   });
 
   it('names the active runtime in the empty state instead of the global message', async () => {
-    renderWithClient(<SettingsPage payload={payloadWithRuntimes} />);
+    renderProvidersPage(payloadWithRuntimes);
 
     await screen.findByRole('heading', { name: 'Provider Profiles' });
     expect(screen.queryByText('No provider profiles configured yet.')).toBeNull();
@@ -235,7 +254,7 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Provider Profile runtime filt
   });
 
   it('keeps runtime_id immutable while editing an existing profile', async () => {
-    renderWithClient(<SettingsPage payload={payloadWithRuntimes} />);
+    renderProvidersPage(payloadWithRuntimes);
 
     await screen.findByRole('heading', { name: 'Provider Profiles' });
 

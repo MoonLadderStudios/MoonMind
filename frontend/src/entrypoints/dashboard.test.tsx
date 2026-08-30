@@ -279,12 +279,18 @@ vi.mock('./workflow-start', () => ({
   },
 }));
 
-vi.mock('./settings', () => ({
-  default: ({ payload }: { payload: BootPayload }) => {
+vi.mock('./settings', () => {
+  const MockSettingsPage = ({ payload }: { payload: BootPayload }) => {
     const initialData = payload.initialData as { settingsPermissions?: string[] } | undefined;
     return <div>Settings permissions: {(initialData?.settingsPermissions ?? []).join(',')}</div>;
-  },
-}));
+  };
+  return {
+    SettingsEntryPage: MockSettingsPage,
+    OperationsSettingsPage: MockSettingsPage,
+    ProvidersSecretsSettingsPage: MockSettingsPage,
+    UserWorkspaceSettingsPage: MockSettingsPage,
+  };
+});
 
 function uiInfo(overrides: Record<string, unknown> = {}) {
   return {
@@ -489,7 +495,7 @@ describe('Dashboard shared entry', () => {
     ['/artifacts/example', 'Artifacts'],
     ['/observability/example', 'Artifacts'],
     ['/remediations/example', 'Remediation'],
-    ['/settings/providers', 'Settings'],
+    ['/settings/providers-secrets', 'Settings'],
     ['/schedules', 'Recurring'],
     ['/schedules/nightly-build', 'Recurring'],
     ['/skills', 'Skills'],

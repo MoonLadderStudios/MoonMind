@@ -56,7 +56,7 @@ describe('dashboard route resolution', () => {
     ['/artifacts/run/1', 'artifacts'],
     ['/observability/run/1', 'artifacts'],
     ['/remediations/mm:1', 'remediation'],
-    ['/settings/providers', 'settings'],
+    ['/settings/providers-secrets', 'settings'],
     ['/schedules', 'recurring'],
     ['/schedules/nightly%3Abuild', 'recurring'],
     ['/skills', 'skills'],
@@ -90,6 +90,18 @@ describe('dashboard route resolution', () => {
       });
     },
   );
+  it.each([
+    ['/settings', 'settings-entry'],
+    ['/settings/providers-secrets', 'settings-providers-secrets'],
+    ['/settings/user-workspace', 'settings-user-workspace'],
+    ['/settings/operations', 'settings-operations'],
+  ])('resolves the canonical Settings route %s to %s', (path, page) => {
+    expect(resolveDashboardRoute(path)).toEqual({
+      page,
+      dataWidePanel: true,
+      currentPath: path,
+    });
+  });
   it.each(['/artifacts', '/observability'])('resolves the %s evidence collection route', (path) => {
     expect(resolveDashboardRoute(path)).toEqual({
       page: 'artifacts',

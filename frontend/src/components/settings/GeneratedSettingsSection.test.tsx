@@ -1,7 +1,13 @@
+import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '../../utils/test-utils';
 import { renderWithClient } from '../../utils/test-utils';
 import { GeneratedSettingsSection } from './GeneratedSettingsSection';
+
+function ControlledGeneratedSettingsSection() {
+  const [scope, setScope] = useState<'workspace' | 'user'>('workspace');
+  return <GeneratedSettingsSection scope={scope} onScopeChange={setScope} />;
+}
 
 const workspaceCatalog = {
   section: 'user-workspace',
@@ -368,7 +374,7 @@ describe('GeneratedSettingsSection', () => {
   });
 
   it('renders descriptor rows with metadata, badges, diagnostics, and filters', async () => {
-    renderWithClient(<GeneratedSettingsSection />);
+    renderWithClient(<ControlledGeneratedSettingsSection />);
 
     expect(await screen.findByText('Default Publish Mode')).toBeTruthy();
     expect(screen.getByText('Config')).toBeTruthy();
@@ -397,7 +403,7 @@ describe('GeneratedSettingsSection', () => {
   });
 
   it('switches scope and fetches scoped descriptors', async () => {
-    renderWithClient(<GeneratedSettingsSection />);
+    renderWithClient(<ControlledGeneratedSettingsSection />);
 
     await screen.findByText('Default Publish Mode');
     fireEvent.click(screen.getByRole('button', { name: 'User' }));
@@ -408,7 +414,7 @@ describe('GeneratedSettingsSection', () => {
   });
 
   it('does not offer reset for inherited workspace overrides in user scope', async () => {
-    renderWithClient(<GeneratedSettingsSection />);
+    renderWithClient(<ControlledGeneratedSettingsSection />);
 
     await screen.findByText('Default Publish Mode');
     fireEvent.click(screen.getByRole('button', { name: 'User' }));
@@ -418,7 +424,7 @@ describe('GeneratedSettingsSection', () => {
   });
 
   it('edits generated controls and previews only changed keys', async () => {
-    renderWithClient(<GeneratedSettingsSection />);
+    renderWithClient(<ControlledGeneratedSettingsSection />);
 
     await screen.findByText('Default Publish Mode');
 
@@ -441,7 +447,7 @@ describe('GeneratedSettingsSection', () => {
   });
 
   it('saves only changed keys with expected versions and refreshes catalog', async () => {
-    renderWithClient(<GeneratedSettingsSection />);
+    renderWithClient(<ControlledGeneratedSettingsSection />);
 
     await screen.findByText('Default Publish Mode');
     fireEvent.change(screen.getByLabelText('Default Publish Mode'), { target: { value: 'branch' } });
@@ -463,7 +469,7 @@ describe('GeneratedSettingsSection', () => {
   });
 
   it('disables read-only descriptors and shows lock reason', async () => {
-    renderWithClient(<GeneratedSettingsSection />);
+    renderWithClient(<ControlledGeneratedSettingsSection />);
 
     expect(await screen.findByText('Operator Locked Mode')).toBeTruthy();
     expect(screen.getByText('Operator locked by workspace policy.')).toBeTruthy();
@@ -475,7 +481,7 @@ describe('GeneratedSettingsSection', () => {
   });
 
   it('renders a Broken reference indicator on rows whose secret_ref is unresolved', async () => {
-    renderWithClient(<GeneratedSettingsSection />);
+    renderWithClient(<ControlledGeneratedSettingsSection />);
 
     expect(await screen.findByText('Default Publish Mode')).toBeTruthy();
 
@@ -485,7 +491,7 @@ describe('GeneratedSettingsSection', () => {
   });
 
   it('supports discard for pending generated setting changes', async () => {
-    renderWithClient(<GeneratedSettingsSection />);
+    renderWithClient(<ControlledGeneratedSettingsSection />);
 
     await screen.findByText('Default Publish Mode');
     fireEvent.change(screen.getByLabelText('Default Publish Mode'), { target: { value: 'branch' } });

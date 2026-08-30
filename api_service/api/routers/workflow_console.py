@@ -1196,8 +1196,8 @@ async def secrets_route(
     request: Request,
     _user: User = Depends(get_current_user()),
 ) -> RedirectResponse:
-    """Redirect the legacy secrets page into unified settings."""
-    return RedirectResponse(url="/settings?section=providers-secrets", status_code=307)
+    """Redirect the legacy secrets page to its canonical Settings route."""
+    return RedirectResponse(url="/settings/providers-secrets", status_code=307)
 
 
 @router.get("/workflows", name="workflow_console_root", response_class=HTMLResponse)
@@ -1365,8 +1365,8 @@ async def task_workers_route(
     request: Request,
     _user: User = Depends(get_current_user()),
 ) -> RedirectResponse:
-    """Redirect the legacy workers page into unified settings."""
-    return RedirectResponse(url="/settings?section=operations", status_code=307)
+    """Redirect the legacy workers page to its canonical Settings route."""
+    return RedirectResponse(url="/settings/operations", status_code=307)
 
 
 @router.get("/settings", response_class=HTMLResponse)

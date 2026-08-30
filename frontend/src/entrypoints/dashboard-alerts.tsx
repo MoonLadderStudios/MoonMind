@@ -72,7 +72,7 @@ export function DashboardAlerts() {
         Profiles in Settings.
         <div style={{ marginTop: "12px" }}>
           <a
-            href="/settings?section=providers-secrets"
+            href="/settings/providers-secrets"
             className="btn btn-sm btn-outline"
           >
             Open Settings
@@ -104,7 +104,7 @@ export function DashboardAlerts() {
       </ul>
       <div style={{ marginTop: "12px" }}>
         <a
-          href="/settings?section=providers-secrets"
+          href="/settings/providers-secrets"
           className="btn btn-sm btn-outline"
         >
           Open Settings

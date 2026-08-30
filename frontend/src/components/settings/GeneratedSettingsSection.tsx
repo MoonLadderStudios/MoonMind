@@ -1,7 +1,12 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
-type SettingScope = 'workspace' | 'user';
+import {
+  useSettingsDraftGuard,
+  useSettingsDraftRegistration,
+} from './SettingsDraftGuard';
+
+export type SettingScope = 'workspace' | 'user';
 
 interface SettingOption {
   value: string;
@@ -338,9 +343,15 @@ function sanitizeError(error: unknown): string {
   return 'Settings request failed.';
 }
 
-export function GeneratedSettingsSection() {
+export function GeneratedSettingsSection({
+  scope,
+  onScopeChange,
+}: {
+  scope: SettingScope;
+  onScopeChange: (scope: SettingScope) => void;
+}) {
   const queryClient = useQueryClient();
-  const [scope, setScope] = useState<SettingScope>('workspace');
+  const { requestDeparture } = useSettingsDraftGuard();
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('all');
   const [modifiedOnly, setModifiedOnly] = useState(false);
@@ -399,14 +410,33 @@ export function GeneratedSettingsSection() {
     });
   };
 
-  const resetLocalStateForScope = (nextScope: SettingScope) => {
-    setScope(nextScope);
+  const discardPending = useCallback(() => {
+    setPending({});
+  }, []);
+
+  useSettingsDraftRegistration(
+    `generated-settings:${scope}`,
+    pendingChanges.length > 0,
+    discardPending,
+  );
+
+  useEffect(() => {
     setPending({});
     setNotice(null);
     setCategory('all');
     setSearch('');
     setModifiedOnly(false);
     setReadOnlyOnly(false);
+  }, [scope]);
+
+  const requestScopeChange = (nextScope: SettingScope) => {
+    if (nextScope === scope) {
+      return;
+    }
+    requestDeparture(
+      () => onScopeChange(nextScope),
+      `Change to ${SCOPE_LABELS[nextScope]} scope? Your unsaved settings draft will be discarded.`,
+    );
   };
 
   const saveChanges = async () => {
@@ -483,7 +513,7 @@ export function GeneratedSettingsSection() {
       <div className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div className="space-y-2">
-            <h3 className="text-lg font-semibold text-slate-900 dark:text-white">User / Workspace</h3>
+            <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Generated settings</h3>
             <p className="max-w-3xl text-sm text-slate-600 dark:text-slate-400">
               Configure eligible settings from backend-owned descriptors. Validation, sensitivity, and authorization remain server-side.
             </p>
@@ -498,7 +528,7 @@ export function GeneratedSettingsSection() {
                     ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
                     : 'bg-transparent text-slate-600 hover:text-slate-950 dark:text-slate-400 dark:hover:text-white'
                 }`}
-                onClick={() => resetLocalStateForScope(candidate)}
+                onClick={() => requestScopeChange(candidate)}
               >
                 {SCOPE_LABELS[candidate]}
               </button>
