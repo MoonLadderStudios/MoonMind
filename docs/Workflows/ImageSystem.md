@@ -328,7 +328,7 @@ Rules:
 - objective-scoped images produce objective-scoped context
 - step-scoped images produce step-scoped context
 - the index artifact summarizes what context exists for which target
-- generated context may include OCR, captions, and safety notes, but must remain deterministic and auditable for a given source image set and model configuration
+- generated context may include OCR, captions, and security or policy notes, but must remain deterministic and auditable for a given source image set and model configuration
 
 ---
 
