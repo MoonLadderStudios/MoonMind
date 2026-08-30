@@ -20,277 +20,125 @@ jobs:
           ref: docs/security-positioning
           fetch-depth: 0
 
-      - name: Apply security-focused documentation language
+      - name: Apply final editorial replacements and audit terminology
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
           import re
 
-          migration_file = Path(".github/workflows/docs-security-terminology-migration.yml")
-
-          file_replacements = {
-              "README.md": [
-                  (
-                      "MoonMind is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for copyright and attribution notices.",
-                      "MoonMind is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for the full license text and [NOTICE](NOTICE) for copyright and attribution notices.",
-                  ),
+          replacements = {
+              "docs/DocsReview.md": [
+                  ("authority/safety/lifecycle boundaries", "authority/security/lifecycle boundaries"),
+                  ("candidate/promotion/terminal-evidence safety", "candidate/promotion/terminal-evidence integrity"),
+                  ("cost/safety tradeoff", "cost/risk tradeoff"),
+                  ("skill-projection safety", "skill-projection integrity"),
               ],
-              "docs/UI/ProviderProfileCreation.md": [
-                  ("safe creation preset", "validated creation preset"),
-                  ("fail safely", "fail closed"),
-                  ("safe preset", "validated preset"),
-                  ("safe materialization strategy", "approved materialization strategy"),
-                  ("infer safety from blank browser fields", "infer security posture from blank browser fields"),
-                  ("launch-safety", "launch-security"),
-                  ("safely empty", "empty without weakening isolation"),
-                  ("simplify the experience safely", "simplify the experience without weakening activation controls"),
-                  ("render the standard form and advanced summary safely", "render the standard form and advanced summary securely and predictably"),
+              "docs/ManagedAgents/ManagedRuntimeCleanup.md": [
+                  ("**Shared-checkout safety.**", "**Shared-checkout protection.**"),
+                  ("path safety", "path confinement"),
               ],
-              "docs/UI/SettingsPage.md": [
-                  ("secret-safe behavior", "credential-redacted behavior"),
-                  ("safe filters", "approved filters"),
-                  ("Safe independent failure", "Independent failure isolation"),
-                  ("safe specific mapping", "approved specific mapping"),
-                  ("preserve safe page-relevant query", "preserve approved page-relevant query"),
-                  ("launch-safety", "launch-security"),
-                  ("safe policy controls", "authorized policy controls"),
-                  ("safe diagnostic switches", "bounded diagnostic switches"),
-                  ("unset, safe, or healthy", "unset, permitted, or healthy"),
-                  ("Secret Safety, Validation, and Explainability", "Secret Security, Validation, and Explainability"),
-                  ("degrade safely", "degrade predictably"),
-                  ("secret-safety decisions", "secret-security decisions"),
+              "docs/Omnigent/OmnigentFaultInjectionSuite.md": [
+                  ("historical-read safety", "historical-read integrity"),
               ],
-              "docs/Workflows/WorkflowPublishing.md": [
-                  ("### Safety Guard", "### Protected Branch Guard"),
-                  ("are safety decisions", "are security decisions"),
+              "docs/Observability/MetricsAndDashboards.md": [
+                  ("safety/intervention", "security/intervention"),
               ],
-              "docs/Security/ProviderProfiles.md": [
-                  ("This means “disabled by default” is a safety state for unconfigured providers.", "This means “disabled by default” is a security control for unconfigured providers."),
-                  ("**Safe Settings-first activation**", "**Secure Settings-first activation**"),
-                  ("as a safety net", "as a recovery guard"),
-                  ("This makes the safe state the default", "This makes the non-launchable state the default"),
+              "docs/Memory/MemoryResearch.md": [
+                  ("auditability + safety", "auditability + security"),
+                  ("safety/compliance hurdles", "security/compliance hurdles"),
+                  ("Safety/guardrails", "Security/guardrails"),
               ],
-              "docs/Omnigent/OmnigentHostOAuth.md": [
-                  ("safety invariants", "security invariants"),
-                  ("Only safe references cross durable boundaries.", "Only bounded references cross durable boundaries."),
-                  ("proving safe mutable-state ownership", "proving validated mutable-state ownership"),
-                  ("<safe-volume-ref>", "<bounded-volume-ref>"),
-                  ("<safe-cleanup-ref>", "<bounded-cleanup-ref>"),
-                  ("## 19. Secret-safe evidence", "## 19. Credential-redacted evidence"),
+              "AGENTS.md": [
+                  ("safe defaults", "secure defaults"),
+                  ("safe-by-default configuration", "restrictive-by-default configuration"),
+                  ("when that alias is safe", "when that alias is conflict-free"),
+                  ("safe, reviewable handoff", "bounded, reviewable handoff"),
               ],
-              "docs/Workflows/PrMergeAutomation.md": [
-                  ("replay safety", "replay compatibility"),
-                  ("applies one validated transition when it can do so safely.", "applies one validated transition only when every required condition is satisfied."),
-                  ("A pull request is only safe to merge when", "A pull request may be merged only when"),
-                  ("decide that the PR is safe to merge", "decide that the PR is authorized to merge"),
+              "CLAUDE.md": [
+                  ("safe defaults", "secure defaults"),
+                  ("safe-by-default configuration", "restrictive-by-default configuration"),
+                  ("when that alias is safe", "when that alias is conflict-free"),
+                  ("safe, reviewable handoff", "bounded, reviewable handoff"),
               ],
-              "docs/UI/ProviderProfileModelEffortTierSettings.md": [
-                  ("easy to understand and safe to change", "easy to understand and resistant to accidental policy changes"),
-                  ("capability loading and safe degradation", "capability loading and predictable degradation"),
-                  ("removing a safe last tier", "removing a last tier that does not renumber remaining tiers"),
-                  ("### 4.6 Structural safety without unnecessary friction", "### 4.6 Controlled structural changes without unnecessary friction"),
-                  ("safe structured editors", "constrained structured editors"),
-                  ("After a safe last-tier removal", "After a last-tier removal that does not renumber remaining tiers"),
-                  ("difficult to make safe and accessible", "difficult to make predictable and accessible"),
-                  ("when safely cached", "when backed by a validated cache"),
+              "GEMINI.md": [
+                  ("safe defaults", "secure defaults"),
+                  ("safe-by-default configuration", "restrictive-by-default configuration"),
+                  ("when that alias is safe", "when that alias is conflict-free"),
+                  ("safe, reviewable handoff", "bounded, reviewable handoff"),
               ],
           }
 
-          # These phrases have established reliability or compatibility meanings.
-          # Resolve them before the general product-language shift so they do not
-          # become awkward constructions such as "replay security".
-          prose_replacements = [
-              ("Replay / In-Flight Safety", "Replay / In-Flight Compatibility"),
-              ("Replay and In-Flight Safety", "Replay and In-Flight Compatibility"),
-              ("Continue-As-New and In-Flight Safety", "Continue-As-New and In-Flight Compatibility"),
-              ("Deployment and Replay Safety", "Deployment Integrity and Replay Compatibility"),
-              ("Determinism & Temporal Safety", "Determinism & Temporal Integrity"),
-              ("Replay Safety", "Replay Compatibility"),
-              ("replay/in-flight safety", "replay/in-flight compatibility"),
-              ("replay and in-flight safety", "replay and in-flight compatibility"),
-              ("replay safety", "replay compatibility"),
-              ("in-flight safety", "in-flight compatibility"),
-              ("cutover & in-flight safety", "cutover and in-flight compatibility"),
-              ("deployment-safety", "deployment-integrity"),
-              ("deployment safety", "deployment integrity"),
-              ("cutover safety", "cutover integrity"),
-              ("serialization safety", "serialization correctness"),
-              ("compatibility safety", "compatibility guarantees"),
-              ("historical-read safety", "historical-read integrity"),
-              ("filesystem-safety", "filesystem-integrity"),
-              ("filesystem safety", "filesystem integrity"),
-              ("path safety", "path confinement"),
-              ("runner safety", "runner integrity"),
-              ("restart-safety", "restart compatibility"),
-              ("execution-safety", "execution-integrity"),
-              ("cleanup safety", "cleanup integrity"),
-              ("lease safety", "lease integrity"),
-              ("fencing safety", "fencing integrity"),
-              ("candidate/promotion/terminal-evidence safety", "candidate/promotion/terminal-evidence integrity"),
-              ("skill-projection safety", "skill-projection integrity"),
-              ("safety property", "reliability property"),
-              ("unit PR safety net", "unit PR regression suite"),
-              ("cheap, broad safety net", "cheap, broad regression suite"),
-              ("unit safety net", "unit regression suite"),
-              ("safety net", "fallback guard"),
-              ("Safety cap", "Hard cap"),
-              ("safety cap", "hard cap"),
-              ("safety paths", "high-risk verification paths"),
-              ("three safety paths", "three high-risk verification paths"),
-              ("cost/safety tradeoff", "cost/risk tradeoff"),
-              ("safer-by-default", "more restrictive by default"),
-              ("safer refactors", "lower-risk refactors"),
-              ("safer async data handling", "more reliable async data handling"),
-              ("safer to evolve", "easier to evolve without regressions"),
-              ("safer as a clean restart", "more reliable as a clean restart"),
-              ("safer presentation", "more secure presentation"),
-              ("faster, safer, and more repeatable", "faster, more secure, and more repeatable"),
-              ("preserve safe progress", "preserve validated progress"),
-              ("cutover is made safe", "cutover is controlled"),
-              ("request a safer branch mode", "request a more isolated branch mode"),
-              ("side effect is safe and reviewable", "side effect is bounded and reviewable"),
-              ("downstream side effect is safe, reviewable", "downstream side effect is bounded, reviewable"),
-              ("unsafe or ambiguous side effects", "unauthorized, untrusted, or ambiguous side effects"),
-              ("unsafe or ambiguous", "unauthorized, untrusted, or ambiguous"),
-              ("unsafe, ambiguous", "unauthorized, untrusted, or ambiguous"),
-              ("safe symlink", "controlled symlink"),
-              ("Concise authority is safer than generated historical accumulation", "Concise authority reduces drift compared with generated historical accumulation"),
-          ]
-
-          # Preserve standard language whose meaning is not an AI/product-security
-          # claim. Type safety is a distinct software-engineering concept.
-          protected_phrases = (
-              "Temporal Type Safety",
-              "Type Safety",
-              "type safety",
-              "Type-safety",
-              "type-safety",
-              "type-safe",
-          )
-
-          def transform_prose(segment: str) -> str:
-              placeholders: dict[str, str] = {}
-
-              def protect(value: str) -> str:
-                  key = f"@@MM_PROTECTED_{len(placeholders)}@@"
-                  placeholders[key] = value
-                  return key
-
-              # Keep Markdown link destinations and path-like technical tokens
-              # exact. Their display prose may change, but identifiers must not.
-              segment = re.sub(
-                  r"(?<=\]\()[^)]+(?=\))",
-                  lambda match: protect(match.group(0)),
-                  segment,
-              )
-              for phrase in protected_phrases:
-                  segment = segment.replace(phrase, protect(phrase))
-
-              token_pattern = re.compile(r"\S*(?:Safety|safety)\S*")
-              for token in list(token_pattern.findall(segment)):
-                  if any(marker in token for marker in ("/", ".", "_")):
-                      segment = segment.replace(token, protect(token))
-
-              for old, new in prose_replacements:
-                  segment = segment.replace(old, new)
-
-              segment = re.sub(r"\bSafety\b", "Security", segment)
-              segment = re.sub(r"\bsafety\b", "security", segment)
-              segment = re.sub(r"\bSafer\b", "More secure", segment)
-              segment = re.sub(r"\bsafer\b", "more secure", segment)
-
-              for key, value in placeholders.items():
-                  segment = segment.replace(key, value)
-              return segment
-
-          def transform_markdown(text: str) -> str:
-              output: list[str] = []
-              in_fence = False
-              fence_marker = ""
-              for line in text.splitlines(keepends=True):
-                  stripped = line.lstrip()
-                  if stripped.startswith("```") or stripped.startswith("~~~"):
-                      marker = stripped[:3]
-                      if not in_fence:
-                          in_fence = True
-                          fence_marker = marker
-                      elif marker == fence_marker:
-                          in_fence = False
-                          fence_marker = ""
-                      output.append(line)
-                      continue
-                  if in_fence:
-                      output.append(line)
-                      continue
-
-                  parts = re.split(r"(`+[^`]*`+)", line)
-                  for index in range(0, len(parts), 2):
-                      parts[index] = transform_prose(parts[index])
-                  output.append("".join(parts))
-              return "".join(output)
-
-          changed: list[str] = []
-          markdown_files = [
-              path
-              for path in Path(".").rglob("*.md")
-              if path != migration_file and ".git" not in path.parts
-          ]
-
-          for path in markdown_files:
+          changed = []
+          for relative_path, pairs in replacements.items():
+              path = Path(relative_path)
+              if not path.exists():
+                  continue
               text = path.read_text(encoding="utf-8")
               original = text
-              for old, new in file_replacements.get(path.as_posix(), []):
+              for old, new in pairs:
                   text = text.replace(old, new)
-              text = transform_markdown(text)
               if text != original:
                   path.write_text(text, encoding="utf-8")
-                  changed.append(path.as_posix())
+                  changed.append(relative_path)
 
-          # Report any remaining prose uses. Standard Type Safety phrases and
-          # technical identifiers are expected exceptions; all other matches are
-          # visible in the job log for a final editorial pass.
-          remaining: list[str] = []
-          for path in markdown_files:
+          def prose_segments(path: Path):
               in_fence = False
-              fence_marker = ""
+              fence = ""
               for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
                   stripped = line.lstrip()
                   if stripped.startswith("```") or stripped.startswith("~~~"):
                       marker = stripped[:3]
                       if not in_fence:
                           in_fence = True
-                          fence_marker = marker
-                      elif marker == fence_marker:
+                          fence = marker
+                      elif marker == fence:
                           in_fence = False
-                          fence_marker = ""
+                          fence = ""
                       continue
                   if in_fence:
                       continue
                   prose = "".join(re.split(r"(`+[^`]*`+)", line)[::2])
                   prose = re.sub(r"(?<=\]\()[^)]+(?=\))", "", prose)
-                  matches = re.findall(r"\b(?:safety|safer)\b", prose, re.IGNORECASE)
-                  if matches and not re.search(r"\btype[- ]safety\b", prose, re.IGNORECASE):
-                      remaining.append(f"{path}:{line_number}: {line.strip()}")
+                  yield line_number, line, prose
 
-          print(f"Updated {len(changed)} documentation files.")
+          markdown_files = [
+              p for p in Path(".").rglob("*.md")
+              if ".git" not in p.parts
+          ]
+          forbidden = []
+          safe_usage = []
+          for path in markdown_files:
+              for line_number, line, prose in prose_segments(path):
+                  check = re.sub(r"\btype[- ]safety\b", "", prose, flags=re.IGNORECASE)
+                  check = re.sub(r"\S*(?:/|_|\.)(?:\S*Safety\S*|\S*safety\S*)", "", check)
+                  if re.search(r"\b(?:safety|safer)\b", check, re.IGNORECASE):
+                      forbidden.append(f"{path}:{line_number}: {line.strip()}")
+                  if re.search(r"\b(?:safe|safely|unsafe)\b", prose, re.IGNORECASE):
+                      safe_usage.append(f"{path}:{line_number}: {line.strip()}")
+
+          print("Updated files:")
           for path in changed:
               print(f"- {path}")
-          if remaining:
-              print("Remaining terminology requiring editorial review:")
-              for item in remaining:
-                  print(item)
+          if forbidden:
+              raise SystemExit(
+                  "Remaining non-technical safety/safer terminology:\n" + "\n".join(forbidden)
+              )
+          print("No non-technical safety/safer terminology remains in Markdown prose.")
+          print(f"Remaining safe/safely/unsafe prose usages for editorial review: {len(safe_usage)}")
+          for item in safe_usage:
+              print(item)
           PY
 
-      - name: Commit terminology migration
+      - name: Commit final editorial replacements
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add README.md AGENTS.md CLAUDE.md GEMINI.md docs .agents
+          git add AGENTS.md CLAUDE.md GEMINI.md docs
           if git diff --cached --quiet; then
-            echo "No documentation changes were needed."
+            echo "No final replacements were needed."
             exit 0
           fi
-          git commit -m "docs: finish security terminology migration"
+          git commit -m "docs: complete security terminology audit"
           git push origin HEAD:docs/security-positioning
