@@ -753,6 +753,11 @@ type ProviderProfileTierPreviewLookup = Record<
   ProviderProfileTierPreviewItem
 >;
 
+interface ProviderProfileTierPreviewResult {
+  previews: ProviderProfileTierPreviewLookup;
+  errors: Record<string, string>;
+}
+
 export interface ModelTierPreview {
   requestedTier: number;
   effectiveTier: number;
@@ -850,54 +855,92 @@ function modelTierPreviewEndpoint(
 async function fetchProviderProfileTierPreviews(
   providerProfilesEndpoint: string,
   selections: ModelTierPreviewSelection[],
-): Promise<ProviderProfileTierPreviewLookup> {
-  const selectionsByProfile = new Map<string, ModelTierPreviewSelection[]>();
+): Promise<ProviderProfileTierPreviewResult> {
+  const clampSelectionsByProfile = new Map<
+    string,
+    ModelTierPreviewSelection[]
+  >();
+  const requestGroups: Array<{
+    profileId: string;
+    selections: ModelTierPreviewSelection[];
+  }> = [];
   for (const selection of selections) {
-    const existing = selectionsByProfile.get(selection.profileId) || [];
+    if (selection.tierFallback === "strict") {
+      requestGroups.push({
+        profileId: selection.profileId,
+        selections: [selection],
+      });
+      continue;
+    }
+    const existing = clampSelectionsByProfile.get(selection.profileId) || [];
     existing.push(selection);
-    selectionsByProfile.set(selection.profileId, existing);
+    clampSelectionsByProfile.set(selection.profileId, existing);
+  }
+  for (const [profileId, profileSelections] of clampSelectionsByProfile) {
+    requestGroups.push({ profileId, selections: profileSelections });
   }
 
-  const responses = await Promise.all(
-    Array.from(selectionsByProfile.entries()).map(
-      async ([profileId, profileSelections]) => {
-        const response = await fetch(
-          modelTierPreviewEndpoint(providerProfilesEndpoint, profileId),
-          {
-            method: "POST",
-            headers: {
-              Accept: "application/json",
-              "Content-Type": "application/json",
+  const results = await Promise.all(
+    requestGroups.map(
+      async ({ profileId, selections: profileSelections }) => {
+        const errors: Record<string, string> = {};
+        try {
+          const response = await fetch(
+            modelTierPreviewEndpoint(providerProfilesEndpoint, profileId),
+            {
+              method: "POST",
+              headers: {
+                Accept: "application/json",
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                steps: profileSelections.map((selection) => ({
+                  id: selection.id,
+                  modelTier: selection.modelTier,
+                  tierFallback: selection.tierFallback,
+                })),
+              }),
             },
-            body: JSON.stringify({
-              steps: profileSelections.map((selection) => ({
-                id: selection.id,
-                modelTier: selection.modelTier,
-                tierFallback: selection.tierFallback,
-              })),
-            }),
-          },
-        );
-        if (!response.ok) {
-          throw new Error(
-            await responseErrorMessage(
+          );
+          if (!response.ok) {
+            const message = await responseErrorMessage(
               response,
               "Failed to preview Provider Profile model tiers.",
-            ),
-          );
+            );
+            for (const selection of profileSelections) {
+              errors[selection.id] = message;
+            }
+            return { response: null, errors };
+          }
+          return {
+            response:
+              (await response.json()) as ProviderProfileTierPreviewResponse,
+            errors,
+          };
+        } catch (error) {
+          const message = error instanceof Error
+            ? error.message
+            : "Failed to preview Provider Profile model tiers.";
+          for (const selection of profileSelections) {
+            errors[selection.id] = message;
+          }
+          return { response: null, errors };
         }
-        return (await response.json()) as ProviderProfileTierPreviewResponse;
       },
     ),
   );
 
   const previews: ProviderProfileTierPreviewLookup = {};
-  for (const response of responses) {
-    for (const item of response.items) {
-      previews[item.stepId] = item;
+  const errors: Record<string, string> = {};
+  for (const result of results) {
+    Object.assign(errors, result.errors);
+    if (result.response) {
+      for (const item of result.response.items) {
+        previews[item.stepId] = item;
+      }
     }
   }
-  return previews;
+  return { previews, errors };
 }
 
 interface BranchOption {
@@ -8538,8 +8581,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     );
   const workflowTierPreview = previewModelTier(
     selectedProviderProfileForPreview,
-    modelTierPreviewsQuery.data?.workflow,
+    modelTierPreviewsQuery.data?.previews.workflow,
   );
+  const workflowTierPreviewError = modelTierPreviewsQuery.data?.errors.workflow;
 
   // MM-936: the primary step always carries the publish-mode capability (gh)
   // when publishing as a PR, surfaced as a non-removable derived chip.
@@ -12914,8 +12958,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                   );
               const stepTierPreview = previewModelTier(
                 stepPreviewProfile,
-                modelTierPreviewsQuery.data?.[`step:${step.localId}`],
+                modelTierPreviewsQuery.data?.previews[`step:${step.localId}`],
               );
+              const stepTierPreviewError =
+                modelTierPreviewsQuery.data?.errors[`step:${step.localId}`];
               const jiraTransitionState =
                 jiraTransitionStateByStep[step.localId] || null;
               const showJiraTransitionOptions =
@@ -13747,6 +13793,15 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                           ) : null}
                         </div>
                       ) : null}
+                      {stepTierPreviewError ? (
+                        <div
+                          className="notice error small"
+                          role="alert"
+                          aria-label={`Step ${index + 1} model tier preview error`}
+                        >
+                          {stepTierPreviewError}
+                        </div>
+                      ) : null}
                       <label>
                         {`Step ${index + 1} Hard override model`}
                         <input
@@ -14185,6 +14240,15 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                 {workflowTierPreview.warning}
               </span>
             ) : null}
+          </div>
+        ) : null}
+        {workflowTierPreviewError ? (
+          <div
+            className="notice error small"
+            role="alert"
+            aria-label="Workflow model tier preview error"
+          >
+            {workflowTierPreviewError}
           </div>
         ) : null}</>
         ) : null}

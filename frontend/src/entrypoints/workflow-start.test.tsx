@@ -21514,6 +21514,23 @@ describe("Task Create runtime switch layout stability", () => {
               tierFallback: string;
             }>;
           };
+          const strictUnavailable = (request.steps || []).find(
+            (step) => step.tierFallback === "strict" && step.modelTier > 2,
+          );
+          if (strictUnavailable) {
+            return Promise.resolve({
+              ok: false,
+              text: async () =>
+                JSON.stringify({
+                  detail: {
+                    code: "requested_model_tier_unavailable",
+                    message: `Requested model tier ${strictUnavailable.modelTier} is unavailable; the selected profile defines 2 tiers.`,
+                    requestedModelTier: strictUnavailable.modelTier,
+                    configuredTierCount: 2,
+                  },
+                }),
+            } as Response);
+          }
           return Promise.resolve({
             ok: true,
             json: async () => ({
@@ -21854,6 +21871,108 @@ describe("Task Create runtime switch layout stability", () => {
     });
     expect(request.payload.task.steps[0].runtime).not.toHaveProperty("model");
     expect(request.payload.task.steps[0].runtime).not.toHaveProperty("effort");
+  });
+
+  it("surfaces strict-tier preview errors without discarding successful previews", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(
+        (screen.getByLabelText("Provider profile") as HTMLSelectElement).value,
+      ).toBe("profile:codex-default");
+    });
+
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    const primaryStep = screen.getByText("Step 1").closest(
+      "section",
+    ) as HTMLElement;
+    fireEvent.change(
+      within(primaryStep).getByLabelText("Step 1 Model tier intent"),
+      { target: { value: "1" } },
+    );
+    fireEvent.change(screen.getByLabelText("Model tier intent"), {
+      target: { value: "3" },
+    });
+    fireEvent.change(screen.getByLabelText("Tier fallback"), {
+      target: { value: "strict" },
+    });
+
+    const strictPreviewError = await screen.findByRole("alert", {
+      name: "Workflow model tier preview error",
+    });
+    expect(strictPreviewError.textContent).toContain(
+      "Requested model tier 3 is unavailable; the selected profile defines 2 tiers.",
+    );
+    expect(
+      await within(primaryStep).findByText(
+        "Tier 1 · Plan · gpt-step-backend-preview · medium",
+      ),
+    ).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("Model tier intent"), {
+      target: { value: "1" },
+    });
+    fireEvent.change(screen.getByLabelText("Tier fallback"), {
+      target: { value: "clamp" },
+    });
+    fireEvent.change(
+      within(primaryStep).getByLabelText("Step 1 Model tier intent"),
+      { target: { value: "3" } },
+    );
+    fireEvent.change(
+      within(primaryStep).getByLabelText("Step 1 Tier fallback"),
+      { target: { value: "strict" } },
+    );
+
+    const stepStrictPreviewError = await within(primaryStep).findByRole(
+      "alert",
+      { name: "Step 1 model tier preview error" },
+    );
+    expect(stepStrictPreviewError.textContent).toContain(
+      "Requested model tier 3 is unavailable; the selected profile defines 2 tiers.",
+    );
+    expect(
+      await screen.findByText(
+        "Tier 1 · Plan · gpt-backend-preview · xhigh",
+      ),
+    ).toBeTruthy();
+
+    const previewRequests = fetchSpy.mock.calls
+      .filter(
+        ([url]) =>
+          String(url) ===
+          "/api/v1/provider-profiles/profile%3Acodex-default/model-tiers:preview",
+      )
+      .map(([, init]) =>
+        JSON.parse(String(init?.body || "{}")) as {
+          steps?: Array<{ id: string; tierFallback: string }>;
+        },
+      );
+    expect(previewRequests).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          steps: [
+            expect.objectContaining({ id: "workflow", tierFallback: "strict" }),
+          ],
+        }),
+        expect.objectContaining({
+          steps: [
+            expect.objectContaining({
+              id: expect.stringMatching(/^step:/),
+              tierFallback: "clamp",
+            }),
+          ],
+        }),
+        expect.objectContaining({
+          steps: [
+            expect.objectContaining({
+              id: expect.stringMatching(/^step:/),
+              tierFallback: "strict",
+            }),
+          ],
+        }),
+      ]),
+    );
   });
 
   it("defaults hard overrides from the selected profile until manually changed", async () => {
