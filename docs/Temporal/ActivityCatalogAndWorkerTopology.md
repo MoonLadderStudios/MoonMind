@@ -844,4 +844,4 @@ The key architectural rule for current and future work is:
 - **Canonical runtime contracts cross the workflow boundary**
 - **Workflow code should not perform provider-specific coercion**
 
-That keeps MoonMind’s Temporal model easier to reason about, easier to test, and safer to evolve.
+That keeps MoonMind’s Temporal model easier to reason about, easier to test, and easier to evolve without regressions.

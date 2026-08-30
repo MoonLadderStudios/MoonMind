@@ -122,7 +122,7 @@ This document owns the **generic consumer-facing artifact presentation contract*
 - **ArtifactRef**: Small pointer that workflows/activities can pass around safely.
 - **ExecutionRef**: `(namespace, workflow_id, run_id)` identifying one Temporal execution.
 - **Link**: Join row connecting an artifact to an execution with semantic `link_type`.
-- **Preview artifact**: Redacted or reduced representation generated for safer presentation.
+- **Preview artifact**: Redacted or reduced representation generated for more secure presentation.
 - **Raw artifact**: The original bytes, which may be restricted.
 - **Workflow-scoped session container**: A managed-runtime container or long-lived process reused across multiple steps within one workflow.
 - **Session ID**: Durable MoonMind identifier for one workflow-scoped runtime session.
@@ -158,7 +158,7 @@ Rules:
 - `artifact_ref_v` is the version marker for the ref shape.
 - `artifact_id` is the durable handle.
 - `ArtifactRef` does not include a URL and must not be treated as a permanent download token.
-- Compact projections may use a reduced ref shape with only `artifact_ref_v` and `artifact_id` when size and safety matter more than inline metadata.
+- Compact projections may use a reduced ref shape with only `artifact_ref_v` and `artifact_id` when size and security matter more than inline metadata.
 
 ### 5.2 ArtifactMetadata
 
@@ -1172,7 +1172,7 @@ Rules:
 - clients should request presigns only when the user intentionally opens or downloads raw content
 - clients should not copy presigned URLs into logs or diagnostics
 
-### 15.4 Metadata safety
+### 15.4 Metadata security
 
 Artifact metadata must remain bounded and display-safe.
 
@@ -1286,7 +1286,7 @@ Consumer-facing artifact changes should include tests that cover:
 
 1. Should `ArtifactMetadata` grow a first-class `session_context` column-backed field, or should session presentation remain metadata/projection-driven for now?
 2. Should report-aware execution projections live under execution endpoints, workflow endpoints, or both?
-3. Should `application/pdf` get a first-party viewer, or should PDFs remain download/open-only for safety and simplicity?
+3. Should `application/pdf` get a first-party viewer, or should PDFs remain download/open-only for security and simplicity?
 4. Should latest-artifact queries support a generic multi-link server aggregation mode, or should each projection define its own latest refs?
 5. Should `report.evidence` receive additional grouping metadata such as `finding_id`, `section_id`, or `evidence_kind` in the report-specific contract?
 6. Should session projections eventually support historical epoch browsing through query filters, or should they remain latest-session surfaces with links back to execution-scoped artifacts?

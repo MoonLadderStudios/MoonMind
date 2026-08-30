@@ -284,7 +284,7 @@ Your adapter must:
 * normalize provider states into canonical `AgentRunStatus.status` values
 * keep provider-specific details inside canonical `metadata`
 * return canonical models only
-* preserve idempotency and retry safety
+* preserve idempotency and retry correctness
 * avoid leaking provider raw payloads into workflow-facing top-level contracts
 
 ## 7.3 Status normalization rules

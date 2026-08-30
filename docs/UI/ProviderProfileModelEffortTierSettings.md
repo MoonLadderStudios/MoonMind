@@ -23,7 +23,7 @@ Canonical for: the Settings experience used to inspect and edit `model_tiers` an
 
 ## 1. Purpose
 
-Provider Profiles already define an ordered model and effort policy through `model_tiers` and `default_model_tier`. Settings must make that policy easy to understand and safe to change.
+Provider Profiles already define an ordered model and effort policy through `model_tiers` and `default_model_tier`. Settings must make that policy easy to understand and resistant to accidental policy changes.
 
 A user should be able to answer these questions at a glance:
 
@@ -89,7 +89,7 @@ This document owns the Settings contract for:
 - add, duplicate, remove, and default-selection behavior,
 - structural change warnings,
 - draft state and canonical save payloads,
-- capability loading and safe degradation,
+- capability loading and predictable degradation,
 - responsive layout,
 - accessibility,
 - frontend validation,
@@ -148,7 +148,7 @@ Color alone must not communicate default state.
 
 ### 4.3 Common actions stay easy
 
-Appending a tier and removing a safe last tier should be lightweight. Structural changes that alter existing tier numbers must explain their impact before applying.
+Appending a tier and removing a last tier that does not renumber remaining tiers should be lightweight. Structural changes that alter existing tier numbers must explain their impact before applying.
 
 ### 4.4 Runtime defaults are explicit values
 
@@ -175,7 +175,7 @@ Model names and effort values change. The frontend must not maintain a product-w
 
 The backend supplies choices, constraints, support status, and custom-value policy for the selected runtime and provider. Existing unknown values must remain visible and round-trippable.
 
-### 4.6 Structural safety without unnecessary friction
+### 4.6 Controlled structural changes without unnecessary friction
 
 The initial design does not use drag and drop. Reordering tier cards looks harmless but changes the meaning of every affected future `modelTier` request.
 
@@ -450,7 +450,7 @@ Runtime default is not currently known
 
 `parameters` and `annotations` remain part of the canonical tier object. They are not shown as primary fields.
 
-Each card may expose an `Advanced tier options` disclosure containing safe structured editors for:
+Each card may expose an `Advanced tier options` disclosure containing constrained structured editors for:
 
 - non-secret runtime parameters,
 - annotations, and
@@ -554,7 +554,7 @@ The UI must not silently assign a new default after a destructive action.
 
 ### 10.4 Undo
 
-After a safe last-tier removal, show an Undo notice while the form remains open. Undo restores:
+After a last-tier removal that does not renumber remaining tiers, show an Undo notice while the form remains open. Undo restores:
 
 - the tier at its former position,
 - its stable draft client ID,
@@ -573,7 +573,7 @@ Rationale:
 
 - tier order is execution policy,
 - reordering changes existing numeric references,
-- drag and drop is difficult to make safe and accessible, and
+- drag and drop is difficult to make predictable and accessible, and
 - appending satisfies the common add-tier case without changing existing numbers.
 
 A later implementation may add `Insert after`, `Move up`, or `Move down` only when all of these are true:
@@ -734,7 +734,7 @@ If capabilities fail to load:
 - `Runtime default` remains available,
 - no existing value is erased,
 - an inline warning states that model choices could not be refreshed,
-- custom entry follows the last successfully loaded capability policy when safely cached,
+- custom entry follows the last successfully loaded capability policy when backed by a validated cache,
 - otherwise unknown new custom entry is disabled,
 - saving unchanged tier values remains possible when server validation permits it, and
 - server validation errors are mapped back to the affected tier and field.

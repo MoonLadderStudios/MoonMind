@@ -74,7 +74,7 @@ This document does not:
  Provider APIs, webhook verification, filesystem access, and artifact writes all happen in Activities or the API layer.
 
 3. **Callback-first, hybrid by default.** 
- If a provider can call back, prefer callback handling and keep polling as a safety net unless reliability is already proven.
+ If a provider can call back, prefer callback handling and keep polling as a fallback guard unless reliability is already proven.
 
 4. **Artifacts hold large or volatile payloads.** 
  Raw provider responses, webhook bodies, logs, and fetched outputs should not bloat workflow history.
@@ -594,7 +594,7 @@ MoonMind should treat integration monitoring as a normal Temporal workflow conce
 * external work starts in provider Activities
 * workflows wait durably in `awaiting_external`
 * callbacks enter through `ExternalEvent`
-* polling is a fallback or safety net
+* polling is a bounded fallback
 * results and raw provider payloads are stored as artifacts
 * visibility stays aligned with existing `mm_*` lifecycle contracts
 

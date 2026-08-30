@@ -13,7 +13,7 @@ From inspecting the MoonMind codebase and deployment manifests (via direct repos
 - Durable operational state and audit artifacts via a relational DB plus stored workflow artifacts (patches/logs) for Celery-driven orchestrations.
 - A growing agent/tool integration story via Model Context Protocol (MCP), which is increasingly positioned as a standard way for agent runtimes to access tools and data sources. citeturn24search0turn24search1
 
-Given MoonMind’s apparent goals (agentic workflows for software production tasks and multi-service automation) and the stated business setting (building a video game), the best “memory” investments are the ones that improve: **cross-session continuity, multi-agent coordination, retrieval quality over heterogeneous project corpora (code + design docs + tickets + asset metadata), and governance (auditability + safety)**.
+Given MoonMind’s apparent goals (agentic workflows for software production tasks and multi-service automation) and the stated business setting (building a video game), the best “memory” investments are the ones that improve: **cross-session continuity, multi-agent coordination, retrieval quality over heterogeneous project corpora (code + design docs + tickets + asset metadata), and governance (auditability + security)**.
 
 A prioritized shortlist of memory strategies worth integrating into MoonMind is:
 - **Hybrid retrieval + reranking (semantic + lexical) as a first-class memory layer** (build on Qdrant’s dense/sparse + reranking patterns, add metadata, policy filters, and provenance). citeturn21search2turn21search1turn22view0
@@ -77,7 +77,7 @@ This taxonomy reflects widely used strategies in production systems and notable 
 - Pros: High signal-to-noise; supports organization-wide alignment; easy to reuse across agents.
 - Cons: Requires governance to prevent drift and contradictions; can become stale without refresh policies.
 **Scalability/latency/cost:** Very scalable with vector DB + filtering; cost dominated by embedding and reranking.
-**Security:** Can be safer than episodic logs if content is curated and scrubbed.
+**Security:** Can be more secure than episodic logs if content is curated and scrubbed.
 
 ### Working memory and context window augmentation
 
@@ -145,7 +145,7 @@ This taxonomy reflects widely used strategies in production systems and notable 
 **Mechanism:** Encode “memory” into weights via finetuning, adapters (LoRA), or continual training.
 **Pros/cons:**
 - Pros: Fast inference (knowledge internalized); can enforce style/format conventions.
-- Cons: Expensive; risk of catastrophic forgetting; hard provenance; safety/compliance hurdles; retraining cadence.
+- Cons: Expensive; risk of catastrophic forgetting; hard provenance; security/compliance hurdles; retraining cadence.
 **Maturity:** Common for style/domain adaptation but risky as the *primary* memory mechanism for fast-changing project state.
 
 ### Compressed summaries
@@ -175,7 +175,7 @@ Game development (as a business setting) has a distinctive memory profile:
 
 The table below summarizes how each memory strategy typically performs against the requested criteria (H/M/L), assuming a studio environment building an actual game. These are not absolute truths; they are default expectations based on observed patterns in research and widely used frameworks.
 
-| Strategy | Persistence | Real-time constraints | Multi-agent coordination | Personalization | Safety/guardrails | Auditability | Integration complexity |
+| Strategy | Persistence | Real-time constraints | Multi-agent coordination | Personalization | Security/guardrails | Auditability | Integration complexity |
 |---|---|---:|---:|---:|---:|---:|---:|
 | Episodic (event log) | H | M | H | M | M→H (with redaction) | H | M |
 | Semantic (curated KB) | H | H | H | M | H | M→H (with provenance) | M |
@@ -462,7 +462,7 @@ Game studios operate under strong IP constraints. Memory systems amplify risk be
  - retrieved context before prompt assembly.
 - Keep raw secrets in a dedicated secret manager; in memory objects store only opaque handles.
 
-**Retrieval safety**
+**Retrieval security**
 - Separate “retrieved content” from “instructions” in the prompt template (system prompt explicitly states retrieved text is *data*, not instructions).
 - Add a filtering stage that removes:
  - credential-like patterns,

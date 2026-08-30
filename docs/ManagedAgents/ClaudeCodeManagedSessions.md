@@ -92,7 +92,7 @@ Claude Code policy is not a single knob. The runtime behavior depends on:
 
 The plane should compile these into one effective `PolicyEnvelope` that is attached to the session and versioned over time.
 
-### 2.4 Model deterministic and non-deterministic safety controls explicitly
+### 2.4 Model deterministic and classifier-based policy controls explicitly
 
 Codex’s public app-server contract centers approvals. Claude requires a richer decision pipeline:
 
@@ -844,7 +844,7 @@ Map Claude modes into shared behavior:
 | `plan` | reads only; no mutation or command execution |
 | `auto` | baseline auto-approve path plus classifier checks |
 | `dontAsk` | everything not pre-approved is denied |
-| `bypassPermissions` | skip permission prompts and safety checks except protected-path handling |
+| `bypassPermissions` | skip permission prompts and policy checks except protected-path handling |
 
 ### sandbox_substitution
 
@@ -852,7 +852,7 @@ For Bash, a sandbox may replace the need for per-command approval depending on e
 
 ### auto_mode_classifier
 
-In `auto`, unsafe or ambiguous actions are checked by a classifier path. The plane should record classifier decisions as distinct from user approvals.
+In `auto`, higher-risk or ambiguous actions are checked by a classifier path. The plane should record classifier decisions as distinct from user approvals.
 
 ### interactive_prompt_or_headless_resolution
 
@@ -997,7 +997,7 @@ A rewind should not destroy provenance. The plane should:
 - add `rewound_from_checkpoint_id`
 - keep old checkpoints addressable until expiry or GC
 
-This mirrors source-control safety expectations while remaining session-native.
+This mirrors source-control integrity expectations while remaining session-native.
 
 ---
 

@@ -92,7 +92,7 @@ python3 .agents/skills/batch-pr-resolver/bin/batch_pr_resolver.py \
    as successful.
 6. Print a short count summary to stdout (`queued`, `skipped`, `errors`).
 
-## Safety constraints
+## Security constraints
 
 - Reject missing `repo` unless it can be inferred from `git remote origin` fallback.
 - Use `state=open` by default to avoid accidental non-open PR dispatch.

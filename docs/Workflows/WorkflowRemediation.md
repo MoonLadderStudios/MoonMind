@@ -1303,7 +1303,7 @@ Rules:
   - neither,
 - when an action intentionally changes the target run, the remediation summary must record both the pinned run and the new resulting run if known.
 
-### 13.6 Continue-As-New safety
+### 13.6 Continue-As-New state integrity
 
 If the remediation Workflow Execution continues as new, it must preserve:
 - target `workflowId`,

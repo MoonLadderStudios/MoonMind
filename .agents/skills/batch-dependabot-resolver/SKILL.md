@@ -89,8 +89,8 @@ uiSchema:
 Discover open Dependabot dependency-version PRs in a target repository and enqueue
 one `pr-resolver` workflow per matching PR, so Dependabot bumps can be resolved
 automatically on a daily or weekly recurring schedule. This is a narrower,
-safer-by-default discovery/filter layer over `batch-pr-resolver`: it reuses the
-same child `pr-resolver` payload shape, fork/cross-repo safety, runtime
+more restrictive by default discovery/filter layer over `batch-pr-resolver`: it reuses the
+same child `pr-resolver` payload shape, fork and cross-repository protections, runtime
 inheritance, and `/api/executions` submission path, and adds Dependabot-specific
 matching, a cross-run-stable idempotency key, a dry-run mode, an optional `maxPrs`
 cap, and a Dependabot-specific summary artifact.
@@ -121,7 +121,7 @@ each queued `pr-resolver` child owns its repository publishing outcome.
   that contain multiple `from ... to ...` update segments).
 - `includeSecurityUpdates` (boolean, optional): Default `true`. When `false`, PRs labeled
   `security` are skipped.
-- `maxPrs` (number, optional): Safety cap on the number of resolver workflows queued per run.
+- `maxPrs` (number, optional): Hard cap on the number of resolver workflows queued per run.
 - `dryRun` (boolean, optional): Default `false`. When `true`, compute and report the resolver
   workflows that would be submitted without creating any.
 - `runtimeMode` / `runtimeModel` / `runtimeEffort` / `runtimeProviderProfile` (string, optional):
@@ -241,7 +241,7 @@ Use `"cron": "0 7 * * *"` for daily 07:00 UTC or `"cron": "0 7 * * 1"` for weekl
 MoonMind delegates cron/time handling to Temporal Schedules. Set `"dryRun": true` in `inputs`
 to validate a schedule without creating resolver workflows.
 
-## Safety constraints
+## Security constraints
 
 - Reject missing `repo` unless it can be inferred from task context / `git remote origin` / env.
 - Use `state=open` by default to avoid dispatching against non-open PRs.

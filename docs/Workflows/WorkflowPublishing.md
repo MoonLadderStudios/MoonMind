@@ -249,7 +249,7 @@ refresh failure, remote-head mismatch, or indeterminate commits-ahead count
 downgrades the raw push result to a failed publication result; it never emits
 accepted evidence or permits native PR creation from that incomplete state.
 
-### Safety Guard
+### Protected Branch Guard
 
 Before pushing, the runtime resolves the current branch name (`git rev-parse --abbrev-ref HEAD`) and **refuses to push** if the branch is:
 
@@ -361,7 +361,7 @@ are not that evidence: `agent_runtime.fetch_result` strips forged accepted
 evidence objects but leaves those raw keys intact, so only the managed push
 boundary's own evidence can make the gate publication-feasible. Definitive
 refusals recorded by a step — unauthorized publication, a contaminated
-candidate, or no candidate change — are safety decisions and are never
+candidate, or no candidate change — are security decisions and are never
 overridden by that projection.
 
 The published head that makes the gate feasible is also the head the draft is

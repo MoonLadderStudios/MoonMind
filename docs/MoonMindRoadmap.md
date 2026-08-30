@@ -1,12 +1,12 @@
 # 🌙 MoonMind Roadmap
 
-> Durable, declarative roadmap for making **Omnigent the primary runtime provider for MoonMind over time**, with the cross-cutting goals of **safety, resilience, and observability**.
+> Durable, declarative roadmap for making **Omnigent the primary runtime provider for MoonMind over time**, with the cross-cutting goals of **security, resilience, and observability**.
 >
 > The destination is not limited to Codex. Codex, Claude Code, OpenCode, and future approved harnesses should enter one generic Omnigent execution plane. The migration remains evidence-gated. Direct and legacy runtime paths continue as explicit compatibility, replay, rollback, and historical-read substrate until their retirement criteria pass.
 >
 > The canonical runtime-provider strategy is [`docs/Omnigent/PrimaryRuntimeProviderStrategy.md`](Omnigent/PrimaryRuntimeProviderStrategy.md). The harness mechanics are defined by [`docs/Omnigent/OmnigentHarnessPlatformDesign.md`](Omnigent/OmnigentHarnessPlatformDesign.md).
 >
-> **Document class:** this file is a *canonical declarative document*. It states the durable destination, ownership boundaries, evidence rules, acceptance-claim identifiers, and safety gates that persist across implementation waves. The dated, imperative execution tracker, milestone checklists, PR-by-PR status, tracker maps, and rollout sequencing are disposable working scaffolding and live at [`docs/tmp/MoonMindRoadmapExecutionTracker.md`](tmp/MoonMindRoadmapExecutionTracker.md). When the tracker and this declarative roadmap disagree, the declarative design wins.
+> **Document class:** this file is a *canonical declarative document*. It states the durable destination, ownership boundaries, evidence rules, acceptance-claim identifiers, and security gates that persist across implementation waves. The dated, imperative execution tracker, milestone checklists, PR-by-PR status, tracker maps, and rollout sequencing are disposable working scaffolding and live at [`docs/tmp/MoonMindRoadmapExecutionTracker.md`](tmp/MoonMindRoadmapExecutionTracker.md). When the tracker and this declarative roadmap disagree, the declarative design wins.
 
 ---
 
@@ -80,7 +80,7 @@ The transition follows six durable stages. Detailed execution sequencing belongs
 
 Every milestone is additionally gated by these durable properties:
 
-- **Safety.** Credential, filesystem, network, publish, approval, retrieval, and control boundaries are enforced at trusted substrate boundaries. Workflows and hosts receive capabilities, refs, and immutable snapshots, not raw infrastructure authority or reusable credential bodies.
+- **Security.** Credential, filesystem, network, publish, approval, retrieval, and control boundaries are enforced at trusted substrate boundaries. Workflows and hosts receive capabilities, refs, and immutable snapshots, not raw infrastructure authority or reusable credential bodies.
 - **Resilience.** Runs prefer idempotent retry, evidence-gated resume, branch isolation, bounded degraded mode, and durable cleanup over silent restart-from-scratch. Provider Profiles, billing-relevant settings, constraints, and checkpoint authority are never silently substituted.
 - **Observability.** Live state, terminal outcomes, denials, degraded behavior, artifacts, cleanup, recovery decisions, retrieval delivery, runtime-pack identity, host-image identity, materializer identity, and rollout state are inspectable through MoonMind-owned projections, manifests, audit events, and telemetry rather than a second-source runtime dashboard.
 
@@ -115,7 +115,7 @@ The primary runtime-provider strategy owns the long-term direction. The harness 
 These exact identifiers are pinned by `tests/unit/docs/test_final_docs_cleanup_policy.py` and `tests/integration/docs/test_final_docs_cleanup_contract.py`. They remain stable even when active execution milestones are renumbered in the tracker:
 
 - [ ] **5.1 Checkpoint boundary and completeness** — implementation foundation landed; independently resolvable acceptance evidence remains required.
-- [ ] **5.4 Resume-from-checkpoint default flow** — production orchestration must choose safe reattach, cold restore, branch-required, or explicit unavailable outcomes.
+- [ ] **5.4 Resume-from-checkpoint default flow** — production orchestration must choose validated reattach, cold restore, branch-required, or explicit unavailable outcomes.
 - [ ] **5.5 Checkpoint Branch UI and runtime-profile gaps** — isolated corrected-instruction turns, selectors, compare, promote, and archive in Workflow Detail.
 - [ ] **6.2 Omnigent remediation context enrichment** — bounded evidence with target-authorized typed actions and closed residual authority gaps.
 - [ ] **7.1 Initial context injection for Omnigent** — durable controlling verification evidence for first-message `ContextPack` injection.

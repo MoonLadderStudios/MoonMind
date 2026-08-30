@@ -1,4 +1,4 @@
-# 🌙 MoonMind — Safety, resiliency, and observability for AI coding agents
+# 🌙 MoonMind — Security, resilience, and observability for AI coding agents
 
 <p align="center">
     <picture>
@@ -7,7 +7,7 @@
     </picture>
 </p>
 
-MoonMind is an open-source framework that makes AI coding agents **safer**, more **resilient**, and more **observable** through Temporal-based durable workflows, explicit Provider Profiles and policies, controlled runtime and container boundaries, and an operational dashboard.
+MoonMind is an open-source framework that gives AI coding agents stronger **security**, more **resilient** execution, and more **observable** operations through Temporal-based durable workflows, explicit Provider Profiles and policies, controlled runtime and container boundaries, and an operational dashboard.
 
 For now, MoonMind is focused on software engineering use cases, but it can be used for other use cases as well. Support for workflows that do not require a Git repository will become easier over time.
 
@@ -65,9 +65,9 @@ AI coding agents are remarkable, but long-running autonomous work needs more tha
 
 MoonMind exists to answer those questions. Progress against each promise below is tracked milestone by milestone in the [MoonMind Roadmap](docs/MoonMindRoadmap.md).
 
-### 🛡️ Safety — boundaries the agent can't cross
+### 🛡️ Security — boundaries the agent can't cross
 
-An autonomous agent with your credentials and a shell is a liability unless something constrains it. MoonMind builds the constraints into the execution substrate rather than trusting the agent to behave:
+An autonomous agent with your credentials and a shell creates a privileged attack surface unless something constrains it. MoonMind enforces those constraints in the execution substrate rather than depending on the agent to police its own authority:
 
 - **Provider Profiles as policy.** A profile binds runtime, provider, credential source, materialization, concurrency slots, cooldowns, and routing into one declared contract, so model and credential policy is explicit per run rather than ambient environment state.
 - **Sandboxed execution.** Managed runtime sessions and specialized workloads run in isolated Docker boundaries with strict capability routing. Containerized build and test jobs are submitted through MoonMind's API-owned Docker Backend Service. Agent runtimes never receive the host Docker socket. File allowlists restrict what a run may modify.
@@ -77,7 +77,7 @@ An autonomous agent with your credentials and a shell is a liability unless some
 
 Where this is headed: typed policy envelopes that declare per run what an agent may touch, governance telemetry that records every privileged action an agent took and why, and a complete audit trail for the secret lifecycle, including creation, rotation, reference, and every launch that resolved one. The goal is that granting an agent autonomy never means granting it trust.
 
-### 🔁 Resiliency — fire and forget, literally
+### 🔁 Resilience — fire and forget, literally
 
 Submit a refactoring job, close your laptop, and let MoonMind handle the rest. Every run is backed by [Temporal](https://temporal.io/), so workflows survive container crashes, worker restarts, and host reboots:
 

@@ -163,7 +163,7 @@ The Settings System must support all of the following:
 8. **Provider-aware configuration**
    - Provider Profiles are configurable from Settings while preserving the separation between profile semantics and secret semantics.
 
-9. **Operational safety**
+9. **Operational security**
    - Operational controls are discoverable from Settings but remain explicit, authorized, auditable actions.
 
 10. **Local-first baseline**
@@ -452,7 +452,7 @@ Locks may come from:
 - deployment config,
 - system policy,
 - administrative policy, or
-- runtime safety constraints.
+- runtime security constraints.
 
 ### 7.8 Eligibility
 
@@ -1177,7 +1177,7 @@ Examples:
 - personal integration SecretRef bindings, and
 - personal workflow creation defaults.
 
-User settings must not override workspace safety policies unless the specific setting explicitly allows it.
+User settings must not override workspace security policies unless the specific setting explicitly allows it.
 
 ### 16.2 Workspace Settings
 
@@ -1250,7 +1250,7 @@ Operational actions should be modeled as commands with:
 - result status, and
 - rollback or resume path where possible.
 
-### 17.3 Safety
+### 17.3 Security
 
 Operational controls must avoid accidental disruptive changes.
 

@@ -46,7 +46,7 @@ This document owns:
 - descriptor-driven settings rendering;
 - filtering, editing, preview, save, discard, and reset UX;
 - Provider Profile, Managed Secret, OAuth, and Operations placement;
-- permissions, secret-safe behavior, accessibility, and unsaved-change navigation; and
+- permissions, credential-redacted behavior, accessibility, and unsaved-change navigation; and
 - migration and acceptance criteria for removing the old page-local switcher.
 
 The detailed Provider Profile create and edit form is owned by [ProviderProfileCreation.md](./ProviderProfileCreation.md). Model and effort tier editing is owned by [ProviderProfileModelEffortTierSettings.md](./ProviderProfileModelEffortTierSettings.md).
@@ -65,7 +65,7 @@ The Settings dropdown owns navigation among configuration pages. A page-local co
 
 ### 3.2 Pathname owns page identity
 
-The pathname selects the configuration page. Query parameters may select safe filters or scope within that page. Query parameters must not select among the three configuration pages.
+The pathname selects the configuration page. Query parameters may select approved filters or scope within that page. Query parameters must not select among the three configuration pages.
 
 ### 3.3 Backend-owned truth
 
@@ -91,7 +91,7 @@ For Provider Profile creation, credential connection remains visible, while raw 
 
 Stored secret plaintext is never rendered. Generic settings do not accept raw credentials. Sensitive relationships use SecretRef pickers, provider-profile secret-role bindings, or one-way Managed Secret creation and replacement flows.
 
-### 3.8 Safe independent failure
+### 3.8 Independent failure isolation
 
 Failure on one configuration page must not make the other two unavailable unless the shared dashboard shell itself is unavailable.
 
@@ -206,9 +206,9 @@ are user-visible URLs rather than an internal routing contract:
 |---|---|
 | `/secrets` | `/settings/providers-secrets` |
 | `/workers` | `/settings/operations` |
-| an unknown older Settings alias | the default entry point in section 5.2 unless a safe specific mapping exists |
+| an unknown older Settings alias | the default entry point in section 5.2 unless an approved specific mapping exists |
 
-These redirects use replacement history, preserve safe page-relevant query
+These redirects use replacement history, preserve approved page-relevant query
 parameters, and drop parameters that no longer have meaning on the target page.
 A redirect never lands on a destination the user is not authorized to see; when
 the mapped destination is unavailable, resolution falls back to section 5.2.
@@ -333,7 +333,7 @@ One unchecked `Show advanced options` checkbox reveals:
 
 Credential setup itself does not disappear behind the checkbox. OAuth and API-key actions remain visible, while low-level credential plumbing stays advanced or system-generated.
 
-`clear_env_keys` is backend-owned launch-safety metadata. The normal Settings UI may display it read-only, but must not present a freeform textarea as an ordinary preference.
+`clear_env_keys` is backend-owned launch-security metadata. The normal Settings UI may display it read-only, but must not present a freeform textarea as an ordinary preference.
 
 Creation must use backend presets or omit untouched advanced values. It must not blindly submit global React defaults. A profile with required missing credentials is saved disabled, while successful guided setup may enable it when policy permits.
 
@@ -353,7 +353,7 @@ This page contains descriptor-driven settings for:
 - workspace workflow and routing defaults;
 - workspace feature flags;
 - non-secret integration defaults;
-- safe policy controls; and
+- authorized policy controls; and
 - SecretRef bindings not owned by a Provider Profile.
 
 This is the canonical generated-settings surface. Adding an eligible ordinary setting should require backend catalog metadata and validation, not a new hard-coded React row.
@@ -370,7 +370,7 @@ This page contains explicit administrative commands and statusful controls for:
 - maintenance mode;
 - deployment or runtime updates where authorized;
 - recent operational audit actions; and
-- safe diagnostic switches.
+- bounded diagnostic switches.
 
 Each command card shows current state, expected impact, permitted actions, disabled reason, confirmation requirements, reason input where required, pending transitions, last actor and time, failure state, and recovery or resume action.
 
@@ -539,11 +539,11 @@ In-page behavior includes:
 | operation not invokable | Current state visible, action disabled with reason |
 | permission error during mutation | Structured error, no automatic destructive retry |
 
-Loading placeholders must not imply values are default, unset, safe, or healthy. Empty states explain the next authorized action. Failures identify the affected page or region and preserve unrelated content where possible.
+Loading placeholders must not imply values are default, unset, permitted, or healthy. Empty states explain the next authorized action. Failures identify the affected page or region and preserve unrelated content where possible.
 
 ---
 
-## 11. Secret Safety, Validation, and Explainability
+## 11. Secret Security, Validation, and Explainability
 
 Generic settings never accept raw secret values. Managed Secret creation and replacement may accept plaintext only for one-way submission. After submission, clear the field and display metadata and validation state, not the value.
 
@@ -662,16 +662,16 @@ The design is satisfied when:
 14. Max parallel runs remains visible in the standard Provider Profile form.
 15. Account label remains a visible user-facing identity aid.
 16. Credential connection remains visible while credential implementation details stay advanced or system-generated.
-17. Clear environment keys are backend-owned launch-safety metadata.
+17. Clear environment keys are backend-owned launch-security metadata.
 18. Provider Profile creation uses contextual backend presets or omission rather than global frontend guesses.
 19. A credential-required profile is not silently created enabled without successful setup.
 20. User / Workspace renders ordinary settings from backend descriptors and supports authorized scope switching.
 21. Operations uses explicit statusful command cards with confirmation and audit context.
 22. Secret-like settings use SecretRefs or Managed Secret flows, never generic plaintext inputs.
 23. Route navigation protects unsaved drafts.
-24. Unsupported descriptors degrade safely.
+24. Unsupported descriptors degrade predictably.
 25. A failure on one page does not break sibling Configuration destinations.
-26. Backend authorization, defaults, validation, source resolution, and secret-safety decisions remain authoritative.
+26. Backend authorization, defaults, validation, source resolution, and secret-handling decisions remain authoritative.
 27. Navigation tests and telemetry use canonical destination keys instead of the removed `section` state.
 28. A concurrent-change `version_conflict` stops the save, refreshes the affected descriptors, shows the conflict, and requires explicit resubmission.
 29. Rendered rows keep the descriptor fields section 9 declares load-bearing, including active state, activation guidance, application requirements, and ordering.

@@ -255,7 +255,7 @@ terminal checkpoint publication = preserve authoritative work after controlled f
 11. **Publication is separate from promotion.** A branch may be published as a PR or saved-work branch without becoming canonical workflow progress.
 12. **Side effects are branch-scoped until promoted.** External effects must be idempotent, isolated, compensated, or gated before branch execution and promotion.
 13. **Branch comparison is evidence-backed.** Comparisons must produce artifacts and should not be reconstructed from UI projections.
-14. **No silent fallback.** If checkpoint validation, workspace restoration, or provider continuation fails, MoonMind must fail closed or request a safer branch mode.
+14. **No silent fallback.** If checkpoint validation, workspace restoration, or provider continuation fails, MoonMind must fail closed or request a more isolated branch mode.
 15. **Controlled failures preserve work before disposal.** When eligible, terminal checkpoint publication is awaited before the authoritative workspace is cleaned up.
 16. **Saved work does not change the outcome.** A failed workflow remains failed even when its recovery branch is pushed successfully.
 17. **Branch budgets are launch authority.** An authored `maxBudgetUsd` is carried with the immutable branch-turn request and the selected profile-bound runtime must enforce it prospectively. A runtime without a provider-native USD hard stop rejects the launch before capacity, host, session, or billing authority is acquired; terminal cost observation is not budget enforcement.
@@ -1222,7 +1222,7 @@ A saved-work branch is a valid comparison input. Its failed source workflow does
 
 ---
 
-## 14. Security and safety
+## 14. Security and isolation
 
 Checkpoint Branches inherit MoonMind's normal artifact, secrets, runtime, and repository policies.
 
@@ -1307,7 +1307,7 @@ View git diff
 View provider diagnostics
 ```
 
-### 15.4 Safety previews
+### 15.4 Risk and authority previews
 
 Before branch creation, show:
 
@@ -1689,4 +1689,4 @@ The branch can be inspected, continued, compared, archived, or promoted later.
 A sudden infrastructure failure never falsely claims that work was saved.
 ```
 
-MoonMind remains responsible for checkpoint validation, artifact authority, Step Execution identity, workspace and git isolation, provider/runtime boundaries, gates, side-effect classification, publication safety, first-failure-wins diagnostics, and explicit promotion into canonical workflow progress.
+MoonMind remains responsible for checkpoint validation, artifact authority, Step Execution identity, workspace and git isolation, provider/runtime boundaries, gates, side-effect classification, publication authorization, first-failure-wins diagnostics, and explicit promotion into canonical workflow progress.

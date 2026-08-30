@@ -1239,7 +1239,7 @@ Rules:
 
 1. Skill selection does not automatically grant all Tools.
 2. Allowed Tools must be declared, inherited, or policy-derived.
-3. Tool use remains subject to authorization, worker capability, safety, and approval rules.
+3. Tool use remains subject to authorization, worker capability, security, and approval rules.
 4. A Tool invoked by an agent is still a Tool.
 5. Tool outputs remain Tool outputs and artifact refs.
 6. Agent decisions about which Tool to use belong to the Skill step/runtime policy, not to the Tool registry.

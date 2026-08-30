@@ -95,7 +95,7 @@ Migration rules:
 5. Move cooldown and rate-limit policy behind advanced options.
 6. Keep max parallel runs visible.
 7. Keep command behavior, tags, and priority advanced.
-8. Replace editable Clear env keys with backend-generated read-only launch-safety metadata for normal profiles.
+8. Replace editable Clear env keys with backend-generated read-only launch-security metadata for normal profiles.
 9. Remove unconditional client-side enablement from creation.
 10. Preserve and reveal non-default or invalid advanced fields during edit.
 

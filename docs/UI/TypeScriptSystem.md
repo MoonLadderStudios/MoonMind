@@ -11,7 +11,7 @@ Related: `README.md`, `api_service/static/workflow_console/`, `docs/Workflows/Wo
 
 ## 1. Summary
 
-The MoonMind dashboard has outgrown the “single static page with a little JavaScript” stage. The frontend now needs stronger contracts, safer refactors, clearer module boundaries, and a path to continue growing without forcing a full frontend-platform rewrite.
+The MoonMind dashboard has outgrown the “single static page with a little JavaScript” stage. The frontend now needs stronger contracts, lower-risk refactors, clearer module boundaries, and a path to continue growing without forcing a full frontend-platform rewrite.
 
 This document defines the **TypeScript tooling and frontend strategy** for MoonMind while **keeping FastAPI-owned server rendering for now**.
 
@@ -33,7 +33,7 @@ This is intentionally **not** a move to a separately deployed SPA. It is a move 
 1. Add strong typing to the dashboard frontend code.
 2. Keep the current server-rendered deployment model and FastAPI route ownership.
 3. Replace the growing monolithic dashboard JavaScript with a modular frontend architecture.
-4. Improve safety when working with API responses, forms, page state, polling, and mutations.
+4. Improve correctness when working with API responses, forms, page state, polling, and mutations.
 5. Support incremental migration without blocking active feature work.
 6. Keep local development straightforward inside the existing MoonMind development workflow.
 
@@ -79,7 +79,7 @@ This gives MoonMind the main benefits it needs now:
 - typed UI contracts
 - modular code organization
 - reusable components
-- safer async data handling
+- more reliable async data handling
 - better testing options
 - modern frontend developer ergonomics
 
@@ -794,4 +794,4 @@ Until then, MoonMind should optimize for the simpler path:
 
 MoonMind should adopt **Vite + React + TypeScript** as the new frontend system while **keeping FastAPI-driven server rendering and route ownership**.
 
-This is the highest-leverage next step because it improves maintainability and safety immediately without forcing the project into a heavier frontend deployment model before that model is warranted.
+This is the highest-leverage next step because it improves maintainability and correctness immediately without forcing the project into a heavier frontend deployment model before that model is warranted.

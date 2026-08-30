@@ -148,7 +148,7 @@ Dependents are stored in the `execution_dependencies` durable edge table. If rev
 
 ---
 
-## 7. Deployment and Replay Safety
+## 7. Deployment Integrity and Replay Compatibility
 
 The dependency gate is deployed under cooperating Temporal patches:
 

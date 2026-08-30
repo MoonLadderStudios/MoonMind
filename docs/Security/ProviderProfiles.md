@@ -59,7 +59,7 @@ The Settings experience has one additional product rule:
 
 > Claude and Codex provider profiles should be easy to find and configure in Settings. OAuth profiles must default to not launchable until the user successfully authenticates OAuth. API-key profiles seeded from configured environment secrets are connected and enabled by default.
 
-This means “disabled by default” is a safety state for unconfigured providers. It is not an extra manual step after setup succeeds.
+This means “disabled by default” is a security control for unconfigured providers. It is not an extra manual step after setup succeeds.
 
 On a fresh installation with no provider credentials configured, the persisted
 profile set contains exactly `claude_anthropic_oauth` and
@@ -177,7 +177,7 @@ The Provider Profile system must support all of the following:
    - Provider Profiles store the resulting OAuth-backed profile metadata.
    - OAuth session rows store terminal/session transport metadata.
 
-10. **Safe Settings-first activation**
+10. **Secure Settings-first activation**
     - First-party Claude and Codex providers are discoverable in Settings.
     - They are not launchable until first successful OAuth or API-key setup.
     - A successful Settings setup action enables the profile by default.
@@ -542,7 +542,7 @@ Examples:
 
 #### `max_lease_duration_seconds`
 
-Maximum time a slot lease is valid. The `ProviderProfileManager` may evict leases exceeding this bound as a safety net when a workflow terminates without explicitly releasing its slot.
+Maximum time a slot lease is valid. The `ProviderProfileManager` may evict leases exceeding this bound as a recovery guard when a workflow terminates without explicitly releasing its slot.
 
 #### `priority`
 
@@ -1428,7 +1428,7 @@ disabled_reason: missing_credentials
 credential_source: none
 ```
 
-New custom profiles should also be created disabled unless the create request is part of a verified setup flow. This makes the safe state the default across all provider profile creation paths.
+New custom profiles should also be created disabled unless the create request is part of a verified setup flow. This makes the non-launchable state the default across all provider profile creation paths.
 
 ---
 

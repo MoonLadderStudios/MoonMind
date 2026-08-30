@@ -405,7 +405,7 @@ Write local artifacts when possible so the review is auditable and reusable:
 
 Use the issue for human planning and the optional SARIF for file/line-level static-analysis-style findings.
 
-## Safety and quality constraints
+## Security and quality constraints
 
 - Do not include secrets, tokens, credentials, or private keys in the issue body. Scan outgoing issue/comment text for secret-like patterns (`ghp_`, `github_pat_`, `AIza`, `ATATT`, `AKIA`, private key blocks, `token=`, `password=`, `Authorization:`) and block publishing on any match.
 - Do not paste large source files into issues; include only minimal code snippets needed to explain a finding.

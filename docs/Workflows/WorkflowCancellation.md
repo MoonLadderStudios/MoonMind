@@ -94,7 +94,7 @@ Managed agent runs (`MoonMind.AgentRun`) acquire provider profile slots from the
 The slot lifecycle is protected by multiple layers, ordered by reliability:
 
 1. **Workflow-initiated release (primary)**: `MoonMind.AgentRun`'s `CancelledError`/`TimeoutError`/`Exception` handlers signal `release_slot` to the `ProviderProfileManager`. This is the fast path.
-2. **Manager-side lease eviction (safety net)**: The `ProviderProfileManager` calls `evict_expired_leases()` every 60 seconds, removing leases older than `_MAX_LEASE_DURATION_SECONDS`. This catches cases where the workflow cleanup failed entirely.
+2. **Manager-side lease eviction (fallback guard)**: The `ProviderProfileManager` calls `evict_expired_leases()` every 60 seconds, removing leases older than `_MAX_LEASE_DURATION_SECONDS`. This catches cases where the workflow cleanup failed entirely.
 3. **Manager-side active probing (recommended)**: The `ProviderProfileManager` should verify that lease-holding workflows are still running via Temporal visibility queries. Workflows in a terminal state that did not explicitly release should have their leases reclaimed immediately.
 
 ### 6.3 Invariant

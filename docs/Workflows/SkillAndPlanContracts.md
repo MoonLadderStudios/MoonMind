@@ -297,7 +297,7 @@ Legacy `skill` spelling remains an alias for the node object name, without versi
 * `id` unique within Plan.
 * Tool must exist in the pinned tool registry snapshot (see §8).
 * Inputs must validate against the tool input schema.
-* Overrides are optional and must be within safety limits.
+* Overrides are optional and must be within policy limits.
 
 ---
 
@@ -907,7 +907,7 @@ This section **locks decisions** for implementation.
 
 * Reproducibility: the same plan re-runs the same tool contracts.
 * Debuggability: you can answer “what tool code/schema was used?”
-* Safety: avoids surprise changes from concurrent deployments.
+* Integrity: avoids surprise changes from concurrent deployments.
 
 **How**
 

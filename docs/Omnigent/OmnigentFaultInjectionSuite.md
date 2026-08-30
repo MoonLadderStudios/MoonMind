@@ -72,20 +72,20 @@ Generated tests enforce, at minimum:
    the correct terminal or active state despite event loss.
 3. **Monotonic authority** — durable session/turn revisions and the derived
    lifecycle phase never move backward.
-4. **Fencing safety** — a former generation never mutates current session, host,
+4. **Fencing integrity (`fencing_safety`)** — a former generation never mutates current session, host,
    workspace, lease, or cleanup authority.
 5. **No blind ambiguity retry** — a lost response after a side effect produces
    reconciliation, not an unbounded duplicate command.
 6. **Distinct terminality** — turn, session, AgentRun, Workflow, cleanup, and
    remediation terminal states are not conflated.
-7. **Lease safety** — Provider Profile capacity is not released while a credential
+7. **Lease ownership (`lease_safety`)** — Provider Profile capacity is not released while a credential
    consumer remains.
-8. **Cleanup safety** — cleanup never deletes replacement-generation resources.
-9. **Historical-read safety** — terminal evidence and diagnostic projection remain
+8. **Cleanup protection (`cleanup_safety`)** — cleanup never deletes replacement-generation resources.
+9. **Historical-read integrity (`historical_read_safety`)** — terminal evidence and diagnostic projection remain
    available after live-resource removal.
-10. **Compatibility safety** — unknown provider or scenario schema versions fail
+10. **Compatibility enforcement (`compatibility_safety`)** — unknown provider or scenario schema versions fail
     or quarantine.
-11. **Secret safety** — retained fault evidence and minimized scenarios contain no
+11. **Secret confidentiality (`secret_safety`)** — retained fault evidence and minimized scenarios contain no
     raw credentials or secrets (bundles are digest-only and secret-scanned).
 12. **Deterministic replay** — a seed and scenario produce the same decisions and
     observations; a nondeterministic scenario is itself a failure.
@@ -160,7 +160,7 @@ replay corpus.
     `test_control_plane_faultlab.py` replays the projected command stream against
     the real `moonmind.omnigent.control_plane` repositories, re-proving durable
     revisions, command-claim uniqueness, idempotency-key conflict, fencing
-    generation, distinct terminality, and historical-read safety. The hermetic
+    generation, distinct terminality, and historical-read integrity. The hermetic
     SQLite journey is required-CI (`integration_ci` + `reliability_journey`); the
     decisive concurrency races run on the ephemeral PostgreSQL cluster in
     `conftest.py`.

@@ -311,7 +311,7 @@ MoonMind should also Continue-As-New when:
 - run history is growing beyond configured lifecycle thresholds
 - a `MoonMind.UserWorkflow` execution exceeds the configured step-count threshold
 - a `MoonMind.ManifestIngest` execution exceeds the configured phase / wait-cycle threshold
-- an input update is large enough to count as a major reconfiguration and is safer as a clean restart
+- an input update is large enough to count as a major reconfiguration and is more reliable as a clean restart
 
 Examples already aligned with the current service layer:
 

@@ -34,7 +34,7 @@ How the contract behaves on invalid input, downstream failure, and degraded cond
 
 ## 5. Versioning & compatibility
 
-How changes to this contract are versioned and what compatibility callers can expect. For Temporal-facing contracts (workflows, activities, signals, updates), explicitly address replay safety, in-flight compatibility, and workflow boundary test coverage.
+How changes to this contract are versioned and what compatibility callers can expect. For Temporal-facing contracts (workflows, activities, signals, updates), explicitly address replay compatibility, in-flight compatibility, and workflow boundary test coverage.
 
 ### TEST-001 <concise stable verification heading>
 

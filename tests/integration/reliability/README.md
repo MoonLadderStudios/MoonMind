@@ -24,7 +24,7 @@ MOONMIND_FORCE_LOCAL_TESTS=1 python -m pytest \
 ```
 
 The cold-resume replay crosses the production archive capture, artifact store,
-source disposal, archive restore, filesystem-safety, and restore-idempotency
+source disposal, archive restore, filesystem-integrity, and restore-idempotency
 boundaries. Its fixture is retained under
 `replays/cold-resume-worktree-archive/`. The complete required production
 journey additionally needs the Temporal test server, UserWorkflow recovery

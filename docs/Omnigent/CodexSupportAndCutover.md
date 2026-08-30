@@ -194,7 +194,7 @@ action/verification capability, the required policy/profile authority mode and
 egress authority, the required normal-Create UI journey, the owning evidence
 kind and artifact schema, the exact pass/fail threshold keys, whether the row
 gates manual diagnosis, manual mutation, or autonomous rollout, and whether the
-row is satisfied by a passing capability or by an *intentional* safety denial.
+row is satisfied by a passing capability or by an *intentional* security denial.
 Row ownership is fixed by this catalog; a caller-supplied row list never
 qualifies support.
 

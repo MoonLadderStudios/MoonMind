@@ -85,7 +85,7 @@ The attempt number is the retry-cycle number, not the individual gap number. A s
 
 ## 5. When immediate verification is still required
 
-MoonMind may insert a verification or health-check boundary inside a remediation attempt when the next repair decision depends on it or the action has independent safety risk.
+MoonMind may insert a verification or health-check boundary inside a remediation attempt when the next repair decision depends on it or the action has independent security risk.
 
 Examples:
 

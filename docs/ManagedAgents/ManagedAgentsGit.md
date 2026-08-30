@@ -96,7 +96,7 @@ Never allow:
 
 - `https://<token>@github.com/owner/repo.git`
 
-## 6. Logging and Safety Requirements
+## 6. Logging and Security Requirements
 
 - Never log `GITHUB_TOKEN` to Temporal histories or stdout.
 - Never log `GH_TOKEN`, `WORKFLOW_GITHUB_TOKEN`, or resolved SecretRef values.

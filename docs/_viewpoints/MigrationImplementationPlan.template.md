@@ -24,7 +24,7 @@ Ordered steps to reach the goal. Mark status inline (`[ ]` / `[x]`).
 - [ ] Step 1
 - [ ] Step 2
 
-## 4. Cutover & in-flight safety
+## 4. Cutover & in-flight compatibility
 
 How the change is rolled out safely, including any in-flight/replay compatibility concerns.
 

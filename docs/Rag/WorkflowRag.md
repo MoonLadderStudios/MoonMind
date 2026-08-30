@@ -145,7 +145,7 @@ This retrieval path does not route through a separate generative LLM summarizati
 
 Codex CLI and Claude Code are the current reference managed-session implementations.
 
-In the current Codex runtime strategy, `prepare_workspace()` invokes `ContextInjectionService` before the command is built. `ContextInjectionService` resolves retrieval, persists a context artifact under `artifacts/context/`, prepends the retrieved context to `instruction_ref`, and adds safety framing that treats retrieved text as untrusted reference data.
+In the current Codex runtime strategy, `prepare_workspace()` invokes `ContextInjectionService` before the command is built. `ContextInjectionService` resolves retrieval, persists a context artifact under `artifacts/context/`, prepends the retrieved context to `instruction_ref`, and adds untrusted-content framing that treats retrieved text as untrusted reference data.
 
 ### Profile-bound Omnigent initial context
 
@@ -158,7 +158,7 @@ is preferred when MoonMind owns embedding or vector-store credentials, so those
 credentials never enter the stock Omnigent host.
 
 MoonMind persists the full `ContextPack` as an artifact and renders only its
-bounded, safety-framed `context_text` into the existing first user message. It
+bounded, policy-framed `context_text` into the existing first user message. It
 does not create a second context message. The bridge persists a compact
 `initialRetrieval` projection containing the pack ref, transport, result count,
 truncation, mode/reason, prepared-message ref and digest, consumption flag, and
@@ -416,11 +416,11 @@ The longer-term contract should continue to strengthen:
 - usage/budget reporting,
 - compact artifact refs for durable publication.
 
-### 10.2 Prompt safety
+### 10.2 Prompt-injection boundary
 
 Retrieved context is reference data, not instructions.
 
-Runtime injection must continue to preserve a safety boundary that tells the model to treat retrieved content as untrusted reference material and to prefer current repository state when retrieved content conflicts with the checked-out workspace.
+Runtime injection must continue to preserve a trust boundary that tells the model to treat retrieved content as untrusted reference material and to prefer current repository state when retrieved content conflicts with the checked-out workspace.
 
 ---
 
