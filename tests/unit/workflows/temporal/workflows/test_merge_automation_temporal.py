@@ -10,6 +10,7 @@ from temporalio.workflow import ChildWorkflowCancellationType
 
 from moonmind.workflows.temporal.workflows import merge_automation as merge_automation_module
 from moonmind.workflows.temporal.workflows.merge_automation import (
+    MERGE_AUTOMATION_RESOLVER_ATTEMPT_TITLE_PATCH,
     MERGE_AUTOMATION_RESOLVER_PARENT_GATE_ID_PATCH,
     MERGE_AUTOMATION_STRICT_CONTINUATION_IDENTITY_PATCH,
     MERGE_AUTOMATION_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH,
@@ -385,6 +386,7 @@ async def test_merge_automation_reenters_gate_after_resolver_remediation(
         },
     ]
     child_workflow_ids: list[str] = []
+    child_memos: list[dict[str, Any]] = []
 
     async def fake_execute_activity(
         activity_type: str,
@@ -418,6 +420,7 @@ async def test_merge_automation_reenters_gate_after_resolver_remediation(
         child_payloads.append(payload)
         child_workflow_id = str(kwargs["id"])
         child_workflow_ids.append(child_workflow_id)
+        child_memos.append(kwargs["memo"])
         if len(child_workflow_ids) == 1:
             return {
                 "status": "success",
@@ -494,6 +497,10 @@ async def test_merge_automation_reenters_gate_after_resolver_remediation(
     assert child_workflow_ids == [
         f"{first_resolver_id}:1",
         f"{second_resolver_id}:2",
+    ]
+    assert [memo["title"] for memo in child_memos] == [
+        "Resolve PR #350 (Attempt 1)",
+        "Resolve PR #350 (Attempt 2)",
     ]
     assert child_payloads[0]["workflow_type"] == "MoonMind.UserWorkflow"
     assert child_payloads[0]["initial_parameters"]["publishMode"] == "auto"
@@ -618,12 +625,29 @@ async def test_merge_automation_tracks_current_head_when_checks_are_still_runnin
     )
     assert child_payloads[0]["initial_parameters"]["mergeGate"]["headSha"] == "def456"
 
+@pytest.mark.parametrize(
+    ("attempt_titles_enabled", "expected_title"),
+    [
+        (True, "Resolve PR #350 (Attempt 1)"),
+        (False, "Resolve PR #350"),
+    ],
+)
 @pytest.mark.asyncio
 async def test_merge_automation_resolver_child_uses_try_cancel(
     monkeypatch: pytest.MonkeyPatch,
+    attempt_titles_enabled: bool,
+    expected_title: str,
 ) -> None:
     workflow = MoonMindMergeAutomationWorkflow()
     child_kwargs: dict[str, Any] = {}
+
+    if not attempt_titles_enabled:
+        monkeypatch.setattr(
+            merge_automation_module.workflow,
+            "patched",
+            lambda patch_id: patch_id
+            != MERGE_AUTOMATION_RESOLVER_ATTEMPT_TITLE_PATCH,
+        )
 
     async def fake_execute_activity(
         activity_type: str,
@@ -687,7 +711,7 @@ async def test_merge_automation_resolver_child_uses_try_cancel(
     assert search_attributes["mm_repo"] == ["MoonLadderStudios/MoonMind"]
     assert child_kwargs["memo"] == {
         "entry": "user_workflow",
-        "title": "Resolve PR #350",
+        "title": expected_title,
         "summary": "Resolver child workflow for merge automation.",
         "targetRuntime": "codex",
         "targetSkill": "pr-resolver",
@@ -702,10 +726,14 @@ def test_merge_automation_child_memo_truncates_runtime_and_skill_visibility() ->
         },
     }
 
-    memo = MoonMindMergeAutomationWorkflow._resolver_child_memo(resolver_request)
+    memo = MoonMindMergeAutomationWorkflow._resolver_child_memo(
+        resolver_request,
+        attempt=12,
+    )
 
     assert memo["targetRuntime"] == "r" * 80
     assert memo["targetSkill"] == "s" * 160
+    assert memo["title"] == "Resolve PR #350 (Attempt 12)"
 
 @pytest.mark.asyncio
 async def test_merge_automation_resolver_child_uses_legacy_id_before_patch_marker(
