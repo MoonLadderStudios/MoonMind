@@ -5,6 +5,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useInRouterContext, useLocation } from "react-router-dom";
 
 import type { BootPayload } from "../boot/parseBootPayload";
+import type { components } from "../generated/openapi";
 import { configQueryDefaults } from "../boot/queryClient";
 import { LoadingPlaceholder } from "../components/dashboard/LoadingPlaceholder";
 import { AttachmentImagePreview } from "../components/AttachmentImagePreview";
@@ -735,6 +736,27 @@ interface ProviderModelEffortTier {
 }
 
 type TierFallbackMode = "clamp" | "strict";
+type ProviderProfileTierPreviewItem =
+  components["schemas"]["ProviderProfileTierPreviewItem"];
+type ProviderProfileTierPreviewResponse =
+  components["schemas"]["ProviderProfileTierPreviewResponse"];
+
+interface ModelTierPreviewSelection {
+  id: string;
+  profileId: string;
+  modelTier: number;
+  tierFallback: TierFallbackMode;
+}
+
+type ProviderProfileTierPreviewLookup = Record<
+  string,
+  ProviderProfileTierPreviewItem
+>;
+
+interface ProviderProfileTierPreviewResult {
+  previews: ProviderProfileTierPreviewLookup;
+  errors: Record<string, string>;
+}
 
 export interface ModelTierPreview {
   requestedTier: number;
@@ -742,7 +764,7 @@ export interface ModelTierPreview {
   label: string;
   model: string;
   effort: string;
-  fallbackReason: "requested_tier_above_configured_range" | null;
+  fallbackReason: string | null;
   warning: string | null;
 }
 
@@ -778,42 +800,147 @@ function defaultModelTierForProfile(
 
 export function previewModelTier(
   profile: ProviderProfile | undefined,
-  requestedTierValue: string,
+  resolved: ProviderProfileTierPreviewItem | undefined,
 ): ModelTierPreview | null {
-  if (typeof requestedTierValue !== "string") {
+  const requestedTier = resolved?.requestedTier;
+  const effectiveTier = resolved?.effectiveTier;
+  if (
+    !Number.isInteger(requestedTier) ||
+    !Number.isInteger(effectiveTier) ||
+    Number(requestedTier) < 1 ||
+    Number(effectiveTier) < 1
+  ) {
     return null;
   }
-  const requestedTier = Number.parseInt(requestedTierValue.trim(), 10);
-  if (!Number.isInteger(requestedTier) || requestedTier < 1) {
-    return null;
-  }
+  const normalizedRequestedTier = Number(requestedTier);
+  const normalizedEffectiveTier = Number(effectiveTier);
   const tiers = modelTiersForProfile(profile);
-  if (tiers.length === 0) {
-    return {
-      requestedTier,
-      effectiveTier: requestedTier,
-      label: `Tier ${requestedTier}`,
-      model: "backend resolved model",
-      effort: "backend resolved effort",
-      fallbackReason: null,
-      warning: null,
-    };
-  }
-  const effectiveTier = Math.min(requestedTier, tiers.length);
-  const tier = tiers[effectiveTier - 1] || {};
-  const fallbackReason =
-    requestedTier > tiers.length ? "requested_tier_above_configured_range" : null;
+  const tier = tiers[normalizedEffectiveTier - 1] || {};
+  const fallbackReason = resolved?.fallbackReason || null;
+  const configuredTierCount = Array.isArray(profile?.model_tiers) &&
+      profile.model_tiers.length > 0
+    ? profile.model_tiers.length
+    : normalizedEffectiveTier;
   return {
-    requestedTier,
-    effectiveTier,
-    label: tier.label || `Tier ${effectiveTier}`,
-    model: tier.model || "runtime default model",
-    effort: tier.effort || "runtime default effort",
+    requestedTier: normalizedRequestedTier,
+    effectiveTier: normalizedEffectiveTier,
+    label: tier.label || `Tier ${normalizedEffectiveTier}`,
+    model: resolved?.model || "runtime default model",
+    effort: resolved?.effort || "runtime default effort",
     fallbackReason,
     warning: fallbackReason
-      ? `Requested Tier ${requestedTier}, used Tier ${effectiveTier} because the selected profile only defines ${tiers.length} ${tiers.length === 1 ? "tier" : "tiers"}.`
+      ? fallbackReason === "requested_tier_above_configured_range"
+        ? `Requested Tier ${normalizedRequestedTier}, used Tier ${normalizedEffectiveTier} because the selected profile only defines ${configuredTierCount} ${configuredTierCount === 1 ? "tier" : "tiers"}.`
+        : `Requested Tier ${normalizedRequestedTier}, used Tier ${normalizedEffectiveTier} because backend tier policy reported ${fallbackReason}.`
       : null,
   };
+}
+
+function requestedModelTier(value: string): number | null {
+  const parsed = Number.parseInt(value.trim(), 10);
+  return Number.isInteger(parsed) && parsed >= 1 ? parsed : null;
+}
+
+function modelTierPreviewEndpoint(
+  providerProfilesEndpoint: string,
+  profileId: string,
+): string {
+  const queryIndex = providerProfilesEndpoint.search(/[?#]/);
+  const endpointWithoutQuery = queryIndex >= 0
+    ? providerProfilesEndpoint.slice(0, queryIndex)
+    : providerProfilesEndpoint;
+  return `${endpointWithoutQuery.replace(/\/+$/, "")}/${encodeURIComponent(profileId)}/model-tiers:preview`;
+}
+
+async function fetchProviderProfileTierPreviews(
+  providerProfilesEndpoint: string,
+  selections: ModelTierPreviewSelection[],
+): Promise<ProviderProfileTierPreviewResult> {
+  const clampSelectionsByProfile = new Map<
+    string,
+    ModelTierPreviewSelection[]
+  >();
+  const requestGroups: Array<{
+    profileId: string;
+    selections: ModelTierPreviewSelection[];
+  }> = [];
+  for (const selection of selections) {
+    if (selection.tierFallback === "strict") {
+      requestGroups.push({
+        profileId: selection.profileId,
+        selections: [selection],
+      });
+      continue;
+    }
+    const existing = clampSelectionsByProfile.get(selection.profileId) || [];
+    existing.push(selection);
+    clampSelectionsByProfile.set(selection.profileId, existing);
+  }
+  for (const [profileId, profileSelections] of clampSelectionsByProfile) {
+    requestGroups.push({ profileId, selections: profileSelections });
+  }
+
+  const results = await Promise.all(
+    requestGroups.map(
+      async ({ profileId, selections: profileSelections }) => {
+        const errors: Record<string, string> = {};
+        try {
+          const response = await fetch(
+            modelTierPreviewEndpoint(providerProfilesEndpoint, profileId),
+            {
+              method: "POST",
+              headers: {
+                Accept: "application/json",
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                steps: profileSelections.map((selection) => ({
+                  id: selection.id,
+                  modelTier: selection.modelTier,
+                  tierFallback: selection.tierFallback,
+                })),
+              }),
+            },
+          );
+          if (!response.ok) {
+            const message = await responseErrorMessage(
+              response,
+              "Failed to preview Provider Profile model tiers.",
+            );
+            for (const selection of profileSelections) {
+              errors[selection.id] = message;
+            }
+            return { response: null, errors };
+          }
+          return {
+            response:
+              (await response.json()) as ProviderProfileTierPreviewResponse,
+            errors,
+          };
+        } catch (error) {
+          const message = error instanceof Error
+            ? error.message
+            : "Failed to preview Provider Profile model tiers.";
+          for (const selection of profileSelections) {
+            errors[selection.id] = message;
+          }
+          return { response: null, errors };
+        }
+      },
+    ),
+  );
+
+  const previews: ProviderProfileTierPreviewLookup = {};
+  const errors: Record<string, string> = {};
+  for (const result of results) {
+    Object.assign(errors, result.errors);
+    if (result.response) {
+      for (const item of result.response.items) {
+        previews[item.stepId] = item;
+      }
+    }
+  }
+  return { previews, errors };
 }
 
 interface BranchOption {
@@ -6504,6 +6631,59 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       })
     : (providerProfilesQuery.data || []);
 
+  const modelTierPreviewSelections = useMemo<ModelTierPreviewSelection[]>(() => {
+    if (providerProfilesQuery.isPlaceholderData) {
+      return [];
+    }
+    const selections: ModelTierPreviewSelection[] = [];
+    const workflowModelTier = requestedModelTier(modelTier);
+    if (providerProfile && workflowModelTier !== null) {
+      selections.push({
+        id: "workflow",
+        profileId: providerProfile,
+        modelTier: workflowModelTier,
+        tierFallback,
+      });
+    }
+    for (const step of steps) {
+      const stepModelTier = requestedModelTier(step.runtimeModelTier);
+      const stepProfileId =
+        step.runtimeProviderProfile.trim() || providerProfile;
+      if (!stepProfileId || stepModelTier === null) {
+        continue;
+      }
+      selections.push({
+        id: `step:${step.localId}`,
+        profileId: stepProfileId,
+        modelTier: stepModelTier,
+        tierFallback:
+          step.runtimeTierFallback === "strict" ? "strict" : "clamp",
+      });
+    }
+    return selections;
+  }, [
+    modelTier,
+    providerProfile,
+    providerProfilesQuery.isPlaceholderData,
+    steps,
+    tierFallback,
+  ]);
+  const modelTierPreviewsQuery = useQuery({
+    queryKey: [
+      "workflow-start",
+      "provider-profile-model-tier-previews",
+      providerProfilesEndpoint,
+      providerProfilesQuery.dataUpdatedAt,
+      modelTierPreviewSelections,
+    ],
+    enabled: modelTierPreviewSelections.length > 0,
+    queryFn: () =>
+      fetchProviderProfileTierPreviews(
+        providerProfilesEndpoint,
+        modelTierPreviewSelections,
+      ),
+  });
+
   useEffect(() => {
     if (runtime !== "omnigent" || !omnigentCatalogQuery.data) return;
     if (!omnigentExecutionTargetRef) {
@@ -8401,8 +8581,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     );
   const workflowTierPreview = previewModelTier(
     selectedProviderProfileForPreview,
-    modelTier,
+    modelTierPreviewsQuery.data?.previews.workflow,
   );
+  const workflowTierPreviewError = modelTierPreviewsQuery.data?.errors.workflow;
 
   // MM-936: the primary step always carries the publish-mode capability (gh)
   // when publishing as a PR, surfaced as a non-removable derived chip.
@@ -12777,8 +12958,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                   );
               const stepTierPreview = previewModelTier(
                 stepPreviewProfile,
-                step.runtimeModelTier,
+                modelTierPreviewsQuery.data?.previews[`step:${step.localId}`],
               );
+              const stepTierPreviewError =
+                modelTierPreviewsQuery.data?.errors[`step:${step.localId}`];
               const jiraTransitionState =
                 jiraTransitionStateByStep[step.localId] || null;
               const showJiraTransitionOptions =
@@ -13610,6 +13793,15 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                           ) : null}
                         </div>
                       ) : null}
+                      {stepTierPreviewError ? (
+                        <div
+                          className="notice error small"
+                          role="alert"
+                          aria-label={`Step ${index + 1} model tier preview error`}
+                        >
+                          {stepTierPreviewError}
+                        </div>
+                      ) : null}
                       <label>
                         {`Step ${index + 1} Hard override model`}
                         <input
@@ -14048,6 +14240,15 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                 {workflowTierPreview.warning}
               </span>
             ) : null}
+          </div>
+        ) : null}
+        {workflowTierPreviewError ? (
+          <div
+            className="notice error small"
+            role="alert"
+            aria-label="Workflow model tier preview error"
+          >
+            {workflowTierPreviewError}
           </div>
         ) : null}</>
         ) : null}
