@@ -95,7 +95,17 @@ class _Session:
                 profile_id="omnigent-opencode-default",
                 active_version=self.version.version,
             )
-        return SimpleNamespace(credential_generation=1)
+        if model.__name__ == "ManagedAgentProviderProfile":
+            return SimpleNamespace(
+                profile_id=_identity,
+                provider_id=(
+                    "opencode"
+                    if _identity == "opencode-zen-free"
+                    else "opencode-go"
+                ),
+                credential_generation=1,
+            )
+        return None
 
     async def execute(self, _statement):
         version = self.version
@@ -194,13 +204,18 @@ def qualification_boundary(monkeypatch, tmp_path):
     return state
 
 
-async def _qualify(state) -> dict:
+async def _qualify(
+    state,
+    *,
+    provider_profile_ref: str = "opencode-go-default",
+    qualified_model: str = "opencode-go/muse-spark-1.2-contributor",
+) -> dict:
     controller = controller_module.BootstrapController(
         session_factory=state.session_factory
     )
     return await controller._qualify_and_publish(
-        provider_profile_ref="opencode-go-default",
-        qualified_model="opencode-go/muse-spark-1.2-contributor",
+        provider_profile_ref=provider_profile_ref,
+        qualified_model=qualified_model,
         effort="xhigh",
         resolved=_resolved_state(),
         record=SimpleNamespace(),
@@ -222,6 +237,33 @@ async def test_qualification_attests_the_launch_policy_admission_selects(
     expected = default_launch_policy_ref(_ALLOWED_LAUNCH_POLICIES)
     assert expected == "omnigent-on-demand@1"
     assert evidence["supportIdentity"]["launchPolicyRef"] == expected
+
+
+@pytest.mark.asyncio
+async def test_qualification_attests_the_selected_provider_route(
+    qualification_boundary,
+) -> None:
+    """Qualification and admission derive the model route from the same profile."""
+
+    from moonmind.omnigent.harness_platform.execution_plan import (
+        compute_model_config_digest,
+    )
+
+    qualified_model = "opencode/muse-spark-1.2-contributor-free"
+    evidence = await _qualify(
+        qualification_boundary,
+        provider_profile_ref="opencode-zen-free",
+        qualified_model=qualified_model,
+    )
+
+    assert evidence["supportIdentity"]["modelConfigDigest"] == (
+        compute_model_config_digest(
+            qualifiedId=qualified_model,
+            effort="xhigh",
+            routeRef="opencode",
+            normalizedOptions={},
+        )
+    )
 
 
 @pytest.mark.asyncio
@@ -328,6 +370,8 @@ async def test_requalification_uses_the_current_provider_profile_model(
         providerProfileRef="opencode-go-default",
     )
     provider_profile = SimpleNamespace(
+        profile_id="opencode-go-default",
+        is_default=True,
         enabled=True,
         auth_state=ProviderProfileAuthState.CONNECTED,
         disabled_reason=None,
@@ -382,6 +426,108 @@ async def test_requalification_uses_the_current_provider_profile_model(
 
 
 @pytest.mark.asyncio
+async def test_requalification_follows_the_current_default_provider_profile(
+    monkeypatch,
+) -> None:
+    """Changing the OpenCode default moves qualification to that profile."""
+
+    from api_service.db.models import (
+        ProviderCredentialSource,
+        ProviderProfileAuthState,
+        RuntimeMaterializationMode,
+        SecretStatus,
+    )
+    from moonmind.omnigent.bootstrap.provider_revalidation import (
+        ProviderReconcileOutcome,
+    )
+
+    stored = BootstrapRecord(
+        state=BootstrapState.ready,
+        desired=BootstrapDesired(
+            modelDisplayName="opencode-go/muse-spark-1.2-contributor",
+            effort="xhigh",
+            acceptContributorDataUse=True,
+        ),
+        providerProfileRef="opencode-go-default",
+    )
+    shared = {
+        "enabled": True,
+        "auth_state": ProviderProfileAuthState.CONNECTED,
+        "disabled_reason": None,
+        "max_parallel_runs": 1,
+        "runtime_id": "opencode",
+        "credential_source": ProviderCredentialSource.SECRET_REF,
+        "runtime_materialization_mode": RuntimeMaterializationMode.COMPOSITE,
+        "cooldown_after_429_seconds": 0,
+        "command_behavior": {},
+    }
+    previous = SimpleNamespace(
+        **shared,
+        profile_id="opencode-go-default",
+        is_default=False,
+        secret_refs={"opencode_api_key": "db://opencode-go-default-api-key"},
+        default_model="opencode-go/muse-spark-1.2-contributor",
+        default_effort="xhigh",
+    )
+    current = SimpleNamespace(
+        **shared,
+        profile_id="opencode-zen-free",
+        is_default=True,
+        secret_refs={"opencode_api_key": "db://opencode-zen-free-api-key"},
+        default_model="opencode/muse-spark-1.2-contributor-free",
+        default_effort="xhigh",
+    )
+
+    class _DefaultProfileSession:
+        async def get(self, _model, identity):
+            return {
+                previous.profile_id: previous,
+                current.profile_id: current,
+            }.get(identity)
+
+        async def scalar(self, _statement):
+            return current
+
+    @asynccontextmanager
+    async def _session_scope():
+        yield _DefaultProfileSession()
+
+    monkeypatch.setattr(controller_module, "load_bootstrap_record", lambda: stored)
+    monkeypatch.setattr(controller_module, "save_bootstrap_record", lambda _record: None)
+    monkeypatch.setattr(
+        "api_service.services.provider_profile_service._managed_secret_statuses_for_profiles",
+        AsyncMock(
+            return_value={
+                "opencode-zen-free-api-key": SecretStatus.ACTIVE.value,
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.bootstrap.provider_revalidation.reconcile_opencode_provider_readiness",
+        AsyncMock(return_value=ProviderReconcileOutcome(ready=True)),
+    )
+    controller = controller_module.BootstrapController(
+        session_factory=lambda: _session_scope()
+    )
+
+    async def _reconcile(*, record, api_key, principal):
+        assert api_key is None
+        assert principal is None
+        return record
+
+    monkeypatch.setattr(controller, "_reconcile", _reconcile)
+
+    result = await controller.requalify()
+
+    assert result.provider_profile_ref == "opencode-zen-free"
+    assert (
+        result.desired.model_display_name
+        == "opencode/muse-spark-1.2-contributor-free"
+    )
+    assert result.desired.effort == "xhigh"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("enabled", "secret_status"),
     [
@@ -412,6 +558,8 @@ async def test_requalification_rejects_an_unlaunchable_provider_profile(
         providerProfileRef="opencode-go-default",
     )
     provider_profile = SimpleNamespace(
+        profile_id="opencode-go-default",
+        is_default=True,
         enabled=enabled,
         auth_state=ProviderProfileAuthState.CONNECTED,
         disabled_reason=None,
@@ -475,6 +623,8 @@ async def test_requalification_stops_when_runtime_revalidation_fails(
         providerProfileRef="opencode-go-default",
     )
     provider_profile = SimpleNamespace(
+        profile_id="opencode-go-default",
+        is_default=True,
         enabled=True,
         auth_state=ProviderProfileAuthState.CONNECTED,
         disabled_reason=None,
@@ -551,6 +701,8 @@ async def test_managed_agent_profile_advance_requalifies_default_deployment(
     """Catalog-owned profile advancement must not strand default launches."""
 
     provider_profile = SimpleNamespace(
+        profile_id="opencode-go-default",
+        is_default=True,
         default_model="opencode-go/muse-spark-1.2-contributor",
         default_effort="xhigh",
         credential_generation=1,
@@ -621,6 +773,8 @@ async def test_current_default_qualification_avoids_repeating_live_workload(
     """The maintenance cadence must not re-run qualification without drift."""
 
     provider_profile = SimpleNamespace(
+        profile_id="opencode-go-default",
+        is_default=True,
         default_model="opencode-go/muse-spark-1.2-contributor",
         default_effort="xhigh",
         credential_generation=1,

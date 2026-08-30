@@ -5,5 +5,14 @@
   "terminalEvidencePath": "var/pr_resolver/result.json",
   "publishEvidencePath": "artifacts/publish_result.json",
   "mergeAutomationDisposition": "already_merged",
+  "resultStatus": "merged",
+  "publishStatus": "verified",
+  "publishAction": "merge",
+  "localHead": "abc1234",
+  "remoteBranchHead": null,
+  "remoteVerified": true,
+  "pushed": false,
+  "merged": true,
+  "prUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/3616",
   "failureReason": "auto_publish_evidence_missing"
 }

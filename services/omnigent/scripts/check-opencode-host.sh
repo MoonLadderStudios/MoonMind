@@ -46,9 +46,9 @@ done
 
 # Verify opencode provider key is present in auth.json (without leaking)
 if command -v python3 >/dev/null 2>&1; then
-  python3 -c "import json,sys; d=json.load(open('$opencode_auth')); p=d.get('opencode-go'); sys.exit(0 if isinstance(p,dict) and p.get('type') == 'api' and isinstance(p.get('key'),str) and p.get('key') else 1)" || exit 84
+  python3 -c "import json,sys; d=json.load(open('$opencode_auth')); keys=('opencode-go','opencode'); found=[k for k in keys if isinstance(d.get(k),dict) and d.get(k).get('type') == 'api' and isinstance(d.get(k).get('key'),str) and d.get(k).get('key')]; sys.exit(0 if found else 1)" || exit 84
 else
-  grep -q "opencode-go" "$opencode_auth" || exit 84
+  grep -E -q "opencode-go|opencode" "$opencode_auth" || exit 84
 fi
 
 # Verify host advertises opencode-native (via local check; full attestation is via API)

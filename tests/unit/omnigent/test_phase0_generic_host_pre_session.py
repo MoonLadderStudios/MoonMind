@@ -24,7 +24,10 @@ from moonmind.omnigent.harness_platform.materializers import (
 def test_opencode_auth_json_uses_key_not_apiKey():
     """Issue §5 / Phase 0: pinned OpenCode uses `key`, not `apiKey`."""
     raw_key = "sk-opencode-phase0-test-1234567890abcdef"
-    payload_bytes = build_opencode_auth_json_bytes(api_key=raw_key)
+    payload_bytes = build_opencode_auth_json_bytes(
+        api_key=raw_key,
+        provider_key=OPENCODE_PROVIDER_KEY,
+    )
     payload = json.loads(payload_bytes)
 
     # Must use provider key "opencode-go"
@@ -42,11 +45,13 @@ def test_opencode_auth_json_uses_key_not_apiKey():
 
     # Also verify correct canonical form: {"opencode-go": {"type":"api","key":"..."}}
     # No other secret-carrying shape is acceptable
-    expected = {OPENCODE_PROVIDER_KEY: {"type": "api", "key": raw_key}}
+    expected = {
+        OPENCODE_PROVIDER_KEY: {"type": "api", "key": raw_key},
+    }
     assert payload == expected
 
 
-def test_get_opencode_host_image_ref_requires_real_digest():
+def test_get_opencode_host_image_ref_requires_real_digest(monkeypatch):
     """Phase 0: must fail closed when only mutable tag or no digest-pinned REF.
 
     Do not synthesize a fake digest from image:tag. A Host Class becomes
@@ -66,6 +71,11 @@ def test_get_opencode_host_image_ref_requires_real_digest():
         # No env at all -> must raise, not synthesize
         from moonmind.omnigent.harness_platform.host_classes import (
             get_opencode_host_image_ref,
+        )
+
+        monkeypatch.setattr(
+            "moonmind.omnigent.harness_platform.host_classes._persisted_image_ref",
+            lambda _key: "",
         )
 
         with pytest.raises(HarnessPlatformError) as exc:

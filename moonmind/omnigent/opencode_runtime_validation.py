@@ -36,7 +36,12 @@ def _models(value: Any) -> set[str]:
     if isinstance(value, str):
         for line in value.splitlines():
             item = line.strip().strip("\"',")
-            if item.startswith("opencode-go/"):
+            provider, separator, model = item.partition("/")
+            if (
+                separator
+                and model
+                and (provider == "opencode" or provider.startswith("opencode-"))
+            ):
                 found.add(item)
     elif isinstance(value, dict):
         for item in value.values():
@@ -48,7 +53,7 @@ def _models(value: Any) -> set[str]:
 
 
 def _validated_models(value: Any) -> list[str]:
-    """Return observed OpenCode Go models or reject the validation result.
+    """Return observed OpenCode models or reject the validation result.
 
     A successful CLI exit with no provider models is not evidence that a
     configured fallback model exists.  Persisting such a fallback lets
@@ -59,7 +64,7 @@ def _validated_models(value: Any) -> list[str]:
     models = sorted(_models(value))
     if not models:
         raise HarnessPlatformError(
-            "pinned OpenCode runtime returned no OpenCode Go models",
+            "pinned OpenCode runtime returned no OpenCode models",
             code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
         )
     return models
@@ -203,6 +208,7 @@ class OpenCodeProviderRuntimeValidationService:
                     secrets=secrets,
                     writer_image_ref=self._image_ref,
                     artifact_gateway=self._artifacts,
+                    provider_route_ref=str(profile.provider_id or ""),
                 )
             )
             attachment = handle.attachments[0]

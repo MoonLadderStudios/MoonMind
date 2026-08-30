@@ -35,12 +35,14 @@ from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
 
-# The runtime-backed model catalog evidence contract exists for exactly one
-# provider route today. Keep that identity explicit rather than inferring it
-# from a name list that would drift from the materializer contract.
+# The runtime-backed model catalog evidence contract exists for the OpenCode
+# family. Keep both OpenCode routes explicit because they share the same host
+# image, materializer, and secret role.
 OPENCODE_RUNTIME_ID = "opencode"
 OPENCODE_PROVIDER_ID = "opencode-go"
+OPENCODE_PROVIDER_IDS = (OPENCODE_PROVIDER_ID, "opencode")
 OPENCODE_SECRET_ROLE = "opencode_api_key"
+OPENCODE_DEPLOYMENT_SECRET_REF = "env://OPENCODE_API_KEY"
 
 # Readiness reads this ``command_behavior`` entry to distinguish a bounded
 # re-validation attempt in flight from a credential the pinned runtime keeps
@@ -231,15 +233,20 @@ def _has_enrolled_credential(profile: Any) -> bool:
     with ``enabled=True``, so treating a disabled-but-connected profile as
     absent would let deployment configuration silently undo an operator's
     decision to disable it. The credential identity is what enrollment owns;
-    ``enabled`` belongs to the operator.
+    ``enabled`` belongs to the operator. The one pending state accepted here is
+    the startup seed's exact deployment SecretRef: it is already materializable
+    and must be promoted only by the pinned-runtime evidence path below.
     """
 
     from api_service.db.models import ProviderProfileAuthState
 
     state = getattr(profile.auth_state, "value", profile.auth_state)
+    secret_ref = str((profile.secret_refs or {}).get(OPENCODE_SECRET_ROLE) or "")
     return (
-        state == ProviderProfileAuthState.CONNECTED.value
-        and OPENCODE_SECRET_ROLE in (profile.secret_refs or {})
+        state == ProviderProfileAuthState.CONNECTED.value and bool(secret_ref)
+    ) or (
+        state == ProviderProfileAuthState.API_KEY_PENDING.value
+        and secret_ref == OPENCODE_DEPLOYMENT_SECRET_REF
     )
 
 
@@ -275,7 +282,7 @@ async def _opencode_profiles(session_factory: Any) -> list[Any]:
                 await session.execute(
                     select(ManagedAgentProviderProfile).where(
                         ManagedAgentProviderProfile.runtime_id == OPENCODE_RUNTIME_ID,
-                        ManagedAgentProviderProfile.provider_id == OPENCODE_PROVIDER_ID,
+                        ManagedAgentProviderProfile.provider_id.in_(OPENCODE_PROVIDER_IDS),
                     )
                 )
             ).scalars()
@@ -622,7 +629,10 @@ async def _persist_evidence(
     caller never reports a profile refreshed that readiness still rejects.
     """
 
-    from api_service.db.models import ManagedAgentProviderProfile
+    from api_service.db.models import (
+        ManagedAgentProviderProfile,
+        ProviderProfileAuthState,
+    )
 
     async with session_factory() as session:
         profile = await session.get(ManagedAgentProviderProfile, profile_id)
@@ -649,7 +659,6 @@ async def _persist_evidence(
             "model_count": len(models),
         }
         behavior.pop(REVALIDATION_FAILURE_KEY, None)
-        profile.command_behavior = behavior
         # This pass just observed the catalog, so the refresh interval has
         # nothing to say about it. Only the launchable identity is in question.
         launchable = evidence_matches_launchable_identity(
@@ -657,6 +666,25 @@ async def _persist_evidence(
             profile=profile,
             image_ref=str(evidence.get("imageRef") or ""),
         )
+        readiness = dict(behavior.get("auth_readiness") or {})
+        readiness.update(
+            {
+                "connected": launchable,
+                "backing_secret_exists": True,
+                "launch_ready": launchable,
+            }
+        )
+        if launchable:
+            readiness.pop("failure_reason", None)
+            profile.auth_state = ProviderProfileAuthState.CONNECTED
+            behavior["auth_state"] = "connected"
+            behavior["auth_status_label"] = "OpenCode API key ready"
+        else:
+            readiness["failure_reason"] = (
+                "The selected model was not observed by the pinned OpenCode runtime."
+            )
+        behavior["auth_readiness"] = readiness
+        profile.command_behavior = behavior
         await session.commit()
         return launchable
 
@@ -702,6 +730,14 @@ async def _record_revalidation_failure(
             "exhausted": attempts + 1 >= MAX_REVALIDATION_ATTEMPTS,
             "lastAttemptAt": datetime.now(UTC).isoformat(),
         }
+        readiness = dict(behavior.get("auth_readiness") or {})
+        readiness.update(
+            {
+                "launch_ready": False,
+                "failure_reason": "Pinned OpenCode runtime validation failed.",
+            }
+        )
+        behavior["auth_readiness"] = readiness
         profile.command_behavior = behavior
         await session.commit()
 
@@ -710,6 +746,7 @@ __all__ = [
     "MAX_OBSERVATION_CLOCK_SKEW",
     "MAX_REVALIDATION_ATTEMPTS",
     "OPENCODE_PROVIDER_ID",
+    "OPENCODE_PROVIDER_IDS",
     "OPENCODE_RUNTIME_ID",
     "OPENCODE_SECRET_ROLE",
     "REVALIDATION_FAILURE_KEY",

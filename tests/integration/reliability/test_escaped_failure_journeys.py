@@ -5582,13 +5582,20 @@ async def test_omnigent_profile_bound_skill_activation_replay() -> None:
     assert text.endswith(manifest["firstMessage"])
 
 
+@pytest.mark.parametrize(
+    "replay_id",
+    [
+        "omnigent-pr-resolver-publish-evidence-handoff",
+        "omnigent-pr-resolver-review-clean-publish-evidence-handoff",
+    ],
+)
 async def test_omnigent_pr_resolver_publish_evidence_handoff_replay(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    replay_id: str,
 ) -> None:
-    """Replay mm:a5460547 across AgentRun-to-parent publication authority."""
+    """Replay successful resolver outcomes across publication authority."""
 
-    replay_id = "omnigent-pr-resolver-publish-evidence-handoff"
     manifest = load_replay(replay_id, "manifest.json")
     expected = load_replay(replay_id, "expected-outcome.json")
     workspace = tmp_path / "repo"
@@ -5602,7 +5609,7 @@ async def test_omnigent_pr_resolver_publish_evidence_handoff_replay(
                 "mergeAutomationDisposition": manifest[
                     "mergeAutomationDisposition"
                 ],
-                "status": "merged",
+                "status": manifest["resultStatus"],
             }
         ),
         encoding="utf-8",
@@ -5613,16 +5620,16 @@ async def test_omnigent_pr_resolver_publish_evidence_handoff_replay(
         "owner": "agent",
         "skillId": "pr-resolver",
         "executionRef": manifest["stepExecutionId"],
-        "status": "verified",
-        "action": "merge",
+        "status": manifest["publishStatus"],
+        "action": manifest["publishAction"],
         "repository": "MoonLadderStudios/MoonMind",
         "branch": "feature",
-        "localHead": "abc1234",
-        "remoteBranchHead": None,
-        "remoteVerified": True,
-        "pushed": False,
-        "merged": True,
-        "prUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/3616",
+        "localHead": manifest["localHead"],
+        "remoteBranchHead": manifest["remoteBranchHead"],
+        "remoteVerified": manifest["remoteVerified"],
+        "pushed": manifest["pushed"],
+        "merged": manifest["merged"],
+        "prUrl": manifest["prUrl"],
         "blockedReason": None,
         "verificationCommands": ["gh pr view 3616"],
     }
@@ -5657,7 +5664,7 @@ async def test_omnigent_pr_resolver_publish_evidence_handoff_replay(
                 "expectedSchemaVersion": "pr-resolver-result.v1",
                 "executionRef": manifest["stepExecutionId"],
             },
-            "result": {"summary": "PR was already merged."},
+            "result": {"summary": "PR resolver reached a successful outcome."},
         }
     )
     assert agent_result.metadata["terminalContractSatisfied"] is expected[

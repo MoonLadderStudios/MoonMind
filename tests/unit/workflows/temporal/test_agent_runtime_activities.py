@@ -6830,8 +6830,26 @@ async def test_terminal_evidence_activity_resolves_managed_workspace_locator(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    (
+        "disposition",
+        "result_status",
+        "publish_status",
+        "publish_action",
+        "publish_merged",
+    ),
+    [
+        ("already_merged", "merged", "verified", "merge", True),
+        ("review_clean", "completed", "no_op_verified", "none", False),
+    ],
+)
 async def test_terminal_evidence_activity_publishes_pr_resolver_companion(
     tmp_path: Path,
+    disposition: str,
+    result_status: str,
+    publish_status: str,
+    publish_action: str,
+    publish_merged: bool,
 ) -> None:
     workspace = tmp_path / "repo"
     execution_ref = "workflow:run:node-1:execution:1"
@@ -6842,8 +6860,8 @@ async def test_terminal_evidence_activity_publishes_pr_resolver_companion(
             {
                 "schema_version": 2,
                 "executionRef": execution_ref,
-                "mergeAutomationDisposition": "already_merged",
-                "status": "merged",
+                "mergeAutomationDisposition": disposition,
+                "status": result_status,
             }
         ),
         encoding="utf-8",
@@ -6854,15 +6872,15 @@ async def test_terminal_evidence_activity_publishes_pr_resolver_companion(
         "owner": "agent",
         "skillId": "pr-resolver",
         "executionRef": execution_ref,
-        "status": "verified",
-        "action": "merge",
+        "status": publish_status,
+        "action": publish_action,
         "repository": "MoonLadderStudios/MoonMind",
         "branch": "feature",
         "localHead": "abc1234",
-        "remoteBranchHead": None,
+        "remoteBranchHead": None if publish_merged else "abc1234",
         "remoteVerified": True,
         "pushed": False,
-        "merged": True,
+        "merged": publish_merged,
         "prUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/1",
         "blockedReason": None,
         "verificationCommands": ["gh pr view 1"],

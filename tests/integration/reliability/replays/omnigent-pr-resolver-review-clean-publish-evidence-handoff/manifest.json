@@ -1,0 +1,18 @@
+{
+  "incidentWorkflowId": "mm:5a32ee50-e1c3-4325-919c-952f63c3a7c0",
+  "incidentRunId": "01a05076-b661-74a0-a145-e211843ba8b3",
+  "stepExecutionId": "mm:5a32ee50-e1c3-4325-919c-952f63c3a7c0:01a05076-b661-74a0-a145-e211843ba8b3:node-1:execution:1",
+  "terminalEvidencePath": "var/pr_resolver/result.json",
+  "publishEvidencePath": "artifacts/publish_result.json",
+  "mergeAutomationDisposition": "review_clean",
+  "resultStatus": "completed",
+  "publishStatus": "no_op_verified",
+  "publishAction": "none",
+  "localHead": "924fd49a4f59771714973a528a27e8b858744afc",
+  "remoteBranchHead": "924fd49a4f59771714973a528a27e8b858744afc",
+  "remoteVerified": true,
+  "pushed": false,
+  "merged": false,
+  "prUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/3837",
+  "failureReason": "auto_publish_evidence_missing"
+}
