@@ -192,18 +192,88 @@ async def test_auto_seed_creates_default_profiles(_module_db, monkeypatch):
 
     zen_profile = next(p for p in profiles if p.profile_id == "opencode-zen-free")
     assert zen_profile.default_model == "opencode/muse-spark-1.2-contributor-free"
-    assert zen_profile.default_effort == "xhigh"
+    assert zen_profile.default_effort is None
     assert zen_profile.model_tiers == [
         {
             "label": "Muse Spark 1.2 Contributor Free",
             "model": "opencode/muse-spark-1.2-contributor-free",
-            "effort": "xhigh",
+            "effort": None,
             "parameters": {},
             "annotations": {},
         }
     ]
     assert zen_profile.enabled is False
     assert zen_profile.credential_source == ProviderCredentialSource.NONE
+
+
+@pytest.mark.asyncio
+async def test_auto_seed_keeps_configured_zen_credential_validation_pending(
+    _module_db, monkeypatch
+):
+    from api_service.main import _auto_seed_provider_profiles
+
+    monkeypatch.setenv("OPENCODE_API_KEY", "test-opencode-key")
+
+    await _auto_seed_provider_profiles()
+
+    async with db_base.async_session_maker() as session:
+        profile = await session.get(
+            ManagedAgentProviderProfile, "opencode-zen-free"
+        )
+
+    assert profile is not None
+    assert profile.enabled is True
+    assert profile.auth_state == ProviderProfileAuthState.API_KEY_PENDING
+    assert profile.disabled_reason is None
+    assert profile.default_effort is None
+    assert profile.model_tiers[0]["effort"] is None
+    assert profile.model_catalog_evidence_json is None
+    readiness = profile.command_behavior["auth_readiness"]
+    assert readiness["connected"] is False
+    assert readiness["backing_secret_exists"] is True
+    assert readiness["launch_ready"] is False
+
+
+@pytest.mark.asyncio
+async def test_auto_seed_preserves_operator_disabled_zen_profile(
+    _module_db, monkeypatch
+):
+    from api_service.main import _auto_seed_provider_profiles
+
+    monkeypatch.setenv("OPENCODE_API_KEY", "test-opencode-key")
+    await _auto_seed_provider_profiles()
+
+    async with db_base.async_session_maker() as session:
+        profile = await session.get(
+            ManagedAgentProviderProfile, "opencode-zen-free"
+        )
+        assert profile is not None
+        profile.enabled = False
+        profile.auth_state = ProviderProfileAuthState.CONNECTED
+        profile.disabled_reason = ProviderProfileDisabledReason.USER_DISABLED
+        profile.command_behavior = {
+            **profile.command_behavior,
+            "auth_state": "connected",
+            "auth_readiness": {
+                "connected": True,
+                "backing_secret_exists": True,
+                "launch_ready": False,
+            },
+        }
+        await session.commit()
+
+    assert await _auto_seed_provider_profiles() == []
+
+    async with db_base.async_session_maker() as session:
+        preserved = await session.get(
+            ManagedAgentProviderProfile, "opencode-zen-free"
+        )
+
+    assert preserved is not None
+    assert preserved.enabled is False
+    assert preserved.auth_state == ProviderProfileAuthState.CONNECTED
+    assert preserved.disabled_reason == ProviderProfileDisabledReason.USER_DISABLED
+    assert preserved.command_behavior["auth_readiness"]["launch_ready"] is False
 
 
 @pytest.mark.asyncio

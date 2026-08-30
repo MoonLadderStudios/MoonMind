@@ -1032,6 +1032,7 @@ async def test_opencode_volume_materialization_transports_secret_only_on_stdin()
             secrets=secrets,
             writer_image_ref="ghcr.io/example/opencode@sha256:" + "1" * 64,
             artifact_gateway=artifacts,
+            provider_route_ref="opencode-go",
         )
     )
     backend.runtime_ref = handle.credentialRuntimeRef
@@ -1050,8 +1051,8 @@ async def test_opencode_volume_materialization_transports_secret_only_on_stdin()
     assert len(stdin_payloads) == 1
     assert json.loads(stdin_payloads[0]) == {
         "opencode-go": {"type": "api", "key": secret},
-        "opencode": {"type": "api", "key": secret},
     }
+    assert artifacts.payloads[0]["providerRouteRef"] == "opencode-go"
     writer_argv = next(argv for argv, payload in backend.calls if payload)
     assert writer_argv[0:7] == [
         "docker",

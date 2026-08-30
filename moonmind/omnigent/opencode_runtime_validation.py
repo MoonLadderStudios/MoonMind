@@ -208,6 +208,7 @@ class OpenCodeProviderRuntimeValidationService:
                     secrets=secrets,
                     writer_image_ref=self._image_ref,
                     artifact_gateway=self._artifacts,
+                    provider_route_ref=str(profile.provider_id or ""),
                 )
             )
             attachment = handle.attachments[0]

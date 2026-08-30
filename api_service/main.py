@@ -1131,6 +1131,20 @@ async def _auto_seed_provider_profiles() -> list[str]:
             },
         }
 
+    def _make_opencode_validation_pending_command_behavior() -> dict[str, Any]:
+        return {
+            "auth_strategy": "opencode_auth_json",
+            "auth_state": "api_key_pending",
+            "auth_actions": ["use_api_key"],
+            "auth_status_label": "OpenCode API key validation pending",
+            "auth_readiness": {
+                "connected": False,
+                "backing_secret_exists": True,
+                "launch_ready": False,
+                "failure_reason": "Pinned OpenCode runtime validation is pending.",
+            },
+        }
+
     # Well-known runtime defaults matching docker-compose.yaml conventions.
     _DEFAULT_PROFILES = [
         {
@@ -1383,9 +1397,10 @@ async def _auto_seed_provider_profiles() -> list[str]:
     # Respects the same kill-switches as the generic Omnigent host plane so
     # `MOONMIND_OMNIGENT_OPENCODE_ENABLED=false` or `MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED=false`
     # suppresses the default. When `OPENCODE_API_KEY` is present the profile is
-    # seeded as enabled/connected; otherwise a disabled placeholder is created
-    # so the Settings UI can show "Not connected" and the operator can add the
-    # key via the normal `use_api_key` flow.
+    # enabled but remains launch-blocked until pinned-runtime validation persists
+    # exact model evidence. Otherwise a disabled placeholder is created so the
+    # Settings UI can show "Not connected" and the operator can add the key via
+    # the normal `use_api_key` flow.
     from moonmind.omnigent.settings import generic_host_enabled, opencode_support_enabled
 
     if opencode_support_enabled() and generic_host_enabled():
@@ -1397,12 +1412,12 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 "provider_id": "opencode",
                 "provider_label": "OpenCode Zen",
                 "default_model": "opencode/muse-spark-1.2-contributor-free",
-                "default_effort": "xhigh",
+                "default_effort": None,
                 "model_tiers": [
                     {
                         "label": "Muse Spark 1.2 Contributor Free",
                         "model": "opencode/muse-spark-1.2-contributor-free",
-                        "effort": "xhigh",
+                        "effort": None,
                         "parameters": {},
                         "annotations": {},
                     }
@@ -1425,20 +1440,10 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 "volume_mount_path": None,
                 "account_label": "OpenCode Zen Contributor Free (auto-seeded)",
                 "enabled": True,
-                "auth_state": ProviderProfileAuthState.CONNECTED,
+                "auth_state": ProviderProfileAuthState.API_KEY_PENDING,
                 "disabled_reason": None,
                 "tags": ["api-key", "opencode", "zen"],
-                "command_behavior": {
-                    "auth_strategy": "opencode_auth_json",
-                    "auth_state": "connected",
-                    "auth_actions": ["use_api_key"],
-                    "auth_status_label": "OpenCode Zen API key ready",
-                    "auth_readiness": {
-                        "connected": True,
-                        "backing_secret_exists": True,
-                        "launch_ready": True,
-                    },
-                },
+                "command_behavior": _make_opencode_validation_pending_command_behavior(),
                 "last_auth_method": ProviderProfileAuthMethod.SECRET_REF,
             })
         else:
@@ -1449,12 +1454,12 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 "provider_id": "opencode",
                 "provider_label": "OpenCode Zen",
                 "default_model": "opencode/muse-spark-1.2-contributor-free",
-                "default_effort": "xhigh",
+                "default_effort": None,
                 "model_tiers": [
                     {
                         "label": "Muse Spark 1.2 Contributor Free",
                         "model": "opencode/muse-spark-1.2-contributor-free",
-                        "effort": "xhigh",
+                        "effort": None,
                         "parameters": {},
                         "annotations": {},
                     }
@@ -1523,6 +1528,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     ManagedAgentProviderProfile.disabled_reason,
                     ManagedAgentProviderProfile.command_behavior,
                     ManagedAgentProviderProfile.last_auth_method,
+                    ManagedAgentProviderProfile.model_catalog_evidence_json,
                     ManagedAgentProviderProfile.volume_ref,
                     ManagedAgentProviderProfile.volume_mount_path,
                     ManagedAgentProviderProfile.max_parallel_runs,
@@ -1558,6 +1564,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     "disabled_reason": row.disabled_reason,
                     "command_behavior": row.command_behavior,
                     "last_auth_method": row.last_auth_method,
+                    "model_catalog_evidence_json": row.model_catalog_evidence_json,
                     "volume_ref": row.volume_ref,
                     "volume_mount_path": row.volume_mount_path,
                     "max_parallel_runs": row.max_parallel_runs,
@@ -1722,10 +1729,34 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     if zen_current.get(key) != value
                 }
                 if zen_configured:
-                    # Upgrade disabled placeholder to enabled
-                    if not zen_current.get("enabled") or zen_current.get(
-                        "auth_state"
-                    ) != ProviderProfileAuthState.CONNECTED:
+                    zen_secret_refs = zen_current.get("secret_refs") or {}
+                    uses_env_ref = any(
+                        str(v or "").strip() == "env://OPENCODE_API_KEY"
+                        for v in zen_secret_refs.values()
+                    )
+                    auth_state = getattr(
+                        zen_current.get("auth_state"),
+                        "value",
+                        zen_current.get("auth_state"),
+                    )
+                    disabled_reason = getattr(
+                        zen_current.get("disabled_reason"),
+                        "value",
+                        zen_current.get("disabled_reason"),
+                    )
+                    untouched_placeholder = (
+                        zen_current.get("enabled") is False
+                        and auth_state == ProviderProfileAuthState.NOT_CONFIGURED.value
+                        and disabled_reason
+                        == ProviderProfileDisabledReason.MISSING_CREDENTIALS.value
+                        and not zen_secret_refs
+                    )
+                    unvalidated_env_seed = (
+                        zen_current.get("enabled") is True
+                        and uses_env_ref
+                        and not zen_current.get("model_catalog_evidence_json")
+                    )
+                    if untouched_placeholder or unvalidated_env_seed:
                         credential_updates = {
                             "credential_source": ProviderCredentialSource.SECRET_REF,
                             "runtime_materialization_mode": RuntimeMaterializationMode.COMPOSITE,
@@ -1739,19 +1770,9 @@ async def _auto_seed_provider_profiles() -> list[str]:
                             ],
                             "env_template": {},
                             "enabled": True,
-                            "auth_state": ProviderProfileAuthState.CONNECTED,
+                            "auth_state": ProviderProfileAuthState.API_KEY_PENDING,
                             "disabled_reason": None,
-                            "command_behavior": {
-                                "auth_strategy": "opencode_auth_json",
-                                "auth_state": "connected",
-                                "auth_actions": ["use_api_key"],
-                                "auth_status_label": "OpenCode Zen API key ready",
-                                "auth_readiness": {
-                                    "connected": True,
-                                    "backing_secret_exists": True,
-                                    "launch_ready": True,
-                                },
-                            },
+                            "command_behavior": _make_opencode_validation_pending_command_behavior(),
                             "last_auth_method": ProviderProfileAuthMethod.SECRET_REF,
                         }
                         zen_updates.update({

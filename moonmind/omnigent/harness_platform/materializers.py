@@ -318,7 +318,7 @@ def _assert_no_forbidden_ambient_env() -> None:
 
 
 def _opencode_auth_json_payload(
-    *, api_key: str, provider_key: str | None = None
+    *, api_key: str, provider_key: str
 ) -> dict[str, Any]:
     """Exact OpenCode credential structure for the pinned version.
 
@@ -334,22 +334,16 @@ def _opencode_auth_json_payload(
             code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
         )
     key = api_key.strip()
-    if provider_key is not None:
-        if provider_key not in OPENCODE_PROVIDER_KEYS:
-            raise HarnessPlatformError(
-                f"unsupported OpenCode provider key {provider_key!r}",
-                code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
-            )
-        return {provider_key: {"type": "api", "key": key}}
-    # Default: write both provider keys with the same API key so that a single
-    # credential grants access to both OpenCode Go and built-in Zen models.
-    return {
-        provider: {"type": "api", "key": key} for provider in OPENCODE_PROVIDER_KEYS
-    }
+    if provider_key not in OPENCODE_PROVIDER_KEYS:
+        raise HarnessPlatformError(
+            f"unsupported OpenCode provider key {provider_key!r}",
+            code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+        )
+    return {provider_key: {"type": "api", "key": key}}
 
 
 def build_opencode_auth_json_bytes(
-    *, api_key: str, provider_key: str | None = None
+    *, api_key: str, provider_key: str
 ) -> bytes:
     """Return canonical JSON bytes for auth.json without touching filesystem."""
     payload = _opencode_auth_json_payload(api_key=api_key, provider_key=provider_key)

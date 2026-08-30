@@ -16,7 +16,6 @@ import pytest
 
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from moonmind.omnigent.harness_platform.materializers import (
-    OPENCODE_BUILTIN_PROVIDER_KEY,
     OPENCODE_PROVIDER_KEY,
     build_opencode_auth_json_bytes,
 )
@@ -25,7 +24,10 @@ from moonmind.omnigent.harness_platform.materializers import (
 def test_opencode_auth_json_uses_key_not_apiKey():
     """Issue §5 / Phase 0: pinned OpenCode uses `key`, not `apiKey`."""
     raw_key = "sk-opencode-phase0-test-1234567890abcdef"
-    payload_bytes = build_opencode_auth_json_bytes(api_key=raw_key)
+    payload_bytes = build_opencode_auth_json_bytes(
+        api_key=raw_key,
+        provider_key=OPENCODE_PROVIDER_KEY,
+    )
     payload = json.loads(payload_bytes)
 
     # Must use provider key "opencode-go"
@@ -45,7 +47,6 @@ def test_opencode_auth_json_uses_key_not_apiKey():
     # No other secret-carrying shape is acceptable
     expected = {
         OPENCODE_PROVIDER_KEY: {"type": "api", "key": raw_key},
-        OPENCODE_BUILTIN_PROVIDER_KEY: {"type": "api", "key": raw_key},
     }
     assert payload == expected
 

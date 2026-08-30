@@ -219,18 +219,24 @@ def test_opencode_image_ref_fail_closed(monkeypatch):
     os.environ.pop("OMNIGENT_OPENCODE_HOST_IMAGE_REF", None)
 
 
-def test_opencode_auth_json_bytes_structure():
+@pytest.mark.parametrize(
+    "provider_key",
+    (OPENCODE_PROVIDER_KEY, OPENCODE_BUILTIN_PROVIDER_KEY),
+)
+def test_opencode_auth_json_bytes_structure(provider_key: str):
     key = "sk-opencode-abcdef1234567890"
-    payload_bytes = build_opencode_auth_json_bytes(api_key=key)
+    payload_bytes = build_opencode_auth_json_bytes(
+        api_key=key,
+        provider_key=provider_key,
+    )
     payload = json.loads(payload_bytes)
-    assert OPENCODE_PROVIDER_KEY in payload
-    assert payload[OPENCODE_PROVIDER_KEY]["key"] == key
-    assert payload[OPENCODE_PROVIDER_KEY]["type"] == "api"
+    assert provider_key in payload
+    assert payload[provider_key]["key"] == key
+    assert payload[provider_key]["type"] == "api"
     # Must NOT use legacy apiKey after Phase 0 correction
-    assert "apiKey" not in payload[OPENCODE_PROVIDER_KEY]
+    assert "apiKey" not in payload[provider_key]
     assert payload == {
-        OPENCODE_PROVIDER_KEY: {"type": "api", "key": key},
-        OPENCODE_BUILTIN_PROVIDER_KEY: {"type": "api", "key": key},
+        provider_key: {"type": "api", "key": key},
     }
 
 
