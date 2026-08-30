@@ -1,0 +1,138 @@
+name: Documentation security terminology migration
+
+on:
+  push:
+    branches:
+      - docs/security-positioning
+    paths:
+      - .github/workflows/docs-security-terminology-migration.yml
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    if: github.event.head_commit.message == 'chore: run documentation terminology migration'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out terminology branch
+        uses: actions/checkout@v4
+        with:
+          ref: docs/security-positioning
+          fetch-depth: 0
+
+      - name: Apply security-focused documentation language
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          replacements = {
+              "README.md": [
+                  (
+                      "MoonMind is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for copyright and attribution notices.",
+                      "MoonMind is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for the full license text and [NOTICE](NOTICE) for copyright and attribution notices.",
+                  ),
+              ],
+              "docs/UI/ProviderProfileCreation.md": [
+                  ("safe creation preset", "validated creation preset"),
+                  ("fail safely", "fail closed"),
+                  ("safe preset", "validated preset"),
+                  ("safe materialization strategy", "approved materialization strategy"),
+                  ("infer safety from blank browser fields", "infer security posture from blank browser fields"),
+                  ("launch-safety", "launch-security"),
+                  ("safely empty", "empty without weakening isolation"),
+                  ("simplify the experience safely", "simplify the experience without weakening activation controls"),
+                  ("render the standard form and advanced summary safely", "render the standard form and advanced summary securely and predictably"),
+              ],
+              "docs/UI/SettingsPage.md": [
+                  ("secret-safe behavior", "credential-redacted behavior"),
+                  ("safe filters", "approved filters"),
+                  ("Safe independent failure", "Independent failure isolation"),
+                  ("safe specific mapping", "approved specific mapping"),
+                  ("preserve safe page-relevant query", "preserve approved page-relevant query"),
+                  ("launch-safety", "launch-security"),
+                  ("safe policy controls", "authorized policy controls"),
+                  ("safe diagnostic switches", "bounded diagnostic switches"),
+                  ("unset, safe, or healthy", "unset, permitted, or healthy"),
+                  ("Secret Safety, Validation, and Explainability", "Secret Security, Validation, and Explainability"),
+                  ("degrade safely", "degrade predictably"),
+                  ("secret-safety decisions", "secret-security decisions"),
+              ],
+              "docs/Workflows/WorkflowPublishing.md": [
+                  ("### Safety Guard", "### Protected Branch Guard"),
+              ],
+              "docs/Security/ProviderProfiles.md": [
+                  ("This means “disabled by default” is a safety state for unconfigured providers.", "This means “disabled by default” is a security control for unconfigured providers."),
+                  ("**Safe Settings-first activation**", "**Secure Settings-first activation**"),
+                  ("as a safety net", "as a recovery guard"),
+                  ("This makes the safe state the default", "This makes the non-launchable state the default"),
+              ],
+              "docs/Omnigent/OmnigentHostOAuth.md": [
+                  ("safety invariants", "security invariants"),
+                  ("Only safe references cross durable boundaries.", "Only bounded references cross durable boundaries."),
+                  ("proving safe mutable-state ownership", "proving validated mutable-state ownership"),
+                  ("<safe-volume-ref>", "<bounded-volume-ref>"),
+                  ("<safe-cleanup-ref>", "<bounded-cleanup-ref>"),
+                  ("## 19. Secret-safe evidence", "## 19. Credential-redacted evidence"),
+              ],
+              "docs/Workflows/PrMergeAutomation.md": [
+                  ("replay safety", "replay determinism"),
+                  ("applies one validated transition when it can do so safely.", "applies one validated transition only when every required condition is satisfied."),
+                  ("A pull request is only safe to merge when", "A pull request may be merged only when"),
+                  ("decide that the PR is safe to merge", "decide that the PR is authorized to merge"),
+              ],
+              "docs/UI/ProviderProfileModelEffortTierSettings.md": [
+                  ("easy to understand and safe to change", "easy to understand and resistant to accidental policy changes"),
+                  ("capability loading and safe degradation", "capability loading and predictable degradation"),
+                  ("removing a safe last tier", "removing a last tier that does not renumber remaining tiers"),
+                  ("### 4.6 Structural safety without unnecessary friction", "### 4.6 Controlled structural changes without unnecessary friction"),
+                  ("safe structured editors", "constrained structured editors"),
+                  ("After a safe last-tier removal", "After a last-tier removal that does not renumber remaining tiers"),
+                  ("difficult to make safe and accessible", "difficult to make predictable and accessible"),
+                  ("when safely cached", "when backed by a validated cache"),
+              ],
+          }
+
+          changed = []
+          for relative_path, pairs in replacements.items():
+              path = Path(relative_path)
+              text = path.read_text(encoding="utf-8")
+              original = text
+              for old, new in pairs:
+                  text = text.replace(old, new)
+              if text != original:
+                  path.write_text(text, encoding="utf-8")
+                  changed.append(relative_path)
+
+          forbidden = re.compile(r"\b(?:safety|safer)\b", re.IGNORECASE)
+          unresolved = []
+          migration_file = Path(".github/workflows/docs-security-terminology-migration.yml")
+          for path in Path(".").rglob("*.md"):
+              if path == migration_file or ".git" in path.parts:
+                  continue
+              for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                  if forbidden.search(line):
+                      unresolved.append(f"{path}:{line_number}: {line.strip()}")
+
+          if unresolved:
+              raise SystemExit("Unresolved safety-oriented Markdown language:\n" + "\n".join(unresolved))
+
+          print("Updated documentation files:")
+          for path in changed:
+              print(f"- {path}")
+          PY
+
+      - name: Commit terminology migration
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md docs .agents
+          if git diff --cached --quiet; then
+            echo "No documentation changes were needed."
+            exit 0
+          fi
+          git commit -m "docs: finish security terminology migration"
+          git push origin HEAD:docs/security-positioning
