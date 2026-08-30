@@ -86,6 +86,9 @@ MERGE_AUTOMATION_STRICT_CONTINUATION_IDENTITY_PATCH = (
 MERGE_AUTOMATION_CONTINUATION_OBSERVABILITY_PATCH = (
     "merge-automation-continuation-observability-v1"
 )
+MERGE_AUTOMATION_RESOLVER_ATTEMPT_TITLE_PATCH = (
+    "merge-automation-resolver-attempt-title-v1"
+)
 # Request/remediate/request loop for one configured automated review provider.
 # Guarded so histories recorded before the loop existed keep replaying their
 # original gate decisions.
@@ -124,6 +127,7 @@ class MoonMindMergeAutomationWorkflow:
         self._post_merge_github_result: dict[str, Any] | None = None
         self._external_event_count = 0
         self._continuation_observability_enabled = False
+        self._resolver_attempt_titles_enabled = False
         self._continuation_counters: dict[str, int] = {
             "continuation_requested": 0,
             "continuation_accepted": 0,
@@ -235,7 +239,11 @@ class MoonMindMergeAutomationWorkflow:
         return attributes
 
     @staticmethod
-    def _resolver_child_memo(resolver_request: Mapping[str, Any]) -> dict[str, Any]:
+    def _resolver_child_memo(
+        resolver_request: Mapping[str, Any],
+        *,
+        attempt: int | None = None,
+    ) -> dict[str, Any]:
         initial_parameters = resolver_request.get("initial_parameters")
         if not isinstance(initial_parameters, Mapping):
             initial_parameters = {}
@@ -271,10 +279,14 @@ class MoonMindMergeAutomationWorkflow:
             ).strip()[:160]
             or None
         )
+        title = (
+            str(resolver_request.get("title") or "Resolve PR").strip() or "Resolve PR"
+        )
+        if attempt is not None:
+            title = f"{title} (Attempt {attempt})"
         memo: dict[str, Any] = {
             "entry": "user_workflow",
-            "title": str(resolver_request.get("title") or "Resolve PR").strip()
-            or "Resolve PR",
+            "title": title,
             "summary": "Resolver child workflow for merge automation.",
         }
         if target_runtime:
@@ -1146,6 +1158,9 @@ class MoonMindMergeAutomationWorkflow:
         self._continuation_observability_enabled = workflow.patched(
             MERGE_AUTOMATION_CONTINUATION_OBSERVABILITY_PATCH
         )
+        self._resolver_attempt_titles_enabled = workflow.patched(
+            MERGE_AUTOMATION_RESOLVER_ATTEMPT_TITLE_PATCH
+        )
         self._review_loop_enabled = workflow.patched(
             MERGE_AUTOMATION_REVIEW_LOOP_PATCH
         )
@@ -1237,9 +1252,8 @@ class MoonMindMergeAutomationWorkflow:
                     pr_number=self._input.pull_request.number,
                     head_sha=self._input.pull_request.head_sha,
                 )
-                resolver_workflow_id = (
-                    f"{resolver_workflow_id}:{len(self._resolver_child_workflow_ids) + 1}"
-                )
+                resolver_attempt = len(self._resolver_child_workflow_ids) + 1
+                resolver_workflow_id = f"{resolver_workflow_id}:{resolver_attempt}"
                 self._resolver_child_workflow_ids.append(resolver_workflow_id)
                 child_kwargs: dict[str, Any] = {
                     "id": resolver_workflow_id,
@@ -1250,7 +1264,14 @@ class MoonMindMergeAutomationWorkflow:
                     "static_details": f"Resolve {self._input.pull_request.url}",
                 }
                 if workflow.patched("merge-automation-resolver-child-visibility-memo"):
-                    child_kwargs["memo"] = self._resolver_child_memo(resolver_request)
+                    child_kwargs["memo"] = self._resolver_child_memo(
+                        resolver_request,
+                        attempt=(
+                            resolver_attempt
+                            if self._resolver_attempt_titles_enabled
+                            else None
+                        ),
+                    )
                 try:
                     resolver_result = await workflow.execute_child_workflow(
                         "MoonMind.UserWorkflow",
