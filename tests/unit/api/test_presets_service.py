@@ -15,10 +15,12 @@ from sqlalchemy.orm import selectinload, sessionmaker
 
 from api_service.db.models import (
     Base,
+    ManagedAgentProviderProfile,
     Preset,
     PresetRecent,
     PresetReleaseStatus,
     PresetScopeType,
+    ProviderProfileAuthState,
 )
 from api_service.services.presets.catalog import (
     ExpandOptions,
@@ -29,6 +31,7 @@ from api_service.services.presets.catalog import (
 )
 from api_service.services.presets.save import PresetSaveService
 from moonmind.config.settings import settings
+from moonmind.workflows.executions.model_resolver import resolve_model_effort
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 from tests.helpers.step_type_payloads import preset_step, skill_step, tool_step
 
@@ -163,6 +166,105 @@ async def test_mm1171_preset_runtime_tier_intent_is_validated_and_preserved(tmp_
         "tierFallback": "strict",
     }
     assert expanded["steps"][0]["runtime"] == runtime
+
+
+async def test_github_issue_3796_preset_tier_resolves_per_profile_policy(tmp_path):
+    """MoonLadderStudios/MoonMind#3796: prove one preset is tier-portable."""
+    user_id = uuid4()
+    profiles = [
+        ManagedAgentProviderProfile(
+            profile_id="portable-codex",
+            runtime_id="codex_cli",
+            provider_id="openai",
+            enabled=True,
+            auth_state=ProviderProfileAuthState.CONNECTED,
+            model_tiers=[
+                {"label": "Plan", "model": "codex-plan", "effort": "medium"},
+                {
+                    "label": "Implement",
+                    "model": "codex-implementation",
+                    "effort": "xhigh",
+                },
+            ],
+            default_model_tier=1,
+        ),
+        ManagedAgentProviderProfile(
+            profile_id="portable-claude",
+            runtime_id="claude_code",
+            provider_id="anthropic",
+            enabled=True,
+            auth_state=ProviderProfileAuthState.CONNECTED,
+            model_tiers=[
+                {"label": "Plan", "model": "claude-plan", "effort": "low"},
+                {
+                    "label": "Implement",
+                    "model": "claude-implementation",
+                    "effort": "high",
+                },
+            ],
+            default_model_tier=1,
+        ),
+    ]
+
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = PresetCatalogService(session)
+            await service.create_template(
+                slug="portable-tiered-workflow",
+                title="Portable Tiered Workflow",
+                description="One tier-based preset for differing profile policies.",
+                scope="personal",
+                scope_ref=str(user_id),
+                tags=["runtime"],
+                inputs_schema=[],
+                steps=[
+                    {
+                        "title": "Implement",
+                        "instructions": "Implement the issue.",
+                        "skill": {
+                            "id": "auto",
+                            "runtime": {
+                                "modelTier": 2,
+                                "tierFallback": "strict",
+                            },
+                        },
+                    }
+                ],
+                annotations={},
+                required_capabilities=[],
+                created_by=user_id,
+            )
+
+            outcomes = []
+            for profile in profiles:
+                expanded = await service.expand_template(
+                    slug="portable-tiered-workflow",
+                    scope="personal",
+                    scope_ref=str(user_id),
+                    inputs={},
+                    context={},
+                    options=ExpandOptions(should_enforce_step_limit=True),
+                )
+                runtime = expanded["steps"][0]["skill"]["runtime"]
+
+                assert runtime == {"modelTier": 2, "tierFallback": "strict"}
+                assert expanded["steps"][0]["runtime"] == runtime
+                assert "model" not in runtime
+                assert "effort" not in runtime
+
+                resolved = resolve_model_effort(
+                    runtime_id=profile.runtime_id,
+                    profile=profile,
+                    requested_model_tier=runtime["modelTier"],
+                    tier_fallback=runtime["tierFallback"],
+                    env={},
+                )
+                outcomes.append((resolved.model, resolved.effort))
+
+    assert outcomes == [
+        ("codex-implementation", "xhigh"),
+        ("claude-implementation", "high"),
+    ]
 
 
 async def test_mm1171_preset_runtime_rejects_invalid_tier_values(tmp_path):
