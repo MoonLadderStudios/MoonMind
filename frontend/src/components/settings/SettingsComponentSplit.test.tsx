@@ -4,7 +4,9 @@
  * The Settings System design (`docs/Security/SettingsSystem.md` §26) names a
  * suggested frontend component split:
  *
- *   - SettingsPage
+ *   - ProvidersSecretsSettingsPage
+ *   - UserWorkspaceSettingsPage
+ *   - OperationsSettingsPage
  *   - SettingsCatalogSection (a.k.a. GeneratedSettingsSection)
  *   - SettingControlRenderer (lives inside GeneratedSettingsSection)
  *   - SecretRefPicker (lives inside GeneratedSettingsSection)
@@ -24,11 +26,17 @@ import { GeneratedSettingsSection } from './GeneratedSettingsSection';
 import { OperationsSettingsSection } from './OperationsSettingsSection';
 import { ProviderProfilesManager } from './ProviderProfilesManager';
 import { SecretManager } from '../secrets/SecretManager';
-import SettingsPage from '../../entrypoints/settings';
+import {
+  OperationsSettingsPage,
+  ProvidersSecretsSettingsPage,
+  UserWorkspaceSettingsPage,
+} from '../../entrypoints/settings';
 
 describe('Settings System §26 component split', () => {
-  it('exposes a SettingsPage that owns top-level section navigation', () => {
-    expect(typeof SettingsPage).toBe('function');
+  it('exposes three route-owned Settings pages without a shared page selector', () => {
+    expect(typeof ProvidersSecretsSettingsPage).toBe('function');
+    expect(typeof UserWorkspaceSettingsPage).toBe('function');
+    expect(typeof OperationsSettingsPage).toBe('function');
   });
 
   it('exposes GeneratedSettingsSection as the catalog-driven section renderer', () => {

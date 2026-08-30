@@ -24,7 +24,6 @@ import {
 } from '../utils/dashboardPreferences';
 import { DASHBOARD_DESTINATIONS } from '../lib/dashboardRoutes';
 import { SKILLS_CREATE_REQUEST_EVENT } from '../lib/skillsCreateRequest';
-import { SETTINGS_ROUTE_CHANGE_REQUEST_EVENT } from '../lib/settingsRouteGuard';
 
 const animatedNavIconMocks = vi.hoisted(() => ({
   moonStart: vi.fn(),
@@ -280,12 +279,18 @@ vi.mock('./workflow-start', () => ({
   },
 }));
 
-vi.mock('./settings', () => ({
-  default: ({ payload }: { payload: BootPayload }) => {
+vi.mock('./settings', () => {
+  const MockSettingsPage = ({ payload }: { payload: BootPayload }) => {
     const initialData = payload.initialData as { settingsPermissions?: string[] } | undefined;
     return <div>Settings permissions: {(initialData?.settingsPermissions ?? []).join(',')}</div>;
-  },
-}));
+  };
+  return {
+    SettingsEntryPage: MockSettingsPage,
+    OperationsSettingsPage: MockSettingsPage,
+    ProvidersSecretsSettingsPage: MockSettingsPage,
+    UserWorkspaceSettingsPage: MockSettingsPage,
+  };
+});
 
 function uiInfo(overrides: Record<string, unknown> = {}) {
   return {
@@ -500,7 +505,6 @@ describe('Dashboard shared entry', () => {
     ['/settings/providers-secrets', 'Settings'],
     ['/settings/user-workspace', 'Settings'],
     ['/settings/operations', 'Settings'],
-    ['/settings/provider-profiles', 'Settings'],
     ['/schedules', 'Recurring'],
     ['/schedules/nightly-build', 'Recurring'],
     ['/skills', 'Skills'],
@@ -598,30 +602,6 @@ describe('Dashboard shared entry', () => {
     fireEvent.click(trigger);
     fireEvent.pointerDown(document.body);
     expect(trigger.getAttribute('aria-expanded')).toBe('false');
-  });
-
-  it('MoonLadderStudios/MoonMind#3817 cancels menu navigation when a Settings draft guard blocks it', () => {
-    function LocationProbe() {
-      return <output aria-label="Current path">{useLocation().pathname}</output>;
-    }
-    window.addEventListener(
-      SETTINGS_ROUTE_CHANGE_REQUEST_EVENT,
-      (event) => event.preventDefault(),
-      { once: true },
-    );
-    renderWithClient(
-      <MemoryRouter initialEntries={['/settings/providers-secrets']}>
-        <DashboardSystemMenu uiInfo={uiInfo()} mobileDrawerOpen={false} />
-        <LocationProbe />
-      </MemoryRouter>,
-    );
-
-    const trigger = screen.getByRole('button', { name: 'Settings' });
-    fireEvent.click(trigger);
-    fireEvent.click(screen.getByRole('menuitem', { name: 'User / Workspace' }));
-
-    expect(screen.getByRole('status', { name: 'Current path' }).textContent).toBe('/settings/providers-secrets');
-    expect(trigger.getAttribute('aria-expanded')).toBe('true');
   });
 
   it('MM-1200 renders enabled System children inline on mobile without a nested popover', () => {

@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { QueryClient, useMutation } from '@tanstack/react-query';
 
-import { formatRuntimeLabel, formatStatusLabel } from '../../utils/formatters';
 import type { components } from '../../generated/openapi';
+import { formatRuntimeLabel, formatStatusLabel } from '../../utils/formatters';
+import { useSettingsDraftRegistration } from './SettingsDraftGuard';
 
 type ProviderProfileAuthenticationMethod =
   components['schemas']['ProviderProfileAuthenticationMethod'];
@@ -839,6 +840,9 @@ export function ProviderProfilesManager({
   const [form, setForm] = useState<ProviderProfileFormState>(() =>
     defaultFormState(createFormRuntimeSeed),
   );
+  const [formBaseline, setFormBaseline] = useState<ProviderProfileFormState>(() =>
+    defaultFormState(createFormRuntimeSeed),
+  );
   const [creationPreset, setCreationPreset] =
     useState<ProviderProfileCreationPreset | null>(null);
   const [creationPresetLoading, setCreationPresetLoading] = useState(false);
@@ -940,6 +944,11 @@ export function ProviderProfilesManager({
         ? { ...current, runtimeId: createFormRuntimeSeed }
         : current,
     );
+    setFormBaseline((current) =>
+      current.runtimeId === '' || current.runtimeId === previousSeed
+        ? { ...current, runtimeId: createFormRuntimeSeed }
+        : current,
+    );
   }, [createFormRuntimeSeed, editingProfileId]);
 
   useEffect(() => {
@@ -1036,7 +1045,9 @@ export function ProviderProfilesManager({
       return;
     }
     setEditingProfileId(null);
-    setForm(defaultFormState(selectedRuntimeId));
+    const nextForm = defaultFormState(selectedRuntimeId);
+    setForm(nextForm);
+    setFormBaseline(nextForm);
     setShowAdvancedOptions(false);
   }, [editingProfileId, form.runtimeId, selectedRuntimeId]);
 
@@ -1055,10 +1066,18 @@ export function ProviderProfilesManager({
 
   const resetForm = () => {
     setEditingProfileId(null);
-    setForm(defaultFormState(createFormRuntimeSeed));
+    const nextForm = defaultFormState(createFormRuntimeSeed);
+    setForm(nextForm);
+    setFormBaseline(nextForm);
     setShowAdvancedOptions(false);
     onNotice(null);
   };
+
+  useSettingsDraftRegistration(
+    'provider-profile',
+    canWriteProviderProfiles && JSON.stringify(form) !== JSON.stringify(formBaseline),
+    resetForm,
+  );
 
   const closeClaudeEnrollment = () => {
     claudeEnrollmentProfileIdRef.current = null;
@@ -1392,7 +1411,9 @@ export function ProviderProfilesManager({
           : `Provider profile "${submittedForm.profileId.trim()}" created.`,
       });
       setEditingProfileId(null);
-      setForm(defaultFormState(createFormRuntimeSeed));
+      const nextForm = defaultFormState(createFormRuntimeSeed);
+      setForm(nextForm);
+      setFormBaseline(nextForm);
       setShowAdvancedOptions(false);
       queryClient.setQueryData<ProviderProfile[]>(
         PROVIDER_PROFILE_QUERY_KEY,
@@ -1457,7 +1478,9 @@ export function ProviderProfilesManager({
       onNotice({ level: 'ok', text: `Provider profile "${profileId}" deleted.` });
       if (editingProfileId === profileId) {
         setEditingProfileId(null);
-        setForm(defaultFormState(createFormRuntimeSeed));
+        const nextForm = defaultFormState(createFormRuntimeSeed);
+        setForm(nextForm);
+        setFormBaseline(nextForm);
       }
       queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
     },
@@ -2288,8 +2311,10 @@ export function ProviderProfilesManager({
                             type="button"
                             className="rounded-full border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
                             onClick={() => {
+                              const nextForm = toFormState(profile);
                               setEditingProfileId(profile.profile_id);
-                              setForm(toFormState(profile));
+                              setForm(nextForm);
+                              setFormBaseline(nextForm);
                               setShowAdvancedOptions(true);
                               onNotice(null);
                             }}

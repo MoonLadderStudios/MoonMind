@@ -13,7 +13,6 @@ import {
   type DashboardIconKey,
   type DashboardUiInfo,
 } from '../lib/dashboardRoutes';
-import { requestSettingsRouteChange } from '../lib/settingsRouteGuard';
 
 const ICONS: Partial<Record<DashboardIconKey, typeof Settings>> = {
   archive: Archive,
@@ -59,13 +58,7 @@ function DestinationLink({ destination, state, onSelect, menuItem = true }: {
       to={destination.canonicalPath}
       role={menuItem ? 'menuitem' : undefined}
       className={({ isActive }) => (isActive ? 'active' : undefined)}
-      onClick={(event) => {
-        if (!requestSettingsRouteChange(destination.canonicalPath)) {
-          event.preventDefault();
-          return;
-        }
-        onSelect();
-      }}
+      onClick={onSelect}
     >
       <Icon size={16} className="route-nav-icon" aria-hidden="true" />
       {destination.label}

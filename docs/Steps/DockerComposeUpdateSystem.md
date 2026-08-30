@@ -952,11 +952,11 @@ Representative operational sequence:
 
 ## 17. Interaction with Settings information architecture
 
-The Settings page remains a single operator-facing location for configuration and administrative controls.
+Settings remains the operator-facing configuration area.
 
-Deployment update belongs in the **Operations** subsection because it is a system-control surface. It should not become a top-level navigation item unless the broader Settings architecture is intentionally revisited.
+Deployment update belongs on the **Operations** page because it is a system-control surface. It should not become a top-level navigation item unless the broader Settings architecture is intentionally revisited.
 
-The Settings page should continue to use subsection routing such as:
+Use the canonical Operations route:
 
 ```text
 /settings/operations
