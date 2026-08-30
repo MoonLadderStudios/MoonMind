@@ -4049,7 +4049,7 @@ export interface paths {
         };
         /**
          * Secrets Route
-         * @description Redirect the legacy secrets page into unified settings.
+         * @description Redirect the legacy secrets page to its canonical Settings route.
          */
         get: operations["secrets_route_secrets_get"];
         put?: never;
@@ -4269,7 +4269,7 @@ export interface paths {
         };
         /**
          * Task Workers Route
-         * @description Redirect the legacy workers page into unified settings.
+         * @description Redirect the legacy workers page to its canonical Settings route.
          */
         get: operations["task_workers_route_workers_get"];
         put?: never;
