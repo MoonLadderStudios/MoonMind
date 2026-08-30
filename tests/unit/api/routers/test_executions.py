@@ -7826,6 +7826,33 @@ def test_mm1171_create_execution_rejects_invalid_runtime_tier_intent(
     assert "hardOverrideAudit" in response.json()["detail"]["message"]
 
 
+def test_mm1171_create_execution_rejects_below_range_runtime_tier_intent(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+    test_client.app.dependency_overrides[get_async_session] = lambda: None
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "targetRuntime": "codex_cli",
+                "workflow": {
+                    "title": "Reject below-range tier",
+                    "instructions": "Run a workflow.",
+                    "runtime": {"modelTier": 0},
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "greater than or equal to 1" in response.json()["detail"]["message"]
+
+
 def test_create_task_shaped_execution_preserves_preset_schedule_provenance(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:

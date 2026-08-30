@@ -382,9 +382,7 @@ def _normalize_requested_tier(value: int | None) -> int | None:
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError("modelTier must be an integer greater than or equal to 1")
-    if value < 1:
-        raise ValueError("modelTier must be an integer greater than or equal to 1")
+        raise ValueError("modelTier must be an integer")
     return value
 
 
