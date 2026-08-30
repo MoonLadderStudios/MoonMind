@@ -2,6 +2,12 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { QueryClient, useMutation } from '@tanstack/react-query';
 
 import { formatRuntimeLabel, formatStatusLabel } from '../../utils/formatters';
+import type { components } from '../../generated/openapi';
+
+type ProviderProfileAuthenticationMethod =
+  components['schemas']['ProviderProfileAuthenticationMethod'];
+type ProviderProfileCreationPreset =
+  components['schemas']['ProviderProfileCreationPresetResponse'];
 
 export interface ProviderProfile {
   profile_id: string;
@@ -94,6 +100,7 @@ interface ProviderProfileFormState {
   providerLabel: string;
   defaultModel: string;
   defaultEffort: string;
+  authenticationMethod: '' | ProviderProfileAuthenticationMethod;
   credentialSource: string;
   runtimeMaterializationMode: string;
   secretRefsText: string;
@@ -111,29 +118,7 @@ interface ProviderProfileFormState {
   accountLabel: string;
 }
 
-interface ProviderProfileSavePayload {
-  profile_id: string;
-  runtime_id: string;
-  provider_id: string;
-  provider_label: string | null;
-  default_model: string | null;
-  default_effort: string | null;
-  credential_source: string;
-  runtime_materialization_mode: string;
-  secret_refs: Record<string, string>;
-  volume_ref: string | null;
-  volume_mount_path: string | null;
-  max_parallel_runs: number;
-  cooldown_after_429_seconds: number;
-  rate_limit_policy: string;
-  enabled: boolean;
-  is_default: boolean;
-  command_behavior: Record<string, unknown> | null;
-  tags: string[] | null;
-  priority: number | null;
-  clear_env_keys: string[] | null;
-  account_label: string | null;
-}
+type ProviderProfileSavePayload = components['schemas']['ProviderProfileCreate'];
 
 type OAuthSessionStatus =
   | 'pending'
@@ -224,15 +209,16 @@ export function defaultFormState(runtimeId = ''): ProviderProfileFormState {
     providerLabel: '',
     defaultModel: '',
     defaultEffort: '',
-    credentialSource: 'secret_ref',
-    runtimeMaterializationMode: 'api_key_env',
+    authenticationMethod: '',
+    credentialSource: '',
+    runtimeMaterializationMode: '',
     secretRefsText: '{}',
     volumeRef: '',
     volumeMountPath: '',
-    maxParallelRuns: '1',
-    cooldownAfter429Seconds: '300',
-    rateLimitPolicy: 'backoff',
-    enabled: true,
+    maxParallelRuns: '',
+    cooldownAfter429Seconds: '',
+    rateLimitPolicy: '',
+    enabled: false,
     isDefault: false,
     commandBehavior: '{}',
     tagsText: '',
@@ -250,6 +236,7 @@ export function toFormState(profile: ProviderProfile): ProviderProfileFormState 
     providerLabel: profile.provider_label ?? '',
     defaultModel: profile.default_model ?? '',
     defaultEffort: profile.default_effort ?? '',
+    authenticationMethod: '',
     credentialSource: profile.credential_source,
     runtimeMaterializationMode: profile.runtime_materialization_mode,
     secretRefsText: JSON.stringify(profile.secret_refs ?? {}, null, 2),
@@ -506,9 +493,12 @@ function redactClaudeSecretText(value: string | null | undefined, submittedToken
   return redacted;
 }
 
-function extractErrorMessage(payload: unknown): string {
+function extractErrorMessage(
+  payload: unknown,
+  fallback = 'Anthropic API key validation failed.',
+): string {
   if (typeof payload === 'string') return payload;
-  if (!payload || typeof payload !== 'object') return 'Anthropic API key validation failed.';
+  if (!payload || typeof payload !== 'object') return fallback;
   const record = payload as Record<string, unknown>;
   if (typeof record.message === 'string') return record.message;
   if (typeof record.detail === 'string') return record.detail;
@@ -518,7 +508,7 @@ function extractErrorMessage(payload: unknown): string {
     if (typeof detail.error === 'string') return detail.error;
   }
   if (typeof record.error === 'string') return record.error;
-  return 'Anthropic API key validation failed.';
+  return fallback;
 }
 
 function isFirstPartyOAuthProfile(profile: ProviderProfile): boolean {
@@ -666,12 +656,54 @@ function canRetryOAuthStatus(status: OAuthSessionStatus): boolean {
   return status === 'failed' || status === 'cancelled' || status === 'expired';
 }
 
-function buildSavePayload(form: ProviderProfileFormState): ProviderProfileSavePayload {
+function valuesEqual(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function applyCreationPresetToForm(
+  form: ProviderProfileFormState,
+  preset: ProviderProfileCreationPreset,
+): ProviderProfileFormState {
+  const value = (fieldName: string): unknown => preset.fields[fieldName]?.value;
+  const stringValue = (fieldName: string): string => {
+    const fieldValue = value(fieldName);
+    return fieldValue == null ? '' : String(fieldValue);
+  };
+  return {
+    ...form,
+    credentialSource: stringValue('credential_source'),
+    runtimeMaterializationMode: stringValue('runtime_materialization_mode'),
+    secretRefsText: JSON.stringify(value('secret_refs') ?? {}, null, 2),
+    volumeRef: stringValue('volume_ref'),
+    volumeMountPath: stringValue('volume_mount_path'),
+    maxParallelRuns: stringValue('max_parallel_runs'),
+    cooldownAfter429Seconds: stringValue('cooldown_after_429_seconds'),
+    rateLimitPolicy: stringValue('rate_limit_policy'),
+    enabled: value('enabled') === true,
+    isDefault: value('is_default') === true,
+    commandBehavior: JSON.stringify(value('command_behavior') ?? {}, null, 2),
+    tagsText: Array.isArray(value('user_tags'))
+      ? (value('user_tags') as string[]).join(', ')
+      : '',
+    priority: stringValue('priority'),
+    clearEnvKeysText: Array.isArray(value('clear_env_keys'))
+      ? (value('clear_env_keys') as string[]).join('\n')
+      : '',
+  };
+}
+
+function buildSavePayload(
+  form: ProviderProfileFormState,
+  options: {
+    isEditing: boolean;
+    creationPreset: ProviderProfileCreationPreset | null;
+  },
+): ProviderProfileSavePayload {
   const isCodexOAuth =
     form.runtimeId.trim() === 'codex_cli' &&
     form.credentialSource === 'oauth_volume' &&
     form.runtimeMaterializationMode === 'oauth_home';
-  const payload = {
+  const payload: ProviderProfileSavePayload = {
     profile_id: form.profileId.trim(),
     runtime_id: form.runtimeId.trim(),
     provider_id: form.providerId.trim(),
@@ -705,6 +737,52 @@ function buildSavePayload(form: ProviderProfileFormState): ProviderProfileSavePa
     throw new Error('Provider ID is required.');
   }
 
+  if (options.isEditing) {
+    return payload;
+  }
+  if (!form.authenticationMethod) {
+    throw new Error('Authentication method is required.');
+  }
+  const preset = options.creationPreset;
+  if (!preset) {
+    throw new Error('Wait for the backend creation preset before creating the profile.');
+  }
+  if (!preset.supported) {
+    throw new Error(
+      preset.diagnostics[0]?.message ??
+        'This runtime, provider, and authentication combination is unsupported.',
+    );
+  }
+  payload.authentication_method = form.authenticationMethod;
+  payload.preset_version = preset.version;
+
+  const omitWhenRecommended = (
+    payloadKey: keyof ProviderProfileSavePayload,
+    fieldName: string,
+  ) => {
+    if (valuesEqual(payload[payloadKey], preset.fields[fieldName]?.value)) {
+      delete payload[payloadKey];
+    }
+  };
+  omitWhenRecommended('credential_source', 'credential_source');
+  omitWhenRecommended('runtime_materialization_mode', 'runtime_materialization_mode');
+  omitWhenRecommended('secret_refs', 'secret_refs');
+  omitWhenRecommended('volume_ref', 'volume_ref');
+  omitWhenRecommended('volume_mount_path', 'volume_mount_path');
+  omitWhenRecommended('max_parallel_runs', 'max_parallel_runs');
+  omitWhenRecommended('cooldown_after_429_seconds', 'cooldown_after_429_seconds');
+  omitWhenRecommended('rate_limit_policy', 'rate_limit_policy');
+  omitWhenRecommended('enabled', 'enabled');
+  omitWhenRecommended('is_default', 'is_default');
+  omitWhenRecommended('command_behavior', 'command_behavior');
+  if (
+    valuesEqual(payload.tags ?? [], preset.fields.user_tags?.value ?? [])
+  ) {
+    delete payload.tags;
+  }
+  omitWhenRecommended('priority', 'priority');
+  omitWhenRecommended('clear_env_keys', 'clear_env_keys');
+
   return payload;
 }
 
@@ -723,6 +801,10 @@ export function ProviderProfilesManager({
   const [form, setForm] = useState<ProviderProfileFormState>(() =>
     defaultFormState(createFormRuntimeSeed),
   );
+  const [creationPreset, setCreationPreset] =
+    useState<ProviderProfileCreationPreset | null>(null);
+  const [creationPresetLoading, setCreationPresetLoading] = useState(false);
+  const [creationPresetError, setCreationPresetError] = useState<string | null>(null);
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
   const createFormRuntimeSeedRef = useRef(createFormRuntimeSeed);
   const [oauthSessions, setOauthSessions] = useState<Record<string, OAuthSessionState>>({});
@@ -758,7 +840,7 @@ export function ProviderProfilesManager({
     form.runtimeId.trim() === 'codex_cli' &&
     form.credentialSource === 'oauth_volume' &&
     form.runtimeMaterializationMode === 'oauth_home';
-  const defaultFormValues = defaultFormState();
+  const presetField = (fieldName: string) => creationPreset?.fields[fieldName];
 
   const updateClaudeEnrollmentForProfile = (
     profileId: string,
@@ -813,6 +895,84 @@ export function ProviderProfilesManager({
         : current,
     );
   }, [createFormRuntimeSeed, editingProfileId]);
+
+  useEffect(() => {
+    if (editingProfileId !== null) {
+      setCreationPreset(null);
+      setCreationPresetLoading(false);
+      setCreationPresetError(null);
+      return;
+    }
+
+    const runtimeId = form.runtimeId.trim();
+    const providerId = form.providerId.trim();
+    const authenticationMethod = form.authenticationMethod;
+    if (!runtimeId || !providerId || !authenticationMethod) {
+      setCreationPreset(null);
+      setCreationPresetLoading(false);
+      setCreationPresetError(null);
+      return;
+    }
+
+    const controller = new AbortController();
+    const params = new URLSearchParams({
+      runtime_id: runtimeId,
+      provider_id: providerId,
+      authentication_method: authenticationMethod,
+    });
+    setCreationPreset(null);
+    setCreationPresetLoading(true);
+    setCreationPresetError(null);
+
+    void fetch(`/api/v1/provider-profiles/creation-preset?${params.toString()}`, {
+      headers: { Accept: 'application/json' },
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        const payload: unknown = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(
+            extractErrorMessage(
+              payload,
+              'Failed to load the Provider Profile creation preset.',
+            ),
+          );
+        }
+        return payload as ProviderProfileCreationPreset;
+      })
+      .then((preset) => {
+        setCreationPreset(preset);
+        setForm((current) =>
+          current.runtimeId.trim() === preset.runtime_id &&
+          current.providerId.trim() === preset.provider_id &&
+          current.authenticationMethod === preset.authentication_method
+            ? applyCreationPresetToForm(current, preset)
+            : current,
+        );
+      })
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          return;
+        }
+        setCreationPresetError(
+          error instanceof Error
+            ? error.message
+            : 'Failed to load the Provider Profile creation preset.',
+        );
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setCreationPresetLoading(false);
+        }
+      });
+
+    return () => controller.abort();
+  }, [
+    editingProfileId,
+    form.runtimeId,
+    form.providerId,
+    form.authenticationMethod,
+  ]);
 
   // A single-runtime view cannot show the row being edited when that row
   // belongs to another runtime, so close the editor instead of leaving it
@@ -1146,7 +1306,7 @@ export function ProviderProfilesManager({
 
   const saveMutation = useMutation({
     mutationFn: async (formState: ProviderProfileFormState) => {
-      const payload = buildSavePayload(formState);
+      const payload = buildSavePayload(formState, { isEditing, creationPreset });
       const endpoint = isEditing
         ? `/api/v1/provider-profiles/${encodeURIComponent(payload.profile_id)}`
         : '/api/v1/provider-profiles';
@@ -1160,10 +1320,10 @@ export function ProviderProfilesManager({
       });
       if (!response.ok) {
         const errorPayload = await response.json().catch(() => ({}));
-        const detail =
-          typeof errorPayload.detail === 'string'
-            ? errorPayload.detail
-            : `Failed to ${isEditing ? 'update' : 'create'} provider profile.`;
+        const detail = extractErrorMessage(
+          errorPayload,
+          `Failed to ${isEditing ? 'update' : 'create'} provider profile.`,
+        );
         throw new Error(detail);
       }
       return response.json() as Promise<ProviderProfile>;
@@ -2508,6 +2668,28 @@ export function ProviderProfilesManager({
             </div>
           </fieldset>
 
+          {!isEditing ? (
+            <div
+              className={`rounded-xl border p-4 text-sm ${
+                creationPreset?.supported === false || creationPresetError
+                  ? 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-300'
+                  : 'border-sky-200 bg-sky-50 text-sky-800 dark:border-sky-900/60 dark:bg-sky-950/30 dark:text-sky-300'
+              }`}
+              aria-live="polite"
+            >
+              {creationPresetLoading
+                ? 'Loading backend creation recommendations…'
+                : creationPresetError
+                  ? creationPresetError
+                  : creationPreset
+                    ? creationPreset.supported
+                      ? `Backend preset ${creationPreset.version} loaded. Untouched advanced values will be omitted and normalized by the server.`
+                      : creationPreset.diagnostics[0]?.message ??
+                        'This combination does not have a safe standard creation preset.'
+                    : 'Choose runtime, provider, and authentication method to load backend creation recommendations.'}
+            </div>
+          ) : null}
+
           {/* ── Provider Settings (have smart defaults) ── */}
           <fieldset className="rounded-2xl border border-slate-200 dark:border-slate-700 p-5 space-y-4">
             <legend className="px-2 text-sm font-semibold text-slate-700 dark:text-slate-300">
@@ -2526,11 +2708,37 @@ export function ProviderProfilesManager({
                 />
                 <p className="text-xs text-slate-400 dark:text-slate-500">Optional display name</p>
               </label>
+              {!isEditing ? (
+                <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                  <span>Authentication method <span className="text-amber-600 dark:text-amber-400">*</span></span>
+                  <select
+                    className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
+                    value={form.authenticationMethod}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        authenticationMethod: event.target.value as
+                          | ''
+                          | ProviderProfileAuthenticationMethod,
+                      }))
+                    }
+                  >
+                    <option value="">Choose authentication…</option>
+                    <option value="oauth">OAuth</option>
+                    <option value="api_key">API key</option>
+                    <option value="none">No credentials</option>
+                  </select>
+                  <p className="text-xs text-slate-400 dark:text-slate-500">
+                    Selects the backend-owned credential and launch strategy.
+                  </p>
+                </label>
+              ) : null}
               <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                 <span>Credential source</span>
                 <select
                   className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
                   value={form.credentialSource}
+                  disabled={!isEditing && !presetField('credential_source')?.editable}
                   onChange={(event) =>
                     setForm((current) => ({
                       ...current,
@@ -2538,12 +2746,16 @@ export function ProviderProfilesManager({
                     }))
                   }
                 >
+                  <option value="">Backend-derived</option>
                   <option value="secret_ref">secret_ref</option>
                   <option value="oauth_volume">oauth_volume</option>
                   <option value="none">none</option>
                 </select>
                 <p className="text-xs text-slate-400 dark:text-slate-500">
-                  Default: {defaultFormValues.credentialSource}
+                  {isEditing
+                    ? 'Saved launch-contract value.'
+                    : presetField('credential_source')?.lock_reason ??
+                      'Choose an authentication method to derive this value.'}
                 </p>
               </label>
               <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
@@ -2551,6 +2763,7 @@ export function ProviderProfilesManager({
                 <select
                   className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
                   value={form.runtimeMaterializationMode}
+                  disabled={!isEditing && !presetField('runtime_materialization_mode')?.editable}
                   onChange={(event) =>
                     setForm((current) => ({
                       ...current,
@@ -2558,6 +2771,7 @@ export function ProviderProfilesManager({
                     }))
                   }
                 >
+                  <option value="">Backend-derived</option>
                   <option value="api_key_env">api_key_env</option>
                   <option value="env_bundle">env_bundle</option>
                   <option value="config_bundle">config_bundle</option>
@@ -2565,7 +2779,10 @@ export function ProviderProfilesManager({
                   <option value="oauth_home">oauth_home</option>
                 </select>
                 <p className="text-xs text-slate-400 dark:text-slate-500">
-                  Default: {defaultFormValues.runtimeMaterializationMode}
+                  {isEditing
+                    ? 'Saved launch-contract value.'
+                    : presetField('runtime_materialization_mode')?.lock_reason ??
+                      'Choose an authentication method to derive this value.'}
                 </p>
               </label>
               <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
@@ -2605,16 +2822,18 @@ export function ProviderProfilesManager({
                 </p>
               </label>
               <div className="flex gap-4 items-start xl:col-span-1">
-                <label className="flex items-center gap-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 px-4 py-3 text-sm font-medium text-slate-700 dark:text-slate-300 flex-1">
-                  <input
-                    type="checkbox"
-                    checked={form.enabled}
-                    onChange={(event) =>
-                      setForm((current) => ({ ...current, enabled: event.target.checked }))
-                    }
-                  />
-                  Enabled
-                </label>
+                {isEditing ? (
+                  <label className="flex items-center gap-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 px-4 py-3 text-sm font-medium text-slate-700 dark:text-slate-300 flex-1">
+                    <input
+                      type="checkbox"
+                      checked={form.enabled}
+                      onChange={(event) =>
+                        setForm((current) => ({ ...current, enabled: event.target.checked }))
+                      }
+                    />
+                    Enabled
+                  </label>
+                ) : null}
                 <label className="flex items-center gap-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 px-4 py-3 text-sm font-medium text-slate-700 dark:text-slate-300 flex-1">
                   <input
                     type="checkbox"
@@ -2640,7 +2859,10 @@ export function ProviderProfilesManager({
                 <input
                   type="number"
                   min="1"
-                  disabled={isCodexOAuthForm}
+                  disabled={
+                    isCodexOAuthForm ||
+                    (!isEditing && presetField('max_parallel_runs')?.editable === false)
+                  }
                   className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
                   value={isCodexOAuthForm ? '1' : form.maxParallelRuns}
                   onChange={(event) =>
@@ -2653,7 +2875,11 @@ export function ProviderProfilesManager({
                 <p className="text-xs text-slate-400 dark:text-slate-500">
                   {isCodexOAuthForm
                     ? 'Fixed at 1 because the Codex OAuth home is an exclusive mutable identity.'
-                    : `Default: ${defaultFormValues.maxParallelRuns}`}
+                    : isEditing
+                      ? 'Saved capacity value.'
+                      : presetField('max_parallel_runs')
+                        ? `Recommended by ${presetField('max_parallel_runs')?.source}.`
+                        : 'Loaded from the backend creation preset.'}
                 </p>
               </label>
               <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
@@ -2671,7 +2897,11 @@ export function ProviderProfilesManager({
                   }
                 />
                 <p className="text-xs text-slate-400 dark:text-slate-500">
-                  Default: {defaultFormValues.cooldownAfter429Seconds}
+                  {isEditing
+                    ? 'Saved rate-limit value.'
+                    : presetField('cooldown_after_429_seconds')
+                      ? `Recommended by ${presetField('cooldown_after_429_seconds')?.source}.`
+                      : 'Loaded from the backend creation preset.'}
                 </p>
               </label>
               <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
@@ -2686,12 +2916,17 @@ export function ProviderProfilesManager({
                     }))
                   }
                 >
+                  <option value="">Backend recommendation</option>
                   <option value="backoff">backoff</option>
                   <option value="queue">queue</option>
                   <option value="fail_fast">fail_fast</option>
                 </select>
                 <p className="text-xs text-slate-400 dark:text-slate-500">
-                  Default: {defaultFormValues.rateLimitPolicy}
+                  {isEditing
+                    ? 'Saved rate-limit policy.'
+                    : presetField('rate_limit_policy')
+                      ? `Recommended by ${presetField('rate_limit_policy')?.source}.`
+                      : 'Loaded from the backend creation preset.'}
                 </p>
               </label>
             </div>
@@ -2712,6 +2947,7 @@ export function ProviderProfilesManager({
                   rows={6}
                   className="w-full rounded-2xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 font-mono text-sm text-slate-900 dark:text-white shadow-sm"
                   value={form.secretRefsText}
+                  disabled={!isEditing && presetField('secret_refs')?.editable === false}
                   onChange={(event) =>
                     setForm((current) => ({
                       ...current,
@@ -2743,6 +2979,7 @@ export function ProviderProfilesManager({
                   <input
                     className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
                     value={form.volumeRef}
+                    disabled={!isEditing && presetField('volume_ref')?.editable === false}
                     onChange={(event) =>
                       setForm((current) => ({ ...current, volumeRef: event.target.value }))
                     }
@@ -2754,6 +2991,7 @@ export function ProviderProfilesManager({
                   <input
                     className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
                     value={form.volumeMountPath}
+                    disabled={!isEditing && presetField('volume_mount_path')?.editable === false}
                     onChange={(event) =>
                       setForm((current) => ({
                         ...current,
@@ -2779,6 +3017,7 @@ export function ProviderProfilesManager({
                   rows={4}
                   className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 font-mono text-sm text-slate-900 dark:text-white shadow-sm"
                   value={form.commandBehavior}
+                  disabled={!isEditing && presetField('command_behavior')?.editable === false}
                   onChange={(event) =>
                     setForm((current) => ({
                       ...current,
@@ -2840,6 +3079,7 @@ export function ProviderProfilesManager({
                 rows={3}
                 className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 font-mono text-sm text-slate-900 dark:text-white shadow-sm"
                 value={form.clearEnvKeysText}
+                disabled={!isEditing && presetField('clear_env_keys')?.editable === false}
                 onChange={(event) =>
                   setForm((current) => ({
                     ...current,
@@ -2856,7 +3096,12 @@ export function ProviderProfilesManager({
             <button
               type="submit"
               className="inline-flex items-center justify-center rounded-lg bg-slate-900 dark:bg-slate-100 px-5 py-2.5 text-sm font-semibold text-white dark:text-slate-900 transition hover:bg-slate-800 dark:hover:bg-slate-200"
-              disabled={saveMutation.isPending}
+              disabled={
+                saveMutation.isPending ||
+                (!isEditing &&
+                  Boolean(form.authenticationMethod) &&
+                  (creationPresetLoading || !creationPreset?.supported))
+              }
             >
               {saveMutation.isPending
                 ? 'Saving...'

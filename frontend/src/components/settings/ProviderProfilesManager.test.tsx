@@ -118,16 +118,151 @@ describe('defaultFormState', () => {
     expect(state.isDefault).toBe(false);
   });
 
-  it('includes all legacy fields', () => {
+  it('does not guess backend-owned creation policy', () => {
     const state = defaultFormState();
 
     expect(state.profileId).toBe('');
     expect(state.runtimeId).toBe('');
     expect(state.providerId).toBe('');
-    expect(state.credentialSource).toBe('secret_ref');
-    expect(state.rateLimitPolicy).toBe('backoff');
-    expect(state.enabled).toBe(true);
+    expect(state.authenticationMethod).toBe('');
+    expect(state.credentialSource).toBe('');
+    expect(state.runtimeMaterializationMode).toBe('');
+    expect(state.maxParallelRuns).toBe('');
+    expect(state.cooldownAfter429Seconds).toBe('');
+    expect(state.rateLimitPolicy).toBe('');
+    expect(state.enabled).toBe(false);
     expect(state.isDefault).toBe(false);
+  });
+});
+
+describe('backend creation presets', () => {
+  it('uses the generated preset contract and omits untouched advanced values', async () => {
+    const field = (
+      value: unknown,
+      editable = true,
+      source = 'test_policy',
+    ) => ({
+      value,
+      source,
+      editable,
+      required: false,
+      lock_reason: editable ? null : 'Backend controlled.',
+    });
+    const preset = {
+      version: 'provider-profile-create-v1-test',
+      supported: true,
+      runtime_id: 'codex_cli',
+      provider_id: 'openai',
+      authentication_method: 'api_key',
+      fields: {
+        credential_source: field('secret_ref', false),
+        runtime_materialization_mode: field('api_key_env', false),
+        secret_refs: field({}),
+        volume_ref: field(null, false),
+        volume_mount_path: field(null, false),
+        max_parallel_runs: field(1),
+        cooldown_after_429_seconds: field(300),
+        rate_limit_policy: field('backoff'),
+        enabled: field(false, false),
+        is_default: field(false),
+        command_behavior: field({ auth_strategy: 'api_key_env' }, false),
+        user_tags: field([]),
+        priority: field(100),
+        clear_env_keys: field(['MINIMAX_API_KEY'], false),
+      },
+      diagnostics: [],
+      manual_creation_allowed: false,
+      required_manual_fields: [],
+    };
+    const savedProfile: ProviderProfile = {
+      profile_id: 'preset-profile',
+      runtime_id: 'codex_cli',
+      provider_id: 'openai',
+      credential_source: 'secret_ref',
+      runtime_materialization_mode: 'api_key_env',
+      secret_refs: {},
+      max_parallel_runs: 1,
+      cooldown_after_429_seconds: 300,
+      rate_limit_policy: 'backoff',
+      enabled: false,
+      is_default: false,
+    };
+    const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(
+      async (input, init) => {
+        const url = String(input);
+        if (url.startsWith('/api/v1/provider-profiles/creation-preset?')) {
+          return {
+            ok: true,
+            json: async () => preset,
+          } as Response;
+        }
+        if (url === '/api/v1/provider-profiles' && init?.method === 'POST') {
+          return {
+            ok: true,
+            json: async () => savedProfile,
+          } as Response;
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      },
+    );
+
+    renderProviderProfilesManager();
+    fireEvent.change(screen.getByLabelText(/Profile ID/), {
+      target: { value: 'preset-profile' },
+    });
+    fireEvent.change(screen.getByLabelText(/Runtime ID/), {
+      target: { value: 'codex_cli' },
+    });
+    fireEvent.change(screen.getByLabelText(/Provider ID/), {
+      target: { value: 'openai' },
+    });
+    fireEvent.change(screen.getByLabelText(/Authentication method/), {
+      target: { value: 'api_key' },
+    });
+
+    await screen.findByText(/Backend preset provider-profile-create-v1-test loaded/);
+    expect((screen.getByLabelText(/Credential source/) as HTMLSelectElement).value).toBe(
+      'secret_ref',
+    );
+    expect(
+      (screen.getByLabelText(/Materialization mode/) as HTMLSelectElement).value,
+    ).toBe('api_key_env');
+    expect(screen.queryByLabelText('Enabled')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create provider profile' }));
+
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(([, init]) => init?.method === 'POST'),
+      ).toBe(true);
+    });
+    const postCall = fetchSpy.mock.calls.find(([, init]) => init?.method === 'POST');
+    const payload = JSON.parse(String((postCall?.[1] as RequestInit).body));
+    expect(payload).toMatchObject({
+      profile_id: 'preset-profile',
+      runtime_id: 'codex_cli',
+      provider_id: 'openai',
+      authentication_method: 'api_key',
+      preset_version: 'provider-profile-create-v1-test',
+    });
+    for (const omittedField of [
+      'credential_source',
+      'runtime_materialization_mode',
+      'secret_refs',
+      'volume_ref',
+      'volume_mount_path',
+      'max_parallel_runs',
+      'cooldown_after_429_seconds',
+      'rate_limit_policy',
+      'enabled',
+      'is_default',
+      'command_behavior',
+      'tags',
+      'priority',
+      'clear_env_keys',
+    ]) {
+      expect(payload).not.toHaveProperty(omittedField);
+    }
   });
 });
 
