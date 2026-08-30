@@ -141,6 +141,7 @@ from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     AgentRunStatus,
     AgentRunResult,
+    MANAGED_RUNTIME_PROFILE_TIER_POLICY_VERSION,
     ManagedRunRecord,
     ManagedRuntimeProfile,
     extract_durable_retrieval_metadata,
@@ -8169,6 +8170,23 @@ class TemporalAgentRuntimeActivities:
         if not run_id or request_data is None or profile_data is None:
             raise TemporalActivityRuntimeError("Payload must contain 'run_id', 'request', and 'profile'")
 
+        profile_tier_policy_version = payload.get("profile_tier_policy_version")
+        if profile_tier_policy_version is not None and (
+            isinstance(profile_tier_policy_version, bool)
+            or profile_tier_policy_version
+            != MANAGED_RUNTIME_PROFILE_TIER_POLICY_VERSION
+        ):
+            raise TemporalActivityRuntimeError(
+                "profile_tier_policy_version must be 1 when provided"
+            )
+        # Missing version is reserved for an already-scheduled, pre-cutover
+        # Activity payload. New AgentRun histories always stamp the version
+        # behind a Temporal patch marker before scheduling this Activity.
+        require_model_tiers = (
+            profile_tier_policy_version
+            == MANAGED_RUNTIME_PROFILE_TIER_POLICY_VERSION
+        )
+
         request = AgentExecutionRequest(**request_data)
         profile = ManagedRuntimeProfile(**profile_data)
         workspace_path = payload.get("workspace_path")
@@ -8216,6 +8234,7 @@ class TemporalAgentRuntimeActivities:
             request=request,
             profile=profile,
             workspace_path=workspace_path,
+            require_model_tiers=require_model_tiers,
         )
 
         if workflow_id:

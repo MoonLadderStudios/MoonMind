@@ -1,12 +1,14 @@
 """Replay-safety checks for managed workflow binding in MoonMind.AgentRun."""
 
 import inspect
+import re
 
 import pytest
 
 from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
 from moonmind.workflows.temporal.workflows.agent_run import (
     AGENT_RUN_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH,
+    MANAGED_RUNTIME_PROFILE_TIER_POLICY_PATCH_ID,
     MoonMindAgentRun,
 )
 
@@ -18,6 +20,17 @@ def test_managed_launch_binding_uses_temporal_patch_guard() -> None:
     assert "task_workflow_id = parent_info.workflow_id" in source
     assert "task_workflow_id = wf_id" in source
     assert "task_workflow_id=task_workflow_id" in source
+
+
+def test_managed_launch_profile_tier_policy_is_replay_patched() -> None:
+    source = inspect.getsource(MoonMindAgentRun.run)
+
+    assert re.search(
+        r"workflow\.patched\(\s*MANAGED_RUNTIME_PROFILE_TIER_POLICY_PATCH_ID\s*\)",
+        source,
+    )
+    assert 'launch_payload["profile_tier_policy_version"]' in source
+    assert MANAGED_RUNTIME_PROFILE_TIER_POLICY_PATCH_ID.endswith("-v1")
 
 
 def test_auto_runtime_rejection_is_replay_patched_at_dispatch() -> None:

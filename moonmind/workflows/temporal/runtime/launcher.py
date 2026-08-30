@@ -1961,7 +1961,11 @@ class ManagedRuntimeLauncher:
             }
 
     @staticmethod
-    def _assert_profile_launch_ready(profile: ManagedRuntimeProfile) -> None:
+    def _assert_profile_launch_ready(
+        profile: ManagedRuntimeProfile,
+        *,
+        require_model_tiers: bool = True,
+    ) -> None:
         """Re-check compact Provider Profile readiness at the launch boundary."""
 
         profile_ref = str(profile.profile_id or profile.runtime_id or "profile").strip()
@@ -1990,11 +1994,17 @@ class ManagedRuntimeLauncher:
                 f"Provider profile {profile_ref!r} is not launch-ready: "
                 "launch_ready=False"
             )
-        if not profile.model_tiers:
-            raise RuntimeError(
-                f"Provider profile {profile_ref!r} is not launch-ready: "
-                "model_tiers must contain at least one tier"
-            )
+        if require_model_tiers:
+            if not profile.model_tiers:
+                raise RuntimeError(
+                    f"Provider profile {profile_ref!r} is not launch-ready: "
+                    "model_tiers must contain at least one tier"
+                )
+            if profile.default_model_tier > len(profile.model_tiers):
+                raise RuntimeError(
+                    f"Provider profile {profile_ref!r} is not launch-ready: "
+                    "default_model_tier must be within configured model_tiers"
+                )
         readiness = profile.command_behavior.get("auth_readiness")
         if isinstance(readiness, Mapping):
             launch_ready = readiness.get("launch_ready")
@@ -2103,6 +2113,7 @@ class ManagedRuntimeLauncher:
         request: AgentExecutionRequest,
         profile: ManagedRuntimeProfile,
         workspace_path: str | Path | None = None,
+        require_model_tiers: bool = True,
     ) -> tuple[
         ManagedRunRecord,
         asyncio.subprocess.Process | None,
@@ -2126,7 +2137,10 @@ class ManagedRuntimeLauncher:
 
         from moonmind.workflows.executions.runtime_defaults import normalize_runtime_id
         from moonmind.workflows.temporal.runtime.strategies import get_strategy
-        self._assert_profile_launch_ready(profile)
+        self._assert_profile_launch_ready(
+            profile,
+            require_model_tiers=require_model_tiers,
+        )
         strategy = get_strategy(normalize_runtime_id(profile.runtime_id))
         self._apply_resolved_tier_policy(
             request=request,

@@ -1873,6 +1873,9 @@ class RuntimeFileTemplate(BaseModel):
         self.merge_strategy = normalized_merge
         return self
 
+MANAGED_RUNTIME_PROFILE_TIER_POLICY_VERSION = 1
+
+
 class ManagedRuntimeProfile(BaseModel):
     """Runtime-specific execution parameters for managed agent launches."""
 

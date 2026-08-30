@@ -1141,6 +1141,32 @@ def test_assert_profile_launch_ready_accepts_connected_enum_auth_state():
     ManagedRuntimeLauncher._assert_profile_launch_ready(profile)
 
 
+def test_assert_profile_launch_ready_rejects_default_tier_above_range():
+    profile = _make_profile(
+        profile_id="persisted-invalid-default-tier",
+        model_tiers=[{"label": "Only tier"}],
+        default_model_tier=2,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="default_model_tier must be within configured model_tiers",
+    ):
+        ManagedRuntimeLauncher._assert_profile_launch_ready(profile)
+
+
+def test_assert_profile_launch_ready_preserves_tierless_legacy_activity_payload():
+    profile = _make_profile(
+        profile_id="in-flight-tierless-profile",
+        model_tiers=[],
+    )
+
+    ManagedRuntimeLauncher._assert_profile_launch_ready(
+        profile,
+        require_model_tiers=False,
+    )
+
+
 def test_apply_resolved_tier_policy_merges_defaults_and_records_codex_effort_status():
     from moonmind.workflows.temporal.runtime.strategies.codex_cli import CodexCliStrategy
 
