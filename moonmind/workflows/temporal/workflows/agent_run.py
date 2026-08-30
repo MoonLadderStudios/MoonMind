@@ -27,6 +27,7 @@ with workflow.unsafe.imports_passed_through():
         AgentRunStatus as AgentRunStatusModel,
         ExecutionBudget,
         ExecutionBudgetVerdict,
+        MANAGED_RUNTIME_PROFILE_TIER_POLICY_VERSION,
         ProfileSelector,
         evaluate_execution_budget,
         resolve_execution_budget,
@@ -111,6 +112,9 @@ TERMINAL_CONTRACT_RUNTIME_FAILURE_AUTHORITY_PATCH_ID = (
 )
 MANAGED_PROCESS_LOSS_RECOVERY_PATCH_ID = (
     "agent-run-managed-process-loss-recovery-v1"
+)
+MANAGED_RUNTIME_PROFILE_TIER_POLICY_PATCH_ID = (
+    "agent-run-managed-runtime-profile-tier-policy-v1"
 )
 CODEX_TURN_RUNTIME_SELECTION_PATCH_ID = (
     "agent-run-codex-turn-runtime-selection-v1"
@@ -5143,12 +5147,19 @@ class MoonMindAgentRun:
                         })
 
                     async def _run_launcher(**kw):
+                        launch_payload = {
+                            **kw.get("payload", {}),
+                            "workflow_id": task_workflow_id,
+                        }
+                        if workflow.patched(
+                            MANAGED_RUNTIME_PROFILE_TIER_POLICY_PATCH_ID
+                        ):
+                            launch_payload["profile_tier_policy_version"] = (
+                                MANAGED_RUNTIME_PROFILE_TIER_POLICY_VERSION
+                            )
                         return await self._execute_routed_activity(
                             "agent_runtime.launch",
-                            {
-                                **kw.get("payload", {}),
-                                "workflow_id": task_workflow_id,
-                            },
+                            launch_payload,
                             cancellation_type=ActivityCancellationType.TRY_CANCEL,
                         )
 

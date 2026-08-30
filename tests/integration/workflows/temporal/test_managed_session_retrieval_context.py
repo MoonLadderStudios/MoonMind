@@ -20,6 +20,7 @@ def _make_profile(**overrides) -> ManagedRuntimeProfile:
         command_template=["claude"],
         default_model="claude-sonnet-4-6",
         default_effort=None,
+        model_tiers=[{"label": "Runtime default"}],
         default_timeout_seconds=3600,
         workspace_mode="tempdir",
         env_overrides={},

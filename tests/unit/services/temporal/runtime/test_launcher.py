@@ -42,6 +42,7 @@ def _make_profile(**overrides) -> ManagedRuntimeProfile:
         command_template=["codex", "run"],
         default_model="o4-mini",
         default_effort="medium",
+        model_tiers=[{"label": "Runtime default"}],
         default_timeout_seconds=3600,
         workspace_mode="tempdir",
         env_overrides={},
@@ -1138,6 +1139,32 @@ def test_assert_profile_launch_ready_accepts_connected_enum_auth_state():
     )
 
     ManagedRuntimeLauncher._assert_profile_launch_ready(profile)
+
+
+def test_assert_profile_launch_ready_rejects_default_tier_above_range():
+    profile = _make_profile(
+        profile_id="persisted-invalid-default-tier",
+        model_tiers=[{"label": "Only tier"}],
+        default_model_tier=2,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="default_model_tier must be within configured model_tiers",
+    ):
+        ManagedRuntimeLauncher._assert_profile_launch_ready(profile)
+
+
+def test_assert_profile_launch_ready_preserves_tierless_legacy_activity_payload():
+    profile = _make_profile(
+        profile_id="in-flight-tierless-profile",
+        model_tiers=[],
+    )
+
+    ManagedRuntimeLauncher._assert_profile_launch_ready(
+        profile,
+        require_model_tiers=False,
+    )
 
 
 def test_apply_resolved_tier_policy_merges_defaults_and_records_codex_effort_status():
@@ -3186,6 +3213,89 @@ async def test_launch_rechecks_profile_readiness_before_secret_resolution(
             request=request,
             profile=profile,
         )
+
+
+@pytest.mark.asyncio
+async def test_launch_rejects_persisted_profile_without_model_tiers(
+    tmp_path, monkeypatch
+):
+    """MoonLadderStudios/MoonMind#3799: launch rechecks tier presence."""
+
+    launcher = ManagedRuntimeLauncher(ManagedRunStore(tmp_path))
+    profile = _make_profile(
+        profile_id="persisted-tierless-profile",
+        enabled=True,
+        auth_state="connected",
+        disabled_reason=None,
+        model_tiers=[],
+    )
+
+    monkeypatch.setattr(
+        launcher,
+        "build_command",
+        lambda *_args, **_kwargs: pytest.fail(
+            "command construction must not run for a tier-less profile"
+        ),
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await launcher.launch(
+            run_id="run-persisted-tierless-profile",
+            request=_make_request(parameters={"modelTier": 1}),
+            profile=profile,
+        )
+
+    message = str(exc_info.value)
+    assert "persisted-tierless-profile" in message
+    assert "model_tiers must contain at least one tier" in message
+
+
+@pytest.mark.asyncio
+async def test_launch_rejects_persisted_tier_with_raw_credentials(
+    tmp_path, monkeypatch
+):
+    """MoonLadderStudios/MoonMind#3799: launch re-screens resolved params."""
+
+    launcher = ManagedRuntimeLauncher(ManagedRunStore(tmp_path))
+    profile = _make_profile(
+        profile_id="persisted-unsafe-tier-profile",
+        enabled=True,
+        auth_state="connected",
+        disabled_reason=None,
+        model_tiers=[{"label": "Safe", "model": "gpt-safe"}],
+    ).model_copy(
+        update={
+            # Simulate a migration, seed, or direct database write that bypassed
+            # ProviderModelEffortTier's API-write validation.
+            "model_tiers": [
+                {
+                    "label": "Persisted unsafe tier",
+                    "model": "gpt-unsafe",
+                    "parameters": {"api_key": "raw-secret-value"},
+                }
+            ]
+        }
+    )
+
+    monkeypatch.setattr(
+        launcher,
+        "build_command",
+        lambda *_args, **_kwargs: pytest.fail(
+            "command construction must not run for credential-bearing tier params"
+        ),
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await launcher.launch(
+            run_id="run-persisted-unsafe-tier-profile",
+            request=_make_request(parameters={"modelTier": 1}),
+            profile=profile,
+        )
+
+    message = str(exc_info.value)
+    assert "persisted-unsafe-tier-profile" in message
+    assert "resolved tier parameters must not contain raw credentials" in message
+
 
 @pytest.mark.asyncio
 async def test_launch_resolves_github_token_from_secret_ref_setting(
