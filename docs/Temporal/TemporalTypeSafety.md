@@ -55,7 +55,7 @@ MoonMind standardizes on **Pydantic v2** models for Temporal boundary I/O. Use d
 
 ### 3.4 The data converter is part of the contract
 
-Type security is incomplete if models only exist inside workflow or activity bodies. Temporal clients and workers must share the same data-converter policy so the wire shape matches the annotated shape.
+Type safety is incomplete if models only exist inside workflow or activity bodies. Temporal clients and workers must share the same data-converter policy so the wire shape matches the annotated shape.
 
 The desired default is:
 
@@ -69,7 +69,7 @@ A cleaner model is not enough reason to break replay or in-flight executions. Ev
 
 ### 3.6 Determinism remains the workflow rule
 
-Type security does not move nondeterminism into workflows. It only makes boundaries explicit. Network calls, clocks, subprocesses, filesystem I/O, provider inspection, and mutable external-state reads stay in Activities.
+Type safety does not move nondeterminism into workflows. It only makes boundaries explicit. Network calls, clocks, subprocesses, filesystem I/O, provider inspection, and mutable external-state reads stay in Activities.
 
 ---
 
@@ -261,7 +261,7 @@ If old and new shapes must coexist, the dual-read/normalize step happens at the 
 
 ## 11. Testing and tooling requirements
 
-Type security is not considered complete without verification at four layers.
+Type safety is not considered complete without verification at four layers.
 
 ### 11.1 Schema tests
 

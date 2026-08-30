@@ -445,7 +445,7 @@ Benefits:
 - forward-compatible field addition,
 - simpler validation,
 - less ambiguity across Python handler signatures,
-- more secure replay compatibility when evolving fields with defaults.
+- more reliable replay compatibility when evolving fields with defaults.
 
 ### 7.2 Artifact References for Large Content
 
@@ -559,7 +559,7 @@ When signal contracts change, MoonMind must protect in-flight executions by eith
 To protect in-flight workflow histories during the transition to this desired-state contract without violating the strict "no internal compatibility wrappers" policy:
 
 1. **Explicit Versioned Cutover**: Rather than introducing temporary translation layers, dynamic signal handlers, or `workflow.patched(...)` multi-type wrappers, changes to Temporal-facing contracts (such as `MoonMind.UserWorkflow` control aliases, `child_state_changed` positional arguments, or raw dict payloads in `ProviderProfileManager`) MUST be deployed via an explicit versioned cutover plan (e.g., bumping the Temporal Task Queue or renaming the workflow).
-2. **Old Executions**: Existing in-flight executions will continue to run to completion on older workers tied to the legacy task queue, ensuring security without polluting the new codebase with backward-compatibility logic.
+2. **Old Executions**: Existing in-flight executions will continue to run to completion on older workers tied to the legacy task queue, preserving compatibility without polluting the new codebase with backward-compatibility logic.
 
 ---
 

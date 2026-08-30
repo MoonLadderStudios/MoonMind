@@ -1222,7 +1222,7 @@ A saved-work branch is a valid comparison input. Its failed source workflow does
 
 ---
 
-## 14. Security and security
+## 14. Security and isolation
 
 Checkpoint Branches inherit MoonMind's normal artifact, secrets, runtime, and repository policies.
 
@@ -1307,7 +1307,7 @@ View git diff
 View provider diagnostics
 ```
 
-### 15.4 Security previews
+### 15.4 Risk and authority previews
 
 Before branch creation, show:
 
@@ -1689,4 +1689,4 @@ The branch can be inspected, continued, compared, archived, or promoted later.
 A sudden infrastructure failure never falsely claims that work was saved.
 ```
 
-MoonMind remains responsible for checkpoint validation, artifact authority, Step Execution identity, workspace and git isolation, provider/runtime boundaries, gates, side-effect classification, publication security, first-failure-wins diagnostics, and explicit promotion into canonical workflow progress.
+MoonMind remains responsible for checkpoint validation, artifact authority, Step Execution identity, workspace and git isolation, provider/runtime boundaries, gates, side-effect classification, publication authorization, first-failure-wins diagnostics, and explicit promotion into canonical workflow progress.

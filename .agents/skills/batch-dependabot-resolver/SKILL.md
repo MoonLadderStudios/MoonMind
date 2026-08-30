@@ -90,7 +90,7 @@ Discover open Dependabot dependency-version PRs in a target repository and enque
 one `pr-resolver` workflow per matching PR, so Dependabot bumps can be resolved
 automatically on a daily or weekly recurring schedule. This is a narrower,
 more restrictive by default discovery/filter layer over `batch-pr-resolver`: it reuses the
-same child `pr-resolver` payload shape, fork/cross-repo security, runtime
+same child `pr-resolver` payload shape, fork and cross-repository protections, runtime
 inheritance, and `/api/executions` submission path, and adds Dependabot-specific
 matching, a cross-run-stable idempotency key, a dry-run mode, an optional `maxPrs`
 cap, and a Dependabot-specific summary artifact.

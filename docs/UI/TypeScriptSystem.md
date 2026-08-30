@@ -33,7 +33,7 @@ This is intentionally **not** a move to a separately deployed SPA. It is a move 
 1. Add strong typing to the dashboard frontend code.
 2. Keep the current server-rendered deployment model and FastAPI route ownership.
 3. Replace the growing monolithic dashboard JavaScript with a modular frontend architecture.
-4. Improve security when working with API responses, forms, page state, polling, and mutations.
+4. Improve correctness when working with API responses, forms, page state, polling, and mutations.
 5. Support incremental migration without blocking active feature work.
 6. Keep local development straightforward inside the existing MoonMind development workflow.
 
@@ -794,4 +794,4 @@ Until then, MoonMind should optimize for the simpler path:
 
 MoonMind should adopt **Vite + React + TypeScript** as the new frontend system while **keeping FastAPI-driven server rendering and route ownership**.
 
-This is the highest-leverage next step because it improves maintainability and security immediately without forcing the project into a heavier frontend deployment model before that model is warranted.
+This is the highest-leverage next step because it improves maintainability and correctness immediately without forcing the project into a heavier frontend deployment model before that model is warranted.

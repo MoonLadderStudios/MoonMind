@@ -160,7 +160,7 @@ Expectations:
 
 ---
 
-## 6. Partial-restore security (§23.3, §23.4)
+## 6. Partial-restore integrity (§23.3, §23.4)
 
 If a future operator restores **only** the `settings_overrides` table
 (without `managed_secrets`), the SecretRef saved in step 3 will resolve

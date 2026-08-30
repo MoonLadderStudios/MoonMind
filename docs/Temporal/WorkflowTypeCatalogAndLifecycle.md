@@ -442,7 +442,7 @@ Each workflow type that can wait or poll repeatedly must define:
 
 - workflow execution timeouts should be generous
 - workflows should also use internal phase budgets and timers
-- workflows should not depend solely on giant top-level execution timeouts for security
+- workflows should not depend solely on giant top-level execution timeouts for correctness and recoverability
 
 ## 9.2 Activity-level posture
 

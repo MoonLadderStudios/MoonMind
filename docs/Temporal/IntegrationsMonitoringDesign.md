@@ -594,7 +594,7 @@ MoonMind should treat integration monitoring as a normal Temporal workflow conce
 * external work starts in provider Activities
 * workflows wait durably in `awaiting_external`
 * callbacks enter through `ExternalEvent`
-* polling is a fallback or fallback guard
+* polling is a bounded fallback
 * results and raw provider payloads are stored as artifacts
 * visibility stays aligned with existing `mm_*` lifecycle contracts
 

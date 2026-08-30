@@ -145,7 +145,7 @@ The reducer encodes and tests the twelve required invariants:
 11. No decision trusts caller-supplied identity for authority.
 12. Reconciliation is deterministic for equal inputs.
 
-## 6. Diagnostics security
+## 6. Diagnostic confidentiality
 
 `DecisionDiagnostics` carries only enum codes, booleans, and observation *kind
 names*. It never includes any workflow, user, provider-session, host, profile,

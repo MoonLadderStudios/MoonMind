@@ -52,7 +52,7 @@ The selector is conservative. If it cannot classify the change confidently, it s
 
 ### Shared Changed-File Helper
 
-`tools/ci/compute_changed_files.sh` is the single event-aware classifier that computes the exact changed-file list from a shallow checkout. It fetches only the exact base and head commits (`ensure_commit_available`) and emits the two-dot tree diff. The selector, deployment-integrity validation, and the generated-contract detector all consume it instead of maintaining subtly different event logic. It classifies pull requests, pushes with a real non-zero base SHA, and merge groups as known change sets; manual dispatches, scheduled runs, first pushes, and missing or unavailable commits resolve to an unknown change set so every consumer stays fail-open.
+`tools/ci/compute_changed_files.sh` is the single event-aware classifier that computes the exact changed-file list from a shallow checkout. It fetches only the exact base and head commits (`ensure_commit_available`) and emits the two-dot tree diff. The selector, deployment validation, and the generated-contract detector all consume it instead of maintaining subtly different event logic. It classifies pull requests, pushes with a real non-zero base SHA, and merge groups as known change sets; manual dispatches, scheduled runs, first pushes, and missing or unavailable commits resolve to an unknown change set so every consumer stays fail-open.
 
 ### Backend Detection
 
@@ -169,7 +169,7 @@ Conditional GitHub Actions jobs are not suitable as individual branch-protection
 
 `ci-required` is a pure result aggregator: it performs no repository operations (no checkout, no submodules, no Python/Node setup, no repository command) and has a short timeout. It evaluates every dependency and emits one annotation per failed, cancelled, timed-out, or unexpectedly skipped selected job before exiting, rather than stopping at the first failure. This keeps repository, submodule, and policy work off the serial tail of required CI.
 
-`preflight-policy` owns the static repository guardrails — docs terminology, workflow terminology, removed-capability semantics, status-token domains, the status-token audit, the GitHub workflow display-name guard, and AgentSession deployment-integrity validation. These checks start immediately alongside `select-test-suites` and are no longer duplicated in `unit-fast` or `ci-required`. In CI, deployment-integrity validation consumes the exact event-derived changed-file list (`--changed-files-file`) computed by `tools/ci/compute_changed_files.sh`; local development still uses `--base-ref`.
+`preflight-policy` owns the static repository guardrails — docs terminology, workflow terminology, removed-capability semantics, status-token domains, the status-token audit, the GitHub workflow display-name guard, and AgentSession deployment validation. These checks start immediately alongside `select-test-suites` and are no longer duplicated in `unit-fast` or `ci-required`. In CI, deployment validation consumes the exact event-derived changed-file list (`--changed-files-file`) computed by `tools/ci/compute_changed_files.sh`; local development still uses `--base-ref`.
 
 Backend jobs use shallow, submodule-free checkouts. Only `moonspec-projection` initializes a submodule, and it initializes just `moonspec` via `git submodule update --init --depth 1 -- moonspec`. Open WebUI and Omnigent are never initialized in required backend CI.
 
@@ -179,13 +179,13 @@ Required checks must run against the current merge candidate. Prefer GitHub Merg
 
 ## Main, Manual, And Scheduled Runs
 
-Pull request CI is impact-aware. Security paths are intentionally broader:
+Pull request CI is impact-aware. Full-verification paths are intentionally broader:
 
 - Pushes to `main` run full backend verification.
 - Manual dispatches run full backend verification.
 - Scheduled runs run full backend verification.
 - The `CI / Test Suite` workflow owns the hermetic `integration-ci` job for all
-  three high-risk verification paths, so scheduled and manual runs do not need a second
+  three full-verification paths, so scheduled and manual runs do not need a second
   standalone integration workflow.
 - Provider verification remains separate and should run only where required provider credentials are intentionally available.
 

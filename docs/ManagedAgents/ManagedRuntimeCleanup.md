@@ -29,7 +29,7 @@ MoonMind has several cleanup paths today, but they do not share one declarative 
 - run and session stores keep JSON records and expose active-record views;
 - managed-runtime workspaces and artifact directories under `/work/agent_jobs` are automatically retained and expired according to the policies in this document.
 
-The desired model is a **declarative cleanup catalog**: each resource class declares its owner, durable truth source, terminal states, retention policy, security gates, deletion authority, and observability. Cleanup implementations reconcile that catalog instead of embedding unrelated deletion rules in hot lifecycle paths.
+The desired model is a **declarative cleanup catalog**: each resource class declares its owner, durable truth source, terminal states, retention policy, deletion gates, deletion authority, and observability. Cleanup implementations reconcile that catalog instead of embedding unrelated deletion rules in hot lifecycle paths.
 
 The **managed runtime workspace janitor** removes old terminal workspaces, session roots, and artifact directories after configurable retention windows. Run/session JSON records remain indefinitely unless record retention is explicitly configured. Active sessions, active runs, and recent workflow-shared checkouts remain protected.
 
@@ -75,7 +75,7 @@ Those systems may adopt the same cleanup-catalog shape later, but they remain se
 2. **Terminal-state awareness.** Durable workspaces and artifacts are never deleted solely because their filesystem mtime is old.
 3. **Shared-checkout protection.** A workflow/correlation-key workspace can be shared by multiple child runs; it must survive until every owner is terminal and past retention.
 4. **Hot-path restraint.** Session termination and run completion should clean live runtime resources, not perform broad retained-state garbage collection.
-5. **Safe working default.** Retained-state cleanup runs automatically and destructively after retention; dry-run remains an explicit diagnostic override with actionable skip reasons.
+5. **Protective working default.** Retained-state cleanup runs automatically and destructively after retention; dry-run remains an explicit diagnostic override with actionable skip reasons.
 6. **Fail closed.** Missing stores, corrupt records, unsafe paths, symlinks, and ambiguous ownership must prevent deletion.
 7. **Idempotent operations.** Cleanup may run repeatedly and concurrently with lifecycle reconciliation without corrupting active execution state.
 8. **Operator visibility.** Each cleanup pass should report scanned, eligible, skipped, deleted, errored, and dry-run counts.
@@ -105,13 +105,13 @@ Filesystem age alone is never enough to delete a workspace, artifact directory, 
 | Managed run supervisor cleanup | Run cancel, process exit, startup reconciliation | Launcher support files and deferred runtime files | `ManagedRunStore` active records plus supervised process state | Does not remove durable workspace roots |
 | Managed-session orphan reaping | `MoonMind.ManagedSessionReconcile` schedule | Orphaned session containers and pre-cutover sidecar graph/socket volumes | Active session records, Docker labels, Temporal owner status, grace windows | Does not remove `/work/agent_jobs` workspaces or artifact directories |
 | Run/session store active reconciliation | Store list-active calls | Active-record discovery and stale-process/session marking | JSON record status fields | No retention delete pass |
-| Workspace janitor | Hourly operational workflow | Old terminal workspace roots, session roots, artifact dirs, and optionally old JSON records | All run/session records plus canonical paths and live Docker security gates | Bounded retained-state cleanup system |
+| Workspace janitor | Hourly operational workflow | Old terminal workspace roots, session roots, artifact dirs, and optionally old JSON records | All run/session records plus canonical paths and live Docker protection gates | Bounded retained-state cleanup system |
 
 ---
 
 ## 6. Declarative cleanup catalog
 
-MoonMind should model cleanup as resource classes. The examples below are normative for ownership and security semantics; implementation may use Python dataclasses or plain configuration instead of literal YAML.
+MoonMind should model cleanup as resource classes. The examples below are normative for ownership and deletion-protection semantics; implementation may use Python dataclasses or plain configuration instead of literal YAML.
 
 ### 6.1 Managed session container
 
@@ -530,7 +530,7 @@ An installation without explicit janitor settings adopts enabled, non-dry-run cl
 
 Before upgrading, operators may set `MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN=true` to inspect candidates. Operators requiring indefinite local retention must set `MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED=false`. Otherwise, terminal workspaces older than 10 days and eligible unreferenced local artifact directories older than 90 days may be deleted after startup. There is no implicit first-run dry run.
 
-### 8.8 Security gates
+### 8.8 Deletion gates
 
 Before deleting a workspace or artifact root, the janitor must verify all of the following:
 
@@ -623,7 +623,7 @@ Each candidate should receive exactly one final classification:
 | `protected_active` | At least one owner is active or has `activeTurnId`. |
 | `protected_recent` | All owners are terminal, but retention/grace has not elapsed. |
 | `protected_shared` | A shared workspace has at least one recent or active owner. |
-| `eligible` | All security gates pass, but dry-run may prevent deletion. |
+| `eligible` | All deletion gates pass, but dry-run may prevent deletion. |
 | `deleted` | Candidate was renamed and removed. |
 | `skipped_unsafe_path` | Path is outside canonical roots, symlinked, or traversal-like. |
 | `skipped_ambiguous_owner` | Ownership cannot be derived safely. |

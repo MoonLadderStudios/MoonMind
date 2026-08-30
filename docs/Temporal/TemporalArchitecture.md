@@ -335,7 +335,7 @@ True agent-runtime Activities must return canonical runtime contracts directly:
 
 Provider-specific data belongs in canonical `metadata`, not in alternate top-level provider-shaped workflow payloads. Workflow code should not reconstruct canonical contracts from raw provider responses.
 
-### 6.10 Type security is part of the architecture
+### 6.10 Type safety is part of the architecture
 
 Temporal boundary payloads are durable contracts.
 

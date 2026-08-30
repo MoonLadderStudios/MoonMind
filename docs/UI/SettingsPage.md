@@ -206,7 +206,7 @@ are user-visible URLs rather than an internal routing contract:
 |---|---|
 | `/secrets` | `/settings/providers-secrets` |
 | `/workers` | `/settings/operations` |
-| an unknown older Settings alias | the default entry point in section 5.2 unless a approved specific mapping exists |
+| an unknown older Settings alias | the default entry point in section 5.2 unless an approved specific mapping exists |
 
 These redirects use replacement history, preserve approved page-relevant query
 parameters, and drop parameters that no longer have meaning on the target page.
@@ -671,7 +671,7 @@ The design is satisfied when:
 23. Route navigation protects unsaved drafts.
 24. Unsupported descriptors degrade predictably.
 25. A failure on one page does not break sibling Configuration destinations.
-26. Backend authorization, defaults, validation, source resolution, and secret-security decisions remain authoritative.
+26. Backend authorization, defaults, validation, source resolution, and secret-handling decisions remain authoritative.
 27. Navigation tests and telemetry use canonical destination keys instead of the removed `section` state.
 28. A concurrent-change `version_conflict` stops the save, refreshes the affected descriptors, shows the conflict, and requires explicit resubmission.
 29. Rendered rows keep the descriptor fields section 9 declares load-bearing, including active state, activation guidance, application requirements, and ordering.
