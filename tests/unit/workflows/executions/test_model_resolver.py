@@ -312,6 +312,7 @@ class TestResolveModelEffortTiers:
         assert resolved.effort == "high"
         assert resolved.model_source == "profile_default_tier"
         assert resolved.effort_source == "profile_default_tier"
+        assert resolved.fallback_reason == "profile_default_tier"
 
     def test_requested_tier_below_configured_range_clamps_by_default(self):
         resolved = resolve_model_effort(
@@ -377,6 +378,17 @@ class TestResolveModelEffortTiers:
                 tier_fallback="strict",
                 env={},
             )
+
+    def test_strict_tier_fallback_accepts_in_range_profile_default_tier(self):
+        resolved = resolve_model_effort(
+            runtime_id="codex_cli",
+            profile=self._profile(default_model_tier=2),
+            tier_fallback="strict",
+            env={},
+        )
+
+        assert resolved.effective_model_tier == 2
+        assert resolved.fallback_reason == "profile_default_tier"
 
     def test_explicit_model_and_effort_bypass_tier_policy(self):
         resolved = resolve_model_effort(

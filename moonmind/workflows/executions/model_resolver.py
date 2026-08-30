@@ -414,6 +414,8 @@ def _resolve_effective_tier(
 
     if fallback_reason and tier_fallback == _FALLBACK_STRICT:
         raise ValueError("requested_model_tier_unavailable")
+    if fallback_reason is None and requested_tier is None:
+        fallback_reason = _MODEL_SOURCE_PROFILE_DEFAULT_TIER
 
     return max(1, min(raw_tier, tier_count)), fallback_reason, source
 
