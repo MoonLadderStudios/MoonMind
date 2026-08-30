@@ -24,6 +24,7 @@ import {
 } from '../utils/dashboardPreferences';
 import { DASHBOARD_DESTINATIONS } from '../lib/dashboardRoutes';
 import { SKILLS_CREATE_REQUEST_EVENT } from '../lib/skillsCreateRequest';
+import { SETTINGS_ROUTE_CHANGE_REQUEST_EVENT } from '../lib/settingsRouteGuard';
 
 const animatedNavIconMocks = vi.hoisted(() => ({
   moonStart: vi.fn(),
@@ -499,6 +500,7 @@ describe('Dashboard shared entry', () => {
     ['/settings/providers-secrets', 'Settings'],
     ['/settings/user-workspace', 'Settings'],
     ['/settings/operations', 'Settings'],
+    ['/settings/provider-profiles', 'Settings'],
     ['/schedules', 'Recurring'],
     ['/schedules/nightly-build', 'Recurring'],
     ['/skills', 'Skills'],
@@ -522,7 +524,7 @@ describe('Dashboard shared entry', () => {
     expect(trigger.classList.contains('active')).toBe(true);
     expect(screen.queryByRole('button', { name: 'System' })).toBeNull();
     expect(screen.getByRole('link', { name: 'Workflows' }).classList.contains('active')).toBe(false);
-    if (path.startsWith('/settings/')) {
+    if (path.startsWith('/settings/') && path !== '/settings/provider-profiles') {
       expect(trigger.querySelector('.lucide-settings')).not.toBeNull();
       fireEvent.click(trigger);
       const activeLink = screen.getByRole('menuitem', {
@@ -598,6 +600,30 @@ describe('Dashboard shared entry', () => {
     expect(trigger.getAttribute('aria-expanded')).toBe('false');
   });
 
+  it('MoonLadderStudios/MoonMind#3817 cancels menu navigation when a Settings draft guard blocks it', () => {
+    function LocationProbe() {
+      return <output aria-label="Current path">{useLocation().pathname}</output>;
+    }
+    window.addEventListener(
+      SETTINGS_ROUTE_CHANGE_REQUEST_EVENT,
+      (event) => event.preventDefault(),
+      { once: true },
+    );
+    renderWithClient(
+      <MemoryRouter initialEntries={['/settings/providers-secrets']}>
+        <DashboardSystemMenu uiInfo={uiInfo()} mobileDrawerOpen={false} />
+        <LocationProbe />
+      </MemoryRouter>,
+    );
+
+    const trigger = screen.getByRole('button', { name: 'Settings' });
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'User / Workspace' }));
+
+    expect(screen.getByRole('status', { name: 'Current path' }).textContent).toBe('/settings/providers-secrets');
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+  });
+
   it('MM-1200 renders enabled System children inline on mobile without a nested popover', () => {
     renderWithClient(
       <MemoryRouter initialEntries={['/settings/operations']}>
@@ -670,6 +696,24 @@ describe('Dashboard shared entry', () => {
     expect(screen.getAllByText('Configuration')).toHaveLength(1);
     const unavailable = screen.getByRole('menuitem', { name: /Operations/ });
     expect(unavailable.tagName).toBe('SPAN');
+    expect(unavailable.getAttribute('aria-disabled')).toBe('true');
+    expect(unavailable.tabIndex).toBe(-1);
+  });
+
+  it('MoonLadderStudios/MoonMind#3817 includes unavailable destinations in keyboard focus movement', async () => {
+    renderWithClient(
+      <MemoryRouter initialEntries={['/workflows']}>
+        <DashboardSystemMenu
+          uiInfo={uiInfo({ features: { settingsOperations: false } })}
+          mobileDrawerOpen={false}
+        />
+      </MemoryRouter>,
+    );
+
+    const trigger = screen.getByRole('button', { name: 'System' });
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+    const unavailable = await screen.findByRole('menuitem', { name: /Operations/ });
+    await waitFor(() => expect(document.activeElement).toBe(unavailable));
     expect(unavailable.getAttribute('aria-disabled')).toBe('true');
   });
 

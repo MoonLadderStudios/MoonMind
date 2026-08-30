@@ -25,6 +25,7 @@ describe('dashboard route resolution', () => {
       Array.from(new Set([
         ...DASHBOARD_DESTINATIONS.flatMap(({ pathPatterns }) => pathPatterns),
         '/settings',
+        '/settings/*',
       ])),
     );
     expect(DASHBOARD_DESTINATIONS.find(({ key }) => key === 'skills')?.displayMode).toBe('skills-list');
@@ -99,6 +100,14 @@ describe('dashboard route resolution', () => {
     'resolves the extensionless collection deep link %s',
     (path) => expect(resolveDashboardRoute(path)).not.toBeNull(),
   );
+  it('routes extensionless Settings aliases through the Settings page for normalization', () => {
+    expect(DASHBOARD_REACT_ROUTE_PATHS).toContain('/settings/*');
+    expect(resolveDashboardRoute('/settings/provider-profiles')).toEqual({
+      page: 'settings',
+      dataWidePanel: true,
+      currentPath: '/settings/provider-profiles',
+    });
+  });
   it.each(['/omnigent/agents', '/omnigent/policies'])(
     'resolves the %s inventory route independently',
     (path) => {

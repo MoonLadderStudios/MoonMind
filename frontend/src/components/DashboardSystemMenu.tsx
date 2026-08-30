@@ -13,6 +13,7 @@ import {
   type DashboardIconKey,
   type DashboardUiInfo,
 } from '../lib/dashboardRoutes';
+import { requestSettingsRouteChange } from '../lib/settingsRouteGuard';
 
 const ICONS: Partial<Record<DashboardIconKey, typeof Settings>> = {
   archive: Archive,
@@ -44,6 +45,7 @@ function DestinationLink({ destination, state, onSelect, menuItem = true }: {
       <span
         role={menuItem ? 'menuitem' : undefined}
         aria-disabled="true"
+        tabIndex={menuItem ? -1 : undefined}
         className="dashboard-system-destination-unavailable"
       >
         <Icon size={16} className="route-nav-icon" aria-hidden="true" />
@@ -57,7 +59,13 @@ function DestinationLink({ destination, state, onSelect, menuItem = true }: {
       to={destination.canonicalPath}
       role={menuItem ? 'menuitem' : undefined}
       className={({ isActive }) => (isActive ? 'active' : undefined)}
-      onClick={onSelect}
+      onClick={(event) => {
+        if (!requestSettingsRouteChange(destination.canonicalPath)) {
+          event.preventDefault();
+          return;
+        }
+        onSelect();
+      }}
     >
       <Icon size={16} className="route-nav-icon" aria-hidden="true" />
       {destination.label}
@@ -148,7 +156,7 @@ export function DashboardSystemMenu({ uiInfo, mobileDrawerOpen }: {
   const destinations = exposedSystemDestinations(uiInfo);
   const activeDestination = destinationForPath(location.pathname);
   const activeDestinationGroup = destinationGroupForDestination(activeDestination) ?? (
-    location.pathname.replace(/\/$/, '') === '/settings'
+    location.pathname.replace(/\/$/, '') === '/settings' || location.pathname.startsWith('/settings/')
       ? DASHBOARD_DESTINATION_GROUPS.find(({ key }) => key === 'configuration') ?? null
       : null
   );
@@ -176,7 +184,7 @@ export function DashboardSystemMenu({ uiInfo, mobileDrawerOpen }: {
 
   const items = () => Array.from(
     rootRef.current?.querySelectorAll<HTMLElement>(
-      '.dashboard-system-popover [role="menuitem"]:not([aria-disabled="true"])',
+      '.dashboard-system-popover [role="menuitem"]',
     ) ?? [],
   );
   const focusAt = (index: number) => items()[index]?.focus();

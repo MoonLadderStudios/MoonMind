@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
-import { fireEvent, screen, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { renderWithClient } from '../utils/test-utils';
@@ -10,6 +10,14 @@ describe('Settings Entrypoint', () => {
   const mockPayload: BootPayload = {
     page: 'settings',
     apiBase: '/api',
+    initialData: {
+      settingsPermissions: [
+        'provider_profiles.read',
+        'secrets.metadata.read',
+        'settings.catalog.read',
+        'operations.read',
+      ],
+    },
   };
 
   let fetchSpy: MockInstance;
@@ -66,6 +74,119 @@ describe('Settings Entrypoint', () => {
     expect(screen.queryByRole('tab')).toBeNull();
     expect(document.querySelector('.settings-page .segmented-control')).toBeNull();
   });
+
+  it('resolves bare Settings to the first readable destination with replacement history', async () => {
+    window.history.replaceState({}, 'Settings', '/settings');
+    renderWithClient(
+      <SettingsPage
+        payload={{
+          page: 'settings',
+          apiBase: '/api',
+          initialData: { settingsPermissions: ['operations.read'] },
+        }}
+      />,
+    );
+
+    expect(screen.getByRole('heading', { level: 2, name: 'Operations' })).toBeTruthy();
+    await waitFor(() => expect(window.location.pathname).toBe('/settings/operations'));
+  });
+
+  it('normalizes an unknown Settings alias through the authorized default destination', async () => {
+    window.history.replaceState({}, 'Settings', '/settings/provider-profiles');
+    renderWithClient(
+      <SettingsPage
+        payload={{
+          page: 'settings',
+          apiBase: '/api',
+          initialData: { settingsPermissions: ['settings.catalog.read'] },
+        }}
+      />,
+    );
+
+    expect(screen.getByRole('heading', { level: 2, name: 'User / Workspace' })).toBeTruthy();
+    await waitFor(() => expect(window.location.pathname).toBe('/settings/user-workspace'));
+  });
+
+  it('shows direct unauthorized destinations without mounting protected page content', () => {
+    window.history.replaceState({}, 'Settings', '/settings/providers-secrets');
+    renderWithClient(
+      <SettingsPage
+        payload={{
+          page: 'settings',
+          apiBase: '/api',
+          initialData: { settingsPermissions: ['operations.read'] },
+        }}
+      />,
+    );
+
+    expect(screen.getByRole('heading', { level: 2, name: 'Providers & Secrets' })).toBeTruthy();
+    expect(screen.getByRole('status', { name: 'Configuration unavailable' })).toBeTruthy();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(window.location.pathname).toBe('/settings/providers-secrets');
+  });
+
+  it('renders the unavailable default state when no Configuration page is readable', () => {
+    window.history.replaceState({}, 'Settings', '/settings');
+    renderWithClient(
+      <SettingsPage
+        payload={{
+          page: 'settings',
+          apiBase: '/api',
+          initialData: { settingsPermissions: ['operations.invoke'] },
+        }}
+      />,
+    );
+
+    expect(screen.getByRole('heading', { level: 2, name: 'Configuration unavailable' })).toBeTruthy();
+    expect(screen.getByRole('status', { name: 'Configuration unavailable' })).toBeTruthy();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(window.location.pathname).toBe('/settings');
+  });
+
+  it('does not request provider or secret datasets from another Settings page', () => {
+    window.history.replaceState({}, 'Settings', '/settings/operations');
+    renderWithClient(
+      <SettingsPage
+        payload={{
+          page: 'settings',
+          apiBase: '/api',
+          initialData: { settingsPermissions: ['operations.read'] },
+        }}
+      />,
+    );
+
+    const requestedUrls = fetchSpy.mock.calls.map(([input]) => String(input));
+    expect(requestedUrls).not.toContain('/api/v1/provider-profiles');
+    expect(requestedUrls).not.toContain('/api/v1/secrets');
+    expect(screen.queryByLabelText('Configuration health summary')).toBeNull();
+  });
+
+  it('does not request Operations data from the Providers & Secrets summary', async () => {
+    window.history.replaceState({}, 'Settings', '/settings/providers-secrets');
+    renderWithClient(
+      <SettingsPage
+        payload={{
+          page: 'settings',
+          apiBase: '/api',
+          initialData: {
+            settingsPermissions: ['provider_profiles.read', 'secrets.metadata.read'],
+            workerPause: {
+              get: '/api/system/worker-pause',
+              post: '/api/system/worker-pause',
+              shardHealth: '/api/v1/operations/codex/shards',
+            },
+          },
+        }}
+      />,
+    );
+
+    await waitFor(() => {
+      const requestedUrls = fetchSpy.mock.calls.map(([input]) => String(input));
+      expect(requestedUrls).toContain('/api/v1/provider-profiles');
+      expect(requestedUrls).toContain('/api/v1/secrets');
+    });
+    expect(fetchSpy.mock.calls.map(([input]) => String(input))).not.toContain('/api/system/worker-pause');
+  });
 });
 
 describe('MoonLadderStudios/MoonMind#3788 Settings Provider Profile runtime filter', () => {
@@ -93,7 +214,11 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Provider Profile runtime filt
     page: 'settings',
     apiBase: '/api',
     initialData: {
-      settingsPermissions: ['provider_profiles.write'],
+      settingsPermissions: [
+        'provider_profiles.read',
+        'provider_profiles.write',
+        'secrets.metadata.read',
+      ],
       runtimeConfig: {
         system: {
           // `omnigent` is a facade, never a Provider Profile owner, so it must

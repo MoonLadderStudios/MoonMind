@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '../../utils/test-utils';
 import { renderWithClient } from '../../utils/test-utils';
+import { requestSettingsRouteChange } from '../../lib/settingsRouteGuard';
 import { GeneratedSettingsSection } from './GeneratedSettingsSection';
 
 const workspaceCatalog = {
@@ -492,5 +493,26 @@ describe('GeneratedSettingsSection', () => {
     expect(screen.getByLabelText('Pending settings preview')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Discard changes' }));
     expect(screen.queryByLabelText('Pending settings preview')).toBeNull();
+  });
+
+  it('blocks Settings route changes and unload while generated edits are pending', async () => {
+    const confirm = vi.spyOn(window, 'confirm')
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
+    renderWithClient(<GeneratedSettingsSection />);
+
+    await screen.findByText('Default Publish Mode');
+    fireEvent.change(screen.getByLabelText('Default Publish Mode'), { target: { value: 'branch' } });
+
+    expect(requestSettingsRouteChange('/settings/operations')).toBe(false);
+    expect(confirm).toHaveBeenNthCalledWith(
+      1,
+      'Discard unsaved Settings changes and leave this page? Select OK to discard and leave, or Cancel to stay.',
+    );
+    expect(window.dispatchEvent(new Event('beforeunload', { cancelable: true }))).toBe(false);
+    expect(requestSettingsRouteChange('/settings/operations')).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Discard changes' }));
+    expect(window.dispatchEvent(new Event('beforeunload', { cancelable: true }))).toBe(true);
   });
 });

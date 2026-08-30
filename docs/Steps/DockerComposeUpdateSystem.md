@@ -959,7 +959,7 @@ Deployment update belongs in the **Operations** subsection because it is a syste
 The Settings page should continue to use subsection routing such as:
 
 ```text
-/settings?section=operations
+/settings/operations
 ```
 
 ---

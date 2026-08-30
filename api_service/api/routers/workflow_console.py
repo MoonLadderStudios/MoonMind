@@ -600,34 +600,41 @@ def _dashboard_destination_info() -> list[dict[str, object]]:
 
 def _settings_destination_features(permissions: set[str]) -> dict[str, bool]:
     permission_groups = {
-        "settingsProvidersSecrets": {
-            "provider_profiles.read",
-            "provider_profiles.write",
-            "secrets.metadata.read",
-            "secrets.value.write",
-            "secrets.rotate",
-            "secrets.disable",
-            "secrets.delete",
-        },
-        "settingsUserWorkspace": {
-            "settings.catalog.read",
-            "settings.effective.read",
-            "settings.user.write",
-            "settings.workspace.write",
-            "settings.system.read",
-            "settings.system.write",
-            "settings.audit.read",
-        },
-        "settingsOperations": {
-            "operations.read",
-            "operations.invoke",
-        },
+        "settingsProvidersSecrets": (
+            {"provider_profiles.read", "secrets.metadata.read"},
+            {
+                "provider_profiles.write",
+                "secrets.value.write",
+                "secrets.rotate",
+                "secrets.disable",
+                "secrets.delete",
+            },
+        ),
+        "settingsUserWorkspace": (
+            {
+                "settings.catalog.read",
+                "settings.effective.read",
+                "settings.system.read",
+                "settings.audit.read",
+            },
+            {
+                "settings.user.write",
+                "settings.workspace.write",
+                "settings.system.write",
+            },
+        ),
+        "settingsOperations": (
+            {"operations.read"},
+            {"operations.invoke"},
+        ),
     }
-    return {
-        capability_key: True
-        for capability_key, required_permissions in permission_groups.items()
-        if permissions & required_permissions
-    }
+    features: dict[str, bool] = {}
+    for capability_key, (read_permissions, mutation_permissions) in permission_groups.items():
+        if permissions & read_permissions:
+            features[capability_key] = True
+        elif permissions & mutation_permissions:
+            features[capability_key] = False
+    return features
 
 
 def _is_extensionless_collection_route(request: Request, destination_keys: set[str]) -> bool:
@@ -1259,7 +1266,7 @@ async def secrets_route(
     _user: User = Depends(get_current_user()),
 ) -> RedirectResponse:
     """Redirect the legacy secrets page into unified settings."""
-    return RedirectResponse(url="/settings?section=providers-secrets", status_code=307)
+    return RedirectResponse(url="/settings/providers-secrets", status_code=307)
 
 
 @router.get("/workflows", name="workflow_console_root", response_class=HTMLResponse)
@@ -1428,7 +1435,7 @@ async def task_workers_route(
     _user: User = Depends(get_current_user()),
 ) -> RedirectResponse:
     """Redirect the legacy workers page into unified settings."""
-    return RedirectResponse(url="/settings?section=operations", status_code=307)
+    return RedirectResponse(url="/settings/operations", status_code=307)
 
 
 @router.get("/settings", response_class=HTMLResponse)

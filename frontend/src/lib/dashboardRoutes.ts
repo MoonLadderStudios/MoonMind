@@ -155,6 +155,7 @@ export const DASHBOARD_REACT_ROUTE_PATHS = Array.from(
   new Set([
     ...DASHBOARD_DESTINATIONS.flatMap((destination) => destination.pathPatterns),
     '/settings',
+    '/settings/*',
   ]),
 );
 

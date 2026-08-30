@@ -456,6 +456,23 @@ def test_dashboard_ui_info_scopes_configuration_destinations_to_permissions() ->
     assert features["settingsOperations"] is True
 
 
+def test_dashboard_ui_info_marks_mutation_only_configuration_destinations_unavailable() -> None:
+    with _client_with_mock_service(
+        user_settings_permissions={
+            "provider_profiles.write",
+            "settings.workspace.write",
+            "operations.invoke",
+        }
+    ) as (client, _mock_service):
+        response = client.get("/api/ui/info")
+
+    assert response.status_code == 200
+    features = response.json()["features"]
+    assert features["settingsProvidersSecrets"] is False
+    assert features["settingsUserWorkspace"] is False
+    assert features["settingsOperations"] is False
+
+
 def test_index_health_route_uses_index_health_boot_payload(client: TestClient) -> None:
     response = client.get("/index-health")
 
@@ -677,11 +694,11 @@ def test_legacy_settings_subroutes_redirect_to_unified_settings(
 ) -> None:
     workers = client.get("/workers", follow_redirects=False)
     assert workers.status_code == 307
-    assert workers.headers["location"] == "/settings?section=operations"
+    assert workers.headers["location"] == "/settings/operations"
 
     secrets = client.get("/secrets", follow_redirects=False)
     assert secrets.status_code == 307
-    assert secrets.headers["location"] == "/settings?section=providers-secrets"
+    assert secrets.headers["location"] == "/settings/providers-secrets"
 
 
 def test_react_tasks_list_and_detail_boot_exclude_route_specific_config(
