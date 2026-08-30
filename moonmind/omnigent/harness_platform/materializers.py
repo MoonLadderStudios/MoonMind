@@ -25,8 +25,8 @@ OPENCODE_AUTH_FILE_MODE = 0o600
 OPENCODE_AUTH_UID = 1000
 OPENCODE_AUTH_GID = 1000
 OPENCODE_PROVIDER_KEY = "opencode-go"
-OPENCODE_ZEN_PROVIDER_KEY = "opencode-zen"
-OPENCODE_PROVIDER_KEYS = (OPENCODE_PROVIDER_KEY, OPENCODE_ZEN_PROVIDER_KEY)
+OPENCODE_BUILTIN_PROVIDER_KEY = "opencode"
+OPENCODE_PROVIDER_KEYS = (OPENCODE_PROVIDER_KEY, OPENCODE_BUILTIN_PROVIDER_KEY)
 OPENCODE_SUPPORTED_VERSION_RANGE = (  # inclusive lower, exclusive upper
     "1.17.7",
     "1.19.0",
@@ -121,7 +121,6 @@ BUILTIN_MATERIALIZERS: dict[str, CredentialMaterializer] = {}
 
 _PROVIDER_MATERIALIZER_REFS: dict[tuple[str, str], str] = {
     ("opencode", "opencode-go"): "opencode-auth-json@1",
-    ("opencode", "opencode-zen"): "opencode-auth-json@1",
     ("opencode", "opencode"): "opencode-auth-json@1",
     ("codex_cli", "openai"): "codex-oauth-home@1",
     ("omnigent", "anthropic"): "omnigent-provider-config@1",
@@ -324,7 +323,7 @@ def _opencode_auth_json_payload(
     """Exact OpenCode credential structure for the pinned version.
 
     Verified against opencode-ai 1.18.x auth.json shape:
-    The provider key is `opencode-go` (and `opencode-zen` for the Zen free tier)
+    The provider key is `opencode-go` or `opencode` for the Zen free tier,
     and the file contains the API key under that key. This is the only
     secret-bearing structure; all diagnostics, handles, and logs must remain
     secret-free.
@@ -343,8 +342,7 @@ def _opencode_auth_json_payload(
             )
         return {provider_key: {"type": "api", "key": key}}
     # Default: write both provider keys with the same API key so that a single
-    # credential grants access to both opencode-go and opencode-zen models.
-    # This preserves backward compatibility while enabling the Zen free tier.
+    # credential grants access to both OpenCode Go and built-in Zen models.
     return {
         provider: {"type": "api", "key": key} for provider in OPENCODE_PROVIDER_KEYS
     }

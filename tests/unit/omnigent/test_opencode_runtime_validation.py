@@ -45,9 +45,14 @@ def test_model_probe_stages_auth_in_writable_home_with_restricted_egress() -> No
     assert "head" not in script
 
 
-def test_validated_models_returns_only_observed_opencode_go_models() -> None:
-    assert _validated_models("opencode-go/gpt-5.6-luna\nother-provider/model\n") == [
-        "opencode-go/gpt-5.6-luna"
+def test_validated_models_returns_only_observed_opencode_models() -> None:
+    assert _validated_models(
+        "opencode-go/gpt-5.6-luna\n"
+        "opencode/muse-spark-1.2-contributor-free\n"
+        "other-provider/model\n"
+    ) == [
+        "opencode-go/gpt-5.6-luna",
+        "opencode/muse-spark-1.2-contributor-free",
     ]
 
 

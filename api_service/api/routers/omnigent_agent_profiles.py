@@ -407,7 +407,7 @@ async def ensure_builtin_opencode_agent_profile(
                 {
                     "id": "primary-model",
                     "acceptedAuthModels": ["own-auth"],
-                    "acceptedProviderIds": ["opencode-go", "opencode-zen", "opencode"],
+                    "acceptedProviderIds": ["opencode-go", "opencode"],
                 }
             ],
             "model": {},

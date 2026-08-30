@@ -574,11 +574,11 @@ function claudeCredentialActions(profile: ProviderProfile): ClaudeAuthAction[] {
 }
 
 function isOpencodeGoProfile(profile: ProviderProfile): boolean {
-  return profile.runtime_id === 'opencode' && (profile.provider_id === 'opencode-go' || profile.provider_id === 'opencode-zen');
+  return profile.runtime_id === 'opencode' && profile.provider_id === 'opencode-go';
 }
 
 function isOpencodeCredentialMethodProfile(profile: ProviderProfile): boolean {
-  return profile.runtime_id === 'opencode' && (profile.provider_id === 'opencode-go' || profile.provider_id === 'opencode' || profile.provider_id === 'opencode-zen');
+  return profile.runtime_id === 'opencode' && (profile.provider_id === 'opencode-go' || profile.provider_id === 'opencode');
 }
 
 function defaultOpencodeCredentialActions(profile: ProviderProfile): string[] {

@@ -36,12 +36,11 @@ from sqlalchemy import select
 logger = logging.getLogger(__name__)
 
 # The runtime-backed model catalog evidence contract exists for the OpenCode
-# family. Keep the primary route explicit but support the Zen free tier as a
-# sibling provider that shares the same host image, materializer, and secret role.
+# family. Keep both OpenCode routes explicit because they share the same host
+# image, materializer, and secret role.
 OPENCODE_RUNTIME_ID = "opencode"
 OPENCODE_PROVIDER_ID = "opencode-go"
-OPENCODE_ZEN_PROVIDER_ID = "opencode-zen"
-OPENCODE_PROVIDER_IDS = (OPENCODE_PROVIDER_ID, OPENCODE_ZEN_PROVIDER_ID, "opencode")
+OPENCODE_PROVIDER_IDS = (OPENCODE_PROVIDER_ID, "opencode")
 OPENCODE_SECRET_ROLE = "opencode_api_key"
 
 # Readiness reads this ``command_behavior`` entry to distinguish a bounded
@@ -715,7 +714,6 @@ __all__ = [
     "OPENCODE_PROVIDER_IDS",
     "OPENCODE_RUNTIME_ID",
     "OPENCODE_SECRET_ROLE",
-    "OPENCODE_ZEN_PROVIDER_ID",
     "REVALIDATION_FAILURE_KEY",
     "ProviderReconcileOutcome",
     "evidence_is_current",

@@ -36,7 +36,10 @@ from moonmind.omnigent.harness_platform.host_classes import (
     OPENCODE_PINNED_VERSION,
     OmnigentHostClassSelector,
 )
-from moonmind.omnigent.harness_platform.materializers import OPENCODE_PROVIDER_KEY
+from moonmind.omnigent.harness_platform.materializers import (
+    OPENCODE_BUILTIN_PROVIDER_KEY,
+    OPENCODE_PROVIDER_KEY,
+)
 
 
 def _ensure_opencode_env(
@@ -225,7 +228,10 @@ def test_opencode_auth_json_bytes_structure():
     assert payload[OPENCODE_PROVIDER_KEY]["type"] == "api"
     # Must NOT use legacy apiKey after Phase 0 correction
     assert "apiKey" not in payload[OPENCODE_PROVIDER_KEY]
-    assert payload == {OPENCODE_PROVIDER_KEY: {"type": "api", "key": key}}
+    assert payload == {
+        OPENCODE_PROVIDER_KEY: {"type": "api", "key": key},
+        OPENCODE_BUILTIN_PROVIDER_KEY: {"type": "api", "key": key},
+    }
 
 
 def test_exact_host_preflight_success():
@@ -381,5 +387,5 @@ def test_image_does_not_install_unrelated_harnesses():
     assert "OPENCODE_AUTH_CONTENT" in check_source
     # The host readiness check must validate the exact auth.json contract
     # emitted by opencode-auth-json@1 (``key``, not the obsolete ``apiKey``).
-    assert "p.get('key')" in check_source
+    assert ".get('key')" in check_source
     assert "'apiKey'" not in check_source

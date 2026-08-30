@@ -103,6 +103,8 @@ class BootstrapController:
             raise ValueError(
                 "OpenCode is not configured yet; submit the API key first"
             )
+        from sqlalchemy import select
+
         from api_service.db.models import ManagedAgentProviderProfile
         from api_service.services.provider_profile_readiness import (
             provider_profile_launch_ready,
@@ -116,10 +118,25 @@ class BootstrapController:
                 ManagedAgentProviderProfile,
                 str(record.provider_profile_ref),
             )
+            if provider_profile is not None and not provider_profile.is_default:
+                provider_profile = await session.scalar(
+                    select(ManagedAgentProviderProfile)
+                    .where(
+                        ManagedAgentProviderProfile.runtime_id == "opencode",
+                        ManagedAgentProviderProfile.enabled.is_(True),
+                        ManagedAgentProviderProfile.is_default.is_(True),
+                    )
+                    .order_by(
+                        ManagedAgentProviderProfile.priority.desc(),
+                        ManagedAgentProviderProfile.profile_id.asc(),
+                    )
+                    .limit(1)
+                )
             if provider_profile is None:
                 raise ValueError(
-                    "the persisted OpenCode Provider Profile no longer exists"
+                    "the current default OpenCode Provider Profile does not exist"
                 )
+            provider_profile_ref = str(provider_profile.profile_id)
             managed_secret_statuses = await _managed_secret_statuses_for_profiles(
                 session=session,
                 rows=[provider_profile],
@@ -152,7 +169,7 @@ class BootstrapController:
         async with self._session_factory() as session:
             provider_profile = await session.get(
                 ManagedAgentProviderProfile,
-                str(record.provider_profile_ref),
+                provider_profile_ref,
             )
         if provider_profile is None:
             raise ValueError(
@@ -169,6 +186,7 @@ class BootstrapController:
             update={
                 "state": BootstrapState.resolving_images,
                 "desired": record.desired.model_copy(update=desired_updates),
+                "provider_profile_ref": provider_profile_ref,
                 "revision": int(record.revision) + 1,
                 "updated_at": datetime.now(UTC),
             }
@@ -228,6 +246,8 @@ class BootstrapController:
 
         if provider_profile is None:
             drift.append("provider_profile")
+        elif not provider_profile.is_default:
+            drift.append("provider_profile_default")
         if agent_profile is None or active_version is None:
             drift.append("agent_profile")
             current_agent_profile_ref = ""
@@ -948,10 +968,19 @@ class BootstrapController:
             from sqlalchemy import select
 
             from api_service.db.models import (
+                ManagedAgentProviderProfile,
                 OmnigentAgentProfile,
                 OmnigentAgentProfileVersion,
             )
 
+            provider_profile = await session.get(
+                ManagedAgentProviderProfile, provider_profile_ref
+            )
+            if provider_profile is None:
+                raise RuntimeError("provider profile not found")
+            model_route_ref = str(provider_profile.provider_id or "").strip()
+            if not model_route_ref:
+                raise RuntimeError("provider profile route is unavailable")
             profile_row = await session.get(OmnigentAgentProfile, "omnigent-opencode-default")
             if profile_row is None:
                 raise RuntimeError("agent profile not found")
@@ -1013,7 +1042,7 @@ class BootstrapController:
             launch_policy_ref=qualified_launch_policy_ref,
             model_qualified_id=qualified_model,
             model_effort=effort,
-            model_route_ref="opencode-go",
+            model_route_ref=model_route_ref,
             model_normalized_options={},
             workflow_requirements=[],
             bridge_capabilities={},
