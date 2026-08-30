@@ -108,7 +108,7 @@ describe("deriveExplicitWorkflowTitle", () => {
 });
 
 describe("previewModelTier", () => {
-  it("MM-1173 shows concise fallback copy when requested tier exceeds configured tiers", () => {
+  it("MoonLadderStudios/MoonMind#3797 formats backend-resolved preview values", () => {
     const preview = previewModelTier(
       {
         profile_id: "codex_openai_api",
@@ -117,15 +117,22 @@ describe("previewModelTier", () => {
           { label: "Implement", model: "gpt-5.5", effort: "xhigh" },
         ],
       },
-      "3",
+      {
+        stepId: "workflow",
+        requestedTier: 3,
+        effectiveTier: 2,
+        model: "gpt-backend-preview",
+        effort: "high",
+        fallbackReason: "requested_tier_above_configured_range",
+      },
     );
 
     expect(preview).toMatchObject({
       requestedTier: 3,
       effectiveTier: 2,
       label: "Implement",
-      model: "gpt-5.5",
-      effort: "xhigh",
+      model: "gpt-backend-preview",
+      effort: "high",
       fallbackReason: "requested_tier_above_configured_range",
       warning: "Requested Tier 3, used Tier 2 because the selected profile only defines 2 tiers.",
     });
@@ -21494,8 +21501,40 @@ describe("Task Create runtime switch layout stability", () => {
     resolveClaudeProfiles = null;
     fetchSpy = vi
       .spyOn(window, "fetch")
-      .mockImplementation((input: RequestInfo | URL) => {
+      .mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
+        if (
+          url ===
+          "/api/v1/provider-profiles/profile%3Acodex-default/model-tiers:preview"
+        ) {
+          const request = JSON.parse(String(init?.body || "{}")) as {
+            steps?: Array<{
+              id: string;
+              modelTier: number;
+              tierFallback: string;
+            }>;
+          };
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              profileId: "profile:codex-default",
+              advisory: true,
+              items: (request.steps || []).map((step) => ({
+                stepId: step.id,
+                requestedTier: step.modelTier,
+                effectiveTier: step.modelTier > 2 ? 2 : step.modelTier,
+                model: step.id.startsWith("step:")
+                  ? "gpt-step-backend-preview"
+                  : "gpt-backend-preview",
+                effort: step.id.startsWith("step:") ? "medium" : "xhigh",
+                fallbackReason:
+                  step.modelTier > 2
+                    ? "requested_tier_above_configured_range"
+                    : null,
+              })),
+            }),
+          } as Response);
+        }
         if (url.startsWith("/api/v1/provider-profiles")) {
           const runtimeId = new URL(`http://localhost${url}`).searchParams.get(
             "runtime_id",
@@ -21726,6 +21765,95 @@ describe("Task Create runtime switch layout stability", () => {
     expect(request.payload.task.runtime).not.toHaveProperty("tierFallback");
     expect(request.payload.task.runtime).not.toHaveProperty("model");
     expect(request.payload.task.runtime).not.toHaveProperty("effort");
+  });
+
+  it("MoonLadderStudios/MoonMind#3797 previews backend truth and submits tier intent", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(
+        (screen.getByLabelText("Provider profile") as HTMLSelectElement).value,
+      ).toBe("profile:codex-default");
+    });
+
+    fireEvent.change(screen.getByLabelText("Model tier intent"), {
+      target: { value: "3" },
+    });
+
+    expect(
+      await screen.findByText(
+        "Tier 3 · Default · gpt-backend-preview · xhigh",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Requested Tier 3, used Tier 2 because the selected profile only defines 2 tiers.",
+      ),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    const primaryStep = screen.getByText("Step 1").closest(
+      "section",
+    ) as HTMLElement;
+    fireEvent.change(
+      within(primaryStep).getByLabelText("Step 1 Model tier intent"),
+      { target: { value: "1" } },
+    );
+    expect(
+      await within(primaryStep).findByText(
+        "Tier 1 · Plan · gpt-step-backend-preview · medium",
+      ),
+    ).toBeTruthy();
+
+    const previewCall = fetchSpy.mock.calls
+      .filter(
+        ([url]) =>
+          String(url) ===
+          "/api/v1/provider-profiles/profile%3Acodex-default/model-tiers:preview",
+      )
+      .at(-1);
+    expect(previewCall).toBeTruthy();
+    expect(JSON.parse(String(previewCall?.[1]?.body || "{}"))).toMatchObject({
+      steps: [
+        { id: "workflow", modelTier: 3, tierFallback: "clamp" },
+        expect.objectContaining({
+          id: expect.stringMatching(/^step:/),
+          modelTier: 1,
+          tierFallback: "clamp",
+        }),
+      ],
+    });
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Launch with backend-previewed tier intent." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const executionCall = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/executions")
+      .at(-1);
+    const request = JSON.parse(String(executionCall?.[1]?.body));
+
+    expect(request.payload.task.runtime).toMatchObject({
+      mode: "codex_cli",
+      profileId: "profile:codex-default",
+      modelTier: 3,
+      tierFallback: "clamp",
+    });
+    expect(request.payload.task.runtime).not.toHaveProperty("model");
+    expect(request.payload.task.runtime).not.toHaveProperty("effort");
+    expect(request.payload.task.steps[0].runtime).toMatchObject({
+      modelTier: 1,
+      tierFallback: "clamp",
+    });
+    expect(request.payload.task.steps[0].runtime).not.toHaveProperty("model");
+    expect(request.payload.task.steps[0].runtime).not.toHaveProperty("effort");
   });
 
   it("defaults hard overrides from the selected profile until manually changed", async () => {
