@@ -8790,6 +8790,7 @@ async def _resolve_step_runtime_selections(
 
         effective_profile_id = raw_step_profile_id or task_profile_id
         provider_profile = None
+        default_profile_id = None
         if effective_profile_id and session is not None:
             from api_service.db.models import ManagedAgentProviderProfile
 
@@ -8812,6 +8813,17 @@ async def _resolve_step_runtime_selections(
                 profile=provider_profile,
                 profile_id=effective_profile_id,
                 selected_runtime=canonical_step_runtime,
+            )
+        elif _runtime_model_tier(runtime_payload) is not None:
+            # Resolve profile-less tier intent only after the step runtime is
+            # known, then persist that selection for the eventual launch.
+            provider_profile = await _load_default_provider_profile_for_runtime(
+                session=session,
+                runtime_id=canonical_step_runtime,
+            )
+            default_profile_id = (
+                str(getattr(provider_profile, "profile_id", "") or "").strip()
+                or None
             )
 
         (
@@ -8844,6 +8856,10 @@ async def _resolve_step_runtime_selections(
             resolved_runtime["providerProfileRef"] = raw_step_profile_id
         elif task_profile_id and not raw_step_profile_id:
             resolved_runtime.setdefault("inheritedProfileId", task_profile_id)
+        elif default_profile_id:
+            resolved_runtime["profileId"] = default_profile_id
+            resolved_runtime["providerProfile"] = default_profile_id
+            resolved_runtime["providerProfileRef"] = default_profile_id
         if "effort" not in resolved_runtime and isinstance(
             task_runtime.get("effort"), str
         ):
