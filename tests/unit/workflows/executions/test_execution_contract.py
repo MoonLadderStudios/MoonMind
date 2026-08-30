@@ -1174,6 +1174,62 @@ def test_task_step_accepts_per_step_runtime_selection() -> None:
     assert spec.runtime.effort == "low"
     assert spec.runtime.provider_profile == "claude-default"
 
+
+def test_task_step_accepts_and_normalizes_tier_preview_snapshot() -> None:
+    spec = WorkflowStepSpec.model_validate(
+        {
+            "id": "review",
+            "instructions": "Review with the previewed profile policy.",
+            "runtime": {
+                "modelTier": 2,
+                "tierPreview": {
+                    "profileId": "codex-default",
+                    "profileVersion": "2026-08-30T10:00:00+00:00",
+                    "model": "gpt-5.5",
+                    "effort": "high",
+                },
+            },
+        }
+    )
+
+    assert spec.runtime is not None
+    dumped = spec.runtime.model_dump(by_alias=True, exclude_none=True)
+    assert dumped["tierPreview"] == {
+        "profileId": "codex-default",
+        "profileVersion": "2026-08-30T10:00:00+00:00",
+        "model": "gpt-5.5",
+        "effort": "high",
+    }
+
+
+@pytest.mark.parametrize(
+    "tier_preview",
+    [
+        {"profileVersion": 1, "model": "gpt-5.5", "effort": "high"},
+        {
+            "profileId": "codex-default",
+            "profileVersion": True,
+            "model": "gpt-5.5",
+            "effort": "high",
+        },
+        {
+            "profileId": "codex-default",
+            "profileVersion": 1,
+            "model": {"name": "gpt-5.5"},
+            "effort": "high",
+        },
+    ],
+)
+def test_task_step_rejects_invalid_tier_preview_snapshot(tier_preview: object) -> None:
+    with pytest.raises(ValidationError, match="tierPreview"):
+        WorkflowStepSpec.model_validate(
+            {
+                "id": "review",
+                "instructions": "Reject an invalid preview.",
+                "runtime": {"modelTier": 2, "tierPreview": tier_preview},
+            }
+        )
+
 def test_mm569_accepts_executable_tool_and_skill_payload_fixtures() -> None:
     result = build_canonical_workflow_view(
         job_type="task",

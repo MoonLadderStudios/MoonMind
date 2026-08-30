@@ -23,6 +23,7 @@ Usage::
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from datetime import datetime
 from typing import Any, Mapping
 
 from moonmind.workflows.executions.runtime_defaults import (
@@ -33,6 +34,7 @@ from moonmind.workflows.executions.runtime_defaults import (
 __all__ = [
     "RequestedModelTierUnavailableError",
     "ResolvedModelEffort",
+    "provider_profile_version",
     "resolve_effective_model",
     "resolve_model_effort",
 ]
@@ -224,6 +226,7 @@ def resolve_model_effort(
                 tier_parameters={},
             ),
             advisory_preview,
+            profile=profile,
         )
 
     tiers = _profile_model_tiers(profile)
@@ -271,6 +274,7 @@ def resolve_model_effort(
                 tier_parameters=dict(tier_parameters),
             ),
             advisory_preview,
+            profile=profile,
         )
 
     if requested_tier is not None and requested_tier < 1:
@@ -304,6 +308,7 @@ def resolve_model_effort(
             tier_parameters={},
         ),
         advisory_preview,
+        profile=profile,
     )
 
 
@@ -314,10 +319,14 @@ def _clean(value: Any | None) -> str | None:
 def _with_preview_mismatch(
     resolved: ResolvedModelEffort,
     advisory_preview: Mapping[str, Any] | None,
+    *,
+    profile: Any | None,
 ) -> ResolvedModelEffort:
     if not advisory_preview:
         return resolved
     expected = {
+        "profileId": _clean(_profile_value(profile, "profile_id", "profileId")),
+        "profileVersion": provider_profile_version(profile),
         "requestedTier": resolved.requested_model_tier,
         "effectiveTier": resolved.effective_model_tier,
         "model": resolved.model,
@@ -329,6 +338,49 @@ def _with_preview_mismatch(
         for key, value in expected.items()
     )
     return replace(resolved, preview_mismatch=preview_mismatch)
+
+
+def _profile_value(profile: Any | None, *field_names: str) -> Any | None:
+    if profile is None:
+        return None
+    if isinstance(profile, Mapping):
+        for field_name in field_names:
+            if field_name in profile:
+                return profile.get(field_name)
+        return None
+    for field_name in field_names:
+        value = getattr(profile, field_name, None)
+        if value is not None:
+            return value
+    return None
+
+
+def provider_profile_version(profile: Any | None) -> int | str | None:
+    """Return the explicit or update-stamp version for a resolved profile.
+
+    Provider Profile rows already carry an authoritative ``updated_at`` value.
+    Treating that value as an opaque version lets advisory snapshots detect a
+    policy edit without introducing a second mutable revision counter.
+    """
+
+    value = _profile_value(
+        profile,
+        "profile_version",
+        "profileVersion",
+        "version",
+    )
+    if value is None:
+        value = _profile_value(profile, "updated_at", "updatedAt")
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 1 else None
+    if isinstance(value, str):
+        normalized = value.strip()
+        return normalized or None
+    return None
 
 
 def _runtime_defaults(

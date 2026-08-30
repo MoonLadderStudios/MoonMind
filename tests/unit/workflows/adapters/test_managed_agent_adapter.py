@@ -928,6 +928,7 @@ async def test_start_passes_rich_provider_profile_fields_to_launcher() -> None:
     profiles = [
         {
             "profile_id": "codex-openrouter",
+            "profile_version": "2026-08-30T10:00:00+00:00",
             "provider_id": "openrouter",
             "provider_label": "OpenRouter",
             "credential_source": "secret_ref",
@@ -990,6 +991,7 @@ async def test_start_passes_rich_provider_profile_fields_to_launcher() -> None:
     await adapter.start(request)
 
     profile_payload = captured_payload.get("profile") or {}
+    assert profile_payload["profileVersion"] == "2026-08-30T10:00:00+00:00"
     assert profile_payload.get("providerId") == "openrouter"
     assert profile_payload.get("providerLabel") == "OpenRouter"
     assert profile_payload.get("credentialSource") == "secret_ref"
@@ -1416,6 +1418,8 @@ async def test_provider_profile_list_returns_enabled_profiles(tmp_path: Path):
         profiles = result["profiles"]
         assert len(profiles) == 1
         assert profiles[0]["profile_id"] == "gprofile-1"
+        assert isinstance(profiles[0]["profile_version"], str)
+        assert profiles[0]["profile_version"]
         assert profiles[0]["credential_source"] == "oauth_volume"
         assert profiles[0]["enabled"] is True
         assert profiles[0]["auth_state"] == "connected"

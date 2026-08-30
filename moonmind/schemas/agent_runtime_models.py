@@ -1880,6 +1880,7 @@ class ManagedRuntimeProfile(BaseModel):
 
     runtime_id: str = Field(..., alias="runtimeId", min_length=1)
     profile_id: str | None = Field(None, alias="profileId")
+    profile_version: int | str | None = Field(None, alias="profileVersion")
     provider_id: str | None = Field(None, alias="providerId")
     provider_label: str | None = Field(None, alias="providerLabel")
     auth_mode: str | None = Field(None, alias="authMode")

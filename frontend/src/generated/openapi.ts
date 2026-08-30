@@ -11320,6 +11320,8 @@ export interface components {
         ProviderProfileTierPreviewResponse: {
             /** Profileid */
             profileId: string;
+            /** Profileversion */
+            profileVersion: number | string;
             /**
              * Advisory
              * @default true

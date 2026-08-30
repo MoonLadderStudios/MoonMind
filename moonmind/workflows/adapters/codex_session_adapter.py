@@ -739,6 +739,11 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 else None
             ),
         )
+        launch_profile = self._profile_for_launch(
+            runtime_id=runtime_id,
+            profile=profile,
+            launch_context=launch_context,
+        )
         session_handle = await self._ensure_remote_session(
             binding=binding,
             request=request,
@@ -756,11 +761,19 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     principalType="service",
                 )
             ),
-            profile=self._profile_for_launch(
-                runtime_id=runtime_id,
-                profile=profile,
-                launch_context=launch_context,
-            ),
+            profile=launch_profile,
+        )
+        # Managed sessions bypass ManagedRuntimeLauncher.launch(), so apply its
+        # authoritative launch-boundary tier resolution explicitly before the
+        # turn payload is created. The current selected profile, not admission
+        # model/effort snapshots, owns the values sent to Codex.
+        from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
+        from moonmind.workflows.temporal.runtime.strategies import get_strategy
+
+        ManagedRuntimeLauncher._apply_resolved_tier_policy(
+            request=request,
+            profile=launch_profile,
+            strategy=get_strategy(runtime_id),
         )
         locator = self._locator_from_state(
             session_state=session_handle.session_state,
@@ -2117,6 +2130,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         )
         return ManagedRuntimeProfile(
             profileId=launch_context.profile_id,
+            profileVersion=profile.get("profile_version"),
             runtimeId=runtime_id,
             providerId=profile.get("provider_id"),
             providerLabel=profile.get("provider_label"),

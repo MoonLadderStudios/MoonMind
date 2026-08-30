@@ -3656,6 +3656,9 @@ class TemporalArtifactActivities:
         from moonmind.provider_profiles.model_tiers import (
             coerce_model_effort_tier_policy,
         )
+        from moonmind.workflows.executions.model_resolver import (
+            provider_profile_version,
+        )
 
         async with get_async_session_context() as session:
             stmt = select(ManagedAgentProviderProfile).where(
@@ -3720,6 +3723,7 @@ class TemporalArtifactActivities:
             profiles.append(
                 {
                     "profile_id": row.profile_id,
+                    "profile_version": provider_profile_version(row),
                     "runtime_id": row.runtime_id,
                     "is_default": row.is_default,
                     "provider_id": row.provider_id,

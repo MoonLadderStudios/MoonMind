@@ -53,6 +53,7 @@ from moonmind.utils.logging import (
 )
 from moonmind.workflows.executions.model_resolver import (
     RequestedModelTierUnavailableError,
+    provider_profile_version,
     resolve_model_effort,
 )
 
@@ -463,6 +464,7 @@ class ProviderProfileTierPreviewItem(BaseModel):
 
 class ProviderProfileTierPreviewResponse(BaseModel):
     profile_id: str = Field(..., alias="profileId")
+    profile_version: int | str = Field(..., alias="profileVersion")
     advisory: bool = True
     items: list[ProviderProfileTierPreviewItem]
 
@@ -951,7 +953,12 @@ async def preview_model_tiers(
             }
         )
 
-    return {"profileId": profile.profile_id, "advisory": True, "items": items}
+    return {
+        "profileId": profile.profile_id,
+        "profileVersion": provider_profile_version(profile),
+        "advisory": True,
+        "items": items,
+    }
 
 
 @router.post(

@@ -1115,6 +1115,7 @@ class ManagedAgentAdapter:
 
             profile_obj = ManagedRuntimeProfile(
                 profile_id=profile_id,
+                profile_version=profile.get("profile_version"),
                 runtime_id=runtime_id_for_profile,
                 provider_id=profile.get("provider_id"),
                 provider_label=profile.get("provider_label"),
