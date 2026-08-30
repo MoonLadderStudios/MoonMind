@@ -1199,6 +1199,58 @@ def test_apply_resolved_tier_policy_preserves_original_tier_intent():
     assert resolution["effectiveModelTier"] == 1
 
 
+@pytest.mark.parametrize(
+    ("parameters", "expected_requested_tier", "expected_fallback_reason"),
+    [
+        ({}, None, "profile_default_tier"),
+        ({"modelTier": 2}, 2, None),
+    ],
+)
+def test_apply_resolved_tier_policy_shapes_omitted_and_explicit_default_tiers(
+    parameters,
+    expected_requested_tier,
+    expected_fallback_reason,
+):
+    profile = _make_profile(
+        runtime_id="codex_cli",
+        enabled=True,
+        authState="connected",
+        disabledReason=None,
+        model_tiers=[
+            {
+                "label": "Standard",
+                "model": "tier-1-model",
+                "effort": "medium",
+                "parameters": {"output_format": "text"},
+            },
+            {
+                "label": "Implementation",
+                "model": "tier-2-model",
+                "effort": "high",
+                "parameters": {"output_format": "strict_json"},
+            },
+        ],
+        default_model_tier=2,
+    )
+    request = _make_request(parameters=parameters)
+
+    ManagedRuntimeLauncher._apply_resolved_tier_policy(
+        request=request,
+        profile=profile,
+        strategy=None,
+    )
+
+    assert request.parameters["model"] == "tier-2-model"
+    assert request.parameters["effort"] == "high"
+    assert request.parameters["output_format"] == "strict_json"
+    resolution = request.parameters["metadata"]["moonmind"]["modelEffortResolution"]
+    assert resolution["requestedModelTier"] == expected_requested_tier
+    assert resolution["effectiveModelTier"] == 2
+    assert resolution["fallbackReason"] == expected_fallback_reason
+    assert resolution["resolvedModel"] == "tier-2-model"
+    assert resolution["resolvedEffort"] == "high"
+
+
 def test_apply_resolved_tier_policy_initializes_missing_parameters():
     profile = _make_profile(
         runtime_id="codex_cli",

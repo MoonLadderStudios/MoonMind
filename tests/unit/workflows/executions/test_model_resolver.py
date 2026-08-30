@@ -327,6 +327,19 @@ class TestResolveModelEffortTiers:
         assert resolved.model == "tier-1-model"
         assert resolved.fallback_reason == "requested_tier_below_configured_range"
 
+    @pytest.mark.parametrize("tier_fallback", ["clamp", "strict"])
+    def test_requested_tier_below_range_without_tiers_is_rejected(
+        self, tier_fallback
+    ):
+        with pytest.raises(ValueError, match="greater than or equal to 1"):
+            resolve_model_effort(
+                runtime_id="codex_cli",
+                profile=self._profile(model_tiers=[]),
+                requested_model_tier=0,
+                tier_fallback=tier_fallback,
+                env={},
+            )
+
     def test_requested_tier_above_configured_range_clamps_by_default(self):
         resolved = resolve_model_effort(
             runtime_id="codex_cli",

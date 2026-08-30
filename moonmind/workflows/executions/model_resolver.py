@@ -248,6 +248,9 @@ def resolve_model_effort(
             advisory_preview,
         )
 
+    if requested_tier is not None and requested_tier < 1:
+        raise ValueError("modelTier must be an integer greater than or equal to 1")
+
     runtime_model, runtime_effort = _runtime_defaults(
         runtime_id,
         workflow_settings=workflow_settings,
