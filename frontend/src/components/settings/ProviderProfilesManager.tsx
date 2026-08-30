@@ -329,6 +329,7 @@ function visibleReadinessChecks(readiness?: ProviderProfileReadiness | null): Pr
 type ProviderAuthActionLabel =
   | 'OAuth'
   | 'Use Anthropic API key'
+  | 'Use OpenAI API key'
   | 'Use OpenCode API key'
   | 'Validate OAuth'
   | 'Disconnect OAuth';
@@ -338,7 +339,7 @@ interface ClaudeAuthAction {
   label: ProviderAuthActionLabel;
 }
 
-type OpencodeAuthAction = ClaudeAuthAction;
+type ProviderApiKeyAuthAction = ClaudeAuthAction;
 
 type ClaudeEnrollmentStep =
   | 'not_connected'
@@ -367,9 +368,10 @@ type ProviderAuthModel =
       readiness: ClaudeReadinessMetadata | null;
     }
   | {
-      kind: 'opencode_credentials';
+      kind: 'api_key_credentials';
+      providerLabel: string;
       statusLabel: string | null;
-      actions: OpencodeAuthAction[];
+      actions: ProviderApiKeyAuthAction[];
       readiness: ClaudeReadinessMetadata | null;
     }
   | { kind: 'none' };
@@ -397,10 +399,6 @@ const CLAUDE_AUTH_ACTION_LABELS: Record<string, ProviderAuthActionLabel> = {
   use_api_key: 'Use Anthropic API key',
   validate_oauth: 'Validate OAuth',
   disconnect_oauth: 'Disconnect OAuth',
-};
-
-const OPENCODE_AUTH_ACTION_LABELS: Record<string, ProviderAuthActionLabel> = {
-  use_api_key: 'Use OpenCode API key',
 };
 
 const CLAUDE_ENROLLMENT_STEPS: ClaudeEnrollmentStep[] = [
@@ -511,6 +509,27 @@ function extractErrorMessage(
   return fallback;
 }
 
+function extractErrorCode(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const record = payload as Record<string, unknown>;
+  if (typeof record.code === 'string') return record.code;
+  if (record.detail && typeof record.detail === 'object') {
+    const detail = record.detail as Record<string, unknown>;
+    return typeof detail.code === 'string' ? detail.code : null;
+  }
+  return null;
+}
+
+class ProviderProfileRequestError extends Error {
+  readonly code: string | null;
+
+  constructor(message: string, code: string | null = null) {
+    super(message);
+    this.name = 'ProviderProfileRequestError';
+    this.code = code;
+  }
+}
+
 function isFirstPartyOAuthProfile(profile: ProviderProfile): boolean {
   const authActions = commandBehaviorStringArray(profile, 'auth_actions') ?? [];
   return (
@@ -563,30 +582,29 @@ function claudeCredentialActions(profile: ProviderProfile): ClaudeAuthAction[] {
     .filter((action): action is ClaudeAuthAction => action !== null);
 }
 
-function isOpencodeGoProfile(profile: ProviderProfile): boolean {
-  return profile.runtime_id === 'opencode' && profile.provider_id === 'opencode-go';
+function isProviderApiKeyCredentialProfile(profile: ProviderProfile): boolean {
+  return (
+    (profile.runtime_id === 'codex_cli' && profile.provider_id === 'openai') ||
+    (profile.runtime_id === 'opencode' &&
+      (profile.provider_id === 'opencode-go' || profile.provider_id === 'opencode'))
+  );
 }
 
-function isOpencodeCredentialMethodProfile(profile: ProviderProfile): boolean {
-  return profile.runtime_id === 'opencode' && (profile.provider_id === 'opencode-go' || profile.provider_id === 'opencode');
+function providerApiKeyLabel(profile: ProviderProfile): string {
+  if (profile.runtime_id === 'codex_cli') return 'OpenAI';
+  return 'OpenCode';
 }
 
-function defaultOpencodeCredentialActions(profile: ProviderProfile): string[] {
-  if (!isOpencodeGoProfile(profile)) {
-    return [];
-  }
-  return ['use_api_key'];
-}
-
-function opencodeCredentialActions(profile: ProviderProfile): OpencodeAuthAction[] {
+function providerApiKeyCredentialActions(profile: ProviderProfile): ProviderApiKeyAuthAction[] {
   const actionIds = commandBehaviorStringArray(profile, 'auth_actions');
-  const resolvedActionIds = actionIds ?? defaultOpencodeCredentialActions(profile);
+  const resolvedActionIds = actionIds ?? ['use_api_key'];
+  const label: ProviderAuthActionLabel =
+    profile.runtime_id === 'codex_cli'
+      ? 'Use OpenAI API key'
+      : 'Use OpenCode API key';
   return resolvedActionIds
-    .map((actionId) => {
-      const label = OPENCODE_AUTH_ACTION_LABELS[actionId];
-      return label ? { id: actionId, label } : null;
-    })
-    .filter((action): action is OpencodeAuthAction => action !== null);
+    .filter((actionId) => actionId === 'use_api_key')
+    .map((actionId) => ({ id: actionId, label }));
 }
 
 function providerAuthModel(profile: ProviderProfile): ProviderAuthModel {
@@ -594,11 +612,12 @@ function providerAuthModel(profile: ProviderProfile): ProviderAuthModel {
     return { kind: 'codex_oauth' };
   }
 
-  if (isOpencodeCredentialMethodProfile(profile)) {
+  if (isProviderApiKeyCredentialProfile(profile)) {
     return {
-      kind: 'opencode_credentials',
+      kind: 'api_key_credentials',
+      providerLabel: providerApiKeyLabel(profile),
       statusLabel: formatStatusLabel(commandBehaviorString(profile, 'auth_status_label'), ''),
-      actions: opencodeCredentialActions(profile),
+      actions: providerApiKeyCredentialActions(profile),
       readiness: normalizeReadinessMetadata(commandBehaviorValue(profile, 'auth_readiness')),
     };
   }
@@ -701,8 +720,10 @@ function buildSavePayload(
 ): ProviderProfileSavePayload {
   const isCodexOAuth =
     form.runtimeId.trim() === 'codex_cli' &&
-    form.credentialSource === 'oauth_volume' &&
-    form.runtimeMaterializationMode === 'oauth_home';
+    ((options.isEditing &&
+      form.credentialSource === 'oauth_volume' &&
+      form.runtimeMaterializationMode === 'oauth_home') ||
+      (!options.isEditing && form.authenticationMethod === 'oauth'));
   const payload: ProviderProfileSavePayload = {
     profile_id: form.profileId.trim(),
     runtime_id: form.runtimeId.trim(),
@@ -740,10 +761,27 @@ function buildSavePayload(
   if (options.isEditing) {
     return payload;
   }
-  if (!form.authenticationMethod) {
-    throw new Error('Authentication method is required.');
+
+  if (!form.maxParallelRuns.trim()) delete payload.max_parallel_runs;
+  if (!form.cooldownAfter429Seconds.trim()) {
+    delete payload.cooldown_after_429_seconds;
   }
+  if (!form.rateLimitPolicy) delete payload.rate_limit_policy;
+  if (!form.priority.trim()) delete payload.priority;
+
   const preset = options.creationPreset;
+  const authenticationMethod = form.authenticationMethod;
+  const usesManualCreation =
+    !authenticationMethod ||
+    (preset?.supported === false && preset.manual_creation_allowed);
+  if (usesManualCreation) {
+    if (!payload.credential_source || !payload.runtime_materialization_mode) {
+      throw new Error(
+        'Manual creation requires credential source and materialization mode.',
+      );
+    }
+    return payload;
+  }
   if (!preset) {
     throw new Error('Wait for the backend creation preset before creating the profile.');
   }
@@ -753,7 +791,7 @@ function buildSavePayload(
         'This runtime, provider, and authentication combination is unsupported.',
     );
   }
-  payload.authentication_method = form.authenticationMethod;
+  payload.authentication_method = authenticationMethod;
   payload.preset_version = preset.version;
 
   const omitWhenRecommended = (
@@ -805,6 +843,8 @@ export function ProviderProfilesManager({
     useState<ProviderProfileCreationPreset | null>(null);
   const [creationPresetLoading, setCreationPresetLoading] = useState(false);
   const [creationPresetError, setCreationPresetError] = useState<string | null>(null);
+  const [creationPresetRefreshKey, setCreationPresetRefreshKey] = useState(0);
+  const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
   const createFormRuntimeSeedRef = useRef(createFormRuntimeSeed);
   const [oauthSessions, setOauthSessions] = useState<Record<string, OAuthSessionState>>({});
@@ -838,8 +878,14 @@ export function ProviderProfilesManager({
   const isEditing = editingProfileId !== null;
   const isCodexOAuthForm =
     form.runtimeId.trim() === 'codex_cli' &&
-    form.credentialSource === 'oauth_volume' &&
-    form.runtimeMaterializationMode === 'oauth_home';
+    ((isEditing &&
+      form.credentialSource === 'oauth_volume' &&
+      form.runtimeMaterializationMode === 'oauth_home') ||
+      (!isEditing && form.authenticationMethod === 'oauth'));
+  const manualCreationAllowed =
+    !isEditing &&
+    creationPreset?.supported === false &&
+    creationPreset.manual_creation_allowed;
   const presetField = (fieldName: string) => creationPreset?.fields[fieldName];
 
   const updateClaudeEnrollmentForProfile = (
@@ -942,13 +988,17 @@ export function ProviderProfilesManager({
       })
       .then((preset) => {
         setCreationPreset(preset);
-        setForm((current) =>
-          current.runtimeId.trim() === preset.runtime_id &&
-          current.providerId.trim() === preset.provider_id &&
-          current.authenticationMethod === preset.authentication_method
-            ? applyCreationPresetToForm(current, preset)
-            : current,
-        );
+        if (preset.supported) {
+          setForm((current) =>
+            current.runtimeId.trim() === preset.runtime_id &&
+            current.providerId.trim() === preset.provider_id &&
+            current.authenticationMethod === preset.authentication_method
+              ? applyCreationPresetToForm(current, preset)
+              : current,
+          );
+        } else if (preset.manual_creation_allowed) {
+          setShowAdvancedOptions(true);
+        }
       })
       .catch((error: unknown) => {
         if (error instanceof DOMException && error.name === 'AbortError') {
@@ -972,6 +1022,7 @@ export function ProviderProfilesManager({
     form.runtimeId,
     form.providerId,
     form.authenticationMethod,
+    creationPresetRefreshKey,
   ]);
 
   // A single-runtime view cannot show the row being edited when that row
@@ -986,6 +1037,7 @@ export function ProviderProfilesManager({
     }
     setEditingProfileId(null);
     setForm(defaultFormState(selectedRuntimeId));
+    setShowAdvancedOptions(false);
   }, [editingProfileId, form.runtimeId, selectedRuntimeId]);
 
   useEffect(() => {
@@ -1004,6 +1056,7 @@ export function ProviderProfilesManager({
   const resetForm = () => {
     setEditingProfileId(null);
     setForm(defaultFormState(createFormRuntimeSeed));
+    setShowAdvancedOptions(false);
     onNotice(null);
   };
 
@@ -1145,16 +1198,16 @@ export function ProviderProfilesManager({
     };
   }, [claudeEnrollment]);
 
-  // ── OpenCode API-key enrollment (mirrors Claude flow but uses /credentials/api-key) ──
-  const [opencodeEnrollment, setOpencodeEnrollment] = useState<ClaudeEnrollmentState | null>(null);
-  const opencodeEnrollmentDrawerRef = useRef<HTMLDivElement | null>(null);
-  const opencodeEnrollmentProfileIdRef = useRef<string | null>(null);
+  // ── Provider API-key enrollment through /credentials/api-key ──
+  const [apiKeyEnrollment, setApiKeyEnrollment] = useState<ClaudeEnrollmentState | null>(null);
+  const apiKeyEnrollmentDrawerRef = useRef<HTMLDivElement | null>(null);
+  const apiKeyEnrollmentProfileIdRef = useRef<string | null>(null);
 
-  const updateOpencodeEnrollmentForProfile = (
+  const updateApiKeyEnrollmentForProfile = (
     profileId: string,
     updater: (current: ClaudeEnrollmentState) => ClaudeEnrollmentState,
   ) => {
-    setOpencodeEnrollment((current) => {
+    setApiKeyEnrollment((current) => {
       if (!current || current.profile.profile_id !== profileId) {
         return current;
       }
@@ -1162,36 +1215,36 @@ export function ProviderProfilesManager({
     });
   };
 
-  const closeOpencodeEnrollment = () => {
-    opencodeEnrollmentProfileIdRef.current = null;
-    setOpencodeEnrollment(null);
+  const closeApiKeyEnrollment = () => {
+    apiKeyEnrollmentProfileIdRef.current = null;
+    setApiKeyEnrollment(null);
   };
 
-  const openOpencodeEnrollment = (profile: ProviderProfile) => {
+  const openApiKeyEnrollment = (profile: ProviderProfile) => {
     const authModel = providerAuthModel(profile);
-    opencodeEnrollmentProfileIdRef.current = profile.profile_id;
-    setOpencodeEnrollment({
+    apiKeyEnrollmentProfileIdRef.current = profile.profile_id;
+    setApiKeyEnrollment({
       profile,
       step: 'not_connected',
       token: '',
       failureReason: null,
-      statusLabel: authModel.kind === 'opencode_credentials' ? authModel.statusLabel : null,
-      readiness: authModel.kind === 'opencode_credentials' ? authModel.readiness : null,
+      statusLabel: authModel.kind === 'api_key_credentials' ? authModel.statusLabel : null,
+      readiness: authModel.kind === 'api_key_credentials' ? authModel.readiness : null,
     });
     onNotice(null);
   };
 
-  const updateOpencodeEnrollmentToken = (token: string) => {
-    setOpencodeEnrollment((current) => (current ? { ...current, token } : current));
+  const updateApiKeyEnrollmentToken = (token: string) => {
+    setApiKeyEnrollment((current) => (current ? { ...current, token } : current));
   };
 
-  const continueOpencodeEnrollment = () => {
-    setOpencodeEnrollment((current) =>
+  const continueApiKeyEnrollment = () => {
+    setApiKeyEnrollment((current) =>
       current ? { ...current, step: 'awaiting_token_paste', failureReason: null } : current,
     );
   };
 
-  const opencodeEnrollmentMutation = useMutation({
+  const apiKeyEnrollmentMutation = useMutation({
     mutationFn: async ({
       profileId,
       submittedToken,
@@ -1210,13 +1263,13 @@ export function ProviderProfilesManager({
       const payload: unknown = await response.json().catch(() => ({}));
 
       if (!response.ok) {
-        throw new Error(redactClaudeSecretText(extractErrorMessage(payload), submittedToken) ?? 'OpenCode API key validation failed.');
+        throw new Error(redactClaudeSecretText(extractErrorMessage(payload), submittedToken) ?? 'Provider API key validation failed.');
       }
 
       return payload as ClaudeManualAuthResult;
     },
     onMutate: ({ profileId }) => {
-      updateOpencodeEnrollmentForProfile(profileId, (current) => ({
+      updateApiKeyEnrollmentForProfile(profileId, (current) => ({
         ...current,
         step: 'validating_token',
         token: '',
@@ -1224,22 +1277,22 @@ export function ProviderProfilesManager({
       }));
     },
     onSuccess: async (result, { profileId }) => {
-      updateOpencodeEnrollmentForProfile(profileId, (current) => ({
+      updateApiKeyEnrollmentForProfile(profileId, (current) => ({
         ...current,
         step: 'saving_secret',
         token: '',
       }));
       await delay(CLAUDE_ENROLLMENT_PROGRESS_DELAY_MS);
-      updateOpencodeEnrollmentForProfile(profileId, (current) => ({
+      updateApiKeyEnrollmentForProfile(profileId, (current) => ({
         ...current,
         step: 'updating_profile',
         token: '',
       }));
       await delay(CLAUDE_ENROLLMENT_PROGRESS_DELAY_MS);
-      if (opencodeEnrollmentProfileIdRef.current !== profileId) {
+      if (apiKeyEnrollmentProfileIdRef.current !== profileId) {
         return;
       }
-      updateOpencodeEnrollmentForProfile(profileId, (current) => ({
+      updateApiKeyEnrollmentForProfile(profileId, (current) => ({
         ...current,
         step: 'ready',
         token: '',
@@ -1250,59 +1303,62 @@ export function ProviderProfilesManager({
       queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
       onNotice({
         level: 'ok',
-        text: `OpenCode API key enrollment completed for "${profileId}".`,
+        text: `Provider API key enrollment completed for "${profileId}".`,
       });
     },
     onError: (error, { profileId, submittedToken }) => {
-      if (opencodeEnrollmentProfileIdRef.current !== profileId) {
+      if (apiKeyEnrollmentProfileIdRef.current !== profileId) {
         return;
       }
       const failureReason =
         error instanceof Error
           ? redactClaudeSecretText(error.message, submittedToken)
-          : 'OpenCode API key validation failed.';
-      updateOpencodeEnrollmentForProfile(profileId, (current) => ({
+          : 'Provider API key validation failed.';
+      updateApiKeyEnrollmentForProfile(profileId, (current) => ({
         ...current,
         step: 'failed',
         token: '',
-        failureReason: failureReason ?? 'OpenCode API key validation failed.',
+        failureReason: failureReason ?? 'Provider API key validation failed.',
       }));
     },
   });
 
-  const submitOpencodeEnrollment = () => {
-    if (!opencodeEnrollment) return;
-    const profileId = opencodeEnrollment.profile.profile_id;
-    const submittedToken = opencodeEnrollment.token.trim();
+  const submitApiKeyEnrollment = () => {
+    if (!apiKeyEnrollment) return;
+    const profileId = apiKeyEnrollment.profile.profile_id;
+    const submittedToken = apiKeyEnrollment.token.trim();
     if (!submittedToken) {
-      onNotice({ level: 'error', text: 'OpenCode API key is required.' });
+      onNotice({
+        level: 'error',
+        text: `${providerApiKeyLabel(apiKeyEnrollment.profile)} API key is required.`,
+      });
       return;
     }
 
-    opencodeEnrollmentMutation.mutate({ profileId, submittedToken });
+    apiKeyEnrollmentMutation.mutate({ profileId, submittedToken });
   };
 
   useEffect(() => {
-    if (!opencodeEnrollment) return;
-    opencodeEnrollmentDrawerRef.current?.focus();
-  }, [opencodeEnrollment?.profile.profile_id]);
+    if (!apiKeyEnrollment) return;
+    apiKeyEnrollmentDrawerRef.current?.focus();
+  }, [apiKeyEnrollment?.profile.profile_id]);
 
   useEffect(() => {
-    opencodeEnrollmentProfileIdRef.current = opencodeEnrollment?.profile.profile_id ?? null;
-  }, [opencodeEnrollment?.profile.profile_id]);
+    apiKeyEnrollmentProfileIdRef.current = apiKeyEnrollment?.profile.profile_id ?? null;
+  }, [apiKeyEnrollment?.profile.profile_id]);
 
   useEffect(() => {
-    if (!opencodeEnrollment) return;
+    if (!apiKeyEnrollment) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        closeOpencodeEnrollment();
+        closeApiKeyEnrollment();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [opencodeEnrollment]);
+  }, [apiKeyEnrollment]);
 
   const saveMutation = useMutation({
     mutationFn: async (formState: ProviderProfileFormState) => {
@@ -1324,7 +1380,7 @@ export function ProviderProfilesManager({
           errorPayload,
           `Failed to ${isEditing ? 'update' : 'create'} provider profile.`,
         );
-        throw new Error(detail);
+        throw new ProviderProfileRequestError(detail, extractErrorCode(errorPayload));
       }
       return response.json() as Promise<ProviderProfile>;
     },
@@ -1337,6 +1393,7 @@ export function ProviderProfilesManager({
       });
       setEditingProfileId(null);
       setForm(defaultFormState(createFormRuntimeSeed));
+      setShowAdvancedOptions(false);
       queryClient.setQueryData<ProviderProfile[]>(
         PROVIDER_PROFILE_QUERY_KEY,
         (currentProfiles = []) => {
@@ -1364,6 +1421,19 @@ export function ProviderProfilesManager({
       queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
     },
     onError: (error: Error) => {
+      setShowAdvancedOptions(true);
+      if (
+        !isEditing &&
+        error instanceof ProviderProfileRequestError &&
+        error.code === 'provider_profile_creation_preset_version_mismatch'
+      ) {
+        setCreationPresetRefreshKey((current) => current + 1);
+        onNotice({
+          level: 'error',
+          text: 'The creation policy changed. Reloading the current preset for review.',
+        });
+        return;
+      }
       onNotice({ level: 'error', text: error.message });
     },
   });
@@ -1804,8 +1874,8 @@ export function ProviderProfilesManager({
                 const enableAllowed = mayEnableFromSettings(profile);
                 const claudeReadiness =
                   authModel.kind === 'claude_credentials' ? authModel.readiness : undefined;
-                const opencodeReadiness =
-                  authModel.kind === 'opencode_credentials' ? authModel.readiness : undefined;
+                const apiKeyReadiness =
+                  authModel.kind === 'api_key_credentials' ? authModel.readiness : undefined;
                 const hasStatusDetails = Boolean(
                   (activationLabel && activationLabel !== 'Connected') ||
                     profile.disabled_reason ||
@@ -1816,11 +1886,11 @@ export function ProviderProfilesManager({
                     claudeReadiness?.backingSecretExists !== undefined ||
                     claudeReadiness?.launchReady !== undefined ||
                     claudeReadiness?.failureReason ||
-                    opencodeReadiness?.connected !== undefined ||
-                    opencodeReadiness?.lastValidatedAt ||
-                    opencodeReadiness?.backingSecretExists !== undefined ||
-                    opencodeReadiness?.launchReady !== undefined ||
-                    opencodeReadiness?.failureReason,
+                    apiKeyReadiness?.connected !== undefined ||
+                    apiKeyReadiness?.lastValidatedAt ||
+                    apiKeyReadiness?.backingSecretExists !== undefined ||
+                    apiKeyReadiness?.launchReady !== undefined ||
+                    apiKeyReadiness?.failureReason,
                 );
                 return (
                 <tr key={profile.profile_id} role="row">
@@ -1988,7 +2058,7 @@ export function ProviderProfilesManager({
                           {authModel.statusLabel}
                         </div>
                       ) : null}
-                      {authModel.kind === 'opencode_credentials' && authModel.statusLabel ? (
+                      {authModel.kind === 'api_key_credentials' && authModel.statusLabel ? (
                         <div className="text-xs font-medium text-slate-600 dark:text-slate-400">
                           {authModel.statusLabel}
                         </div>
@@ -2068,27 +2138,27 @@ export function ProviderProfilesManager({
                                 Failure: {redactClaudeSecretText(authModel.readiness.failureReason)}
                               </div>
                             ) : null}
-                            {authModel.kind === 'opencode_credentials' && authModel.readiness?.connected !== undefined ? (
+                            {authModel.kind === 'api_key_credentials' && authModel.readiness?.connected !== undefined ? (
                               <div className="text-xs text-slate-500 dark:text-slate-400">
-                                OpenCode connection: {authModel.readiness.connected ? 'Connected' : 'Not connected'}
+                                {authModel.providerLabel} connection: {authModel.readiness.connected ? 'Connected' : 'Not connected'}
                               </div>
                             ) : null}
-                            {authModel.kind === 'opencode_credentials' && authModel.readiness?.lastValidatedAt ? (
+                            {authModel.kind === 'api_key_credentials' && authModel.readiness?.lastValidatedAt ? (
                               <div className="text-xs text-slate-500 dark:text-slate-400">
                                 Last validated: {authModel.readiness.lastValidatedAt}
                               </div>
                             ) : null}
-                            {authModel.kind === 'opencode_credentials' && authModel.readiness?.backingSecretExists !== undefined ? (
+                            {authModel.kind === 'api_key_credentials' && authModel.readiness?.backingSecretExists !== undefined ? (
                               <div className="text-xs text-slate-500 dark:text-slate-400">
                                 Backing secret: {authModel.readiness.backingSecretExists ? 'Present' : 'Missing'}
                               </div>
                             ) : null}
-                            {authModel.kind === 'opencode_credentials' && authModel.readiness?.launchReady !== undefined ? (
+                            {authModel.kind === 'api_key_credentials' && authModel.readiness?.launchReady !== undefined ? (
                               <div className="text-xs text-slate-500 dark:text-slate-400">
                                 Launch readiness: {authModel.readiness.launchReady ? 'Ready' : 'Not ready'}
                               </div>
                             ) : null}
-                            {authModel.kind === 'opencode_credentials' && authModel.readiness?.failureReason ? (
+                            {authModel.kind === 'api_key_credentials' && authModel.readiness?.failureReason ? (
                               <div className="text-xs text-rose-600 dark:text-rose-400">
                                 Failure: {redactClaudeSecretText(authModel.readiness.failureReason)}
                               </div>
@@ -2145,7 +2215,7 @@ export function ProviderProfilesManager({
                             </button>
                           ))
                         : null}
-                      {canWriteProviderProfiles && authModel.kind === 'opencode_credentials'
+                      {canWriteProviderProfiles && authModel.kind === 'api_key_credentials'
                         ? authModel.actions.map((action) => (
                             <button
                               key={action.id}
@@ -2153,11 +2223,11 @@ export function ProviderProfilesManager({
                               className="rounded-full border border-emerald-300 dark:border-emerald-700 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 transition hover:border-emerald-500 dark:hover:border-emerald-500"
                               onClick={() => {
                                 if (action.id === 'use_api_key') {
-                                  openOpencodeEnrollment(profile);
+                                  openApiKeyEnrollment(profile);
                                   return;
                                 }
                               }}
-                              disabled={opencodeEnrollmentMutation.isPending}
+                              disabled={apiKeyEnrollmentMutation.isPending}
                               aria-label={`${action.label} ${profile.profile_id}`}
                             >
                               {action.label}
@@ -2220,6 +2290,7 @@ export function ProviderProfilesManager({
                             onClick={() => {
                               setEditingProfileId(profile.profile_id);
                               setForm(toFormState(profile));
+                              setShowAdvancedOptions(true);
                               onNotice(null);
                             }}
                           >
@@ -2480,17 +2551,17 @@ export function ProviderProfilesManager({
         </div>
       ) : null}
 
-      {opencodeEnrollment ? (
+      {apiKeyEnrollment ? (
         <div
           className="fixed inset-0 z-50 flex justify-end bg-slate-950/40"
           onMouseDown={(event) => {
             if (event.target === event.currentTarget) {
-              closeOpencodeEnrollment();
+              closeApiKeyEnrollment();
             }
           }}
         >
           <div
-            ref={opencodeEnrollmentDrawerRef}
+            ref={apiKeyEnrollmentDrawerRef}
             role="dialog"
             aria-modal="true"
             aria-labelledby="opencode-enrollment-title"
@@ -2503,27 +2574,27 @@ export function ProviderProfilesManager({
                 id="opencode-enrollment-title"
                 className="text-base font-semibold text-slate-900 dark:text-white"
               >
-                OpenCode API key enrollment for {opencodeEnrollment.profile.profile_id}
+                {providerApiKeyLabel(apiKeyEnrollment.profile)} API key enrollment for {apiKeyEnrollment.profile.profile_id}
               </h4>
               <p className="max-w-3xl text-sm text-slate-600 dark:text-slate-400">
-                Use an OpenCode Go API key for OpenCode launches. Paste the key here, then validate and save it as a managed provider credential.
+                Use a {providerApiKeyLabel(apiKeyEnrollment.profile)} API key for {formatRuntimeLabel(apiKeyEnrollment.profile.runtime_id)} launches. Paste the key here, then validate and save it as a managed provider credential.
               </p>
             </div>
             <button
               type="button"
               className="inline-flex items-center justify-center rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500"
-              onClick={closeOpencodeEnrollment}
+              onClick={closeApiKeyEnrollment}
             >
               Cancel API key enrollment
             </button>
           </div>
 
-          <div className="mt-4 flex flex-wrap gap-2" aria-label="OpenCode enrollment lifecycle states">
+          <div className="mt-4 flex flex-wrap gap-2" aria-label={`${providerApiKeyLabel(apiKeyEnrollment.profile)} enrollment lifecycle states`}>
             {CLAUDE_ENROLLMENT_STEPS.map((step) => (
               <span
                 key={step}
                 className={`rounded-full px-2.5 py-1 font-mono text-xs ${
-                  step === opencodeEnrollment.step
+                  step === apiKeyEnrollment.step
                     ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300'
                     : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
                 }`}
@@ -2533,64 +2604,64 @@ export function ProviderProfilesManager({
             ))}
           </div>
 
-          {opencodeEnrollment.step === 'not_connected' ? (
+          {apiKeyEnrollment.step === 'not_connected' ? (
             <div className="mt-5 space-y-4">
               <div className="rounded-xl border border-slate-200 dark:border-slate-800 p-4 text-sm text-slate-700 dark:text-slate-300">
-                Continue when you are ready to paste the OpenCode API key. This path stores the key in Managed Secrets and does not create an OAuth terminal session.
+                Continue when you are ready to paste the {providerApiKeyLabel(apiKeyEnrollment.profile)} API key. This path stores the key in Managed Secrets and does not create an OAuth terminal session.
               </div>
               <button
                 type="button"
                 className="inline-flex items-center justify-center rounded-lg bg-slate-900 dark:bg-slate-100 px-4 py-2 text-sm font-semibold text-white dark:text-slate-900 transition hover:bg-slate-800 dark:hover:bg-slate-200"
-                onClick={continueOpencodeEnrollment}
+                onClick={continueApiKeyEnrollment}
               >
                 Continue to API key paste
               </button>
             </div>
           ) : null}
 
-          {opencodeEnrollment.step === 'awaiting_token_paste' ? (
+          {apiKeyEnrollment.step === 'awaiting_token_paste' ? (
             <div className="mt-5 space-y-4">
               <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
-                <span>OpenCode API key</span>
+                <span>{providerApiKeyLabel(apiKeyEnrollment.profile)} API key</span>
                 <input
                   type="password"
                   className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-                  value={opencodeEnrollment.token}
-                  onChange={(event) => updateOpencodeEnrollmentToken(event.target.value)}
+                  value={apiKeyEnrollment.token}
+                  onChange={(event) => updateApiKeyEnrollmentToken(event.target.value)}
                   autoComplete="off"
                 />
               </label>
               <button
                 type="button"
                 className="inline-flex items-center justify-center rounded-lg bg-slate-900 dark:bg-slate-100 px-4 py-2 text-sm font-semibold text-white dark:text-slate-900 transition hover:bg-slate-800 dark:hover:bg-slate-200"
-                onClick={() => void submitOpencodeEnrollment()}
+                onClick={() => void submitApiKeyEnrollment()}
               >
-                Validate and save OpenCode API key
+                Validate and save {providerApiKeyLabel(apiKeyEnrollment.profile)} API key
               </button>
             </div>
           ) : null}
 
-          {['validating_token', 'saving_secret', 'updating_profile'].includes(opencodeEnrollment.step) ? (
+          {['validating_token', 'saving_secret', 'updating_profile'].includes(apiKeyEnrollment.step) ? (
             <div className="mt-5 rounded-xl border border-sky-200 dark:border-sky-900/60 bg-sky-50 dark:bg-sky-950/30 p-4 text-sm font-medium text-sky-800 dark:text-sky-300">
-              Processing OpenCode API key enrollment: {formatStatusLabel(opencodeEnrollment.step)}
+              Processing {providerApiKeyLabel(apiKeyEnrollment.profile)} API key enrollment: {formatStatusLabel(apiKeyEnrollment.step)}
             </div>
           ) : null}
 
-          {opencodeEnrollment.step === 'ready' ? (
+          {apiKeyEnrollment.step === 'ready' ? (
             <div className="mt-5 rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/30 p-4 text-sm font-medium text-emerald-800 dark:text-emerald-300">
-              {formatStatusLabel(opencodeEnrollment.statusLabel ?? 'OpenCode API key ready')}
+              {formatStatusLabel(apiKeyEnrollment.statusLabel ?? `${providerApiKeyLabel(apiKeyEnrollment.profile)} API key ready`)}
             </div>
           ) : null}
 
-          {opencodeEnrollment.step === 'failed' ? (
+          {apiKeyEnrollment.step === 'failed' ? (
             <div className="mt-5 space-y-4">
               <div className="rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/30 p-4 text-sm font-medium text-rose-700 dark:text-rose-300">
-                {opencodeEnrollment.failureReason ?? 'OpenCode API key validation failed.'}
+                {apiKeyEnrollment.failureReason ?? `${providerApiKeyLabel(apiKeyEnrollment.profile)} API key validation failed.`}
               </div>
               <button
                 type="button"
                 className="inline-flex items-center justify-center rounded-lg border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500"
-                onClick={continueOpencodeEnrollment}
+                onClick={continueApiKeyEnrollment}
               >
                 Return to API key paste
               </button>
@@ -2710,7 +2781,7 @@ export function ProviderProfilesManager({
               </label>
               {!isEditing ? (
                 <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
-                  <span>Authentication method <span className="text-amber-600 dark:text-amber-400">*</span></span>
+                  <span>Authentication method</span>
                   <select
                     className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
                     value={form.authenticationMethod}
@@ -2729,61 +2800,24 @@ export function ProviderProfilesManager({
                     <option value="none">No credentials</option>
                   </select>
                   <p className="text-xs text-slate-400 dark:text-slate-500">
-                    Selects the backend-owned credential and launch strategy.
+                    Choose a guided setup method, or leave blank to create an expert manual profile.
                   </p>
                 </label>
               ) : null}
               <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
-                <span>Credential source</span>
-                <select
+                <span>Account label</span>
+                <input
                   className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-                  value={form.credentialSource}
-                  disabled={!isEditing && !presetField('credential_source')?.editable}
+                  value={form.accountLabel}
                   onChange={(event) =>
                     setForm((current) => ({
                       ...current,
-                      credentialSource: event.target.value,
+                      accountLabel: event.target.value,
                     }))
                   }
-                >
-                  <option value="">Backend-derived</option>
-                  <option value="secret_ref">secret_ref</option>
-                  <option value="oauth_volume">oauth_volume</option>
-                  <option value="none">none</option>
-                </select>
-                <p className="text-xs text-slate-400 dark:text-slate-500">
-                  {isEditing
-                    ? 'Saved launch-contract value.'
-                    : presetField('credential_source')?.lock_reason ??
-                      'Choose an authentication method to derive this value.'}
-                </p>
-              </label>
-              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
-                <span>Materialization mode</span>
-                <select
-                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-                  value={form.runtimeMaterializationMode}
-                  disabled={!isEditing && !presetField('runtime_materialization_mode')?.editable}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      runtimeMaterializationMode: event.target.value,
-                    }))
-                  }
-                >
-                  <option value="">Backend-derived</option>
-                  <option value="api_key_env">api_key_env</option>
-                  <option value="env_bundle">env_bundle</option>
-                  <option value="config_bundle">config_bundle</option>
-                  <option value="composite">composite</option>
-                  <option value="oauth_home">oauth_home</option>
-                </select>
-                <p className="text-xs text-slate-400 dark:text-slate-500">
-                  {isEditing
-                    ? 'Saved launch-contract value.'
-                    : presetField('runtime_materialization_mode')?.lock_reason ??
-                      'Choose an authentication method to derive this value.'}
-                </p>
+                  placeholder="team-default"
+                />
+                <p className="text-xs text-slate-400 dark:text-slate-500">Optional friendly account name</p>
               </label>
               <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                 <span>Default model</span>
@@ -2823,6 +2857,7 @@ export function ProviderProfilesManager({
               </label>
               <div className="flex gap-4 items-start xl:col-span-1">
                 {isEditing ? (
+                  <>
                   <label className="flex items-center gap-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 px-4 py-3 text-sm font-medium text-slate-700 dark:text-slate-300 flex-1">
                     <input
                       type="checkbox"
@@ -2833,25 +2868,26 @@ export function ProviderProfilesManager({
                     />
                     Enabled
                   </label>
+                  <label className="flex items-center gap-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 px-4 py-3 text-sm font-medium text-slate-700 dark:text-slate-300 flex-1">
+                    <input
+                      type="checkbox"
+                      checked={form.isDefault}
+                      onChange={(event) =>
+                        setForm((current) => ({ ...current, isDefault: event.target.checked }))
+                      }
+                    />
+                    Runtime default
+                  </label>
+                  </>
                 ) : null}
-                <label className="flex items-center gap-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 px-4 py-3 text-sm font-medium text-slate-700 dark:text-slate-300 flex-1">
-                  <input
-                    type="checkbox"
-                    checked={form.isDefault}
-                    onChange={(event) =>
-                      setForm((current) => ({ ...current, isDefault: event.target.checked }))
-                    }
-                  />
-                  Runtime default
-                </label>
               </div>
             </div>
           </fieldset>
 
-          {/* ── Runtime Limits (have smart defaults) ── */}
+          {/* ── Standard runtime capacity ── */}
           <fieldset className="rounded-2xl border border-slate-200 dark:border-slate-700 p-5 space-y-4">
             <legend className="px-2 text-sm font-semibold text-slate-700 dark:text-slate-300">
-              Runtime Limits <span className="font-normal text-slate-500 dark:text-slate-400">&mdash; defaults provided</span>
+              Runtime capacity <span className="font-normal text-slate-500 dark:text-slate-400">&mdash; defaults provided</span>
             </legend>
             <div className="grid gap-4 md:grid-cols-3">
               <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
@@ -2882,6 +2918,116 @@ export function ProviderProfilesManager({
                         : 'Loaded from the backend creation preset.'}
                 </p>
               </label>
+            </div>
+          </fieldset>
+
+          <div className="rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 p-4">
+            <label className="flex items-start gap-3 text-sm font-medium text-slate-700 dark:text-slate-300">
+              <input
+                type="checkbox"
+                checked={showAdvancedOptions}
+                aria-controls="provider-profile-advanced-options"
+                aria-expanded={showAdvancedOptions}
+                onChange={(event) => setShowAdvancedOptions(event.target.checked)}
+              />
+              <span>
+                Show advanced options
+                <span className="mt-1 block text-xs font-normal text-slate-500 dark:text-slate-400">
+                  Credential bindings, volumes, rate limits, routing, and launch shaping
+                </span>
+                {!showAdvancedOptions ? (
+                  <span className="mt-1 block text-xs font-normal text-slate-500 dark:text-slate-400">
+                    {creationPreset?.supported
+                      ? 'Using backend-recommended launch settings.'
+                      : 'Advanced draft values are preserved while collapsed.'}
+                  </span>
+                ) : null}
+              </span>
+            </label>
+          </div>
+
+          {showAdvancedOptions ? (
+          <div id="provider-profile-advanced-options" className="space-y-6">
+          {/* ── Backend launch strategy ── */}
+          <fieldset className="rounded-2xl border border-slate-200 dark:border-slate-700 p-5 space-y-4">
+            <legend className="px-2 text-sm font-semibold text-slate-700 dark:text-slate-300">
+              Launch strategy <span className="font-normal text-slate-500 dark:text-slate-400">&mdash; expert controls</span>
+            </legend>
+            {manualCreationAllowed ? (
+              <p className="text-sm text-amber-700 dark:text-amber-300">
+                This combination has no standard preset. Supply the required manual launch fields before creating the profile.
+              </p>
+            ) : null}
+            <div className="grid gap-4 md:grid-cols-2">
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                <span>Credential source</span>
+                <select
+                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
+                  value={form.credentialSource}
+                  disabled={
+                    !isEditing &&
+                    creationPreset?.supported === true &&
+                    presetField('credential_source')?.editable === false
+                  }
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      credentialSource: event.target.value,
+                    }))
+                  }
+                >
+                  <option value="">Backend-derived</option>
+                  <option value="secret_ref">secret_ref</option>
+                  <option value="oauth_volume">oauth_volume</option>
+                  <option value="none">none</option>
+                </select>
+                <p className="text-xs text-slate-400 dark:text-slate-500">
+                  {isEditing || manualCreationAllowed || !form.authenticationMethod
+                    ? 'Explicit manual launch-contract value.'
+                    : presetField('credential_source')?.lock_reason ??
+                      'Choose an authentication method to derive this value.'}
+                </p>
+              </label>
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                <span>Materialization mode</span>
+                <select
+                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
+                  value={form.runtimeMaterializationMode}
+                  disabled={
+                    !isEditing &&
+                    creationPreset?.supported === true &&
+                    presetField('runtime_materialization_mode')?.editable === false
+                  }
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      runtimeMaterializationMode: event.target.value,
+                    }))
+                  }
+                >
+                  <option value="">Backend-derived</option>
+                  <option value="api_key_env">api_key_env</option>
+                  <option value="env_bundle">env_bundle</option>
+                  <option value="config_bundle">config_bundle</option>
+                  <option value="composite">composite</option>
+                  <option value="oauth_home">oauth_home</option>
+                </select>
+                <p className="text-xs text-slate-400 dark:text-slate-500">
+                  {isEditing || manualCreationAllowed || !form.authenticationMethod
+                    ? 'Explicit manual launch-contract value.'
+                    : presetField('runtime_materialization_mode')?.lock_reason ??
+                      'Choose an authentication method to derive this value.'}
+                </p>
+              </label>
+            </div>
+          </fieldset>
+
+          {/* ── Advanced rate-limit policy ── */}
+          <fieldset className="rounded-2xl border border-slate-200 dark:border-slate-700 p-5 space-y-4">
+            <legend className="px-2 text-sm font-semibold text-slate-700 dark:text-slate-300">
+              Rate limits <span className="font-normal text-slate-500 dark:text-slate-400">&mdash; defaults provided</span>
+            </legend>
+            <div className="grid gap-4 md:grid-cols-2">
               <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                 <span>Cooldown after 429 (seconds)</span>
                 <input
@@ -2901,7 +3047,7 @@ export function ProviderProfilesManager({
                     ? 'Saved rate-limit value.'
                     : presetField('cooldown_after_429_seconds')
                       ? `Recommended by ${presetField('cooldown_after_429_seconds')?.source}.`
-                      : 'Loaded from the backend creation preset.'}
+                      : 'Optional manual override.'}
                 </p>
               </label>
               <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
@@ -2926,7 +3072,7 @@ export function ProviderProfilesManager({
                     ? 'Saved rate-limit policy.'
                     : presetField('rate_limit_policy')
                       ? `Recommended by ${presetField('rate_limit_policy')?.source}.`
-                      : 'Loaded from the backend creation preset.'}
+                      : 'Optional manual override.'}
                 </p>
               </label>
             </div>
@@ -3058,20 +3204,6 @@ export function ProviderProfilesManager({
                   placeholder="100"
                 />
               </label>
-              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
-                <span>Account label</span>
-                <input
-                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-                  value={form.accountLabel}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      accountLabel: event.target.value,
-                    }))
-                  }
-                  placeholder="team-default"
-                />
-              </label>
             </div>
             <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
               <span>Clear env keys</span>
@@ -3091,6 +3223,8 @@ export function ProviderProfilesManager({
               <p className="text-xs text-slate-400 dark:text-slate-500">One key per line</p>
             </label>
           </fieldset>
+          </div>
+          ) : null}
 
           <div className="flex flex-wrap gap-3">
             <button
@@ -3100,7 +3234,8 @@ export function ProviderProfilesManager({
                 saveMutation.isPending ||
                 (!isEditing &&
                   Boolean(form.authenticationMethod) &&
-                  (creationPresetLoading || !creationPreset?.supported))
+                  (creationPresetLoading ||
+                    (!creationPreset?.supported && !manualCreationAllowed)))
               }
             >
               {saveMutation.isPending

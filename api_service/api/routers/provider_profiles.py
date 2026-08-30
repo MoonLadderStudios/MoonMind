@@ -587,7 +587,7 @@ def _get_session() -> Any:
 def _normalized_create_values(body: ProviderProfileCreate) -> dict[str, Any]:
     values = body.model_dump(
         exclude={"authentication_method", "preset_version"},
-        mode="json",
+        mode="python",
     )
     supplied_fields = set(body.model_fields_set)
     supplied_fields.difference_update({"authentication_method", "preset_version"})
@@ -801,8 +801,8 @@ async def create_profile(
 
     profile = ManagedAgentProviderProfile(
         profile_id=body.profile_id,
-        runtime_id=body.runtime_id,
-        provider_id=body.provider_id,
+        runtime_id=values["runtime_id"],
+        provider_id=values["provider_id"],
         provider_label=body.provider_label,
         default_model=body.default_model,
         default_effort=body.default_effort,
@@ -837,8 +837,8 @@ async def create_profile(
             if values["disabled_reason"] is not None
             else None
         ),
-        first_authenticated_at=body.first_authenticated_at,
-        last_validated_at=body.last_validated_at,
+        first_authenticated_at=values["first_authenticated_at"],
+        last_validated_at=values["last_validated_at"],
         last_auth_method=(
             ProviderProfileAuthMethod(values["last_auth_method"])
             if values["last_auth_method"] is not None
@@ -871,7 +871,7 @@ async def create_profile(
         )
     await normalize_runtime_default_profile(
         session=session,
-        runtime_id=body.runtime_id,
+        runtime_id=profile.runtime_id,
         preferred_profile_id=(
             profile.profile_id if values["is_default"] else None
         ),
@@ -879,7 +879,7 @@ async def create_profile(
     await session.commit()
     await session.refresh(profile)
 
-    await sync_provider_profile_manager(session=session, runtime_id=body.runtime_id)
+    await sync_provider_profile_manager(session=session, runtime_id=profile.runtime_id)
 
     secret_ref_results = _secret_ref_results_for_rows([profile])
     secret_statuses = await _managed_secret_statuses_for_rows(

@@ -160,6 +160,8 @@ _PERSISTED_PRESET_FIELDS = frozenset(
         "max_lease_duration_seconds",
         "auth_state",
         "disabled_reason",
+        "first_authenticated_at",
+        "last_validated_at",
         "last_auth_method",
     }
 )
@@ -211,7 +213,6 @@ def _missing_credentials_diagnostic(
 def _common_fields(
     *,
     authentication_method: ProviderProfileAuthenticationMethod,
-    credential_source: str,
     runtime_materialization_mode: str,
     system_tags: list[str],
     secret_ref_roles: list[str],
@@ -223,8 +224,8 @@ def _common_fields(
     volume_mount_path_after_setup: str | None = None,
 ) -> dict[str, CreationPresetField]:
     credential_lock_reason = (
-        "Credential source follows the selected authentication method and changes "
-        "only after validated credential setup."
+        "Credential source remains none until validated credential setup installs "
+        "the source selected by the authentication method."
     )
     materialization_lock_reason = (
         "Materialization is fixed by the selected "
@@ -232,8 +233,8 @@ def _common_fields(
     )
     fields = {
         "credential_source": _field(
-            credential_source,
-            "runtime_provider_authentication_strategy",
+            "none",
+            "credential_activation_policy",
             editable=False,
             required=True,
             lock_reason=credential_lock_reason,
@@ -379,6 +380,24 @@ def _common_fields(
         "last_auth_method": _field(
             None, "credential_activation_policy", editable=False
         ),
+        "first_authenticated_at": _field(
+            None,
+            "credential_activation_policy",
+            editable=False,
+            lock_reason=(
+                "Authentication history is recorded only after validated "
+                "credential setup."
+            ),
+        ),
+        "last_validated_at": _field(
+            None,
+            "credential_activation_policy",
+            editable=False,
+            lock_reason=(
+                "Credential validation history is recorded only by a validation "
+                "or finalization endpoint."
+            ),
+        ),
         "is_default": _field(False, "user_intent_after_readiness", editable=True),
         "may_become_runtime_default": _field(
             True,
@@ -418,7 +437,6 @@ def _oauth_preset(
         supported=True,
         fields=_common_fields(
             authentication_method=ProviderProfileAuthenticationMethod.OAUTH,
-            credential_source="oauth_volume",
             runtime_materialization_mode="oauth_home",
             system_tags=["oauth", "first-party"],
             secret_ref_roles=[],
@@ -467,7 +485,6 @@ def _api_key_preset(
         supported=True,
         fields=_common_fields(
             authentication_method=ProviderProfileAuthenticationMethod.API_KEY,
-            credential_source="secret_ref",
             runtime_materialization_mode=materialization_mode,
             system_tags=system_tags or ["api-key", "first-party"],
             secret_ref_roles=[secret_role],
@@ -667,6 +684,11 @@ def apply_provider_profile_creation_preset(
         )
 
     normalized = dict(values)
+    # Persist the exact canonical identity that selected this preset.  Requests
+    # with surrounding whitespace must not validate against one tuple and then
+    # create an unroutable profile under a different identity.
+    normalized["runtime_id"] = preset.runtime_id
+    normalized["provider_id"] = preset.provider_id
     for field_name in _PERSISTED_PRESET_FIELDS:
         field = preset.fields.get(field_name)
         if field is None:

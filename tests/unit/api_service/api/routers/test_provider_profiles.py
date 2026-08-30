@@ -673,17 +673,17 @@ async def test_create_codex_oauth_profile_requires_volume_ref_and_mount_path(
         "materialization_mode",
     ),
     [
-        ("codex_cli", "openai", "oauth", "oauth_volume", "oauth_home"),
-        ("codex_cli", "openai", "api_key", "secret_ref", "api_key_env"),
-        ("claude_code", "anthropic", "oauth", "oauth_volume", "oauth_home"),
+        ("codex_cli", "openai", "oauth", "none", "oauth_home"),
+        ("codex_cli", "openai", "api_key", "none", "api_key_env"),
+        ("claude_code", "anthropic", "oauth", "none", "oauth_home"),
         (
             "claude_code",
             "anthropic",
             "api_key",
-            "secret_ref",
+            "none",
             "api_key_env",
         ),
-        ("opencode", "opencode", "api_key", "secret_ref", "composite"),
+        ("opencode", "opencode", "api_key", "none", "composite"),
     ],
 )
 async def test_creation_preset_conformance_matrix(
@@ -734,6 +734,8 @@ async def test_creation_preset_conformance_matrix(
         "clear_env_keys",
         "enabled",
         "auth_state",
+        "first_authenticated_at",
+        "last_validated_at",
         "may_become_runtime_default",
     ):
         assert required_metadata == set(payload["fields"][field_name])
@@ -811,7 +813,7 @@ async def test_create_applies_preset_to_omitted_advanced_fields_atomically(
 
     assert response.status_code == 201
     payload = response.json()
-    assert payload["credential_source"] == "secret_ref"
+    assert payload["credential_source"] == "none"
     assert payload["runtime_materialization_mode"] == "api_key_env"
     assert payload["max_parallel_runs"] == 1
     assert payload["cooldown_after_429_seconds"] == 300
@@ -896,7 +898,7 @@ async def test_create_rejects_locked_preset_override_before_persistence(
                 "provider_id": "openai",
                 "authentication_method": "api_key",
                 "preset_version": preset["version"],
-                "credential_source": "none",
+                "credential_source": "secret_ref",
             },
         )
 
@@ -904,8 +906,8 @@ async def test_create_rejects_locked_preset_override_before_persistence(
     detail = response.json()["detail"]
     assert detail["code"] == "provider_profile_creation_preset_field_locked"
     assert detail["field"] == "credential_source"
-    assert detail["expected_value"] == "secret_ref"
-    assert "selected authentication method" in detail["lock_reason"]
+    assert detail["expected_value"] == "none"
+    assert "validated credential setup" in detail["lock_reason"]
     async with db_base.async_session_maker() as session:
         assert await session.get(ManagedAgentProviderProfile, profile_id) is None
 
@@ -935,6 +937,88 @@ async def test_create_rejects_stale_preset_before_persistence(
     assert detail["current_version"].startswith("provider-profile-create-v1-")
     async with db_base.async_session_maker() as session:
         assert await session.get(ManagedAgentProviderProfile, profile_id) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "timestamp_field",
+    ["first_authenticated_at", "last_validated_at"],
+)
+async def test_create_rejects_guided_authentication_history_override(
+    client_app: AsyncClient,
+    _module_db,
+    timestamp_field: str,
+) -> None:
+    profile_id = f"preset-auth-history-{timestamp_field}-{uuid4().hex}"
+    async with client_app as client:
+        preset = (
+            await client.get(
+                "/api/v1/provider-profiles/creation-preset",
+                params={
+                    "runtime_id": "codex_cli",
+                    "provider_id": "openai",
+                    "authentication_method": "api_key",
+                },
+            )
+        ).json()
+        response = await client.post(
+            "/api/v1/provider-profiles",
+            json={
+                "profile_id": profile_id,
+                "runtime_id": "codex_cli",
+                "provider_id": "openai",
+                "authentication_method": "api_key",
+                "preset_version": preset["version"],
+                timestamp_field: "2026-08-30T20:00:00Z",
+            },
+        )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "provider_profile_creation_preset_field_locked"
+    assert detail["field"] == timestamp_field
+    assert detail["expected_value"] is None
+    async with db_base.async_session_maker() as session:
+        assert await session.get(ManagedAgentProviderProfile, profile_id) is None
+
+
+@pytest.mark.asyncio
+async def test_create_guided_profile_persists_preset_normalized_identity(
+    client_app: AsyncClient,
+    _module_db,
+) -> None:
+    profile_id = f"preset-normalized-identity-{uuid4().hex}"
+    async with client_app as client:
+        preset = (
+            await client.get(
+                "/api/v1/provider-profiles/creation-preset",
+                params={
+                    "runtime_id": "codex_cli",
+                    "provider_id": "openai",
+                    "authentication_method": "api_key",
+                },
+            )
+        ).json()
+        response = await client.post(
+            "/api/v1/provider-profiles",
+            json={
+                "profile_id": profile_id,
+                "runtime_id": " codex_cli ",
+                "provider_id": " openai ",
+                "authentication_method": "api_key",
+                "preset_version": preset["version"],
+            },
+        )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["runtime_id"] == "codex_cli"
+    assert payload["provider_id"] == "openai"
+    async with db_base.async_session_maker() as session:
+        row = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert row is not None
+        assert row.runtime_id == "codex_cli"
+        assert row.provider_id == "openai"
 
 
 @pytest.mark.asyncio
@@ -1005,7 +1089,7 @@ async def test_create_guided_oauth_profile_is_disabled_until_enrollment(
 
     assert response.status_code == 201
     payload = response.json()
-    assert payload["credential_source"] == "oauth_volume"
+    assert payload["credential_source"] == "none"
     assert payload["runtime_materialization_mode"] == "oauth_home"
     assert payload["volume_ref"] is None
     assert payload["volume_mount_path"] is None
