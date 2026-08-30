@@ -237,6 +237,7 @@ from moonmind.workflows.temporal.hard_switch_cutover import (
     resolve_user_workflow_start_contract,
 )
 from moonmind.workflows.executions.model_resolver import (
+    RequestedModelTierUnavailableError,
     ResolvedModelEffort,
     resolve_effective_model,
     resolve_model_effort,
@@ -7801,6 +7802,16 @@ def _resolve_runtime_model_effort(
                 advisory_preview=advisory_preview,
                 workflow_settings=settings.workflow,
             )
+        except RequestedModelTierUnavailableError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={
+                    "code": exc.code,
+                    "message": str(exc),
+                    "requestedModelTier": exc.requested_model_tier,
+                    "configuredTierCount": exc.configured_tier_count,
+                },
+            ) from exc
         except ValueError as exc:
             raise _invalid_workflow_request(str(exc)) from exc
         return (

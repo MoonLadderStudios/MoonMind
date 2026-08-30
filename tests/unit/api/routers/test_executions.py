@@ -60,6 +60,7 @@ from api_service.api.routers.executions import (
     update_execution as update_execution_route,
 )
 from api_service.api.routers import executions as executions_module
+from api_service.api.schemas import CreateJobRequest
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
 from moonmind.omnigent.bridge_store import (
@@ -70,6 +71,8 @@ from api_service.db.models import (
     Base,
     ManagedAgentProviderProfile,
     MoonMindWorkflowState,
+    ProviderProfileAuthState,
+    ProviderProfileSlotLease,
     TemporalExecutionCloseStatus,
     TemporalArtifact,
     TemporalArtifactEncryption,
@@ -7200,9 +7203,142 @@ def test_create_task_shaped_execution_rejects_strict_unavailable_model_tier() ->
         )
 
     assert response.status_code == 422
-    assert response.json()["detail"]["message"] == "requested_model_tier_unavailable"
+    assert response.json()["detail"] == {
+        "code": "requested_model_tier_unavailable",
+        "message": (
+            "Requested model tier 3 is unavailable; "
+            "the selected profile defines 2 tiers."
+        ),
+        "requestedModelTier": 3,
+        "configuredTierCount": 2,
+    }
     mock_service.create_execution.assert_not_awaited()
     app.dependency_overrides.clear()
+
+
+# MoonLadderStudios/MoonMind#3795 — strict tier admission must stop before the
+# durable workflow-start and Provider Profile slot-leasing authority boundaries.
+@pytest.mark.asyncio
+async def test_strict_unavailable_tier_consumes_no_resources_and_default_clamps(
+    tmp_path,
+) -> None:
+    original_backend = settings.workflow.temporal_artifact_backend
+    original_root = settings.workflow.temporal_artifact_root
+    settings.workflow.temporal_artifact_backend = "local_fs"
+    settings.workflow.temporal_artifact_root = str(tmp_path / "artifacts")
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{tmp_path}/mm3795_strict_tier.db",
+        future=True,
+    )
+    session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    try:
+        async with session_factory() as session:
+            session.add(
+                ManagedAgentProviderProfile(
+                    profile_id="codex-provider-profile",
+                    runtime_id="codex_cli",
+                    provider_id="openai",
+                    enabled=True,
+                    auth_state=ProviderProfileAuthState.CONNECTED,
+                    model_tiers=[
+                        {
+                            "label": "Review",
+                            "model": "gpt-5-mini",
+                            "effort": "low",
+                            "parameters": {},
+                            "annotations": {},
+                        },
+                        {
+                            "label": "Implement",
+                            "model": "gpt-5.5",
+                            "effort": "high",
+                            "parameters": {},
+                            "annotations": {},
+                        },
+                    ],
+                    default_model_tier=1,
+                )
+            )
+            await session.commit()
+            service = TemporalExecutionService(session)
+            service._client_adapter.start_workflow = AsyncMock(
+                return_value=SimpleNamespace(run_id="run-mm3795-clamp")
+            )
+            user = SimpleNamespace(
+                id=uuid4(),
+                email="mm3795@example.com",
+                is_active=True,
+                is_superuser=False,
+                roles=[],
+            )
+            request_payload = {
+                "type": "workflow",
+                "payload": {
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "targetRuntime": "codex",
+                    "workflow": {
+                        "instructions": "Implement MoonLadderStudios/MoonMind#3795.",
+                        "runtime": {
+                            "mode": "codex",
+                            "providerProfile": "codex-provider-profile",
+                            "modelTier": 3,
+                            "tierFallback": "strict",
+                        },
+                    },
+                },
+            }
+
+            with pytest.raises(HTTPException) as exc_info:
+                await executions_module._create_execution_from_workflow_request(
+                    request=CreateJobRequest.model_validate(request_payload),
+                    service=service,
+                    user=user,
+                    session=session,
+                    principal_context={},
+                )
+
+            assert exc_info.value.status_code == 422
+            service._client_adapter.start_workflow.assert_not_awaited()
+            execution_rows = (
+                await session.execute(select(TemporalExecutionCanonicalRecord))
+            ).scalars().all()
+            slot_leases = (
+                await session.execute(select(ProviderProfileSlotLease))
+            ).scalars().all()
+            assert execution_rows == []
+            assert slot_leases == []
+
+            del request_payload["payload"]["workflow"]["runtime"]["tierFallback"]
+            clamped = await executions_module._create_execution_from_workflow_request(
+                request=CreateJobRequest.model_validate(request_payload),
+                service=service,
+                user=user,
+                session=session,
+                principal_context={},
+            )
+
+            assert clamped.model == "gpt-5.5"
+            assert clamped.input_parameters["modelTierResolution"] == {
+                "requestedModelTier": 3,
+                "effectiveModelTier": 2,
+                "tierLabel": "Implement",
+                "fallbackReason": "requested_tier_above_configured_range",
+                "resolvedModel": "gpt-5.5",
+                "resolvedEffort": "high",
+                "modelSource": "requested_tier",
+                "effortSource": "requested_tier",
+                "effortApplicationStatus": "unknown",
+                "previewMismatch": False,
+                "providerProfileId": "codex-provider-profile",
+            }
+            service._client_adapter.start_workflow.assert_awaited_once()
+    finally:
+        await engine.dispose()
+        settings.workflow.temporal_artifact_backend = original_backend
+        settings.workflow.temporal_artifact_root = original_root
 
 
 def test_create_task_shaped_execution_preserves_task_title_and_publish_overrides(
@@ -7824,6 +7960,33 @@ def test_mm1171_create_execution_rejects_invalid_runtime_tier_intent(
 
     assert response.status_code == 422
     assert "hardOverrideAudit" in response.json()["detail"]["message"]
+
+
+def test_mm1171_create_execution_rejects_below_range_runtime_tier_intent(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+    test_client.app.dependency_overrides[get_async_session] = lambda: None
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "targetRuntime": "codex_cli",
+                "workflow": {
+                    "title": "Reject below-range tier",
+                    "instructions": "Run a workflow.",
+                    "runtime": {"modelTier": 0},
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "greater than or equal to 1" in response.json()["detail"]["message"]
 
 
 def test_create_task_shaped_execution_preserves_preset_schedule_provenance(

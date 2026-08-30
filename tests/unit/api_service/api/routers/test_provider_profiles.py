@@ -928,6 +928,48 @@ async def test_provider_profile_model_tier_preview_returns_advisory_resolution(
 
 
 @pytest.mark.asyncio
+async def test_provider_profile_model_tier_preview_preserves_strict_error_code(
+    client_app: AsyncClient, _module_db
+) -> None:
+    profile_id = "tier_preview_strict_error_code"
+    payload = {
+        "profile_id": profile_id,
+        "runtime_id": "codex_cli",
+        "provider_id": "openai",
+        "credential_source": "none",
+        "runtime_materialization_mode": "composite",
+        "model_tiers": [
+            {"label": "Plan", "model": "gpt-5-mini", "effort": "low"},
+            {"label": "Implement", "model": "gpt-5.5", "effort": "xhigh"},
+        ],
+        "default_model_tier": 1,
+    }
+
+    async with client_app as client:
+        create_response = await client.post("/api/v1/provider-profiles", json=payload)
+        preview_response = await client.post(
+            f"/api/v1/provider-profiles/{profile_id}/model-tiers:preview",
+            json={
+                "steps": [
+                    {"id": "docs", "modelTier": 3, "tierFallback": "strict"}
+                ]
+            },
+        )
+
+    assert create_response.status_code == 201
+    assert preview_response.status_code == 422
+    assert preview_response.json()["detail"] == {
+        "code": "requested_model_tier_unavailable",
+        "message": (
+            "Requested model tier 3 is unavailable; "
+            "the selected profile defines 2 tiers."
+        ),
+        "requestedModelTier": 3,
+        "configuredTierCount": 2,
+    }
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("default_model_tier", [2, True])
 async def test_provider_profile_rejects_invalid_default_model_tier(
     client_app: AsyncClient, _module_db, default_model_tier: object

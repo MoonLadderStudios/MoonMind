@@ -17,6 +17,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from moonmind.workflows.executions.model_resolver import (
+    RequestedModelTierUnavailableError,
     resolve_effective_model,
     resolve_model_effort,
 )
@@ -299,6 +300,47 @@ class TestResolveModelEffortTiers:
         assert resolved.effective_model_tier == 2
         assert resolved.model == "tier-2-model"
 
+    def test_omitted_requested_tier_uses_profile_default_tier(self):
+        resolved = resolve_model_effort(
+            runtime_id="codex_cli",
+            profile=self._profile(default_model_tier=2),
+            env={},
+        )
+
+        assert resolved.requested_model_tier is None
+        assert resolved.effective_model_tier == 2
+        assert resolved.model == "tier-2-model"
+        assert resolved.effort == "high"
+        assert resolved.model_source == "profile_default_tier"
+        assert resolved.effort_source == "profile_default_tier"
+        assert resolved.fallback_reason == "profile_default_tier"
+
+    def test_requested_tier_below_configured_range_clamps_by_default(self):
+        resolved = resolve_model_effort(
+            runtime_id="codex_cli",
+            profile=self._profile(),
+            requested_model_tier=0,
+            env={},
+        )
+
+        assert resolved.requested_model_tier == 0
+        assert resolved.effective_model_tier == 1
+        assert resolved.model == "tier-1-model"
+        assert resolved.fallback_reason == "requested_tier_below_configured_range"
+
+    @pytest.mark.parametrize("tier_fallback", ["clamp", "strict"])
+    def test_requested_tier_below_range_without_tiers_is_rejected(
+        self, tier_fallback
+    ):
+        with pytest.raises(ValueError, match="greater than or equal to 1"):
+            resolve_model_effort(
+                runtime_id="codex_cli",
+                profile=self._profile(model_tiers=[]),
+                requested_model_tier=0,
+                tier_fallback=tier_fallback,
+                env={},
+            )
+
     def test_requested_tier_above_configured_range_clamps_by_default(self):
         resolved = resolve_model_effort(
             runtime_id="codex_cli",
@@ -342,7 +384,7 @@ class TestResolveModelEffortTiers:
         assert resolved.model == "tier-1-model"
 
     def test_strict_tier_fallback_rejects_unavailable_requested_tier(self):
-        with pytest.raises(ValueError, match="requested_model_tier_unavailable"):
+        with pytest.raises(RequestedModelTierUnavailableError) as exc_info:
             resolve_model_effort(
                 runtime_id="codex_cli",
                 profile=self._profile(),
@@ -350,6 +392,21 @@ class TestResolveModelEffortTiers:
                 tier_fallback="strict",
                 env={},
             )
+
+        assert exc_info.value.code == "requested_model_tier_unavailable"
+        assert exc_info.value.requested_model_tier == 3
+        assert exc_info.value.configured_tier_count == 2
+
+    def test_strict_tier_fallback_accepts_in_range_profile_default_tier(self):
+        resolved = resolve_model_effort(
+            runtime_id="codex_cli",
+            profile=self._profile(default_model_tier=2),
+            tier_fallback="strict",
+            env={},
+        )
+
+        assert resolved.effective_model_tier == 2
+        assert resolved.fallback_reason == "profile_default_tier"
 
     def test_explicit_model_and_effort_bypass_tier_policy(self):
         resolved = resolve_model_effort(
@@ -403,8 +460,8 @@ class TestResolveModelEffortTiers:
         assert resolved.effort_source == "task_override"
         assert resolved.fallback_reason is None
 
-    @pytest.mark.parametrize("bad_tier", [0, -1, 1.5, "2", True])
-    def test_model_tier_must_be_integer_greater_than_or_equal_to_1(self, bad_tier):
+    @pytest.mark.parametrize("bad_tier", [1.5, "2", True])
+    def test_model_tier_must_be_integer(self, bad_tier):
         with pytest.raises(ValueError, match="modelTier"):
             resolve_model_effort(
                 runtime_id="codex_cli",
