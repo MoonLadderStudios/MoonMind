@@ -147,7 +147,7 @@ Progress" with a single batch run.
    linking every queued child workflow id together with the resolved targets,
    skips, and errors, and prints a short `queued/skipped/errors` count summary.
 
-## Safety constraints
+## Security and execution constraints
 
 - Require `MOONMIND_URL` to reach the MoonMind API; the legacy direct-DB queue is
   not supported.
