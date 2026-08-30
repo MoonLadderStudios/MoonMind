@@ -1069,6 +1069,12 @@ The parent workflow detail should show a **Merge Automation** panel with:
 - resolver attempt history
 - child workflow links
 
+Resolver child workflow titles include their one-based attempt ordinal, for
+example `Resolve PR #123 (Attempt 1)` and `Resolve PR #123 (Attempt 2)`. The
+ordinal is the same deterministic cycle value used in the child workflow ID so
+the workflow list distinguishes repeated gate passes without inventing a second
+attempt identity.
+
 ### 20.2 Child artifacts
 
 `MoonMind.MergeAutomation` SHOULD write:
