@@ -12,7 +12,6 @@ permissions:
 
 jobs:
   migrate:
-    if: github.event.head_commit.message == 'chore: run documentation terminology migration'
     runs-on: ubuntu-latest
     steps:
       - name: Check out terminology branch
