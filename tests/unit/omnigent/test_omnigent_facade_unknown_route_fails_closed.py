@@ -9,6 +9,7 @@ list) for HTTP, SSE, WebSocket, and terminal/PTY variants.
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 import json
 
@@ -232,13 +233,19 @@ def test_every_inventory_entry_has_explicit_disposition() -> None:
         assert route["pathPattern"]
 
 
+_CONTRACT_FIXTURE = Path(__file__).parents[2] / "fixtures" / "omnigent" / "native_ui_network_contract_v1.json"
+
+
 def test_facade_digest_binds_inventory_to_exact_sources() -> None:
     first = compat.compatibility_map()["moonmindFacadeDigest"]
     second = compat.compatibility_map()["moonmindFacadeDigest"]
     # Deterministic and non-empty.
     assert isinstance(first, str) and len(first) == 64
     assert first == second
-    # The digest is bound to the exact allowlist — a second call must match.
+    # Pinned to independently reviewed evidence: an allowlist change without
+    # bumping NATIVE_UI_COMPAT_VERSION must fail, not silently recompute.
+    fixture = json.loads(_CONTRACT_FIXTURE.read_text(encoding="utf-8"))
+    assert first == fixture["moonmindFacadeDigest"]
 
 
 def test_hosted_ui_never_uses_root_v1_route() -> None:
