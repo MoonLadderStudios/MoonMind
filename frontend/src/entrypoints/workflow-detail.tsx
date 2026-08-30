@@ -865,7 +865,7 @@ const StepExecutionListSchema = z
 const ModelTierResolutionSchema = z
   .object({
     providerProfileId: z.string().nullable(),
-    requestedModelTier: z.number().int().positive(),
+    requestedModelTier: z.number().int().positive().nullable(),
     effectiveModelTier: z.number().int().positive(),
     tierLabel: z.string().nullable(),
     fallbackReason: z.string().nullable(),
@@ -2344,10 +2344,14 @@ function RepositoryFact({ repository }: { repository: string }) {
 
 function renderProviderProfileSummary(
   execution: z.infer<typeof ExecutionDetailSchema>,
+  launchProfileId?: string | null,
 ): ReactNode {
-  const providerLabel = execution.providerLabel?.trim();
-  const providerId = execution.providerId?.trim();
-  const profileId = execution.profileId?.trim();
+  const profileId = launchProfileId?.trim() || execution.profileId?.trim();
+  const launchProfileChanged = Boolean(
+    launchProfileId?.trim() && launchProfileId?.trim() !== execution.profileId?.trim(),
+  );
+  const providerLabel = launchProfileChanged ? undefined : execution.providerLabel?.trim();
+  const providerId = launchProfileChanged ? undefined : execution.providerId?.trim();
   const primary = providerLabel || providerId || profileId;
   if (!primary) return '—';
 
@@ -2370,11 +2374,38 @@ function renderProviderProfileSummary(
 
 function persistedModelTierResolution(
   execution: z.infer<typeof ExecutionDetailSchema>,
+  observability: z.infer<typeof ObservabilityEventsResponseSchema> | null | undefined,
 ): z.infer<typeof ModelTierResolutionSchema> | null {
-  const parsed = ModelTierResolutionSchema.safeParse(
+  const events = observability?.events ?? [];
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (!event) continue;
+    if (event.kind !== 'system_annotation') continue;
+    const metadata = event.metadata ?? {};
+    if (metadata.source !== 'launcher' || metadata.reason !== 'model_tier_resolution') {
+      continue;
+    }
+    const launchAnnotation = ModelTierResolutionSchema.safeParse(
+      metadata.modelTierResolution,
+    );
+    if (launchAnnotation.success) return launchAnnotation.data;
+  }
+
+  const metadata = detailObjectValue(execution.inputParameters.metadata);
+  const moonmindMetadata = detailObjectValue(metadata.moonmind);
+  const launchMetadata = detailObjectValue(moonmindMetadata.modelEffortResolution);
+  if (Object.keys(launchMetadata).length > 0) {
+    const parsedLaunchMetadata = ModelTierResolutionSchema.safeParse({
+      ...launchMetadata,
+      providerProfileId: launchMetadata.providerProfileId ?? execution.profileId ?? null,
+    });
+    if (parsedLaunchMetadata.success) return parsedLaunchMetadata.data;
+  }
+
+  const admissionResolution = ModelTierResolutionSchema.safeParse(
     execution.inputParameters.modelTierResolution,
   );
-  return parsed.success ? parsed.data : null;
+  return admissionResolution.success ? admissionResolution.data : null;
 }
 
 function modelTierFallbackExplanation(
@@ -2382,6 +2413,9 @@ function modelTierFallbackExplanation(
 ): string | null {
   const fallbackReason = resolution.fallbackReason?.trim();
   if (!fallbackReason) return null;
+  if (fallbackReason === 'profile_default_tier') {
+    return `Profile default selected Tier ${resolution.effectiveModelTier}.`;
+  }
   if (fallbackReason === 'requested_tier_above_configured_range') {
     const configuredTierCount = resolution.effectiveModelTier;
     return (
@@ -2390,8 +2424,11 @@ function modelTierFallbackExplanation(
       `${configuredTierCount === 1 ? 'tier' : 'tiers'}.`
     );
   }
+  const requestedTier = resolution.requestedModelTier === null
+    ? 'Profile default'
+    : `Requested Tier ${resolution.requestedModelTier}`;
   return (
-    `Requested Tier ${resolution.requestedModelTier}, used Tier ${resolution.effectiveModelTier} ` +
+    `${requestedTier}, used Tier ${resolution.effectiveModelTier} ` +
     `because backend tier policy reported ${fallbackReason}.`
   );
 }
@@ -9164,6 +9201,18 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
   const debugTabActive = detailSubroute === 'debug';
   const shouldFetchStepLedger = (stepsTabActive || artifactsTabActive) && Boolean(execution?.stepsHref);
 
+  const modelTierObservabilityQuery = useQuery({
+    queryKey: ['agent-run-observability-events', resolvedAgentRunId],
+    queryFn: () => fetchObservabilityEvents(
+      payload.apiBase,
+      resolvedAgentRunId,
+      agentRunRoutes.observabilityEvents,
+    ),
+    enabled: overviewTabActive && Boolean(resolvedAgentRunId),
+    staleTime: isTerminalExecution ? Infinity : detailPoll,
+    retry: false,
+  });
+
   const stepsQuery = useQuery({
     queryKey: ['workflow-detail-steps', workflowId, execution?.stepsHref],
     queryFn: () => fetchStepLedger(String(execution?.stepsHref || '')),
@@ -10133,11 +10182,14 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
   const artifactTabCount = artifactsQuery.data?.artifacts.length ?? null;
   const runTabCount = execution ? (execution.relatedRuns?.length ?? 0) + 1 : null;
   const modelTierResolution = execution
-    ? persistedModelTierResolution(execution)
+    ? persistedModelTierResolution(execution, modelTierObservabilityQuery.data)
     : null;
   const modelTierFallback = modelTierResolution
     ? modelTierFallbackExplanation(modelTierResolution)
     : null;
+  const historicalModel = modelTierResolution?.resolvedModel?.trim() || execution?.model;
+  const historicalEffort = modelTierResolution?.resolvedEffort?.trim() || execution?.effort;
+  const historicalProfileId = modelTierResolution?.providerProfileId?.trim() || execution?.profileId;
   return (
     <div className="stack workflow-detail-page">
       <div className="toolbar">
@@ -10402,25 +10454,32 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
 
               <FactGroup title="Runtime">
                 {execution.targetRuntime ? <Fact label="Runtime">{formatRuntimeLabel(execution.targetRuntime)}</Fact> : null}
-                {execution.model ? (
+                {historicalModel ? (
                   <Fact label="Model">
-                    <code className="text-xs">{execution.model}</code>
+                    <code className="text-xs">{historicalModel}</code>
                   </Fact>
                 ) : null}
-                {execution.profileId ? (
-                  <Fact label="Provider Profile">{renderProviderProfileSummary(execution)}</Fact>
+                {historicalProfileId ? (
+                  <Fact label="Provider Profile">
+                    {renderProviderProfileSummary(execution, historicalProfileId)}
+                  </Fact>
                 ) : null}
-                {execution.effort ? <Fact label="Effort">{execution.effort}</Fact> : null}
+                {historicalEffort ? <Fact label="Effort">{historicalEffort}</Fact> : null}
                 {modelTierResolution ? (
                   <>
                     <Fact label="Requested Tier">
-                      Tier {modelTierResolution.requestedModelTier}
+                      {modelTierResolution.requestedModelTier === null
+                        ? 'Profile default'
+                        : `Tier ${modelTierResolution.requestedModelTier}`}
                     </Fact>
                     <Fact label="Effective Tier">
                       Tier {modelTierResolution.effectiveModelTier}
                     </Fact>
                     <Fact label="Tier Label">{modelTierResolution.tierLabel || '—'}</Fact>
                     <Fact label="Fallback Reason">{modelTierFallback || 'No fallback.'}</Fact>
+                    <Fact label="Effort Application">
+                      {formatStatusLabel(modelTierResolution.effortApplicationStatus)}
+                    </Fact>
                   </>
                 ) : null}
                 {execution.priority !== null && execution.priority !== undefined ? (
