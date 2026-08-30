@@ -49,6 +49,9 @@ jobs:
                   ("safety/compliance hurdles", "security/compliance hurdles"),
                   ("Safety/guardrails", "Security/guardrails"),
               ],
+              "tests/integration/reliability/README.md": [
+                  ("filesystem-safety", "filesystem-integrity"),
+              ],
               "AGENTS.md": [
                   ("safe defaults", "secure defaults"),
                   ("safe-by-default configuration", "restrictive-by-default configuration"),
@@ -135,7 +138,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add AGENTS.md CLAUDE.md GEMINI.md docs
+          git add AGENTS.md CLAUDE.md GEMINI.md docs tests/integration/reliability/README.md
           if git diff --cached --quiet; then
             echo "No final replacements were needed."
             exit 0
