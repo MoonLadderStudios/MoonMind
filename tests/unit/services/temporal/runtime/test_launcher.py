@@ -1210,6 +1210,59 @@ def test_apply_resolved_tier_policy_preserves_original_tier_intent():
     assert resolution["effectiveModelTier"] == 1
 
 
+def test_apply_resolved_tier_policy_replaces_stale_admission_resolution():
+    profile = _make_profile(
+        profile_id="codex-current",
+        profile_version=22,
+        runtime_id="codex_cli",
+        enabled=True,
+        authState="connected",
+        disabledReason=None,
+        model_tiers=[
+            {
+                "label": "Current",
+                "model": "current-model",
+                "effort": "xhigh",
+            }
+        ],
+        default_model_tier=1,
+    )
+    request = _make_request(
+        parameters={
+            "modelTier": 1,
+            "model": "stale-model",
+            "effort": "low",
+            "tierPreview": {
+                "profileId": "codex-current",
+                "profileVersion": 22,
+                "model": "current-model",
+                "effort": "xhigh",
+            },
+            "modelTierResolution": {
+                "providerProfileId": "codex-old",
+                "resolvedModel": "stale-model",
+                "resolvedEffort": "low",
+                "effortSource": "requested_tier",
+                "previewMismatch": True,
+            },
+        }
+    )
+
+    ManagedRuntimeLauncher._apply_resolved_tier_policy(
+        request=request,
+        profile=profile,
+        strategy=None,
+    )
+
+    assert request.parameters["model"] == "current-model"
+    assert request.parameters["effort"] == "xhigh"
+    assert request.parameters["modelTierResolution"] == {
+        **request.parameters["metadata"]["moonmind"]["modelEffortResolution"],
+        "providerProfileId": "codex-current",
+    }
+    assert request.parameters["modelTierResolution"]["previewMismatch"] is False
+
+
 @pytest.mark.parametrize(
     ("parameters", "expected_requested_tier", "expected_fallback_reason"),
     [

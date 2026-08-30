@@ -7778,6 +7778,7 @@ def _resolve_runtime_model_effort(
     profile: Any | None,
     runtime_payload: Mapping[str, Any],
     requested_model: str | None,
+    compare_advisory_preview: bool = True,
 ) -> tuple[str | None, str, str | None, dict[str, Any] | None]:
     requested_tier = _runtime_model_tier(runtime_payload)
     requested_effort = runtime_payload.get("effort")
@@ -7786,7 +7787,8 @@ def _resolve_runtime_model_effort(
     tier_fallback = str(runtime_payload.get("tierFallback") or "clamp")
     advisory_preview = (
         runtime_payload.get("tierPreview")
-        if isinstance(runtime_payload.get("tierPreview"), Mapping)
+        if compare_advisory_preview
+        and isinstance(runtime_payload.get("tierPreview"), Mapping)
         else None
     )
 
@@ -8836,6 +8838,10 @@ async def _resolve_step_runtime_selections(
             profile=provider_profile,
             runtime_payload=runtime_payload,
             requested_model=raw_requested_model,
+            compare_advisory_preview=not (
+                effective_profile_id is None
+                and bool(runtime_payload.get("profileSelector"))
+            ),
         )
 
         resolved_runtime = dict(runtime_payload)
@@ -11266,6 +11272,10 @@ async def _create_execution_from_workflow_request(
         profile=_provider_profile,
         runtime_payload=runtime_payload,
         requested_model=raw_requested_model,
+        compare_advisory_preview=not (
+            raw_profile_id is None
+            and bool(runtime_payload.get("profileSelector"))
+        ),
     )
 
     await _resolve_step_runtime_selections(
@@ -11883,16 +11893,20 @@ async def _resolve_recurring_runtime_metadata(
         field_name="payload.workflow.runtime",
     )
     steps_payload = task_payload.get("steps")
+    normalized_step_tier_previews: dict[int, dict[str, Any]] = {}
     if isinstance(steps_payload, Sequence) and not isinstance(steps_payload, (str, bytes)):
         for index, step_payload in enumerate(steps_payload):
             if not isinstance(step_payload, Mapping):
                 continue
             step_runtime = step_payload.get("runtime")
             if isinstance(step_runtime, Mapping):
-                _validate_runtime_tier_intent_for_submit(
+                validated_step_runtime = _validate_runtime_tier_intent_for_submit(
                     step_runtime,
                     field_name=f"payload.workflow.steps[{index}].runtime",
                 )
+                normalized_preview = validated_step_runtime.get("tierPreview")
+                if isinstance(normalized_preview, Mapping):
+                    normalized_step_tier_previews[index] = dict(normalized_preview)
     authored_runtime = (
         request_payload.get("targetRuntime")
         or parameter_payload.get("targetRuntime")
@@ -11974,6 +11988,10 @@ async def _resolve_recurring_runtime_metadata(
         profile=provider_profile,
         runtime_payload=runtime_payload,
         requested_model=raw_requested_model,
+        compare_advisory_preview=not (
+            raw_profile_id is None
+            and bool(runtime_payload.get("profileSelector"))
+        ),
     )
     metadata: dict[str, Any] = {
         "targetRuntime": canonical_target_runtime,
@@ -11998,6 +12016,11 @@ async def _resolve_recurring_runtime_metadata(
         metadata["tierFallback"] = runtime_payload.get("tierFallback")
     if isinstance(runtime_payload.get("profileSelector"), Mapping):
         metadata["profileSelector"] = dict(runtime_payload["profileSelector"])
+    normalized_preview = runtime_payload.get("tierPreview")
+    if isinstance(normalized_preview, Mapping):
+        metadata["_normalizedTierPreview"] = dict(normalized_preview)
+    if normalized_step_tier_previews:
+        metadata["_normalizedStepTierPreviews"] = normalized_step_tier_previews
     return metadata
 
 
@@ -12061,9 +12084,41 @@ def _stamp_recurring_runtime_metadata(
         runtime_payload["tierFallback"] = runtime_metadata.get("tierFallback")
     if isinstance(runtime_metadata.get("profileSelector"), Mapping):
         runtime_payload["profileSelector"] = dict(runtime_metadata["profileSelector"])
+    if isinstance(runtime_metadata.get("_normalizedTierPreview"), Mapping):
+        runtime_payload["tierPreview"] = dict(
+            runtime_metadata["_normalizedTierPreview"]
+        )
     if runtime_payload:
         task_payload["runtime"] = runtime_payload
-        initial_parameters[task_key] = task_payload
+
+    normalized_step_tier_previews = runtime_metadata.get(
+        "_normalizedStepTierPreviews"
+    )
+    steps_payload = task_payload.get("steps")
+    if isinstance(normalized_step_tier_previews, Mapping) and isinstance(
+        steps_payload, Sequence
+    ) and not isinstance(steps_payload, (str, bytes)):
+        normalized_steps = list(steps_payload)
+        for index, step_payload in enumerate(normalized_steps):
+            preview = normalized_step_tier_previews.get(index)
+            if preview is None:
+                preview = normalized_step_tier_previews.get(str(index))
+            if not isinstance(step_payload, Mapping) or not isinstance(
+                preview, Mapping
+            ):
+                continue
+            normalized_step = dict(step_payload)
+            normalized_step_runtime = (
+                dict(normalized_step.get("runtime"))
+                if isinstance(normalized_step.get("runtime"), Mapping)
+                else {}
+            )
+            normalized_step_runtime["tierPreview"] = dict(preview)
+            normalized_step["runtime"] = normalized_step_runtime
+            normalized_steps[index] = normalized_step
+        task_payload["steps"] = normalized_steps
+
+    initial_parameters[task_key] = task_payload
 
 
 def _build_recurring_target(

@@ -7163,6 +7163,72 @@ def test_create_task_shaped_execution_records_tier_preview_mismatch() -> None:
     app.dependency_overrides.clear()
 
 
+def test_create_task_shaped_execution_defers_selector_preview_comparison() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    mock_service.create_execution.return_value = _build_execution_record()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    default_profile = SimpleNamespace(
+        profile_id="codex-default",
+        profile_version=11,
+        runtime_id="codex_cli",
+        provider_id="openrouter",
+        default_model_tier=1,
+        model_tiers=[
+            {
+                "label": "Default",
+                "model": "default-model",
+                "effort": "medium",
+            }
+        ],
+    )
+    scalar_result = SimpleNamespace(first=lambda: default_profile)
+    app.dependency_overrides[get_async_session] = lambda: SimpleNamespace(
+        execute=AsyncMock(
+            return_value=SimpleNamespace(scalars=lambda: scalar_result)
+        )
+    )
+    _override_temporal_client(app)
+    _override_user_dependencies(app, is_superuser=False)
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "workflow",
+                "payload": {
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "targetRuntime": "codex",
+                    "workflow": {
+                        "instructions": "Use the selector-owned tier preview.",
+                        "runtime": {
+                            "mode": "codex",
+                            "profileSelector": {"providerId": "openai"},
+                            "modelTier": 1,
+                            "tierPreview": {
+                                "profileId": "codex-openai",
+                                "profileVersion": 17,
+                                "model": "selected-model",
+                                "effort": "high",
+                            },
+                        },
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 201
+    initial_parameters = mock_service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["modelTierResolution"]["providerProfileId"] == (
+        "codex-default"
+    )
+    assert initial_parameters["modelTierResolution"]["previewMismatch"] is False
+    app.dependency_overrides.clear()
+
+
 def test_create_task_shaped_execution_rejects_strict_unavailable_model_tier() -> None:
     app = FastAPI()
     app.include_router(router)
@@ -10499,6 +10565,63 @@ def test_recurring_target_preserves_omnigent_selection_in_initial_parameters() -
     assert target["initialParameters"]["workflow"]["runtime"] == {
         "mode": "omnigent",
         "executionProfileRef": "codex-oauth-profile",
+    }
+
+
+@pytest.mark.asyncio
+async def test_recurring_target_persists_normalized_tier_previews() -> None:
+    request_payload = {
+        "targetRuntime": "codex_cli",
+        "workflow": {
+            "instructions": "Run nightly with normalized preview evidence.",
+            "runtime": {
+                "mode": "codex_cli",
+                "modelTier": 1,
+                "tierPreview": {
+                    "profileId": "  codex-default  ",
+                    "profileVersion": "  version-17  ",
+                    "model": "  gpt-current  ",
+                    "effort": "  high  ",
+                },
+            },
+            "steps": [
+                {
+                    "id": "review",
+                    "runtime": {
+                        "modelTier": 2,
+                        "tierPreview": {
+                            "profileId": "  codex-default  ",
+                            "profileVersion": "  version-17  ",
+                            "model": "  gpt-review  ",
+                            "effort": "  xhigh  ",
+                        },
+                    },
+                }
+            ],
+        },
+    }
+
+    runtime_metadata = await _resolve_recurring_runtime_metadata(
+        request_payload,
+        session=None,
+    )
+    target = _build_recurring_target(
+        request_payload,
+        runtime_metadata=runtime_metadata,
+    )
+
+    stored_workflow = target["initialParameters"]["workflow"]
+    assert stored_workflow["runtime"]["tierPreview"] == {
+        "profileId": "codex-default",
+        "profileVersion": "version-17",
+        "model": "gpt-current",
+        "effort": "high",
+    }
+    assert stored_workflow["steps"][0]["runtime"]["tierPreview"] == {
+        "profileId": "codex-default",
+        "profileVersion": "version-17",
+        "model": "gpt-review",
+        "effort": "xhigh",
     }
 
 

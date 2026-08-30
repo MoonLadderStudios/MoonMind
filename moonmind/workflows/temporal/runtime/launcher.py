@@ -1891,12 +1891,24 @@ class ManagedRuntimeLauncher:
         requested_model = parameters.get("requestedModel")
         if requested_model is None and requested_tier is None:
             requested_model = parameters.get("model")
+        requested_effort = parameters.get("effort")
+        admission_resolution = parameters.get("modelTierResolution")
+        if (
+            requested_tier is not None
+            and isinstance(admission_resolution, Mapping)
+            and admission_resolution.get("effortSource") != "task_override"
+        ):
+            # Admission stores the resolved tier effort in ``effort``. Do not
+            # reinterpret that snapshot as an authored override after the
+            # selected profile changes before launch. Older payloads without
+            # source evidence retain their previous pass-through behavior.
+            requested_effort = None
         resolved = resolve_model_effort(
             runtime_id=profile.runtime_id,
             profile=profile,
             requested_model_tier=requested_tier,
             requested_model=requested_model,
-            requested_effort=parameters.get("effort"),
+            requested_effort=requested_effort,
             tier_fallback=parameters.get("tierFallback", "clamp"),
             advisory_preview=parameters.get("tierPreview"),
         )
@@ -1923,7 +1935,15 @@ class ManagedRuntimeLauncher:
         if not isinstance(moonmind_metadata, dict):
             moonmind_metadata = {}
             metadata["moonmind"] = moonmind_metadata
-        moonmind_metadata["modelEffortResolution"] = resolved.as_metadata()
+        resolution_metadata = resolved.as_metadata()
+        moonmind_metadata["modelEffortResolution"] = resolution_metadata
+        if requested_tier is not None or isinstance(
+            parameters.get("tierPreview"), Mapping
+        ):
+            parameters["modelTierResolution"] = {
+                **resolution_metadata,
+                "providerProfileId": profile.profile_id,
+            }
 
     @staticmethod
     def _assert_profile_launch_ready(profile: ManagedRuntimeProfile) -> None:
