@@ -27,6 +27,12 @@ interface SettingDiagnostic {
   severity: 'info' | 'warning' | 'error';
 }
 
+interface SettingAuditPolicy {
+  store_old_value: boolean;
+  store_new_value: boolean;
+  redact: boolean;
+}
+
 interface SettingDescriptor {
   key: string;
   title: string;
@@ -58,6 +64,7 @@ interface SettingDescriptor {
   requires_process_restart: boolean;
   applies_to: string[];
   order: number;
+  audit: SettingAuditPolicy;
   value_version: number;
   diagnostics: SettingDiagnostic[];
 }
@@ -73,6 +80,25 @@ interface PendingChange {
   value: unknown;
   valid: boolean;
   message?: string;
+}
+
+interface SettingsAuditEvent {
+  id: string;
+  event_type: string;
+  key: string;
+  scope: string;
+  actor_user_id?: string | null;
+  old_value?: unknown;
+  new_value?: unknown;
+  redacted: boolean;
+  reason?: string | null;
+  validation_outcome?: string | null;
+  affected_systems: string[];
+  created_at?: string | null;
+}
+
+interface SettingsAuditResponse {
+  items: SettingsAuditEvent[];
 }
 
 const SCOPE_LABELS: Record<SettingScope, string> = {
@@ -327,6 +353,17 @@ async function fetchCatalog(scope: SettingScope): Promise<SettingsCatalogRespons
   return response.json();
 }
 
+async function fetchSettingAudit(scope: SettingScope, key: string): Promise<SettingsAuditResponse> {
+  const query = new URLSearchParams({ scope, key });
+  const response = await fetch(`/api/v1/settings/audit?${query.toString()}`, {
+    headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch settings audit: ${response.statusText}`);
+  }
+  return response.json();
+}
+
 function flattenedDescriptors(catalog?: SettingsCatalogResponse): SettingDescriptor[] {
   if (!catalog) {
     return [];
@@ -343,12 +380,36 @@ function sanitizeError(error: unknown): string {
   return 'Settings request failed.';
 }
 
+function formatAuditTimestamp(value?: string | null): string {
+  if (!value) {
+    return 'Time unavailable';
+  }
+  const timestamp = new Date(value);
+  return Number.isNaN(timestamp.getTime()) ? value : timestamp.toLocaleString();
+}
+
+function displayAuditValue(
+  event: SettingsAuditEvent,
+  value: unknown,
+  storedByPolicy: boolean,
+): string {
+  if (event.redacted) {
+    return 'Redacted';
+  }
+  if (!storedByPolicy) {
+    return 'Not recorded by policy';
+  }
+  return displayValue(value);
+}
+
 export function GeneratedSettingsSection({
   scope,
   onScopeChange,
+  canReadAudit,
 }: {
   scope: SettingScope;
   onScopeChange: (scope: SettingScope) => void;
+  canReadAudit: boolean;
 }) {
   const queryClient = useQueryClient();
   const { requestDeparture } = useSettingsDraftGuard();
@@ -358,6 +419,7 @@ export function GeneratedSettingsSection({
   const [readOnlyOnly, setReadOnlyOnly] = useState(false);
   const [pending, setPending] = useState<Record<string, PendingChange>>({});
   const [notice, setNotice] = useState<string | null>(null);
+  const [selectedAuditKey, setSelectedAuditKey] = useState<string | null>(null);
 
   const catalogQuery = useQuery({
     queryKey: ['settings-catalog', scope],
@@ -365,6 +427,14 @@ export function GeneratedSettingsSection({
   });
 
   const descriptors = useMemo(() => flattenedDescriptors(catalogQuery.data), [catalogQuery.data]);
+  const selectedAuditDescriptor = descriptors.find(
+    (descriptor) => descriptor.key === selectedAuditKey,
+  );
+  const auditQuery = useQuery({
+    queryKey: ['settings-audit', scope, selectedAuditKey],
+    queryFn: () => fetchSettingAudit(scope, selectedAuditKey ?? ''),
+    enabled: canReadAudit && selectedAuditKey !== null,
+  });
   const categories = useMemo(
     () => Array.from(new Set(descriptors.map((descriptor) => descriptor.category))).sort(),
     [descriptors],
@@ -427,6 +497,7 @@ export function GeneratedSettingsSection({
     setSearch('');
     setModifiedOnly(false);
     setReadOnlyOnly(false);
+    setSelectedAuditKey(null);
   }, [scope]);
 
   const requestScopeChange = (nextScope: SettingScope) => {
@@ -541,6 +612,88 @@ export function GeneratedSettingsSection({
         <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 shadow-sm dark:border-slate-800 dark:bg-slate-900/40 dark:text-slate-300">
           {notice}
         </div>
+      ) : null}
+
+      {canReadAudit && selectedAuditDescriptor ? (
+        <section
+          id="settings-audit-panel"
+          aria-label={`Audit history for ${selectedAuditDescriptor.title}`}
+          className="rounded-3xl border border-mm-border/80 bg-transparent p-5 shadow-sm"
+        >
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h4 className="text-base font-semibold text-slate-900 dark:text-white">
+                Audit history: {selectedAuditDescriptor.title}
+              </h4>
+              <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+                Recent recorded changes for {SCOPE_LABELS[scope].toLowerCase()} scope.
+              </p>
+              {selectedAuditDescriptor.audit.redact ? (
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-500">
+                  This setting&apos;s audit policy may redact values based on your permissions.
+                </p>
+              ) : null}
+            </div>
+            <button
+              type="button"
+              className="rounded-xl border border-slate-300 bg-transparent px-3 py-2 text-sm font-medium text-slate-700 hover:border-slate-400 hover:text-slate-950 dark:border-slate-700 dark:text-slate-300 dark:hover:border-slate-500 dark:hover:text-white"
+              onClick={() => setSelectedAuditKey(null)}
+              aria-label={`Close audit history for ${selectedAuditDescriptor.title}`}
+            >
+              Close
+            </button>
+          </div>
+
+          {auditQuery.isLoading ? (
+            <p className="mt-4 text-sm text-slate-500 dark:text-slate-400" role="status">
+              Loading audit history...
+            </p>
+          ) : auditQuery.isError ? (
+            <p className="mt-4 text-sm text-rose-700 dark:text-rose-400" role="alert">
+              {sanitizeError(auditQuery.error)} Generated settings remain available.
+            </p>
+          ) : auditQuery.data?.items.length ? (
+            <ol className="mt-4 space-y-3">
+              {auditQuery.data.items.map((event) => (
+                <li
+                  key={event.id}
+                  className="rounded-2xl border border-slate-200 p-4 text-sm dark:border-slate-800"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-semibold text-slate-900 dark:text-white">
+                      {event.event_type.replaceAll('.', ' ').replaceAll('_', ' ')}
+                    </span>
+                    <span className="text-xs text-slate-500 dark:text-slate-400">
+                      {formatAuditTimestamp(event.created_at)}
+                    </span>
+                  </div>
+                  <dl className="mt-3 grid gap-2 text-slate-600 dark:text-slate-300 sm:grid-cols-2">
+                    <div>
+                      <dt className="text-xs font-medium text-slate-500 dark:text-slate-400">Previous value</dt>
+                      <dd>{displayAuditValue(event, event.old_value, selectedAuditDescriptor.audit.store_old_value)}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs font-medium text-slate-500 dark:text-slate-400">New value</dt>
+                      <dd>{displayAuditValue(event, event.new_value, selectedAuditDescriptor.audit.store_new_value)}</dd>
+                    </div>
+                  </dl>
+                  {event.reason ? (
+                    <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">Reason: {event.reason}</p>
+                  ) : null}
+                  {event.actor_user_id ? (
+                    <p className="mt-1 font-mono text-xs text-slate-500 dark:text-slate-400">
+                      Actor: {event.actor_user_id}
+                    </p>
+                  ) : null}
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="mt-4 text-sm text-slate-500 dark:text-slate-400">
+              No audit events were found for this setting and scope.
+            </p>
+          )}
+        </section>
       ) : null}
 
       <div className="rounded-3xl border border-mm-border/80 bg-transparent p-5 shadow-sm">
@@ -720,16 +873,30 @@ export function GeneratedSettingsSection({
                     {renderControl(descriptor, currentValue, updatePending)}
                     <div className="flex items-center justify-between gap-3">
                       <span className="font-mono text-xs text-slate-500 dark:text-slate-500">{descriptor.key}</span>
-                      {canReset(descriptor, scope) ? (
-                        <button
-                          type="button"
-                          className="rounded-xl border border-slate-300 bg-transparent px-3 py-2 text-sm font-medium text-slate-700 hover:border-slate-400 hover:text-slate-950 dark:border-slate-700 dark:text-slate-300 dark:hover:border-slate-500 dark:hover:text-white"
-                          onClick={() => resetOverride(descriptor)}
-                          aria-label={`Reset ${descriptor.title}`}
-                        >
-                          Reset
-                        </button>
-                      ) : null}
+                      <div className="flex flex-wrap justify-end gap-2">
+                        {canReadAudit ? (
+                          <button
+                            type="button"
+                            className="rounded-xl border border-slate-300 bg-transparent px-3 py-2 text-sm font-medium text-slate-700 hover:border-slate-400 hover:text-slate-950 dark:border-slate-700 dark:text-slate-300 dark:hover:border-slate-500 dark:hover:text-white"
+                            onClick={() => setSelectedAuditKey(descriptor.key)}
+                            aria-controls="settings-audit-panel"
+                            aria-expanded={selectedAuditKey === descriptor.key}
+                            aria-label={`View audit for ${descriptor.title}`}
+                          >
+                            View audit
+                          </button>
+                        ) : null}
+                        {canReset(descriptor, scope) ? (
+                          <button
+                            type="button"
+                            className="rounded-xl border border-slate-300 bg-transparent px-3 py-2 text-sm font-medium text-slate-700 hover:border-slate-400 hover:text-slate-950 dark:border-slate-700 dark:text-slate-300 dark:hover:border-slate-500 dark:hover:text-white"
+                            onClick={() => resetOverride(descriptor)}
+                            aria-label={`Reset ${descriptor.title}`}
+                          >
+                            Reset
+                          </button>
+                        ) : null}
+                      </div>
                     </div>
                   </div>
                 </div>

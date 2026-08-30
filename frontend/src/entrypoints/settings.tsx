@@ -391,7 +391,11 @@ function UserWorkspaceSettingsContent({ payload }: { payload: BootPayload }) {
       </section>
 
       <NoticeBanner notice={notice} />
-      <GeneratedSettingsSection scope={scope} onScopeChange={changeScope} />
+      <GeneratedSettingsSection
+        scope={scope}
+        onScopeChange={changeScope}
+        canReadAudit={permissions.has('settings.audit.read')}
+      />
 
       <section className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
         <h3 className="text-base font-semibold text-slate-900 dark:text-white">

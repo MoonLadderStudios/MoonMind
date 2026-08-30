@@ -4,9 +4,15 @@ import { fireEvent, screen, waitFor, within } from '../../utils/test-utils';
 import { renderWithClient } from '../../utils/test-utils';
 import { GeneratedSettingsSection } from './GeneratedSettingsSection';
 
-function ControlledGeneratedSettingsSection() {
+function ControlledGeneratedSettingsSection({ canReadAudit = false }: { canReadAudit?: boolean }) {
   const [scope, setScope] = useState<'workspace' | 'user'>('workspace');
-  return <GeneratedSettingsSection scope={scope} onScopeChange={setScope} />;
+  return (
+    <GeneratedSettingsSection
+      scope={scope}
+      onScopeChange={setScope}
+      canReadAudit={canReadAudit}
+    />
+  );
 }
 
 const workspaceCatalog = {
@@ -356,6 +362,26 @@ describe('GeneratedSettingsSection', () => {
       const url = String(input);
       requests.push({ url, init });
 
+      if (url.startsWith('/api/v1/settings/audit')) {
+        return Promise.resolve(jsonResponse({
+          items: [
+            {
+              id: 'audit-1',
+              event_type: 'settings.override.updated',
+              key: 'integrations.github.token_ref',
+              scope: 'user',
+              actor_user_id: 'user-1',
+              old_value: null,
+              new_value: null,
+              redacted: true,
+              reason: 'Prefer branch publication',
+              validation_outcome: 'accepted',
+              affected_systems: ['publishing'],
+              created_at: '2026-08-30T12:00:00Z',
+            },
+          ],
+        }));
+      }
       if (url.includes('scope=user')) {
         return Promise.resolve(jsonResponse(userCatalog));
       }
@@ -498,5 +524,56 @@ describe('GeneratedSettingsSection', () => {
     expect(screen.getByLabelText('Pending settings preview')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Discard changes' }));
     expect(screen.queryByLabelText('Pending settings preview')).toBeNull();
+  });
+
+  it('loads row audit on demand with the active scope and setting key when authorized', async () => {
+    renderWithClient(<ControlledGeneratedSettingsSection canReadAudit />);
+
+    await screen.findByText('Default Publish Mode');
+    expect(requests.some((request) => request.url.startsWith('/api/v1/settings/audit'))).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: 'User' }));
+    await screen.findByDisplayValue('env://WORKSPACE_TOKEN');
+    fireEvent.click(screen.getByRole('button', { name: 'View audit for GitHub Token Reference' }));
+
+    await waitFor(() => {
+      const auditRequest = requests.find((request) => request.url.startsWith('/api/v1/settings/audit'));
+      expect(auditRequest).toBeTruthy();
+      const query = new URL(auditRequest?.url ?? '', window.location.origin).searchParams;
+      expect(query.get('scope')).toBe('user');
+      expect(query.get('key')).toBe('integrations.github.token_ref');
+    });
+    expect(await screen.findByRole('region', { name: 'Audit history for GitHub Token Reference' })).toBeTruthy();
+    expect(await screen.findByText(/Prefer branch publication/)).toBeTruthy();
+  });
+
+  it('hides audit affordances without settings.audit.read permission', async () => {
+    renderWithClient(<ControlledGeneratedSettingsSection />);
+
+    await screen.findByText('Default Publish Mode');
+    expect(screen.queryByRole('button', { name: /View audit for/ })).toBeNull();
+    expect(requests.some((request) => request.url.startsWith('/api/v1/settings/audit'))).toBe(false);
+  });
+
+  it('keeps generated settings usable when an audit request fails', async () => {
+    fetchSpy.mockImplementation((input, init) => {
+      const url = String(input);
+      requests.push({ url, init });
+      if (url.startsWith('/api/v1/settings/audit')) {
+        return Promise.resolve(jsonResponse({}, false, 503));
+      }
+      if (url.includes('/api/v1/settings/catalog')) {
+        return Promise.resolve(jsonResponse(workspaceCatalog));
+      }
+      return Promise.resolve(jsonResponse({ error: 'not_found' }, false, 404));
+    });
+    renderWithClient(<ControlledGeneratedSettingsSection canReadAudit />);
+
+    await screen.findByText('Default Publish Mode');
+    fireEvent.click(screen.getByRole('button', { name: 'View audit for Default Publish Mode' }));
+
+    expect((await screen.findByRole('alert')).textContent).toContain('Failed to fetch settings audit');
+    expect(screen.getByText('Default Publish Mode')).toBeTruthy();
+    expect(screen.getByLabelText('Default Publish Mode')).toBeTruthy();
   });
 });
