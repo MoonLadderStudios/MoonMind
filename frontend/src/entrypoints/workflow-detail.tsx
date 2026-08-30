@@ -862,6 +862,22 @@ const StepExecutionListSchema = z
   })
   .passthrough();
 
+const ModelTierResolutionSchema = z
+  .object({
+    providerProfileId: z.string().nullable(),
+    requestedModelTier: z.number().int().positive(),
+    effectiveModelTier: z.number().int().positive(),
+    tierLabel: z.string().nullable(),
+    fallbackReason: z.string().nullable(),
+    resolvedModel: z.string().nullable(),
+    resolvedEffort: z.string().nullable(),
+    modelSource: z.string(),
+    effortSource: z.string(),
+    effortApplicationStatus: z.string(),
+    previewMismatch: z.boolean(),
+  })
+  .passthrough();
+
 const ExecutionDetailSchema = z
   .object({
     taskId: z.string().optional(),
@@ -2349,6 +2365,34 @@ function renderProviderProfileSummary(
         </span>
       ) : null}
     </span>
+  );
+}
+
+function persistedModelTierResolution(
+  execution: z.infer<typeof ExecutionDetailSchema>,
+): z.infer<typeof ModelTierResolutionSchema> | null {
+  const parsed = ModelTierResolutionSchema.safeParse(
+    execution.inputParameters.modelTierResolution,
+  );
+  return parsed.success ? parsed.data : null;
+}
+
+function modelTierFallbackExplanation(
+  resolution: z.infer<typeof ModelTierResolutionSchema>,
+): string | null {
+  const fallbackReason = resolution.fallbackReason?.trim();
+  if (!fallbackReason) return null;
+  if (fallbackReason === 'requested_tier_above_configured_range') {
+    const configuredTierCount = resolution.effectiveModelTier;
+    return (
+      `Requested Tier ${resolution.requestedModelTier}, used Tier ${resolution.effectiveModelTier} ` +
+      `because the selected profile only defines ${configuredTierCount} ` +
+      `${configuredTierCount === 1 ? 'tier' : 'tiers'}.`
+    );
+  }
+  return (
+    `Requested Tier ${resolution.requestedModelTier}, used Tier ${resolution.effectiveModelTier} ` +
+    `because backend tier policy reported ${fallbackReason}.`
   );
 }
 
@@ -10088,6 +10132,12 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
   const stepTabCount = stepsQuery.data?.steps.length ?? null;
   const artifactTabCount = artifactsQuery.data?.artifacts.length ?? null;
   const runTabCount = execution ? (execution.relatedRuns?.length ?? 0) + 1 : null;
+  const modelTierResolution = execution
+    ? persistedModelTierResolution(execution)
+    : null;
+  const modelTierFallback = modelTierResolution
+    ? modelTierFallbackExplanation(modelTierResolution)
+    : null;
   return (
     <div className="stack workflow-detail-page">
       <div className="toolbar">
@@ -10361,6 +10411,18 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                   <Fact label="Provider Profile">{renderProviderProfileSummary(execution)}</Fact>
                 ) : null}
                 {execution.effort ? <Fact label="Effort">{execution.effort}</Fact> : null}
+                {modelTierResolution ? (
+                  <>
+                    <Fact label="Requested Tier">
+                      Tier {modelTierResolution.requestedModelTier}
+                    </Fact>
+                    <Fact label="Effective Tier">
+                      Tier {modelTierResolution.effectiveModelTier}
+                    </Fact>
+                    <Fact label="Tier Label">{modelTierResolution.tierLabel || '—'}</Fact>
+                    <Fact label="Fallback Reason">{modelTierFallback || 'No fallback.'}</Fact>
+                  </>
+                ) : null}
                 {execution.priority !== null && execution.priority !== undefined ? (
                   <Fact label="Priority">{execution.priority}</Fact>
                 ) : null}

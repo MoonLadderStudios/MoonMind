@@ -6243,6 +6243,83 @@ describe('Workflow Detail Entrypoint', () => {
     });
   });
 
+  // MoonLadderStudios/MoonMind#3800 — historical detail must explain the
+  // immutable launch-time tier resolution, not a later Provider Profile state.
+  it('renders persisted model tier resolution and its concise fallback explanation', async () => {
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123/overview?source=temporal');
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      entry: 'user_workflow',
+      targetRuntime: 'codex_cli',
+      profileId: 'codex-provider-profile',
+      model: 'gpt-5.5',
+      effort: 'high',
+      inputParameters: {
+        modelTierResolution: {
+          providerProfileId: 'codex-provider-profile',
+          requestedModelTier: 3,
+          effectiveModelTier: 2,
+          tierLabel: 'Implement',
+          fallbackReason: 'requested_tier_above_configured_range',
+          resolvedModel: 'gpt-5.5',
+          resolvedEffort: 'high',
+          modelSource: 'requested_tier',
+          effortSource: 'requested_tier',
+          effortApplicationStatus: 'applied',
+          previewMismatch: false,
+        },
+      },
+      title: 'Historical tier fallback task',
+      summary: 'Verifies persisted tier resolution is shown',
+      status: 'completed',
+      state: 'succeeded',
+      rawState: 'succeeded',
+      temporalStatus: 'completed',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: { canSetTitle: false, canCancel: false, canRerun: false },
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/remediations?direction=')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ direction: 'inbound', items: [] }),
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Requested Tier').closest('div')?.textContent).toContain('Tier 3');
+      expect(screen.getByText('Effective Tier').closest('div')?.textContent).toContain('Tier 2');
+      expect(screen.getByText('Tier Label').closest('div')?.textContent).toContain('Implement');
+      expect(screen.getByText('Fallback Reason').closest('div')?.textContent).toContain(
+        'Requested Tier 3, used Tier 2 because the selected profile only defines 2 tiers.',
+      );
+      expect(screen.getByText('Model').closest('div')?.textContent).toContain('gpt-5.5');
+      expect(screen.getByText('Effort').closest('div')?.textContent).toContain('high');
+    });
+  });
+
   it('hides the Model fact when no model field is populated', async () => {
     window.history.pushState({}, 'Overview Test', '/workflows/test-123/overview?source=temporal');
     const mockExecution = {

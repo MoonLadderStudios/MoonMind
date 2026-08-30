@@ -7407,6 +7407,59 @@ async def test_strict_unavailable_tier_consumes_no_resources_and_default_clamps(
                 "providerProfileId": "codex-provider-profile",
             }
             service._client_adapter.start_workflow.assert_awaited_once()
+
+            # MoonLadderStudios/MoonMind#3800 — launch-time history remains
+            # authoritative after the selected Provider Profile changes.
+            source_record = await session.get(
+                TemporalExecutionCanonicalRecord,
+                clamped.workflow_id,
+            )
+            assert source_record is not None
+            source_record.state = MoonMindWorkflowState.COMPLETED
+            source_record.close_status = TemporalExecutionCloseStatus.COMPLETED
+            source_record.closed_at = datetime.now(UTC)
+            profile = await session.get(
+                ManagedAgentProviderProfile,
+                "codex-provider-profile",
+            )
+            assert profile is not None
+            profile.model_tiers = [
+                {
+                    "label": "Edited after launch",
+                    "model": "gpt-5-mini-edited",
+                    "effort": "low",
+                    "parameters": {},
+                    "annotations": {},
+                }
+            ]
+            profile.default_model_tier = 1
+            await session.commit()
+            await session.refresh(source_record)
+
+            service._client_adapter.describe_workflow = AsyncMock(
+                side_effect=RuntimeError("Temporal history is unavailable in unit test")
+            )
+            historical_record = await service.describe_execution(
+                clamped.workflow_id
+            )
+            historical = _serialize_execution(historical_record, user=user)
+
+            assert historical.status == "completed"
+            assert historical.model == "gpt-5.5"
+            assert historical.effort == "high"
+            assert historical.input_parameters["modelTierResolution"] == {
+                "requestedModelTier": 3,
+                "effectiveModelTier": 2,
+                "tierLabel": "Implement",
+                "fallbackReason": "requested_tier_above_configured_range",
+                "resolvedModel": "gpt-5.5",
+                "resolvedEffort": "high",
+                "modelSource": "requested_tier",
+                "effortSource": "requested_tier",
+                "effortApplicationStatus": "unknown",
+                "previewMismatch": False,
+                "providerProfileId": "codex-provider-profile",
+            }
     finally:
         await engine.dispose()
         settings.workflow.temporal_artifact_backend = original_backend
