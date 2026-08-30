@@ -209,6 +209,7 @@ async def test_claude_launcher_uses_shared_durable_retrieval_metadata_contract(
         runtimeId="claude_code",
         commandTemplate=["claude"],
         defaultModel="claude-sonnet-4-6",
+        modelTiers=[{"label": "Runtime default"}],
         defaultTimeoutSeconds=3600,
         workspaceMode="tempdir",
         envOverrides={},

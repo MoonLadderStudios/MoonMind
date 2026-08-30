@@ -17,6 +17,7 @@ def _make_profile(**overrides) -> ManagedRuntimeProfile:
         command_template=["codex", "exec"],
         default_model="gpt-5.3-codex",
         default_effort=None,
+        model_tiers=[{"label": "Runtime default"}],
         default_timeout_seconds=3600,
         workspace_mode="tempdir",
         env_overrides={},
