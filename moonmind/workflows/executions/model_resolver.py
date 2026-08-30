@@ -30,7 +30,12 @@ from moonmind.workflows.executions.runtime_defaults import (
     resolve_runtime_defaults,
 )
 
-__all__ = ["ResolvedModelEffort", "resolve_effective_model", "resolve_model_effort"]
+__all__ = [
+    "RequestedModelTierUnavailableError",
+    "ResolvedModelEffort",
+    "resolve_effective_model",
+    "resolve_model_effort",
+]
 
 # legacy_run contract — the model_source value "task_override" is persisted in
 # execution parameters/diagnostics; the value renames at the
@@ -46,6 +51,26 @@ _FALLBACK_STRICT = "strict"
 _EFFORT_APPLICATION_UNKNOWN = "unknown"
 _FALLBACK_REQUESTED_TIER_BELOW_RANGE = "requested_tier_below_configured_range"
 _FALLBACK_REQUESTED_TIER_ABOVE_RANGE = "requested_tier_above_configured_range"
+
+
+class RequestedModelTierUnavailableError(ValueError):
+    """A strict tier request cannot be satisfied by the selected profile."""
+
+    code = "requested_model_tier_unavailable"
+
+    def __init__(
+        self,
+        *,
+        requested_model_tier: int,
+        configured_tier_count: int,
+    ) -> None:
+        self.requested_model_tier = requested_model_tier
+        self.configured_tier_count = configured_tier_count
+        tier_label = "tier" if configured_tier_count == 1 else "tiers"
+        super().__init__(
+            f"Requested model tier {requested_model_tier} is unavailable; "
+            f"the selected profile defines {configured_tier_count} {tier_label}."
+        )
 
 
 @dataclass(frozen=True)
@@ -415,7 +440,10 @@ def _resolve_effective_tier(
         fallback_reason = _FALLBACK_REQUESTED_TIER_ABOVE_RANGE
 
     if fallback_reason and tier_fallback == _FALLBACK_STRICT:
-        raise ValueError("requested_model_tier_unavailable")
+        raise RequestedModelTierUnavailableError(
+            requested_model_tier=raw_tier,
+            configured_tier_count=tier_count,
+        )
 
     return max(1, min(raw_tier, tier_count)), fallback_reason, source
 

@@ -17,6 +17,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from moonmind.workflows.executions.model_resolver import (
+    RequestedModelTierUnavailableError,
     resolve_effective_model,
     resolve_model_effort,
 )
@@ -342,7 +343,7 @@ class TestResolveModelEffortTiers:
         assert resolved.model == "tier-1-model"
 
     def test_strict_tier_fallback_rejects_unavailable_requested_tier(self):
-        with pytest.raises(ValueError, match="requested_model_tier_unavailable"):
+        with pytest.raises(RequestedModelTierUnavailableError) as exc_info:
             resolve_model_effort(
                 runtime_id="codex_cli",
                 profile=self._profile(),
@@ -350,6 +351,10 @@ class TestResolveModelEffortTiers:
                 tier_fallback="strict",
                 env={},
             )
+
+        assert exc_info.value.code == "requested_model_tier_unavailable"
+        assert exc_info.value.requested_model_tier == 3
+        assert exc_info.value.configured_tier_count == 2
 
     def test_explicit_model_and_effort_bypass_tier_policy(self):
         resolved = resolve_model_effort(
