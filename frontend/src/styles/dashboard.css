@@ -879,6 +879,22 @@ h1 {
   width: 100%;
 }
 
+.route-nav .dashboard-system-destination-unavailable {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.42rem;
+  padding: 0.48rem 0.82rem;
+  color: rgb(var(--mm-muted) / 0.78);
+  font-size: 0.9rem;
+  cursor: not-allowed;
+  user-select: none;
+}
+
+.dashboard-system-popover .dashboard-system-destination-unavailable {
+  width: 100%;
+}
+
 /* The System trigger keeps its purple underline when a System destination is
  * active, but the selected row inside the open popover must not repeat that
  * underline. Suppress the masthead underline on every popover row (it also
@@ -6284,7 +6300,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 /* MM-1138 Q3: one canonical segmented-control system with two intensity tiers.
  * `data-intensity="quiet"` is the low-key detail-tab look (subtle accent thumb,
- * navigation links); `data-intensity="loud"` is the high-energy create/settings
+ * navigation links); `data-intensity="loud"` is the high-energy create-flow
  * look (neon gradient thumb and radio group, without perpetual motion). Both tiers
  * share the container chrome, item typography, focus ring and the sliding thumb,
  * which is driven by the shared --segmented-control-count /
@@ -6548,67 +6564,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     grid-template-columns: minmax(0, 1fr);
   }
 
-  /* MM-1138 Q3: the Settings section switcher (a loud-tier segmented control)
-   * stacks vertically on narrow viewports. Scoped to `.settings-page` so the
-   * create-page controls keep their inline layout, matching prior behavior. */
-  .settings-page .segmented-control[data-intensity="loud"] {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    gap: 0.25rem;
-    width: 100%;
-    padding: 0;
-  }
-
-  .settings-page .segmented-control[data-intensity="loud"]::before {
-    display: none;
-  }
-
-  .settings-page .segmented-control[data-intensity="loud"] .segmented-control-item {
-    justify-content: flex-start;
-    min-height: 2.75rem;
-    width: 100%;
-    padding: 0.7rem 0.85rem;
-    border-radius: 8px;
-    letter-spacing: 0.04em;
-    text-align: left;
-  }
-
-  .settings-page .segmented-control[data-intensity="loud"] .segmented-control-item:first-of-type {
-    border-top-left-radius: 9px;
-    border-top-right-radius: 9px;
-  }
-
-  .settings-page .segmented-control[data-intensity="loud"] .segmented-control-item:last-of-type {
-    border-bottom-left-radius: 9px;
-    border-bottom-right-radius: 9px;
-  }
-
-  .settings-page .segmented-control[data-intensity="loud"] .segmented-control-item:has(input:checked) {
-    background:
-      linear-gradient(
-          115deg,
-          transparent 35%,
-          rgb(255 255 255 / 0.14) 50%,
-          transparent 65%
-        )
-        0 0 / 220% 100% no-repeat,
-      linear-gradient(
-        135deg,
-        color-mix(in srgb, rgb(var(--mm-accent)) 82%, black) 0%,
-        color-mix(in srgb, rgb(var(--mm-accent-2)) 70%, black) 100%
-    );
-    box-shadow:
-      0 0 0 1px rgb(var(--mm-accent) / 0.55),
-      0 0 18px rgb(var(--mm-accent) / 0.55),
-      0 0 32px rgb(var(--mm-accent-2) / 0.22),
-      inset 0 1px 0 rgb(255 255 255 / 0.22);
-  }
-
-  .settings-page .segmented-control[data-intensity="loud"] .segmented-control-item-label {
-    white-space: normal;
-    overflow-wrap: anywhere;
-    line-height: 1.2;
-  }
 }
 
 .segmented-control-panel {
@@ -8029,6 +7984,15 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
     transform: none;
+  }
+
+  .route-nav .dashboard-system-destination-unavailable {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    min-height: 3.25rem;
+    padding: 0 1rem;
+    color: rgb(var(--mm-muted) / 0.78);
   }
 
   /* The collapsed nav renders flat menu rows: drop the desktop liquid-glass
