@@ -28,7 +28,7 @@ _SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+.*$")
 _CATALOG_REF_RE = re.compile(r"^omnigent-harness-catalog:sha256:[0-9a-f]{64}$")
 _IMPL_REF_RE = re.compile(r"^omnigent-harness-implementation:sha256:[0-9a-f]{64}$")
 _SAFE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
-_ALLOWED_FRESHNESS_SECONDS = 3600  # 1 hour default
+_ALLOWED_FRESHNESS_SECONDS = 86400  # 24 hours
 
 
 class TrustState(StrEnum):

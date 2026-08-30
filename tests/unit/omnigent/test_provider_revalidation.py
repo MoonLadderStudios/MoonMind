@@ -48,6 +48,8 @@ def _profile(
     secret_refs: dict[str, str] | None = None,
     command_behavior: dict | None = None,
     evidence_validated_at: str | None = _UNSET_VALIDATED_AT,
+    provider_id: str = "opencode-go",
+    default_model: str = "opencode-go/muse-spark-1.2-contributor",
 ) -> SimpleNamespace:
     evidence = None
     if evidence_image is not None:
@@ -68,12 +70,12 @@ def _profile(
     return SimpleNamespace(
         profile_id=profile_id,
         runtime_id="opencode",
-        provider_id="opencode-go",
+        provider_id=provider_id,
         enabled=enabled,
         auth_state=auth_state,
         credential_generation=generation,
         capacity_scope_ref=None,
-        default_model="opencode-go/muse-spark-1.2-contributor",
+        default_model=default_model,
         command_behavior=dict(command_behavior or {}),
         secret_refs=(
             {"opencode_api_key": "db://opencode-key"}
@@ -509,6 +511,58 @@ async def test_stale_host_image_evidence_is_revalidated_and_refreshed(
     assert rows[0].model_catalog_evidence_json["imageRef"] == CURRENT_IMAGE
     assert rows[0].command_behavior["runtime_validation"]["image_ref"] == CURRENT_IMAGE
     assert evidence_is_current(rows[0], image_ref=CURRENT_IMAGE)
+
+
+@pytest.mark.asyncio
+async def test_pending_zen_credential_is_promoted_only_after_runtime_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    qualified_model = "opencode/muse-spark-1.2-contributor-free"
+
+    async def validate(profile, image_ref, _lease, _kwargs):
+        return {
+            "schemaVersion": "moonmind.provider-model-catalog-evidence.v1",
+            "models": [{"qualifiedId": qualified_model}],
+            "imageRef": image_ref,
+            "runtimeVersions": {"opencode": "1.18.11"},
+            "materializerRef": "opencode-auth-json@1",
+            "validatedAt": datetime.now(UTC).isoformat(),
+            "credentialGeneration": profile.credential_generation,
+        }
+
+    _install_stubs(monkeypatch, validate=validate)
+    controller = _Controller()
+    rows = [
+        _profile(
+            profile_id="opencode-zen-free",
+            provider_id="opencode",
+            default_model=qualified_model,
+            evidence_image=None,
+            auth_state="api_key_pending",
+            secret_refs={"opencode_api_key": "env://OPENCODE_API_KEY"},
+            command_behavior={
+                "auth_state": "api_key_pending",
+                "auth_readiness": {
+                    "connected": False,
+                    "backing_secret_exists": True,
+                    "launch_ready": False,
+                },
+            },
+        )
+    ]
+
+    outcome = await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory(rows), controller=controller
+    )
+
+    assert outcome.ready is True
+    assert outcome.refreshed == ("opencode-zen-free",)
+    assert controller.calls == []
+    assert rows[0].auth_state.value == "connected"
+    assert rows[0].command_behavior["auth_readiness"]["launch_ready"] is True
+    assert rows[0].model_catalog_evidence_json["models"] == [
+        {"qualifiedId": qualified_model}
+    ]
 
 
 @pytest.mark.asyncio

@@ -1509,6 +1509,21 @@ _API_KEY_MAPPINGS: dict[tuple[str, str], _ApiKeyMapping] = {
         auth_strategy="opencode_auth_json",
         ready_label="OpenCode Go API key ready",
     ),
+    ("opencode", "opencode"): _ApiKeyMapping(
+        runtime_id="opencode",
+        provider_id="opencode",
+        secret_role="opencode_api_key",
+        env_key="OPENCODE_API_KEY",
+        clear_env_keys=(
+            "OPENCODE_AUTH_CONTENT",
+            "OPENCODE_CONFIG",
+            "OPENCODE_CONFIG_CONTENT",
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+        ),
+        auth_strategy="opencode_auth_json",
+        ready_label="OpenCode API key ready",
+    ),
 }
 
 
@@ -1556,7 +1571,7 @@ def _looks_like_provider_api_key(mapping: _ApiKeyMapping, api_key: str) -> bool:
     if mapping.provider_id == "openai":
         return api_key.startswith("sk-") and len(api_key) >= 12
     if mapping.provider_id in {"opencode-go", "opencode"}:
-        # OpenCode Go API keys are provider-specific; accept common prefixes
+        # OpenCode API keys are provider-specific; accept common prefixes
         # but require minimum entropy to avoid trivial values.
         return len(api_key.strip()) >= 12 and " " not in api_key.strip()
     return False

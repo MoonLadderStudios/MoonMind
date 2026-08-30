@@ -1,0 +1,7 @@
+{
+  "invariant": "a validated review-clean pr-resolver terminal contract publishes the Skill-authored no-op publish_result.json companion by artifact ref before the parent evaluates auto publication",
+  "terminalContractSatisfied": true,
+  "publishEvidenceRef": "art_pr_review_clean_publish_evidence",
+  "publishStatus": "not_required",
+  "publishReason": "auto publish no-op verified"
+}

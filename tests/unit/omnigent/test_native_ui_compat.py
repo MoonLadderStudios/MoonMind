@@ -63,6 +63,10 @@ def test_compatibility_map_exactly_covers_pinned_network_contract_fixture() -> N
     assert fixture["evidence"]["routeCount"] == len(cmap["routes"])
     assert fixture["evidence"]["capture"] == "stock-ui-and-server-static-analysis"
     assert all(route["pathPattern"] for route in cmap["routes"])
+    # Pinned MoonMind facade digest is reviewed evidence: a facade allowlist
+    # change without bumping NATIVE_UI_COMPAT_VERSION must fail this test.
+    assert cmap["moonmindFacadeDigest"] == fixture["moonmindFacadeDigest"]
+    assert isinstance(fixture["moonmindFacadeDigest"], str) and len(fixture["moonmindFacadeDigest"]) == 64
 
 
 def test_network_contract_is_anchored_to_pinned_stock_sources() -> None:

@@ -247,8 +247,10 @@ class DockerOpencodeAuthJsonMaterializer:
         anticipated = anticipated_credential_handle(acquired, self.ref)
         runtime_ref, digest = credential_runtime_identity(acquired, self.ref)
         volume_name = f"mm-omnigent-credential-{digest[:32]}"
+        provider_route_ref = str(context.provider_route_ref or "").strip()
         payload = build_opencode_auth_json_bytes(
-            api_key=context.secrets.require("opencode_api_key")
+            api_key=context.secrets.require("opencode_api_key"),
+            provider_key=provider_route_ref,
         )
         await self._run(
             [
@@ -313,9 +315,9 @@ class DockerOpencodeAuthJsonMaterializer:
                     'test "$(stat -c %u:%g /credential/auth.json)" = 1000:1000; ',
                     'test "$(stat -c %a /credential/auth.json)" = 600; ',
                     'test "$(cat /credential/.moonmind-generation)" = "$1"; ',
-                    'python3 -c \'import json; d=json.load(open("/credential/auth.json")); ',
-                    'assert set(d)=={"opencode-go"}; assert d["opencode-go"]["type"]=="api"; ',
-                    'assert isinstance(d["opencode-go"]["key"],str) and d["opencode-go"]["key"]\'',
+                    'python3 -c \'import json,sys; d=json.load(open("/credential/auth.json")); '
+                    'assert list(d)==[sys.argv[1]]; v=d[sys.argv[1]]; '
+                    'assert v.get("type")=="api" and isinstance(v.get("key"),str) and v.get("key")\' "$2"',
                 )
             )
             await self._run(
@@ -335,6 +337,7 @@ class DockerOpencodeAuthJsonMaterializer:
                     verify_script,
                     "--",
                     str(acquired.credential_generation),
+                    provider_route_ref,
                 ],
                 failure="credential volume attestation failed",
             )
@@ -352,6 +355,7 @@ class DockerOpencodeAuthJsonMaterializer:
             "providerLeaseRef": acquired.provider_lease_ref,
             "credentialGeneration": acquired.credential_generation,
             "materializerRef": self.ref,
+            "providerRouteRef": provider_route_ref,
             "attachment": {
                 "kind": "volume",
                 "sourceRef": volume_name,

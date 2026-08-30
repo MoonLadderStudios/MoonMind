@@ -34,8 +34,11 @@ WebSocket handler).
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from moonmind.omnigent.workflow_chat_facade import (
@@ -425,6 +428,53 @@ def negotiate_ws_subprotocol(
     )
 
 
+def _facade_source_digest() -> str:
+    """Return a stable digest binding the map to exact MoonMind facade sources.
+
+    MoonLadderStudios/MoonMind#3635 requires the versioned inventory to be bound
+    to exact Omnigent, UI, host, harness implementation, and MoonMind facade
+    digests. The Omnigent UI/server pin is already captured in
+    ``native_ui_network_contract_v1.json``; this digest binds the
+    MoonMind-controlled side of the contract (the two facade allowlists) so a
+    facade change without an inventory bump is detectable.
+    """
+
+    # Canonical route projection is already stable; hashing it proves the
+    # served surface matches the reviewed contract.
+    canonical = json.dumps(
+        [
+            {
+                "name": route.name,
+                "transport": route.transport,
+                "methods": sorted(route.methods),
+                "operationClass": route.operation_class,
+                "disposition": route.disposition,
+                "capability": route.capability,
+                "mutation": route.mutation,
+                "pathPattern": route.pattern.pattern if route.pattern else None,
+            }
+            for route in NATIVE_UI_ROUTES
+        ],
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    # Include the two facade source files when present so an edit to the
+    # allowlist without a compatibility bump changes the digest.
+    facade_files = [
+        Path(__file__).with_name("workflow_chat_facade.py"),
+        Path(__file__),
+    ]
+    hasher = hashlib.sha256(canonical)
+    for path in facade_files:
+        try:
+            hasher.update(path.read_bytes())
+        except OSError:
+            # Source not available in a stripped image — the canonical route
+            # projection above already binds the behavior.
+            continue
+    return hasher.hexdigest()
+
+
 def compatibility_map() -> dict[str, Any]:
     """Return the versioned native-UI compatibility map for diagnostics/tests.
 
@@ -440,6 +490,8 @@ def compatibility_map() -> dict[str, Any]:
         "wsSubprotocols": list(NATIVE_UI_WS_SUBPROTOCOLS),
         "payloadClasses": list(NATIVE_UI_PAYLOAD_CLASSES),
         "urlBehaviors": list(NATIVE_UI_URL_BEHAVIORS),
+        # Binding to exact MoonMind facade sources (issue #3635 §1, AC 1, 9).
+        "moonmindFacadeDigest": _facade_source_digest(),
         "routes": [
             {
                 "name": route.name,
