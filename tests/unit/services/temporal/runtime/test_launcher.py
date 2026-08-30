@@ -751,27 +751,36 @@ async def test_launch_records_model_tier_resolution_with_runtime_effort_status(
     )
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    resolution = {
-        "providerProfileId": "codex-profile",
+    admission_resolution = {
+        "providerProfileId": "admission-profile",
         "requestedModelTier": 3,
-        "effectiveModelTier": 2,
-        "tierLabel": "Implementation",
+        "effectiveModelTier": 1,
+        "tierLabel": "Admission",
         "fallbackReason": "requested_tier_above_configured_range",
-        "resolvedModel": "gpt-5.5",
-        "resolvedEffort": "xhigh",
+        "resolvedModel": "stale-model",
+        "resolvedEffort": "low",
         "modelSource": "requested_tier",
         "effortSource": "requested_tier",
         "effortApplicationStatus": "unknown",
         "previewMismatch": False,
     }
+    launch_profile = _make_profile(
+        runtime_id="codex_cli",
+        profile_id="launch-profile",
+        model_tiers=[
+            {"label": "Standard", "model": "gpt-5-mini", "effort": "medium"},
+            {"label": "Implementation", "model": "gpt-5.5", "effort": "high"},
+        ],
+        default_model_tier=2,
+    )
 
     await launcher.launch(
         run_id="run-tier-resolution",
         request=_make_request(
             instruction_ref="Implement the issue",
-            parameters={"modelTierResolution": resolution},
+            parameters={"modelTierResolution": admission_resolution},
         ),
-        profile=_make_profile(runtime_id="codex_cli"),
+        profile=launch_profile,
         workspace_path=str(workspace),
     )
 
@@ -782,10 +791,19 @@ async def test_launch_records_model_tier_resolution_with_runtime_effort_status(
     )
     recorded = emission["metadata"]["modelTierResolution"]
     assert recorded == {
-        **resolution,
+        "providerProfileId": "launch-profile",
+        "requestedModelTier": None,
+        "effectiveModelTier": 2,
+        "tierLabel": "Implementation",
+        "fallbackReason": "profile_default_tier",
+        "resolvedModel": "gpt-5.5",
+        "resolvedEffort": "high",
+        "modelSource": "profile_default_tier",
+        "effortSource": "profile_default_tier",
         "effortApplicationStatus": "not_supported",
+        "previewMismatch": False,
     }
-    assert resolution["effortApplicationStatus"] == "unknown"
+    assert admission_resolution["effortApplicationStatus"] == "unknown"
 
 
 @pytest.mark.asyncio
@@ -1340,6 +1358,10 @@ def test_apply_resolved_tier_policy_shapes_omitted_and_explicit_default_tiers(
     assert resolution["fallbackReason"] == expected_fallback_reason
     assert resolution["resolvedModel"] == "tier-2-model"
     assert resolution["resolvedEffort"] == "high"
+    assert request.parameters["modelTierResolution"] == {
+        **resolution,
+        "providerProfileId": profile.profile_id,
+    }
 
 
 def test_apply_resolved_tier_policy_initializes_missing_parameters():
