@@ -9,6 +9,7 @@ from api_service.db.models import (
     RuntimeMaterializationMode,
     SecretStatus,
 )
+from api_service.services.provider_profile_creation import required_secret_roles
 from moonmind.auth.secret_refs import SecretBackend, SecretReferenceError, parse_secret_ref
 from moonmind.provider_profiles.oauth_policy import is_codex_oauth_profile
 
@@ -63,6 +64,21 @@ def provider_profile_launch_ready_from_payload(profile: dict[str, Any]) -> bool:
     ) and profile.get("max_parallel_runs", profile.get("maxParallelRuns")) != 1:
         return False
 
+    credential_source = profile.get(
+        "credential_source",
+        profile.get("credentialSource"),
+    )
+    if str(getattr(credential_source, "value", credential_source) or "") == "secret_ref":
+        secret_refs = profile.get("secret_refs", profile.get("secretRefs"))
+        if not isinstance(secret_refs, dict) or not secret_refs:
+            return False
+        required_roles = required_secret_roles(
+            str(profile.get("runtime_id", profile.get("runtimeId")) or ""),
+            str(profile.get("provider_id", profile.get("providerId")) or ""),
+        )
+        if any(not secret_refs.get(role) for role in required_roles):
+            return False
+
     readiness = profile.get("readiness")
     if isinstance(readiness, dict):
         launch_ready = readiness.get("launch_ready")
@@ -94,6 +110,9 @@ def _credential_bindings_launch_ready(
         return True
 
     if not isinstance(row.secret_refs, dict) or not row.secret_refs:
+        return False
+    required_roles = required_secret_roles(row.runtime_id, row.provider_id)
+    if any(not row.secret_refs.get(role) for role in required_roles):
         return False
     for secret_ref in row.secret_refs.values():
         if not isinstance(secret_ref, str) or not secret_ref:

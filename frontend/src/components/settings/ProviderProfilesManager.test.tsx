@@ -126,7 +126,7 @@ describe('defaultFormState', () => {
     expect(state.providerId).toBe('');
     expect(state.credentialSource).toBe('secret_ref');
     expect(state.rateLimitPolicy).toBe('backoff');
-    expect(state.enabled).toBe(true);
+    expect(state.enabled).toBe(false);
     expect(state.isDefault).toBe(false);
   });
 });
@@ -459,11 +459,10 @@ describe('ProviderProfilesManager form controls', () => {
     },
   };
 
-  it('labels secret refs and resets create-form values', () => {
+  it('keeps raw SecretRef JSON out of standard creation and resets form values', () => {
     renderProviderProfilesManager();
 
-    const secretRefs = screen.getByLabelText('Secret refs (JSON object of string refs)');
-    expect(secretRefs.tagName).toBe('TEXTAREA');
+    expect(screen.queryByLabelText('Secret refs (JSON object of string refs)')).toBeNull();
 
     const profileId = screen.getByLabelText(/Profile ID/) as HTMLInputElement;
     fireEvent.change(profileId, { target: { value: 'draft-profile' } });
@@ -605,32 +604,39 @@ describe('ProviderProfilesManager form controls', () => {
     expect(payload.default_effort).toBe('high');
   });
 
-  it('reports form validation failures through the save mutation', async () => {
-    const fetchSpy = vi.spyOn(window, 'fetch');
+  it('requires a backend-supported authentication method before creation', async () => {
+    const fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        version: 'provider-profile-creation-v1',
+        runtime_id: 'unknown-runtime',
+        provider_id: 'unknown-provider',
+        supported: false,
+        authentication_methods: [],
+        diagnostics: ['No validated creation preset exists for this runtime and provider.'],
+      }),
+    } as Response);
     const { onNotice } = renderProviderProfilesManager();
 
     fireEvent.change(screen.getByLabelText(/Profile ID/), {
       target: { value: 'codex-default' },
     });
     fireEvent.change(screen.getByLabelText(/Runtime ID/), {
-      target: { value: 'codex_cli' },
+      target: { value: 'unknown-runtime' },
     });
     fireEvent.change(screen.getByLabelText(/Provider ID/), {
-      target: { value: 'openai' },
+      target: { value: 'unknown-provider' },
     });
-    fireEvent.change(screen.getByLabelText('Secret refs (JSON object of string refs)'), {
-      target: { value: '[]' },
-    });
-
+    await screen.findByText('No validated creation preset exists for this runtime and provider.');
     fireEvent.click(screen.getByRole('button', { name: 'Create provider profile' }));
 
     await waitFor(() => {
       expect(onNotice).toHaveBeenCalledWith({
         level: 'error',
-        text: 'Secret refs must be a JSON object.',
+        text: 'Choose a supported authentication method.',
       });
     });
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
   it('starts a Codex OAuth session from the profile OAuth action', async () => {
@@ -1299,5 +1305,339 @@ describe('ProviderProfilesManager form controls', () => {
     expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Create provider profile' })).toBeNull();
     expect(screen.queryByText('Create Provider Profile')).toBeNull();
+  });
+});
+
+describe('MoonLadderStudios/MoonMind#3820 guided provider-profile creation', () => {
+  const openAiCapabilities = {
+    version: 'provider-profile-creation-v1',
+    runtime_id: 'codex_cli',
+    provider_id: 'openai',
+    supported: true,
+    authentication_methods: [
+      {
+        id: 'oauth',
+        label: 'OAuth',
+        setup_action: 'oauth',
+        launch_ready_after_setup: true,
+        fields: {
+          credential_source: {
+            value: 'oauth_volume',
+            source: 'runtime_provider_strategy',
+            editable: false,
+            lock_reason: 'OAuth enrollment owns the credential source.',
+          },
+          runtime_materialization_mode: {
+            value: 'oauth_home',
+            source: 'runtime_provider_strategy',
+            editable: false,
+            lock_reason: 'OAuth enrollment owns runtime materialization.',
+          },
+        },
+        secret_roles: [],
+        imported_volume: {
+          supported: true,
+          mount_path: '/home/app/.codex',
+          source: 'runtime_provider_strategy',
+          lock_reason: 'The runtime strategy owns the credential mount path.',
+        },
+      },
+      {
+        id: 'api_key',
+        label: 'API key',
+        setup_action: 'api_key',
+        launch_ready_after_setup: true,
+        fields: {
+          credential_source: {
+            value: 'secret_ref',
+            source: 'runtime_provider_strategy',
+            editable: false,
+            lock_reason: 'Guided API-key setup owns the credential source.',
+          },
+          runtime_materialization_mode: {
+            value: 'api_key_env',
+            source: 'runtime_provider_strategy',
+            editable: false,
+            lock_reason: 'Guided API-key setup owns runtime materialization.',
+          },
+        },
+        secret_roles: [
+          {
+            role: 'openai_api_key',
+            label: 'OpenAI API key',
+            required: true,
+            compatible_schemes: ['db', 'env'],
+          },
+        ],
+        imported_volume: {
+          supported: false,
+          mount_path: null,
+          source: 'runtime_provider_strategy',
+          lock_reason: 'API-key setup does not use a credential volume.',
+        },
+      },
+    ],
+    diagnostics: [],
+  };
+
+  function mockCreationCapabilities() {
+    return vi.spyOn(window, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.startsWith('/api/v1/provider-profiles/creation-preset?')) {
+        return {
+          ok: true,
+          json: async () => openAiCapabilities,
+        } as Response;
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+  }
+
+  async function selectOpenAiApiKeyCreation() {
+    fireEvent.change(screen.getByLabelText(/Runtime ID/), {
+      target: { value: 'codex_cli' },
+    });
+    fireEvent.change(screen.getByLabelText(/Provider ID/), {
+      target: { value: 'openai' },
+    });
+    const apiKey = await screen.findByLabelText('API key');
+    fireEvent.click(apiKey);
+  }
+
+  it('shows capability-derived authentication while low-level plumbing stays collapsed', async () => {
+    mockCreationCapabilities();
+    renderProviderProfilesManager();
+
+    await selectOpenAiApiKeyCreation();
+
+    expect(screen.getByLabelText('OAuth')).toBeTruthy();
+    expect(screen.getByLabelText('API key')).toBeTruthy();
+    expect(screen.getByText('Connection: Setup required')).toBeTruthy();
+    expect(
+      screen.getByText('Launch readiness: Blocked until API-key setup succeeds.'),
+    ).toBeTruthy();
+    expect(screen.queryByLabelText('Credential source')).toBeNull();
+    expect(screen.queryByLabelText('Materialization mode')).toBeNull();
+    expect(screen.queryByLabelText(/Secret refs \(JSON/)).toBeNull();
+    expect(screen.queryByLabelText('Volume ref')).toBeNull();
+
+    const advanced = screen.getByLabelText('Show advanced options') as HTMLInputElement;
+    expect(advanced.checked).toBe(false);
+    fireEvent.click(advanced);
+
+    expect(screen.getByText('Credential source: secret_ref')).toBeTruthy();
+    expect(screen.getByText('Source: runtime_provider_strategy')).toBeTruthy();
+    expect(
+      screen.getByText('Locked: Guided API-key setup owns the credential source.'),
+    ).toBeTruthy();
+    expect(screen.getByLabelText('OpenAI API key (required)')).toBeTruthy();
+    expect(screen.getByText('Compatible references: db://, env://')).toBeTruthy();
+    expect(screen.queryByText('Owned by enrollment')).toBeNull();
+    expect(screen.getAllByText('Not used')).toHaveLength(2);
+  });
+
+  it('creates a backend-preset profile and opens the one-way OpenAI API-key drawer', async () => {
+    const savedProfile = {
+      profile_id: 'codex-guided-key',
+      runtime_id: 'codex_cli',
+      provider_id: 'openai',
+      authentication_method: 'api_key',
+      credential_source: 'secret_ref',
+      runtime_materialization_mode: 'api_key_env',
+      secret_refs: {},
+      max_parallel_runs: 1,
+      cooldown_after_429_seconds: 300,
+      rate_limit_policy: 'backoff',
+      enabled: false,
+      auth_state: 'not_configured',
+      disabled_reason: 'missing_credentials',
+      creation_capabilities: openAiCapabilities,
+    } as ProviderProfile;
+    const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.startsWith('/api/v1/provider-profiles/creation-preset?')) {
+        return { ok: true, json: async () => openAiCapabilities } as Response;
+      }
+      if (url === '/api/v1/provider-profiles') {
+        const payload = JSON.parse(String(init?.body));
+        expect(payload).toEqual(
+          expect.objectContaining({
+            profile_id: 'codex-guided-key',
+            authentication_method: 'api_key',
+            preset_version: 'provider-profile-creation-v1',
+          }),
+        );
+        expect(payload).not.toHaveProperty('credential_source');
+        expect(payload).not.toHaveProperty('runtime_materialization_mode');
+        expect(payload).not.toHaveProperty('priority');
+        return { ok: true, json: async () => savedProfile } as Response;
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    renderProviderProfilesManager();
+
+    fireEvent.change(screen.getByLabelText(/Profile ID/), {
+      target: { value: 'codex-guided-key' },
+    });
+    await selectOpenAiApiKeyCreation();
+    fireEvent.click(screen.getByRole('button', { name: 'Create provider profile' }));
+
+    expect(
+      await screen.findByRole('dialog', { name: 'OpenAI API key enrollment for codex-guided-key' }),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to API key paste' }));
+    const keyInput = screen.getByLabelText('OpenAI API key') as HTMLInputElement;
+    fireEvent.change(keyInput, { target: { value: 'one-way-test-key' } });
+    expect(keyInput.value).toBe('one-way-test-key');
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel API key enrollment' }));
+
+    expect(screen.queryByDisplayValue('one-way-test-key')).toBeNull();
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('creates OAuth setup without typed volume metadata and starts enrollment', async () => {
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue(null);
+    const savedProfile = {
+      profile_id: 'codex-guided-oauth',
+      runtime_id: 'codex_cli',
+      provider_id: 'openai',
+      authentication_method: 'oauth',
+      credential_source: 'none',
+      runtime_materialization_mode: 'api_key_env',
+      secret_refs: {},
+      max_parallel_runs: 1,
+      cooldown_after_429_seconds: 300,
+      rate_limit_policy: 'backoff',
+      enabled: false,
+      auth_state: 'not_configured',
+      disabled_reason: 'missing_credentials',
+      creation_capabilities: openAiCapabilities,
+    } as ProviderProfile;
+    const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.startsWith('/api/v1/provider-profiles/creation-preset?')) {
+        return { ok: true, json: async () => openAiCapabilities } as Response;
+      }
+      if (url === '/api/v1/provider-profiles') {
+        const payload = JSON.parse(String(init?.body));
+        expect(payload.authentication_method).toBe('oauth');
+        expect(payload.volume_ref).toBeNull();
+        expect(payload.volume_mount_path).toBeNull();
+        return { ok: true, json: async () => savedProfile } as Response;
+      }
+      if (url === '/api/v1/oauth-sessions') {
+        expect(JSON.parse(String(init?.body))).toEqual(
+          expect.objectContaining({
+            runtime_id: 'codex_cli',
+            provider_id: 'openai',
+            profile_id: 'codex-guided-oauth',
+          }),
+        );
+        return {
+          ok: true,
+          json: async () => ({
+            session_id: 'oas_guided',
+            runtime_id: 'codex_cli',
+            profile_id: 'codex-guided-oauth',
+            status: 'pending',
+            session_transport: 'moonmind_pty_ws',
+          }),
+        } as Response;
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    renderProviderProfilesManager();
+
+    fireEvent.change(screen.getByLabelText(/Profile ID/), {
+      target: { value: 'codex-guided-oauth' },
+    });
+    fireEvent.change(screen.getByLabelText(/Runtime ID/), {
+      target: { value: 'codex_cli' },
+    });
+    fireEvent.change(screen.getByLabelText(/Provider ID/), {
+      target: { value: 'openai' },
+    });
+    fireEvent.click(await screen.findByLabelText('OAuth'));
+    fireEvent.click(screen.getByRole('button', { name: 'Create provider profile' }));
+
+    await waitFor(() => expect(openSpy).toHaveBeenCalledTimes(1));
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it('preserves an unknown existing SecretRef role for inspection', () => {
+    const profileWithUnknownRole = {
+      profile_id: 'codex-unknown-role',
+      runtime_id: 'codex_cli',
+      provider_id: 'openai',
+      credential_source: 'secret_ref',
+      runtime_materialization_mode: 'api_key_env',
+      secret_refs: {
+        openai_api_key: 'db://OPENAI_API_KEY',
+        future_provider_role: 'env://FUTURE_PROVIDER_TOKEN',
+      },
+      max_parallel_runs: 1,
+      cooldown_after_429_seconds: 300,
+      rate_limit_policy: 'backoff',
+      enabled: true,
+      auth_state: 'connected',
+      creation_capabilities: openAiCapabilities,
+    } as ProviderProfile;
+
+    renderProviderProfilesManager([profileWithUnknownRole]);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+
+    expect((screen.getByLabelText('Show advanced options') as HTMLInputElement).checked).toBe(true);
+
+    expect(screen.getByText(/Unknown existing method: secret_ref → api_key_env/)).toBeTruthy();
+    expect(screen.getByText('Unknown existing role: future_provider_role')).toBeTruthy();
+    expect(screen.getByDisplayValue('env://FUTURE_PROVIDER_TOKEN')).toBeTruthy();
+  });
+
+  it('validates imported OAuth volumes through the distinct expert flow', async () => {
+    const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.startsWith('/api/v1/provider-profiles/creation-preset?')) {
+        return { ok: true, json: async () => openAiCapabilities } as Response;
+      }
+      if (url === '/api/v1/provider-profiles/credential-volume/validate') {
+        expect(JSON.parse(String(init?.body))).toEqual({
+          runtime_id: 'codex_cli',
+          provider_id: 'openai',
+          volume_ref: 'existing-codex-home',
+        });
+        return {
+          ok: true,
+          json: async () => ({
+            status: 'validated',
+            volume_ref: 'existing-codex-home',
+            volume_mount_path: '/home/app/.codex',
+            source: 'validated_import',
+          }),
+        } as Response;
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    renderProviderProfilesManager();
+
+    fireEvent.change(screen.getByLabelText(/Runtime ID/), {
+      target: { value: 'codex_cli' },
+    });
+    fireEvent.change(screen.getByLabelText(/Provider ID/), {
+      target: { value: 'openai' },
+    });
+    fireEvent.click(await screen.findByLabelText('OAuth'));
+    fireEvent.click(screen.getByLabelText('Show advanced options'));
+    fireEvent.click(screen.getByRole('button', { name: 'Use an existing credential volume' }));
+    fireEvent.change(screen.getByLabelText('Existing credential volume'), {
+      target: { value: 'existing-codex-home' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Validate imported volume' }));
+
+    expect(await screen.findByText('Validated imported volume')).toBeTruthy();
+    expect(screen.getByText('Derived mount path: /home/app/.codex')).toBeTruthy();
+    expect(fetchSpy).toHaveBeenCalledWith(
+      '/api/v1/provider-profiles/credential-volume/validate',
+      expect.objectContaining({ method: 'POST' }),
+    );
   });
 });

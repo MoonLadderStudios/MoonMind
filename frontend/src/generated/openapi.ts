@@ -824,6 +824,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/provider-profiles/creation-preset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Creation Preset */
+        get: operations["get_creation_preset_api_v1_provider_profiles_creation_preset_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/provider-profiles/credential-volume/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Validate Imported Credential Volume */
+        post: operations["validate_imported_credential_volume_api_v1_provider_profiles_credential_volume_validate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/provider-profiles/{profile_id}": {
         parameters: {
             query?: never;
@@ -11022,6 +11056,29 @@ export interface components {
             /** Secret Ref */
             secret_ref: string;
         };
+        /** ProviderCredentialVolumeImportRequest */
+        ProviderCredentialVolumeImportRequest: {
+            /** Runtime Id */
+            runtime_id: string;
+            /** Provider Id */
+            provider_id: string;
+            /** Volume Ref */
+            volume_ref: string;
+        };
+        /** ProviderCredentialVolumeImportResponse */
+        ProviderCredentialVolumeImportResponse: {
+            /** Status */
+            status: string;
+            /** Volume Ref */
+            volume_ref: string;
+            /** Volume Mount Path */
+            volume_mount_path: string;
+            /**
+             * Source
+             * @default validated_import
+             */
+            source: string;
+        };
         /**
          * ProviderModelEffortTier
          * @description Profile-local model/effort tier definition.
@@ -11041,6 +11098,24 @@ export interface components {
             annotations?: {
                 [key: string]: unknown;
             };
+        };
+        /** ProviderProfileAuthenticationMethodCapability */
+        ProviderProfileAuthenticationMethodCapability: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Setup Action */
+            setup_action: string;
+            /** Launch Ready After Setup */
+            launch_ready_after_setup: boolean;
+            /** Fields */
+            fields: {
+                [key: string]: components["schemas"]["ProviderProfileCreationField"];
+            };
+            /** Secret Roles */
+            secret_roles: components["schemas"]["ProviderProfileSecretRoleCapability"][];
+            imported_volume: components["schemas"]["ProviderProfileImportedVolumeCapability"];
         };
         /** ProviderProfileCreate */
         ProviderProfileCreate: {
@@ -11067,10 +11142,14 @@ export interface components {
             model_overrides?: {
                 [key: string]: string;
             } | null;
+            /** Authentication Method */
+            authentication_method?: string | null;
+            /** Preset Version */
+            preset_version?: string | null;
             /** Credential Source */
-            credential_source: string;
+            credential_source?: string | null;
             /** Runtime Materialization Mode */
-            runtime_materialization_mode: string;
+            runtime_materialization_mode?: string | null;
             /** Volume Ref */
             volume_ref?: string | null;
             /** Volume Mount Path */
@@ -11152,6 +11231,48 @@ export interface components {
             last_validated_at?: string | null;
             /** Last Auth Method */
             last_auth_method?: string | null;
+            /**
+             * Import Existing Credential Volume
+             * @default false
+             */
+            import_existing_credential_volume: boolean;
+        };
+        /** ProviderProfileCreationCapabilitiesResponse */
+        ProviderProfileCreationCapabilitiesResponse: {
+            /** Version */
+            version: string;
+            /** Runtime Id */
+            runtime_id: string;
+            /** Provider Id */
+            provider_id: string;
+            /** Supported */
+            supported: boolean;
+            /** Authentication Methods */
+            authentication_methods: components["schemas"]["ProviderProfileAuthenticationMethodCapability"][];
+            /** Diagnostics */
+            diagnostics: string[];
+        };
+        /** ProviderProfileCreationField */
+        ProviderProfileCreationField: {
+            /** Value */
+            value: unknown;
+            /** Source */
+            source: string;
+            /** Editable */
+            editable: boolean;
+            /** Lock Reason */
+            lock_reason: string;
+        };
+        /** ProviderProfileImportedVolumeCapability */
+        ProviderProfileImportedVolumeCapability: {
+            /** Supported */
+            supported: boolean;
+            /** Mount Path */
+            mount_path: string | null;
+            /** Source */
+            source: string;
+            /** Lock Reason */
+            lock_reason: string;
         };
         /** ProviderProfilePolicy */
         ProviderProfilePolicy: {
@@ -11268,10 +11389,24 @@ export interface components {
             /** Launch Ready */
             launch_ready: boolean;
             readiness: components["schemas"]["ProviderProfileReadiness"];
+            /** Authentication Method */
+            authentication_method?: string | null;
+            creation_capabilities: components["schemas"]["ProviderProfileCreationCapabilitiesResponse"];
             /** Created At */
             created_at: string | null;
             /** Updated At */
             updated_at: string | null;
+        };
+        /** ProviderProfileSecretRoleCapability */
+        ProviderProfileSecretRoleCapability: {
+            /** Role */
+            role: string;
+            /** Label */
+            label: string;
+            /** Required */
+            required: boolean;
+            /** Compatible Schemes */
+            compatible_schemes: string[];
         };
         /** ProviderProfileSummary */
         ProviderProfileSummary: {
@@ -11418,6 +11553,11 @@ export interface components {
             last_validated_at?: string | null;
             /** Last Auth Method */
             last_auth_method?: string | null;
+            /**
+             * Import Existing Credential Volume
+             * @default false
+             */
+            import_existing_credential_volume: boolean;
         };
         /** ProviderReadinessCheck */
         ProviderReadinessCheck: {
@@ -16063,6 +16203,71 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProviderProfileResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_creation_preset_api_v1_provider_profiles_creation_preset_get: {
+        parameters: {
+            query: {
+                runtime_id: string;
+                provider_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderProfileCreationCapabilitiesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    validate_imported_credential_volume_api_v1_provider_profiles_credential_volume_validate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProviderCredentialVolumeImportRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderCredentialVolumeImportResponse"];
                 };
             };
             /** @description Validation Error */
