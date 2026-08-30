@@ -36,6 +36,6 @@ Alerts use short/long multi-window burn pairs, start as tickets, and become page
 
 ## Operator surfaces and rollout
 
-The provisioned overview dashboard groups panels for overview, workflow/steps, Temporal/workers, providers/profiles/cost, Omnigent, artifacts/Live Logs/Chat, and safety/intervention. Variables use bounded dimensions only. Drill-down links are server-owned templates to authorized Workflow Detail, trace, log, Temporal, and runbook views.
+The provisioned overview dashboard groups panels for overview, workflow/steps, Temporal/workers, providers/profiles/cost, Omnigent, artifacts/Live Logs/Chat, and security/intervention. Variables use bounded dimensions only. Drill-down links are server-owned templates to authorized Workflow Detail, trace, log, Temporal, and runbook views.
 
 Rollout freezes the legacy inventory, dual-emits via an adapter, validates registry/rules/dashboard/runbook references in CI, calibrates in non-production, promotes reviewed alerts, and removes legacy names after retention. Before production enablement operators record expected series count, backend storage/retention, exporter overhead, and rollback to disabled telemetry and non-paging rules.

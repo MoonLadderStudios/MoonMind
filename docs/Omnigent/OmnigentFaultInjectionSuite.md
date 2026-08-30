@@ -160,7 +160,7 @@ replay corpus.
     `test_control_plane_faultlab.py` replays the projected command stream against
     the real `moonmind.omnigent.control_plane` repositories, re-proving durable
     revisions, command-claim uniqueness, idempotency-key conflict, fencing
-    generation, distinct terminality, and historical-read safety. The hermetic
+    generation, distinct terminality, and historical-read integrity. The hermetic
     SQLite journey is required-CI (`integration_ci` + `reliability_journey`); the
     decisive concurrency races run on the ephemeral PostgreSQL cluster in
     `conftest.py`.

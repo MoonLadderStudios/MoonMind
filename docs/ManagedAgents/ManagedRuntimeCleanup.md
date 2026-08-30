@@ -73,7 +73,7 @@ Those systems may adopt the same cleanup-catalog shape later, but they remain se
 
 1. **Declarative resource ownership.** Every cleanable resource class must state who owns it and what durable truth determines whether it is live.
 2. **Terminal-state awareness.** Durable workspaces and artifacts are never deleted solely because their filesystem mtime is old.
-3. **Shared-checkout safety.** A workflow/correlation-key workspace can be shared by multiple child runs; it must survive until every owner is terminal and past retention.
+3. **Shared-checkout protection.** A workflow/correlation-key workspace can be shared by multiple child runs; it must survive until every owner is terminal and past retention.
 4. **Hot-path restraint.** Session termination and run completion should clean live runtime resources, not perform broad retained-state garbage collection.
 5. **Safe working default.** Retained-state cleanup runs automatically and destructively after retention; dry-run remains an explicit diagnostic override with actionable skip reasons.
 6. **Fail closed.** Missing stores, corrupt records, unsafe paths, symlinks, and ambiguous ownership must prevent deletion.
@@ -90,7 +90,7 @@ Cleanup decisions must be derived from durable truth sources in this priority or
 2. **ManagedSessionStore JSON records** for managed session status and session-level paths.
 3. **ManagedRunStore JSON records** for managed run status, workflow ownership, workspace paths, and artifact refs.
 4. **Docker labels and active mounts** for live container and volume security gates.
-5. **Canonical filesystem layout** for candidate discovery and path safety.
+5. **Canonical filesystem layout** for candidate discovery and path confinement.
 6. **Filesystem timestamps** only as an age signal after ownership has been resolved.
 
 Filesystem age alone is never enough to delete a workspace, artifact directory, or record.
