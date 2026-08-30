@@ -1,6 +1,6 @@
-# AgentSession deployment integrity cutover
+# AgentSession deployment safety cutover
 
-Operator playbook for **replay-safe rollout** of durable `AgentSession` workflow changes. The deployment validation gate expects this file to mention the topics below when sensitive workflow paths change.
+Operator playbook for **replay-safe rollout** of durable `AgentSession` workflow changes. The deployment-safety gate expects this file to mention the topics below when sensitive workflow paths change.
 
 ## Shared prerequisites
 
