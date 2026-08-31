@@ -161,11 +161,11 @@ interface ProviderProfileFormState {
 
 interface ProviderProfileSavePayload {
   profile_id: string;
-  runtime_id: string;
-  provider_id: string;
-  provider_label: string | null;
-  default_model: string | null;
-  default_effort: string | null;
+  runtime_id?: string;
+  provider_id?: string;
+  provider_label?: string | null;
+  default_model?: string | null;
+  default_effort?: string | null;
   authentication_method?: AuthenticationMethod;
   preset_version?: string;
   credential_source?: string;
@@ -182,7 +182,7 @@ interface ProviderProfileSavePayload {
   tags?: string[] | null;
   priority?: number;
   clear_env_keys?: string[] | null;
-  account_label: string | null;
+  account_label?: string | null;
   import_existing_credential_volume?: boolean;
 }
 
@@ -809,6 +809,7 @@ function buildSavePayload(
   form: ProviderProfileFormState,
   options: {
     isEditing: boolean;
+    formBaseline: ProviderProfileFormState;
     creationPreset: ProviderProfileCreationPreset | null;
     importExistingCredentialVolume: boolean;
   },
@@ -819,34 +820,94 @@ function buildSavePayload(
       form.credentialSource === 'oauth_volume' &&
       form.runtimeMaterializationMode === 'oauth_home') ||
       (!options.isEditing && form.authenticationMethod === 'oauth'));
-  const payload: ProviderProfileSavePayload = {
-    profile_id: form.profileId.trim(),
-    runtime_id: form.runtimeId.trim(),
-    provider_id: form.providerId.trim(),
-    provider_label: form.providerLabel.trim() || null,
-    default_model: form.defaultModel.trim() || null,
-    default_effort: form.defaultEffort.trim() || null,
-    account_label: form.accountLabel.trim() || null,
-  };
+  const payload: ProviderProfileSavePayload = { profile_id: form.profileId.trim() };
 
   if (options.isEditing) {
-    payload.secret_refs = parseSecretRefs(form.secretRefsText);
-    payload.volume_ref = form.volumeRef.trim() || null;
-    payload.volume_mount_path = form.volumeMountPath.trim() || null;
-    payload.max_parallel_runs = isCodexOAuth ? 1 : Number(form.maxParallelRuns);
-    payload.cooldown_after_429_seconds = Number(form.cooldownAfter429Seconds);
-    payload.rate_limit_policy = form.rateLimitPolicy;
-    payload.enabled = form.enabled;
-    payload.is_default = form.isDefault;
-    payload.command_behavior = parseCommandBehavior(form.commandBehavior);
-    payload.tags = parseTags(form.tagsText);
-    payload.clear_env_keys = parseClearEnvKeys(form.clearEnvKeysText);
+    const baseline = options.formBaseline;
+    const setChanged = <Key extends keyof ProviderProfileSavePayload>(
+      key: Key,
+      current: ProviderProfileSavePayload[Key],
+      previous: ProviderProfileSavePayload[Key],
+    ) => {
+      if (!valuesEqual(current, previous)) payload[key] = current;
+    };
+    setChanged('provider_id', form.providerId.trim(), baseline.providerId.trim());
+    setChanged(
+      'provider_label',
+      form.providerLabel.trim() || null,
+      baseline.providerLabel.trim() || null,
+    );
+    setChanged(
+      'default_model',
+      form.defaultModel.trim() || null,
+      baseline.defaultModel.trim() || null,
+    );
+    setChanged(
+      'default_effort',
+      form.defaultEffort.trim() || null,
+      baseline.defaultEffort.trim() || null,
+    );
+    setChanged(
+      'account_label',
+      form.accountLabel.trim() || null,
+      baseline.accountLabel.trim() || null,
+    );
+    setChanged(
+      'secret_refs',
+      parseSecretRefs(form.secretRefsText),
+      parseSecretRefs(baseline.secretRefsText),
+    );
+    setChanged(
+      'volume_ref',
+      form.volumeRef.trim() || null,
+      baseline.volumeRef.trim() || null,
+    );
+    setChanged(
+      'volume_mount_path',
+      form.volumeMountPath.trim() || null,
+      baseline.volumeMountPath.trim() || null,
+    );
+    setChanged(
+      'max_parallel_runs',
+      isCodexOAuth ? 1 : Number(form.maxParallelRuns),
+      isCodexOAuth ? 1 : Number(baseline.maxParallelRuns),
+    );
+    setChanged(
+      'cooldown_after_429_seconds',
+      Number(form.cooldownAfter429Seconds),
+      Number(baseline.cooldownAfter429Seconds),
+    );
+    setChanged('rate_limit_policy', form.rateLimitPolicy, baseline.rateLimitPolicy);
+    setChanged('enabled', form.enabled, baseline.enabled);
+    setChanged('is_default', form.isDefault, baseline.isDefault);
+    setChanged(
+      'command_behavior',
+      parseCommandBehavior(form.commandBehavior),
+      parseCommandBehavior(baseline.commandBehavior),
+    );
+    setChanged('tags', parseTags(form.tagsText), parseTags(baseline.tagsText));
+    setChanged(
+      'clear_env_keys',
+      parseClearEnvKeys(form.clearEnvKeysText),
+      parseClearEnvKeys(baseline.clearEnvKeysText),
+    );
     const priority = parsePriority(form.priority);
-    if (priority !== null) payload.priority = priority;
+    const baselinePriority = parsePriority(baseline.priority);
+    if (priority !== null && priority !== baselinePriority) payload.priority = priority;
     if (options.importExistingCredentialVolume) {
       payload.import_existing_credential_volume = true;
+      payload.volume_ref = form.volumeRef.trim() || null;
+      payload.volume_mount_path = form.volumeMountPath.trim() || null;
     }
+    return payload;
   }
+
+  payload.runtime_id = form.runtimeId.trim();
+  payload.provider_id = form.providerId.trim();
+  payload.provider_label = form.providerLabel.trim() || null;
+  payload.default_model = form.defaultModel.trim() || null;
+  payload.default_effort = form.defaultEffort.trim() || null;
+  payload.account_label = form.accountLabel.trim() || null;
 
   if (!payload.profile_id) {
     throw new Error('Profile ID is required.');
@@ -857,8 +918,6 @@ function buildSavePayload(
   if (!payload.provider_id) {
     throw new Error('Provider ID is required.');
   }
-
-  if (options.isEditing) return payload;
 
   const preset = options.creationPreset;
   const authenticationMethod = form.authenticationMethod;
@@ -1667,6 +1726,7 @@ export function ProviderProfilesManager({
     mutationFn: async (formState: ProviderProfileFormState) => {
       const payload = buildSavePayload(formState, {
         isEditing,
+        formBaseline,
         creationPreset,
         importExistingCredentialVolume: importedVolumeValidated,
       });
@@ -1729,7 +1789,22 @@ export function ProviderProfilesManager({
         },
       );
       queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
-      if (createdProfile && submittedForm.authenticationMethod === 'api_key') {
+      const submittedMethod =
+        savedProfile.creation_capabilities?.authentication_methods.find(
+          (method) => method.id === submittedForm.authenticationMethod,
+        ) ??
+        creationCapabilities?.authentication_methods.find(
+          (method) => method.id === submittedForm.authenticationMethod,
+        );
+      const guidedApiKeySetupPending =
+        submittedMethod?.setup_action === 'api_key' &&
+        submittedMethod.launch_ready_after_setup &&
+        savedProfile.auth_state !== 'connected';
+      if (
+        createdProfile &&
+        submittedForm.authenticationMethod === 'api_key' &&
+        guidedApiKeySetupPending
+      ) {
         if (
           savedProfile.runtime_id === 'claude_code' &&
           savedProfile.provider_id === 'anthropic'

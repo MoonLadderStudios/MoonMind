@@ -431,6 +431,9 @@ describe('backend creation presets', () => {
     });
     expect(payload).not.toHaveProperty('authentication_method');
     expect(payload).not.toHaveProperty('preset_version');
+    expect(
+      screen.queryByRole('dialog', { name: /API key enrollment for manual-openrouter/ }),
+    ).toBeNull();
   });
 
   it('reloads the active preset after a version mismatch', async () => {
@@ -2031,6 +2034,57 @@ describe('MoonLadderStudios/MoonMind#3820 guided provider-profile creation', () 
     expect(fetchSpy).toHaveBeenCalledTimes(4);
   });
 
+  it('keeps a selected existing SecretRef and skips plaintext enrollment', async () => {
+    const savedProfile = {
+      profile_id: 'codex-guided-existing-key',
+      runtime_id: 'codex_cli',
+      provider_id: 'openai',
+      authentication_method: 'api_key',
+      credential_source: 'secret_ref',
+      runtime_materialization_mode: 'api_key_env',
+      secret_refs: { openai_api_key: 'db://OPENAI_API_KEY' },
+      max_parallel_runs: 1,
+      cooldown_after_429_seconds: 300,
+      rate_limit_policy: 'backoff',
+      enabled: true,
+      auth_state: 'connected',
+      creation_capabilities: openAiCapabilities,
+    } as ProviderProfile;
+    const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      const creationResponse = openAiCreationResponse(url);
+      if (creationResponse) return creationResponse;
+      if (url === '/api/v1/provider-profiles') {
+        expect(JSON.parse(String(init?.body))).toEqual(
+          expect.objectContaining({
+            secret_refs: { openai_api_key: 'db://OPENAI_API_KEY' },
+          }),
+        );
+        return { ok: true, json: async () => savedProfile } as Response;
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    renderProviderProfilesManager();
+
+    fireEvent.change(screen.getByLabelText(/Profile ID/), {
+      target: { value: 'codex-guided-existing-key' },
+    });
+    await selectOpenAiApiKeyCreation();
+    await screen.findByText(/Backend preset provider-profile-creation-v1 loaded/);
+    fireEvent.click(screen.getByLabelText('Show advanced options'));
+    fireEvent.change(screen.getByLabelText('OpenAI API key (required)'), {
+      target: { value: 'db://OPENAI_API_KEY' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create provider profile' }));
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(3));
+    expect(
+      screen.queryByRole('dialog', {
+        name: 'OpenAI API key enrollment for codex-guided-existing-key',
+      }),
+    ).toBeNull();
+  });
+
   it('creates OAuth setup without typed volume metadata and starts enrollment', async () => {
     const openSpy = vi.spyOn(window, 'open').mockReturnValue(null);
     const savedProfile = {
@@ -2047,6 +2101,8 @@ describe('MoonLadderStudios/MoonMind#3820 guided provider-profile creation', () 
       enabled: false,
       auth_state: 'oauth_pending',
       disabled_reason: 'missing_credentials',
+      volume_ref: 'moonmind_oauth_guided',
+      volume_mount_path: '/home/app/.codex',
       creation_capabilities: openAiCapabilities,
     } as ProviderProfile;
     const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(async (input, init) => {
@@ -2066,6 +2122,8 @@ describe('MoonLadderStudios/MoonMind#3820 guided provider-profile creation', () 
             runtime_id: 'codex_cli',
             provider_id: 'openai',
             profile_id: 'codex-guided-oauth',
+            volume_ref: 'moonmind_oauth_guided',
+            volume_mount_path: '/home/app/.codex',
           }),
         );
         return {
@@ -2169,6 +2227,11 @@ describe('MoonLadderStudios/MoonMind#3820 guided provider-profile creation', () 
     expect(updatePayload).not.toHaveProperty('authentication_method');
     expect(updatePayload).not.toHaveProperty('credential_source');
     expect(updatePayload).not.toHaveProperty('runtime_materialization_mode');
+    expect(updatePayload).not.toHaveProperty('provider_id');
+    expect(updatePayload).not.toHaveProperty('secret_refs');
+    expect(updatePayload).not.toHaveProperty('volume_ref');
+    expect(updatePayload).not.toHaveProperty('volume_mount_path');
+    expect(updatePayload).not.toHaveProperty('command_behavior');
   });
 
   it('validates imported OAuth volumes through the distinct expert flow', async () => {

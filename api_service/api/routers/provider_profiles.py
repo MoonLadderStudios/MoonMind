@@ -31,6 +31,8 @@ from api_service.db.models import (
 )
 from api_service.services.provider_profile_creation import (
     ProviderApiKeyStrategy,
+    authentication_method_launch_ready_after_setup,
+    expert_manual_credential_launch_ready,
     infer_authentication_method,
     provider_api_key_strategy,
     provider_profile_creation_capabilities,
@@ -821,6 +823,89 @@ async def _validate_imported_credential_volume(
     return volume_ref, mount_path
 
 
+def _require_privileged_credential_volume_import(user: Any) -> None:
+    """Keep arbitrary Docker credential-volume adoption superuser-only."""
+
+    if bool(getattr(user, "is_superuser", False)):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail="Importing an existing credential volume requires superuser authority.",
+    )
+
+
+def _guided_oauth_volume_ref(*, runtime_id: str, profile_id: str) -> str:
+    """Return a stable opaque volume name owned by one guided OAuth profile."""
+
+    digest = hashlib.sha256(
+        f"{runtime_id.strip()}\0{profile_id.strip()}".encode("utf-8")
+    ).hexdigest()[:24]
+    return f"moonmind_oauth_{digest}"
+
+
+def _activate_selected_api_key_refs(
+    *,
+    body: ProviderProfileCreate,
+    values: dict[str, Any],
+) -> None:
+    """Activate a guided API-key profile when all required refs were selected."""
+
+    if body.authentication_method != ProviderProfileAuthenticationMethod.API_KEY:
+        return
+    strategy = provider_api_key_strategy(body.runtime_id, body.provider_id)
+    if strategy is None:
+        return
+    secret_refs = values.get("secret_refs")
+    if not isinstance(secret_refs, dict) or not all(
+        secret_refs.get(role)
+        for role in required_secret_roles(body.runtime_id, body.provider_id)
+    ):
+        return
+
+    activated_at = datetime.now(UTC)
+    command_behavior = dict(values.get("command_behavior") or {})
+    command_behavior.update(
+        {
+            "auth_state": "connected",
+            "auth_status_label": strategy.ready_label,
+            "auth_readiness": {
+                "connected": True,
+                "last_validated_at": activated_at.isoformat(),
+                "backing_secret_exists": True,
+                "launch_ready": True,
+            },
+        }
+    )
+    values.update(
+        {
+            "credential_source": ProviderCredentialSource.SECRET_REF.value,
+            "enabled": True,
+            "auth_state": ProviderProfileAuthState.CONNECTED.value,
+            "disabled_reason": None,
+            "first_authenticated_at": activated_at,
+            "last_validated_at": activated_at,
+            "last_auth_method": ProviderProfileAuthMethod.SECRET_REF.value,
+            "command_behavior": command_behavior,
+        }
+    )
+
+
+async def _reconcile_imported_credential_generation(
+    profile: ManagedAgentProviderProfile,
+) -> None:
+    """Refresh bindings and fence hosts issued for an older credential home."""
+
+    from api_service.db.base import get_async_session_context
+    from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
+
+    repository = OmnigentOAuthHostRepository(get_async_session_context)
+    await repository.refresh_binding_generation(profile.profile_id)
+    await repository.mark_generation_stale(
+        profile_id=profile.profile_id,
+        credential_generation=profile.credential_generation,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -909,6 +994,7 @@ async def validate_imported_credential_volume(
     current_user: User = Depends(get_current_user()),
 ) -> dict[str, str]:
     _require_provider_profile_permission(current_user, "provider_profiles.write")
+    _require_privileged_credential_volume_import(current_user)
     volume_ref, mount_path = await _validate_imported_credential_volume(
         runtime_id=body.runtime_id,
         provider_id=body.provider_id,
@@ -971,6 +1057,7 @@ async def create_profile(
         )
     values = _normalized_create_values(normalization_body)
     if body.import_existing_credential_volume:
+        _require_privileged_credential_volume_import(current_user)
         volume_ref, volume_mount_path = await _validate_imported_credential_volume(
             runtime_id=body.runtime_id,
             provider_id=body.provider_id,
@@ -1009,6 +1096,26 @@ async def create_profile(
                 "command_behavior": command_behavior,
             }
         )
+    elif body.authentication_method == ProviderProfileAuthenticationMethod.OAUTH:
+        preset = get_provider_profile_creation_preset(
+            runtime_id=body.runtime_id,
+            provider_id=body.provider_id,
+            authentication_method=ProviderProfileAuthenticationMethod.OAUTH,
+        )
+        mount_path_field = preset.fields.get("volume_mount_path_after_setup")
+        mount_path = mount_path_field.value if mount_path_field is not None else None
+        if not isinstance(mount_path, str) or not mount_path:
+            raise HTTPException(
+                status_code=422,
+                detail="The runtime strategy did not derive a credential mount path.",
+            )
+        values["volume_ref"] = _guided_oauth_volume_ref(
+            runtime_id=body.runtime_id,
+            profile_id=body.profile_id,
+        )
+        values["volume_mount_path"] = mount_path
+
+    _activate_selected_api_key_refs(body=body, values=values)
     try:
         model_tiers, default_model_tier = coerce_model_effort_tier_policy(
             model_tiers=(
@@ -1189,6 +1296,7 @@ async def update_profile(
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
     if import_existing_credential_volume:
+        _require_privileged_credential_volume_import(current_user)
         requested_volume_ref = update_data.get("volume_ref")
         if not isinstance(requested_volume_ref, str) or not requested_volume_ref.strip():
             raise HTTPException(
@@ -1218,6 +1326,7 @@ async def update_profile(
                 "last_auth_method": ProviderProfileAuthMethod.OAUTH_VOLUME.value,
             }
         )
+        profile.credential_generation = int(profile.credential_generation) + 1
     model_tiers_supplied = "model_tiers" in update_data
     default_model_tier_supplied = "default_model_tier" in update_data
     legacy_default_supplied = (
@@ -1367,6 +1476,8 @@ async def update_profile(
     )
     await session.commit()
     await session.refresh(profile)
+    if import_existing_credential_volume:
+        await _reconcile_imported_credential_generation(profile)
     await sync_provider_profile_manager(session=session, runtime_id=profile.runtime_id)
     secret_ref_results = _secret_ref_results_for_rows([profile])
     secret_statuses = await _managed_secret_statuses_for_rows(
@@ -2435,14 +2546,42 @@ def _credential_capability_check(
         auth_state=row.auth_state,
         last_auth_method=row.last_auth_method,
     )
+    launch_ready_after_setup = bool(
+        authentication_method
+        and authentication_method_launch_ready_after_setup(
+            authentication_method=authentication_method,
+            authentication_methods=capabilities["authentication_methods"],
+        )
+    )
+    expert_launch_ready = bool(
+        authentication_method
+        and not launch_ready_after_setup
+        and expert_manual_credential_launch_ready(
+            runtime_id=row.runtime_id,
+            provider_id=row.provider_id,
+            credential_source=row.credential_source,
+            runtime_materialization_mode=row.runtime_materialization_mode,
+            secret_refs=row.secret_refs,
+            env_template=row.env_template,
+            file_templates=row.file_templates,
+            home_path_overrides=row.home_path_overrides,
+            command_behavior=row.command_behavior,
+        )
+    )
+    launch_ready = launch_ready_after_setup or expert_launch_ready
     return _readiness_check(
         "credential_capability",
         "Credential capability",
-        "pass" if authentication_method is not None else "error",
+        "pass" if launch_ready else "error",
         (
-            f"Credential contract matches the supported {authentication_method} preset."
-            if authentication_method is not None
-            else "Credential contract does not match a supported authentication preset."
+            f"Credential contract matches the launch-ready {authentication_method} preset."
+            if launch_ready
+            else (
+                "This expert credential preset requires a provider-specific "
+                "validation path before it can become launch ready."
+                if authentication_method is not None
+                else "Credential contract does not match a supported authentication preset."
+            )
         ),
     )
 

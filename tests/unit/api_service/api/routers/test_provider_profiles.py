@@ -190,6 +190,7 @@ def _advertise_expert_manual_contracts(
                     label="Expert manual test contract",
                     credential_source=credential_source,
                     runtime_materialization_mode=materialization_mode,
+                    launch_validator=lambda _profile: True,
                 ),
             ),
         )
@@ -288,6 +289,46 @@ async def test_guided_api_key_creation_uses_backend_preset_and_stays_disabled(
     assert payload["launch_ready"] is False
     checks = {check["id"]: check for check in payload["readiness"]["checks"]}
     assert "openai_api_key" in checks["secret_refs"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_guided_api_key_creation_activates_selected_managed_secret_ref(
+    client_app: AsyncClient, _module_db
+) -> None:
+    _override_current_user()
+    profile_id = f"mm3820-guided-existing-ref-{uuid4().hex}"
+    secret_slug = f"mm3820-existing-openai-{uuid4().hex}"
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedSecret(
+                slug=secret_slug,
+                ciphertext="encrypted-test-value",
+                status=SecretStatus.ACTIVE,
+                details={},
+            )
+        )
+        await session.commit()
+
+    async with client_app as client:
+        response = await client.post(
+            "/api/v1/provider-profiles",
+            json={
+                "profile_id": profile_id,
+                "runtime_id": "codex_cli",
+                "provider_id": "openai",
+                "authentication_method": "api_key",
+                "preset_version": CODEX_OPENAI_API_KEY_PRESET_VERSION,
+                "secret_refs": {"openai_api_key": f"db://{secret_slug}"},
+            },
+        )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["secret_refs"] == {"openai_api_key": f"db://{secret_slug}"}
+    assert payload["credential_source"] == "secret_ref"
+    assert payload["auth_state"] == "connected"
+    assert payload["enabled"] is True
+    assert payload["launch_ready"] is True
 
 
 @pytest.mark.asyncio
@@ -632,7 +673,7 @@ async def test_unrelated_update_preserves_enabled_unknown_profile_without_author
 async def test_imported_credential_volume_uses_derived_mount_and_validation(
     client_app: AsyncClient, _module_db, monkeypatch
 ) -> None:
-    _override_current_user()
+    _override_current_user(is_superuser=True)
     verified: list[tuple[str, str, str]] = []
 
     async def _verify(
@@ -697,6 +738,95 @@ async def test_imported_credential_volume_uses_derived_mount_and_validation(
         assert imported_profile is not None
         await session.delete(imported_profile)
         await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_imported_credential_volume_requires_superuser_authority(
+    client_app: AsyncClient, _module_db
+) -> None:
+    _override_current_user(is_superuser=False)
+
+    async with client_app as client:
+        response = await client.post(
+            "/api/v1/provider-profiles/credential-volume/validate",
+            json={
+                "runtime_id": "codex_cli",
+                "provider_id": "openai",
+                "volume_ref": "another-users-home",
+            },
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == (
+        "Importing an existing credential volume requires superuser authority."
+    )
+
+
+@pytest.mark.asyncio
+async def test_replacing_imported_volume_increments_and_reconciles_generation(
+    client_app: AsyncClient,
+    _module_db,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile_id = f"mm3820-import-replacement-{uuid4().hex}"
+    _override_current_user(is_superuser=True)
+    reconciled: list[tuple[str, int]] = []
+
+    async def _verify(
+        *, runtime_id: str, volume_ref: str, volume_mount_path: str
+    ) -> dict[str, object]:
+        assert runtime_id == "codex_cli"
+        assert volume_ref == "replacement-codex-home"
+        assert volume_mount_path == "/home/app/.codex"
+        return {"verified": True}
+
+    async def _reconcile(profile: ManagedAgentProviderProfile) -> None:
+        reconciled.append((profile.profile_id, profile.credential_generation))
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.providers.volume_verifiers.verify_volume_credentials",
+        _verify,
+    )
+    monkeypatch.setattr(
+        provider_profiles_router,
+        "_reconcile_imported_credential_generation",
+        _reconcile,
+    )
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="codex_cli",
+                provider_id="openai",
+                credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                volume_ref="original-codex-home",
+                volume_mount_path="/home/app/.codex",
+                max_parallel_runs=1,
+                enabled=True,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+                disabled_reason=None,
+                credential_generation=4,
+                command_behavior={
+                    "auth_readiness": {"connected": True, "launch_ready": True}
+                },
+            )
+        )
+        await session.commit()
+
+    async with client_app as client:
+        response = await client.patch(
+            f"/api/v1/provider-profiles/{profile_id}",
+            json={
+                "import_existing_credential_volume": True,
+                "volume_ref": "replacement-codex-home",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["volume_ref"] == "replacement-codex-home"
+    assert response.json()["credential_generation"] == 5
+    assert reconciled == [(profile_id, 5)]
 
 
 @pytest.mark.asyncio
@@ -1708,12 +1838,44 @@ async def test_create_guided_oauth_profile_is_disabled_until_enrollment(
     payload = response.json()
     assert payload["credential_source"] == "none"
     assert payload["runtime_materialization_mode"] == "oauth_home"
-    assert payload["volume_ref"] is None
-    assert payload["volume_mount_path"] is None
+    assert payload["volume_ref"].startswith("moonmind_oauth_")
+    assert payload["volume_mount_path"] == "/home/app/.codex"
     assert payload["max_parallel_runs"] == 1
     assert payload["enabled"] is False
     assert payload["launch_ready"] is False
     assert payload["is_default"] is False
+
+
+@pytest.mark.asyncio
+async def test_guided_oauth_profiles_reserve_distinct_credential_volumes(
+    client_app: AsyncClient, _module_db
+) -> None:
+    first_id = f"oauth-preset-{uuid4().hex}"
+    second_id = f"oauth-preset-{uuid4().hex}"
+    async with client_app as client:
+        first = await client.post(
+            "/api/v1/provider-profiles",
+            json={
+                "profile_id": first_id,
+                "runtime_id": "codex_cli",
+                "provider_id": "openai",
+                "authentication_method": "oauth",
+                "preset_version": CODEX_OPENAI_OAUTH_PRESET_VERSION,
+            },
+        )
+        second = await client.post(
+            "/api/v1/provider-profiles",
+            json={
+                "profile_id": second_id,
+                "runtime_id": "codex_cli",
+                "provider_id": "openai",
+                "authentication_method": "oauth",
+                "preset_version": CODEX_OPENAI_OAUTH_PRESET_VERSION,
+            },
+        )
+
+    assert first.status_code == second.status_code == 201
+    assert first.json()["volume_ref"] != second.json()["volume_ref"]
 
 @pytest.mark.asyncio
 async def test_provider_profile_update_rejects_non_owner(
@@ -2578,11 +2740,11 @@ async def test_create_second_profile_can_become_runtime_default(
     """Creating a second profile with is_default should move the runtime default."""
     _advertise_expert_manual_contracts(
         monkeypatch,
-        ("codex_cli", "unknown", "secret_ref", "api_key_env"),
+        ("create_runtime_default", "unknown", "secret_ref", "api_key_env"),
     )
     first_payload = {
         "profile_id": "runtime_default_first",
-        "runtime_id": "codex_cli",
+        "runtime_id": "create_runtime_default",
         "credential_source": "secret_ref",
         "runtime_materialization_mode": "api_key_env",
         "secret_refs": {"API_KEY": "env://first_secret"},
@@ -2593,7 +2755,7 @@ async def test_create_second_profile_can_become_runtime_default(
     }
     second_payload = {
         "profile_id": "runtime_default_second",
-        "runtime_id": "codex_cli",
+        "runtime_id": "create_runtime_default",
         "credential_source": "secret_ref",
         "runtime_materialization_mode": "api_key_env",
         "secret_refs": {"API_KEY": "env://second_secret"},
@@ -2607,7 +2769,10 @@ async def test_create_second_profile_can_become_runtime_default(
     async with client_app as client:
         first_response = await client.post("/api/v1/provider-profiles", json=first_payload)
         second_response = await client.post("/api/v1/provider-profiles", json=second_payload)
-        listed = await client.get("/api/v1/provider-profiles", params={"runtime_id": "codex_cli"})
+        listed = await client.get(
+            "/api/v1/provider-profiles",
+            params={"runtime_id": "create_runtime_default"},
+        )
 
     assert first_response.status_code == 201
     assert first_response.json()["is_default"] is True

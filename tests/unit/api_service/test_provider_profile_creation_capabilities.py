@@ -8,6 +8,7 @@ from api_service.services import provider_profile_creation
 from api_service.services.provider_profile_creation import (
     ExpertManualCredentialCapability,
     RuntimeProviderAuthenticationCapability,
+    expert_manual_credential_launch_ready,
     infer_authentication_method,
     provider_profile_creation_capabilities,
     required_secret_roles,
@@ -207,3 +208,41 @@ def test_exact_expert_manual_contract_requires_typed_backend_capability(
             runtime_materialization_mode="composite",
             authentication_methods=capabilities["authentication_methods"],
         )
+
+
+def test_expert_minimax_capability_requires_provider_launch_templates() -> None:
+    capabilities = provider_profile_creation_capabilities(
+        runtime_id="codex_cli",
+        provider_id="minimax",
+    )
+    method = capabilities["authentication_methods"][0]
+
+    assert method["launch_ready_after_setup"] is False
+    assert [role["role"] for role in method["secret_roles"]] == [
+        "provider_api_key"
+    ]
+    common = {
+        "runtime_id": "codex_cli",
+        "provider_id": "minimax",
+        "credential_source": "secret_ref",
+        "runtime_materialization_mode": "composite",
+        "secret_refs": {"provider_api_key": "env://MINIMAX_API_KEY"},
+        "command_behavior": {},
+    }
+    assert (
+        expert_manual_credential_launch_ready(
+            **common,
+            env_template={},
+            file_templates=[],
+            home_path_overrides={},
+        )
+        is False
+    )
+    assert expert_manual_credential_launch_ready(
+        **common,
+        env_template={
+            "MINIMAX_API_KEY": {"from_secret_ref": "provider_api_key"}
+        },
+        file_templates=[{"path": "config.toml", "content": "profile"}],
+        home_path_overrides={"CODEX_HOME": "{{runtime_support_dir}}/codex-home"},
+    )
