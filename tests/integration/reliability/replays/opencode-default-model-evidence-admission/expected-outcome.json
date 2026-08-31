@@ -1,0 +1,7 @@
+{
+  "invariant": "default local deployment qualification admits valid per-run Provider Profile model, effort, option, and capability choices without manual policy configuration",
+  "supportTier": "deployment_qualified",
+  "modelConfigDigestMayVary": true,
+  "protectedEvidenceRemainsExact": true,
+  "exactHostModelAttestationRequired": true
+}

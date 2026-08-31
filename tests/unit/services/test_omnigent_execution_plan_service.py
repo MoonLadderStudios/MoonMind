@@ -630,6 +630,46 @@ async def test_selected_omnigent_runtime_is_safe_for_pre_cutover_worker(
     assert "exactHostRequired" not in decision
 
 
+@pytest.mark.asyncio
+async def test_resolved_fanout_is_admitted_as_platform_owned_capability(
+    monkeypatch,
+) -> None:
+    """A trusted batch Skill must compile without inventing host evidence."""
+
+    async def resolve_skills(**_kwargs):
+        return (
+            SimpleNamespace(
+                skills=[
+                    SimpleNamespace(
+                        required_capabilities=["execution.fanout"]
+                    )
+                ]
+            ),
+            "art_skill_manifest",
+            "sha256:" + "5" * 64,
+            (),
+        )
+
+    monkeypatch.setattr(service, "_resolve_and_persist_skills", resolve_skills)
+
+    def resolve_evidence(plan_payload, **_kwargs):
+        return _protected_support_evidence(plan_payload), "supported"
+
+    monkeypatch.setattr(service, "resolve_execution_evidence", resolve_evidence)
+    result = await _compile_opencode_plan(
+        monkeypatch,
+        artifacts=_ArtifactService(),
+        launch_policy_ref="opencode-on-demand@1",
+        plan_store=_PlanStore(object()),
+    )
+
+    decision = result.envelope.payload.classAdmissionDecision
+    legacy_decision = _LegacyClassAdmissionDecision.model_validate(decision)
+    assert legacy_decision.requiredSatisfied == ()
+    assert legacy_decision.unknown == ()
+    assert result.envelope.payload.resolvedTools["tools"] == []
+
+
 async def _capture_plan_payload(*, launch_policy_ref: str):
     """Return the compiled plan payload deployment qualification must match.
 
@@ -853,16 +893,12 @@ async def test_unsupported_required_capability_is_refused_before_evidence(
 
 
 @pytest.mark.asyncio
-async def test_deployment_evidence_for_another_model_is_inadmissible(
+async def test_default_evidence_policy_admits_a_selected_profile_model(
     tmp_path, monkeypatch
 ) -> None:
-    """Model identity stays part of the qualified combination."""
+    """Per-run model choice must not require deployment requalification."""
 
-    from moonmind.omnigent.harness_platform.support import (
-        compute_support_combination_key,
-    )
-
-    monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "deployment")
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "either")
     monkeypatch.setenv(
         "MOONMIND_DEPLOYMENT_EVIDENCE_KEY_PATH",
         str(tmp_path / "deployment_evidence_key"),
@@ -871,33 +907,33 @@ async def test_deployment_evidence_for_another_model_is_inadmissible(
         _OPENCODE_ALLOWED_LAUNCH_POLICIES
     )
     plan_payload = await _capture_plan_payload(launch_policy_ref=admitted_policy)
-    drifted = plan_payload.supportIdentity.model_copy(
-        update={"modelConfigDigest": "sha256:" + "3" * 64}
-    )
-    drifted_payload = SimpleNamespace(
-        supportIdentity=drifted,
-        supportCombinationKey=compute_support_combination_key(drifted),
-        hostImageRef=plan_payload.hostImageRef,
-        policySnapshotDigest=plan_payload.policySnapshotDigest,
-        effectiveLaunchSnapshotDigest=(
-            plan_payload.effectiveLaunchSnapshotDigest
-        ),
-    )
     _write_deployment_evidence(
         tmp_path,
         monkeypatch,
-        plan_payload=drifted_payload,
+        plan_payload=plan_payload,
         launch_policy_ref=admitted_policy,
     )
 
-    with pytest.raises(ValueError) as excinfo:
-        await _compile_opencode_plan(
-            monkeypatch,
-            artifacts=_ArtifactService(),
-            launch_policy_ref=admitted_policy,
-            plan_store=_PlanStore(None),
-        )
-    assert "modelConfigDigest" in str(excinfo.value)
+    result = await _compile_opencode_plan(
+        monkeypatch,
+        artifacts=_ArtifactService(),
+        launch_policy_ref=admitted_policy,
+        plan_store=_PlanStore(None),
+        extra_parameters={
+            "model": "opencode/muse-spark-1.2-contributor-free",
+            "effort": "medium",
+        },
+    )
+
+    payload = result.envelope.payload
+    assert payload.admissionAuthority.supportTier == "deployment_qualified"
+    assert payload.modelConfig.qualifiedId == (
+        "opencode/muse-spark-1.2-contributor-free"
+    )
+    assert (
+        payload.supportIdentity.modelConfigDigest
+        != plan_payload.supportIdentity.modelConfigDigest
+    )
 
 
 @pytest.mark.asyncio
@@ -916,7 +952,7 @@ async def test_untrusted_evidence_values_are_redacted_from_admission_errors(
     candidate_identity = plan_payload.supportIdentity.model_dump(
         mode="json", by_alias=True
     )
-    candidate_identity["modelConfigDigest"] = untrusted_value
+    candidate_identity["launchPolicyRef"] = untrusted_value
     destination = tmp_path / "deployment-execution-evidence.json"
     destination.write_text(
         json.dumps({"entries": [{"supportIdentity": candidate_identity}]}),
@@ -937,6 +973,6 @@ async def test_untrusted_evidence_values_are_redacted_from_admission_errors(
         )
 
     message = str(excinfo.value)
-    assert "modelConfigDigest differs" in message
+    assert "launchPolicyRef differs" in message
     assert untrusted_value not in message
     assert "/api/omnigent/bootstrap/opencode/retry" not in message
