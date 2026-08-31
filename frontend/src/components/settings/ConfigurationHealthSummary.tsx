@@ -1,7 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
-
 import { isBrokenReferenceStatus } from '../secrets/SecretManager';
-import type { WorkerPauseConfig } from './OperationsSettingsSection';
 import type { ProviderProfile } from './ProviderProfilesManager';
 
 /**
@@ -10,9 +7,8 @@ import type { ProviderProfile } from './ProviderProfilesManager';
  * Aggregates boot/query data already loaded by the Settings page into a single
  * launch-readiness answer: "Is MoonMind configured well enough to run workflows
  * safely?" It surfaces provider/secret counts, missing or invalid defaults, and
- * permission/read-only states with visible reasons. It deliberately reuses the
- * data the page already fetches and the shared worker snapshot query rather than
- * introducing a dedicated backend health endpoint (out of scope).
+ * permission/read-only states with visible reasons. The summary is deliberately
+ * scoped to Providers & Secrets so this route never loads Operations data.
  */
 
 export interface HealthSecret {
@@ -31,9 +27,6 @@ export interface HealthWarning {
 export interface ConfigurationHealthInput {
   providerProfiles: ProviderProfile[];
   secrets: HealthSecret[];
-  workerPauseConfigured: boolean;
-  workersPaused?: boolean | null;
-  workerMode?: string | null;
 }
 
 export interface ConfigurationHealthSummaryData {
@@ -74,13 +67,7 @@ function secretSlugFromRef(ref: string): string | null {
 export function summarizeConfigurationHealth(
   input: ConfigurationHealthInput,
 ): ConfigurationHealthSummaryData {
-  const {
-    providerProfiles,
-    secrets,
-    workerPauseConfigured,
-    workersPaused,
-    workerMode,
-  } = input;
+  const { providerProfiles, secrets } = input;
 
   const enabledProfiles = providerProfiles.filter((profile) => profile.enabled);
   const defaultProfile =
@@ -159,22 +146,6 @@ export function summarizeConfigurationHealth(
     });
   }
 
-  if (!workerPauseConfigured) {
-    warnings.push({
-      id: 'worker-controls-unavailable',
-      level: 'warning',
-      message:
-        'Worker operations controls are not configured for this deployment, so pause/resume state cannot be confirmed here.',
-    });
-  } else if (workersPaused) {
-    const pausedDescriptor = workerMode === 'quiesce' ? 'quiesced' : 'paused';
-    warnings.push({
-      id: 'workers-paused',
-      level: 'warning',
-      message: `Workers are currently ${pausedDescriptor}, so newly launched workflows will not start until workers resume.`,
-    });
-  }
-
   const hasBlocking = warnings.some((warning) => warning.level === 'blocked');
   const level: HealthLevel = hasBlocking
     ? 'blocked'
@@ -199,13 +170,6 @@ export function summarizeConfigurationHealth(
     managedSecretCount: secrets.length,
     brokenSecretCount: brokenSecrets.length,
     warnings,
-  };
-}
-
-interface WorkerStateSnapshot {
-  system?: {
-    workersPaused?: boolean;
-    mode?: string | null;
   };
 }
 
@@ -269,8 +233,6 @@ export interface ConfigurationHealthSummaryProps {
   secrets: HealthSecret[];
   isLoading?: boolean;
   isError?: boolean;
-  workerPauseConfig: WorkerPauseConfig | null;
-  includeWorkerState?: boolean;
   canWriteProviderProfiles: boolean;
   canRunGithubTokenProbe: boolean;
 }
@@ -280,30 +242,9 @@ export function ConfigurationHealthSummary({
   secrets,
   isLoading = false,
   isError = false,
-  workerPauseConfig,
-  includeWorkerState = true,
   canWriteProviderProfiles,
   canRunGithubTokenProbe,
 }: ConfigurationHealthSummaryProps) {
-  const workerPauseConfigured = !includeWorkerState || workerPauseConfig !== null;
-
-  const { data: workerState } = useQuery<WorkerStateSnapshot>({
-    queryKey: ['workers-snapshot'],
-    queryFn: async () => {
-      if (!workerPauseConfig?.get) {
-        throw new Error('Worker pause GET endpoint is not configured.');
-      }
-      const response = await fetch(workerPauseConfig.get, {
-        headers: { Accept: 'application/json' },
-      });
-      if (!response.ok) {
-        throw new Error(`Failed to fetch worker status: ${response.statusText}`);
-      }
-      return (await response.json()) as WorkerStateSnapshot;
-    },
-    enabled: includeWorkerState && workerPauseConfigured && Boolean(workerPauseConfig?.get),
-  });
-
   if (isLoading) {
     return (
       <section
@@ -326,29 +267,12 @@ export function ConfigurationHealthSummary({
     );
   }
 
-  const workersPaused = workerState?.system?.workersPaused ?? null;
-  const workerMode = workerState?.system?.mode ?? null;
-
   const summary = summarizeConfigurationHealth({
     providerProfiles,
     secrets,
-    workerPauseConfigured,
-    workersPaused,
-    workerMode,
   });
 
   const badge = LEVEL_BADGE[summary.level];
-
-  let workerStateLabel: string;
-  if (!workerPauseConfigured) {
-    workerStateLabel = 'Not configured';
-  } else if (workersPaused === null) {
-    workerStateLabel = 'Unknown';
-  } else if (workersPaused) {
-    workerStateLabel = workerMode === 'quiesce' ? 'Quiesced' : 'Paused';
-  } else {
-    workerStateLabel = 'Running';
-  }
 
   return (
     <section
@@ -372,7 +296,7 @@ export function ConfigurationHealthSummary({
         </span>
       </div>
 
-      <div className={`mt-5 grid gap-4 sm:grid-cols-2 ${includeWorkerState ? 'lg:grid-cols-4' : 'lg:grid-cols-3'}`}>
+      <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <MetricTile
           label="Provider profiles"
           value={String(summary.providerProfileCount)}
@@ -395,7 +319,6 @@ export function ConfigurationHealthSummary({
           }
           tone={summary.brokenSecretCount > 0 ? 'warning' : 'default'}
         />
-        {includeWorkerState ? <MetricTile label="Worker state" value={workerStateLabel} /> : null}
       </div>
 
       {summary.warnings.length > 0 ? (

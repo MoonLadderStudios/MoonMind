@@ -1,6 +1,7 @@
 import { FormEvent, useState } from 'react';
 import { QueryClient, useMutation } from '@tanstack/react-query';
 
+import { useSettingsDraftRegistration } from '../settings/SettingsDraftGuard';
 import { formatStatusLabel } from '../../utils/formatters';
 
 interface SecretMetadata {
@@ -71,6 +72,20 @@ export function SecretManager({
   const [usageLoadingSlug, setUsageLoadingSlug] = useState<string | null>(null);
   const [usageErrorBySlug, setUsageErrorBySlug] = useState<Record<string, string>>({});
 
+  const discardSecretDraft = () => {
+    setSlug('');
+    setPlaintext('');
+    setIsEditing(false);
+    setRotatePromptOpen(false);
+    setRotatePromptSlug('');
+    setRotatePromptVal('');
+  };
+  useSettingsDraftRegistration(
+    'managed-secret-editor',
+    Boolean(slug || plaintext || isEditing || rotatePromptOpen || rotatePromptVal),
+    discardSecretDraft,
+  );
+
   const createOp = useMutation({
     mutationFn: async ({
       slug: nextSlug,
@@ -92,9 +107,7 @@ export function SecretManager({
     },
     onSuccess: () => {
       onNotice({ level: 'ok', text: 'Secret saved successfully.' });
-      setSlug('');
-      setPlaintext('');
-      setIsEditing(false);
+      discardSecretDraft();
       queryClient.invalidateQueries({ queryKey: ['secrets'] });
     },
     onError: (error: Error) => onNotice({ level: 'error', text: error.message }),
@@ -121,9 +134,7 @@ export function SecretManager({
     },
     onSuccess: () => {
       onNotice({ level: 'ok', text: 'Secret updated successfully.' });
-      setSlug('');
-      setPlaintext('');
-      setIsEditing(false);
+      discardSecretDraft();
       queryClient.invalidateQueries({ queryKey: ['secrets'] });
     },
     onError: (error: Error) => onNotice({ level: 'error', text: error.message }),
@@ -150,9 +161,7 @@ export function SecretManager({
     },
     onSuccess: () => {
       onNotice({ level: 'ok', text: 'Secret rotated successfully.' });
-      setSlug('');
-      setPlaintext('');
-      setIsEditing(false);
+      discardSecretDraft();
       queryClient.invalidateQueries({ queryKey: ['secrets'] });
     },
     onError: (error: Error) => onNotice({ level: 'error', text: error.message }),
@@ -541,7 +550,6 @@ export function SecretManager({
                     slug: rotatePromptSlug,
                     plaintext: rotatePromptVal,
                   });
-                  setRotatePromptOpen(false);
                 }
               }}
               className="mt-6 space-y-4"
@@ -561,7 +569,11 @@ export function SecretManager({
                 <button
                   type="button"
                   className="btn btn-outline"
-                  onClick={() => setRotatePromptOpen(false)}
+                  onClick={() => {
+                    setRotatePromptOpen(false);
+                    setRotatePromptSlug('');
+                    setRotatePromptVal('');
+                  }}
                 >
                   Cancel
                 </button>

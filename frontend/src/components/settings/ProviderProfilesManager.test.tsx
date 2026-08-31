@@ -118,16 +118,348 @@ describe('defaultFormState', () => {
     expect(state.isDefault).toBe(false);
   });
 
-  it('includes all legacy fields', () => {
+  it('does not guess backend-owned creation policy', () => {
     const state = defaultFormState();
 
     expect(state.profileId).toBe('');
     expect(state.runtimeId).toBe('');
     expect(state.providerId).toBe('');
-    expect(state.credentialSource).toBe('secret_ref');
-    expect(state.rateLimitPolicy).toBe('backoff');
-    expect(state.enabled).toBe(true);
+    expect(state.authenticationMethod).toBe('');
+    expect(state.credentialSource).toBe('');
+    expect(state.runtimeMaterializationMode).toBe('');
+    expect(state.maxParallelRuns).toBe('');
+    expect(state.cooldownAfter429Seconds).toBe('');
+    expect(state.rateLimitPolicy).toBe('');
+    expect(state.enabled).toBe(false);
     expect(state.isDefault).toBe(false);
+  });
+});
+
+describe('backend creation presets', () => {
+  it('uses the generated preset contract and omits untouched advanced values', async () => {
+    const field = (
+      value: unknown,
+      editable = true,
+      source = 'test_policy',
+    ) => ({
+      value,
+      source,
+      editable,
+      required: false,
+      lock_reason: editable ? null : 'Backend controlled.',
+    });
+    const preset = {
+      version: 'provider-profile-create-v1-test',
+      supported: true,
+      runtime_id: 'codex_cli',
+      provider_id: 'openai',
+      authentication_method: 'api_key',
+      fields: {
+        credential_source: field('none', false),
+        runtime_materialization_mode: field('api_key_env', false),
+        secret_refs: field({}),
+        volume_ref: field(null, false),
+        volume_mount_path: field(null, false),
+        max_parallel_runs: field(1),
+        cooldown_after_429_seconds: field(300),
+        rate_limit_policy: field('backoff'),
+        enabled: field(false, false),
+        is_default: field(false),
+        command_behavior: field({ auth_strategy: 'api_key_env' }, false),
+        user_tags: field([]),
+        priority: field(100),
+        clear_env_keys: field(['MINIMAX_API_KEY'], false),
+      },
+      diagnostics: [],
+      manual_creation_allowed: false,
+      required_manual_fields: [],
+    };
+    const savedProfile: ProviderProfile = {
+      profile_id: 'preset-profile',
+      runtime_id: 'codex_cli',
+      provider_id: 'openai',
+      credential_source: 'none',
+      runtime_materialization_mode: 'api_key_env',
+      secret_refs: {},
+      max_parallel_runs: 1,
+      cooldown_after_429_seconds: 300,
+      rate_limit_policy: 'backoff',
+      enabled: false,
+      is_default: false,
+    };
+    const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(
+      async (input, init) => {
+        const url = String(input);
+        if (url.startsWith('/api/v1/provider-profiles/creation-preset?')) {
+          return {
+            ok: true,
+            json: async () => preset,
+          } as Response;
+        }
+        if (url === '/api/v1/provider-profiles' && init?.method === 'POST') {
+          return {
+            ok: true,
+            json: async () => savedProfile,
+          } as Response;
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      },
+    );
+
+    renderProviderProfilesManager();
+    fireEvent.change(screen.getByLabelText(/Profile ID/), {
+      target: { value: 'preset-profile' },
+    });
+    fireEvent.change(screen.getByLabelText(/Runtime ID/), {
+      target: { value: 'codex_cli' },
+    });
+    fireEvent.change(screen.getByLabelText(/Provider ID/), {
+      target: { value: 'openai' },
+    });
+    fireEvent.change(screen.getByLabelText(/Authentication method/), {
+      target: { value: 'api_key' },
+    });
+
+    await screen.findByText(/Backend preset provider-profile-create-v1-test loaded/);
+    expect(screen.queryByLabelText(/Credential source/)).toBeNull();
+    expect(screen.queryByLabelText('Runtime default')).toBeNull();
+    fireEvent.click(screen.getByLabelText(/Show advanced options/));
+    expect((screen.getByLabelText(/Credential source/) as HTMLSelectElement).value).toBe(
+      'none',
+    );
+    expect(
+      (screen.getByLabelText(/Materialization mode/) as HTMLSelectElement).value,
+    ).toBe('api_key_env');
+    expect(screen.queryByLabelText('Enabled')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create provider profile' }));
+
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(([, init]) => init?.method === 'POST'),
+      ).toBe(true);
+    });
+    const postCall = fetchSpy.mock.calls.find(([, init]) => init?.method === 'POST');
+    const payload = JSON.parse(String((postCall?.[1] as RequestInit).body));
+    expect(payload).toMatchObject({
+      profile_id: 'preset-profile',
+      runtime_id: 'codex_cli',
+      provider_id: 'openai',
+      authentication_method: 'api_key',
+      preset_version: 'provider-profile-create-v1-test',
+    });
+    for (const omittedField of [
+      'credential_source',
+      'runtime_materialization_mode',
+      'secret_refs',
+      'volume_ref',
+      'volume_mount_path',
+      'max_parallel_runs',
+      'cooldown_after_429_seconds',
+      'rate_limit_policy',
+      'enabled',
+      'is_default',
+      'command_behavior',
+      'tags',
+      'priority',
+      'clear_env_keys',
+    ]) {
+      expect(payload).not.toHaveProperty(omittedField);
+    }
+  });
+
+  it('routes unsupported guided combinations through manual creation', async () => {
+    const unsupportedPreset = {
+      version: 'provider-profile-create-v1-unsupported',
+      supported: false,
+      runtime_id: 'codex_cli',
+      provider_id: 'openrouter',
+      authentication_method: 'api_key',
+      fields: {},
+      diagnostics: [
+        {
+          code: 'no_safe_standard_creation_preset',
+          severity: 'error',
+          message: 'Use the authorized manual profile path.',
+          field: null,
+          action: 'open_manual_profile',
+        },
+      ],
+      manual_creation_allowed: true,
+      required_manual_fields: [
+        'credential_source',
+        'runtime_materialization_mode',
+        'clear_env_keys',
+        'command_behavior',
+      ],
+    };
+    const savedProfile: ProviderProfile = {
+      profile_id: 'manual-openrouter',
+      runtime_id: 'codex_cli',
+      provider_id: 'openrouter',
+      credential_source: 'secret_ref',
+      runtime_materialization_mode: 'api_key_env',
+      secret_refs: {},
+      max_parallel_runs: 1,
+      cooldown_after_429_seconds: 900,
+      rate_limit_policy: 'backoff',
+      enabled: false,
+    };
+    const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(
+      async (input, init) => {
+        const url = String(input);
+        if (url.startsWith('/api/v1/provider-profiles/creation-preset?')) {
+          return {
+            ok: true,
+            json: async () => unsupportedPreset,
+          } as Response;
+        }
+        if (url === '/api/v1/provider-profiles' && init?.method === 'POST') {
+          return {
+            ok: true,
+            json: async () => savedProfile,
+          } as Response;
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      },
+    );
+
+    renderProviderProfilesManager();
+    fireEvent.change(screen.getByLabelText(/Profile ID/), {
+      target: { value: 'manual-openrouter' },
+    });
+    fireEvent.change(screen.getByLabelText(/Runtime ID/), {
+      target: { value: 'codex_cli' },
+    });
+    fireEvent.change(screen.getByLabelText(/Provider ID/), {
+      target: { value: 'openrouter' },
+    });
+    fireEvent.change(screen.getByLabelText(/Authentication method/), {
+      target: { value: 'api_key' },
+    });
+
+    await screen.findByText('Use the authorized manual profile path.');
+    expect((screen.getByLabelText(/Show advanced options/) as HTMLInputElement).checked).toBe(true);
+    fireEvent.change(screen.getByLabelText(/Credential source/), {
+      target: { value: 'secret_ref' },
+    });
+    fireEvent.change(screen.getByLabelText(/Materialization mode/), {
+      target: { value: 'api_key_env' },
+    });
+    fireEvent.change(screen.getByLabelText(/Clear env keys/), {
+      target: { value: 'OPENAI_API_KEY' },
+    });
+    fireEvent.change(screen.getByLabelText('Command behavior'), {
+      target: { value: '{"auth_strategy":"manual"}' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create provider profile' }));
+
+    await waitFor(() => {
+      expect(fetchSpy.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(true);
+    });
+    const postCall = fetchSpy.mock.calls.find(([, init]) => init?.method === 'POST');
+    const payload = JSON.parse(String((postCall?.[1] as RequestInit).body));
+    expect(payload).toMatchObject({
+      profile_id: 'manual-openrouter',
+      runtime_id: 'codex_cli',
+      provider_id: 'openrouter',
+      credential_source: 'secret_ref',
+      runtime_materialization_mode: 'api_key_env',
+      clear_env_keys: ['OPENAI_API_KEY'],
+      command_behavior: { auth_strategy: 'manual' },
+    });
+    expect(payload).not.toHaveProperty('authentication_method');
+    expect(payload).not.toHaveProperty('preset_version');
+  });
+
+  it('reloads the active preset after a version mismatch', async () => {
+    const field = (value: unknown, editable = true) => ({
+      value,
+      source: 'test_policy',
+      editable,
+      required: false,
+      lock_reason: editable ? null : 'Backend controlled.',
+    });
+    const makePreset = (version: string, cooldown: number) => ({
+      version,
+      supported: true,
+      runtime_id: 'codex_cli',
+      provider_id: 'openai',
+      authentication_method: 'api_key',
+      fields: {
+        credential_source: field('none', false),
+        runtime_materialization_mode: field('api_key_env', false),
+        secret_refs: field({}),
+        volume_ref: field(null, false),
+        volume_mount_path: field(null, false),
+        max_parallel_runs: field(1),
+        cooldown_after_429_seconds: field(cooldown),
+        rate_limit_policy: field('backoff'),
+        enabled: field(false, false),
+        is_default: field(false),
+        command_behavior: field({ auth_strategy: 'api_key_env' }, false),
+        user_tags: field([]),
+        priority: field(100),
+        clear_env_keys: field(['MINIMAX_API_KEY'], false),
+      },
+      diagnostics: [],
+      manual_creation_allowed: false,
+      required_manual_fields: [],
+    });
+    let presetRequests = 0;
+    const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(
+      async (input, init) => {
+        const url = String(input);
+        if (url.startsWith('/api/v1/provider-profiles/creation-preset?')) {
+          presetRequests += 1;
+          return {
+            ok: true,
+            json: async () =>
+              presetRequests === 1
+                ? makePreset('provider-profile-create-v1-old', 300)
+                : makePreset('provider-profile-create-v1-current', 600),
+          } as Response;
+        }
+        if (url === '/api/v1/provider-profiles' && init?.method === 'POST') {
+          return {
+            ok: false,
+            json: async () => ({
+              detail: {
+                code: 'provider_profile_creation_preset_version_mismatch',
+                message: 'The preset changed.',
+              },
+            }),
+          } as Response;
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      },
+    );
+    const { onNotice } = renderProviderProfilesManager();
+    fireEvent.change(screen.getByLabelText(/Profile ID/), {
+      target: { value: 'stale-preset-profile' },
+    });
+    fireEvent.change(screen.getByLabelText(/Runtime ID/), {
+      target: { value: 'codex_cli' },
+    });
+    fireEvent.change(screen.getByLabelText(/Provider ID/), {
+      target: { value: 'openai' },
+    });
+    fireEvent.change(screen.getByLabelText(/Authentication method/), {
+      target: { value: 'api_key' },
+    });
+
+    await screen.findByText(/provider-profile-create-v1-old loaded/);
+    fireEvent.click(screen.getByRole('button', { name: 'Create provider profile' }));
+
+    await screen.findByText(/provider-profile-create-v1-current loaded/);
+    expect(presetRequests).toBe(2);
+    expect(onNotice).toHaveBeenCalledWith({
+      level: 'error',
+      text: 'The creation policy changed. Reloading the current preset for review.',
+    });
+    expect((screen.getByLabelText(/Show advanced options/) as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByLabelText(/Cooldown after 429/) as HTMLInputElement).value).toBe('600');
+    expect(fetchSpy.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
   });
 });
 
@@ -372,6 +704,24 @@ describe('ProviderProfilesManager form controls', () => {
     account_label: 'Codex account',
   };
 
+  const codexApiKeySetupProfile: ProviderProfile = {
+    ...profile,
+    profile_id: 'codex-openai-api-key',
+    credential_source: 'none',
+    runtime_materialization_mode: 'api_key_env',
+    secret_refs: {},
+    enabled: false,
+    is_default: false,
+    auth_state: 'not_configured',
+    disabled_reason: 'missing_credentials',
+    command_behavior: {
+      auth_strategy: 'api_key_env',
+      auth_state: 'not_configured',
+      auth_actions: ['use_api_key'],
+      auth_status_label: 'OpenAI credentials not connected',
+    },
+  };
+
   const claudeCredentialProfile: ProviderProfile = {
     ...profile,
     profile_id: 'claude-anthropic',
@@ -462,6 +812,7 @@ describe('ProviderProfilesManager form controls', () => {
   it('labels secret refs and resets create-form values', () => {
     renderProviderProfilesManager();
 
+    fireEvent.click(screen.getByLabelText(/Show advanced options/));
     const secretRefs = screen.getByLabelText('Secret refs (JSON object of string refs)');
     expect(secretRefs.tagName).toBe('TEXTAREA');
 
@@ -618,6 +969,7 @@ describe('ProviderProfilesManager form controls', () => {
     fireEvent.change(screen.getByLabelText(/Provider ID/), {
       target: { value: 'openai' },
     });
+    fireEvent.click(screen.getByLabelText(/Show advanced options/));
     fireEvent.change(screen.getByLabelText('Secret refs (JSON object of string refs)'), {
       target: { value: '[]' },
     });
@@ -881,6 +1233,53 @@ describe('ProviderProfilesManager form controls', () => {
     expect(screen.getByText('Setup required')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'OAuth codex-openai-oauth' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Enable' })).toHaveProperty('disabled', true);
+  });
+
+  it('enrolls a Codex OpenAI API key through the provider API-key endpoint', async () => {
+    const fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        status: 'ready',
+        status_label: 'OpenAI API key ready',
+        readiness: {
+          connected: true,
+          backing_secret_exists: true,
+          launch_ready: true,
+        },
+      }),
+    } as Response);
+
+    renderProviderProfilesManager([codexApiKeySetupProfile]);
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Use OpenAI API key codex-openai-api-key',
+      }),
+    );
+    expect(
+      screen.getByRole('dialog', {
+        name: 'OpenAI API key enrollment for codex-openai-api-key',
+      }),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to API key paste' }));
+    fireEvent.change(screen.getByLabelText('OpenAI API key'), {
+      target: { value: 'sk-openai-provider-test' },
+    });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Validate and save OpenAI API key' }),
+    );
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/v1/provider-profiles/codex-openai-api-key/credentials/api-key',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ api_key: 'sk-openai-provider-test' }),
+        }),
+      );
+    });
+    expect(
+      fetchSpy.mock.calls.some(([input]) => String(input).includes('/oauth-sessions')),
+    ).toBe(false);
   });
 
   it('shows supported Claude OAuth lifecycle actions for connected claude_anthropic rows', () => {
