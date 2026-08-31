@@ -359,8 +359,8 @@ def _unqualified_combination_message(
         "this deployment is not qualified for the requested execution "
         f"combination {plan_payload.supportCombinationKey} ({detail}). "
         "Qualification follows the current Provider and Agent Profile defaults; "
-        "align those defaults with the requested launch policy, model, and effort "
-        "before qualifying the deployment."
+        "align those defaults with the requested host and launch policy before "
+        "qualifying the deployment."
     )
 
 
