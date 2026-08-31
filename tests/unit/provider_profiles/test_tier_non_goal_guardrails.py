@@ -70,6 +70,14 @@ def test_slot_lease_contract_and_persistence_have_no_tier_capacity_scope() -> No
 
 @pytest.mark.asyncio
 async def test_different_tiers_share_one_provider_profile_capacity_pool() -> None:
+    """Guardrail: tier choice does not create a separate capacity pool.
+
+    Production AgentRun._ensure_manager_and_signal sends SlotRequestPayload
+    without a model_tier key; tier-to-profile resolution happens upstream.
+    This test drives two conceptual tier choices through the real profile-
+    owned ledger path and asserts they contend for the same slot.
+    """
+
     manager = MoonMindProviderProfileManagerWorkflow()
     manager._runtime_id = "codex_cli"
     manager._profiles["profile"] = ProfileSlotState(
@@ -86,6 +94,30 @@ async def test_different_tiers_share_one_provider_profile_capacity_pool() -> Non
         default_model_tier=1,
     )
     manager._signal_slot_assigned = AsyncMock()
+    # Mock persistence boundary so active patched durable-lease path can run.
+    manager._sync_leases_to_db = AsyncMock(return_value=True)  # type: ignore[method-assign]
+
+    # Verify the contract has no tier field — tier is resolved before slot request.
+    assert "model_tier" not in SlotRequestPayload.__annotations__
+    assert "modelTier" not in SlotRequestPayload.__annotations__
+
+    # Demonstrate that both tier 1 and tier 2 would resolve through same profile.
+    # In production, AgentRun resolves requested_model_tier to a tier definition
+    # but still signals the same execution_profile_ref; slot ledger is profile-owned.
+    for tier_index in (1, 2):
+        resolved = resolve_model_effort(
+            runtime_id="codex_cli",
+            profile={
+                "profile_id": "profile",
+                "enabled": True,
+                "auth_state": "connected",
+                "model_tiers": manager._profiles["profile"].model_tiers,
+                "default_model_tier": manager._profiles["profile"].default_model_tier,
+            },
+            requested_model_tier=tier_index,
+            env={},
+        )
+        assert resolved.effort in ("provider-plan", "provider-build")
 
     with patch(
         "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
@@ -93,13 +125,15 @@ async def test_different_tiers_share_one_provider_profile_capacity_pool() -> Non
         temporal_workflow.now.return_value = datetime(
             2026, 8, 30, tzinfo=timezone.utc
         )
-        temporal_workflow.patched.return_value = False
+        # Exercise the active patch set, including deduplication, ordering,
+        # and durable lease persistence, not the legacy fallback.
+        temporal_workflow.patched.return_value = True
+        # Both tier choices result in the same profile-owned slot request.
         manager.request_slot(
             {
                 "requester_workflow_id": "run-tier-1",
                 "runtime_id": "codex_cli",
                 "execution_profile_ref": "profile",
-                "model_tier": 1,
             }
         )
         manager.request_slot(
@@ -107,7 +141,6 @@ async def test_different_tiers_share_one_provider_profile_capacity_pool() -> Non
                 "requester_workflow_id": "run-tier-2",
                 "runtime_id": "codex_cli",
                 "execution_profile_ref": "profile",
-                "model_tier": 2,
             }
         )
         await manager._drain_queue()
@@ -119,6 +152,8 @@ async def test_different_tiers_share_one_provider_profile_capacity_pool() -> Non
     assert [request.requester_workflow_id for request in manager._pending_requests] == [
         "run-tier-2"
     ]
+    # Verify persistence was attempted on the active path.
+    assert manager._sync_leases_to_db.await_count >= 1
 
 
 @pytest.mark.asyncio
@@ -157,13 +192,24 @@ async def test_tier_policy_refresh_does_not_change_profile_slot_leasing() -> Non
         authoritative=True,
     )
 
+    # Assert lease preservation immediately after refresh, before any
+    # acquire/release that could mask a cleared lease.
+    profile_after_sync = manager._profiles["profile"]
+    assert "existing-run" in profile_after_sync.current_leases, (
+        "policy refresh must preserve active leases"
+    )
+    assert profile_after_sync.lease_granted_at.get("existing-run") == "2026-08-30T00:00:00+00:00"
+    assert profile_after_sync.max_parallel_runs == 2
+    assert profile_after_sync.default_model_tier == 2
+
+    manager._sync_leases_to_db = AsyncMock(return_value=True)  # type: ignore[method-assign]
     with patch(
         "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
     ) as temporal_workflow:
         temporal_workflow.now.return_value = datetime(
             2026, 8, 30, 1, tzinfo=timezone.utc
         )
-        temporal_workflow.patched.return_value = False
+        temporal_workflow.patched.return_value = True
         acquired = await manager.acquire_slot(
             {
                 "requester_workflow_id": "new-run",
