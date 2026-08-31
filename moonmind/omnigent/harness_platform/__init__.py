@@ -81,6 +81,12 @@ from moonmind.omnigent.harness_platform.materializers import (
     materialize_credential,
 )
 from moonmind.omnigent.harness_platform.planner import compile_execution_plan
+from moonmind.omnigent.harness_platform.runtime_packs import (
+    RuntimePack,
+    get_runtime_pack,
+    list_runtime_packs,
+    runtime_pack_for_harness,
+)
 from moonmind.omnigent.harness_platform.runtime_binding import (
     OmnigentRuntimeBinding,
     assert_runtime_binding_generation_sticky,
@@ -155,6 +161,10 @@ __all__ = [
     "compute_support_combination_key",
     "compute_required_capabilities_digest",
     "compile_execution_plan",
+    "RuntimePack",
+    "get_runtime_pack",
+    "runtime_pack_for_harness",
+    "list_runtime_packs",
     "HarnessPlatformError",
     "HarnessPlatformFailure",
 ]

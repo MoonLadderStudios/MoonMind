@@ -88,12 +88,14 @@ def load_resolved_state() -> ResolvedOmnigentDeploymentState | None:
     # Try env fallback: if image refs already set in env, synthesize
     server_ref = os.getenv("OMNIGENT_IMAGE_REF", "").strip()
     host_ref = os.getenv("OMNIGENT_OPENCODE_HOST_IMAGE_REF", "").strip()
+    runtime_ref = os.getenv("OMNIGENT_RUNTIME_HOST_IMAGE_REF", "").strip()
     build_digest = os.getenv("OMNIGENT_BUILD_DIGEST", "").strip()
-    if server_ref or host_ref or build_digest:
+    if server_ref or host_ref or runtime_ref or build_digest:
         try:
             return ResolvedOmnigentDeploymentState(
                 serverImageRef=server_ref or None,
                 opencodeHostImageRef=host_ref or None,
+                runtimeHostImageRef=runtime_ref or None,
                 omnigentBuildDigest=build_digest or None,
                 resolvedAt=datetime.now(UTC),
                 source="env",

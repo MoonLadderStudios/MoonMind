@@ -53,8 +53,8 @@ def _persisted_image_ref(key: str) -> str:
         return ""
     attribute = {
         OMNIGENT_OPENCODE_HOST_IMAGE_ENV: "opencode_host_image_ref",
+        OMNIGENT_RUNTIME_HOST_IMAGE_ENV: "runtime_host_image_ref",
         OMNIGENT_PI_HOST_IMAGE_ENV: "pi_host_image_ref",
-        OMNIGENT_RUNTIME_HOST_IMAGE_ENV: "opencode_host_image_ref",
     }.get(key)
     if attribute is None:
         return ""
