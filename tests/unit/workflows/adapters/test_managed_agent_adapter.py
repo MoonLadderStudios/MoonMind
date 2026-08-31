@@ -267,11 +267,74 @@ async def _in_memory_db(tmp_path: Path):
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _complete_fake_profile(
+    profile: dict[str, Any], *, runtime_id: str
+) -> dict[str, Any]:
+    """Expand adapter-test shorthand into a launch-ready profile payload."""
+
+    completed = dict(profile)
+    completed.setdefault("runtime_id", runtime_id)
+    default_provider = {
+        "claude_code": "anthropic",
+        "codex_cli": "openai",
+        "opencode": "opencode-go",
+    }.get(runtime_id)
+    if default_provider is not None:
+        completed.setdefault("provider_id", default_provider)
+
+    credential_source = getattr(
+        completed.get("credential_source"),
+        "value",
+        completed.get("credential_source"),
+    )
+    if credential_source is None and default_provider is not None:
+        credential_source = "secret_ref"
+        completed["credential_source"] = credential_source
+
+    if credential_source == "oauth_volume":
+        completed.setdefault("runtime_materialization_mode", "oauth_home")
+        completed.setdefault("max_parallel_runs", 1)
+    elif credential_source == "secret_ref":
+        provider_id = completed.get("provider_id")
+        standard_contracts = {
+            ("claude_code", "anthropic"): (
+                "api_key_env",
+                "anthropic_api_key",
+                "ANTHROPIC_API_KEY",
+            ),
+            ("codex_cli", "openai"): (
+                "api_key_env",
+                "openai_api_key",
+                "OPENAI_API_KEY",
+            ),
+            ("opencode", "opencode-go"): (
+                "composite",
+                "opencode_api_key",
+                "OPENCODE_API_KEY",
+            ),
+        }
+        contract = standard_contracts.get((runtime_id, provider_id))
+        if contract is not None:
+            materialization_mode, secret_role, env_key = contract
+            completed.setdefault(
+                "runtime_materialization_mode", materialization_mode
+            )
+            completed.setdefault(
+                "secret_refs", {secret_role: f"env://{env_key}"}
+            )
+    return completed
+
+
 def _fake_profiles(profiles: list[dict[str, Any]]):
-    """Return an async callable that always yields the given profiles list."""
+    """Return an async callable that yields production-shaped test profiles."""
 
     async def _fetcher(*, runtime_id: str):
-        return {"profiles": profiles}
+        return {
+            "profiles": [
+                _complete_fake_profile(profile, runtime_id=runtime_id)
+                for profile in profiles
+            ]
+        }
 
     return _fetcher
 
@@ -589,7 +652,8 @@ async def test_resolve_profile_selector_filters():
             "profile_id": "prof-a",
             "credential_source": "secret_ref",
             "provider_id": "anthropic",
-            "runtime_materialization_mode": "env",
+            "runtime_materialization_mode": "api_key_env",
+            "secret_refs": {"anthropic_api_key": "env://ANTHROPIC_API_KEY"},
             "tags": ["premium", "fast"],
             "priority": 10,
         },
@@ -597,15 +661,23 @@ async def test_resolve_profile_selector_filters():
             "profile_id": "prof-b",
             "credential_source": "oauth_volume",
             "provider_id": "anthropic",
-            "runtime_materialization_mode": "oauth",
+            "runtime_materialization_mode": "oauth_home",
+            "max_parallel_runs": 1,
             "tags": ["standard"],
             "priority": 20,
         },
         {
             "profile_id": "prof-c",
             "credential_source": "secret_ref",
-            "provider_id": "openai",
-            "runtime_materialization_mode": "env",
+            "provider_id": "minimax",
+            "runtime_materialization_mode": "env_bundle",
+            "secret_refs": {"provider_api_key": "env://MINIMAX_API_KEY"},
+            "env_template": {
+                "ANTHROPIC_AUTH_TOKEN": {
+                    "from_secret_ref": "provider_api_key"
+                },
+                "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",
+            },
             "tags": ["premium"],
             "priority": 5,
             "available_slots": 5,
@@ -613,8 +685,15 @@ async def test_resolve_profile_selector_filters():
         {
             "profile_id": "prof-d",
             "credential_source": "secret_ref",
-            "provider_id": "openai",
-            "runtime_materialization_mode": "env",
+            "provider_id": "minimax",
+            "runtime_materialization_mode": "env_bundle",
+            "secret_refs": {"provider_api_key": "env://MINIMAX_API_KEY"},
+            "env_template": {
+                "ANTHROPIC_AUTH_TOKEN": {
+                    "from_secret_ref": "provider_api_key"
+                },
+                "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",
+            },
             "tags": ["premium"],
             "priority": 5,
             "available_slots": 10,
@@ -641,7 +720,7 @@ async def test_resolve_profile_selector_filters():
         correlationId="corr",
         idempotencyKey="idem",
         profileSelector=ProfileSelector(
-            providerId="anthropic", runtimeMaterializationMode="oauth"
+            providerId="anthropic", runtimeMaterializationMode="oauth_home"
         ),
     )
     h1 = await adapter.start(req1)
@@ -675,7 +754,7 @@ async def test_resolve_profile_selector_filters():
         agentId="claude_code",
         correlationId="corr",
         idempotencyKey="idem",
-        profileSelector=ProfileSelector(providerId="openai"),
+        profileSelector=ProfileSelector(providerId="minimax"),
     )
     h4 = await adapter.start(req4)
     assert h4.metadata["profile_id"] == "prof-d"
@@ -1372,6 +1451,7 @@ async def test_provider_profile_list_returns_enabled_profiles(tmp_path: Path):
                 ManagedAgentProviderProfile(
                     profile_id="gprofile-1",
                     runtime_id="claude_code",
+                    provider_id="anthropic",
                     credential_source=ProviderCredentialSource.OAUTH_VOLUME,
                     runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
                     volume_ref="oauth-volume://claude",
@@ -1389,6 +1469,7 @@ async def test_provider_profile_list_returns_enabled_profiles(tmp_path: Path):
                 ManagedAgentProviderProfile(
                     profile_id="gprofile-disabled",
                     runtime_id="claude_code",
+                    provider_id="anthropic",
                     credential_source=ProviderCredentialSource.SECRET_REF,
                     runtime_materialization_mode=RuntimeMaterializationMode.ENV_BUNDLE,
                     max_parallel_runs=1,
@@ -1458,12 +1539,21 @@ async def test_provider_profile_list_filters_by_runtime_id(tmp_path: Path):
     async with _in_memory_db(tmp_path) as session_factory:
         async with session_factory() as session:
             for runtime, pid in [("codex_cli", "g1"), ("claude_code", "c1")]:
+                provider_id = "openai" if runtime == "codex_cli" else "anthropic"
+                secret_role = (
+                    "openai_api_key"
+                    if runtime == "codex_cli"
+                    else "anthropic_api_key"
+                )
+                env_key = "OPENAI_API_KEY" if runtime == "codex_cli" else "ANTHROPIC_API_KEY"
                 session.add(
                     ManagedAgentProviderProfile(
                         profile_id=pid,
                         runtime_id=runtime,
-                        credential_source=ProviderCredentialSource.NONE,
-                        runtime_materialization_mode=RuntimeMaterializationMode.ENV_BUNDLE,
+                        provider_id=provider_id,
+                        credential_source=ProviderCredentialSource.SECRET_REF,
+                        runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                        secret_refs={secret_role: f"env://{env_key}"},
                         max_parallel_runs=1,
                         cooldown_after_429_seconds=300,
                         rate_limit_policy=ManagedAgentRateLimitPolicy.QUEUE,
@@ -1504,9 +1594,10 @@ async def test_provider_profile_list_filters_to_launch_ready_profiles(
                     ManagedAgentProviderProfile(
                         profile_id="ready-secret",
                         runtime_id="codex_cli",
+                        provider_id="openai",
                         credential_source=ProviderCredentialSource.SECRET_REF,
-                        runtime_materialization_mode=RuntimeMaterializationMode.ENV_BUNDLE,
-                        secret_refs={"provider_api_key": "env://OPENAI_API_KEY"},
+                        runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                        secret_refs={"openai_api_key": "env://OPENAI_API_KEY"},
                         max_parallel_runs=1,
                         cooldown_after_429_seconds=300,
                         rate_limit_policy=ManagedAgentRateLimitPolicy.BACKOFF,
@@ -1665,11 +1756,15 @@ async def test_provider_profile_list_preserves_secret_ref_materialization_fields
                 ManagedAgentProviderProfile(
                     profile_id="claude-minimax",
                     runtime_id="claude_code",
+                    provider_id="minimax",
                     credential_source=ProviderCredentialSource.SECRET_REF,
                     runtime_materialization_mode=RuntimeMaterializationMode.ENV_BUNDLE,
-                    secret_refs={"ANTHROPIC_AUTH_TOKEN": "env://MINIMAX_API_KEY"},
+                    secret_refs={"provider_api_key": "env://MINIMAX_API_KEY"},
                     clear_env_keys=["ANTHROPIC_API_KEY", "OPENAI_API_KEY"],
                     env_template={
+                        "ANTHROPIC_AUTH_TOKEN": {
+                            "from_secret_ref": "provider_api_key"
+                        },
                         "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",
                         "ANTHROPIC_MODEL": "MiniMax-M2.7",
                     },
@@ -1704,13 +1799,16 @@ async def test_provider_profile_list_preserves_secret_ref_materialization_fields
         assert len(profiles) == 1
         assert profiles[0]["profile_id"] == "claude-minimax"
         assert profiles[0]["secret_refs"] == {
-            "ANTHROPIC_AUTH_TOKEN": "env://MINIMAX_API_KEY"
+            "provider_api_key": "env://MINIMAX_API_KEY"
         }
         assert profiles[0]["clear_env_keys"] == [
             "ANTHROPIC_API_KEY",
             "OPENAI_API_KEY",
         ]
         assert profiles[0]["env_template"] == {
+            "ANTHROPIC_AUTH_TOKEN": {
+                "from_secret_ref": "provider_api_key"
+            },
             "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",
             "ANTHROPIC_MODEL": "MiniMax-M2.7",
         }
@@ -3706,7 +3804,9 @@ async def test_start_with_sensitive_runtime_env_overrides_does_not_raise(
     profiles = [
         {
             "profile_id": "claude_minimax",
+            "provider_id": "minimax",
             "credential_source": "secret_ref",
+            "runtime_materialization_mode": "env_bundle",
             "api_key_ref": "MINIMAX_API_KEY",
             "api_key_env_var": "ANTHROPIC_AUTH_TOKEN",
             # Sensitive-keyed override: previously triggered ValidationError
@@ -3719,7 +3819,13 @@ async def test_start_with_sensitive_runtime_env_overrides_does_not_raise(
                 "ANTHROPIC_AUTH_TOKEN": "dummy-token-value",
             },
             "secret_refs": {
-                "MINIMAX_API_KEY": "secrets/minimax-api-key",
+                "provider_api_key": "secrets/minimax-api-key",
+            },
+            "env_template": {
+                "ANTHROPIC_AUTH_TOKEN": {
+                    "from_secret_ref": "provider_api_key"
+                },
+                "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",
             },
             "command_template": ["claude"],
         }

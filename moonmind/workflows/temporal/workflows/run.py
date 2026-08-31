@@ -766,6 +766,9 @@ RUN_RESOLVED_SKILL_REQUIRED_CAPABILITIES_PATCH = (
 RUN_PROFILE_SNAPSHOT_RUNTIME_AUTHORITY_PATCH = (
     "run-profile-snapshot-runtime-authority-v1"
 )
+RUN_PROFILE_SNAPSHOT_CREDENTIAL_CAPABILITY_PATCH = (
+    "run-profile-snapshot-credential-capability-v1"
+)
 RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH = (
     "run-already-implemented-jira-completion-v1"
 )
@@ -20891,7 +20894,12 @@ class MoonMindRunWorkflow:
         snapshot = profile_snapshots.get(profile_id)
         if not isinstance(snapshot, Mapping):
             return profile_id
-        if not provider_profile_launch_ready_from_payload(dict(snapshot)):
+        if not provider_profile_launch_ready_from_payload(
+            dict(snapshot),
+            require_registered_capability=self._workflow_patch_enabled(
+                RUN_PROFILE_SNAPSHOT_CREDENTIAL_CAPABILITY_PATCH
+            ),
+        ):
             raise ValueError(
                 "%s execution_profile_ref '%s' is not launch-ready for this "
                 "runtime." % (source_label, profile_id)

@@ -5,8 +5,6 @@ import type { components } from '../../generated/openapi';
 import { formatRuntimeLabel, formatStatusLabel } from '../../utils/formatters';
 import { useSettingsDraftRegistration } from './SettingsDraftGuard';
 
-type ProviderProfileAuthenticationMethod =
-  components['schemas']['ProviderProfileAuthenticationMethod'];
 type ProviderProfileCreationPreset =
   components['schemas']['ProviderProfileCreationPresetResponse'];
 
@@ -41,6 +39,48 @@ export interface ProviderProfile {
   clear_env_keys?: string[] | null;
   account_label?: string | null;
   readiness?: ProviderProfileReadiness | null;
+  authentication_method?: AuthenticationMethod | null;
+  creation_capabilities?: ProviderProfileCreationCapabilities | null;
+}
+
+type AuthenticationMethod = 'oauth' | 'api_key' | 'none';
+
+interface CreationPresetField {
+  value: unknown;
+  source: string;
+  editable: boolean;
+  lock_reason: string;
+}
+
+interface SecretRoleCapability {
+  role: string;
+  label: string;
+  required: boolean;
+  compatible_schemes: string[];
+}
+
+interface AuthenticationMethodCapability {
+  id: AuthenticationMethod;
+  label: string;
+  setup_action: AuthenticationMethod;
+  launch_ready_after_setup: boolean;
+  fields: Record<string, CreationPresetField>;
+  secret_roles: SecretRoleCapability[];
+  imported_volume: {
+    supported: boolean;
+    mount_path: string | null;
+    source: string;
+    lock_reason: string;
+  };
+}
+
+interface ProviderProfileCreationCapabilities {
+  version: string;
+  runtime_id: string;
+  provider_id: string;
+  supported: boolean;
+  authentication_methods: AuthenticationMethodCapability[];
+  diagnostics: string[];
 }
 
 export interface ProviderModelEffortTier {
@@ -101,7 +141,7 @@ interface ProviderProfileFormState {
   providerLabel: string;
   defaultModel: string;
   defaultEffort: string;
-  authenticationMethod: '' | ProviderProfileAuthenticationMethod;
+  authenticationMethod: AuthenticationMethod | '';
   credentialSource: string;
   runtimeMaterializationMode: string;
   secretRefsText: string;
@@ -119,7 +159,32 @@ interface ProviderProfileFormState {
   accountLabel: string;
 }
 
-type ProviderProfileSavePayload = components['schemas']['ProviderProfileCreate'];
+interface ProviderProfileSavePayload {
+  profile_id: string;
+  runtime_id?: string;
+  provider_id?: string;
+  provider_label?: string | null;
+  default_model?: string | null;
+  default_effort?: string | null;
+  authentication_method?: AuthenticationMethod;
+  preset_version?: string;
+  credential_source?: string;
+  runtime_materialization_mode?: string;
+  secret_refs?: Record<string, string>;
+  volume_ref?: string | null;
+  volume_mount_path?: string | null;
+  max_parallel_runs?: number;
+  cooldown_after_429_seconds?: number;
+  rate_limit_policy?: string;
+  enabled?: boolean;
+  is_default?: boolean;
+  command_behavior?: Record<string, unknown> | null;
+  tags?: string[] | null;
+  priority?: number;
+  clear_env_keys?: string[] | null;
+  account_label?: string | null;
+  import_existing_credential_volume?: boolean;
+}
 
 type OAuthSessionStatus =
   | 'pending'
@@ -237,7 +302,7 @@ export function toFormState(profile: ProviderProfile): ProviderProfileFormState 
     providerLabel: profile.provider_label ?? '',
     defaultModel: profile.default_model ?? '',
     defaultEffort: profile.default_effort ?? '',
-    authenticationMethod: '',
+    authenticationMethod: profile.authentication_method ?? '',
     credentialSource: profile.credential_source,
     runtimeMaterializationMode: profile.runtime_materialization_mode,
     secretRefsText: JSON.stringify(profile.secret_refs ?? {}, null, 2),
@@ -330,7 +395,6 @@ function visibleReadinessChecks(readiness?: ProviderProfileReadiness | null): Pr
 type ProviderAuthActionLabel =
   | 'OAuth'
   | 'Use Anthropic API key'
-  | 'Use OpenAI API key'
   | 'Use OpenCode API key'
   | 'Validate OAuth'
   | 'Disconnect OAuth';
@@ -340,7 +404,7 @@ interface ClaudeAuthAction {
   label: ProviderAuthActionLabel;
 }
 
-type ProviderApiKeyAuthAction = ClaudeAuthAction;
+type OpencodeAuthAction = ClaudeAuthAction;
 
 type ClaudeEnrollmentStep =
   | 'not_connected'
@@ -369,10 +433,9 @@ type ProviderAuthModel =
       readiness: ClaudeReadinessMetadata | null;
     }
   | {
-      kind: 'api_key_credentials';
-      providerLabel: string;
+      kind: 'opencode_credentials';
       statusLabel: string | null;
-      actions: ProviderApiKeyAuthAction[];
+      actions: OpencodeAuthAction[];
       readiness: ClaudeReadinessMetadata | null;
     }
   | { kind: 'none' };
@@ -395,11 +458,22 @@ interface ClaudeManualAuthResult {
   failureReason?: string | null;
 }
 
+interface ApiKeyEnrollmentCopy {
+  providerName: string;
+  credentialLabel: string;
+  description: string;
+  readyLabel: string;
+}
+
 const CLAUDE_AUTH_ACTION_LABELS: Record<string, ProviderAuthActionLabel> = {
   connect_oauth: 'OAuth',
   use_api_key: 'Use Anthropic API key',
   validate_oauth: 'Validate OAuth',
   disconnect_oauth: 'Disconnect OAuth',
+};
+
+const OPENCODE_AUTH_ACTION_LABELS: Record<string, ProviderAuthActionLabel> = {
+  use_api_key: 'Use OpenCode API key',
 };
 
 const CLAUDE_ENROLLMENT_STEPS: ClaudeEnrollmentStep[] = [
@@ -494,7 +568,7 @@ function redactClaudeSecretText(value: string | null | undefined, submittedToken
 
 function extractErrorMessage(
   payload: unknown,
-  fallback = 'Anthropic API key validation failed.',
+  fallback = 'Provider credential request failed.',
 ): string {
   if (typeof payload === 'string') return payload;
   if (!payload || typeof payload !== 'object') return fallback;
@@ -522,12 +596,12 @@ function extractErrorCode(payload: unknown): string | null {
 }
 
 class ProviderProfileRequestError extends Error {
-  readonly code: string | null;
-
-  constructor(message: string, code: string | null = null) {
+  constructor(
+    message: string,
+    readonly code: string | null,
+  ) {
     super(message);
     this.name = 'ProviderProfileRequestError';
-    this.code = code;
   }
 }
 
@@ -583,29 +657,30 @@ function claudeCredentialActions(profile: ProviderProfile): ClaudeAuthAction[] {
     .filter((action): action is ClaudeAuthAction => action !== null);
 }
 
-function isProviderApiKeyCredentialProfile(profile: ProviderProfile): boolean {
-  return (
-    (profile.runtime_id === 'codex_cli' && profile.provider_id === 'openai') ||
-    (profile.runtime_id === 'opencode' &&
-      (profile.provider_id === 'opencode-go' || profile.provider_id === 'opencode'))
-  );
+function isOpencodeGoProfile(profile: ProviderProfile): boolean {
+  return profile.runtime_id === 'opencode' && profile.provider_id === 'opencode-go';
 }
 
-function providerApiKeyLabel(profile: ProviderProfile): string {
-  if (profile.runtime_id === 'codex_cli') return 'OpenAI';
-  return 'OpenCode';
+function isOpencodeCredentialMethodProfile(profile: ProviderProfile): boolean {
+  return profile.runtime_id === 'opencode' && (profile.provider_id === 'opencode-go' || profile.provider_id === 'opencode');
 }
 
-function providerApiKeyCredentialActions(profile: ProviderProfile): ProviderApiKeyAuthAction[] {
+function defaultOpencodeCredentialActions(profile: ProviderProfile): string[] {
+  if (!isOpencodeGoProfile(profile)) {
+    return [];
+  }
+  return ['use_api_key'];
+}
+
+function opencodeCredentialActions(profile: ProviderProfile): OpencodeAuthAction[] {
   const actionIds = commandBehaviorStringArray(profile, 'auth_actions');
-  const resolvedActionIds = actionIds ?? ['use_api_key'];
-  const label: ProviderAuthActionLabel =
-    profile.runtime_id === 'codex_cli'
-      ? 'Use OpenAI API key'
-      : 'Use OpenCode API key';
+  const resolvedActionIds = actionIds ?? defaultOpencodeCredentialActions(profile);
   return resolvedActionIds
-    .filter((actionId) => actionId === 'use_api_key')
-    .map((actionId) => ({ id: actionId, label }));
+    .map((actionId) => {
+      const label = OPENCODE_AUTH_ACTION_LABELS[actionId];
+      return label ? { id: actionId, label } : null;
+    })
+    .filter((action): action is OpencodeAuthAction => action !== null);
 }
 
 function providerAuthModel(profile: ProviderProfile): ProviderAuthModel {
@@ -613,12 +688,11 @@ function providerAuthModel(profile: ProviderProfile): ProviderAuthModel {
     return { kind: 'codex_oauth' };
   }
 
-  if (isProviderApiKeyCredentialProfile(profile)) {
+  if (isOpencodeCredentialMethodProfile(profile)) {
     return {
-      kind: 'api_key_credentials',
-      providerLabel: providerApiKeyLabel(profile),
+      kind: 'opencode_credentials',
       statusLabel: formatStatusLabel(commandBehaviorString(profile, 'auth_status_label'), ''),
-      actions: providerApiKeyCredentialActions(profile),
+      actions: opencodeCredentialActions(profile),
       readiness: normalizeReadinessMetadata(commandBehaviorValue(profile, 'auth_readiness')),
     };
   }
@@ -632,6 +706,25 @@ function providerAuthModel(profile: ProviderProfile): ProviderAuthModel {
     statusLabel: formatStatusLabel(commandBehaviorString(profile, 'auth_status_label'), ''),
     actions: claudeCredentialActions(profile),
     readiness: normalizeReadinessMetadata(commandBehaviorValue(profile, 'auth_readiness')),
+  };
+}
+
+function apiKeyEnrollmentCopy(profile: ProviderProfile): ApiKeyEnrollmentCopy {
+  if (profile.runtime_id === 'codex_cli' && profile.provider_id === 'openai') {
+    return {
+      providerName: 'OpenAI',
+      credentialLabel: 'OpenAI API key',
+      description:
+        'Use an OpenAI API key for Codex launches. Paste the key here, then validate and save it as a managed provider credential.',
+      readyLabel: 'OpenAI API key ready',
+    };
+  }
+  return {
+    providerName: 'OpenCode',
+    credentialLabel: 'OpenCode API key',
+    description:
+      'Use an OpenCode Go API key for OpenCode launches. Paste the key here, then validate and save it as a managed provider credential.',
+    readyLabel: 'OpenCode API key ready',
   };
 }
 
@@ -716,7 +809,9 @@ function buildSavePayload(
   form: ProviderProfileFormState,
   options: {
     isEditing: boolean;
+    formBaseline: ProviderProfileFormState;
     creationPreset: ProviderProfileCreationPreset | null;
+    importExistingCredentialVolume: boolean;
   },
 ): ProviderProfileSavePayload {
   const isCodexOAuth =
@@ -725,29 +820,94 @@ function buildSavePayload(
       form.credentialSource === 'oauth_volume' &&
       form.runtimeMaterializationMode === 'oauth_home') ||
       (!options.isEditing && form.authenticationMethod === 'oauth'));
-  const payload: ProviderProfileSavePayload = {
-    profile_id: form.profileId.trim(),
-    runtime_id: form.runtimeId.trim(),
-    provider_id: form.providerId.trim(),
-    provider_label: form.providerLabel.trim() || null,
-    default_model: form.defaultModel.trim() || null,
-    default_effort: form.defaultEffort.trim() || null,
-    credential_source: form.credentialSource,
-    runtime_materialization_mode: form.runtimeMaterializationMode,
-    secret_refs: parseSecretRefs(form.secretRefsText),
-    volume_ref: form.volumeRef.trim() || null,
-    volume_mount_path: form.volumeMountPath.trim() || null,
-    max_parallel_runs: isCodexOAuth ? 1 : Number(form.maxParallelRuns),
-    cooldown_after_429_seconds: Number(form.cooldownAfter429Seconds),
-    rate_limit_policy: form.rateLimitPolicy,
-    enabled: form.enabled,
-    is_default: form.isDefault,
-    command_behavior: parseCommandBehavior(form.commandBehavior),
-    tags: parseTags(form.tagsText),
-    priority: parsePriority(form.priority),
-    clear_env_keys: parseClearEnvKeys(form.clearEnvKeysText),
-    account_label: form.accountLabel.trim() || null,
-  };
+  const payload: ProviderProfileSavePayload = { profile_id: form.profileId.trim() };
+
+  if (options.isEditing) {
+    const baseline = options.formBaseline;
+    const setChanged = <Key extends keyof ProviderProfileSavePayload>(
+      key: Key,
+      current: ProviderProfileSavePayload[Key],
+      previous: ProviderProfileSavePayload[Key],
+    ) => {
+      if (!valuesEqual(current, previous)) payload[key] = current;
+    };
+    setChanged('provider_id', form.providerId.trim(), baseline.providerId.trim());
+    setChanged(
+      'provider_label',
+      form.providerLabel.trim() || null,
+      baseline.providerLabel.trim() || null,
+    );
+    setChanged(
+      'default_model',
+      form.defaultModel.trim() || null,
+      baseline.defaultModel.trim() || null,
+    );
+    setChanged(
+      'default_effort',
+      form.defaultEffort.trim() || null,
+      baseline.defaultEffort.trim() || null,
+    );
+    setChanged(
+      'account_label',
+      form.accountLabel.trim() || null,
+      baseline.accountLabel.trim() || null,
+    );
+    setChanged(
+      'secret_refs',
+      parseSecretRefs(form.secretRefsText),
+      parseSecretRefs(baseline.secretRefsText),
+    );
+    setChanged(
+      'volume_ref',
+      form.volumeRef.trim() || null,
+      baseline.volumeRef.trim() || null,
+    );
+    setChanged(
+      'volume_mount_path',
+      form.volumeMountPath.trim() || null,
+      baseline.volumeMountPath.trim() || null,
+    );
+    setChanged(
+      'max_parallel_runs',
+      isCodexOAuth ? 1 : Number(form.maxParallelRuns),
+      isCodexOAuth ? 1 : Number(baseline.maxParallelRuns),
+    );
+    setChanged(
+      'cooldown_after_429_seconds',
+      Number(form.cooldownAfter429Seconds),
+      Number(baseline.cooldownAfter429Seconds),
+    );
+    setChanged('rate_limit_policy', form.rateLimitPolicy, baseline.rateLimitPolicy);
+    setChanged('enabled', form.enabled, baseline.enabled);
+    setChanged('is_default', form.isDefault, baseline.isDefault);
+    setChanged(
+      'command_behavior',
+      parseCommandBehavior(form.commandBehavior),
+      parseCommandBehavior(baseline.commandBehavior),
+    );
+    setChanged('tags', parseTags(form.tagsText), parseTags(baseline.tagsText));
+    setChanged(
+      'clear_env_keys',
+      parseClearEnvKeys(form.clearEnvKeysText),
+      parseClearEnvKeys(baseline.clearEnvKeysText),
+    );
+    const priority = parsePriority(form.priority);
+    const baselinePriority = parsePriority(baseline.priority);
+    if (priority !== null && priority !== baselinePriority) payload.priority = priority;
+    if (options.importExistingCredentialVolume) {
+      payload.import_existing_credential_volume = true;
+      payload.volume_ref = form.volumeRef.trim() || null;
+      payload.volume_mount_path = form.volumeMountPath.trim() || null;
+    }
+    return payload;
+  }
+
+  payload.runtime_id = form.runtimeId.trim();
+  payload.provider_id = form.providerId.trim();
+  payload.provider_label = form.providerLabel.trim() || null;
+  payload.default_model = form.defaultModel.trim() || null;
+  payload.default_effort = form.defaultEffort.trim() || null;
+  payload.account_label = form.accountLabel.trim() || null;
 
   if (!payload.profile_id) {
     throw new Error('Profile ID is required.');
@@ -759,22 +919,35 @@ function buildSavePayload(
     throw new Error('Provider ID is required.');
   }
 
-  if (options.isEditing) {
-    return payload;
-  }
-
-  if (!form.maxParallelRuns.trim()) delete payload.max_parallel_runs;
-  if (!form.cooldownAfter429Seconds.trim()) {
-    delete payload.cooldown_after_429_seconds;
-  }
-  if (!form.rateLimitPolicy) delete payload.rate_limit_policy;
-  if (!form.priority.trim()) delete payload.priority;
-
   const preset = options.creationPreset;
   const authenticationMethod = form.authenticationMethod;
+  if (!authenticationMethod) {
+    throw new Error('Choose a supported authentication method.');
+  }
   const usesManualCreation =
-    !authenticationMethod ||
-    (preset?.supported === false && preset.manual_creation_allowed);
+    preset?.supported === false && preset.manual_creation_allowed;
+
+  if (form.credentialSource) payload.credential_source = form.credentialSource;
+  if (form.runtimeMaterializationMode) {
+    payload.runtime_materialization_mode = form.runtimeMaterializationMode;
+  }
+  payload.secret_refs = parseSecretRefs(form.secretRefsText);
+  payload.volume_ref = form.volumeRef.trim() || null;
+  payload.volume_mount_path = form.volumeMountPath.trim() || null;
+  if (form.maxParallelRuns.trim()) {
+    payload.max_parallel_runs = isCodexOAuth ? 1 : Number(form.maxParallelRuns);
+  }
+  if (form.cooldownAfter429Seconds.trim()) {
+    payload.cooldown_after_429_seconds = Number(form.cooldownAfter429Seconds);
+  }
+  if (form.rateLimitPolicy) payload.rate_limit_policy = form.rateLimitPolicy;
+  payload.is_default = form.isDefault;
+  payload.command_behavior = parseCommandBehavior(form.commandBehavior);
+  payload.tags = parseTags(form.tagsText);
+  payload.clear_env_keys = parseClearEnvKeys(form.clearEnvKeysText);
+  const priority = parsePriority(form.priority);
+  if (priority !== null) payload.priority = priority;
+
   if (usesManualCreation) {
     if (!payload.credential_source || !payload.runtime_materialization_mode) {
       throw new Error(
@@ -811,17 +984,19 @@ function buildSavePayload(
   omitWhenRecommended('max_parallel_runs', 'max_parallel_runs');
   omitWhenRecommended('cooldown_after_429_seconds', 'cooldown_after_429_seconds');
   omitWhenRecommended('rate_limit_policy', 'rate_limit_policy');
-  omitWhenRecommended('enabled', 'enabled');
   omitWhenRecommended('is_default', 'is_default');
   omitWhenRecommended('command_behavior', 'command_behavior');
-  if (
-    valuesEqual(payload.tags ?? [], preset.fields.user_tags?.value ?? [])
-  ) {
+  if (valuesEqual(payload.tags ?? [], preset.fields.user_tags?.value ?? [])) {
     delete payload.tags;
   }
   omitWhenRecommended('priority', 'priority');
   omitWhenRecommended('clear_env_keys', 'clear_env_keys');
 
+  if (options.importExistingCredentialVolume) {
+    payload.import_existing_credential_volume = true;
+    payload.volume_ref = form.volumeRef.trim() || null;
+    payload.volume_mount_path = form.volumeMountPath.trim() || null;
+  }
   return payload;
 }
 
@@ -848,7 +1023,6 @@ export function ProviderProfilesManager({
   const [creationPresetLoading, setCreationPresetLoading] = useState(false);
   const [creationPresetError, setCreationPresetError] = useState<string | null>(null);
   const [creationPresetRefreshKey, setCreationPresetRefreshKey] = useState(0);
-  const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
   const createFormRuntimeSeedRef = useRef(createFormRuntimeSeed);
   const [oauthSessions, setOauthSessions] = useState<Record<string, OAuthSessionState>>({});
@@ -856,6 +1030,14 @@ export function ProviderProfilesManager({
   const [claudeEnrollment, setClaudeEnrollment] = useState<ClaudeEnrollmentState | null>(null);
   const claudeEnrollmentDrawerRef = useRef<HTMLDivElement | null>(null);
   const claudeEnrollmentProfileIdRef = useRef<string | null>(null);
+  const [creationCapabilities, setCreationCapabilities] =
+    useState<ProviderProfileCreationCapabilities | null>(null);
+  const [creationCapabilitiesError, setCreationCapabilitiesError] = useState<string | null>(null);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showImportedVolume, setShowImportedVolume] = useState(false);
+  const [importedVolumeRef, setImportedVolumeRef] = useState('');
+  const [importedVolumeValidated, setImportedVolumeValidated] = useState(false);
+  const startOAuthFromCreationRef = useRef<(profile: ProviderProfile) => void>(() => undefined);
 
   const activeRuntimeFilterValue = selectedRuntimeId ?? ALL_RUNTIMES_FILTER_VALUE;
   // Canonical runtime IDs are the option values; the shared runtime formatter
@@ -880,17 +1062,185 @@ export function ProviderProfilesManager({
   }, [runtimeFilterOptions, selectedRuntimeId]);
 
   const isEditing = editingProfileId !== null;
+  const editingProfile = useMemo(
+    () => profiles.find((profile) => profile.profile_id === editingProfileId) ?? null,
+    [editingProfileId, profiles],
+  );
+  const selectedAuthenticationCapability = useMemo(
+    () =>
+      creationCapabilities?.authentication_methods.find(
+        (method) => method.id === form.authenticationMethod,
+      ) ?? null,
+    [creationCapabilities, form.authenticationMethod],
+  );
+  const hasUnknownExistingAuthenticationMethod = Boolean(
+    isEditing &&
+      (!editingProfile?.authentication_method ||
+        !creationCapabilities?.authentication_methods.some(
+          (method) => method.id === editingProfile.authentication_method,
+        )),
+  );
   const isCodexOAuthForm =
     form.runtimeId.trim() === 'codex_cli' &&
-    ((isEditing &&
-      form.credentialSource === 'oauth_volume' &&
-      form.runtimeMaterializationMode === 'oauth_home') ||
-      (!isEditing && form.authenticationMethod === 'oauth'));
+    (form.authenticationMethod === 'oauth' ||
+      (form.credentialSource === 'oauth_volume' &&
+        form.runtimeMaterializationMode === 'oauth_home'));
   const manualCreationAllowed =
     !isEditing &&
     creationPreset?.supported === false &&
     creationPreset.manual_creation_allowed;
-  const presetField = (fieldName: string) => creationPreset?.fields[fieldName];
+  const defaultFormValues = defaultFormState();
+
+  useEffect(() => {
+    const runtimeId = form.runtimeId.trim();
+    const providerId = form.providerId.trim();
+    setCreationCapabilitiesError(null);
+    setImportedVolumeValidated(false);
+    if (!runtimeId || !providerId) {
+      setCreationCapabilities(null);
+      return;
+    }
+    if (editingProfileId !== null) {
+      const embedded = editingProfile?.creation_capabilities;
+      if (
+        embedded &&
+        embedded.runtime_id === runtimeId &&
+        embedded.provider_id === providerId
+      ) {
+        setCreationCapabilities(embedded);
+      } else {
+        // Current API responses carry this metadata.  Keeping an older row
+        // inspectable is safer than guessing capabilities in the browser.
+        setCreationCapabilities(null);
+        setCreationCapabilitiesError(
+          'Creation capabilities are unavailable; the existing credential contract will be preserved.',
+        );
+      }
+      return;
+    }
+
+    const controller = new AbortController();
+    void fetch(
+      `/api/v1/provider-profiles/creation-capabilities?runtime_id=${encodeURIComponent(runtimeId)}&provider_id=${encodeURIComponent(providerId)}`,
+      { headers: { Accept: 'application/json' }, signal: controller.signal },
+    )
+      .then(async (response) => {
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(extractErrorMessage(payload));
+        }
+        return response.json() as Promise<ProviderProfileCreationCapabilities>;
+      })
+      .then((capabilities) => {
+        setCreationCapabilities(capabilities);
+        setForm((current) => {
+          const methodStillSupported = capabilities.authentication_methods.some(
+            (method) => method.id === current.authenticationMethod,
+          );
+          return methodStillSupported
+            ? current
+            : {
+                ...current,
+                authenticationMethod: capabilities.authentication_methods[0]?.id ?? '',
+              };
+        });
+        if (!capabilities.supported) {
+          setCreationCapabilitiesError(
+            capabilities.diagnostics[0] ??
+              'No validated creation preset exists for this runtime and provider.',
+          );
+        }
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        setCreationCapabilities(null);
+        setCreationCapabilitiesError(
+          error instanceof Error
+            ? error.message
+            : 'Failed to load Provider Profile creation capabilities.',
+        );
+      });
+    return () => controller.abort();
+  }, [editingProfile, editingProfileId, form.providerId, form.runtimeId]);
+
+  useEffect(() => {
+    if (editingProfileId !== null) {
+      setCreationPreset(null);
+      setCreationPresetLoading(false);
+      setCreationPresetError(null);
+      return;
+    }
+
+    const runtimeId = form.runtimeId.trim();
+    const providerId = form.providerId.trim();
+    const authenticationMethod = form.authenticationMethod;
+    if (!runtimeId || !providerId || !authenticationMethod) {
+      setCreationPreset(null);
+      setCreationPresetLoading(false);
+      setCreationPresetError(null);
+      return;
+    }
+
+    const controller = new AbortController();
+    const params = new URLSearchParams({
+      runtime_id: runtimeId,
+      provider_id: providerId,
+      authentication_method: authenticationMethod,
+    });
+    setCreationPreset(null);
+    setCreationPresetLoading(true);
+    setCreationPresetError(null);
+
+    void fetch(`/api/v1/provider-profiles/creation-preset?${params.toString()}`, {
+      headers: { Accept: 'application/json' },
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        const payload: unknown = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(
+            extractErrorMessage(
+              payload,
+              'Failed to load the Provider Profile creation preset.',
+            ),
+          );
+        }
+        return payload as ProviderProfileCreationPreset;
+      })
+      .then((preset) => {
+        setCreationPreset(preset);
+        if (preset.supported) {
+          setForm((current) =>
+            current.runtimeId.trim() === preset.runtime_id &&
+            current.providerId.trim() === preset.provider_id &&
+            current.authenticationMethod === preset.authentication_method
+              ? applyCreationPresetToForm(current, preset)
+              : current,
+          );
+        } else if (preset.manual_creation_allowed) {
+          setShowAdvanced(true);
+        }
+      })
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === 'AbortError') return;
+        setCreationPresetError(
+          error instanceof Error
+            ? error.message
+            : 'Failed to load the Provider Profile creation preset.',
+        );
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setCreationPresetLoading(false);
+      });
+
+    return () => controller.abort();
+  }, [
+    editingProfileId,
+    form.runtimeId,
+    form.providerId,
+    form.authenticationMethod,
+    creationPresetRefreshKey,
+  ]);
 
   const updateClaudeEnrollmentForProfile = (
     profileId: string,
@@ -951,89 +1301,6 @@ export function ProviderProfilesManager({
     );
   }, [createFormRuntimeSeed, editingProfileId]);
 
-  useEffect(() => {
-    if (editingProfileId !== null) {
-      setCreationPreset(null);
-      setCreationPresetLoading(false);
-      setCreationPresetError(null);
-      return;
-    }
-
-    const runtimeId = form.runtimeId.trim();
-    const providerId = form.providerId.trim();
-    const authenticationMethod = form.authenticationMethod;
-    if (!runtimeId || !providerId || !authenticationMethod) {
-      setCreationPreset(null);
-      setCreationPresetLoading(false);
-      setCreationPresetError(null);
-      return;
-    }
-
-    const controller = new AbortController();
-    const params = new URLSearchParams({
-      runtime_id: runtimeId,
-      provider_id: providerId,
-      authentication_method: authenticationMethod,
-    });
-    setCreationPreset(null);
-    setCreationPresetLoading(true);
-    setCreationPresetError(null);
-
-    void fetch(`/api/v1/provider-profiles/creation-preset?${params.toString()}`, {
-      headers: { Accept: 'application/json' },
-      signal: controller.signal,
-    })
-      .then(async (response) => {
-        const payload: unknown = await response.json().catch(() => ({}));
-        if (!response.ok) {
-          throw new Error(
-            extractErrorMessage(
-              payload,
-              'Failed to load the Provider Profile creation preset.',
-            ),
-          );
-        }
-        return payload as ProviderProfileCreationPreset;
-      })
-      .then((preset) => {
-        setCreationPreset(preset);
-        if (preset.supported) {
-          setForm((current) =>
-            current.runtimeId.trim() === preset.runtime_id &&
-            current.providerId.trim() === preset.provider_id &&
-            current.authenticationMethod === preset.authentication_method
-              ? applyCreationPresetToForm(current, preset)
-              : current,
-          );
-        } else if (preset.manual_creation_allowed) {
-          setShowAdvancedOptions(true);
-        }
-      })
-      .catch((error: unknown) => {
-        if (error instanceof DOMException && error.name === 'AbortError') {
-          return;
-        }
-        setCreationPresetError(
-          error instanceof Error
-            ? error.message
-            : 'Failed to load the Provider Profile creation preset.',
-        );
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) {
-          setCreationPresetLoading(false);
-        }
-      });
-
-    return () => controller.abort();
-  }, [
-    editingProfileId,
-    form.runtimeId,
-    form.providerId,
-    form.authenticationMethod,
-    creationPresetRefreshKey,
-  ]);
-
   // A single-runtime view cannot show the row being edited when that row
   // belongs to another runtime, so close the editor instead of leaving it
   // pointing at an invisible profile.
@@ -1048,7 +1315,6 @@ export function ProviderProfilesManager({
     const nextForm = defaultFormState(selectedRuntimeId);
     setForm(nextForm);
     setFormBaseline(nextForm);
-    setShowAdvancedOptions(false);
   }, [editingProfileId, form.runtimeId, selectedRuntimeId]);
 
   useEffect(() => {
@@ -1069,7 +1335,38 @@ export function ProviderProfilesManager({
     const nextForm = defaultFormState(createFormRuntimeSeed);
     setForm(nextForm);
     setFormBaseline(nextForm);
-    setShowAdvancedOptions(false);
+    setCreationPreset(null);
+    setCreationPresetError(null);
+    setCreationCapabilities(null);
+    setCreationCapabilitiesError(null);
+    setShowAdvanced(false);
+    setShowImportedVolume(false);
+    setImportedVolumeRef('');
+    setImportedVolumeValidated(false);
+    onNotice(null);
+  };
+
+  const beginEditingProfile = (profile: ProviderProfile) => {
+    const capabilities = profile.creation_capabilities ?? null;
+    const selectedMethod = capabilities?.authentication_methods.find(
+      (method) => method.id === profile.authentication_method,
+    );
+    const knownRoles = new Set(
+      (selectedMethod?.secret_roles ?? []).map((role) => role.role),
+    );
+    const hasUnknownRole = Object.keys(profile.secret_refs ?? {}).some(
+      (role) => !knownRoles.has(role),
+    );
+    const hasUnknownMethod = !profile.authentication_method || !selectedMethod;
+    const nextForm = toFormState(profile);
+    setEditingProfileId(profile.profile_id);
+    setForm(nextForm);
+    setFormBaseline(nextForm);
+    setCreationCapabilities(capabilities);
+    setShowAdvanced(hasUnknownMethod || hasUnknownRole);
+    setShowImportedVolume(false);
+    setImportedVolumeRef(profile.volume_ref ?? '');
+    setImportedVolumeValidated(false);
     onNotice(null);
   };
 
@@ -1217,16 +1514,16 @@ export function ProviderProfilesManager({
     };
   }, [claudeEnrollment]);
 
-  // ── Provider API-key enrollment through /credentials/api-key ──
-  const [apiKeyEnrollment, setApiKeyEnrollment] = useState<ClaudeEnrollmentState | null>(null);
-  const apiKeyEnrollmentDrawerRef = useRef<HTMLDivElement | null>(null);
-  const apiKeyEnrollmentProfileIdRef = useRef<string | null>(null);
+  // ── OpenCode API-key enrollment (mirrors Claude flow but uses /credentials/api-key) ──
+  const [opencodeEnrollment, setOpencodeEnrollment] = useState<ClaudeEnrollmentState | null>(null);
+  const opencodeEnrollmentDrawerRef = useRef<HTMLDivElement | null>(null);
+  const opencodeEnrollmentProfileIdRef = useRef<string | null>(null);
 
-  const updateApiKeyEnrollmentForProfile = (
+  const updateOpencodeEnrollmentForProfile = (
     profileId: string,
     updater: (current: ClaudeEnrollmentState) => ClaudeEnrollmentState,
   ) => {
-    setApiKeyEnrollment((current) => {
+    setOpencodeEnrollment((current) => {
       if (!current || current.profile.profile_id !== profileId) {
         return current;
       }
@@ -1234,43 +1531,46 @@ export function ProviderProfilesManager({
     });
   };
 
-  const closeApiKeyEnrollment = () => {
-    apiKeyEnrollmentProfileIdRef.current = null;
-    setApiKeyEnrollment(null);
+  const closeOpencodeEnrollment = () => {
+    opencodeEnrollmentProfileIdRef.current = null;
+    setOpencodeEnrollment(null);
   };
 
-  const openApiKeyEnrollment = (profile: ProviderProfile) => {
+  const openOpencodeEnrollment = (profile: ProviderProfile) => {
     const authModel = providerAuthModel(profile);
-    apiKeyEnrollmentProfileIdRef.current = profile.profile_id;
-    setApiKeyEnrollment({
+    opencodeEnrollmentProfileIdRef.current = profile.profile_id;
+    setOpencodeEnrollment({
       profile,
       step: 'not_connected',
       token: '',
       failureReason: null,
-      statusLabel: authModel.kind === 'api_key_credentials' ? authModel.statusLabel : null,
-      readiness: authModel.kind === 'api_key_credentials' ? authModel.readiness : null,
+      statusLabel: authModel.kind === 'opencode_credentials' ? authModel.statusLabel : null,
+      readiness: authModel.kind === 'opencode_credentials' ? authModel.readiness : null,
     });
     onNotice(null);
   };
 
-  const updateApiKeyEnrollmentToken = (token: string) => {
-    setApiKeyEnrollment((current) => (current ? { ...current, token } : current));
+  const updateOpencodeEnrollmentToken = (token: string) => {
+    setOpencodeEnrollment((current) => (current ? { ...current, token } : current));
   };
 
-  const continueApiKeyEnrollment = () => {
-    setApiKeyEnrollment((current) =>
+  const continueOpencodeEnrollment = () => {
+    setOpencodeEnrollment((current) =>
       current ? { ...current, step: 'awaiting_token_paste', failureReason: null } : current,
     );
   };
 
-  const apiKeyEnrollmentMutation = useMutation({
+  const opencodeEnrollmentMutation = useMutation({
     mutationFn: async ({
       profileId,
       submittedToken,
+      profile,
     }: {
       profileId: string;
       submittedToken: string;
+      profile: ProviderProfile;
     }) => {
+      const copy = apiKeyEnrollmentCopy(profile);
       const response = await fetch(
         `/api/v1/provider-profiles/${encodeURIComponent(profileId)}/credentials/api-key`,
         {
@@ -1282,36 +1582,40 @@ export function ProviderProfilesManager({
       const payload: unknown = await response.json().catch(() => ({}));
 
       if (!response.ok) {
-        throw new Error(redactClaudeSecretText(extractErrorMessage(payload), submittedToken) ?? 'Provider API key validation failed.');
+        throw new Error(
+          redactClaudeSecretText(extractErrorMessage(payload), submittedToken) ??
+            `${copy.credentialLabel} validation failed.`,
+        );
       }
 
       return payload as ClaudeManualAuthResult;
     },
     onMutate: ({ profileId }) => {
-      updateApiKeyEnrollmentForProfile(profileId, (current) => ({
+      updateOpencodeEnrollmentForProfile(profileId, (current) => ({
         ...current,
         step: 'validating_token',
         token: '',
         failureReason: null,
       }));
     },
-    onSuccess: async (result, { profileId }) => {
-      updateApiKeyEnrollmentForProfile(profileId, (current) => ({
+    onSuccess: async (result, { profileId, profile }) => {
+      const copy = apiKeyEnrollmentCopy(profile);
+      updateOpencodeEnrollmentForProfile(profileId, (current) => ({
         ...current,
         step: 'saving_secret',
         token: '',
       }));
       await delay(CLAUDE_ENROLLMENT_PROGRESS_DELAY_MS);
-      updateApiKeyEnrollmentForProfile(profileId, (current) => ({
+      updateOpencodeEnrollmentForProfile(profileId, (current) => ({
         ...current,
         step: 'updating_profile',
         token: '',
       }));
       await delay(CLAUDE_ENROLLMENT_PROGRESS_DELAY_MS);
-      if (apiKeyEnrollmentProfileIdRef.current !== profileId) {
+      if (opencodeEnrollmentProfileIdRef.current !== profileId) {
         return;
       }
-      updateApiKeyEnrollmentForProfile(profileId, (current) => ({
+      updateOpencodeEnrollmentForProfile(profileId, (current) => ({
         ...current,
         step: 'ready',
         token: '',
@@ -1322,66 +1626,110 @@ export function ProviderProfilesManager({
       queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
       onNotice({
         level: 'ok',
-        text: `Provider API key enrollment completed for "${profileId}".`,
+        text: `${copy.credentialLabel} enrollment completed for "${profileId}".`,
       });
     },
-    onError: (error, { profileId, submittedToken }) => {
-      if (apiKeyEnrollmentProfileIdRef.current !== profileId) {
+    onError: (error, { profileId, submittedToken, profile }) => {
+      const copy = apiKeyEnrollmentCopy(profile);
+      if (opencodeEnrollmentProfileIdRef.current !== profileId) {
         return;
       }
       const failureReason =
         error instanceof Error
           ? redactClaudeSecretText(error.message, submittedToken)
-          : 'Provider API key validation failed.';
-      updateApiKeyEnrollmentForProfile(profileId, (current) => ({
+          : `${copy.credentialLabel} validation failed.`;
+      updateOpencodeEnrollmentForProfile(profileId, (current) => ({
         ...current,
         step: 'failed',
         token: '',
-        failureReason: failureReason ?? 'Provider API key validation failed.',
+        failureReason: failureReason ?? `${copy.credentialLabel} validation failed.`,
       }));
     },
   });
 
-  const submitApiKeyEnrollment = () => {
-    if (!apiKeyEnrollment) return;
-    const profileId = apiKeyEnrollment.profile.profile_id;
-    const submittedToken = apiKeyEnrollment.token.trim();
+  const submitOpencodeEnrollment = () => {
+    if (!opencodeEnrollment) return;
+    const profile = opencodeEnrollment.profile;
+    const copy = apiKeyEnrollmentCopy(profile);
+    const profileId = opencodeEnrollment.profile.profile_id;
+    const submittedToken = opencodeEnrollment.token.trim();
     if (!submittedToken) {
-      onNotice({
-        level: 'error',
-        text: `${providerApiKeyLabel(apiKeyEnrollment.profile)} API key is required.`,
-      });
+      onNotice({ level: 'error', text: `${copy.credentialLabel} is required.` });
       return;
     }
 
-    apiKeyEnrollmentMutation.mutate({ profileId, submittedToken });
+    opencodeEnrollmentMutation.mutate({ profileId, submittedToken, profile });
   };
 
   useEffect(() => {
-    if (!apiKeyEnrollment) return;
-    apiKeyEnrollmentDrawerRef.current?.focus();
-  }, [apiKeyEnrollment?.profile.profile_id]);
+    if (!opencodeEnrollment) return;
+    opencodeEnrollmentDrawerRef.current?.focus();
+  }, [opencodeEnrollment?.profile.profile_id]);
 
   useEffect(() => {
-    apiKeyEnrollmentProfileIdRef.current = apiKeyEnrollment?.profile.profile_id ?? null;
-  }, [apiKeyEnrollment?.profile.profile_id]);
+    opencodeEnrollmentProfileIdRef.current = opencodeEnrollment?.profile.profile_id ?? null;
+  }, [opencodeEnrollment?.profile.profile_id]);
 
   useEffect(() => {
-    if (!apiKeyEnrollment) return;
+    if (!opencodeEnrollment) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        closeApiKeyEnrollment();
+        closeOpencodeEnrollment();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [apiKeyEnrollment]);
+  }, [opencodeEnrollment]);
+
+  const importedVolumeMutation = useMutation({
+    mutationFn: async () => {
+      const volumeRef = importedVolumeRef.trim();
+      if (!volumeRef) {
+        throw new Error('Existing credential volume is required.');
+      }
+      const response = await fetch('/api/v1/provider-profiles/credential-volume/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+          runtime_id: form.runtimeId.trim(),
+          provider_id: form.providerId.trim(),
+          volume_ref: volumeRef,
+        }),
+      });
+      const payload: unknown = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(extractErrorMessage(payload));
+      }
+      return payload as {
+        volume_ref: string;
+        volume_mount_path: string;
+      };
+    },
+    onSuccess: (result) => {
+      setForm((current) => ({
+        ...current,
+        volumeRef: result.volume_ref,
+        volumeMountPath: result.volume_mount_path,
+      }));
+      setImportedVolumeValidated(true);
+      onNotice({ level: 'ok', text: 'Imported credential volume validated.' });
+    },
+    onError: (error: Error) => {
+      setImportedVolumeValidated(false);
+      onNotice({ level: 'error', text: error.message });
+    },
+  });
 
   const saveMutation = useMutation({
     mutationFn: async (formState: ProviderProfileFormState) => {
-      const payload = buildSavePayload(formState, { isEditing, creationPreset });
+      const payload = buildSavePayload(formState, {
+        isEditing,
+        formBaseline,
+        creationPreset,
+        importExistingCredentialVolume: importedVolumeValidated,
+      });
       const endpoint = isEditing
         ? `/api/v1/provider-profiles/${encodeURIComponent(payload.profile_id)}`
         : '/api/v1/provider-profiles';
@@ -1404,6 +1752,7 @@ export function ProviderProfilesManager({
       return response.json() as Promise<ProviderProfile>;
     },
     onSuccess: (savedProfile, submittedForm) => {
+      const createdProfile = !isEditing;
       onNotice({
         level: 'ok',
         text: isEditing
@@ -1414,7 +1763,7 @@ export function ProviderProfilesManager({
       const nextForm = defaultFormState(createFormRuntimeSeed);
       setForm(nextForm);
       setFormBaseline(nextForm);
-      setShowAdvancedOptions(false);
+      setShowAdvanced(false);
       queryClient.setQueryData<ProviderProfile[]>(
         PROVIDER_PROFILE_QUERY_KEY,
         (currentProfiles = []) => {
@@ -1440,9 +1789,40 @@ export function ProviderProfilesManager({
         },
       );
       queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
+      const submittedMethod =
+        savedProfile.creation_capabilities?.authentication_methods.find(
+          (method) => method.id === submittedForm.authenticationMethod,
+        ) ??
+        creationCapabilities?.authentication_methods.find(
+          (method) => method.id === submittedForm.authenticationMethod,
+        );
+      const guidedApiKeySetupPending =
+        submittedMethod?.setup_action === 'api_key' &&
+        submittedMethod.launch_ready_after_setup &&
+        savedProfile.auth_state !== 'connected';
+      if (
+        createdProfile &&
+        submittedForm.authenticationMethod === 'api_key' &&
+        guidedApiKeySetupPending
+      ) {
+        if (
+          savedProfile.runtime_id === 'claude_code' &&
+          savedProfile.provider_id === 'anthropic'
+        ) {
+          openClaudeEnrollment(savedProfile);
+        } else {
+          openOpencodeEnrollment(savedProfile);
+        }
+      } else if (
+        createdProfile &&
+        submittedForm.authenticationMethod === 'oauth' &&
+        !importedVolumeValidated
+      ) {
+        startOAuthFromCreationRef.current(savedProfile);
+      }
     },
     onError: (error: Error) => {
-      setShowAdvancedOptions(true);
+      setShowAdvanced(true);
       if (
         !isEditing &&
         error instanceof ProviderProfileRequestError &&
@@ -1573,6 +1953,7 @@ export function ProviderProfilesManager({
       onNotice({ level: 'error', text: error.message });
     },
   });
+  startOAuthFromCreationRef.current = (profile) => startOAuthMutation.mutate(profile);
 
   const cancelOAuthMutation = useMutation({
     mutationFn: async ({ profileId, sessionId }: { profileId: string; sessionId: string }) => {
@@ -1772,6 +2153,61 @@ export function ProviderProfilesManager({
     return () => window.clearInterval(intervalId);
   }, [oauthSessions, queryClient]);
 
+  const formSecretRefs = useMemo(() => {
+    try {
+      return parseSecretRefs(form.secretRefsText);
+    } catch {
+      return {};
+    }
+  }, [form.secretRefsText]);
+  const selectedSecretRoleNames = new Set(
+    (selectedAuthenticationCapability?.secret_roles ?? []).map((role) => role.role),
+  );
+  const unknownSecretRoleBindings = Object.entries(formSecretRefs).filter(
+    ([role]) => !selectedSecretRoleNames.has(role),
+  );
+  const selectedCredentialSource =
+    selectedAuthenticationCapability?.fields.credential_source?.value ?? form.credentialSource;
+  const selectedMaterializationMode =
+    selectedAuthenticationCapability?.fields.runtime_materialization_mode?.value ??
+    form.runtimeMaterializationMode;
+  const volumeReferenceLabel =
+    form.volumeRef ||
+    (selectedAuthenticationCapability?.id === 'oauth' ? 'Owned by enrollment' : 'Not used');
+  const volumeMountPathLabel =
+    form.volumeMountPath || selectedAuthenticationCapability?.imported_volume.mount_path || 'Not used';
+  const volumeMetadataSource = importedVolumeValidated
+    ? 'validated_import'
+    : form.volumeRef || form.volumeMountPath
+      ? 'existing_profile'
+      : selectedAuthenticationCapability?.imported_volume.source ?? 'existing_profile';
+  const currentConnectionLabel = editingProfile
+    ? activationStatusLabel(editingProfile) ?? 'Unknown'
+    : form.authenticationMethod === 'none'
+      ? 'Ready without credentials'
+      : 'Setup required';
+  const currentLaunchReadinessLabel = editingProfile?.readiness?.launch_ready
+    ? 'Ready'
+    : form.authenticationMethod === 'none'
+      ? 'Ready after profile creation.'
+      : form.authenticationMethod === 'oauth'
+        ? 'Blocked until OAuth setup succeeds.'
+        : form.authenticationMethod === 'api_key'
+          ? 'Blocked until API-key setup succeeds.'
+          : 'Blocked until a supported authentication method is selected.';
+
+  const updateSecretRoleBinding = (role: string, secretRef: string) => {
+    setForm((current) => {
+      const next = parseSecretRefs(current.secretRefsText);
+      if (secretRef) {
+        next[role] = secretRef;
+      } else {
+        delete next[role];
+      }
+      return { ...current, secretRefsText: JSON.stringify(next, null, 2) };
+    });
+  };
+
   return (
     <section className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
       <div className="flex flex-col gap-3 border-b border-slate-200 dark:border-slate-800 pb-4 md:flex-row md:items-end md:justify-between">
@@ -1891,14 +2327,22 @@ export function ProviderProfilesManager({
                 const oauthSession = oauthSessions[profile.profile_id];
                 const authModel = providerAuthModel(profile);
                 const canStartOAuth = authModel.kind === 'codex_oauth';
+                const canUseGenericApiKey = Boolean(
+                  ((profile.runtime_id === 'codex_cli' && profile.provider_id === 'openai') ||
+                    profile.creation_capabilities?.authentication_methods.some(
+                      (method) => method.id === 'api_key',
+                    )) &&
+                    !isClaudeCredentialMethodProfile(profile) &&
+                    !isOpencodeCredentialMethodProfile(profile),
+                );
                 const activationLabel = activationStatusLabel(profile);
                 const modelTiers = providerProfileModelTiers(profile);
                 const defaultModelTier = profile.default_model_tier || 1;
                 const enableAllowed = mayEnableFromSettings(profile);
                 const claudeReadiness =
                   authModel.kind === 'claude_credentials' ? authModel.readiness : undefined;
-                const apiKeyReadiness =
-                  authModel.kind === 'api_key_credentials' ? authModel.readiness : undefined;
+                const opencodeReadiness =
+                  authModel.kind === 'opencode_credentials' ? authModel.readiness : undefined;
                 const hasStatusDetails = Boolean(
                   (activationLabel && activationLabel !== 'Connected') ||
                     profile.disabled_reason ||
@@ -1909,11 +2353,11 @@ export function ProviderProfilesManager({
                     claudeReadiness?.backingSecretExists !== undefined ||
                     claudeReadiness?.launchReady !== undefined ||
                     claudeReadiness?.failureReason ||
-                    apiKeyReadiness?.connected !== undefined ||
-                    apiKeyReadiness?.lastValidatedAt ||
-                    apiKeyReadiness?.backingSecretExists !== undefined ||
-                    apiKeyReadiness?.launchReady !== undefined ||
-                    apiKeyReadiness?.failureReason,
+                    opencodeReadiness?.connected !== undefined ||
+                    opencodeReadiness?.lastValidatedAt ||
+                    opencodeReadiness?.backingSecretExists !== undefined ||
+                    opencodeReadiness?.launchReady !== undefined ||
+                    opencodeReadiness?.failureReason,
                 );
                 return (
                 <tr key={profile.profile_id} role="row">
@@ -2081,7 +2525,7 @@ export function ProviderProfilesManager({
                           {authModel.statusLabel}
                         </div>
                       ) : null}
-                      {authModel.kind === 'api_key_credentials' && authModel.statusLabel ? (
+                      {authModel.kind === 'opencode_credentials' && authModel.statusLabel ? (
                         <div className="text-xs font-medium text-slate-600 dark:text-slate-400">
                           {authModel.statusLabel}
                         </div>
@@ -2161,27 +2605,27 @@ export function ProviderProfilesManager({
                                 Failure: {redactClaudeSecretText(authModel.readiness.failureReason)}
                               </div>
                             ) : null}
-                            {authModel.kind === 'api_key_credentials' && authModel.readiness?.connected !== undefined ? (
+                            {authModel.kind === 'opencode_credentials' && authModel.readiness?.connected !== undefined ? (
                               <div className="text-xs text-slate-500 dark:text-slate-400">
-                                {authModel.providerLabel} connection: {authModel.readiness.connected ? 'Connected' : 'Not connected'}
+                                OpenCode connection: {authModel.readiness.connected ? 'Connected' : 'Not connected'}
                               </div>
                             ) : null}
-                            {authModel.kind === 'api_key_credentials' && authModel.readiness?.lastValidatedAt ? (
+                            {authModel.kind === 'opencode_credentials' && authModel.readiness?.lastValidatedAt ? (
                               <div className="text-xs text-slate-500 dark:text-slate-400">
                                 Last validated: {authModel.readiness.lastValidatedAt}
                               </div>
                             ) : null}
-                            {authModel.kind === 'api_key_credentials' && authModel.readiness?.backingSecretExists !== undefined ? (
+                            {authModel.kind === 'opencode_credentials' && authModel.readiness?.backingSecretExists !== undefined ? (
                               <div className="text-xs text-slate-500 dark:text-slate-400">
                                 Backing secret: {authModel.readiness.backingSecretExists ? 'Present' : 'Missing'}
                               </div>
                             ) : null}
-                            {authModel.kind === 'api_key_credentials' && authModel.readiness?.launchReady !== undefined ? (
+                            {authModel.kind === 'opencode_credentials' && authModel.readiness?.launchReady !== undefined ? (
                               <div className="text-xs text-slate-500 dark:text-slate-400">
                                 Launch readiness: {authModel.readiness.launchReady ? 'Ready' : 'Not ready'}
                               </div>
                             ) : null}
-                            {authModel.kind === 'api_key_credentials' && authModel.readiness?.failureReason ? (
+                            {authModel.kind === 'opencode_credentials' && authModel.readiness?.failureReason ? (
                               <div className="text-xs text-rose-600 dark:text-rose-400">
                                 Failure: {redactClaudeSecretText(authModel.readiness.failureReason)}
                               </div>
@@ -2238,7 +2682,7 @@ export function ProviderProfilesManager({
                             </button>
                           ))
                         : null}
-                      {canWriteProviderProfiles && authModel.kind === 'api_key_credentials'
+                      {canWriteProviderProfiles && authModel.kind === 'opencode_credentials'
                         ? authModel.actions.map((action) => (
                             <button
                               key={action.id}
@@ -2246,17 +2690,28 @@ export function ProviderProfilesManager({
                               className="rounded-full border border-emerald-300 dark:border-emerald-700 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 transition hover:border-emerald-500 dark:hover:border-emerald-500"
                               onClick={() => {
                                 if (action.id === 'use_api_key') {
-                                  openApiKeyEnrollment(profile);
+                                  openOpencodeEnrollment(profile);
                                   return;
                                 }
                               }}
-                              disabled={apiKeyEnrollmentMutation.isPending}
+                              disabled={opencodeEnrollmentMutation.isPending}
                               aria-label={`${action.label} ${profile.profile_id}`}
                             >
                               {action.label}
                             </button>
                           ))
                         : null}
+                      {canWriteProviderProfiles && canUseGenericApiKey ? (
+                        <button
+                          type="button"
+                          className="rounded-full border border-emerald-300 dark:border-emerald-700 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 transition hover:border-emerald-500 dark:hover:border-emerald-500"
+                          onClick={() => openOpencodeEnrollment(profile)}
+                          disabled={opencodeEnrollmentMutation.isPending}
+                          aria-label={`Use ${apiKeyEnrollmentCopy(profile).credentialLabel} ${profile.profile_id}`}
+                        >
+                          Use {apiKeyEnrollmentCopy(profile).credentialLabel}
+                        </button>
+                      ) : null}
                       {canWriteProviderProfiles && oauthSession && isActiveOAuthStatus(oauthSession.status) ? (
                         <button
                           type="button"
@@ -2311,12 +2766,7 @@ export function ProviderProfilesManager({
                             type="button"
                             className="rounded-full border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
                             onClick={() => {
-                              const nextForm = toFormState(profile);
-                              setEditingProfileId(profile.profile_id);
-                              setForm(nextForm);
-                              setFormBaseline(nextForm);
-                              setShowAdvancedOptions(true);
-                              onNotice(null);
+                              beginEditingProfile(profile);
                             }}
                           >
                             Edit
@@ -2576,17 +3026,17 @@ export function ProviderProfilesManager({
         </div>
       ) : null}
 
-      {apiKeyEnrollment ? (
+      {opencodeEnrollment ? (
         <div
           className="fixed inset-0 z-50 flex justify-end bg-slate-950/40"
           onMouseDown={(event) => {
             if (event.target === event.currentTarget) {
-              closeApiKeyEnrollment();
+              closeOpencodeEnrollment();
             }
           }}
         >
           <div
-            ref={apiKeyEnrollmentDrawerRef}
+            ref={opencodeEnrollmentDrawerRef}
             role="dialog"
             aria-modal="true"
             aria-labelledby="opencode-enrollment-title"
@@ -2599,27 +3049,27 @@ export function ProviderProfilesManager({
                 id="opencode-enrollment-title"
                 className="text-base font-semibold text-slate-900 dark:text-white"
               >
-                {providerApiKeyLabel(apiKeyEnrollment.profile)} API key enrollment for {apiKeyEnrollment.profile.profile_id}
+                {apiKeyEnrollmentCopy(opencodeEnrollment.profile).credentialLabel} enrollment for {opencodeEnrollment.profile.profile_id}
               </h4>
               <p className="max-w-3xl text-sm text-slate-600 dark:text-slate-400">
-                Use a {providerApiKeyLabel(apiKeyEnrollment.profile)} API key for {formatRuntimeLabel(apiKeyEnrollment.profile.runtime_id)} launches. Paste the key here, then validate and save it as a managed provider credential.
+                {apiKeyEnrollmentCopy(opencodeEnrollment.profile).description}
               </p>
             </div>
             <button
               type="button"
               className="inline-flex items-center justify-center rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500"
-              onClick={closeApiKeyEnrollment}
+              onClick={closeOpencodeEnrollment}
             >
               Cancel API key enrollment
             </button>
           </div>
 
-          <div className="mt-4 flex flex-wrap gap-2" aria-label={`${providerApiKeyLabel(apiKeyEnrollment.profile)} enrollment lifecycle states`}>
+          <div className="mt-4 flex flex-wrap gap-2" aria-label={`${apiKeyEnrollmentCopy(opencodeEnrollment.profile).providerName} enrollment lifecycle states`}>
             {CLAUDE_ENROLLMENT_STEPS.map((step) => (
               <span
                 key={step}
                 className={`rounded-full px-2.5 py-1 font-mono text-xs ${
-                  step === apiKeyEnrollment.step
+                  step === opencodeEnrollment.step
                     ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300'
                     : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
                 }`}
@@ -2629,64 +3079,64 @@ export function ProviderProfilesManager({
             ))}
           </div>
 
-          {apiKeyEnrollment.step === 'not_connected' ? (
+          {opencodeEnrollment.step === 'not_connected' ? (
             <div className="mt-5 space-y-4">
               <div className="rounded-xl border border-slate-200 dark:border-slate-800 p-4 text-sm text-slate-700 dark:text-slate-300">
-                Continue when you are ready to paste the {providerApiKeyLabel(apiKeyEnrollment.profile)} API key. This path stores the key in Managed Secrets and does not create an OAuth terminal session.
+                Continue when you are ready to paste the {apiKeyEnrollmentCopy(opencodeEnrollment.profile).credentialLabel}. This path stores the key in Managed Secrets and does not create an OAuth terminal session.
               </div>
               <button
                 type="button"
                 className="inline-flex items-center justify-center rounded-lg bg-slate-900 dark:bg-slate-100 px-4 py-2 text-sm font-semibold text-white dark:text-slate-900 transition hover:bg-slate-800 dark:hover:bg-slate-200"
-                onClick={continueApiKeyEnrollment}
+                onClick={continueOpencodeEnrollment}
               >
                 Continue to API key paste
               </button>
             </div>
           ) : null}
 
-          {apiKeyEnrollment.step === 'awaiting_token_paste' ? (
+          {opencodeEnrollment.step === 'awaiting_token_paste' ? (
             <div className="mt-5 space-y-4">
               <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
-                <span>{providerApiKeyLabel(apiKeyEnrollment.profile)} API key</span>
+                <span>{apiKeyEnrollmentCopy(opencodeEnrollment.profile).credentialLabel}</span>
                 <input
                   type="password"
                   className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-                  value={apiKeyEnrollment.token}
-                  onChange={(event) => updateApiKeyEnrollmentToken(event.target.value)}
+                  value={opencodeEnrollment.token}
+                  onChange={(event) => updateOpencodeEnrollmentToken(event.target.value)}
                   autoComplete="off"
                 />
               </label>
               <button
                 type="button"
                 className="inline-flex items-center justify-center rounded-lg bg-slate-900 dark:bg-slate-100 px-4 py-2 text-sm font-semibold text-white dark:text-slate-900 transition hover:bg-slate-800 dark:hover:bg-slate-200"
-                onClick={() => void submitApiKeyEnrollment()}
+                onClick={() => void submitOpencodeEnrollment()}
               >
-                Validate and save {providerApiKeyLabel(apiKeyEnrollment.profile)} API key
+                Validate and save {apiKeyEnrollmentCopy(opencodeEnrollment.profile).credentialLabel}
               </button>
             </div>
           ) : null}
 
-          {['validating_token', 'saving_secret', 'updating_profile'].includes(apiKeyEnrollment.step) ? (
+          {['validating_token', 'saving_secret', 'updating_profile'].includes(opencodeEnrollment.step) ? (
             <div className="mt-5 rounded-xl border border-sky-200 dark:border-sky-900/60 bg-sky-50 dark:bg-sky-950/30 p-4 text-sm font-medium text-sky-800 dark:text-sky-300">
-              Processing {providerApiKeyLabel(apiKeyEnrollment.profile)} API key enrollment: {formatStatusLabel(apiKeyEnrollment.step)}
+              Processing {apiKeyEnrollmentCopy(opencodeEnrollment.profile).credentialLabel} enrollment: {formatStatusLabel(opencodeEnrollment.step)}
             </div>
           ) : null}
 
-          {apiKeyEnrollment.step === 'ready' ? (
+          {opencodeEnrollment.step === 'ready' ? (
             <div className="mt-5 rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/30 p-4 text-sm font-medium text-emerald-800 dark:text-emerald-300">
-              {formatStatusLabel(apiKeyEnrollment.statusLabel ?? `${providerApiKeyLabel(apiKeyEnrollment.profile)} API key ready`)}
+              {formatStatusLabel(opencodeEnrollment.statusLabel ?? apiKeyEnrollmentCopy(opencodeEnrollment.profile).readyLabel)}
             </div>
           ) : null}
 
-          {apiKeyEnrollment.step === 'failed' ? (
+          {opencodeEnrollment.step === 'failed' ? (
             <div className="mt-5 space-y-4">
               <div className="rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/30 p-4 text-sm font-medium text-rose-700 dark:text-rose-300">
-                {apiKeyEnrollment.failureReason ?? `${providerApiKeyLabel(apiKeyEnrollment.profile)} API key validation failed.`}
+                {opencodeEnrollment.failureReason ?? `${apiKeyEnrollmentCopy(opencodeEnrollment.profile).credentialLabel} validation failed.`}
               </div>
               <button
                 type="button"
                 className="inline-flex items-center justify-center rounded-lg border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500"
-                onClick={continueApiKeyEnrollment}
+                onClick={continueOpencodeEnrollment}
               >
                 Return to API key paste
               </button>
@@ -2764,85 +3214,22 @@ export function ProviderProfilesManager({
             </div>
           </fieldset>
 
-          {!isEditing ? (
-            <div
-              className={`rounded-xl border p-4 text-sm ${
-                creationPreset?.supported === false || creationPresetError
-                  ? 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-300'
-                  : 'border-sky-200 bg-sky-50 text-sky-800 dark:border-sky-900/60 dark:bg-sky-950/30 dark:text-sky-300'
-              }`}
-              aria-live="polite"
-            >
-              {creationPresetLoading
-                ? 'Loading backend creation recommendations…'
-                : creationPresetError
-                  ? creationPresetError
-                  : creationPreset
-                    ? creationPreset.supported
-                      ? `Backend preset ${creationPreset.version} loaded. Untouched advanced values will be omitted and normalized by the server.`
-                      : creationPreset.diagnostics[0]?.message ??
-                        'This combination does not have a safe standard creation preset.'
-                    : 'Choose runtime, provider, and authentication method to load backend creation recommendations.'}
-            </div>
-          ) : null}
-
-          {/* ── Provider Settings (have smart defaults) ── */}
           <fieldset className="rounded-2xl border border-slate-200 dark:border-slate-700 p-5 space-y-4">
             <legend className="px-2 text-sm font-semibold text-slate-700 dark:text-slate-300">
-              Provider Settings <span className="font-normal text-slate-500 dark:text-slate-400">&mdash; defaults provided</span>
+              Provider and account
             </legend>
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
-                <span>Provider label</span>
-                <input
-                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-                  value={form.providerLabel}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, providerLabel: event.target.value }))
-                  }
-                  placeholder="OpenAI"
-                />
-                <p className="text-xs text-slate-400 dark:text-slate-500">Optional display name</p>
-              </label>
-              {!isEditing ? (
-                <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
-                  <span>Authentication method</span>
-                  <select
-                    className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-                    value={form.authenticationMethod}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        authenticationMethod: event.target.value as
-                          | ''
-                          | ProviderProfileAuthenticationMethod,
-                      }))
-                    }
-                  >
-                    <option value="">Choose authentication…</option>
-                    <option value="oauth">OAuth</option>
-                    <option value="api_key">API key</option>
-                    <option value="none">No credentials</option>
-                  </select>
-                  <p className="text-xs text-slate-400 dark:text-slate-500">
-                    Choose a guided setup method, or leave blank to create an expert manual profile.
-                  </p>
-                </label>
-              ) : null}
               <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                 <span>Account label</span>
                 <input
                   className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
                   value={form.accountLabel}
                   onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      accountLabel: event.target.value,
-                    }))
+                    setForm((current) => ({ ...current, accountLabel: event.target.value }))
                   }
-                  placeholder="team-default"
+                  placeholder="Team account"
                 />
-                <p className="text-xs text-slate-400 dark:text-slate-500">Optional friendly account name</p>
+                <p className="text-xs text-slate-400 dark:text-slate-500">Optional friendly account identity</p>
               </label>
               <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                 <span>Default model</span>
@@ -2858,13 +3245,6 @@ export function ProviderProfilesManager({
                       : 'Leave blank to inherit runtime default'
                   }
                 />
-                <p className="text-xs text-slate-400 dark:text-slate-500">
-                  Leave blank to inherit the runtime default
-                  {defaultTaskModelByRuntime[form.runtimeId]
-                    ? ` (${defaultTaskModelByRuntime[form.runtimeId]})`
-                    : ''}.
-                  Set a value to override.
-                </p>
               </label>
               <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                 <span>Default effort</span>
@@ -2876,392 +3256,390 @@ export function ProviderProfilesManager({
                   }
                   placeholder="Leave blank to inherit runtime default"
                 />
-                <p className="text-xs text-slate-400 dark:text-slate-500">
-                  Optional runtime effort such as low, medium, high, or xhigh.
-                </p>
               </label>
-              <div className="flex gap-4 items-start xl:col-span-1">
-                {isEditing ? (
-                  <>
-                  <label className="flex items-center gap-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 px-4 py-3 text-sm font-medium text-slate-700 dark:text-slate-300 flex-1">
-                    <input
-                      type="checkbox"
-                      checked={form.enabled}
-                      onChange={(event) =>
-                        setForm((current) => ({ ...current, enabled: event.target.checked }))
-                      }
-                    />
-                    Enabled
-                  </label>
-                  <label className="flex items-center gap-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 px-4 py-3 text-sm font-medium text-slate-700 dark:text-slate-300 flex-1">
-                    <input
-                      type="checkbox"
-                      checked={form.isDefault}
-                      onChange={(event) =>
-                        setForm((current) => ({ ...current, isDefault: event.target.checked }))
-                      }
-                    />
-                    Runtime default
-                  </label>
-                  </>
-                ) : null}
-              </div>
-            </div>
-          </fieldset>
-
-          {/* ── Standard runtime capacity ── */}
-          <fieldset className="rounded-2xl border border-slate-200 dark:border-slate-700 p-5 space-y-4">
-            <legend className="px-2 text-sm font-semibold text-slate-700 dark:text-slate-300">
-              Runtime capacity <span className="font-normal text-slate-500 dark:text-slate-400">&mdash; defaults provided</span>
-            </legend>
-            <div className="grid gap-4 md:grid-cols-3">
               <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                 <span>Max parallel runs</span>
                 <input
                   type="number"
                   min="1"
-                  disabled={
-                    isCodexOAuthForm ||
-                    (!isEditing && presetField('max_parallel_runs')?.editable === false)
-                  }
+                  disabled={isCodexOAuthForm}
                   className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
                   value={isCodexOAuthForm ? '1' : form.maxParallelRuns}
                   onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      maxParallelRuns: event.target.value,
-                    }))
+                    setForm((current) => ({ ...current, maxParallelRuns: event.target.value }))
                   }
                 />
                 <p className="text-xs text-slate-400 dark:text-slate-500">
                   {isCodexOAuthForm
                     ? 'Fixed at 1 because the Codex OAuth home is an exclusive mutable identity.'
-                    : isEditing
-                      ? 'Saved capacity value.'
-                      : presetField('max_parallel_runs')
-                        ? `Recommended by ${presetField('max_parallel_runs')?.source}.`
-                        : 'Loaded from the backend creation preset.'}
+                    : `Default: ${defaultFormValues.maxParallelRuns}`}
                 </p>
+              </label>
+              <label className="flex items-center gap-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 px-4 py-3 text-sm font-medium text-slate-700 dark:text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={form.isDefault}
+                  onChange={(event) =>
+                    setForm((current) => ({ ...current, isDefault: event.target.checked }))
+                  }
+                />
+                Runtime default
               </label>
             </div>
           </fieldset>
 
-          <div className="rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 p-4">
-            <label className="flex items-start gap-3 text-sm font-medium text-slate-700 dark:text-slate-300">
+          <fieldset className="rounded-2xl border border-emerald-200/70 dark:border-emerald-900/60 bg-emerald-50/30 dark:bg-emerald-950/20 p-5 space-y-4">
+            <legend className="px-2 text-sm font-semibold text-emerald-800 dark:text-emerald-300">
+              Authentication and readiness
+            </legend>
+            {creationCapabilities?.authentication_methods.length ? (
+              <div className="grid gap-3 sm:grid-cols-3">
+                {creationCapabilities.authentication_methods.map((method) => (
+                  <label
+                    key={method.id}
+                    className="flex items-center gap-3 rounded-xl border border-emerald-200 dark:border-emerald-900 bg-white dark:bg-slate-900 px-4 py-3 text-sm font-medium text-slate-800 dark:text-slate-200"
+                  >
+                    <input
+                      type="radio"
+                      name="provider-profile-authentication-method"
+                      value={method.id}
+                      checked={form.authenticationMethod === method.id}
+                      disabled={isEditing}
+                      onChange={() => {
+                        setForm((current) => ({ ...current, authenticationMethod: method.id }));
+                        setShowImportedVolume(false);
+                        setImportedVolumeValidated(false);
+                      }}
+                    />
+                    {method.label}
+                  </label>
+                ))}
+              </div>
+            ) : isEditing ? (
+              <div className="rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-3 text-sm text-amber-800 dark:text-amber-300">
+                Unknown existing method: {form.credentialSource} → {form.runtimeMaterializationMode}. The stored contract is preserved for inspection.
+              </div>
+            ) : (
+              <p className="text-sm text-slate-600 dark:text-slate-400">
+                Choose a runtime and provider to load supported authentication methods.
+              </p>
+            )}
+            {hasUnknownExistingAuthenticationMethod && creationCapabilities?.authentication_methods.length ? (
+              <div className="rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-3 text-sm text-amber-800 dark:text-amber-300">
+                Unknown existing method: {form.credentialSource} → {form.runtimeMaterializationMode}. The stored contract remains inspectable and is not replaced by a supported method automatically.
+              </div>
+            ) : null}
+            {creationCapabilitiesError ? (
+              <div className="rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-3 text-sm text-amber-800 dark:text-amber-300">
+                {creationCapabilitiesError}
+              </div>
+            ) : null}
+            {!isEditing ? (
+              <div
+                className={`rounded-xl border p-3 text-sm ${
+                  creationPresetError || creationPreset?.supported === false
+                    ? 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-300'
+                    : 'border-sky-200 bg-sky-50 text-sky-800 dark:border-sky-900/60 dark:bg-sky-950/30 dark:text-sky-300'
+                }`}
+                aria-live="polite"
+              >
+                {creationPresetLoading
+                  ? 'Loading backend creation recommendations…'
+                  : creationPresetError
+                    ? creationPresetError
+                    : creationPreset
+                      ? creationPreset.supported
+                        ? `Backend preset ${creationPreset.version} loaded. Untouched advanced values will be normalized by the server.`
+                        : creationPreset.diagnostics[0]?.message ??
+                          'This combination does not have a safe standard creation preset.'
+                      : 'Choose an authentication method to load backend creation recommendations.'}
+              </div>
+            ) : null}
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3 text-sm text-slate-700 dark:text-slate-300">
+                Connection: {currentConnectionLabel}
+              </div>
+              <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3 text-sm text-slate-700 dark:text-slate-300">
+                Launch readiness: {currentLaunchReadinessLabel}
+              </div>
+            </div>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              OAuth and API-key setup use dedicated backend flows. No credential plaintext, volume name, mount path, or SecretRef JSON is collected here.
+            </p>
+          </fieldset>
+
+          <div className="rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 p-5 space-y-3">
+            <label className="flex items-center gap-3 text-sm font-semibold text-slate-800 dark:text-slate-200">
               <input
                 type="checkbox"
-                checked={showAdvancedOptions}
-                aria-controls="provider-profile-advanced-options"
-                aria-expanded={showAdvancedOptions}
-                onChange={(event) => setShowAdvancedOptions(event.target.checked)}
+                checked={showAdvanced}
+                aria-controls="provider-profile-advanced-region"
+                onChange={(event) => setShowAdvanced(event.target.checked)}
               />
-              <span>
-                Show advanced options
-                <span className="mt-1 block text-xs font-normal text-slate-500 dark:text-slate-400">
-                  Credential bindings, volumes, rate limits, routing, and launch shaping
-                </span>
-                {!showAdvancedOptions ? (
-                  <span className="mt-1 block text-xs font-normal text-slate-500 dark:text-slate-400">
-                    {creationPreset?.supported
-                      ? 'Using backend-recommended launch settings.'
-                      : 'Advanced draft values are preserved while collapsed.'}
-                  </span>
-                ) : null}
-              </span>
+              Show advanced options
             </label>
-          </div>
-
-          {showAdvancedOptions ? (
-          <div id="provider-profile-advanced-options" className="space-y-6">
-          {/* ── Backend launch strategy ── */}
-          <fieldset className="rounded-2xl border border-slate-200 dark:border-slate-700 p-5 space-y-4">
-            <legend className="px-2 text-sm font-semibold text-slate-700 dark:text-slate-300">
-              Launch strategy <span className="font-normal text-slate-500 dark:text-slate-400">&mdash; expert controls</span>
-            </legend>
-            {manualCreationAllowed ? (
-              <p className="text-sm text-amber-700 dark:text-amber-300">
-                This combination has no standard preset. Supply the required manual launch fields before creating the profile.
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Credential bindings, volumes, rate limits, routing, and launch shaping
+            </p>
+            {!showAdvanced ? (
+              <p className="text-xs font-medium text-slate-600 dark:text-slate-300">
+                {selectedAuthenticationCapability
+                  ? `Using recommended ${selectedAuthenticationCapability.label} launch settings`
+                  : 'Preserving the existing launch contract'}
               </p>
             ) : null}
-            <div className="grid gap-4 md:grid-cols-2">
-              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
-                <span>Credential source</span>
-                <select
-                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-                  value={form.credentialSource}
-                  disabled={
-                    !isEditing &&
-                    creationPreset?.supported === true &&
-                    presetField('credential_source')?.editable === false
-                  }
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      credentialSource: event.target.value,
-                    }))
-                  }
-                >
-                  <option value="">Backend-derived</option>
-                  <option value="secret_ref">secret_ref</option>
-                  <option value="oauth_volume">oauth_volume</option>
-                  <option value="none">none</option>
-                </select>
-                <p className="text-xs text-slate-400 dark:text-slate-500">
-                  {isEditing || manualCreationAllowed || !form.authenticationMethod
-                    ? 'Explicit manual launch-contract value.'
-                    : presetField('credential_source')?.lock_reason ??
-                      'Choose an authentication method to derive this value.'}
-                </p>
-              </label>
-              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
-                <span>Materialization mode</span>
-                <select
-                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-                  value={form.runtimeMaterializationMode}
-                  disabled={
-                    !isEditing &&
-                    creationPreset?.supported === true &&
-                    presetField('runtime_materialization_mode')?.editable === false
-                  }
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      runtimeMaterializationMode: event.target.value,
-                    }))
-                  }
-                >
-                  <option value="">Backend-derived</option>
-                  <option value="api_key_env">api_key_env</option>
-                  <option value="env_bundle">env_bundle</option>
-                  <option value="config_bundle">config_bundle</option>
-                  <option value="composite">composite</option>
-                  <option value="oauth_home">oauth_home</option>
-                </select>
-                <p className="text-xs text-slate-400 dark:text-slate-500">
-                  {isEditing || manualCreationAllowed || !form.authenticationMethod
-                    ? 'Explicit manual launch-contract value.'
-                    : presetField('runtime_materialization_mode')?.lock_reason ??
-                      'Choose an authentication method to derive this value.'}
-                </p>
-              </label>
-            </div>
-          </fieldset>
-
-          {/* ── Advanced rate-limit policy ── */}
-          <fieldset className="rounded-2xl border border-slate-200 dark:border-slate-700 p-5 space-y-4">
-            <legend className="px-2 text-sm font-semibold text-slate-700 dark:text-slate-300">
-              Rate limits <span className="font-normal text-slate-500 dark:text-slate-400">&mdash; defaults provided</span>
-            </legend>
-            <div className="grid gap-4 md:grid-cols-2">
-              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
-                <span>Cooldown after 429 (seconds)</span>
-                <input
-                  type="number"
-                  min="0"
-                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-                  value={form.cooldownAfter429Seconds}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      cooldownAfter429Seconds: event.target.value,
-                    }))
-                  }
-                />
-                <p className="text-xs text-slate-400 dark:text-slate-500">
-                  {isEditing
-                    ? 'Saved rate-limit value.'
-                    : presetField('cooldown_after_429_seconds')
-                      ? `Recommended by ${presetField('cooldown_after_429_seconds')?.source}.`
-                      : 'Optional manual override.'}
-                </p>
-              </label>
-              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
-                <span>Rate limit policy</span>
-                <select
-                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-                  value={form.rateLimitPolicy}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      rateLimitPolicy: event.target.value,
-                    }))
-                  }
-                >
-                  <option value="">Backend recommendation</option>
-                  <option value="backoff">backoff</option>
-                  <option value="queue">queue</option>
-                  <option value="fail_fast">fail_fast</option>
-                </select>
-                <p className="text-xs text-slate-400 dark:text-slate-500">
-                  {isEditing
-                    ? 'Saved rate-limit policy.'
-                    : presetField('rate_limit_policy')
-                      ? `Recommended by ${presetField('rate_limit_policy')?.source}.`
-                      : 'Optional manual override.'}
-                </p>
-              </label>
-            </div>
-          </fieldset>
-
-          {/* ── Credentials & Volumes ── */}
-          <fieldset className="rounded-2xl border border-slate-200 dark:border-slate-700 p-5 space-y-4">
-            <legend className="px-2 text-sm font-semibold text-slate-700 dark:text-slate-300">
-              Credentials & Volumes <span className="font-normal text-slate-500 dark:text-slate-400">&mdash; optional</span>
-            </legend>
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,300px)]">
-              <div className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
-                <label htmlFor="provider-profile-secret-refs">
-                  Secret refs (JSON object of string refs)
-                </label>
-                <textarea
-                  id="provider-profile-secret-refs"
-                  rows={6}
-                  className="w-full rounded-2xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 font-mono text-sm text-slate-900 dark:text-white shadow-sm"
-                  value={form.secretRefsText}
-                  disabled={!isEditing && presetField('secret_refs')?.editable === false}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      secretRefsText: event.target.value,
-                    }))
-                  }
-                />
-                {secretSlugs.length > 0 ? (
-                  <div className="mt-2 flex flex-wrap gap-1.5 items-center">
-                    <span className="text-xs text-slate-400 dark:text-slate-500">Available slugs:</span>
-                    {secretSlugs.map((slug) => (
-                      <code
-                        key={slug}
-                        className="rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-xs text-sky-700 dark:border-sky-800 dark:bg-sky-900/30 dark:text-sky-400"
-                      >
-                        db://{slug}
-                      </code>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-xs text-slate-400 dark:text-slate-500">
-                    No managed secrets yet. Create them in the Managed Secrets section below.
-                  </p>
-                )}
-              </div>
-              <div className="space-y-4">
-                <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
-                  <span>Volume ref</span>
-                  <input
-                    className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-                    value={form.volumeRef}
-                    disabled={!isEditing && presetField('volume_ref')?.editable === false}
-                    onChange={(event) =>
-                      setForm((current) => ({ ...current, volumeRef: event.target.value }))
-                    }
-                  />
-                  <p className="text-xs text-slate-400 dark:text-slate-500">Only needed for volume-based credentials</p>
-                </label>
-                <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
-                  <span>Volume mount path</span>
-                  <input
-                    className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-                    value={form.volumeMountPath}
-                    disabled={!isEditing && presetField('volume_mount_path')?.editable === false}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        volumeMountPath: event.target.value,
-                      }))
-                    }
-                  />
-                  <p className="text-xs text-slate-400 dark:text-slate-500">Only needed for volume-based credentials</p>
-                </label>
-              </div>
-            </div>
-          </fieldset>
-
-          {/* ── Advanced Options ── */}
-          <fieldset className="rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 p-5 space-y-4">
-            <legend className="px-2 text-sm font-semibold text-slate-700 dark:text-slate-300">
-              Advanced Options <span className="font-normal text-slate-500 dark:text-slate-400">&mdash; optional</span>
-            </legend>
-            <div className="grid gap-4 md:grid-cols-2">
-              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
-                <span>Command behavior</span>
-                <textarea
-                  rows={4}
-                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 font-mono text-sm text-slate-900 dark:text-white shadow-sm"
-                  value={form.commandBehavior}
-                  disabled={!isEditing && presetField('command_behavior')?.editable === false}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      commandBehavior: event.target.value,
-                    }))
-                  }
-                  placeholder='{"suppress_default_model_flag": true}'
-                />
-              </label>
-              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
-                <span>Tags</span>
-                <input
-                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-                  value={form.tagsText}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      tagsText: event.target.value,
-                    }))
-                  }
-                  placeholder="openrouter, qwen, codex"
-                />
-                <p className="text-xs text-slate-400 dark:text-slate-500">Comma-separated</p>
-              </label>
-              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
-                <span>Priority</span>
-                <input
-                  type="number"
-                  min="0"
-                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-                  value={form.priority}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      priority: event.target.value,
-                    }))
-                  }
-                  placeholder="100"
-                />
-              </label>
-            </div>
-            <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
-              <span>Clear env keys</span>
-              <textarea
-                rows={3}
-                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 font-mono text-sm text-slate-900 dark:text-white shadow-sm"
-                value={form.clearEnvKeysText}
-                disabled={!isEditing && presetField('clear_env_keys')?.editable === false}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    clearEnvKeysText: event.target.value,
-                  }))
-                }
-                placeholder={"OPENAI_API_KEY\nOPENAI_BASE_URL"}
-              />
-              <p className="text-xs text-slate-400 dark:text-slate-500">One key per line</p>
-            </label>
-          </fieldset>
           </div>
+
+          {showAdvanced ? (
+            <div id="provider-profile-advanced-region" className="space-y-6">
+              <fieldset className="rounded-2xl border border-slate-200 dark:border-slate-700 p-5 space-y-4">
+                <legend className="px-2 text-sm font-semibold text-slate-700 dark:text-slate-300">
+                  Credential launch contract
+                </legend>
+                <div className="grid gap-4 md:grid-cols-2">
+                  {manualCreationAllowed ? (
+                    <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                      <span>Credential source</span>
+                      <select
+                        className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm"
+                        value={form.credentialSource}
+                        onChange={(event) =>
+                          setForm((current) => ({
+                            ...current,
+                            credentialSource: event.target.value,
+                          }))
+                        }
+                      >
+                        <option value="">Choose source…</option>
+                        <option value="secret_ref">secret_ref</option>
+                        <option value="oauth_volume">oauth_volume</option>
+                        <option value="none">none</option>
+                      </select>
+                    </label>
+                  ) : (
+                    <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 p-4 text-sm">
+                    <div className="font-semibold text-slate-800 dark:text-slate-200">
+                      Credential source: {String(selectedCredentialSource)}
+                    </div>
+                    <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                      Source: {selectedAuthenticationCapability?.fields.credential_source?.source ?? 'existing_profile'}
+                    </div>
+                    <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                      Locked: {selectedAuthenticationCapability?.fields.credential_source?.lock_reason ?? 'Unknown existing value is preserved.'}
+                    </div>
+                  </div>
+                  )}
+                  {manualCreationAllowed ? (
+                    <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                      <span>Materialization mode</span>
+                      <select
+                        className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm"
+                        value={form.runtimeMaterializationMode}
+                        onChange={(event) =>
+                          setForm((current) => ({
+                            ...current,
+                            runtimeMaterializationMode: event.target.value,
+                          }))
+                        }
+                      >
+                        <option value="">Choose materialization…</option>
+                        <option value="api_key_env">api_key_env</option>
+                        <option value="env_bundle">env_bundle</option>
+                        <option value="config_bundle">config_bundle</option>
+                        <option value="composite">composite</option>
+                        <option value="oauth_home">oauth_home</option>
+                      </select>
+                    </label>
+                  ) : (
+                    <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 p-4 text-sm">
+                    <div className="font-semibold text-slate-800 dark:text-slate-200">
+                      Materialization mode: {String(selectedMaterializationMode)}
+                    </div>
+                    <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                      Materialization source: {selectedAuthenticationCapability?.fields.runtime_materialization_mode?.source ?? 'existing_profile'}
+                    </div>
+                    <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                      Locked: {selectedAuthenticationCapability?.fields.runtime_materialization_mode?.lock_reason ?? 'Unknown existing value is preserved.'}
+                    </div>
+                  </div>
+                  )}
+                </div>
+              </fieldset>
+
+              <fieldset className="rounded-2xl border border-slate-200 dark:border-slate-700 p-5 space-y-4">
+                <legend className="px-2 text-sm font-semibold text-slate-700 dark:text-slate-300">
+                  Role-aware SecretRef bindings
+                </legend>
+                {(selectedAuthenticationCapability?.secret_roles ?? []).map((role) => {
+                  const controlId = `provider-profile-secret-role-${role.role}`;
+                  return (
+                  <div key={role.role} className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                    <label htmlFor={controlId}>{role.label} ({role.required ? 'required' : 'optional'})</label>
+                    <select
+                      id={controlId}
+                      className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
+                      value={formSecretRefs[role.role] ?? ''}
+                      onChange={(event) => updateSecretRoleBinding(role.role, event.target.value)}
+                    >
+                      <option value="">Not selected</option>
+                      {formSecretRefs[role.role] && !secretSlugs.some((slug) => `db://${slug}` === formSecretRefs[role.role]) ? (
+                        <option value={formSecretRefs[role.role]}>{formSecretRefs[role.role]} (existing)</option>
+                      ) : null}
+                      {secretSlugs.map((slug) => (
+                        <option key={slug} value={`db://${slug}`}>db://{slug}</option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      Compatible references: {role.compatible_schemes.map((scheme) => `${scheme}://`).join(', ')}
+                    </p>
+                    {role.required && !formSecretRefs[role.role] ? (
+                      <p className="text-xs text-rose-600 dark:text-rose-400">Required role is missing; this profile remains disabled and blocked.</p>
+                    ) : (
+                      <p className="text-xs text-emerald-700 dark:text-emerald-400">Selected reference is ready for backend validation.</p>
+                    )}
+                  </div>
+                  );
+                })}
+                {unknownSecretRoleBindings.map(([role, ref]) => (
+                  <label key={role} className="flex flex-col gap-1.5 text-sm font-medium text-amber-800 dark:text-amber-300">
+                    <span>Unknown existing role: {role}</span>
+                    <input
+                      readOnly
+                      className="w-full rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 font-mono text-sm"
+                      value={ref}
+                    />
+                    <p className="text-xs">Preserved for inspection and round-trip; the current preset does not replace it.</p>
+                  </label>
+                ))}
+                {(selectedAuthenticationCapability?.secret_roles.length ?? 0) === 0 && unknownSecretRoleBindings.length === 0 ? (
+                  <p className="text-sm text-slate-500 dark:text-slate-400">This authentication method declares no SecretRef roles.</p>
+                ) : null}
+              </fieldset>
+
+              <fieldset className="rounded-2xl border border-slate-200 dark:border-slate-700 p-5 space-y-4">
+                <legend className="px-2 text-sm font-semibold text-slate-700 dark:text-slate-300">
+                  Credential volume metadata
+                </legend>
+                <dl className="grid gap-3 text-sm md:grid-cols-2">
+                  <div className="rounded-xl bg-slate-50 dark:bg-slate-900 p-3">
+                    <dt className="font-medium text-slate-700 dark:text-slate-300">Volume reference</dt>
+                    <dd className="font-mono text-slate-600 dark:text-slate-400">{volumeReferenceLabel}</dd>
+                  </div>
+                  <div className="rounded-xl bg-slate-50 dark:bg-slate-900 p-3">
+                    <dt className="font-medium text-slate-700 dark:text-slate-300">Mount path</dt>
+                    <dd className="font-mono text-slate-600 dark:text-slate-400">{volumeMountPathLabel}</dd>
+                  </div>
+                </dl>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Source: {volumeMetadataSource} · Locked: {selectedAuthenticationCapability?.imported_volume.lock_reason ?? 'The active runtime strategy owns volume metadata.'}
+                </p>
+                {selectedAuthenticationCapability?.imported_volume.supported ? (
+                  <div className="space-y-3">
+                    <button
+                      type="button"
+                      className="rounded-lg border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-300"
+                      onClick={() => {
+                        setShowImportedVolume((current) => !current);
+                        setImportedVolumeValidated(false);
+                      }}
+                    >
+                      Use an existing credential volume
+                    </button>
+                    {showImportedVolume ? (
+                      <div className="rounded-xl border border-amber-200 dark:border-amber-900 bg-amber-50/50 dark:bg-amber-950/20 p-4 space-y-3">
+                        <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                          <span>Existing credential volume</span>
+                          <input
+                            className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm"
+                            value={importedVolumeRef}
+                            onChange={(event) => {
+                              setImportedVolumeRef(event.target.value);
+                              setImportedVolumeValidated(false);
+                            }}
+                          />
+                        </label>
+                        <p className="text-xs text-slate-500 dark:text-slate-400">
+                          Derived mount path: {selectedAuthenticationCapability.imported_volume.mount_path}
+                        </p>
+                        <button
+                          type="button"
+                          className="rounded-lg bg-slate-900 dark:bg-slate-100 px-4 py-2 text-sm font-semibold text-white dark:text-slate-900"
+                          disabled={importedVolumeMutation.isPending}
+                          onClick={() => importedVolumeMutation.mutate()}
+                        >
+                          Validate imported volume
+                        </button>
+                        {importedVolumeValidated ? (
+                          <p className="text-sm font-medium text-emerald-700 dark:text-emerald-400">Validated imported volume</p>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+              </fieldset>
+
+              <fieldset className="rounded-2xl border border-slate-200 dark:border-slate-700 p-5 space-y-4">
+                <legend className="px-2 text-sm font-semibold text-slate-700 dark:text-slate-300">Advanced profile policy</legend>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                    <span>Provider label override</span>
+                    <input className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm" value={form.providerLabel} onChange={(event) => setForm((current) => ({ ...current, providerLabel: event.target.value }))} />
+                  </label>
+                  <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                    <span>Cooldown after 429 (seconds)</span>
+                    <input type="number" min="0" className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm" value={form.cooldownAfter429Seconds} onChange={(event) => setForm((current) => ({ ...current, cooldownAfter429Seconds: event.target.value }))} />
+                  </label>
+                  <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                    <span>Rate limit policy</span>
+                    <select className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm" value={form.rateLimitPolicy} onChange={(event) => setForm((current) => ({ ...current, rateLimitPolicy: event.target.value }))}>
+                      <option value="backoff">backoff</option>
+                      <option value="queue">queue</option>
+                      <option value="fail_fast">fail_fast</option>
+                    </select>
+                  </label>
+                  <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                    <span>Priority</span>
+                    <input type="number" min="0" className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm" value={form.priority} onChange={(event) => setForm((current) => ({ ...current, priority: event.target.value }))} placeholder="100" />
+                  </label>
+                  <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                    <span>Tags</span>
+                    <input className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm" value={form.tagsText} onChange={(event) => setForm((current) => ({ ...current, tagsText: event.target.value }))} placeholder="team, preferred" />
+                  </label>
+                  <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                    <span>Command behavior</span>
+                    <textarea rows={4} className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 font-mono text-sm" value={form.commandBehavior} onChange={(event) => setForm((current) => ({ ...current, commandBehavior: event.target.value }))} />
+                  </label>
+                </div>
+                {manualCreationAllowed ? (
+                  <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                    <span>Clear env keys</span>
+                    <textarea
+                      rows={3}
+                      className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 font-mono text-sm"
+                      value={form.clearEnvKeysText}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          clearEnvKeysText: event.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+                ) : (
+                  <div className="rounded-xl bg-slate-50 dark:bg-slate-900 p-3 text-xs text-slate-500 dark:text-slate-400">
+                    Clear environment keys: {selectedAuthenticationCapability?.fields.clear_env_keys ? String((selectedAuthenticationCapability.fields.clear_env_keys.value as string[]).join(', ')) : form.clearEnvKeysText || 'Backend strategy'}
+                    <div>Source: {selectedAuthenticationCapability?.fields.clear_env_keys?.source ?? 'existing_profile'} · Locked by backend launch-safety policy</div>
+                  </div>
+                )}
+              </fieldset>
+            </div>
           ) : null}
 
           <div className="flex flex-wrap gap-3">
             <button
               type="submit"
               className="inline-flex items-center justify-center rounded-lg bg-slate-900 dark:bg-slate-100 px-5 py-2.5 text-sm font-semibold text-white dark:text-slate-900 transition hover:bg-slate-800 dark:hover:bg-slate-200"
-              disabled={
-                saveMutation.isPending ||
-                (!isEditing &&
-                  Boolean(form.authenticationMethod) &&
-                  (creationPresetLoading ||
-                    (!creationPreset?.supported && !manualCreationAllowed)))
-              }
+              disabled={saveMutation.isPending}
             >
               {saveMutation.isPending
                 ? 'Saving...'

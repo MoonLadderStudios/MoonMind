@@ -44,6 +44,39 @@ def test_validated_execution_profile_ref_allows_codex_profile_for_omnigent() -> 
     ) == "codex-ready"
 
 
+def test_profile_ref_replay_preserves_legacy_compact_snapshot_predicate() -> None:
+    workflow = MoonMindUserWorkflow()
+    workflow._profile_snapshots = {
+        "legacy-ready": {
+            "profile_id": "legacy-ready",
+            "runtime_id": "codex_cli",
+            "enabled": True,
+        }
+    }
+    workflow._workflow_patch_enabled = lambda _patch_id: False  # type: ignore[method-assign]
+
+    assert workflow._validated_execution_profile_ref(
+        "legacy-ready", agent_id="codex_cli", source_label="Task"
+    ) == "legacy-ready"
+
+
+def test_profile_ref_new_history_requires_registered_credential_capability() -> None:
+    workflow = MoonMindUserWorkflow()
+    workflow._profile_snapshots = {
+        "legacy-ready": {
+            "profile_id": "legacy-ready",
+            "runtime_id": "codex_cli",
+            "enabled": True,
+        }
+    }
+    workflow._workflow_patch_enabled = lambda _patch_id: True  # type: ignore[method-assign]
+
+    with pytest.raises(ValueError, match="not launch-ready"):
+        workflow._validated_execution_profile_ref(
+            "legacy-ready", agent_id="codex_cli", source_label="Task"
+        )
+
+
 @pytest.mark.parametrize(
     "snapshot",
     [
