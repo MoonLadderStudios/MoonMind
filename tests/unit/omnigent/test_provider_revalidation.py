@@ -50,15 +50,18 @@ def _profile(
     evidence_validated_at: str | None = _UNSET_VALIDATED_AT,
     provider_id: str = "opencode-go",
     default_model: str = "opencode-go/muse-spark-1.2-contributor",
+    credential_source: str = "secret_ref",
 ) -> SimpleNamespace:
     evidence = None
     if evidence_image is not None:
         evidence = {
             "schemaVersion": "moonmind.provider-model-catalog-evidence.v1",
-            "models": [{"qualifiedId": "opencode-go/muse-spark-1.2-contributor"}],
+            "models": [{"qualifiedId": default_model}],
             "imageRef": evidence_image,
             "runtimeVersions": {"opencode": "1.18.11"},
-            "materializerRef": "opencode-auth-json@1",
+            "materializerRef": (
+                "none@1" if provider_id == "opencode" else "opencode-auth-json@1"
+            ),
             "credentialGeneration": (
                 generation if evidence_generation is None else evidence_generation
             ),
@@ -73,6 +76,7 @@ def _profile(
         provider_id=provider_id,
         enabled=enabled,
         auth_state=auth_state,
+        credential_source=credential_source,
         credential_generation=generation,
         capacity_scope_ref=None,
         default_model=default_model,
@@ -539,7 +543,7 @@ async def test_stale_host_image_evidence_is_revalidated_and_refreshed(
 
 
 @pytest.mark.asyncio
-async def test_pending_zen_credential_is_promoted_only_after_runtime_evidence(
+async def test_credentialless_zen_is_promoted_only_after_runtime_evidence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     qualified_model = "opencode/muse-spark-1.2-contributor-free"
@@ -550,7 +554,7 @@ async def test_pending_zen_credential_is_promoted_only_after_runtime_evidence(
             "models": [{"qualifiedId": qualified_model}],
             "imageRef": image_ref,
             "runtimeVersions": {"opencode": "1.18.11"},
-            "materializerRef": "opencode-auth-json@1",
+            "materializerRef": "none@1",
             "validatedAt": datetime.now(UTC).isoformat(),
             "credentialGeneration": profile.credential_generation,
         }
@@ -563,13 +567,14 @@ async def test_pending_zen_credential_is_promoted_only_after_runtime_evidence(
             provider_id="opencode",
             default_model=qualified_model,
             evidence_image=None,
-            auth_state="api_key_pending",
-            secret_refs={"opencode_api_key": "env://OPENCODE_API_KEY"},
+            auth_state="connected",
+            credential_source="none",
+            secret_refs={},
             command_behavior={
-                "auth_state": "api_key_pending",
+                "auth_state": "connected",
                 "auth_readiness": {
-                    "connected": False,
-                    "backing_secret_exists": True,
+                    "connected": True,
+                    "backing_secret_exists": False,
                     "launch_ready": False,
                 },
             },
@@ -585,6 +590,7 @@ async def test_pending_zen_credential_is_promoted_only_after_runtime_evidence(
     assert controller.calls == []
     assert rows[0].auth_state.value == "connected"
     assert rows[0].command_behavior["auth_readiness"]["launch_ready"] is True
+    assert rows[0].command_behavior["auth_readiness"]["backing_secret_exists"] is False
     assert rows[0].model_catalog_evidence_json["models"] == [
         {"qualifiedId": qualified_model}
     ]

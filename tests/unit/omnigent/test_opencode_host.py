@@ -39,6 +39,7 @@ from moonmind.omnigent.harness_platform.host_classes import (
 from moonmind.omnigent.harness_platform.materializers import (
     OPENCODE_BUILTIN_PROVIDER_KEY,
     OPENCODE_PROVIDER_KEY,
+    materializer_ref_for_provider,
 )
 
 
@@ -53,7 +54,7 @@ def _ensure_opencode_env(
     return valid
 
 
-def _opencode_host_class():
+def _opencode_host_class(materializer_ref: str = "opencode-auth-json@1"):
     implementation = SimpleNamespace(
         implementation_ref=lambda: "omnigent-harness-implementation:sha256:" + "a" * 64
     )
@@ -63,7 +64,7 @@ def _opencode_host_class():
         omnigent_version="1.0.0",
         omnigent_build_digest="sha256:" + "b" * 64,
         integration_mode="native-server",
-        materializer_refs=["opencode-auth-json@1"],
+        materializer_refs=[materializer_ref],
     )
 
 
@@ -127,6 +128,17 @@ def test_opencode_host_class_is_dedicated():
     dep = hc.declaredHarnessImplementations[0].runtimeDependencies[0]
     assert dep["name"] == "opencode"
     assert dep["version"] == OPENCODE_PINNED_VERSION
+
+
+def test_opencode_host_class_accepts_credentialless_zen():
+    _ensure_opencode_env()
+
+    assert _opencode_host_class("none@1").supports_materializer("none@1")
+    assert materializer_ref_for_provider("opencode", "opencode") == "none@1"
+    assert (
+        materializer_ref_for_provider("opencode", "opencode-go")
+        == "opencode-auth-json@1"
+    )
 
 
 def test_production_registry_has_no_synthetic_host_classes():

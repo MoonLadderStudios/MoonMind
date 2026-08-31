@@ -98,6 +98,7 @@ def test_legacy_setup_profile_detection_accepts_enum_values() -> None:
         },
     )
 
+
 @pytest.fixture()
 def _module_db(tmp_path):
     """Create a single in-memory SQLite engine and schema for the test."""
@@ -106,7 +107,9 @@ def _module_db(tmp_path):
 
     async def _setup():
         engine = create_async_engine(db_url, future=True)
-        session_maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        session_maker = sessionmaker(
+            engine, class_=AsyncSession, expire_on_commit=False
+        )
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         return engine, session_maker
@@ -137,6 +140,7 @@ def _clear_seed_env(monkeypatch):
     ):
         monkeypatch.delenv(env_name, raising=False)
 
+
 @pytest.mark.asyncio
 async def test_auto_seed_creates_default_profiles(_module_db, monkeypatch):
     """When the table is empty, auto-seeding should create disabled OAuth profiles."""
@@ -157,8 +161,7 @@ async def test_auto_seed_creates_default_profiles(_module_db, monkeypatch):
     # runtime default rather than storing a duplicate value.
     defaults = {p.profile_id: p.default_model for p in profiles}
     assert all(
-        defaults[profile_id] is None
-        for profile_id in FIRST_PARTY_SETUP_PROFILE_IDS
+        defaults[profile_id] is None for profile_id in FIRST_PARTY_SETUP_PROFILE_IDS
     )
     runtime_defaults = {p.profile_id: p.is_default for p in profiles}
     assert all(
@@ -202,12 +205,20 @@ async def test_auto_seed_creates_default_profiles(_module_db, monkeypatch):
             "annotations": {},
         }
     ]
-    assert zen_profile.enabled is False
+    assert zen_profile.enabled is True
     assert zen_profile.credential_source == ProviderCredentialSource.NONE
+    assert zen_profile.auth_state == ProviderProfileAuthState.CONNECTED
+    assert zen_profile.secret_refs == {}
+    assert zen_profile.is_default is True
+    assert zen_profile.command_behavior["auth_readiness"] == {
+        "connected": True,
+        "backing_secret_exists": False,
+        "launch_ready": True,
+    }
 
 
 @pytest.mark.asyncio
-async def test_auto_seed_keeps_configured_zen_credential_validation_pending(
+async def test_auto_seed_never_attaches_the_deployment_key_to_zen(
     _module_db, monkeypatch
 ):
     from api_service.main import _auto_seed_provider_profiles
@@ -217,21 +228,21 @@ async def test_auto_seed_keeps_configured_zen_credential_validation_pending(
     await _auto_seed_provider_profiles()
 
     async with db_base.async_session_maker() as session:
-        profile = await session.get(
-            ManagedAgentProviderProfile, "opencode-zen-free"
-        )
+        profile = await session.get(ManagedAgentProviderProfile, "opencode-zen-free")
 
     assert profile is not None
     assert profile.enabled is True
-    assert profile.auth_state == ProviderProfileAuthState.API_KEY_PENDING
+    assert profile.auth_state == ProviderProfileAuthState.CONNECTED
     assert profile.disabled_reason is None
     assert profile.default_effort == "xhigh"
     assert profile.model_tiers[0]["effort"] == "xhigh"
     assert profile.model_catalog_evidence_json is None
     readiness = profile.command_behavior["auth_readiness"]
-    assert readiness["connected"] is False
-    assert readiness["backing_secret_exists"] is True
-    assert readiness["launch_ready"] is False
+    assert profile.credential_source == ProviderCredentialSource.NONE
+    assert profile.secret_refs == {}
+    assert readiness["connected"] is True
+    assert readiness["backing_secret_exists"] is False
+    assert readiness["launch_ready"] is True
 
 
 @pytest.mark.asyncio
@@ -244,9 +255,7 @@ async def test_auto_seed_preserves_operator_disabled_zen_profile(
     await _auto_seed_provider_profiles()
 
     async with db_base.async_session_maker() as session:
-        profile = await session.get(
-            ManagedAgentProviderProfile, "opencode-zen-free"
-        )
+        profile = await session.get(ManagedAgentProviderProfile, "opencode-zen-free")
         assert profile is not None
         profile.enabled = False
         profile.auth_state = ProviderProfileAuthState.CONNECTED
@@ -256,7 +265,7 @@ async def test_auto_seed_preserves_operator_disabled_zen_profile(
             "auth_state": "connected",
             "auth_readiness": {
                 "connected": True,
-                "backing_secret_exists": True,
+                "backing_secret_exists": False,
                 "launch_ready": False,
             },
         }
@@ -265,9 +274,7 @@ async def test_auto_seed_preserves_operator_disabled_zen_profile(
     assert await _auto_seed_provider_profiles() == []
 
     async with db_base.async_session_maker() as session:
-        preserved = await session.get(
-            ManagedAgentProviderProfile, "opencode-zen-free"
-        )
+        preserved = await session.get(ManagedAgentProviderProfile, "opencode-zen-free")
 
     assert preserved is not None
     assert preserved.enabled is False
@@ -286,9 +293,7 @@ async def test_auto_seed_migrates_the_zen_profile_to_the_exact_runtime_model(
     await _auto_seed_provider_profiles()
 
     async with db_base.async_session_maker() as session:
-        profile = await session.get(
-            ManagedAgentProviderProfile, "opencode-zen-free"
-        )
+        profile = await session.get(ManagedAgentProviderProfile, "opencode-zen-free")
         assert profile is not None
         profile.provider_id = "opencode-zen"
         profile.default_model = "opencode-zen/muse-spark-1.2-free"
@@ -306,9 +311,7 @@ async def test_auto_seed_migrates_the_zen_profile_to_the_exact_runtime_model(
     assert await _auto_seed_provider_profiles() == []
 
     async with db_base.async_session_maker() as session:
-        migrated = await session.get(
-            ManagedAgentProviderProfile, "opencode-zen-free"
-        )
+        migrated = await session.get(ManagedAgentProviderProfile, "opencode-zen-free")
     assert migrated is not None
     assert migrated.provider_id == "opencode"
     assert migrated.default_model == "opencode/muse-spark-1.2-contributor-free"
@@ -461,6 +464,7 @@ async def test_auto_seed_includes_first_party_api_profiles_when_env_set(
     for profile_id in FIRST_PARTY_SETUP_PROFILE_IDS:
         assert profiles[profile_id].enabled is False
 
+
 @pytest.mark.asyncio
 async def test_auto_seed_is_idempotent(_module_db, monkeypatch):
     """Calling auto-seed twice should not duplicate profiles."""
@@ -481,6 +485,7 @@ async def test_auto_seed_is_idempotent(_module_db, monkeypatch):
         profiles = result.scalars().all()
     assert len(profiles) == len(BASE_PROFILE_IDS)
 
+
 @pytest.mark.asyncio
 async def test_auto_seed_skipped_when_env_set(_module_db, monkeypatch):
     """Seeding should be skipped when MOONMIND_SKIP_PROVIDER_PROFILE_SEED is set."""
@@ -494,6 +499,7 @@ async def test_auto_seed_skipped_when_env_set(_module_db, monkeypatch):
         result = await session.execute(select(ManagedAgentProviderProfile))
         profiles = result.scalars().all()
     assert len(profiles) == 0
+
 
 @pytest.mark.asyncio
 async def test_auto_seed_includes_minimax_when_env_set(_module_db, monkeypatch):
@@ -523,7 +529,10 @@ async def test_auto_seed_includes_minimax_when_env_set(_module_db, monkeypatch):
     assert mm_profile.secret_refs is not None
     assert mm_profile.secret_refs.get("provider_api_key") == "env://MINIMAX_API_KEY"
     assert mm_profile.env_template is not None
-    assert mm_profile.env_template["ANTHROPIC_BASE_URL"] == "https://api.minimax.io/anthropic"
+    assert (
+        mm_profile.env_template["ANTHROPIC_BASE_URL"]
+        == "https://api.minimax.io/anthropic"
+    )
     assert mm_profile.env_template["ANTHROPIC_AUTH_TOKEN"] == {
         "from_secret_ref": "provider_api_key"
     }
@@ -568,6 +577,7 @@ async def test_auto_seed_includes_minimax_when_env_set(_module_db, monkeypatch):
     assert codex_mm_profile.file_templates[0]["content_template"]["profile"] == "m27"
     assert codex_mm_profile.model_overrides == {"codex_profile_name": "m27"}
 
+
 @pytest.mark.asyncio
 async def test_auto_seed_adds_minimax_after_initial_seed(_module_db, monkeypatch):
     """MINIMAX_API_KEY added after initial seed → claude_minimax is inserted on next call."""
@@ -593,6 +603,7 @@ async def test_auto_seed_adds_minimax_after_initial_seed(_module_db, monkeypatch
     assert "claude_anthropic_oauth" in profile_ids
     assert "claude_minimax" in profile_ids
     assert "codex_minimax_m27" in profile_ids
+
 
 @pytest.mark.asyncio
 async def test_auto_seed_preserves_user_default_model_on_oauth_profile(
@@ -631,9 +642,7 @@ async def test_auto_seed_repairs_legacy_codex_oauth_capacity_to_one(
 
     async with db_base.async_session_maker() as session:
         await session.execute(text("PRAGMA ignore_check_constraints = ON"))
-        profile = await session.get(
-            ManagedAgentProviderProfile, "codex_openai_oauth"
-        )
+        profile = await session.get(ManagedAgentProviderProfile, "codex_openai_oauth")
         assert profile is not None
         profile.credential_source = ProviderCredentialSource.OAUTH_VOLUME
         profile.runtime_materialization_mode = RuntimeMaterializationMode.OAUTH_HOME
@@ -647,11 +656,10 @@ async def test_auto_seed_repairs_legacy_codex_oauth_capacity_to_one(
     assert seeded == []
 
     async with db_base.async_session_maker() as session:
-        profile = await session.get(
-            ManagedAgentProviderProfile, "codex_openai_oauth"
-        )
+        profile = await session.get(ManagedAgentProviderProfile, "codex_openai_oauth")
         assert profile is not None
         assert profile.max_parallel_runs == 1
+
 
 @pytest.mark.asyncio
 async def test_auto_seed_deletes_untouched_legacy_setup_profiles(
@@ -692,17 +700,17 @@ async def test_auto_seed_deletes_untouched_legacy_setup_profiles(
 
     async with db_base.async_session_maker() as session:
         rows = (
-            await session.execute(select(ManagedAgentProviderProfile.profile_id))
-        ).scalars().all()
+            (await session.execute(select(ManagedAgentProviderProfile.profile_id)))
+            .scalars()
+            .all()
+        )
 
     assert set(rows) == BASE_PROFILE_IDS
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("edit_field", ["secret_refs", "volume_ref", "default_model"])
-async def test_auto_seed_preserves_edited_legacy_setup_profile(
-    _module_db, edit_field
-):
+async def test_auto_seed_preserves_edited_legacy_setup_profile(_module_db, edit_field):
     """A legacy ID with credential state is user data, not a generated stub."""
     from api_service.main import _auto_seed_provider_profiles
 
@@ -717,11 +725,15 @@ async def test_auto_seed_preserves_edited_legacy_setup_profile(
         "is_default": False,
         "auth_state": ProviderProfileAuthState.NOT_CONFIGURED,
         "disabled_reason": ProviderProfileDisabledReason.MISSING_CREDENTIALS,
-        edit_field: {"anthropic_api_key": "secret://configured"}
-        if edit_field == "secret_refs"
-        else "claude_oauth_volume"
-        if edit_field == "volume_ref"
-        else "operator-selected-model",
+        edit_field: (
+            {"anthropic_api_key": "secret://configured"}
+            if edit_field == "secret_refs"
+            else (
+                "claude_oauth_volume"
+                if edit_field == "volume_ref"
+                else "operator-selected-model"
+            )
+        ),
     }
     async with db_base.async_session_maker() as session:
         session.add(ManagedAgentProviderProfile(**values))
@@ -732,6 +744,7 @@ async def test_auto_seed_preserves_edited_legacy_setup_profile(
     async with db_base.async_session_maker() as session:
         preserved = await session.get(ManagedAgentProviderProfile, "claude_anthropic")
     assert preserved is not None
+
 
 @pytest.mark.asyncio
 async def test_auto_seed_excludes_minimax_when_env_unset(_module_db, monkeypatch):
@@ -750,6 +763,7 @@ async def test_auto_seed_excludes_minimax_when_env_unset(_module_db, monkeypatch
     assert "codex_minimax_m27" not in profile_ids
     assert "claude_anthropic_oauth" in profile_ids
     assert len(profiles) == len(BASE_PROFILE_IDS)
+
 
 @pytest.mark.asyncio
 async def test_auto_seed_includes_openrouter_codex_profile_when_env_set(
@@ -772,7 +786,9 @@ async def test_auto_seed_includes_openrouter_codex_profile_when_env_set(
     profile_ids = {p.profile_id for p in profiles}
     assert "codex_openrouter_qwen36_plus" in profile_ids
 
-    profile = next(p for p in profiles if p.profile_id == "codex_openrouter_qwen36_plus")
+    profile = next(
+        p for p in profiles if p.profile_id == "codex_openrouter_qwen36_plus"
+    )
     assert profile.runtime_id == "codex_cli"
     assert profile.provider_id == "openrouter"
     assert profile.is_default is True
@@ -819,6 +835,7 @@ async def test_auto_seed_includes_openrouter_codex_profile_when_env_set(
     codex_oauth = next(p for p in profiles if p.profile_id == "codex_openai_oauth")
     assert codex_oauth.is_default is False
 
+
 @pytest.mark.asyncio
 async def test_auto_seed_reconciles_openrouter_codex_config_template_for_existing_profile(
     _module_db, monkeypatch
@@ -851,6 +868,7 @@ async def test_auto_seed_reconciles_openrouter_codex_config_template_for_existin
     assert content_template["model_provider"] == "openrouter"
     assert content_template["model_reasoning_effort"] == "high"
     assert content_template["model"] == "qwen/qwen3.6-plus"
+
 
 @pytest.mark.asyncio
 async def test_auto_seed_reconciles_deprecated_openrouter_codex_seed_model(
@@ -891,6 +909,7 @@ async def test_auto_seed_reconciles_deprecated_openrouter_codex_seed_model(
         content_template["profiles"]["openrouter_qwen36_plus"]["model"]
         == "qwen/qwen3.6-plus"
     )
+
 
 @pytest.mark.asyncio
 async def test_auto_seed_does_not_overwrite_custom_openrouter_codex_config_template(
@@ -1005,9 +1024,7 @@ async def test_auto_seed_disables_and_reenables_env_api_profiles(
     assert seeded == []
 
     async with db_base.async_session_maker() as session:
-        codex_api = await session.get(
-            ManagedAgentProviderProfile, "codex_openai_api"
-        )
+        codex_api = await session.get(ManagedAgentProviderProfile, "codex_openai_api")
         claude_api = await session.get(
             ManagedAgentProviderProfile, "claude_anthropic_api"
         )
@@ -1020,8 +1037,7 @@ async def test_auto_seed_disables_and_reenables_env_api_profiles(
         assert profile.enabled is False
         assert profile.auth_state == ProviderProfileAuthState.NOT_CONFIGURED
         assert (
-            profile.disabled_reason
-            == ProviderProfileDisabledReason.MISSING_CREDENTIALS
+            profile.disabled_reason == ProviderProfileDisabledReason.MISSING_CREDENTIALS
         )
         readiness = profile.command_behavior["auth_readiness"]
         assert readiness["launch_ready"] is False
@@ -1033,9 +1049,7 @@ async def test_auto_seed_disables_and_reenables_env_api_profiles(
     await _auto_seed_provider_profiles()
 
     async with db_base.async_session_maker() as session:
-        codex_api = await session.get(
-            ManagedAgentProviderProfile, "codex_openai_api"
-        )
+        codex_api = await session.get(ManagedAgentProviderProfile, "codex_openai_api")
         claude_api = await session.get(
             ManagedAgentProviderProfile, "claude_anthropic_api"
         )

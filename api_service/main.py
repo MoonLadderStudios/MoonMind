@@ -4,7 +4,11 @@ import asyncio
 import logging
 
 from moonmind.config.logging import configure_logging
-from moonmind.observability import TelemetrySettings, initialize_telemetry, instrument_fastapi
+from moonmind.observability import (
+    TelemetrySettings,
+    initialize_telemetry,
+    instrument_fastapi,
+)
 
 configure_logging()
 initialize_telemetry(TelemetrySettings.from_env(service_name="moonmind-api"))
@@ -31,7 +35,9 @@ from sqlalchemy.exc import OperationalError, ProgrammingError, SQLAlchemyError
 
 from api_service.api.routers import retrieval_gateway as retrieval_router
 from api_service.api.routers.provider_profiles import router as provider_profiles_router
-from api_service.api.routers.omnigent_agent_profiles import router as omnigent_agent_profiles_router
+from api_service.api.routers.omnigent_agent_profiles import (
+    router as omnigent_agent_profiles_router,
+)
 from api_service.api.routers.deployment_operations import (
     router as deployment_operations_router,
 )
@@ -45,16 +51,25 @@ from api_service.api.routers.mcp_tools import router as mcp_tools_router
 from api_service.api.routers.jira_browser import router as jira_browser_router
 from api_service.api.routers.oauth_sessions import router as oauth_sessions_router
 from api_service.api.routers.profile import router as profile_router
-from api_service.api.routers.recurring_workflows import router as recurring_workflows_router
+from api_service.api.routers.recurring_workflows import (
+    router as recurring_workflows_router,
+)
 from api_service.api.routers.automation import router as automation_router
-_ENABLE_TEST_UI_ROUTE = os.environ.get("MOONMIND_ENABLE_TEST_UI_ROUTE", "").lower() in ("1", "true", "yes")
+
+_ENABLE_TEST_UI_ROUTE = os.environ.get("MOONMIND_ENABLE_TEST_UI_ROUTE", "").lower() in (
+    "1",
+    "true",
+    "yes",
+)
 if _ENABLE_TEST_UI_ROUTE:
     from api_service.test_ui_route import router as test_ui_router
 
 from api_service.api.routers.workflow_console import router as workflow_console_router
 from api_service.dashboard_static import DashboardStaticFiles
 from api_service.api.routers.agent_runs import router as agent_runs_router
-from api_service.api.routers.agent_runs import sessions_router as session_resources_router
+from api_service.api.routers.agent_runs import (
+    sessions_router as session_resources_router,
+)
 from api_service.api.routers.sessions import router as sessions_router
 from api_service.api.routers.omnigent_bridge import (
     OMNIGENT_BRIDGE_MOUNT_PATH,
@@ -71,8 +86,12 @@ from api_service.api.routers.omnigent_policies import router as omnigent_policie
 from api_service.api.routers.omnigent_session_timeline import (
     router as omnigent_session_timeline_router,
 )
-from api_service.api.routers.omnigent_bootstrap import router as omnigent_bootstrap_router
-from api_service.api.routers.workflow_proposals import router as workflow_proposals_router
+from api_service.api.routers.omnigent_bootstrap import (
+    router as omnigent_bootstrap_router,
+)
+from api_service.api.routers.workflow_proposals import (
+    router as workflow_proposals_router,
+)
 from api_service.api.routers.presets import (
     router as presets_router,
 )
@@ -106,9 +125,7 @@ from moonmind.utils.logging import SecretRedactor
 
 logger.info("Starting FastAPI...")
 
-_PRESET_SEED_DIR = (
-    Path(__file__).resolve().parent / "data" / "presets"
-)
+_PRESET_SEED_DIR = Path(__file__).resolve().parent / "data" / "presets"
 # One-time pre-release seed cleanup for databases that were created before
 # MoonSpec became the canonical bundle identity. Remove after the submodule
 # cutover has run through existing development installations.
@@ -117,11 +134,13 @@ _LEGACY_PRESET_SLUGS_TO_DEACTIVATE = (
     "speckit-orchestrate",
 )
 
+
 async def _sync_env_managed_secrets() -> int:
     """Seed or refresh managed secrets from environment values."""
 
     def _read_value_from_dotenv(name: str) -> str | None:
         from moonmind.config.paths import ENV_FILE
+
         env_file = ENV_FILE
 
         try:
@@ -139,7 +158,7 @@ async def _sync_env_managed_secrets() -> int:
                 if key.strip() != name:
                     continue
                 value = value.strip()
-                if (value.startswith("\"") and value.endswith("\"")) or (
+                if (value.startswith('"') and value.endswith('"')) or (
                     value.startswith("'") and value.endswith("'")
                 ):
                     return value[1:-1]
@@ -611,9 +630,7 @@ async def _reconcile_omnigent_bootstrap_once(
     )
 
 
-async def _maintain_omnigent_bootstrap_reconciliation(
-    *, initial_ready: bool
-) -> None:
+async def _maintain_omnigent_bootstrap_reconciliation(*, initial_ready: bool) -> None:
     """Retry with capped backoff and keep observed agent inventory fresh."""
 
     ready = initial_ready
@@ -674,6 +691,7 @@ async def _initialize_oidc_provider(app: FastAPI):
             logger.error(f"Error processing Google OIDC discovery document: {e}")
             raise RuntimeError(f"Error processing Google OIDC discovery document: {e}")
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup logic
@@ -706,6 +724,7 @@ async def lifespan(app: FastAPI):
                 pass
         # Shutdown logic
         teardown_providers()
+
 
 app = FastAPI(
     title="MoonMind API",
@@ -745,6 +764,7 @@ health_router = APIRouter()
 
 _api_start_time = time.monotonic()
 
+
 @health_router.get("/healthz")
 async def health_check():
     """Health endpoint with database connectivity probe."""
@@ -756,13 +776,19 @@ async def health_check():
     except Exception:
         return JSONResponse(
             status_code=503,
-            content={"status": "degraded", "db": "unreachable", "uptime_seconds": uptime},
+            content={
+                "status": "degraded",
+                "db": "unreachable",
+                "uptime_seconds": uptime,
+            },
         )
+
 
 @app.get("/", include_in_schema=False)
 async def docs_redirect() -> RedirectResponse:
     """Redirect root path to the dashboard."""
     return RedirectResponse(url="/workflows")
+
 
 app.include_router(health_router, tags=["health"])
 
@@ -856,6 +882,7 @@ app.add_middleware(
     expose_headers=["*"],
 )
 
+
 @app.middleware("http")
 async def add_debug_headers(request: Request, call_next):
     response = await call_next(request)
@@ -865,6 +892,7 @@ async def add_debug_headers(request: Request, call_next):
     )
     return response
 
+
 @app.middleware("http")
 async def add_request_id(request: Request, call_next):
     request_id = str(uuid4())
@@ -872,8 +900,10 @@ async def add_request_id(request: Request, call_next):
     response.headers["X-Request-ID"] = request_id
     return response
 
+
 _CODEX_OPENROUTER_QWEN36_PLUS_MODEL = "qwen/qwen3.6-plus"
 _LEGACY_CODEX_OPENROUTER_QWEN36_PLUS_FREE_MODEL = "qwen/qwen3.6-plus:free"
+
 
 def _codex_openrouter_qwen36_plus_file_templates(
     model: str,
@@ -907,6 +937,7 @@ def _codex_openrouter_qwen36_plus_file_templates(
         }
     ]
 
+
 def _codex_minimax_m27_file_templates() -> list[dict[str, object]]:
     return [
         {
@@ -938,6 +969,7 @@ def _codex_minimax_m27_file_templates() -> list[dict[str, object]]:
         }
     ]
 
+
 def _legacy_codex_openrouter_qwen36_plus_file_templates() -> list[dict[str, object]]:
     return [
         {
@@ -966,6 +998,7 @@ def _legacy_codex_openrouter_qwen36_plus_file_templates() -> list[dict[str, obje
         }
     ]
 
+
 def _should_reconcile_openrouter_codex_file_templates(
     profile_id: str,
     current_file_templates,
@@ -984,6 +1017,7 @@ def _should_reconcile_openrouter_codex_file_templates(
         deprecated_seed_templates,
         _legacy_codex_openrouter_qwen36_plus_file_templates(),
     )
+
 
 _LEGACY_SETUP_PROFILE_SPECS = {
     "claude_anthropic_default": (
@@ -1078,12 +1112,15 @@ async def _auto_seed_provider_profiles() -> list[str]:
     from api_service.services.provider_profile_service import (
         normalize_runtime_default_profile,
     )
-    from moonmind.workflows.temporal.runtime.providers.registry import (
-        get_provider_default,
-    )
 
-    if os.environ.get("MOONMIND_SKIP_PROVIDER_PROFILE_SEED", "").lower() in ("1", "true", "yes"):
-        logger.info("Provider profile auto-seeding disabled via MOONMIND_SKIP_PROVIDER_PROFILE_SEED.")
+    if os.environ.get("MOONMIND_SKIP_PROVIDER_PROFILE_SEED", "").lower() in (
+        "1",
+        "true",
+        "yes",
+    ):
+        logger.info(
+            "Provider profile auto-seeding disabled via MOONMIND_SKIP_PROVIDER_PROFILE_SEED."
+        )
         return []
 
     # First-party setup profiles are visible but disabled until OAuth setup
@@ -1131,17 +1168,16 @@ async def _auto_seed_provider_profiles() -> list[str]:
             },
         }
 
-    def _make_opencode_validation_pending_command_behavior() -> dict[str, Any]:
+    def _make_credentialless_opencode_command_behavior() -> dict[str, Any]:
         return {
-            "auth_strategy": "opencode_auth_json",
-            "auth_state": "api_key_pending",
-            "auth_actions": ["use_api_key"],
-            "auth_status_label": "OpenCode API key validation pending",
+            "auth_strategy": "none",
+            "auth_state": "connected",
+            "auth_actions": [],
+            "auth_status_label": "No API key required",
             "auth_readiness": {
-                "connected": False,
-                "backing_secret_exists": True,
-                "launch_ready": False,
-                "failure_reason": "Pinned OpenCode runtime validation is pending.",
+                "connected": True,
+                "backing_secret_exists": False,
+                "launch_ready": True,
             },
         }
 
@@ -1183,271 +1219,237 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "tags": ["oauth", "first-party"],
             "command_behavior": _make_first_party_oauth_command_behavior(),
         },
-
     ]
 
     if os.environ.get("OPENAI_API_KEY"):
-        _DEFAULT_PROFILES.append({
-            "profile_id": "codex_openai_api",
-            "runtime_id": "codex_cli",
-            "is_default": False,
-            "provider_id": "openai",
-            "provider_label": "OpenAI",
-            "default_model": None,  # inherits runtime default: gpt-5.5
-            "credential_source": ProviderCredentialSource.SECRET_REF,
-            "runtime_materialization_mode": RuntimeMaterializationMode.API_KEY_ENV,
-            "secret_refs": {
-                "openai_api_key": "env://OPENAI_API_KEY",
-            },
-            "clear_env_keys": [
-                "OPENAI_BASE_URL",
-                "OPENAI_ORG_ID",
-                "OPENAI_PROJECT",
-                "MINIMAX_API_KEY",
-            ],
-            "env_template": {
-                "OPENAI_API_KEY": {
-                    "from_secret_ref": "openai_api_key",
+        _DEFAULT_PROFILES.append(
+            {
+                "profile_id": "codex_openai_api",
+                "runtime_id": "codex_cli",
+                "is_default": False,
+                "provider_id": "openai",
+                "provider_label": "OpenAI",
+                "default_model": None,  # inherits runtime default: gpt-5.5
+                "credential_source": ProviderCredentialSource.SECRET_REF,
+                "runtime_materialization_mode": RuntimeMaterializationMode.API_KEY_ENV,
+                "secret_refs": {
+                    "openai_api_key": "env://OPENAI_API_KEY",
                 },
-            },
-            "volume_ref": None,
-            "volume_mount_path": None,
-            "account_label": "Codex OpenAI API",
-            "enabled": True,
-            "auth_state": ProviderProfileAuthState.CONNECTED,
-            "disabled_reason": None,
-            "tags": ["api-key", "first-party"],
-            "command_behavior": _make_first_party_api_command_behavior(
-                "OpenAI API key ready"
-            ),
-            "last_auth_method": ProviderProfileAuthMethod.SECRET_REF,
-        })
+                "clear_env_keys": [
+                    "OPENAI_BASE_URL",
+                    "OPENAI_ORG_ID",
+                    "OPENAI_PROJECT",
+                    "MINIMAX_API_KEY",
+                ],
+                "env_template": {
+                    "OPENAI_API_KEY": {
+                        "from_secret_ref": "openai_api_key",
+                    },
+                },
+                "volume_ref": None,
+                "volume_mount_path": None,
+                "account_label": "Codex OpenAI API",
+                "enabled": True,
+                "auth_state": ProviderProfileAuthState.CONNECTED,
+                "disabled_reason": None,
+                "tags": ["api-key", "first-party"],
+                "command_behavior": _make_first_party_api_command_behavior(
+                    "OpenAI API key ready"
+                ),
+                "last_auth_method": ProviderProfileAuthMethod.SECRET_REF,
+            }
+        )
 
     if os.environ.get("ANTHROPIC_API_KEY"):
-        _DEFAULT_PROFILES.append({
-            "profile_id": "claude_anthropic_api",
-            "runtime_id": "claude_code",
-            "is_default": False,
-            "provider_id": "anthropic",
-            "provider_label": "Anthropic",
-            "default_model": None,  # inherits runtime default: claude-opus-4-8
-            "credential_source": ProviderCredentialSource.SECRET_REF,
-            "runtime_materialization_mode": RuntimeMaterializationMode.API_KEY_ENV,
-            "secret_refs": {
-                "anthropic_api_key": "env://ANTHROPIC_API_KEY",
-            },
-            "clear_env_keys": [
-                "ANTHROPIC_AUTH_TOKEN",
-                "ANTHROPIC_BASE_URL",
-                "CLAUDE_API_KEY",
-                "OPENAI_API_KEY",
-            ],
-            "env_template": {
-                "ANTHROPIC_API_KEY": {
-                    "from_secret_ref": "anthropic_api_key",
+        _DEFAULT_PROFILES.append(
+            {
+                "profile_id": "claude_anthropic_api",
+                "runtime_id": "claude_code",
+                "is_default": False,
+                "provider_id": "anthropic",
+                "provider_label": "Anthropic",
+                "default_model": None,  # inherits runtime default: claude-opus-4-8
+                "credential_source": ProviderCredentialSource.SECRET_REF,
+                "runtime_materialization_mode": RuntimeMaterializationMode.API_KEY_ENV,
+                "secret_refs": {
+                    "anthropic_api_key": "env://ANTHROPIC_API_KEY",
                 },
-            },
-            "volume_ref": None,
-            "volume_mount_path": None,
-            "account_label": "Claude Anthropic API",
-            "enabled": True,
-            "auth_state": ProviderProfileAuthState.CONNECTED,
-            "disabled_reason": None,
-            "tags": ["api-key", "first-party"],
-            "command_behavior": _make_first_party_api_command_behavior(
-                "Anthropic API key ready"
-            ),
-            "last_auth_method": ProviderProfileAuthMethod.SECRET_REF,
-        })
+                "clear_env_keys": [
+                    "ANTHROPIC_AUTH_TOKEN",
+                    "ANTHROPIC_BASE_URL",
+                    "CLAUDE_API_KEY",
+                    "OPENAI_API_KEY",
+                ],
+                "env_template": {
+                    "ANTHROPIC_API_KEY": {
+                        "from_secret_ref": "anthropic_api_key",
+                    },
+                },
+                "volume_ref": None,
+                "volume_mount_path": None,
+                "account_label": "Claude Anthropic API",
+                "enabled": True,
+                "auth_state": ProviderProfileAuthState.CONNECTED,
+                "disabled_reason": None,
+                "tags": ["api-key", "first-party"],
+                "command_behavior": _make_first_party_api_command_behavior(
+                    "Anthropic API key ready"
+                ),
+                "last_auth_method": ProviderProfileAuthMethod.SECRET_REF,
+            }
+        )
 
     # Conditionally include MiniMax profile when the API key is available.
     if os.environ.get("MINIMAX_API_KEY"):
-        _DEFAULT_PROFILES.append({
-            "profile_id": "claude_minimax",
-            "runtime_id": "claude_code",
-            "is_default": False,
-            "provider_id": "minimax",
-            "provider_label": "MiniMax",
-            "default_model": "MiniMax-M2.7",
-            "credential_source": ProviderCredentialSource.SECRET_REF,
-            "runtime_materialization_mode": RuntimeMaterializationMode.ENV_BUNDLE,
-            "secret_refs": {
-                "provider_api_key": "env://MINIMAX_API_KEY"
-            },
-            "clear_env_keys": [
-                "ANTHROPIC_API_KEY",
-                "ANTHROPIC_AUTH_TOKEN",
-                "OPENAI_API_KEY",
-            ],
-            "env_template": {
-                "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",
-                "ANTHROPIC_AUTH_TOKEN": {
-                    "from_secret_ref": "provider_api_key",
-                },
-                "ANTHROPIC_MODEL": "MiniMax-M2.7",
-                "ANTHROPIC_SMALL_FAST_MODEL": "MiniMax-M2.7",
-                "ANTHROPIC_DEFAULT_SONNET_MODEL": "MiniMax-M2.7",
-                "ANTHROPIC_DEFAULT_OPUS_MODEL": "MiniMax-M2.7",
-                "ANTHROPIC_DEFAULT_HAIKU_MODEL": "MiniMax-M2.7",
-                "API_TIMEOUT_MS": "3000000",
-                "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-            },
-            "volume_ref": None,
-            "volume_mount_path": None,
-            "account_label": "Claude Code via MiniMax (auto-seeded)",
-            "enabled": True,
-            "auth_state": ProviderProfileAuthState.CONNECTED,
-            "disabled_reason": None,
-            "last_auth_method": ProviderProfileAuthMethod.SECRET_REF,
-        })
-        _DEFAULT_PROFILES.append({
-            "profile_id": "codex_minimax_m27",
-            "runtime_id": "codex_cli",
-            "is_default": False,
-            "provider_id": "minimax",
-            "provider_label": "MiniMax",
-            "default_model": "codex-MiniMax-M2.7",
-            "model_overrides": {
-                "codex_profile_name": "m27",
-            },
-            "credential_source": ProviderCredentialSource.SECRET_REF,
-            "runtime_materialization_mode": RuntimeMaterializationMode.COMPOSITE,
-            "secret_refs": {
-                "provider_api_key": "env://MINIMAX_API_KEY",
-            },
-            "clear_env_keys": [
-                "OPENAI_API_KEY",
-                "OPENAI_BASE_URL",
-                "OPENAI_ORG_ID",
-                "OPENAI_PROJECT",
-            ],
-            "env_template": {
-                "MINIMAX_API_KEY": {
-                    "from_secret_ref": "provider_api_key",
-                },
-            },
-            "file_templates": _codex_minimax_m27_file_templates(),
-            "home_path_overrides": {
-                "CODEX_HOME": "{{runtime_support_dir}}/codex-home",
-            },
-            "command_behavior": {
-                "suppress_default_model_flag": True,
-            },
-            "max_parallel_runs": 4,
-            "cooldown_after_429_seconds": 600,
-            "rate_limit_policy": ManagedAgentRateLimitPolicy.BACKOFF,
-            "max_lease_duration_seconds": 7200,
-            "volume_ref": None,
-            "volume_mount_path": None,
-            "account_label": "Codex CLI via MiniMax (auto-seeded)",
-            "enabled": True,
-            "auth_state": ProviderProfileAuthState.CONNECTED,
-            "disabled_reason": None,
-            "last_auth_method": ProviderProfileAuthMethod.SECRET_REF,
-        })
-
-    if os.environ.get("OPENROUTER_API_KEY"):
-        _DEFAULT_PROFILES.append({
-            "profile_id": "codex_openrouter_qwen36_plus",
-            "runtime_id": "codex_cli",
-            "is_default": False,
-            "provider_id": "openrouter",
-            "provider_label": "OpenRouter",
-            "default_model": _CODEX_OPENROUTER_QWEN36_PLUS_MODEL,
-            "credential_source": ProviderCredentialSource.SECRET_REF,
-            "runtime_materialization_mode": RuntimeMaterializationMode.COMPOSITE,
-            "secret_refs": {
-                "provider_api_key": "env://OPENROUTER_API_KEY",
-            },
-            "clear_env_keys": [
-                "OPENAI_API_KEY",
-                "OPENAI_BASE_URL",
-                "OPENAI_ORG_ID",
-                "OPENAI_PROJECT",
-                "OPENROUTER_API_KEY",
-            ],
-            "env_template": {
-                "OPENROUTER_API_KEY": {
-                    "from_secret_ref": "provider_api_key",
-                },
-            },
-            "file_templates": _codex_openrouter_qwen36_plus_file_templates(
-                _CODEX_OPENROUTER_QWEN36_PLUS_MODEL
-            ),
-            "home_path_overrides": {
-                "CODEX_HOME": "{{runtime_support_dir}}/codex-home",
-            },
-            "command_behavior": {
-                "suppress_default_model_flag": True,
-            },
-            "max_parallel_runs": 4,
-            "cooldown_after_429_seconds": 300,
-            "rate_limit_policy": ManagedAgentRateLimitPolicy.BACKOFF,
-            "max_lease_duration_seconds": 7200,
-            "volume_ref": None,
-            "volume_mount_path": None,
-            "account_label": "Codex CLI via OpenRouter (auto-seeded)",
-            "enabled": True,
-            "auth_state": ProviderProfileAuthState.CONNECTED,
-            "disabled_reason": None,
-            "last_auth_method": ProviderProfileAuthMethod.SECRET_REF,
-        })
-
-    # OpenCode Zen Contributor Free — provider profile, created unless explicitly disabled.
-    # Respects the same kill-switches as the generic Omnigent host plane so
-    # `MOONMIND_OMNIGENT_OPENCODE_ENABLED=false` or `MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED=false`
-    # suppresses the default. When `OPENCODE_API_KEY` is present the profile is
-    # enabled but remains launch-blocked until pinned-runtime validation persists
-    # exact model evidence. Otherwise a disabled placeholder is created so the
-    # Settings UI can show "Not connected" and the operator can add the key via
-    # the normal `use_api_key` flow.
-    from moonmind.omnigent.settings import generic_host_enabled, opencode_support_enabled
-
-    if opencode_support_enabled() and generic_host_enabled():
-        if os.environ.get("OPENCODE_API_KEY"):
-            _DEFAULT_PROFILES.append({
-                "profile_id": "opencode-zen-free",
-                "runtime_id": "opencode",
+        _DEFAULT_PROFILES.append(
+            {
+                "profile_id": "claude_minimax",
+                "runtime_id": "claude_code",
                 "is_default": False,
-                "provider_id": "opencode",
-                "provider_label": "OpenCode Zen",
-                "default_model": "opencode/muse-spark-1.2-contributor-free",
-                "default_effort": "xhigh",
-                "model_tiers": [
-                    {
-                        "label": "Muse Spark 1.2 Contributor Free",
-                        "model": "opencode/muse-spark-1.2-contributor-free",
-                        "effort": "xhigh",
-                        "parameters": {},
-                        "annotations": {},
-                    }
+                "provider_id": "minimax",
+                "provider_label": "MiniMax",
+                "default_model": "MiniMax-M2.7",
+                "credential_source": ProviderCredentialSource.SECRET_REF,
+                "runtime_materialization_mode": RuntimeMaterializationMode.ENV_BUNDLE,
+                "secret_refs": {"provider_api_key": "env://MINIMAX_API_KEY"},
+                "clear_env_keys": [
+                    "ANTHROPIC_API_KEY",
+                    "ANTHROPIC_AUTH_TOKEN",
+                    "OPENAI_API_KEY",
                 ],
-                "default_model_tier": 1,
+                "env_template": {
+                    "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",
+                    "ANTHROPIC_AUTH_TOKEN": {
+                        "from_secret_ref": "provider_api_key",
+                    },
+                    "ANTHROPIC_MODEL": "MiniMax-M2.7",
+                    "ANTHROPIC_SMALL_FAST_MODEL": "MiniMax-M2.7",
+                    "ANTHROPIC_DEFAULT_SONNET_MODEL": "MiniMax-M2.7",
+                    "ANTHROPIC_DEFAULT_OPUS_MODEL": "MiniMax-M2.7",
+                    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "MiniMax-M2.7",
+                    "API_TIMEOUT_MS": "3000000",
+                    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+                },
+                "volume_ref": None,
+                "volume_mount_path": None,
+                "account_label": "Claude Code via MiniMax (auto-seeded)",
+                "enabled": True,
+                "auth_state": ProviderProfileAuthState.CONNECTED,
+                "disabled_reason": None,
+                "last_auth_method": ProviderProfileAuthMethod.SECRET_REF,
+            }
+        )
+        _DEFAULT_PROFILES.append(
+            {
+                "profile_id": "codex_minimax_m27",
+                "runtime_id": "codex_cli",
+                "is_default": False,
+                "provider_id": "minimax",
+                "provider_label": "MiniMax",
+                "default_model": "codex-MiniMax-M2.7",
+                "model_overrides": {
+                    "codex_profile_name": "m27",
+                },
                 "credential_source": ProviderCredentialSource.SECRET_REF,
                 "runtime_materialization_mode": RuntimeMaterializationMode.COMPOSITE,
                 "secret_refs": {
-                    "opencode_api_key": "env://OPENCODE_API_KEY",
+                    "provider_api_key": "env://MINIMAX_API_KEY",
                 },
                 "clear_env_keys": [
-                    "OPENCODE_AUTH_CONTENT",
-                    "OPENCODE_CONFIG",
-                    "OPENCODE_CONFIG_CONTENT",
                     "OPENAI_API_KEY",
-                    "ANTHROPIC_API_KEY",
+                    "OPENAI_BASE_URL",
+                    "OPENAI_ORG_ID",
+                    "OPENAI_PROJECT",
                 ],
-                "env_template": {},
+                "env_template": {
+                    "MINIMAX_API_KEY": {
+                        "from_secret_ref": "provider_api_key",
+                    },
+                },
+                "file_templates": _codex_minimax_m27_file_templates(),
+                "home_path_overrides": {
+                    "CODEX_HOME": "{{runtime_support_dir}}/codex-home",
+                },
+                "command_behavior": {
+                    "suppress_default_model_flag": True,
+                },
+                "max_parallel_runs": 4,
+                "cooldown_after_429_seconds": 600,
+                "rate_limit_policy": ManagedAgentRateLimitPolicy.BACKOFF,
+                "max_lease_duration_seconds": 7200,
                 "volume_ref": None,
                 "volume_mount_path": None,
-                "account_label": "OpenCode Zen Contributor Free (auto-seeded)",
+                "account_label": "Codex CLI via MiniMax (auto-seeded)",
                 "enabled": True,
-                "auth_state": ProviderProfileAuthState.API_KEY_PENDING,
+                "auth_state": ProviderProfileAuthState.CONNECTED,
                 "disabled_reason": None,
-                "tags": ["api-key", "opencode", "zen"],
-                "command_behavior": _make_opencode_validation_pending_command_behavior(),
                 "last_auth_method": ProviderProfileAuthMethod.SECRET_REF,
-            })
-        else:
-            _DEFAULT_PROFILES.append({
+            }
+        )
+
+    if os.environ.get("OPENROUTER_API_KEY"):
+        _DEFAULT_PROFILES.append(
+            {
+                "profile_id": "codex_openrouter_qwen36_plus",
+                "runtime_id": "codex_cli",
+                "is_default": False,
+                "provider_id": "openrouter",
+                "provider_label": "OpenRouter",
+                "default_model": _CODEX_OPENROUTER_QWEN36_PLUS_MODEL,
+                "credential_source": ProviderCredentialSource.SECRET_REF,
+                "runtime_materialization_mode": RuntimeMaterializationMode.COMPOSITE,
+                "secret_refs": {
+                    "provider_api_key": "env://OPENROUTER_API_KEY",
+                },
+                "clear_env_keys": [
+                    "OPENAI_API_KEY",
+                    "OPENAI_BASE_URL",
+                    "OPENAI_ORG_ID",
+                    "OPENAI_PROJECT",
+                    "OPENROUTER_API_KEY",
+                ],
+                "env_template": {
+                    "OPENROUTER_API_KEY": {
+                        "from_secret_ref": "provider_api_key",
+                    },
+                },
+                "file_templates": _codex_openrouter_qwen36_plus_file_templates(
+                    _CODEX_OPENROUTER_QWEN36_PLUS_MODEL
+                ),
+                "home_path_overrides": {
+                    "CODEX_HOME": "{{runtime_support_dir}}/codex-home",
+                },
+                "command_behavior": {
+                    "suppress_default_model_flag": True,
+                },
+                "max_parallel_runs": 4,
+                "cooldown_after_429_seconds": 300,
+                "rate_limit_policy": ManagedAgentRateLimitPolicy.BACKOFF,
+                "max_lease_duration_seconds": 7200,
+                "volume_ref": None,
+                "volume_mount_path": None,
+                "account_label": "Codex CLI via OpenRouter (auto-seeded)",
+                "enabled": True,
+                "auth_state": ProviderProfileAuthState.CONNECTED,
+                "disabled_reason": None,
+                "last_auth_method": ProviderProfileAuthMethod.SECRET_REF,
+            }
+        )
+
+    # OpenCode Zen Contributor Free — credentialless, launch-ready default.
+    # Respects the same kill-switches as the generic Omnigent host plane so
+    # `MOONMIND_OMNIGENT_OPENCODE_ENABLED=false` or `MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED=false`
+    # suppresses the default. OpenCode's built-in Contributor Free route does
+    # not require an API key; deployment credentials remain scoped to the
+    # separate opencode-go profile and must never be attached here implicitly.
+    from moonmind.omnigent.settings import (
+        generic_host_enabled,
+        opencode_support_enabled,
+    )
+
+    if opencode_support_enabled() and generic_host_enabled():
+        _DEFAULT_PROFILES.append(
+            {
                 "profile_id": "opencode-zen-free",
                 "runtime_id": "opencode",
                 "is_default": False,
@@ -1479,28 +1481,20 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 "volume_ref": None,
                 "volume_mount_path": None,
                 "account_label": "OpenCode Zen Contributor Free",
-                "enabled": False,
-                "auth_state": ProviderProfileAuthState.NOT_CONFIGURED,
-                "disabled_reason": ProviderProfileDisabledReason.MISSING_CREDENTIALS,
-                "tags": ["api-key", "opencode", "zen"],
-                "command_behavior": {
-                    "auth_strategy": "opencode_auth_json",
-                    "auth_state": "not_configured",
-                    "auth_actions": ["use_api_key"],
-                    "auth_status_label": "Not connected",
-                    "auth_readiness": {
-                        "connected": False,
-                        "backing_secret_exists": False,
-                        "launch_ready": False,
-                    },
-                },
+                "enabled": True,
+                "auth_state": ProviderProfileAuthState.CONNECTED,
+                "disabled_reason": None,
+                "tags": ["credentialless", "free", "opencode", "zen"],
+                "command_behavior": _make_credentialless_opencode_command_behavior(),
                 "last_auth_method": None,
-            })
+            }
+        )
 
     seeded: list[str] = []
     try:
         async with get_async_session_context() as session:
             from sqlalchemy import delete, update
+
             existing_result = await session.execute(
                 select(
                     ManagedAgentProviderProfile.profile_id,
@@ -1639,9 +1633,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 ):
                     await session.execute(
                         update(ManagedAgentProviderProfile)
-                        .where(
-                            ManagedAgentProviderProfile.profile_id == profile_id
-                        )
+                        .where(ManagedAgentProviderProfile.profile_id == profile_id)
                         .values(max_parallel_runs=1)
                     )
                     current["max_parallel_runs"] = 1
@@ -1706,15 +1698,23 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     existing_by_id[profile_id].update(updates)
                     needs_commit = True
 
-            # Reconcile opencode-zen-free when OPENCODE_API_KEY is added or removed
-            # after the initial seed. The disabled placeholder uses credential_source=NONE;
-            # the enabled profile uses SECRET_REF with env://OPENCODE_API_KEY.
+            # Reconcile prior OpenCode Zen seeds to the credentialless free
+            # route. Preserve an explicit operator disable, but never inherit
+            # the deployment's OPENCODE_API_KEY: that credential belongs to a
+            # separately selected opencode-go profile.
             zen_profile_id = "opencode-zen-free"
             zen_current = existing_by_id.get(zen_profile_id)
-            if zen_current is not None:
-                zen_configured = bool(os.environ.get("OPENCODE_API_KEY"))
+            if zen_current is not None and zen_profile_id in default_profile_by_id:
                 zen_definition = default_profile_by_id[zen_profile_id]
-                zen_metadata = {
+                operator_disabled = (
+                    getattr(
+                        zen_current.get("disabled_reason"),
+                        "value",
+                        zen_current.get("disabled_reason"),
+                    )
+                    == ProviderProfileDisabledReason.USER_DISABLED.value
+                )
+                zen_desired = {
                     "provider_id": zen_definition["provider_id"],
                     "provider_label": zen_definition["provider_label"],
                     "account_label": zen_definition["account_label"],
@@ -1722,97 +1722,56 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     "default_effort": zen_definition["default_effort"],
                     "model_tiers": zen_definition["model_tiers"],
                     "default_model_tier": zen_definition["default_model_tier"],
+                    "credential_source": ProviderCredentialSource.NONE,
+                    "runtime_materialization_mode": RuntimeMaterializationMode.COMPOSITE,
+                    "secret_refs": {},
+                    "clear_env_keys": zen_definition["clear_env_keys"],
+                    "env_template": {},
+                    "tags": zen_definition["tags"],
+                    "last_auth_method": None,
                 }
+                if operator_disabled:
+                    behavior = dict(zen_current.get("command_behavior") or {})
+                    readiness = dict(behavior.get("auth_readiness") or {})
+                    readiness.update(
+                        {
+                            "connected": True,
+                            "backing_secret_exists": False,
+                            "launch_ready": False,
+                        }
+                    )
+                    behavior.update(
+                        {
+                            "auth_strategy": "none",
+                            "auth_state": "connected",
+                            "auth_actions": [],
+                            "auth_status_label": "Disabled by operator",
+                            "auth_readiness": readiness,
+                        }
+                    )
+                    zen_desired["command_behavior"] = behavior
+                else:
+                    zen_desired.update(
+                        {
+                            "enabled": True,
+                            "auth_state": ProviderProfileAuthState.CONNECTED,
+                            "disabled_reason": None,
+                            "command_behavior": _make_credentialless_opencode_command_behavior(),
+                        }
+                    )
                 zen_updates: dict[str, Any] = {
                     key: value
-                    for key, value in zen_metadata.items()
+                    for key, value in zen_desired.items()
                     if zen_current.get(key) != value
                 }
-                if zen_configured:
-                    zen_secret_refs = zen_current.get("secret_refs") or {}
-                    uses_env_ref = any(
-                        str(v or "").strip() == "env://OPENCODE_API_KEY"
-                        for v in zen_secret_refs.values()
-                    )
-                    auth_state = getattr(
-                        zen_current.get("auth_state"),
-                        "value",
-                        zen_current.get("auth_state"),
-                    )
-                    disabled_reason = getattr(
-                        zen_current.get("disabled_reason"),
-                        "value",
-                        zen_current.get("disabled_reason"),
-                    )
-                    untouched_placeholder = (
-                        zen_current.get("enabled") is False
-                        and auth_state == ProviderProfileAuthState.NOT_CONFIGURED.value
-                        and disabled_reason
-                        == ProviderProfileDisabledReason.MISSING_CREDENTIALS.value
-                        and not zen_secret_refs
-                    )
-                    unvalidated_env_seed = (
-                        zen_current.get("enabled") is True
-                        and uses_env_ref
-                        and not zen_current.get("model_catalog_evidence_json")
-                    )
-                    if untouched_placeholder or unvalidated_env_seed:
-                        credential_updates = {
-                            "credential_source": ProviderCredentialSource.SECRET_REF,
-                            "runtime_materialization_mode": RuntimeMaterializationMode.COMPOSITE,
-                            "secret_refs": {"opencode_api_key": "env://OPENCODE_API_KEY"},
-                            "clear_env_keys": [
-                                "OPENCODE_AUTH_CONTENT",
-                                "OPENCODE_CONFIG",
-                                "OPENCODE_CONFIG_CONTENT",
-                                "OPENAI_API_KEY",
-                                "ANTHROPIC_API_KEY",
-                            ],
-                            "env_template": {},
-                            "enabled": True,
-                            "auth_state": ProviderProfileAuthState.API_KEY_PENDING,
-                            "disabled_reason": None,
-                            "command_behavior": _make_opencode_validation_pending_command_behavior(),
-                            "last_auth_method": ProviderProfileAuthMethod.SECRET_REF,
-                        }
-                        zen_updates.update({
-                            k: v
-                            for k, v in credential_updates.items()
-                            if zen_current.get(k) != v
-                        })
-                else:
-                    # Downgrade enabled profile to disabled placeholder when key is removed
-                    secret_refs = zen_current.get("secret_refs") or {}
-                    uses_env_ref = any(
-                        str(v or "").strip() == "env://OPENCODE_API_KEY"
-                        for v in secret_refs.values()
-                    )
-                    if uses_env_ref and zen_current.get("enabled"):
-                        credential_updates = {
-                            "credential_source": ProviderCredentialSource.NONE,
-                            "secret_refs": {},
-                            "enabled": False,
-                            "auth_state": ProviderProfileAuthState.NOT_CONFIGURED,
-                            "disabled_reason": ProviderProfileDisabledReason.MISSING_CREDENTIALS,
-                            "command_behavior": {
-                                "auth_strategy": "opencode_auth_json",
-                                "auth_state": "not_configured",
-                                "auth_actions": ["use_api_key"],
-                                "auth_status_label": "Not connected",
-                                "auth_readiness": {
-                                    "connected": False,
-                                    "backing_secret_exists": False,
-                                    "launch_ready": False,
-                                },
-                            },
-                            "last_auth_method": None,
-                        }
-                        zen_updates.update({
-                            k: v
-                            for k, v in credential_updates.items()
-                            if zen_current.get(k) != v
-                        })
                 if zen_updates:
+                    previous_source = getattr(
+                        zen_current.get("credential_source"),
+                        "value",
+                        zen_current.get("credential_source"),
+                    )
+                    if previous_source != ProviderCredentialSource.NONE.value:
+                        zen_updates["model_catalog_evidence_json"] = None
                     await session.execute(
                         update(ManagedAgentProviderProfile)
                         .where(ManagedAgentProviderProfile.profile_id == zen_profile_id)
@@ -1821,7 +1780,9 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     existing_by_id[zen_profile_id].update(zen_updates)
                     needs_commit = True
 
-            to_insert = [p for p in _DEFAULT_PROFILES if p["profile_id"] not in existing_ids]
+            to_insert = [
+                p for p in _DEFAULT_PROFILES if p["profile_id"] not in existing_ids
+            ]
 
             for profile_def in _DEFAULT_PROFILES:
                 profile_id = profile_def["profile_id"]
@@ -1842,8 +1803,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     should_reconcile_default_model = (
                         desired_default_model is not None
                         and (
-                            not current_model_text
-                            or should_reconcile_deprecated_model
+                            not current_model_text or should_reconcile_deprecated_model
                         )
                     )
                     if should_reconcile_default_model:
@@ -1874,7 +1834,9 @@ async def _auto_seed_provider_profiles() -> list[str]:
                             await session.execute(stmt)
                             needs_commit = True
                     desired_file_templates = profile_def.get("file_templates")
-                    current_file_templates = existing_by_id[profile_id]["file_templates"]
+                    current_file_templates = existing_by_id[profile_id][
+                        "file_templates"
+                    ]
                     if _should_reconcile_openrouter_codex_file_templates(
                         profile_id=profile_id,
                         current_file_templates=current_file_templates,
@@ -1911,7 +1873,9 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     default_model_tier=profile_def.get("default_model_tier", 1),
                     model_overrides=profile_def.get("model_overrides"),
                     credential_source=profile_def["credential_source"],
-                    runtime_materialization_mode=profile_def["runtime_materialization_mode"],
+                    runtime_materialization_mode=profile_def[
+                        "runtime_materialization_mode"
+                    ],
                     volume_ref=profile_def.get("volume_ref"),
                     volume_mount_path=profile_def.get("volume_mount_path"),
                     account_label=profile_def.get("account_label"),
@@ -1968,6 +1932,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
 
     return seeded
 
+
 async def ensure_provider_profile_managers_started():
     """Ensure ProviderProfileManager workflows are running for all distinct runtime families."""
     from api_service.db.base import get_async_session_context
@@ -1991,14 +1956,16 @@ async def ensure_provider_profile_managers_started():
             stmt = select(ManagedAgentProviderProfile.runtime_id).distinct()
             result = await session.execute(stmt)
             runtime_ids = result.scalars().all()
-            
+
         if not runtime_ids:
-            logger.info("No managed agent provider profiles found. Skipping ProviderProfileManager startup.")
+            logger.info(
+                "No managed agent provider profiles found. Skipping ProviderProfileManager startup."
+            )
             return
 
         temporal_adapter = TemporalClientAdapter()
         temporal_client = await temporal_adapter.get_client()
-        
+
         for runtime_id in runtime_ids:
             workflow_id = workflow_id_for_runtime(runtime_id)
             try:
@@ -2010,19 +1977,35 @@ async def ensure_provider_profile_managers_started():
                 )
                 logger.info(f"Started ProviderProfileManager for runtime: {runtime_id}")
             except WorkflowAlreadyStartedError:
-                logger.debug(f"ProviderProfileManager already running for runtime: {runtime_id}")
+                logger.debug(
+                    f"ProviderProfileManager already running for runtime: {runtime_id}"
+                )
             except Exception as e:
-                logger.error(f"Failed to start ProviderProfileManager for {runtime_id}: {e}", exc_info=True)
+                logger.error(
+                    f"Failed to start ProviderProfileManager for {runtime_id}: {e}",
+                    exc_info=True,
+                )
 
             try:
-                from api_service.services.provider_profile_service import sync_provider_profile_manager
+                from api_service.services.provider_profile_service import (
+                    sync_provider_profile_manager,
+                )
+
                 async with get_async_session_context() as session:
-                    await sync_provider_profile_manager(session=session, runtime_id=runtime_id)
+                    await sync_provider_profile_manager(
+                        session=session, runtime_id=runtime_id
+                    )
                 logger.debug(f"Synced ProviderProfileManager for runtime: {runtime_id}")
             except Exception as e:
-                logger.error(f"Failed to sync ProviderProfileManager for {runtime_id}: {e}", exc_info=True)
+                logger.error(
+                    f"Failed to sync ProviderProfileManager for {runtime_id}: {e}",
+                    exc_info=True,
+                )
     except Exception as e:
-        logger.error(f"Error ensuring ProviderProfileManager workflows: {e}", exc_info=True)
+        logger.error(
+            f"Error ensuring ProviderProfileManager workflows: {e}", exc_info=True
+        )
+
 
 async def ensure_managed_session_reconcile_schedule_started() -> None:
     """Best-effort startup install for the managed-session reconcile schedule."""
@@ -2045,6 +2028,7 @@ async def ensure_managed_session_reconcile_schedule_started() -> None:
         schedule_id,
     )
 
+
 async def ensure_managed_runtime_workspace_cleanup_schedule_started() -> None:
     """Best-effort startup install for the retained-state janitor schedule."""
     from moonmind.workflows.temporal.client import TemporalClientAdapter
@@ -2053,10 +2037,8 @@ async def ensure_managed_runtime_workspace_cleanup_schedule_started() -> None:
     config = ManagedRuntimeCleanupConfig.from_env()
 
     try:
-        schedule_id = (
-            await TemporalClientAdapter().ensure_managed_runtime_workspace_cleanup_schedule(
-                enabled=config.enabled
-            )
+        schedule_id = await TemporalClientAdapter().ensure_managed_runtime_workspace_cleanup_schedule(
+            enabled=config.enabled
         )
     except Exception:
         logger.warning(
@@ -2102,6 +2084,7 @@ async def ensure_omnigent_oauth_host_janitor_schedule_started() -> None:
         return
     logger.info("Ensured Omnigent OAuth host janitor schedule")
 
+
 async def ensure_recurring_workflow_schedules_reconciled() -> None:
     """Best-effort repair for persisted recurring workflow Temporal schedules."""
     from api_service.db.base import get_async_session_context
@@ -2124,6 +2107,7 @@ async def ensure_recurring_workflow_schedules_reconciled() -> None:
         "Reconciled recurring workflow schedules during API startup: count=%s",
         reconciled,
     )
+
 
 def _register_settings_change_subscribers() -> None:
     """Wire the default SettingsChangePublisher subscribers once per process.
@@ -2207,6 +2191,10 @@ async def startup_event():
             exc,
         )
     await _sync_preset_seed_catalog()
+    # Provider defaults are input authority for the Omnigent bootstrap. Seed
+    # them before the first reconciliation pass so a fresh restart can validate
+    # and advertise the credentialless OpenCode Zen route immediately.
+    await _auto_seed_provider_profiles()
     # Readiness uses only bounded local image inspection. Registry refresh runs
     # in the lifespan-owned reconciler after the API can serve health checks.
     omnigent_bootstrap_ready = (
@@ -2217,6 +2205,7 @@ async def startup_event():
     # Embedded mode is an authority-sensitive enablement boundary. Evidence
     # refs cannot make it ready when its pinned verifier or SecretRef fails.
     from api_service.api.routers.omnigent_bridge import embedded_host_auth_preflight
+
     embedded_auth = await embedded_host_auth_preflight()
     if not embedded_auth["ready"]:
         raise RuntimeError(
@@ -2304,11 +2293,13 @@ async def startup_event():
     await ensure_recurring_workflow_schedules_reconciled()
     logger.info("Application startup events completed.")
 
+
 def teardown_providers():
     """
     Optional: If your providers need explicit cleanup, do it here.
     """
     pass
+
 
 async def _sync_preset_seed_catalog() -> None:
     """Ensure YAML-backed default task presets exist in the catalog."""

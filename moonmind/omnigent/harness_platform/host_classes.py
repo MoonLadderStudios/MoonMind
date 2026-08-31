@@ -170,7 +170,7 @@ DEFAULT_HOST_CLASS_TEMPLATES: tuple[HostClassTemplate, ...] = (
         harness_ids=("opencode-native",),
         image_env=OMNIGENT_OPENCODE_HOST_IMAGE_ENV,
         integration_modes=("native-server",),
-        materializer_refs=("opencode-auth-json@1",),
+        materializer_refs=("opencode-auth-json@1", "none@1"),
         runtime_dependencies=(
             {"name": "opencode", "version": OPENCODE_PINNED_VERSION},
         ),
