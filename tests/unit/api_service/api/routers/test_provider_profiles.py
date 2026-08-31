@@ -3673,6 +3673,62 @@ async def test_provider_api_key_setup_stores_secret_ref_mappings_only(
     assert validated == [(provider_id, api_key)]
     assert synced_runtimes == [runtime_id]
 
+
+@pytest.mark.asyncio
+async def test_zen_api_key_setup_is_rejected_without_mutating_profile(
+    client_app: AsyncClient,
+    _module_db,
+) -> None:
+    profile_id = "opencode-zen-reject-api-key"
+    raw_key = "candidate-opencode-zen-key"
+    owner = _override_current_user()
+    command_behavior = {
+        "auth_strategy": "none",
+        "auth_state": "connected",
+        "auth_actions": [],
+        "auth_readiness": {
+            "connected": True,
+            "backing_secret_exists": False,
+            "launch_ready": True,
+        },
+    }
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="opencode",
+                provider_id="opencode",
+                provider_label="OpenCode Zen",
+                owner_user_id=owner.id,
+                credential_source=ProviderCredentialSource.NONE,
+                runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
+                secret_refs={},
+                command_behavior=command_behavior,
+                enabled=True,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+            )
+        )
+        await session.commit()
+
+    async with client_app as client:
+        response = await client.post(
+            f"/api/v1/provider-profiles/{profile_id}/credentials/api-key",
+            json={"api_key": raw_key},
+        )
+
+    assert response.status_code == 422
+    assert raw_key not in response.text
+    assert "OpenCode Go profiles" in response.text
+    async with db_base.async_session_maker() as session:
+        persisted = await session.get(ManagedAgentProviderProfile, profile_id)
+    assert persisted is not None
+    assert persisted.enabled is True
+    assert persisted.auth_state is ProviderProfileAuthState.CONNECTED
+    assert persisted.disabled_reason is None
+    assert persisted.credential_source is ProviderCredentialSource.NONE
+    assert persisted.secret_refs == {}
+    assert persisted.command_behavior == command_behavior
+
 @pytest.mark.asyncio
 async def test_provider_api_key_setup_failed_validation_updates_state_without_secret(
     client_app: AsyncClient,

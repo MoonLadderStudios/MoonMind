@@ -297,6 +297,10 @@ async def test_auto_seed_migrates_the_zen_profile_to_the_exact_runtime_model(
         assert profile is not None
         profile.provider_id = "opencode-zen"
         profile.default_model = "opencode-zen/muse-spark-1.2-free"
+        profile.enabled = False
+        profile.is_default = False
+        profile.auth_state = ProviderProfileAuthState.NOT_CONFIGURED
+        profile.disabled_reason = ProviderProfileDisabledReason.MISSING_CREDENTIALS
         profile.model_tiers = [
             {
                 "label": "Muse Spark 1.2 Free",
@@ -314,6 +318,10 @@ async def test_auto_seed_migrates_the_zen_profile_to_the_exact_runtime_model(
         migrated = await session.get(ManagedAgentProviderProfile, "opencode-zen-free")
     assert migrated is not None
     assert migrated.provider_id == "opencode"
+    assert migrated.enabled is True
+    assert migrated.is_default is True
+    assert migrated.auth_state == ProviderProfileAuthState.CONNECTED
+    assert migrated.disabled_reason is None
     assert migrated.default_model == "opencode/muse-spark-1.2-contributor-free"
     assert migrated.model_tiers[0]["model"] == (
         "opencode/muse-spark-1.2-contributor-free"

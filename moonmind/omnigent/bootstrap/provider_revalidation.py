@@ -348,13 +348,35 @@ async def reconcile_opencode_provider_readiness(
     enrolled = [
         profile for profile in profiles if _has_configured_runtime_authority(profile)
     ]
+    api_key = resolved_opencode_api_key(env=env)
+    key_backed_enrolled = any(
+        str(getattr(profile, "provider_id", "") or "") == OPENCODE_PROVIDER_ID
+        for profile in enrolled
+    )
+    # OpenCode Zen and OpenCode Go are distinct provider routes. A launchable
+    # credential-free Zen profile must not consume an explicitly configured Go
+    # credential or prevent its separate enrollment.
+    if api_key and not key_backed_enrolled and profile_ids is None:
+        if not allow_enrollment:
+            return ProviderReconcileOutcome(
+                ready=False,
+                checked=len(profiles),
+                reason="waiting for immutable image and harness catalog authority",
+            )
+        return await _enroll_from_deployment_config(
+            session_factory=session_factory,
+            api_key=api_key,
+            accepted=opencode_contributor_data_use_accepted(env=env),
+            image_ref=image_ref or "",
+            checked=len(profiles),
+            controller=controller,
+        )
     # A disabled profile cannot launch, and re-validating it would neither help
     # nor honor the operator. Its credential still counts as enrolled above, so
     # deployment configuration never re-enables it.
     launchable = [profile for profile in enrolled if profile.enabled]
 
     if not enrolled:
-        api_key = resolved_opencode_api_key(env=env)
         if not api_key:
             # Nothing configured: the console enrollment path stays available and
             # readiness correctly reports that no compatible profile exists.

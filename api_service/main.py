@@ -1614,6 +1614,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 profile_def["profile_id"]: profile_def
                 for profile_def in _DEFAULT_PROFILES
             }
+            touched_runtime_ids: set[str] = set()
 
             # Codex owns and mutates its OAuth home (including refresh-token
             # state), so every existing OAuth-backed Codex profile must remain
@@ -1778,6 +1779,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
                         .values(**zen_updates)
                     )
                     existing_by_id[zen_profile_id].update(zen_updates)
+                    touched_runtime_ids.add(str(zen_current["runtime_id"]))
                     needs_commit = True
 
             to_insert = [
@@ -1852,6 +1854,12 @@ async def _auto_seed_provider_profiles() -> list[str]:
 
             if not to_insert:
                 if needs_commit:
+                    await session.flush()
+                    for runtime_id in touched_runtime_ids:
+                        await normalize_runtime_default_profile(
+                            session=session,
+                            runtime_id=runtime_id,
+                        )
                     await session.commit()
                 return []
 
@@ -1860,7 +1868,6 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 len(to_insert),
             )
 
-            touched_runtime_ids: set[str] = set()
             for profile_def in to_insert:
                 profile = ManagedAgentProviderProfile(
                     profile_id=profile_def["profile_id"],

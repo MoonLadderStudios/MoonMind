@@ -338,6 +338,34 @@ async def test_configured_api_key_enrolls_the_profile_on_a_cold_deployment(
 
 
 @pytest.mark.asyncio
+async def test_credentialless_zen_does_not_suppress_configured_go_enrollment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_stubs(monkeypatch)
+    monkeypatch.setenv("OPENCODE_API_KEY", API_KEY)
+    controller = _Controller()
+    zen = _profile(
+        profile_id="opencode-zen-free",
+        provider_id="opencode",
+        credential_source="none",
+        secret_refs={},
+        default_model="opencode/muse-spark-1.2-contributor-free",
+        evidence_image=CURRENT_IMAGE,
+    )
+
+    outcome = await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory([zen]),
+        controller=controller,
+    )
+
+    assert outcome.ready is True
+    assert outcome.enrolled is True
+    assert controller.calls == [
+        {"api_key": API_KEY, "accept_contributor_data_use": True}
+    ]
+
+
+@pytest.mark.asyncio
 async def test_declined_contributor_acknowledgement_is_not_overridden(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

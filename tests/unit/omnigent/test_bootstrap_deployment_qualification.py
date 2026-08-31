@@ -324,6 +324,32 @@ async def test_qualification_rejects_a_profile_without_a_launch_policy(
         await _qualify(qualification_boundary)
 
 
+@pytest.mark.asyncio
+async def test_runtime_qualification_rejects_missing_model_catalog_evidence() -> None:
+    from moonmind.omnigent.bootstrap.qualification import run_qualification
+
+    profile = SimpleNamespace(
+        runtime_id="opencode",
+        provider_id="opencode",
+        secret_refs={},
+        model_catalog_evidence_json=None,
+    )
+
+    @asynccontextmanager
+    async def _session_scope():
+        yield SimpleNamespace(get=AsyncMock(return_value=profile))
+
+    with pytest.raises(RuntimeError, match="not in catalog"):
+        await run_qualification(
+            session_factory=lambda: _session_scope(),
+            provider_profile_ref="opencode-zen-free",
+            model_qualified_id="opencode/muse-spark-1.2-contributor-free",
+            effort="xhigh",
+            host_image_ref=_HOST_IMAGE_REF,
+            server_build_digest="sha256:" + "b" * 64,
+        )
+
+
 def test_model_resolution_accepts_a_qualified_opencode_model_before_live_validation() -> (
     None
 ):

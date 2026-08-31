@@ -104,7 +104,7 @@ async def run_qualification(
             models = [
                 str(m.get("qualifiedId") or "") for m in evidence.get("models", [])
             ]
-            if model_qualified_id in models or not models:
+            if model_qualified_id in models:
                 results["modelDiscovery"] = "passed"
                 evidence_refs["modelCatalog"] = "artifact:model-catalog"
             else:
