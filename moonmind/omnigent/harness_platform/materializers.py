@@ -123,6 +123,7 @@ _PROVIDER_MATERIALIZER_REFS: dict[tuple[str, str], str] = {
     ("opencode", "opencode-go"): "opencode-auth-json@1",
     ("opencode", "opencode"): "opencode-auth-json@1",
     ("codex_cli", "openai"): "codex-oauth-home@1",
+    ("claude_code", "anthropic"): "claude-oauth-home@1",
     ("omnigent", "anthropic"): "omnigent-provider-config@1",
     ("omnigent", "openai"): "omnigent-provider-config@1",
 }
@@ -142,10 +143,29 @@ _register_builtin(
         "acceptedAuthModels": ["oauth_volume"],
         "supportedHostModes": ["on-demand", "static-connected"],
         "requiredSecretRoles": ["oauth_token"],
-        "state": {"scope": "run", "mutable": True},
+        "state": {"scope": "run", "mutable": True, "ownership": "profile_owned"},
         "target": {
             "kind": "oauth-home",
             "path": "/home/app/.codex",
+            "permissions": "0700",
+        },
+        "preflight": {"kind": "login-status"},
+        "cleanup": {"mode": "remove-owned-state"},
+    }
+)
+
+_register_builtin(
+    {
+        "materializerId": "claude-oauth-home",
+        "version": 1,
+        "acceptedHarnessIds": ["claude-native"],
+        "acceptedAuthModels": ["oauth_volume"],
+        "supportedHostModes": ["on-demand", "static-connected"],
+        "requiredSecretRoles": ["oauth_token"],
+        "state": {"scope": "run", "mutable": True, "ownership": "profile_owned"},
+        "target": {
+            "kind": "oauth-home",
+            "path": "/home/app/.claude",
             "permissions": "0700",
         },
         "preflight": {"kind": "login-status"},
@@ -161,7 +181,7 @@ _register_builtin(
         "acceptedAuthModels": ["own-auth"],
         "supportedHostModes": ["on-demand", "static-connected"],
         "requiredSecretRoles": ["opencode_api_key"],
-        "state": {"scope": "run", "mutable": False},
+        "state": {"scope": "run", "mutable": False, "ownership": "run_owned"},
         "target": {
             "kind": "generated-file",
             "path": "/home/app/.local/share/opencode/auth.json",
@@ -290,6 +310,7 @@ def materialize_credential(
     # Derive access mode from materializer state: mutable OAuth homes must remain writable for token refresh
     is_mutable = bool(mat.state.get("mutable"))
     access_mode = "read_write" if is_mutable else "read-only"
+    ownership = str(mat.state.get("ownership") or ("profile_owned" if is_mutable else "run_owned"))
     return {
         "credentialRuntimeRef": f"credential-runtime:{provider_profile_ref}:{credential_generation}",
         "providerProfileRef": provider_profile_ref,
@@ -299,6 +320,7 @@ def materialize_credential(
         "mountClass": "provider-auth",
         "targetPath": target_path,
         "accessMode": access_mode,
+        "ownership": ownership,
         "cleanupRef": f"credential-cleanup:{provider_profile_ref}:{credential_generation}",
         "attestationRef": f"artifact:{mat.materializerId}:{credential_generation}",
     }

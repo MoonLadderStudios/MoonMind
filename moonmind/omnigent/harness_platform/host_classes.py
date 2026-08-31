@@ -25,6 +25,8 @@ _SAFE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 
 OMNIGENT_OPENCODE_HOST_IMAGE_ENV = "OMNIGENT_OPENCODE_HOST_IMAGE_REF"
 OMNIGENT_PI_HOST_IMAGE_ENV = "OMNIGENT_PI_HOST_IMAGE_REF"
+# Shared MoonMind Omnigent host image – neutral name for Codex/Claude/OpenCode convergence (Primary Runtime Provider Strategy §5.2)
+OMNIGENT_RUNTIME_HOST_IMAGE_ENV = "OMNIGENT_RUNTIME_HOST_IMAGE_REF"
 OPENCODE_PINNED_VERSION = "1.18.11"
 OPENCODE_SUPPORTED_RANGE = ">=1.17.7,<1.19.0"
 
@@ -52,6 +54,7 @@ def _persisted_image_ref(key: str) -> str:
     attribute = {
         OMNIGENT_OPENCODE_HOST_IMAGE_ENV: "opencode_host_image_ref",
         OMNIGENT_PI_HOST_IMAGE_ENV: "pi_host_image_ref",
+        OMNIGENT_RUNTIME_HOST_IMAGE_ENV: "opencode_host_image_ref",
     }.get(key)
     if attribute is None:
         return ""
@@ -62,6 +65,12 @@ def _require_image_ref(environment: Mapping[str, str], key: str) -> str:
     raw = str(environment.get(key) or "").strip()
     if not raw:
         raw = _persisted_image_ref(key)
+    # Transitional fallback: shared runtime image may be published under the
+    # OpenCode lineage before operators set the neutral variable.
+    if not raw and key == OMNIGENT_RUNTIME_HOST_IMAGE_ENV:
+        raw = str(environment.get(OMNIGENT_OPENCODE_HOST_IMAGE_ENV) or "").strip()
+        if not raw:
+            raw = _persisted_image_ref(OMNIGENT_OPENCODE_HOST_IMAGE_ENV)
     if not raw or not _IMAGE_RE.fullmatch(raw):
         raise HarnessPlatformError(
             f"{key} must be set to a digest-pinned image ref",
@@ -81,6 +90,21 @@ def get_opencode_host_image_ref() -> str:
 
 def get_pi_host_image_ref() -> str:
     return _require_image_ref(os.environ, OMNIGENT_PI_HOST_IMAGE_ENV)
+
+
+def get_runtime_host_image_ref() -> str:
+    """Resolve the shared MoonMind Omnigent host image.
+
+    Prefers ``OMNIGENT_RUNTIME_HOST_IMAGE_REF``; falls back to the
+    transitional ``OMNIGENT_OPENCODE_HOST_IMAGE_REF`` so a shared digest
+    can be promoted without requiring simultaneous operator reconfiguration.
+    """
+
+    runtime = str(os.environ.get(OMNIGENT_RUNTIME_HOST_IMAGE_ENV) or "").strip()
+    if runtime:
+        return _require_image_ref(os.environ, OMNIGENT_RUNTIME_HOST_IMAGE_ENV)
+    # Transitional fallback: the OpenCode image lineage is the shared image origin
+    return _require_image_ref(os.environ, OMNIGENT_OPENCODE_HOST_IMAGE_ENV)
 
 
 class HostClassHarnessEntry(BaseModel):
@@ -174,6 +198,24 @@ DEFAULT_HOST_CLASS_TEMPLATES: tuple[HostClassTemplate, ...] = (
         runtime_dependencies=(
             {"name": "opencode", "version": OPENCODE_PINNED_VERSION},
         ),
+    ),
+    # Shared-image Codex and Claude classes (§5.3): separate Host Classes may
+    # reference the same digest without conflating harness support.
+    HostClassTemplate(
+        host_class_id="omnigent-codex",
+        version=1,
+        harness_ids=("codex-native",),
+        image_env=OMNIGENT_RUNTIME_HOST_IMAGE_ENV,
+        integration_modes=("native-server",),
+        materializer_refs=("codex-oauth-home@1", "none@1"),
+    ),
+    HostClassTemplate(
+        host_class_id="omnigent-claude",
+        version=1,
+        harness_ids=("claude-native",),
+        image_env=OMNIGENT_RUNTIME_HOST_IMAGE_ENV,
+        integration_modes=("native-server",),
+        materializer_refs=("claude-oauth-home@1", "none@1"),
     ),
     HostClassTemplate(
         host_class_id="omnigent-pi",

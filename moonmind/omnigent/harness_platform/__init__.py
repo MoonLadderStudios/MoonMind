@@ -53,6 +53,7 @@ from moonmind.omnigent.harness_platform.failures import (
 )
 from moonmind.omnigent.harness_platform.host_classes import (
     OMNIGENT_OPENCODE_HOST_IMAGE_ENV,
+    OMNIGENT_RUNTIME_HOST_IMAGE_ENV,
     OPENCODE_PINNED_VERSION,
     OPENCODE_SUPPORTED_RANGE,
     HostClass,
@@ -61,6 +62,7 @@ from moonmind.omnigent.harness_platform.host_classes import (
     get_launch_policy,
     get_opencode_host_class,
     get_opencode_host_image_ref,
+    get_runtime_host_image_ref,
     register_host_class,
     register_launch_policy,
 )
@@ -125,9 +127,11 @@ __all__ = [
     "get_launch_policy",
     "get_opencode_host_class",
     "get_opencode_host_image_ref",
+    "get_runtime_host_image_ref",
     "register_host_class",
     "register_launch_policy",
     "OMNIGENT_OPENCODE_HOST_IMAGE_ENV",
+    "OMNIGENT_RUNTIME_HOST_IMAGE_ENV",
     "OPENCODE_PINNED_VERSION",
     "OPENCODE_SUPPORTED_RANGE",
     "CredentialMaterializer",

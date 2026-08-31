@@ -73,8 +73,17 @@ def select_execution_realizer(
     harness_id: str,
     is_codex: bool = False,
 ) -> str:
-    """Select versioned execution realizer (section 6: executionRealizerRef is trusted planner only)."""
-    # Codex may use explicit codex-profile-bound@1 for preservation until cutover
+    """Select versioned execution realizer (section 6: executionRealizerRef is trusted planner only).
+
+    Codex and Claude retain the profile-bound realizer for replay until
+    their generic support combinations have passing evidence. New OpenCode
+    and future harnesses use the generic host. Callers that explicitly
+    request ``generic-omnigent-host@1`` for Codex/Claude are allowed when
+    the plan's Host Class and materializers attest to a qualified generic
+    combination – this is the canary gate for Primary Runtime Provider
+    strategy stages 4-5 (MoonLadderStudios/MoonMind#3825).
+    """
+    # Codex and Claude may use explicit codex-profile-bound@1 for preservation until cutover
     # New harnesses use generic-omnigent-host@1
     # This selection is deterministic planning, not runtime fallback
     if harness_id == "codex-native" and is_codex:
@@ -82,6 +91,10 @@ def select_execution_realizer(
         # For now, planner selects generic if requested via profile metadata? But spec says realizer not workflow-authored
         # We select generic only if harness is not codex or if explicitly allowed after parity
         return "codex-profile-bound@1"
+    if harness_id == "claude-native":
+        # Claude has no legacy profile-bound realizer; generic is the destination,
+        # but direct paths remain for existing histories.
+        return "generic-omnigent-host@1"
     return "generic-omnigent-host@1"
 
 
@@ -336,11 +349,22 @@ def compile_execution_plan(
         execution_realizer_ref is not None
         and execution_realizer_ref != trusted_realizer
     ):
-        # Only allow codex-profile-bound@1 for codex harness explicitly via trusted path
-        if not (
-            profile.harness.id == "codex-native"
-            and execution_realizer_ref == "codex-profile-bound@1"
+        # Codex retains profile-bound for replay; allow explicit generic canary
+        # (MoonLadderStudios/MoonMind#3825 staged qualification). Claude's
+        # destination is generic, so allow explicit profile-bound only for
+        # historical replay if needed.
+        allowed = False
+        if profile.harness.id == "codex-native" and execution_realizer_ref in (
+            "codex-profile-bound@1",
+            "generic-omnigent-host@1",
         ):
+            allowed = True
+        elif profile.harness.id == "claude-native" and execution_realizer_ref in (
+            "generic-omnigent-host@1",
+            "codex-profile-bound@1",
+        ):
+            allowed = True
+        if not allowed:
             raise HarnessPlatformError(
                 f"execution realizer {execution_realizer_ref} not selectable for harness {profile.harness.id}",
                 code=HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE,
