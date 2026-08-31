@@ -263,10 +263,10 @@ async def test_resolver_counts_active_managed_secrets_toward_launch_readiness(
         **{
             **vars(session.provider),
             "credential_source": ProviderCredentialSource.SECRET_REF,
-            "runtime_materialization_mode": RuntimeMaterializationMode.COMPOSITE,
+            "runtime_materialization_mode": RuntimeMaterializationMode.API_KEY_ENV,
             "volume_ref": None,
             "volume_mount_path": None,
-            "secret_refs": {"api_key": "db://team-codex-key"},
+            "secret_refs": {"openai_api_key": "db://team-codex-key"},
         }
     )
 
@@ -303,10 +303,10 @@ async def test_resolver_rejects_secret_backed_profile_without_active_secret(
         **{
             **vars(session.provider),
             "credential_source": ProviderCredentialSource.SECRET_REF,
-            "runtime_materialization_mode": RuntimeMaterializationMode.COMPOSITE,
+            "runtime_materialization_mode": RuntimeMaterializationMode.API_KEY_ENV,
             "volume_ref": None,
             "volume_mount_path": None,
-            "secret_refs": {"api_key": "db://team-codex-key"},
+            "secret_refs": {"openai_api_key": "db://team-codex-key"},
         }
     )
 

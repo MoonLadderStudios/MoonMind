@@ -63,12 +63,16 @@ def compute_support_combination_key(payload: SupportKeyPayload | dict[str, Any])
     return "omnigent-support:sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
 
 
-# ``requiredCapabilitiesDigest`` records the capabilities one workflow asked
-# for, not what the deployment can run. Class admission already refuses a plan
-# whose required capabilities are unsupported or unknown, and it does so before
-# the support key exists, so a deployment cannot be qualified per capability
-# set without qualifying every workflow shape in advance.
-DEPLOYMENT_QUALIFICATION_EXCLUDED_FIELDS = frozenset({"requiredCapabilitiesDigest"})
+# Model, effort, normalized model options, and Required Capabilities are per-run
+# selections, not deployment substrate identity. Class admission rejects
+# unsupported capabilities before the support key exists, and launch preflight
+# validates the selected model against the exact host/provider catalog. Keeping
+# either digest in the local deployment-qualification key would make every
+# otherwise valid default-profile variation require manual requalification.
+# Protected support evidence remains bound to the complete exact support key.
+DEPLOYMENT_QUALIFICATION_EXCLUDED_FIELDS = frozenset(
+    {"modelConfigDigest", "requiredCapabilitiesDigest"}
+)
 
 
 def compute_deployment_qualification_key(
@@ -77,9 +81,9 @@ def compute_deployment_qualification_key(
     """Return the deployment-scoped projection of a support combination.
 
     Deployment qualification proves this deployment can run one exact harness,
-    host, image, realizer, credential, and model combination. It deliberately
-    excludes per-run request variance so an ordinary workflow is admissible
-    without re-qualifying the deployment for every capability set.
+    host, image, realizer, and credential class. It deliberately excludes
+    per-run model/options and capability variance so ordinary default-profile
+    workflows are admissible without manual requalification.
     """
 
     if isinstance(payload, SupportKeyPayload):

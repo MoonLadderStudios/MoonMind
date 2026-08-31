@@ -8,10 +8,17 @@ from sqlalchemy.orm import sessionmaker
 
 from api_service.auth import _DEFAULT_USER_ID
 from api_service.db import base as db_base
-from api_service.db.models import Base, UserProfile
+from api_service.db.models import (
+    Base,
+    ManagedAgentProviderProfile,
+    ProviderCredentialSource,
+    ProviderProfileAuthState,
+    UserProfile,
+)
 from api_service.main import startup_event
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
+
 
 @pytest.mark.asyncio
 async def test_startup_profile_seeding(disabled_env_keys, tmp_path):
@@ -24,9 +31,7 @@ async def test_startup_profile_seeding(disabled_env_keys, tmp_path):
     async with db_base.engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-    with (
-        patch("api_service.main._initialize_oidc_provider"),
-    ):
+    with (patch("api_service.main._initialize_oidc_provider"),):
         await startup_event()
 
     async with db_base.async_session_maker() as session:
@@ -39,3 +44,14 @@ async def test_startup_profile_seeding(disabled_env_keys, tmp_path):
         assert profile is not None
         assert profile.openai_api_key_encrypted is not None
         assert profile.google_api_key_encrypted is not None
+        zen = await session.get(
+            ManagedAgentProviderProfile,
+            "opencode-zen-free",
+        )
+        assert zen is not None
+        assert zen.enabled is True
+        assert zen.auth_state == ProviderProfileAuthState.CONNECTED
+        assert zen.credential_source == ProviderCredentialSource.NONE
+        assert zen.secret_refs == {}
+        assert zen.default_model == "opencode/muse-spark-1.2-contributor-free"
+        assert zen.default_effort == "xhigh"

@@ -1,0 +1,11 @@
+{
+  "invariant": "Omnigent plan compilation recognizes execution.fanout as a runtime-owned requirement while resolved-Skill provenance remains the separate authorization source",
+  "classAdmissionDecision": {
+    "requiredSatisfied": [],
+    "preferredSatisfied": [],
+    "degraded": [],
+    "unknown": []
+  },
+  "resolvedTools": [],
+  "exactHostAttestationRequired": false
+}

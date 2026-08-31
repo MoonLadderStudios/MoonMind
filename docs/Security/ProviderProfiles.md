@@ -448,7 +448,7 @@ For first-party Claude and Codex setup stubs, the default must be:
 
 ```yaml
 enabled: false
-auth_state: not_configured
+auth_state: oauth_pending
 disabled_reason: missing_credentials
 ```
 
@@ -611,7 +611,7 @@ runtime_materialization_mode: api_key_env
 
 enabled: false
 is_default: false
-auth_state: not_configured
+auth_state: oauth_pending
 disabled_reason: missing_credentials
 tags: ["oauth", "first-party"]
 priority: 100
@@ -1276,6 +1276,8 @@ If another compatible launch-ready profile exists, the run may continue on a dif
 
 Claude Code and Codex CLI rate limits must be reported against the selected provider profile whenever the failure can be attributed to that profile. The `AgentRun` should release the current slot, report cooldown, and retry through the same profile selector unless the request required an exact profile. If no compatible profile is available, the run waits in `awaiting_slot`.
 
+Temporary provider or selected-model capacity exhaustion follows the same default cooldown path as provider rate limits. MoonMind preserves the requested model and credential authority, releases the profile slot, and retries after the profile cooldown with bounded exponential backoff rather than silently selecting a different model or credential source. The default budget permits three cooldown retries; after the third retry fails, AgentRun returns the final structured provider failure with explicit exhaustion metadata instead of waiting forever.
+
 The slot-release + cooldown path is gated by provider error classification. Runtime strategies must classify provider rate-limit signals as `failure_class="integration_error"` with `provider_error_code="429"`, or an equivalent retry recommendation that asks the orchestration layer to wait for provider cooldown instead of retrying immediately.
 
 ---
@@ -1423,7 +1425,7 @@ New unconfigured first-party setup stubs should default to:
 
 ```yaml
 enabled: false
-auth_state: not_configured
+auth_state: oauth_pending
 disabled_reason: missing_credentials
 credential_source: none
 ```
@@ -1538,7 +1540,7 @@ runtime_materialization_mode: api_key_env
 account_label: null
 enabled: false
 is_default: false
-auth_state: not_configured
+auth_state: oauth_pending
 disabled_reason: missing_credentials
 tags: ["oauth", "first-party"]
 priority: 100

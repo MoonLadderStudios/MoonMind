@@ -9,6 +9,13 @@ from api_service.db.models import (
     RuntimeMaterializationMode,
     SecretStatus,
 )
+from api_service.services.provider_profile_creation import (
+    authentication_method_launch_ready_after_setup,
+    expert_manual_credential_launch_ready,
+    infer_authentication_method,
+    provider_profile_creation_capabilities,
+    required_secret_roles,
+)
 from moonmind.auth.secret_refs import SecretBackend, SecretReferenceError, parse_secret_ref
 from moonmind.provider_profiles.oauth_policy import is_codex_oauth_profile
 
@@ -36,16 +43,39 @@ def provider_profile_launch_ready(
         return False
     if row.cooldown_after_429_seconds is None or row.cooldown_after_429_seconds < 0:
         return False
+    if not _credential_contract_launch_ready(
+        runtime_id=row.runtime_id,
+        provider_id=row.provider_id,
+        credential_source=row.credential_source,
+        materialization_mode=row.runtime_materialization_mode,
+        auth_state=row.auth_state,
+        last_auth_method=getattr(row, "last_auth_method", None),
+        secret_refs=row.secret_refs,
+        env_template=getattr(row, "env_template", None),
+        file_templates=getattr(row, "file_templates", None),
+        home_path_overrides=getattr(row, "home_path_overrides", None),
+        command_behavior=getattr(row, "command_behavior", None),
+    ):
+        return False
     if not _credential_bindings_launch_ready(
         row,
         managed_secret_statuses=managed_secret_statuses or {},
     ):
         return False
-    return _provider_validation_launch_ready(row.command_behavior)
+    return _provider_validation_launch_ready(getattr(row, "command_behavior", None))
 
 
-def provider_profile_launch_ready_from_payload(profile: dict[str, Any]) -> bool:
-    """Return launch readiness for adapter/manager profile payloads."""
+def provider_profile_launch_ready_from_payload(
+    profile: dict[str, Any],
+    *,
+    require_registered_capability: bool = True,
+) -> bool:
+    """Return launch readiness for adapter/manager profile payloads.
+
+    Temporal workflows may disable the registered-capability portion behind a
+    patch marker while replaying histories that recorded the earlier compact
+    profile payload shape. All non-workflow callers use the strict predicate.
+    """
 
     if profile.get("enabled") is False:
         return False
@@ -63,6 +93,53 @@ def provider_profile_launch_ready_from_payload(profile: dict[str, Any]) -> bool:
     ) and profile.get("max_parallel_runs", profile.get("maxParallelRuns")) != 1:
         return False
 
+    credential_source = profile.get(
+        "credential_source",
+        profile.get("credentialSource"),
+    )
+    materialization_mode = profile.get(
+        "runtime_materialization_mode",
+        profile.get("runtimeMaterializationMode"),
+    )
+    command_behavior = profile.get("command_behavior")
+    if command_behavior is None:
+        command_behavior = profile.get("commandBehavior")
+    if require_registered_capability:
+        if not _credential_contract_launch_ready(
+            runtime_id=profile.get("runtime_id", profile.get("runtimeId")),
+            provider_id=profile.get("provider_id", profile.get("providerId")),
+            credential_source=credential_source,
+            materialization_mode=materialization_mode,
+            auth_state=profile.get("auth_state", profile.get("authState")),
+            last_auth_method=profile.get(
+                "last_auth_method", profile.get("lastAuthMethod")
+            ),
+            secret_refs=profile.get("secret_refs", profile.get("secretRefs")),
+            env_template=profile.get("env_template", profile.get("envTemplate")),
+            file_templates=profile.get(
+                "file_templates", profile.get("fileTemplates")
+            ),
+            home_path_overrides=profile.get(
+                "home_path_overrides", profile.get("homePathOverrides")
+            ),
+            command_behavior=command_behavior,
+        ):
+            return False
+    if (
+        require_registered_capability
+        and str(getattr(credential_source, "value", credential_source) or "")
+        == "secret_ref"
+    ):
+        secret_refs = profile.get("secret_refs", profile.get("secretRefs"))
+        if not isinstance(secret_refs, dict) or not secret_refs:
+            return False
+        required_roles = required_secret_roles(
+            str(profile.get("runtime_id", profile.get("runtimeId")) or ""),
+            str(profile.get("provider_id", profile.get("providerId")) or ""),
+        )
+        if any(not secret_refs.get(role) for role in required_roles):
+            return False
+
     readiness = profile.get("readiness")
     if isinstance(readiness, dict):
         launch_ready = readiness.get("launch_ready")
@@ -71,11 +148,57 @@ def provider_profile_launch_ready_from_payload(profile: dict[str, Any]) -> bool:
         if launch_ready is False:
             return False
 
-    command_behavior = profile.get("command_behavior")
     if isinstance(command_behavior, dict):
         return _provider_validation_launch_ready(command_behavior)
 
     return True
+
+
+def _credential_contract_launch_ready(
+    *,
+    runtime_id: object,
+    provider_id: object,
+    credential_source: object,
+    materialization_mode: object,
+    auth_state: object,
+    last_auth_method: object,
+    secret_refs: object,
+    env_template: object,
+    file_templates: object,
+    home_path_overrides: object,
+    command_behavior: object,
+) -> bool:
+    capabilities = provider_profile_creation_capabilities(
+        runtime_id=str(runtime_id or ""),
+        provider_id=str(provider_id or ""),
+    )
+    if not capabilities["supported"]:
+        return False
+    authentication_method = infer_authentication_method(
+        credential_source=credential_source,
+        runtime_materialization_mode=materialization_mode,
+        authentication_methods=capabilities["authentication_methods"],
+        auth_state=auth_state,
+        last_auth_method=last_auth_method,
+    )
+    if not authentication_method:
+        return False
+    if authentication_method_launch_ready_after_setup(
+        authentication_method=authentication_method,
+        authentication_methods=capabilities["authentication_methods"],
+    ):
+        return True
+    return expert_manual_credential_launch_ready(
+        runtime_id=runtime_id,
+        provider_id=provider_id,
+        credential_source=credential_source,
+        runtime_materialization_mode=materialization_mode,
+        secret_refs=secret_refs,
+        env_template=env_template,
+        file_templates=file_templates,
+        home_path_overrides=home_path_overrides,
+        command_behavior=command_behavior,
+    )
 
 
 def _credential_bindings_launch_ready(
@@ -94,6 +217,9 @@ def _credential_bindings_launch_ready(
         return True
 
     if not isinstance(row.secret_refs, dict) or not row.secret_refs:
+        return False
+    required_roles = required_secret_roles(row.runtime_id, row.provider_id)
+    if any(not row.secret_refs.get(role) for role in required_roles):
         return False
     for secret_ref in row.secret_refs.values():
         if not isinstance(secret_ref, str) or not secret_ref:

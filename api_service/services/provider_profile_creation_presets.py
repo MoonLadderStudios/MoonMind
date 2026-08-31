@@ -421,7 +421,7 @@ def _oauth_preset(
         "supported_auth_methods": ["oauth_volume"],
         "auth_actions": ["connect_oauth"],
         "auth_strategy": "oauth_volume",
-        "auth_state": "not_configured",
+        "auth_state": "oauth_pending",
         "auth_status_label": "Not connected",
         "auth_readiness": {
             "connected": False,
@@ -430,22 +430,26 @@ def _oauth_preset(
             "failure_reason": "OAuth setup has not completed.",
         },
     }
+    fields = _common_fields(
+        authentication_method=ProviderProfileAuthenticationMethod.OAUTH,
+        runtime_materialization_mode="oauth_home",
+        system_tags=["oauth", "first-party"],
+        secret_ref_roles=[],
+        clear_env_keys=clear_env_keys,
+        command_behavior=command_behavior,
+        max_parallel_runs=1,
+        max_parallel_runs_editable=False,
+        volume_mount_path_after_setup=mount_path,
+    )
+    fields["auth_state"] = _field(
+        "oauth_pending", "credential_activation_policy", editable=False, required=True
+    )
     return ProviderProfileCreationPreset(
         runtime_id=runtime_id,
         provider_id=provider_id,
         authentication_method=ProviderProfileAuthenticationMethod.OAUTH,
         supported=True,
-        fields=_common_fields(
-            authentication_method=ProviderProfileAuthenticationMethod.OAUTH,
-            runtime_materialization_mode="oauth_home",
-            system_tags=["oauth", "first-party"],
-            secret_ref_roles=[],
-            clear_env_keys=clear_env_keys,
-            command_behavior=command_behavior,
-            max_parallel_runs=1,
-            max_parallel_runs_editable=False,
-            volume_mount_path_after_setup=mount_path,
-        ),
+        fields=fields,
         diagnostics=(
             _missing_credentials_diagnostic(
                 ProviderProfileAuthenticationMethod.OAUTH
@@ -469,7 +473,7 @@ def _api_key_preset(
         "supported_auth_methods": ["secret_ref"],
         "auth_actions": ["use_api_key"],
         "auth_strategy": auth_strategy,
-        "auth_state": "not_configured",
+        "auth_state": "api_key_pending",
         "auth_status_label": "Not connected",
         "auth_readiness": {
             "connected": False,
@@ -478,25 +482,83 @@ def _api_key_preset(
             "failure_reason": "API-key setup has not completed.",
         },
     }
+    fields = _common_fields(
+        authentication_method=ProviderProfileAuthenticationMethod.API_KEY,
+        runtime_materialization_mode=materialization_mode,
+        system_tags=system_tags or ["api-key", "first-party"],
+        secret_ref_roles=[secret_role],
+        clear_env_keys=clear_env_keys,
+        env_template=env_template,
+        command_behavior=command_behavior,
+    )
+    fields["auth_state"] = _field(
+        "api_key_pending", "credential_activation_policy", editable=False, required=True
+    )
     return ProviderProfileCreationPreset(
         runtime_id=runtime_id,
         provider_id=provider_id,
         authentication_method=ProviderProfileAuthenticationMethod.API_KEY,
         supported=True,
-        fields=_common_fields(
-            authentication_method=ProviderProfileAuthenticationMethod.API_KEY,
-            runtime_materialization_mode=materialization_mode,
-            system_tags=system_tags or ["api-key", "first-party"],
-            secret_ref_roles=[secret_role],
-            clear_env_keys=clear_env_keys,
-            env_template=env_template,
-            command_behavior=command_behavior,
-        ),
+        fields=fields,
         diagnostics=(
             _missing_credentials_diagnostic(
                 ProviderProfileAuthenticationMethod.API_KEY
             ),
         ),
+    )
+
+
+def _credential_free_preset(
+    *, runtime_id: str, provider_id: str
+) -> ProviderProfileCreationPreset:
+    fields = _common_fields(
+        authentication_method=ProviderProfileAuthenticationMethod.NONE,
+        runtime_materialization_mode="composite",
+        system_tags=["credential-free"],
+        secret_ref_roles=[],
+        clear_env_keys=[],
+        command_behavior={
+            "supported_auth_methods": ["none"],
+            "auth_actions": [],
+            "auth_strategy": "credential_free",
+            "auth_state": "connected",
+            "auth_status_label": "Connected",
+            "auth_readiness": {
+                "connected": True,
+                "backing_secret_exists": False,
+                "launch_ready": True,
+            },
+        },
+    )
+    fields.update(
+        {
+            "enabled": _field(
+                True,
+                "credential_activation_policy",
+                editable=False,
+                required=True,
+                lock_reason="Credential-free capability is launch ready at creation.",
+            ),
+            "auth_state": _field(
+                "connected",
+                "credential_activation_policy",
+                editable=False,
+                required=True,
+            ),
+            "disabled_reason": _field(
+                None, "credential_activation_policy", editable=False, required=True
+            ),
+            "last_auth_method": _field(
+                "manual", "credential_activation_policy", editable=False
+            ),
+        }
+    )
+    return ProviderProfileCreationPreset(
+        runtime_id=runtime_id,
+        provider_id=provider_id,
+        authentication_method=ProviderProfileAuthenticationMethod.NONE,
+        supported=True,
+        fields=fields,
     )
 
 
@@ -563,22 +625,6 @@ def _supported_presets() -> dict[
         ),
         _api_key_preset(
             runtime_id="opencode",
-            provider_id="opencode",
-            materialization_mode="composite",
-            secret_role="opencode_api_key",
-            clear_env_keys=[
-                "OPENCODE_AUTH_CONTENT",
-                "OPENCODE_CONFIG",
-                "OPENCODE_CONFIG_CONTENT",
-                "OPENAI_API_KEY",
-                "ANTHROPIC_API_KEY",
-            ],
-            env_template={},
-            auth_strategy="opencode_auth_json",
-            system_tags=["api-key", "opencode", "zen"],
-        ),
-        _api_key_preset(
-            runtime_id="opencode",
             provider_id="opencode-go",
             materialization_mode="composite",
             secret_role="opencode_api_key",
@@ -617,6 +663,21 @@ def get_provider_profile_creation_preset(
     )
     if preset is not None:
         return preset
+
+    if method == ProviderProfileAuthenticationMethod.NONE:
+        # Import lazily so the preset module remains the policy implementation
+        # while the runtime/provider registry remains the trusted declaration.
+        from api_service.services.provider_profile_creation import (
+            credential_free_authentication_supported,
+        )
+
+        if credential_free_authentication_supported(
+            normalized_runtime_id, normalized_provider_id
+        ):
+            return _credential_free_preset(
+                runtime_id=normalized_runtime_id,
+                provider_id=normalized_provider_id,
+            )
 
     return ProviderProfileCreationPreset(
         runtime_id=normalized_runtime_id,

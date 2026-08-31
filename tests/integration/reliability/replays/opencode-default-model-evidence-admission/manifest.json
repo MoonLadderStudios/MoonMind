@@ -1,0 +1,11 @@
+{
+  "incidentReference": "user-report-2026-08-30-opencode-zen-model-evidence",
+  "terminalFailureCode": "OMNIGENT_EXECUTION_EVIDENCE_UNAVAILABLE",
+  "failureShape": "the default either evidence policy rejected an otherwise valid OpenCode Zen workflow because deployment qualification was bound to a different default modelConfigDigest",
+  "targetRuntime": "omnigent",
+  "launchPolicyRef": "omnigent-on-demand@1",
+  "evidencePolicy": "either",
+  "qualifiedModel": "example/model",
+  "requestedModel": "opencode/muse-spark-1.2-contributor-free",
+  "requestedEffort": "medium"
+}
