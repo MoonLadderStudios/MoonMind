@@ -211,9 +211,39 @@ def _pr_resolver_request(
         update={"parameters": {"publishMode": "none", "selectedSkill": "pr-resolver"}}
     )
 
+
+def _complete_fake_profile(profile: dict[str, Any]) -> dict[str, Any]:
+    """Expand common test shorthand into a production-shaped profile payload."""
+
+    if profile.get("profile_id") != "codex-default":
+        return dict(profile)
+    defaults: dict[str, Any] = {
+        "runtime_id": "codex_cli",
+        "provider_id": "openai",
+    }
+    if profile.get("credential_source") == "oauth_volume":
+        defaults.update(
+            {
+                "runtime_materialization_mode": "oauth_home",
+                "max_parallel_runs": 1,
+            }
+        )
+    elif profile.get("credential_source") == "secret_ref":
+        defaults.update(
+            {
+                "runtime_materialization_mode": "api_key_env",
+                "secret_refs": {"openai_api_key": "env://OPENAI_API_KEY"},
+            }
+        )
+    defaults.update(profile)
+    return defaults
+
+
 def _fake_profiles(profiles: list[dict[str, Any]]):
+    completed_profiles = [_complete_fake_profile(profile) for profile in profiles]
+
     async def _fetcher(*, runtime_id: str):
-        return {"profiles": profiles}
+        return {"profiles": completed_profiles}
 
     return _fetcher
 
@@ -3259,14 +3289,23 @@ async def test_start_passes_profile_materialization_payload_to_launch_session(
             [
                 {
                     "profile_id": "codex_openrouter_qwen36_plus",
+                    "runtime_id": "codex_cli",
                     "provider_id": "openrouter",
                     "credential_source": "secret_ref",
+                    "runtime_materialization_mode": "composite",
                     "default_model": "qwen/qwen3.6-plus",
-                    "secret_refs": {"provider_api_key": "env://OPENROUTER_API_KEY"},
+                    "secret_refs": {
+                        "provider_api_key": "env://OPENROUTER_API_KEY"
+                    },
                     "home_path_overrides": {
                         "CODEX_HOME": "{{runtime_support_dir}}/codex-home"
                     },
-                    "env_template": {"OPENAI_BASE_URL": "https://openrouter.ai/api/v1"},
+                    "env_template": {
+                        "OPENROUTER_API_KEY": {
+                            "from_secret_ref": "provider_api_key"
+                        },
+                        "OPENAI_BASE_URL": "https://openrouter.ai/api/v1",
+                    },
                     "file_templates": [
                         {
                             "path": "{{runtime_support_dir}}/codex-home/config.toml",

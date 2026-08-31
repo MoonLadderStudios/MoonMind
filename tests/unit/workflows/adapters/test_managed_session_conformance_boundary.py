@@ -38,7 +38,17 @@ pytestmark = [pytest.mark.asyncio]
 
 def _fake_profiles(profiles: list[dict[str, Any]]):
     async def _fetcher(*, runtime_id: str):
-        return {"profiles": profiles}
+        completed_profiles = []
+        for profile in profiles:
+            completed = {
+                "runtime_id": runtime_id,
+                "provider_id": "openai",
+                "runtime_materialization_mode": "oauth_home",
+                "max_parallel_runs": 1,
+                **profile,
+            }
+            completed_profiles.append(completed)
+        return {"profiles": completed_profiles}
 
     return _fetcher
 

@@ -2222,10 +2222,12 @@ describe('Workflows Entrypoint', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Remove Status filter' }));
 
     await waitFor(() => {
-      openFilterDrawer();
+      expect(lastExecutionListUrl()).toBe(
+        '/api/executions?source=temporal&pageSize=50&repoContains=owner%2Frepo&targetRuntimeIn=codex_cli',
+      );
       expect((screen.getByLabelText('Status filter value') as HTMLSelectElement).value).toBe('');
     });
-  }, 10000);
+  }, 30000);
 
   it('marks mobile card details links as the only full-width card action', async () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);

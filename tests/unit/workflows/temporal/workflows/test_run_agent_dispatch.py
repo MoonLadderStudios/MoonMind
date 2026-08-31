@@ -2547,6 +2547,12 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
             "opencode-provider": {
                 "profile_id": "opencode-provider",
                 "runtime_id": "opencode",
+                "provider_id": "opencode-go",
+                "credential_source": "secret_ref",
+                "runtime_materialization_mode": "composite",
+                "secret_refs": {
+                    "opencode_api_key": "env://OPENCODE_API_KEY"
+                },
             }
         }
 
