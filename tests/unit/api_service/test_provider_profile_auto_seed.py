@@ -179,7 +179,7 @@ async def test_auto_seed_creates_default_profiles(_module_db, monkeypatch):
         p for p in profiles if p.profile_id == "claude_anthropic_oauth"
     )
     assert claude_profile.enabled is False
-    assert claude_profile.auth_state == ProviderProfileAuthState.NOT_CONFIGURED
+    assert claude_profile.auth_state == ProviderProfileAuthState.OAUTH_PENDING
     assert (
         claude_profile.disabled_reason
         == ProviderProfileDisabledReason.MISSING_CREDENTIALS
@@ -996,6 +996,7 @@ async def test_auto_seed_first_party_stubs_have_default_readiness_labels(
 
     for profile_id in FIRST_PARTY_SETUP_PROFILE_IDS:
         profile = profiles[profile_id]
+        assert profile.auth_state == ProviderProfileAuthState.OAUTH_PENDING
         assert profile.command_behavior == expected_command_behavior, profile_id
         # Stubs stay pre-OAuth: no home_path_overrides until setup succeeds.
         assert not profile.home_path_overrides

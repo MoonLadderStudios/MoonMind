@@ -158,7 +158,11 @@ async def test_runtime_replays_stale_final_answer_with_exact_model_and_effort(
             "profiles": [
                 {
                     "profile_id": "codex-default",
+                    "runtime_id": "codex_cli",
+                    "provider_id": "openai",
                     "credential_source": "oauth_volume",
+                    "runtime_materialization_mode": "oauth_home",
+                    "max_parallel_runs": 1,
                 }
             ]
         }

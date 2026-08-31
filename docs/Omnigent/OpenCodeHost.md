@@ -476,6 +476,14 @@ required capabilities
 
 A shared-image Codex or Claude pass does not qualify OpenCode. An OpenCode pass does not qualify Codex or Claude.
 
+Protected support classification remains bound to the complete exact support
+key, including model, effort, normalized options, and Required Capabilities.
+The default local deployment-qualification path instead binds the immutable
+runtime substrate and credential compatibility class. Per-run model/options
+and Required Capabilities are admitted independently through class admission,
+provider/runtime validation, and exact-host model attestation, so selecting a
+valid default Provider Profile does not require manual requalification.
+
 ## 16. Migration and rollback
 
 The image transition should proceed in this order:

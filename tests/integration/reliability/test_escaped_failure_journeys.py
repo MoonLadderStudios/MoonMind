@@ -188,6 +188,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_WORKFLOW_HEADLESS_REMEDIATION_PATCH,
     RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
     RUN_OMNIGENT_STOCK_AGENT_IDENTITY_PATCH,
+    RUN_PROFILE_SNAPSHOT_CREDENTIAL_CAPABILITY_PATCH,
     RUN_PUBLISH_MODE_REPOSITORY_OPERATION_PATCH,
     RUN_PUBLISHED_BRANCH_HANDOFF_PATCH,
     RUN_REMEDIATION_EXPLICIT_EVIDENCE_INPUTS_PATCH,
@@ -1008,7 +1009,11 @@ async def test_pr_resolver_child_compiles_bindable_stock_agent_identity(
         search_attributes={},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", lambda: workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch: patch != RUN_PROFILE_SNAPSHOT_CREDENTIAL_CAPABILITY_PATCH,
+    )
 
     workflow = MoonMindRunWorkflow()
     workflow._profile_snapshots = manifest["profileSnapshots"]

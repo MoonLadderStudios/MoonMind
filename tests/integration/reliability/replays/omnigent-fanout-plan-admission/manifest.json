@@ -1,0 +1,12 @@
+{
+  "incidentReference": "user-report-2026-08-30-execution-fanout-admission",
+  "terminalFailureCode": "OMNIGENT_CAPABILITY_REQUIRED_UNKNOWN",
+  "failureShape": "workflow submission resolved a trusted batch Skill requirement to execution.fanout, but Omnigent class admission had no trusted platform declaration for that runtime-owned capability",
+  "targetRuntime": "omnigent",
+  "launchPolicyRef": "omnigent-on-demand@1",
+  "resolvedSkill": {
+    "name": "batch-workflows",
+    "sourceKind": "built_in",
+    "requiredCapabilities": ["execution.fanout"]
+  }
+}

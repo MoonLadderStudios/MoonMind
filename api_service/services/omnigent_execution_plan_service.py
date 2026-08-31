@@ -59,6 +59,9 @@ from moonmind.schemas.agent_skill_models import (
 from moonmind.schemas.agent_skill_models import (
     ResolvedSkillSet as AgentResolvedSkillSet,
 )
+from moonmind.security.execution_fanout_capabilities import (
+    EXECUTION_FANOUT_REQUIRED_CAPABILITY,
+)
 from moonmind.services.skill_resolution import (
     AgentSkillResolver,
     SkillResolutionContext,
@@ -1138,10 +1141,14 @@ async def compile_and_persist_execution_plan(
         # A workflow request can require a capability, but it cannot make that
         # capability available merely by naming it.
         bridge_capabilities=bridge_capabilities,
-        # Runtime-mode requirements are satisfied by this trusted compiler
-        # only after it has confirmed that the request reached the canonical
-        # Omnigent product boundary. They are not exact-host tool claims.
-        platform_capabilities={OMNIGENT_RUNTIME_ID: True},
+        # Runtime-owned requirements are satisfied at trusted MoonMind adapter
+        # boundaries. They are not exact-host tool claims: the runtime token is
+        # proven by this compiler, while fan-out is authorized from resolved
+        # Skill provenance and materialized by the launch adapter.
+        platform_capabilities={
+            OMNIGENT_RUNTIME_ID: True,
+            EXECUTION_FANOUT_REQUIRED_CAPABILITY: True,
+        },
         workspace_intent_ref=_digest_ref(
             "workspace-intent", {"repository": repository, "workspace": workspace}
         ),
@@ -1164,9 +1171,10 @@ async def compile_and_persist_execution_plan(
         OMNIGENT_SESSION_FEATURE_GENERATION,
     )
 
-    # Execution evidence is now policy-driven. Default policy is deployment
-    # (locally-generated), protected remains for official support tier.
-    # The resolver chooses the appropriate evidence or fails closed.
+    # Execution evidence is policy-driven. The default ``either`` policy
+    # prefers protected evidence and otherwise uses local deployment
+    # qualification; ``protected`` remains the strict support-certification
+    # gate. The resolver chooses the appropriate evidence or fails closed.
     try:
         support_evidence, support_tier = resolve_execution_evidence(plan.payload)
         # For deployment evidence, we still want to publish same artifact class

@@ -363,6 +363,7 @@ async def test_requalification_uses_the_current_provider_profile_model(
     )
     provider_profile = SimpleNamespace(
         profile_id="opencode-go-default",
+        provider_id="opencode-go",
         is_default=True,
         enabled=True,
         auth_state=ProviderProfileAuthState.CONNECTED,
@@ -432,7 +433,6 @@ async def test_requalification_follows_the_current_default_provider_profile(
         ProviderCredentialSource,
         ProviderProfileAuthState,
         RuntimeMaterializationMode,
-        SecretStatus,
     )
     from moonmind.omnigent.bootstrap.provider_revalidation import (
         ProviderReconcileOutcome,
@@ -453,15 +453,16 @@ async def test_requalification_follows_the_current_default_provider_profile(
         "disabled_reason": None,
         "max_parallel_runs": 1,
         "runtime_id": "opencode",
-        "credential_source": ProviderCredentialSource.SECRET_REF,
-        "runtime_materialization_mode": RuntimeMaterializationMode.COMPOSITE,
         "cooldown_after_429_seconds": 0,
         "command_behavior": {},
     }
     previous = SimpleNamespace(
         **shared,
         profile_id="opencode-go-default",
+        provider_id="opencode-go",
         is_default=False,
+        credential_source=ProviderCredentialSource.SECRET_REF,
+        runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
         secret_refs={"opencode_api_key": "db://opencode-go-default-api-key"},
         default_model="opencode-go/muse-spark-1.2-contributor",
         default_effort="xhigh",
@@ -469,8 +470,11 @@ async def test_requalification_follows_the_current_default_provider_profile(
     current = SimpleNamespace(
         **shared,
         profile_id="opencode-zen-free",
+        provider_id="opencode",
         is_default=True,
-        secret_refs={"opencode_api_key": "db://opencode-zen-free-api-key"},
+        credential_source=ProviderCredentialSource.NONE,
+        runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
+        secret_refs={},
         default_model="opencode/muse-spark-1.2-contributor-free",
         default_effort="xhigh",
     )
@@ -495,11 +499,7 @@ async def test_requalification_follows_the_current_default_provider_profile(
     )
     monkeypatch.setattr(
         "api_service.services.provider_profile_service._managed_secret_statuses_for_profiles",
-        AsyncMock(
-            return_value={
-                "opencode-zen-free-api-key": SecretStatus.ACTIVE.value,
-            }
-        ),
+        AsyncMock(return_value={}),
     )
     monkeypatch.setattr(
         "moonmind.omnigent.bootstrap.provider_revalidation.reconcile_opencode_provider_readiness",
@@ -557,6 +557,7 @@ async def test_requalification_rejects_an_unlaunchable_provider_profile(
     )
     provider_profile = SimpleNamespace(
         profile_id="opencode-go-default",
+        provider_id="opencode-go",
         is_default=True,
         enabled=enabled,
         auth_state=ProviderProfileAuthState.CONNECTED,
@@ -622,6 +623,7 @@ async def test_requalification_stops_when_runtime_revalidation_fails(
     )
     provider_profile = SimpleNamespace(
         profile_id="opencode-go-default",
+        provider_id="opencode-go",
         is_default=True,
         enabled=True,
         auth_state=ProviderProfileAuthState.CONNECTED,
