@@ -885,6 +885,19 @@ def _read_worker_token() -> str | None:
 
 
 def _read_execution_fanout_token() -> str | None:
+    token_file = _text(
+        os.getenv("MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE")
+    )
+    if token_file:
+        path = Path(token_file)
+        if not path.is_file():
+            raise RuntimeError(
+                "execution fan-out capability file is unavailable: " + token_file
+            )
+        token = path.read_text(encoding="utf-8").strip()
+        if not token:
+            raise RuntimeError("execution fan-out capability file is empty")
+        return token
     return _text(os.getenv("MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN")) or None
 
 

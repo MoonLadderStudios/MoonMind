@@ -282,7 +282,11 @@ def _extract_parent_runtime_fields(record: Any) -> InheritedRuntime:
             key
         ) not in (None, ""):
             agent_profile[key] = agent_profile_snapshot[key]
-    if not _coerce_str(agent_profile.get("providerProfileRef")) and profile_id:
+    if (
+        agent_profile
+        and not _coerce_str(agent_profile.get("providerProfileRef"))
+        and profile_id
+    ):
         agent_profile["providerProfileRef"] = profile_id
     if not agent_profile:
         agent_profile = None
@@ -501,7 +505,10 @@ def apply_inherited_runtime_to_payload(
         explicit_agent_profile = payload.get("agentProfile")
         if not isinstance(explicit_agent_profile, Mapping):
             explicit_agent_profile = runtime_block.get("agentProfile")
-        if not isinstance(explicit_agent_profile, Mapping):
+        if (
+            not isinstance(explicit_agent_profile, Mapping)
+            and not explicit_profile_id
+        ):
             runtime_block["agentProfile"] = dict(inherited.agent_profile)
     if inherited.omnigent and not isinstance(payload.get("omnigent"), Mapping):
         # Omnigent launch and execution-target selectors are request-level

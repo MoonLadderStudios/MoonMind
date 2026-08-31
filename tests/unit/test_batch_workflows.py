@@ -117,6 +117,37 @@ def test_http_submission_forwards_scoped_execution_fanout_bearer(
     assert captured_headers["X-moonmind-execution-fanout"] == "v1"
 
 
+def test_execution_fanout_token_prefers_lease_owned_file(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    token_file = tmp_path / "execution-fanout"
+    token_file.write_text("file-capability\n", encoding="utf-8")
+    monkeypatch.setenv(
+        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE", str(token_file)
+    )
+    monkeypatch.setenv(
+        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN", "ambient-capability"
+    )
+
+    assert module["_read_execution_fanout_token"]() == "file-capability"
+
+
+def test_execution_fanout_token_file_fails_closed_when_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    monkeypatch.setenv(
+        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE",
+        str(tmp_path / "missing-capability"),
+    )
+
+    with pytest.raises(RuntimeError, match="capability file is unavailable"):
+        module["_read_execution_fanout_token"]()
+
+
 _JIRA_TARGET: dict[str, Any] = {
     "provider": "jira",
     "ref": "THOR-123",

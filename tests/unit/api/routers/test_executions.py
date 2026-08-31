@@ -4934,10 +4934,48 @@ def test_api_execution_compiles_opencode_plan_before_temporal_schedule(
     )
 
 
-def test_api_execution_keeps_selected_provider_profile_model_in_opencode_plan(
+@pytest.mark.parametrize(
+    (
+        "provider_default_model",
+        "provider_model_tiers",
+        "provider_default_tier",
+        "expected_model",
+        "expected_model_source",
+    ),
+    [
+        (
+            "opencode/muse-spark-1.2-contributor-free",
+            [
+                {
+                    "label": "Muse Spark 1.2 Contributor Free",
+                    "model": "opencode/muse-spark-1.2-contributor-free",
+                    "effort": "xhigh",
+                    "parameters": {},
+                    "annotations": {},
+                }
+            ],
+            1,
+            "opencode/muse-spark-1.2-contributor-free",
+            "profile_default_tier",
+        ),
+        (
+            None,
+            [],
+            None,
+            "opencode-go/muse-spark-1.2-contributor",
+            "none",
+        ),
+    ],
+)
+def test_api_execution_keeps_authoritative_model_in_opencode_plan(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    provider_default_model: str | None,
+    provider_model_tiers: list[dict[str, object]],
+    provider_default_tier: int | None,
+    expected_model: str,
+    expected_model_source: str,
 ) -> None:
-    """Replay mm:171981b9 at the Provider Profile -> plan authority handoff."""
+    """Replay Provider Profile and Agent Profile model authority handoffs."""
 
     test_client, temporal_service, _user = client
     temporal_service.create_execution.return_value = _build_execution_record()
@@ -4945,18 +4983,10 @@ def test_api_execution_keeps_selected_provider_profile_model_in_opencode_plan(
         profile_id="opencode-zen-free",
         runtime_id="opencode",
         provider_id="opencode",
-        default_model="opencode/muse-spark-1.2-contributor-free",
+        default_model=provider_default_model,
         default_effort="xhigh",
-        model_tiers=[
-            {
-                "label": "Muse Spark 1.2 Contributor Free",
-                "model": "opencode/muse-spark-1.2-contributor-free",
-                "effort": "xhigh",
-                "parameters": {},
-                "annotations": {},
-            }
-        ],
-        default_model_tier=1,
+        model_tiers=provider_model_tiers,
+        default_model_tier=provider_default_tier,
         enabled=True,
         auth_state="connected",
         disabled_reason=None,
@@ -4980,8 +5010,8 @@ def test_api_execution_keeps_selected_provider_profile_model_in_opencode_plan(
         "launchPolicyRef": "omnigent-on-demand@1",
         "agentId": "opencode-native-ui",
         "document": {
-            # The upstream Agent Profile has a different default; the selected
-            # Provider Profile remains authoritative for this run's model.
+            # The Agent Profile remains authoritative unless Provider Profile
+            # resolution establishes a more specific model source.
             "model": {
                 "qualifiedId": "opencode-go/muse-spark-1.2-contributor",
                 "effort": "xhigh",
@@ -5055,20 +5085,19 @@ def test_api_execution_keeps_selected_provider_profile_model_in_opencode_plan(
         )
 
     assert response.status_code == 201, response.text
-    assert compiled_parameters["model"] == (
-        "opencode/muse-spark-1.2-contributor-free"
-    )
+    assert compiled_parameters["model"] == expected_model
     assert compiled_parameters["effort"] == "xhigh"
-    assert compiled_parameters["modelSource"] == "profile_default_tier"
+    assert compiled_parameters["modelSource"] == expected_model_source
     initial_parameters = temporal_service.create_execution.await_args.kwargs[
         "initial_parameters"
     ]
-    assert initial_parameters["model"] == (
-        "opencode/muse-spark-1.2-contributor-free"
-    )
-    assert initial_parameters["modelTierResolution"]["resolvedModel"] == (
-        "opencode/muse-spark-1.2-contributor-free"
-    )
+    assert initial_parameters["model"] == expected_model
+    if provider_model_tiers:
+        assert initial_parameters["modelTierResolution"]["resolvedModel"] == (
+            expected_model
+        )
+    else:
+        assert "modelTierResolution" not in initial_parameters
 
 
 def test_api_idempotent_omnigent_retry_reuses_recorded_plan_before_resolution(

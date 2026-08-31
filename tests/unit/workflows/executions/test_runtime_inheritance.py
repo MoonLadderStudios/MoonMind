@@ -478,6 +478,38 @@ async def test_github_3453_child_inherits_complete_omnigent_selection() -> None:
     assert "omnigent" not in payload["task"]["runtime"]
 
 
+@pytest.mark.asyncio
+async def test_non_omnigent_parent_does_not_synthesize_agent_profile() -> None:
+    parent = _parent_record(
+        target_runtime="codex_cli",
+        profile_id="codex-default",
+        execution_profile_ref="codex-default",
+    )
+    service = _FakeService({"mm:parent": parent})
+    principal = ExecutionPrincipal(
+        user_id="user-1",
+        workflow_id="mm:parent",
+        scopes=frozenset({SCOPE_CREATE_CHILD, SCOPE_INHERIT_RUNTIME}),
+    )
+    payload: dict[str, Any] = {"runtimeInheritance": "caller", "task": {}}
+
+    inherited = await resolve_child_runtime_inheritance(
+        request_payload=payload,
+        task_payload=payload["task"],
+        principal=principal,
+        service=service,
+    )
+
+    assert inherited is not None
+    assert inherited.agent_profile is None
+    apply_inherited_runtime_to_payload(
+        payload=payload,
+        task_payload=payload["task"],
+        inherited=inherited,
+    )
+    assert "agentProfile" not in payload["task"]["runtime"]
+
+
 def test_github_3453_explicit_child_omnigent_selection_wins_inheritance() -> None:
     inherited = InheritedRuntime(
         target_runtime="omnigent",
@@ -615,6 +647,34 @@ def test_apply_inherited_runtime_preserves_explicit_provider_profile_ref() -> No
     assert task_payload["runtime"]["providerProfileRef"] == "child-explicit"
     assert "executionProfileRef" not in task_payload["runtime"]
     assert "profileId" not in task_payload["runtime"]
+
+
+def test_explicit_child_provider_skips_parent_agent_profile() -> None:
+    payload: dict[str, Any] = {
+        "targetRuntime": "omnigent",
+        "task": {"runtime": {"providerProfileRef": "child-explicit"}},
+    }
+    task_payload = payload["task"]
+    inherited = InheritedRuntime(
+        target_runtime="omnigent",
+        profile_id="parent-provider",
+        execution_profile_ref="parent-provider",
+        agent_profile={
+            "profileId": "parent-agent",
+            "version": 2,
+            "digest": "sha256:" + "a" * 64,
+            "providerProfileRef": "parent-provider",
+        },
+    )
+
+    apply_inherited_runtime_to_payload(
+        payload=payload,
+        task_payload=task_payload,
+        inherited=inherited,
+    )
+
+    assert task_payload["runtime"]["providerProfileRef"] == "child-explicit"
+    assert "agentProfile" not in task_payload["runtime"]
 
 
 def test_apply_inherited_runtime_skips_profile_backfill_when_child_sets_execution_profile_ref() -> None:

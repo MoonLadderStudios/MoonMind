@@ -11490,9 +11490,25 @@ async def _create_execution_from_workflow_request(
         # Preserve both explicit task overrides and the selected Provider
         # Profile's default/tier so the immutable plan cannot pair one profile's
         # credential class with another profile's model.
-        if model_source == "task_override" or _provider_profile is not None:
+        provider_authority_sources = {
+            "provider_profile_default",
+            "requested_tier",
+            "profile_default_tier",
+        }
+        if (
+            model_source == "task_override"
+            or model_source in provider_authority_sources
+        ):
             initial_parameters["model"] = resolved_model
-        if "effort" in runtime_payload or _provider_profile is not None:
+        effort_source = (
+            str(model_tier_resolution.get("effortSource") or "")
+            if isinstance(model_tier_resolution, Mapping)
+            else ""
+        )
+        if (
+            "effort" in runtime_payload
+            or effort_source in provider_authority_sources
+        ):
             initial_parameters["effort"] = resolved_effort
         selected_provider_profile = await session.get(
             ManagedAgentProviderProfile,

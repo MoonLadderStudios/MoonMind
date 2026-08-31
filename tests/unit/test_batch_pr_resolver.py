@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 def _load_module() -> dict[str, Any]:
     repo_root = Path(__file__).resolve().parents[2]
     return runpy.run_path(
@@ -772,6 +774,35 @@ def test_read_worker_token_prefers_env_over_file(
     monkeypatch.setenv("MOONMIND_WORKER_TOKEN_FILE", str(token_file))
 
     assert read_worker_token() == "env-token"
+
+
+def test_execution_fanout_token_prefers_lease_owned_file(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    module = _load_module()
+    token_file = tmp_path / "execution-fanout"
+    token_file.write_text("file-capability\n", encoding="utf-8")
+    monkeypatch.setenv(
+        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE", str(token_file)
+    )
+    monkeypatch.setenv(
+        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN", "ambient-capability"
+    )
+
+    assert module["_read_execution_fanout_token"]() == "file-capability"
+
+
+def test_execution_fanout_token_file_fails_closed_when_missing(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    module = _load_module()
+    monkeypatch.setenv(
+        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE",
+        str(tmp_path / "missing-capability"),
+    )
+
+    with pytest.raises(RuntimeError, match="capability file is unavailable"):
+        module["_read_execution_fanout_token"]()
 
 # ---------------------------------------------------------------------------
 # SkillInvocation payload contract tests
