@@ -39,6 +39,10 @@ from moonmind.omnigent.harness_platform.host_classes import (
     HostClass,
     OmnigentHostClassSelector,
 )
+from moonmind.omnigent.harness_platform.materializers import (
+    get_materializer,
+    materializer_ref_for_provider,
+)
 from moonmind.omnigent.harness_platform.planner import compile_execution_plan
 from moonmind.omnigent.harness_platform.skills import ResolvedSkillSet
 from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
@@ -148,7 +152,11 @@ async def _try_load_real_harness_config(
         )
 
         # Agent profile snapshot carries catalogRef and implementationRef
-        doc = agent_profile_snapshot.get("document") if isinstance(agent_profile_snapshot.get("document"), Mapping) else {}
+        doc = (
+            agent_profile_snapshot.get("document")
+            if isinstance(agent_profile_snapshot.get("document"), Mapping)
+            else {}
+        )
         # Try to load via snapshot's catalogRef
         catalog_ref = None
         if isinstance(doc, Mapping):
@@ -159,7 +167,11 @@ async def _try_load_real_harness_config(
             # Fallback to snapshot's digest field
             catalog_ref = str(agent_profile_snapshot.get("catalogRef") or "").strip()
         # Use DbHarnessCatalogRepository to load; need endpointRef
-        endpoint_ref = str(doc.get("endpointRef") or "default") if isinstance(doc, Mapping) else "default"
+        endpoint_ref = (
+            str(doc.get("endpointRef") or "default")
+            if isinstance(doc, Mapping)
+            else "default"
+        )
         repo = DbHarnessCatalogRepository(session_factory)
         # Try catalogRef first, then latest
         catalog_result = None
@@ -180,8 +192,7 @@ async def _try_load_real_harness_config(
         registration = harness_registration(harness_id)
         auth_model = harness_record.capabilities.authModel or registration.authModel
         integration_mode = (
-            harness_record.capabilities.integrationMode
-            or registration.integrationMode
+            harness_record.capabilities.integrationMode or registration.integrationMode
         )
         materializer = registration.materializerRef
         host_ref = registration.hostClassRef
@@ -228,18 +239,20 @@ async def _resolve_runtime_policy_snapshot(
             )
     except PolicyNotFound:
         # Fallback for generic opencode harness when deployment policy is not seeded
-        if policy_ref.startswith("opencode-") or policy_ref.startswith("omnigent-on-demand"):
+        if policy_ref.startswith("opencode-") or policy_ref.startswith(
+            "omnigent-on-demand"
+        ):
             # Synthesize from a known codex policy
             try:
                 if db_session is not None:
-                    base = await OmnigentPolicyService(db_session).resolve_runtime_snapshot(
-                        "codex-on-demand@1"
-                    )
+                    base = await OmnigentPolicyService(
+                        db_session
+                    ).resolve_runtime_snapshot("codex-on-demand@1")
                 else:
                     async with session_factory() as session2:
-                        base = await OmnigentPolicyService(session2).resolve_runtime_snapshot(
-                            "codex-on-demand@1"
-                        )
+                        base = await OmnigentPolicyService(
+                            session2
+                        ).resolve_runtime_snapshot("codex-on-demand@1")
                 # Clone and adapt for opencode – replace every Codex identity
                 import copy
 
@@ -251,10 +264,18 @@ async def _resolve_runtime_policy_snapshot(
                 execution["agentIdentities"] = ["opencode"]
                 boundaries["execution"] = execution
                 # Replace every remaining Codex provider identity.
-                if "providerProfile" in boundaries and isinstance(boundaries["providerProfile"], dict):
-                    boundaries["providerProfile"]["compatibleProviders"] = ["opencode-go", "opencode"]
+                if "providerProfile" in boundaries and isinstance(
+                    boundaries["providerProfile"], dict
+                ):
+                    boundaries["providerProfile"]["compatibleProviders"] = [
+                        "opencode-go",
+                        "opencode",
+                    ]
                 else:
-                    boundaries["providerProfile"] = {"compatibleProviders": ["opencode-go", "opencode"]}
+                    boundaries["providerProfile"] = {
+                        "compatibleProviders": ["opencode-go", "opencode"]
+                    }
+
                 # Deep sweep: replace any lingering Codex strings that survived the shallow copy
                 def _deep_replace_codex(obj: Any) -> Any:
                     if isinstance(obj, dict):
@@ -271,7 +292,9 @@ async def _resolve_runtime_policy_snapshot(
                         if obj == "omnigent-codex@1":
                             return "omnigent-opencode@1"
                         if "codex" in obj.lower():
-                            return obj.replace("codex", "opencode").replace("Codex", "Opencode")
+                            return obj.replace("codex", "opencode").replace(
+                                "Codex", "Opencode"
+                            )
                         return obj
                     return obj
 
@@ -284,7 +307,10 @@ async def _resolve_runtime_policy_snapshot(
                 boundaries["execution"]["profileRef"] = "omnigent-opencode@1"
                 boundaries["execution"]["agentIdentities"] = ["opencode"]
                 boundaries.get("execution", {}).pop("compatibleProviders", None)
-                boundaries["providerProfile"]["compatibleProviders"] = ["opencode-go", "opencode"]
+                boundaries["providerProfile"]["compatibleProviders"] = [
+                    "opencode-go",
+                    "opencode",
+                ]
                 host = boundaries.get("host", {})
                 # Use resolved opencode image if available
                 opencode_ref = os.getenv("OMNIGENT_OPENCODE_HOST_IMAGE_REF", "").strip()
@@ -305,8 +331,7 @@ async def _resolve_runtime_policy_snapshot(
                     policy_id=policy_id or "opencode-on-demand",
                     version=int(version_text or "1"),
                     document=boundaries,
-                    validation=synthetic.get("validation")
-                    or {"valid": True},
+                    validation=synthetic.get("validation") or {"valid": True},
                 )
             except Exception:
                 raise PolicyNotFound(f"{policy_ref} (synthetic fallback failed)")
@@ -632,9 +657,7 @@ def _build_v2_profile(
                     "optional": False,
                     "acceptedAuthModels": [auth_model],
                     "acceptedProviderIds": list(
-                        (document.get("providerRequirements") or {}).get(
-                            "providerIds"
-                        )
+                        (document.get("providerRequirements") or {}).get("providerIds")
                         or []
                     ),
                 }
@@ -680,13 +703,10 @@ async def compile_and_persist_execution_plan(
 ) -> PersistedOmnigentExecutionPlan:
     """Compile and persist one plan before Temporal or provider side effects."""
 
-    target_runtime = (
-        str(initial_parameters.get("targetRuntime") or "").strip().lower()
-    )
+    target_runtime = str(initial_parameters.get("targetRuntime") or "").strip().lower()
     if target_runtime != OMNIGENT_RUNTIME_ID:
         raise ValueError(
-            "Omnigent execution-plan compilation requires "
-            "targetRuntime='omnigent'"
+            "Omnigent execution-plan compilation requires " "targetRuntime='omnigent'"
         )
     document = agent_profile_snapshot.get("document")
     if not isinstance(document, Mapping):
@@ -720,9 +740,7 @@ async def compile_and_persist_execution_plan(
                 str(document.get("endpointRef") or "default")
             )
             if _latest_cat is not None:
-                catalog_omnigent_version = str(
-                    _latest_cat.snapshot.omnigentVersion
-                )
+                catalog_omnigent_version = str(_latest_cat.snapshot.omnigentVersion)
         except Exception:
             # The catalog lookup only sharpens the reported Omnigent version.
             # Planning authority comes from the profile document, so an
@@ -736,9 +754,27 @@ async def compile_and_persist_execution_plan(
     ).strip()
     if not provider_profile_ref:
         raise ValueError("Provider Profile selection is unavailable")
-    launch_policy_ref = str(
-        agent_profile_snapshot.get("launchPolicyRef") or ""
+    provider_runtime_id = str(
+        getattr(provider_profile, "runtime_id", None) or ""
     ).strip()
+    provider_id = str(getattr(provider_profile, "provider_id", None) or "").strip()
+    if harness_id == "opencode-native":
+        materializer_ref = materializer_ref_for_provider(
+            provider_runtime_id,
+            provider_id,
+        )
+        materializer = get_materializer(materializer_ref)
+        auth_models = list(materializer.acceptedAuthModels)
+        if len(auth_models) != 1:
+            raise ValueError(
+                f"credential materializer {materializer_ref} must declare one auth model"
+            )
+        config = {
+            **config,
+            "materializerRef": materializer_ref,
+            "authModel": auth_models[0],
+        }
+    launch_policy_ref = str(agent_profile_snapshot.get("launchPolicyRef") or "").strip()
     if not launch_policy_ref:
         raise ValueError("launch policy selection is unavailable")
     policy_snapshot = await _resolve_runtime_policy_snapshot(
@@ -778,12 +814,9 @@ async def compile_and_persist_execution_plan(
     ).strip()
     if (
         expected_execution_profile
-        and effective_launch.get("executionProfileRef")
-        != expected_execution_profile
+        and effective_launch.get("executionProfileRef") != expected_execution_profile
     ):
-        raise ValueError(
-            "launch policy execution profile conflicts with Agent Profile"
-        )
+        raise ValueError("launch policy execution profile conflicts with Agent Profile")
     if str(effective_launch.get("harness") or "") != harness_id:
         raise ValueError("launch policy harness conflicts with Agent Profile")
     policy_artifact_ref, policy_artifact_digest = await persist_json_artifact(
@@ -816,9 +849,7 @@ async def compile_and_persist_execution_plan(
                 "id": harness_id,
                 "aliases": [],
                 "label": harness_id,
-                "implementation": implementation.model_dump(
-                    mode="json", by_alias=True
-                ),
+                "implementation": implementation.model_dump(mode="json", by_alias=True),
                 "runtimeRequirements": {},
                 "capabilities": {
                     "integrationMode": config["integrationMode"],
@@ -867,9 +898,7 @@ async def compile_and_persist_execution_plan(
                     "bubblewrap": True,
                     "workspaceBind": True,
                     "readOnlyRoot": bool(effective_launch.get("readOnlyRoot")),
-                    "restrictedEgress": bool(
-                        effective_launch.get("enforcedEgress")
-                    ),
+                    "restrictedEgress": bool(effective_launch.get("enforcedEgress")),
                     "mountedSkills": True,
                     "mountedTools": True,
                 },
@@ -924,9 +953,7 @@ async def compile_and_persist_execution_plan(
                 "id": harness_id,
                 "aliases": [],
                 "label": harness_id,
-                "implementation": implementation.model_dump(
-                    mode="json", by_alias=True
-                ),
+                "implementation": implementation.model_dump(mode="json", by_alias=True),
                 "runtimeRequirements": {},
                 "capabilities": {
                     "integrationMode": config["integrationMode"],
@@ -1097,22 +1124,17 @@ async def compile_and_persist_execution_plan(
         launch_policy_ref=launch_policy_ref,
         model_qualified_id=(
             str(
-                initial_parameters.get("model")
-                or model_mapping.get("model")
-                or ""
+                initial_parameters.get("model") or model_mapping.get("model") or ""
             ).strip()
             or None
         ),
         model_effort=(
             str(
-                initial_parameters.get("effort")
-                or model_mapping.get("effort")
-                or ""
+                initial_parameters.get("effort") or model_mapping.get("effort") or ""
             ).strip()
             or None
         ),
-        model_route_ref=str(getattr(provider_profile, "provider_id", "") or "")
-        or None,
+        model_route_ref=str(getattr(provider_profile, "provider_id", "") or "") or None,
         model_normalized_options=dict(model_mapping.get("settings") or {}),
         workflow_requirements=list(required_capabilities),
         # Capability admission consumes deployment-owned declarations only.
@@ -1137,9 +1159,7 @@ async def compile_and_persist_execution_plan(
         host_image_ref=str(effective_launch.get("hostImageRef") or ""),
         omnigent_host_build_digest=host_class.omnigentBuildDigest,
         host_architecture=host_architecture,
-        capture_policy_ref=_digest_ref(
-            "capture-policy", document.get("capture") or {}
-        ),
+        capture_policy_ref=_digest_ref("capture-policy", document.get("capture") or {}),
         execution_authority=authority,
         agent_profile_snapshot_ref=f"artifact:{profile_snapshot_ref}",
     )
@@ -1187,9 +1207,7 @@ async def compile_and_persist_execution_plan(
                         else "deployment_qualified"
                     ),
                     featureGeneration=OMNIGENT_SESSION_FEATURE_GENERATION,
-                    replayCompatibilityVersion=(
-                        OMNIGENT_SESSION_COMPATIBILITY_VERSION
-                    ),
+                    replayCompatibilityVersion=(OMNIGENT_SESSION_COMPATIBILITY_VERSION),
                     rollbackPolicyVersion=SUPERVISOR_ROLLBACK_POLICY_VERSION,
                 )
             }

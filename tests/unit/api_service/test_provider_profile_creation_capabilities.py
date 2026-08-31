@@ -10,6 +10,7 @@ from api_service.services.provider_profile_creation import (
     RuntimeProviderAuthenticationCapability,
     expert_manual_credential_launch_ready,
     infer_authentication_method,
+    provider_api_key_strategy,
     provider_profile_creation_capabilities,
     required_secret_roles,
     validate_manual_credential_contract,
@@ -80,6 +81,29 @@ def test_credential_free_method_requires_authoritative_backend_capability(
         "none"
     ]
     assert authorized["authentication_methods"][0]["label"] == "No credentials"
+
+
+def test_opencode_zen_is_credential_free_while_go_requires_an_api_key() -> None:
+    zen = provider_profile_creation_capabilities(
+        runtime_id="opencode",
+        provider_id="opencode",
+    )
+    go = provider_profile_creation_capabilities(
+        runtime_id="opencode",
+        provider_id="opencode-go",
+    )
+
+    assert [method["id"] for method in zen["authentication_methods"]] == ["none"]
+    assert zen["authentication_methods"][0]["secret_roles"] == []
+    assert provider_api_key_strategy("opencode", "opencode") is None
+    assert [method["id"] for method in go["authentication_methods"]] == [
+        "api_key"
+    ]
+    assert provider_api_key_strategy("opencode", "opencode-go") is not None
+    assert required_secret_roles("opencode", "opencode") == ()
+    assert required_secret_roles("opencode", "opencode-go") == (
+        "opencode_api_key",
+    )
 
 
 def test_required_secret_roles_are_backend_declared() -> None:

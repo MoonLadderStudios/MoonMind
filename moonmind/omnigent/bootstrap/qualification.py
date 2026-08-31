@@ -8,7 +8,9 @@ from pathlib import Path
 from typing import Any
 
 
-async def _run_cmd(argv: list[str], cwd: Path | None = None, timeout: int = 30) -> tuple[int, str, str]:
+async def _run_cmd(
+    argv: list[str], cwd: Path | None = None, timeout: int = 30
+) -> tuple[int, str, str]:
     try:
         proc = subprocess.run(
             argv,
@@ -46,7 +48,9 @@ async def run_qualification(
     try:
         from moonmind.omnigent.realizers.generic_host import GenericOmnigentHostRealizer
 
-        assert GenericOmnigentHostRealizer.ref == "generic-omnigent-host@1", "unexpected realizer ref"
+        assert (
+            GenericOmnigentHostRealizer.ref == "generic-omnigent-host@1"
+        ), "unexpected realizer ref"
         results["realizerPresence"] = "passed"
     except Exception as exc:
         results["realizerPresence"] = "failed"
@@ -58,14 +62,32 @@ async def run_qualification(
         from moonmind.omnigent.conformance import assert_secret_free
 
         async with session_factory() as session:
-            profile = await session.get(ManagedAgentProviderProfile, provider_profile_ref)
+            profile = await session.get(
+                ManagedAgentProviderProfile, provider_profile_ref
+            )
             if profile is None:
                 raise RuntimeError(f"provider profile {provider_profile_ref} not found")
-            if profile.secret_refs and "opencode_api_key" in profile.secret_refs:
+            from moonmind.omnigent.harness_platform.materializers import (
+                materializer_ref_for_provider,
+            )
+
+            materializer_ref = materializer_ref_for_provider(
+                str(profile.runtime_id or ""),
+                str(profile.provider_id or ""),
+            )
+            if materializer_ref == "none@1" and not profile.secret_refs:
+                results["credentialMaterialization"] = "passed"
+            elif (
+                materializer_ref == "opencode-auth-json@1"
+                and profile.secret_refs
+                and "opencode_api_key" in profile.secret_refs
+            ):
                 results["credentialMaterialization"] = "passed"
             else:
                 results["credentialMaterialization"] = "failed"
-                raise RuntimeError("provider profile missing opencode_api_key")
+                raise RuntimeError(
+                    "provider profile does not satisfy its credential materializer"
+                )
             # Secret scan on profile evidence (should be secret-free)
             try:
                 assert_secret_free(profile.model_catalog_evidence_json or {})
@@ -75,15 +97,21 @@ async def run_qualification(
                 raise RuntimeError(f"secret scan failed: {exc}") from exc
 
         async with session_factory() as session:
-            profile = await session.get(ManagedAgentProviderProfile, provider_profile_ref)
+            profile = await session.get(
+                ManagedAgentProviderProfile, provider_profile_ref
+            )
             evidence = profile.model_catalog_evidence_json or {}
-            models = [str(m.get("qualifiedId") or "") for m in evidence.get("models", [])]
-            if model_qualified_id in models or not models:
+            models = [
+                str(m.get("qualifiedId") or "") for m in evidence.get("models", [])
+            ]
+            if model_qualified_id in models:
                 results["modelDiscovery"] = "passed"
                 evidence_refs["modelCatalog"] = "artifact:model-catalog"
             else:
                 results["modelDiscovery"] = "failed"
-                raise RuntimeError(f"model {model_qualified_id} not in catalog {models}")
+                raise RuntimeError(
+                    f"model {model_qualified_id} not in catalog {models}"
+                )
 
         # 3. Read qualification via disposable git repo with bootstrap-repository/README.md
         try:
@@ -97,7 +125,9 @@ async def run_qualification(
                     pass
                 readme = repo / "README.md"
                 marker = repo / "BOOTSTRAP_MARKER"
-                readme.write_text("# Bootstrap Read Qualification\n\nRead test.\n", encoding="utf-8")
+                readme.write_text(
+                    "# Bootstrap Read Qualification\n\nRead test.\n", encoding="utf-8"
+                )
                 marker.write_text("bootstrap-marker-read\n", encoding="utf-8")
                 # Verify files exist and are readable
                 if not readme.exists() or not marker.exists():
@@ -106,9 +136,14 @@ async def run_qualification(
                 if "Bootstrap" not in content:
                     raise RuntimeError("readme content mismatch")
                 # Secret scan on repo files (should be secret-free)
-                assert_secret_free({"readme": content, "marker": marker.read_text(encoding="utf-8")})
+                assert_secret_free(
+                    {"readme": content, "marker": marker.read_text(encoding="utf-8")}
+                )
                 # If git available, verify we can read via git
-                code, out, _ = await _run_cmd(["git", "status", "--porcelain"], cwd=repo if (repo / ".git").exists() else Path(tmpdir))
+                code, out, _ = await _run_cmd(
+                    ["git", "status", "--porcelain"],
+                    cwd=repo if (repo / ".git").exists() else Path(tmpdir),
+                )
                 # We don't fail on git errors, just ensure no secrets
                 results["readQualification"] = "passed"
                 evidence_refs["readRun"] = "artifact:read-run"
@@ -124,10 +159,15 @@ async def run_qualification(
                 code, _, _ = await _run_cmd(["git", "init", "-q"], cwd=Path(tmpdir))
                 readme = repo / "README.md"
                 marker = repo / "BOOTSTRAP_MARKER"
-                readme.write_text("# Bootstrap Mutation Qualification\n", encoding="utf-8")
+                readme.write_text(
+                    "# Bootstrap Mutation Qualification\n", encoding="utf-8"
+                )
                 marker.write_text("bootstrap-marker-mutation\n", encoding="utf-8")
                 # Simulate mutation: modify file
-                readme.write_text("# Bootstrap Mutation Qualification\n\nMutated content.\n", encoding="utf-8")
+                readme.write_text(
+                    "# Bootstrap Mutation Qualification\n\nMutated content.\n",
+                    encoding="utf-8",
+                )
                 if "Mutated" not in readme.read_text(encoding="utf-8"):
                     raise RuntimeError("mutation not applied")
                 # Verify secret scan still passes after mutation
@@ -155,6 +195,7 @@ async def run_qualification(
             from moonmind.omnigent.credential_materializers import (
                 DockerOpencodeAuthJsonMaterializer,
                 LocalDockerCommandBackend,
+                NoopCredentialMaterializer,
                 anticipated_credential_handle,
             )
             from moonmind.omnigent.provider_leases import AcquiredProviderLease
@@ -174,16 +215,25 @@ async def run_qualification(
                     credential_generation=1,
                     lease=fake_lease,
                 )
-                handle = anticipated_credential_handle(acquired, "opencode-auth-json@1")
+                handle = anticipated_credential_handle(acquired, materializer_ref)
                 # Fence should trigger when expected generation mismatches
-                materializer = DockerOpencodeAuthJsonMaterializer(LocalDockerCommandBackend())
+                materializer = (
+                    NoopCredentialMaterializer(materializer_ref)
+                    if materializer_ref == "none@1"
+                    else DockerOpencodeAuthJsonMaterializer(LocalDockerCommandBackend())
+                )
                 try:
                     await materializer.cleanup(handle, expected_generation=999)
                     results["cleanup"] = "failed"
                     raise RuntimeError("generation fence did not trigger")
                 except Exception as fence_exc:
                     msg = str(fence_exc).lower()
-                    if "generation" in msg or "fenced" in msg or "deferred" in msg or "fence" in msg:
+                    if (
+                        "generation" in msg
+                        or "fenced" in msg
+                        or "deferred" in msg
+                        or "fence" in msg
+                    ):
                         results["cleanup"] = "passed"
                         evidence_refs["cleanup"] = "artifact:cleanup"
                     else:

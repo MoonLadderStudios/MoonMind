@@ -14,10 +14,14 @@ from moonmind.omnigent.credential_materializers import (
     CredentialMaterializationContext,
     DockerOpencodeAuthJsonMaterializer,
     LocalDockerCommandBackend,
+    NoopCredentialMaterializer,
 )
 from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
+)
+from moonmind.omnigent.harness_platform.materializers import (
+    materializer_ref_for_provider,
 )
 from moonmind.omnigent.provider_leases import AcquiredProviderLease
 from moonmind.omnigent.secret_resolution import (
@@ -71,7 +75,10 @@ def _validated_models(value: Any) -> list[str]:
 
 
 def _model_probe_argv(
-    *, image_ref: str, credential_source: str, credential_target: str
+    *,
+    image_ref: str,
+    credential_source: str | None = None,
+    credential_target: str | None = None,
 ) -> list[str]:
     """Build the exact pinned-runtime catalog probe command.
 
@@ -94,33 +101,38 @@ def _model_probe_argv(
         "/home/app:rw,uid=1000,gid=1000,mode=0700",
         "--tmpfs",
         "/tmp:rw,uid=1000,gid=1000,mode=1777",
-        "--mount",
-        (f"type=volume,src={credential_source}," f"dst={credential_target},readonly"),
         "--env",
         "HOME=/home/app",
     ]
+    if (credential_source is None) != (credential_target is None):
+        raise ValueError("credential source and target must be supplied together")
+    if credential_source is not None and credential_target is not None:
+        argv[argv.index("--env") : argv.index("--env")] = [
+            "--mount",
+            (
+                f"type=volume,src={credential_source},"
+                f"dst={credential_target},readonly"
+            ),
+        ]
     for item in omnigent_proxy_env():
         argv.extend(("--env", item))
+    stage_auth = (
+        "mkdir -p /home/app/.local/share/opencode; "
+        'cp "$1/auth.json" /home/app/.local/share/opencode/auth.json; '
+        "chmod 0600 /home/app/.local/share/opencode/auth.json; "
+        if credential_target is not None
+        else ""
+    )
     stage_and_probe = (
         "set -eu; "
         "unset OPENAI_API_KEY ANTHROPIC_API_KEY OPENCODE_AUTH_CONTENT "
         "OPENCODE_CONFIG OPENCODE_CONFIG_CONTENT; "
-        "mkdir -p /home/app/.local/share/opencode; "
-        'cp "$1/auth.json" /home/app/.local/share/opencode/auth.json; '
-        "chmod 0600 /home/app/.local/share/opencode/auth.json; "
-        "exec opencode models --refresh"
+        + stage_auth
+        + "exec opencode models --refresh"
     )
-    argv.extend(
-        (
-            "--entrypoint",
-            "/bin/sh",
-            image_ref,
-            "-ceu",
-            stage_and_probe,
-            "--",
-            credential_target,
-        )
-    )
+    argv.extend(("--entrypoint", "/bin/sh", image_ref, "-ceu", stage_and_probe))
+    if credential_target is not None:
+        argv.extend(("--", credential_target))
     return argv
 
 
@@ -172,21 +184,36 @@ class OpenCodeProviderRuntimeValidationService:
             credential_generation=generation,
             lease=lease,
         )
-        secrets = (
-            ScopedSecretBundle(
+        materializer_ref = materializer_ref_for_provider(
+            str(profile.runtime_id or ""),
+            str(profile.provider_id or ""),
+        )
+        if materializer_ref == "none@1":
+            if candidate_secret is not None:
+                raise ValueError("credentialless OpenCode validation rejects secrets")
+            secrets = ScopedSecretBundle(
                 provider_profile_ref=profile.profile_id,
                 credential_generation=generation,
-                values={"opencode_api_key": str(candidate_secret)},
+                values={},
             )
-            if candidate_secret is not None
-            else await OmnigentSecretResolutionService(
-                session_factory=self._session_factory,
-                resolver=self._resolver,
-            ).resolve(
-                acquired=acquired,
-                allowed_secret_roles=("opencode_api_key",),
+            materializer: Any = NoopCredentialMaterializer(materializer_ref)
+        else:
+            secrets = (
+                ScopedSecretBundle(
+                    provider_profile_ref=profile.profile_id,
+                    credential_generation=generation,
+                    values={"opencode_api_key": str(candidate_secret)},
+                )
+                if candidate_secret is not None
+                else await OmnigentSecretResolutionService(
+                    session_factory=self._session_factory,
+                    resolver=self._resolver,
+                ).resolve(
+                    acquired=acquired,
+                    allowed_secret_roles=("opencode_api_key",),
+                )
             )
-        )
+            materializer = DockerOpencodeAuthJsonMaterializer(self._backend)
         request = AgentExecutionRequest.model_validate(
             {
                 "agentKind": "external",
@@ -198,7 +225,6 @@ class OpenCodeProviderRuntimeValidationService:
                 ),
             }
         )
-        materializer = DockerOpencodeAuthJsonMaterializer(self._backend)
         handle = None
         try:
             handle = await materializer.materialize(
@@ -211,11 +237,11 @@ class OpenCodeProviderRuntimeValidationService:
                     provider_route_ref=str(profile.provider_id or ""),
                 )
             )
-            attachment = handle.attachments[0]
+            attachment = handle.attachments[0] if handle.attachments else None
             argv = _model_probe_argv(
                 image_ref=self._image_ref,
-                credential_source=attachment.sourceRef,
-                credential_target=attachment.targetPath,
+                credential_source=(attachment.sourceRef if attachment else None),
+                credential_target=(attachment.targetPath if attachment else None),
             )
             code, stdout, _stderr = await self._backend.run(argv, timeout_seconds=120)
             if code != 0 and "Unable to find image" in _stderr.decode(

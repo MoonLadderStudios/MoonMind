@@ -64,8 +64,14 @@ class BootstrapController:
         eff = (effort or "xhigh").strip()
 
         # Contributor acknowledgement required
-        if normalize_display(display) == normalize_display(DEFAULT_OPENCODE_MODEL_DISPLAY) and not accept_contributor_data_use:
-            raise ValueError("Contributor data-use acknowledgement is required for Muse Spark 1.2 Contributor")
+        if (
+            normalize_display(display)
+            == normalize_display(DEFAULT_OPENCODE_MODEL_DISPLAY)
+            and not accept_contributor_data_use
+        ):
+            raise ValueError(
+                "Contributor data-use acknowledgement is required for Muse Spark 1.2 Contributor"
+            )
 
         # Validate effort
         eff = validate_effort(eff)
@@ -100,9 +106,7 @@ class BootstrapController:
 
         record = load_bootstrap_record()
         if record is None or not str(record.provider_profile_ref or "").strip():
-            raise ValueError(
-                "OpenCode is not configured yet; submit the API key first"
-            )
+            raise ValueError("OpenCode is not configured yet; submit the API key first")
         from sqlalchemy import select
 
         from api_service.db.models import ManagedAgentProviderProfile
@@ -173,9 +177,7 @@ class BootstrapController:
                 provider_profile_ref,
             )
         if provider_profile is None:
-            raise ValueError(
-                "the persisted OpenCode Provider Profile no longer exists"
-            )
+            raise ValueError("the persisted OpenCode Provider Profile no longer exists")
         desired_updates: dict[str, Any] = {}
         current_model = str(provider_profile.default_model or "").strip()
         if current_model:
@@ -209,9 +211,65 @@ class BootstrapController:
 
         record = load_bootstrap_record()
         if record is None or not str(record.provider_profile_ref or "").strip():
-            # OpenCode has not been enrolled. The console and deployment-key
-            # enrollment paths remain available; there is nothing to qualify.
-            return True
+            # Credentialless defaults still need the same deployment evidence
+            # as key-backed profiles. Bootstrap directly from the current
+            # launch-ready default instead of requiring an API-key enrollment
+            # record to exist first.
+            from sqlalchemy import select
+
+            from api_service.db.models import ManagedAgentProviderProfile
+            from api_service.services.provider_profile_readiness import (
+                provider_profile_launch_ready,
+            )
+            from api_service.services.provider_profile_service import (
+                _managed_secret_statuses_for_profiles,
+            )
+
+            async with self._session_factory() as session:
+                default_profile = await session.scalar(
+                    select(ManagedAgentProviderProfile)
+                    .where(
+                        ManagedAgentProviderProfile.runtime_id == "opencode",
+                        ManagedAgentProviderProfile.enabled.is_(True),
+                        ManagedAgentProviderProfile.is_default.is_(True),
+                    )
+                    .order_by(
+                        ManagedAgentProviderProfile.priority.desc(),
+                        ManagedAgentProviderProfile.profile_id.asc(),
+                    )
+                    .limit(1)
+                )
+                if default_profile is None:
+                    return True
+                secret_statuses = await _managed_secret_statuses_for_profiles(
+                    session=session,
+                    rows=[default_profile],
+                )
+                if not provider_profile_launch_ready(
+                    default_profile,
+                    managed_secret_statuses=secret_statuses,
+                ):
+                    return True
+            default_model = str(default_profile.default_model or "").strip()
+            if not default_model:
+                return True
+            record = BootstrapRecord(
+                state=BootstrapState.resolving_images,
+                desired=BootstrapDesired(
+                    provider=str(default_profile.provider_id or ""),
+                    modelDisplayName=default_model,
+                    effort=str(default_profile.default_effort or "xhigh"),
+                    acceptContributorDataUse=True,
+                ),
+                providerProfileRef=str(default_profile.profile_id),
+            )
+            save_bootstrap_record(record)
+            initialized = await self._reconcile(
+                record=record,
+                api_key=None,
+                principal=None,
+            )
+            return initialized.state == BootstrapState.ready
 
         from sqlalchemy import select
 
@@ -263,10 +321,7 @@ class BootstrapController:
         if resolved is None:
             drift.append("resolved_images")
         else:
-            if (
-                record.resolved.host_image_ref
-                != resolved.opencode_host_image_ref
-            ):
+            if record.resolved.host_image_ref != resolved.opencode_host_image_ref:
                 drift.append("host_image_ref")
             if record.resolved.architecture != resolved.architecture:
                 drift.append("architecture")
@@ -280,10 +335,7 @@ class BootstrapController:
         if provider_profile is not None:
             current_model = str(provider_profile.default_model or "").strip()
             current_effort = str(provider_profile.default_effort or "").strip()
-            if (
-                current_model
-                and record.resolved.qualified_model_id != current_model
-            ):
+            if current_model and record.resolved.qualified_model_id != current_model:
                 drift.append("model")
             if current_effort and record.desired.effort != current_effort:
                 drift.append("effort")
@@ -308,13 +360,15 @@ class BootstrapController:
             ) != int(provider_profile.credential_generation):
                 drift.append("evidence_credential_generation")
             if provider_profile is not None:
-                if evidence.model.get("qualifiedId") != str(
-                    provider_profile.default_model or ""
-                ).strip():
+                if (
+                    evidence.model.get("qualifiedId")
+                    != str(provider_profile.default_model or "").strip()
+                ):
                     drift.append("evidence_model")
-                if evidence.model.get("effort") != str(
-                    provider_profile.default_effort or ""
-                ).strip():
+                if (
+                    evidence.model.get("effort")
+                    != str(provider_profile.default_effort or "").strip()
+                ):
                     drift.append("evidence_effort")
 
         if record.state != BootstrapState.ready:
@@ -358,7 +412,9 @@ class BootstrapController:
         eff = record.desired.effort
         try:
             # 1. Resolve images
-            record = record.model_copy(update={"state": BootstrapState.resolving_images})
+            record = record.model_copy(
+                update={"state": BootstrapState.resolving_images}
+            )
             save_bootstrap_record(record)
             # One boundary resolves, persists, and exports the pinned digests so
             # downstream selectors and `get_opencode_host_image_ref()` observe the
@@ -385,7 +441,10 @@ class BootstrapController:
                 model_info = resolve_model_by_display(display)
             except ValueError as exc:
                 record = record.model_copy(
-                    update={"state": BootstrapState.failed, "failure": {"code": "model_unavailable", "message": str(exc)}}
+                    update={
+                        "state": BootstrapState.failed,
+                        "failure": {"code": "model_unavailable", "message": str(exc)},
+                    }
                 )
                 save_bootstrap_record(record)
                 raise
@@ -412,7 +471,9 @@ class BootstrapController:
             await self._sync_catalog(resolved)
 
             # 3. Validate credentials transactionally and create provider profile
-            record = record.model_copy(update={"state": BootstrapState.validating_credentials})
+            record = record.model_copy(
+                update={"state": BootstrapState.validating_credentials}
+            )
             save_bootstrap_record(record)
             if api_key is None:
                 provider_ref = str(record.provider_profile_ref or "").strip()
@@ -432,7 +493,9 @@ class BootstrapController:
             save_bootstrap_record(record)
 
             # 4. Create agent profile
-            record = record.model_copy(update={"state": BootstrapState.creating_profiles})
+            record = record.model_copy(
+                update={"state": BootstrapState.creating_profiles}
+            )
             save_bootstrap_record(record)
             agent_ref = await self._ensure_agent_profile(
                 qualified_model=qualified,
@@ -442,7 +505,9 @@ class BootstrapController:
             save_bootstrap_record(record)
 
             # 5. Qualifying runtime
-            record = record.model_copy(update={"state": BootstrapState.qualifying_runtime})
+            record = record.model_copy(
+                update={"state": BootstrapState.qualifying_runtime}
+            )
             save_bootstrap_record(record)
             evidence = await self._qualify_and_publish(
                 provider_profile_ref=provider_ref,
@@ -469,7 +534,10 @@ class BootstrapController:
                 rec = rec.model_copy(
                     update={
                         "state": BootstrapState.failed,
-                        "failure": {"code": "bootstrap_failed", "message": str(exc)[:500]},
+                        "failure": {
+                            "code": "bootstrap_failed",
+                            "message": str(exc)[:500],
+                        },
                         "updated_at": datetime.now(UTC),
                     }
                 )
@@ -503,7 +571,13 @@ class BootstrapController:
             raise RuntimeError(f"catalog synchronization failed: {exc}") from exc
 
     async def _ensure_provider_profile(
-        self, *, api_key: str, qualified_model: str, effort: str, resolved: Any, principal: Any | None = None
+        self,
+        *,
+        api_key: str,
+        qualified_model: str,
+        effort: str,
+        resolved: Any,
+        principal: Any | None = None,
     ) -> str:
         from api_service.db.base import async_session_maker
         from api_service.db.models import ManagedAgentProviderProfile
@@ -578,7 +652,10 @@ class BootstrapController:
                 profile_id=profile_id,
                 purpose=CredentialLeasePurpose("credential_validation"),
                 operation_id=operation_id,
-                metadata={"workflowId": f"bootstrap:{operation_id}", "ownerIsWorkflow": False},
+                metadata={
+                    "workflowId": f"bootstrap:{operation_id}",
+                    "ownerIsWorkflow": False,
+                },
             )
         except Exception as guard_exc:
             import logging
@@ -595,20 +672,30 @@ class BootstrapController:
                 image_ref = get_opencode_host_image_ref()
             except Exception:
                 image_ref = None
-            if not image_ref and resolved is not None and getattr(resolved, "opencode_host_image_ref", None):
+            if (
+                not image_ref
+                and resolved is not None
+                and getattr(resolved, "opencode_host_image_ref", None)
+            ):
                 candidate = str(resolved.opencode_host_image_ref).strip()
                 if "@sha256:" in candidate:
                     image_ref = candidate
             if not image_ref:
                 try:
-                    from moonmind.omnigent.bootstrap.store import load_resolved_state as _load_rs
+                    from moonmind.omnigent.bootstrap.store import (
+                        load_resolved_state as _load_rs,
+                    )
 
                     _persisted = _load_rs()
-                    if _persisted and getattr(_persisted, "opencode_host_image_ref", None):
+                    if _persisted and getattr(
+                        _persisted, "opencode_host_image_ref", None
+                    ):
                         cand = str(_persisted.opencode_host_image_ref).strip()
                         if "@sha256:" in cand:
                             image_ref = cand
-                except Exception:  # best-effort fallback to passed resolved if persisted state unavailable
+                except (
+                    Exception
+                ):  # best-effort fallback to passed resolved if persisted state unavailable
                     pass
 
             def _is_substrate_unavailable(exc: Exception) -> bool:
@@ -632,8 +719,12 @@ class BootstrapController:
             if guard is not None and image_ref:
                 try:
                     async with asm() as session:
-                        prof = await session.get(ManagedAgentProviderProfile, profile_id)
-                        candidate_gen = int(prof.credential_generation) + (1 if prof.secret_refs else 0)
+                        prof = await session.get(
+                            ManagedAgentProviderProfile, profile_id
+                        )
+                        candidate_gen = int(prof.credential_generation) + (
+                            1 if prof.secret_refs else 0
+                        )
                     svc = OpenCodeProviderRuntimeValidationService(
                         session_factory=asm,
                         resolver=build_omnigent_secret_resolver(),
@@ -668,7 +759,9 @@ class BootstrapController:
                                 f"validation substrate unavailable: {exc}"
                             ) from exc
                         else:
-                            raise ValueError("API key validation failed: invalid format") from exc
+                            raise ValueError(
+                                "API key validation failed: invalid format"
+                            ) from exc
                     else:
                         # Credential rejection or provider error: fail closed, propagate
                         raise
@@ -695,9 +788,13 @@ class BootstrapController:
                 prof = await session.get(ManagedAgentProviderProfile, profile_id)
                 mapping = _api_key_mapping_for_profile(prof)
                 validated_at = datetime.now(UTC)
-                secret_slug = _provider_api_key_secret_slug(profile_id, mapping.secret_role)
+                secret_slug = _provider_api_key_secret_slug(
+                    profile_id, mapping.secret_role
+                )
                 secret_ref = f"db://{secret_slug}"
-                candidate_generation = int(prof.credential_generation) + (1 if mapping.secret_role in (prof.secret_refs or {}) else 0)
+                candidate_generation = int(prof.credential_generation) + (
+                    1 if mapping.secret_role in (prof.secret_refs or {}) else 0
+                )
                 # For opencode, we already have validation evidence; now upsert secret
                 await _upsert_managed_secret(
                     session=session,
@@ -736,7 +833,6 @@ class BootstrapController:
                     await guard.release()
                 except Exception:
                     pass
-
 
     async def _ensure_agent_profile(self, *, qualified_model: str, effort: str) -> str:
         import hashlib
@@ -786,16 +882,38 @@ class BootstrapController:
             if version is not None:
                 doc = dict(version.document)
                 model = dict(doc.get("model") or {})
-                if model.get("qualifiedId") != qualified_model or model.get("effort") != effort:
+                if (
+                    model.get("qualifiedId") != qualified_model
+                    or model.get("effort") != effort
+                ):
                     # Need to create new version with updated model
                     new_doc = dict(doc)
-                    new_doc["model"] = {"qualifiedId": qualified_model, "effort": effort}
-                    digest = "sha256:" + hashlib.sha256(json.dumps(new_doc, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+                    new_doc["model"] = {
+                        "qualifiedId": qualified_model,
+                        "effort": effort,
+                    }
+                    digest = (
+                        "sha256:"
+                        + hashlib.sha256(
+                            json.dumps(
+                                new_doc, sort_keys=True, separators=(",", ":")
+                            ).encode()
+                        ).hexdigest()
+                    )
                     # Check if digest exists
                     existing = None
                     # Already loaded versions? Query
                     from sqlalchemy import select
-                    versions = list((await session.execute(select(OmnigentAgentProfileVersion).where(OmnigentAgentProfileVersion.profile_id == profile_id))).scalars())
+
+                    versions = list(
+                        (
+                            await session.execute(
+                                select(OmnigentAgentProfileVersion).where(
+                                    OmnigentAgentProfileVersion.profile_id == profile_id
+                                )
+                            )
+                        ).scalars()
+                    )
                     for v in versions:
                         if v.digest == digest:
                             existing = v
@@ -816,7 +934,6 @@ class BootstrapController:
                         await session.commit()
                         return f"{profile_id}@{next_version}"
             return f"{profile_id}@{profile.active_version}"
-
 
     async def _qualify_and_publish(
         self,
@@ -842,6 +959,10 @@ class BootstrapController:
         from moonmind.omnigent.harness_platform.host_classes import (
             OmnigentHostClassSelector,
         )
+        from moonmind.omnigent.harness_platform.materializers import (
+            get_materializer,
+            materializer_ref_for_provider,
+        )
 
         # Need to compute support identity - we need catalog, host class, etc.
         # For now, construct a minimal support identity using resolved state and catalog
@@ -850,9 +971,31 @@ class BootstrapController:
             catalog = await repo.latest("default")
             if catalog is None:
                 raise RuntimeError("catalog not available for qualification")
+            from api_service.db.models import ManagedAgentProviderProfile
+
+            provider_profile = await session.get(
+                ManagedAgentProviderProfile, provider_profile_ref
+            )
+            if provider_profile is None:
+                raise RuntimeError("provider profile not found")
+            model_route_ref = str(provider_profile.provider_id or "").strip()
+            if not model_route_ref:
+                raise RuntimeError("provider profile route is unavailable")
+            materializer_ref = materializer_ref_for_provider(
+                str(provider_profile.runtime_id or ""),
+                model_route_ref,
+            )
+            auth_models = list(get_materializer(materializer_ref).acceptedAuthModels)
+            if len(auth_models) != 1:
+                raise RuntimeError(
+                    f"credential materializer {materializer_ref} must declare one auth model"
+                )
+            auth_model = auth_models[0]
 
         # Select host class
-        harness = next((h for h in catalog.snapshot.harnesses if h.id == "opencode-native"), None)
+        harness = next(
+            (h for h in catalog.snapshot.harnesses if h.id == "opencode-native"), None
+        )
         if harness is None:
             # Fallback synthetic harness for local qualification when upstream lacks implementation
             from moonmind.omnigent.harness_platform.catalog import (
@@ -873,15 +1016,29 @@ class BootstrapController:
 
             synth_catalog = create_catalog_snapshot(
                 endpointRef="default",
-                omnigentVersion=catalog.snapshot.omnigentVersion if catalog else "1.0.0",
-                omnigentBuildDigest=catalog.snapshot.omnigentBuildDigest if catalog else "sha256:" + "b" * 64,
-                sourceDigest="sha256:" + hashlib.sha256(f"opencode-synth-qual-{_uuid2.uuid4().hex}".encode()).hexdigest(),
+                omnigentVersion=(
+                    catalog.snapshot.omnigentVersion if catalog else "1.0.0"
+                ),
+                omnigentBuildDigest=(
+                    catalog.snapshot.omnigentBuildDigest
+                    if catalog
+                    else "sha256:" + "b" * 64
+                ),
+                sourceDigest="sha256:"
+                + hashlib.sha256(
+                    f"opencode-synth-qual-{_uuid2.uuid4().hex}".encode()
+                ).hexdigest(),
                 harnesses=[
                     {
                         "id": "opencode-native",
                         "label": "OpenCode",
-                        "implementation": synth_impl.model_dump(mode="json", by_alias=True),
-                        "capabilities": {"integrationMode": "native-server", "authModel": "own-auth"},
+                        "implementation": synth_impl.model_dump(
+                            mode="json", by_alias=True
+                        ),
+                        "capabilities": {
+                            "integrationMode": "native-server",
+                            "authModel": auth_model,
+                        },
                     }
                 ],
                 observedAt=datetime.now(UTC),
@@ -905,7 +1062,11 @@ class BootstrapController:
             except Exception:
                 # Best-effort: if persisted state cannot be loaded, fall back to passed resolved
                 pass
-        resolved_image = getattr(resolved, "opencode_host_image_ref", None) or getattr(resolved, "opencodeHostImageRef", None) or ""
+        resolved_image = (
+            getattr(resolved, "opencode_host_image_ref", None)
+            or getattr(resolved, "opencodeHostImageRef", None)
+            or ""
+        )
         if isinstance(resolved_image, str):
             resolved_image = resolved_image.strip()
         else:
@@ -917,14 +1078,19 @@ class BootstrapController:
             )
         selector_env = {
             "OMNIGENT_OPENCODE_HOST_IMAGE_REF": resolved_image,
-            "OMNIGENT_IMAGE_REF": getattr(resolved, "server_image_ref", "") or getattr(resolved, "serverImageRef", "") or "",
+            "OMNIGENT_IMAGE_REF": getattr(resolved, "server_image_ref", "")
+            or getattr(resolved, "serverImageRef", "")
+            or "",
         }
         import os as _os
 
         merged_env = dict(_os.environ)
         merged_env.update({k: v for k, v in selector_env.items() if v})
         # Defensive: ensure the resolved image is present in the selector environment
-        if merged_env.get("OMNIGENT_OPENCODE_HOST_IMAGE_REF", "").strip() != resolved_image:
+        if (
+            merged_env.get("OMNIGENT_OPENCODE_HOST_IMAGE_REF", "").strip()
+            != resolved_image
+        ):
             merged_env["OMNIGENT_OPENCODE_HOST_IMAGE_REF"] = resolved_image
         # Publish to process environment for direct readers (get_opencode_host_image_ref, etc.)
         _os.environ["OMNIGENT_OPENCODE_HOST_IMAGE_REF"] = resolved_image
@@ -939,7 +1105,7 @@ class BootstrapController:
                 omnigent_version=catalog.snapshot.omnigentVersion,
                 omnigent_build_digest=catalog.snapshot.omnigentBuildDigest,
                 integration_mode="native-server",
-                materializer_refs=["opencode-auth-json@1"],
+                materializer_refs=[materializer_ref],
                 requested_host_mode="on-demand",
             )
         except Exception as exc:
@@ -974,15 +1140,9 @@ class BootstrapController:
                 OmnigentAgentProfileVersion,
             )
 
-            provider_profile = await session.get(
-                ManagedAgentProviderProfile, provider_profile_ref
+            profile_row = await session.get(
+                OmnigentAgentProfile, "omnigent-opencode-default"
             )
-            if provider_profile is None:
-                raise RuntimeError("provider profile not found")
-            model_route_ref = str(provider_profile.provider_id or "").strip()
-            if not model_route_ref:
-                raise RuntimeError("provider profile route is unavailable")
-            profile_row = await session.get(OmnigentAgentProfile, "omnigent-opencode-default")
             if profile_row is None:
                 raise RuntimeError("agent profile not found")
             result = await session.execute(
@@ -1010,7 +1170,7 @@ class BootstrapController:
             catalog_ref=catalog.snapshot.catalogRef,
             implementation_ref=harness.implementation.implementation_ref(),
             harness_id="opencode-native",
-            auth_model="own-auth",
+            auth_model=auth_model,
         )
         # Build a minimal planner run to get the exact supportIdentity
         trust = classify_harness_trust(
@@ -1029,7 +1189,12 @@ class BootstrapController:
         dummy_binding = create_binding_set(
             bindingSetId="opencode-native.primary-model",
             version=1,
-            bindings={"primary-model": {"providerProfileRef": provider_profile_ref, "materializerRef": "opencode-auth-json@1"}},
+            bindings={
+                "primary-model": {
+                    "providerProfileRef": provider_profile_ref,
+                    "materializerRef": materializer_ref,
+                }
+            },
         )
         # Compile a dummy plan to extract the exact supportIdentity and key
         dummy_plan = compile_execution_plan(

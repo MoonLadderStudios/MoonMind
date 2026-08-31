@@ -57,6 +57,7 @@ class OmnigentRuntimeScriptService:
         tool_attachments: tuple[dict[str, Any], ...] = (),
         github_credential_attachment: dict[str, Any] | None = None,
         control_attachment: dict[str, Any] | None = None,
+        enable_opencode_runtime: bool = False,
     ) -> tuple[str, dict[str, str]]:
         generation_checks: list[str] = []
         for handle in credential_handles:
@@ -79,12 +80,13 @@ class OmnigentRuntimeScriptService:
             for handle in credential_handles
             for attachment in handle.get("attachments", [])
         )
+        opencode_runtime = enable_opencode_runtime or has_opencode_materializer
         tool_bins = [
             str(item["targetPath"]).rstrip("/") + "/bin"
             for item in tool_attachments
             if item.get("targetPath")
         ]
-        if has_opencode_materializer or github_credential_attachment is not None:
+        if opencode_runtime or github_credential_attachment is not None:
             tool_bins.insert(0, _RUNTIME_BIN_DIR)
         # Always include the Omnigent venv so `docker exec` probes (attestation,
         # version checks) resolve the omnigent binary without a full PATH.
@@ -118,7 +120,8 @@ class OmnigentRuntimeScriptService:
         runtime_context_dir = _RUNTIME_CONTEXT_DIR
         opencode_context_wrapper = f"{_RUNTIME_BIN_DIR}/moonmind-opencode-context"
         opencode_wrapper = f"{_RUNTIME_BIN_DIR}/opencode"
-        if has_opencode_materializer:
+        if opencode_runtime:
+            environment["MOONMIND_OPENCODE_RUNTIME"] = "1"
             environment.update(_OPENCODE_RUNTIME_ENV)
         if github_credential_attachment is not None:
             if (
@@ -130,13 +133,9 @@ class OmnigentRuntimeScriptService:
         passthrough_names = {
             "MOONMIND_ACTIVE_SKILLS_DIR",
             "MOONMIND_STEP_EXECUTION_ID",
-            *(_OPENCODE_RUNTIME_ENV if has_opencode_materializer else {}),
-            *(_OPENCODE_PROXY_ENV_NAMES if has_opencode_materializer else {}),
-            *(
-                _GITHUB_RUNTIME_ENV
-                if github_credential_attachment is not None
-                else {}
-            ),
+            *(_OPENCODE_RUNTIME_ENV if opencode_runtime else {}),
+            *(_OPENCODE_PROXY_ENV_NAMES if opencode_runtime else {}),
+            *(_GITHUB_RUNTIME_ENV if github_credential_attachment is not None else {}),
         }
         if passthrough_names:
             environment["OMNIGENT_RUNNER_ENV_PASSTHROUGH"] = ",".join(
@@ -151,9 +150,7 @@ class OmnigentRuntimeScriptService:
             "path=${check%:*}; generation=${check##*:}; "
             'test -r "$path"; test "$(cat "$path")" = "$generation"; done; '
             'IFS=$oldifs; test -d "$MOONMIND_ACTIVE_SKILLS_DIR"; '
-            "if [ -d "
-            '"' + staging_dir + '"'
-            " ]; then "
+            'if [ "${MOONMIND_OPENCODE_RUNTIME:-0}" = 1 ]; then '
             "mkdir -p "
             + opencode_data
             + " "
@@ -161,11 +158,12 @@ class OmnigentRuntimeScriptService:
             + " "
             + _RUNTIME_BIN_DIR
             + "; "
-            "cp "
-            '"' + staging_dir + '/auth.json" '
-            + opencode_data + "/auth.json; "
+            "if [ -d "
+            '"' + staging_dir + '"'
+            " ]; then cp "
+            '"' + staging_dir + '/auth.json" ' + opencode_data + "/auth.json; "
             "chown 1000:1000 " + opencode_data + "/auth.json; "
-            "chmod 0600 " + opencode_data + "/auth.json; "
+            "chmod 0600 " + opencode_data + "/auth.json; fi; "
             "printf '%s\\n' \"$MOONMIND_ACTIVE_SKILLS_DIR\" > "
             + runtime_context_dir
             + "/active-skills-dir; "
@@ -190,20 +188,14 @@ class OmnigentRuntimeScriptService:
             "'  export GIT_CONFIG_VALUE_0=\"!"
             + _RUNTIME_BIN_DIR
             + "/gh auth git-credential\"' "
-            "'fi' 'exec \"$@\"' > "
-            + opencode_context_wrapper
-            + "; "
+            "'fi' 'exec \"$@\"' > " + opencode_context_wrapper + "; "
             "printf '%s\\n' '#!/bin/sh' "
             "'exec "
             + opencode_context_wrapper
-            + " /usr/local/bin/opencode \"$@\"' > "
+            + ' /usr/local/bin/opencode "$@"\' > '
             + opencode_wrapper
             + "; "
-            "chmod 0700 "
-            + opencode_context_wrapper
-            + " "
-            + opencode_wrapper
-            + "; fi; "
+            "chmod 0700 " + opencode_context_wrapper + " " + opencode_wrapper + "; fi; "
             "if [ -d /run/mm-credentials/github ]; then "
             "mkdir -p /home/app/.config/gh; "
             "cp /run/mm-credentials/github/hosts.yml "

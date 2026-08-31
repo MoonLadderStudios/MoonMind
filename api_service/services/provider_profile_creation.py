@@ -111,6 +111,11 @@ _RUNTIME_PROVIDER_AUTHENTICATION_CAPABILITIES: tuple[
     RuntimeProviderAuthenticationCapability, ...
 ] = (
     RuntimeProviderAuthenticationCapability(
+        runtime_id="opencode",
+        provider_id="opencode",
+        credential_free=True,
+    ),
+    RuntimeProviderAuthenticationCapability(
         runtime_id="claude_code",
         provider_id="minimax",
         expert_manual_credentials=(
@@ -210,23 +215,6 @@ _API_KEY_STRATEGIES: dict[tuple[str, str], ProviderApiKeyStrategy] = {
         auth_strategy="opencode_auth_json",
         materialization_mode="composite",
         ready_label="OpenCode Go API key ready",
-    ),
-    ("opencode", "opencode"): ProviderApiKeyStrategy(
-        runtime_id="opencode",
-        provider_id="opencode",
-        secret_role="opencode_api_key",
-        role_label="OpenCode API key",
-        env_key="OPENCODE_API_KEY",
-        clear_env_keys=(
-            "OPENCODE_AUTH_CONTENT",
-            "OPENCODE_CONFIG",
-            "OPENCODE_CONFIG_CONTENT",
-            "OPENAI_API_KEY",
-            "ANTHROPIC_API_KEY",
-        ),
-        auth_strategy="opencode_auth_json",
-        materialization_mode="composite",
-        ready_label="OpenCode API key ready",
     ),
 }
 

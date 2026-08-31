@@ -99,9 +99,7 @@ def test_skill_selector_includes_nested_dynamic_execution_skills() -> None:
                                 "verificationTool": {
                                     "type": "agent_runtime",
                                     "name": "auto",
-                                    "inputs": {
-                                        "selectedSkill": "moonspec-verify"
-                                    },
+                                    "inputs": {"selectedSkill": "moonspec-verify"},
                                 },
                             }
                         }
@@ -153,9 +151,7 @@ async def test_admission_persists_nested_dynamic_execution_skills() -> None:
                                     "verificationTool": {
                                         "type": "agent_runtime",
                                         "name": "auto",
-                                        "inputs": {
-                                            "selectedSkill": "moonspec-verify"
-                                        },
+                                        "inputs": {"selectedSkill": "moonspec-verify"},
                                     },
                                 }
                             }
@@ -207,9 +203,7 @@ def _snapshot(*, harness: str, policy: str, provider_id: str) -> dict:
                 "allowedLaunchPolicyRefs": [policy],
             },
             "providerRequirements": {
-                "runtimeId": (
-                    "codex_cli" if harness == "codex-native" else "opencode"
-                ),
+                "runtimeId": ("codex_cli" if harness == "codex-native" else "opencode"),
                 "providerIds": ["openai"],
                 "credentialSource": (
                     "oauth_volume" if harness == "codex-native" else "secret_ref"
@@ -240,8 +234,7 @@ def _policy_snapshot(
         execution_profile_ref=profile_ref,
         server_image_ref="ghcr.io/example/omnigent-server@sha256:" + "a" * 64,
         host_image_ref=host_image_ref
-        or "ghcr.io/example/omnigent-host@sha256:"
-        + host_image_digest * 64,
+        or "ghcr.io/example/omnigent-host@sha256:" + host_image_digest * 64,
     ).model_dump(mode="json", by_alias=True)
     document["execution"]["harness"] = harness
     document["execution"]["agentIdentities"] = [
@@ -278,9 +271,7 @@ def _protected_support_evidence(plan_payload) -> dict[str, object]:
         ),
         "hostImageRef": plan_payload.hostImageRef,
         "policySnapshotDigest": plan_payload.policySnapshotDigest,
-        "effectiveLaunchSnapshotDigest": (
-            plan_payload.effectiveLaunchSnapshotDigest
-        ),
+        "effectiveLaunchSnapshotDigest": (plan_payload.effectiveLaunchSnapshotDigest),
         "policyGateRef": "deployment-ready",
         "policyQualified": True,
         "exactArtifactsVerified": True,
@@ -308,11 +299,13 @@ async def test_product_boundary_persists_secret_free_plan_and_exact_realizer(
         "load_protected_execution_support_evidence",
         _protected_support_evidence,
     )
+
     # Also mock the resolver to use the protected evidence directly for this hermetic test
     def _mock_resolve(plan_payload, **_kwargs):
         return _protected_support_evidence(plan_payload), "supported"
 
     monkeypatch.setattr(service, "resolve_execution_evidence", _mock_resolve)
+
     async def resolve_policy(**_kwargs):
         return _policy_snapshot(harness=harness, policy=policy)
 
@@ -334,7 +327,8 @@ async def test_product_boundary_persists_secret_free_plan_and_exact_realizer(
         ),
         provider_profile=SimpleNamespace(
             profile_id=provider_id,
-            provider_id="openai",
+            runtime_id=("opencode" if harness == "opencode-native" else "codex_cli"),
+            provider_id=("opencode-go" if harness == "opencode-native" else "openai"),
         ),
         initial_parameters={
             "model": "example/model",
@@ -352,12 +346,8 @@ async def test_product_boundary_persists_secret_free_plan_and_exact_realizer(
     assert result.envelope.payload.executionRealizerRef == realizer
     assert result.envelope.payload.policySnapshotRef.startswith("artifact:")
     assert result.envelope.payload.policySnapshotDigest.startswith("sha256:")
-    assert result.envelope.payload.effectiveLaunchSnapshotRef.startswith(
-        "artifact:"
-    )
-    assert result.envelope.payload.effectiveLaunchSnapshotDigest.startswith(
-        "sha256:"
-    )
+    assert result.envelope.payload.effectiveLaunchSnapshotRef.startswith("artifact:")
+    assert result.envelope.payload.effectiveLaunchSnapshotDigest.startswith("sha256:")
     assert result.envelope.payload.hostImageRef
     assert result.envelope.payload.hostArchitecture == "linux/amd64"
     assert result.envelope.payload.authority is not None
@@ -366,8 +356,7 @@ async def test_product_boundary_persists_secret_free_plan_and_exact_realizer(
     assert admission is not None
     assert admission.featureGeneration == OMNIGENT_SESSION_FEATURE_GENERATION
     assert (
-        admission.replayCompatibilityVersion
-        == OMNIGENT_SESSION_COMPATIBILITY_VERSION
+        admission.replayCompatibilityVersion == OMNIGENT_SESSION_COMPATIBILITY_VERSION
     )
     assert admission.rollbackPolicyVersion == SUPERVISOR_ROLLBACK_POLICY_VERSION
     support_artifact_id = admission.supportEvidenceRef.removeprefix("artifact:")
@@ -475,6 +464,7 @@ async def test_product_boundary_uses_profile_catalog_build_identity(
         ),
         provider_profile=SimpleNamespace(
             profile_id="provider-opencode-native",
+            runtime_id="opencode",
             provider_id="opencode-go",
         ),
         initial_parameters={
@@ -504,13 +494,12 @@ async def _compile_opencode_plan(
     launch_policy_ref: str,
     plan_store=None,
     extra_parameters: dict | None = None,
+    provider_id: str = "opencode-go",
 ):
     """Compile one real OpenCode plan through the product admission boundary."""
 
     async def resolve_policy(**_kwargs):
-        return _policy_snapshot(
-            harness="opencode-native", policy=launch_policy_ref
-        )
+        return _policy_snapshot(harness="opencode-native", policy=launch_policy_ref)
 
     monkeypatch.setattr(service, "_resolve_runtime_policy_snapshot", resolve_policy)
     monkeypatch.setenv(
@@ -533,7 +522,9 @@ async def _compile_opencode_plan(
         workflow_id="mm:test-deployment-evidence",
         agent_profile_snapshot=snapshot,
         provider_profile=SimpleNamespace(
-            profile_id="provider-opencode-native", provider_id="opencode-go"
+            profile_id="provider-opencode-native",
+            runtime_id="opencode",
+            provider_id=provider_id,
         ),
         initial_parameters={
             "model": "example/model",
@@ -549,6 +540,29 @@ async def _compile_opencode_plan(
         task_input_snapshot_digest="sha256:" + "1" * 64,
         execution_plan_store=plan_store,
     )
+
+
+@pytest.mark.asyncio
+async def test_credentialless_zen_plan_uses_noop_materializer(monkeypatch) -> None:
+    monkeypatch.setattr(
+        service,
+        "resolve_execution_evidence",
+        lambda plan_payload, **_kwargs: (
+            _protected_support_evidence(plan_payload),
+            "supported",
+        ),
+    )
+
+    result = await _compile_opencode_plan(
+        monkeypatch,
+        artifacts=_ArtifactService(),
+        launch_policy_ref="opencode-on-demand@1",
+        plan_store=_PlanStore(object()),
+        provider_id="opencode",
+    )
+
+    binding = result.envelope.payload.credentialBindings["primary-model"]
+    assert binding.materializerRef == "none@1"
 
 
 @pytest.mark.asyncio
@@ -712,9 +726,7 @@ def _write_deployment_evidence(
         support_combination_key=compute_support_combination_key(identity),
         host_image_ref=plan_payload.hostImageRef,
         policy_snapshot_digest=plan_payload.policySnapshotDigest,
-        effective_launch_snapshot_digest=(
-            plan_payload.effectiveLaunchSnapshotDigest
-        ),
+        effective_launch_snapshot_digest=(plan_payload.effectiveLaunchSnapshotDigest),
         provider_profile_ref="provider-opencode-native",
         credential_generation=1,
         qualified_model_id="example/model",
@@ -739,12 +751,8 @@ async def test_deployment_evidence_admits_the_launch_policy_admission_selects(
         "MOONMIND_DEPLOYMENT_EVIDENCE_KEY_PATH",
         str(tmp_path / "deployment_evidence_key"),
     )
-    admitted_policy = default_launch_policy_ref(
-        _OPENCODE_ALLOWED_LAUNCH_POLICIES
-    )
-    plan_payload = await _capture_plan_payload(
-        launch_policy_ref=admitted_policy
-    )
+    admitted_policy = default_launch_policy_ref(_OPENCODE_ALLOWED_LAUNCH_POLICIES)
+    plan_payload = await _capture_plan_payload(launch_policy_ref=admitted_policy)
     _write_deployment_evidence(
         tmp_path,
         monkeypatch,
@@ -776,14 +784,10 @@ async def test_deployment_evidence_for_another_launch_policy_is_inadmissible(
         "MOONMIND_DEPLOYMENT_EVIDENCE_KEY_PATH",
         str(tmp_path / "deployment_evidence_key"),
     )
-    admitted_policy = default_launch_policy_ref(
-        _OPENCODE_ALLOWED_LAUNCH_POLICIES
-    )
+    admitted_policy = default_launch_policy_ref(_OPENCODE_ALLOWED_LAUNCH_POLICIES)
     unselected_policy = _OPENCODE_ALLOWED_LAUNCH_POLICIES[1]
     assert unselected_policy != admitted_policy
-    plan_payload = await _capture_plan_payload(
-        launch_policy_ref=admitted_policy
-    )
+    plan_payload = await _capture_plan_payload(launch_policy_ref=admitted_policy)
     _write_deployment_evidence(
         tmp_path,
         monkeypatch,
@@ -829,9 +833,7 @@ async def test_deployment_evidence_admits_a_plan_that_requests_capabilities(
         "MOONMIND_DEPLOYMENT_EVIDENCE_KEY_PATH",
         str(tmp_path / "deployment_evidence_key"),
     )
-    admitted_policy = default_launch_policy_ref(
-        _OPENCODE_ALLOWED_LAUNCH_POLICIES
-    )
+    admitted_policy = default_launch_policy_ref(_OPENCODE_ALLOWED_LAUNCH_POLICIES)
     plan_payload = await _capture_plan_payload(launch_policy_ref=admitted_policy)
     _write_deployment_evidence(
         tmp_path,
@@ -870,9 +872,7 @@ async def test_unsupported_required_capability_is_refused_before_evidence(
         "MOONMIND_DEPLOYMENT_EVIDENCE_KEY_PATH",
         str(tmp_path / "deployment_evidence_key"),
     )
-    admitted_policy = default_launch_policy_ref(
-        _OPENCODE_ALLOWED_LAUNCH_POLICIES
-    )
+    admitted_policy = default_launch_policy_ref(_OPENCODE_ALLOWED_LAUNCH_POLICIES)
     plan_payload = await _capture_plan_payload(launch_policy_ref=admitted_policy)
     _write_deployment_evidence(
         tmp_path,
@@ -903,9 +903,7 @@ async def test_default_evidence_policy_admits_a_selected_profile_model(
         "MOONMIND_DEPLOYMENT_EVIDENCE_KEY_PATH",
         str(tmp_path / "deployment_evidence_key"),
     )
-    admitted_policy = default_launch_policy_ref(
-        _OPENCODE_ALLOWED_LAUNCH_POLICIES
-    )
+    admitted_policy = default_launch_policy_ref(_OPENCODE_ALLOWED_LAUNCH_POLICIES)
     plan_payload = await _capture_plan_payload(launch_policy_ref=admitted_policy)
     _write_deployment_evidence(
         tmp_path,
@@ -944,9 +942,7 @@ async def test_untrusted_evidence_values_are_redacted_from_admission_errors(
 
     monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "deployment")
     plan_payload = await _capture_plan_payload(
-        launch_policy_ref=default_launch_policy_ref(
-            _OPENCODE_ALLOWED_LAUNCH_POLICIES
-        )
+        launch_policy_ref=default_launch_policy_ref(_OPENCODE_ALLOWED_LAUNCH_POLICIES)
     )
     untrusted_value = "sensitive-candidate-value"
     candidate_identity = plan_payload.supportIdentity.model_dump(
@@ -958,9 +954,7 @@ async def test_untrusted_evidence_values_are_redacted_from_admission_errors(
         json.dumps({"entries": [{"supportIdentity": candidate_identity}]}),
         encoding="utf-8",
     )
-    monkeypatch.setenv(
-        "MOONMIND_OMNIGENT_DEPLOYMENT_EVIDENCE", str(destination)
-    )
+    monkeypatch.setenv("MOONMIND_OMNIGENT_DEPLOYMENT_EVIDENCE", str(destination))
 
     with pytest.raises(ValueError) as excinfo:
         await _compile_opencode_plan(

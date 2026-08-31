@@ -72,9 +72,12 @@ def _profile_document() -> dict:
 
 
 def _version_row(document: dict, *, version: int = 27) -> SimpleNamespace:
-    digest = "sha256:" + hashlib.sha256(
-        json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
+    digest = (
+        "sha256:"
+        + hashlib.sha256(
+            json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+    )
     return SimpleNamespace(
         profile_id="omnigent-opencode-default",
         version=version,
@@ -98,10 +101,9 @@ class _Session:
         if model.__name__ == "ManagedAgentProviderProfile":
             return SimpleNamespace(
                 profile_id=_identity,
+                runtime_id="opencode",
                 provider_id=(
-                    "opencode"
-                    if _identity == "opencode-zen-free"
-                    else "opencode-go"
+                    "opencode" if _identity == "opencode-zen-free" else "opencode-go"
                 ),
                 credential_generation=1,
             )
@@ -109,9 +111,7 @@ class _Session:
 
     async def execute(self, _statement):
         version = self.version
-        return SimpleNamespace(
-            scalars=lambda: SimpleNamespace(first=lambda: version)
-        )
+        return SimpleNamespace(scalars=lambda: SimpleNamespace(first=lambda: version))
 
 
 def _catalog_snapshot():
@@ -192,9 +192,7 @@ def qualification_boundary(monkeypatch, tmp_path):
             "evidenceRefs": {"readRun": "artifact:read-run"},
         }
 
-    monkeypatch.setattr(
-        qualification_module, "run_qualification", _run_qualification
-    )
+    monkeypatch.setattr(qualification_module, "run_qualification", _run_qualification)
     monkeypatch.setattr(
         evidence_module,
         "write_deployment_evidence",
@@ -281,11 +279,7 @@ async def test_recorded_qualification_loader_selects_and_validates_exact_evidenc
         json.dumps(
             {
                 "entries": [
-                    {
-                        "supportCombinationKey": (
-                            "omnigent-support:sha256:" + "f" * 64
-                        )
-                    },
+                    {"supportCombinationKey": ("omnigent-support:sha256:" + "f" * 64)},
                     evidence,
                 ]
             }
@@ -308,16 +302,12 @@ async def test_qualification_follows_a_reordered_allow_list(
     """Editing the Agent Profile moves qualification with admission."""
 
     document = _profile_document()
-    document["allowedLaunchPolicyRefs"] = list(
-        reversed(_ALLOWED_LAUNCH_POLICIES)
-    )
+    document["allowedLaunchPolicyRefs"] = list(reversed(_ALLOWED_LAUNCH_POLICIES))
     qualification_boundary.session.version = _version_row(document, version=28)
 
     evidence = await _qualify(qualification_boundary)
 
-    assert evidence["supportIdentity"]["launchPolicyRef"] == (
-        "opencode-on-demand@1"
-    )
+    assert evidence["supportIdentity"]["launchPolicyRef"] == ("opencode-on-demand@1")
 
 
 @pytest.mark.asyncio
@@ -334,7 +324,35 @@ async def test_qualification_rejects_a_profile_without_a_launch_policy(
         await _qualify(qualification_boundary)
 
 
-def test_model_resolution_accepts_a_qualified_opencode_model_before_live_validation() -> None:
+@pytest.mark.asyncio
+async def test_runtime_qualification_rejects_missing_model_catalog_evidence() -> None:
+    from moonmind.omnigent.bootstrap.qualification import run_qualification
+
+    profile = SimpleNamespace(
+        runtime_id="opencode",
+        provider_id="opencode",
+        secret_refs={},
+        model_catalog_evidence_json=None,
+    )
+
+    @asynccontextmanager
+    async def _session_scope():
+        yield SimpleNamespace(get=AsyncMock(return_value=profile))
+
+    with pytest.raises(RuntimeError, match="not in catalog"):
+        await run_qualification(
+            session_factory=lambda: _session_scope(),
+            provider_profile_ref="opencode-zen-free",
+            model_qualified_id="opencode/muse-spark-1.2-contributor-free",
+            effort="xhigh",
+            host_image_ref=_HOST_IMAGE_REF,
+            server_build_digest="sha256:" + "b" * 64,
+        )
+
+
+def test_model_resolution_accepts_a_qualified_opencode_model_before_live_validation() -> (
+    None
+):
     resolved = resolve_model_by_display("opencode-go/gpt-5.6-luna")
 
     assert resolved == {
@@ -400,10 +418,14 @@ async def test_requalification_uses_the_current_provider_profile_model(
         return record
 
     monkeypatch.setattr(controller_module, "load_bootstrap_record", lambda: stored)
-    monkeypatch.setattr(controller_module, "save_bootstrap_record", lambda _record: None)
+    monkeypatch.setattr(
+        controller_module, "save_bootstrap_record", lambda _record: None
+    )
     monkeypatch.setattr(
         "api_service.services.provider_profile_service._managed_secret_statuses_for_profiles",
-        AsyncMock(return_value={"opencode-go-default-api-key": SecretStatus.ACTIVE.value}),
+        AsyncMock(
+            return_value={"opencode-go-default-api-key": SecretStatus.ACTIVE.value}
+        ),
     )
     revalidate = AsyncMock(return_value=ProviderReconcileOutcome(ready=True))
     monkeypatch.setattr(
@@ -437,7 +459,6 @@ async def test_requalification_follows_the_current_default_provider_profile(
         ProviderCredentialSource,
         ProviderProfileAuthState,
         RuntimeMaterializationMode,
-        SecretStatus,
     )
     from moonmind.omnigent.bootstrap.provider_revalidation import (
         ProviderReconcileOutcome,
@@ -458,8 +479,6 @@ async def test_requalification_follows_the_current_default_provider_profile(
         "disabled_reason": None,
         "max_parallel_runs": 1,
         "runtime_id": "opencode",
-        "credential_source": ProviderCredentialSource.SECRET_REF,
-        "runtime_materialization_mode": RuntimeMaterializationMode.COMPOSITE,
         "cooldown_after_429_seconds": 0,
         "command_behavior": {},
     }
@@ -468,6 +487,8 @@ async def test_requalification_follows_the_current_default_provider_profile(
         profile_id="opencode-go-default",
         provider_id="opencode-go",
         is_default=False,
+        credential_source=ProviderCredentialSource.SECRET_REF,
+        runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
         secret_refs={"opencode_api_key": "db://opencode-go-default-api-key"},
         default_model="opencode-go/muse-spark-1.2-contributor",
         default_effort="xhigh",
@@ -477,7 +498,9 @@ async def test_requalification_follows_the_current_default_provider_profile(
         profile_id="opencode-zen-free",
         provider_id="opencode",
         is_default=True,
-        secret_refs={"opencode_api_key": "db://opencode-zen-free-api-key"},
+        credential_source=ProviderCredentialSource.NONE,
+        runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
+        secret_refs={},
         default_model="opencode/muse-spark-1.2-contributor-free",
         default_effort="xhigh",
     )
@@ -497,14 +520,12 @@ async def test_requalification_follows_the_current_default_provider_profile(
         yield _DefaultProfileSession()
 
     monkeypatch.setattr(controller_module, "load_bootstrap_record", lambda: stored)
-    monkeypatch.setattr(controller_module, "save_bootstrap_record", lambda _record: None)
+    monkeypatch.setattr(
+        controller_module, "save_bootstrap_record", lambda _record: None
+    )
     monkeypatch.setattr(
         "api_service.services.provider_profile_service._managed_secret_statuses_for_profiles",
-        AsyncMock(
-            return_value={
-                "opencode-zen-free-api-key": SecretStatus.ACTIVE.value,
-            }
-        ),
+        AsyncMock(return_value={}),
     )
     monkeypatch.setattr(
         "moonmind.omnigent.bootstrap.provider_revalidation.reconcile_opencode_provider_readiness",
@@ -525,8 +546,7 @@ async def test_requalification_follows_the_current_default_provider_profile(
 
     assert result.provider_profile_ref == "opencode-zen-free"
     assert (
-        result.desired.model_display_name
-        == "opencode/muse-spark-1.2-contributor-free"
+        result.desired.model_display_name == "opencode/muse-spark-1.2-contributor-free"
     )
     assert result.desired.effort == "xhigh"
 
@@ -701,6 +721,77 @@ def _ready_bootstrap_record(*, agent_profile_ref: str) -> BootstrapRecord:
 
 
 @pytest.mark.asyncio
+async def test_credentialless_default_initializes_deployment_qualification(
+    monkeypatch,
+) -> None:
+    from api_service.db.models import (
+        ProviderCredentialSource,
+        ProviderProfileAuthState,
+        RuntimeMaterializationMode,
+    )
+
+    profile = SimpleNamespace(
+        profile_id="opencode-zen-free",
+        runtime_id="opencode",
+        provider_id="opencode",
+        provider_label="OpenCode Zen",
+        is_default=True,
+        enabled=True,
+        auth_state=ProviderProfileAuthState.CONNECTED,
+        disabled_reason=None,
+        credential_source=ProviderCredentialSource.NONE,
+        runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
+        secret_refs={},
+        command_behavior={
+            "auth_readiness": {
+                "connected": True,
+                "backing_secret_exists": False,
+                "launch_ready": True,
+            }
+        },
+        default_model="opencode/muse-spark-1.2-contributor-free",
+        default_effort="xhigh",
+        max_parallel_runs=1,
+        cooldown_after_429_seconds=0,
+    )
+
+    class _QualificationSession:
+        async def scalar(self, _statement):
+            return profile
+
+    @asynccontextmanager
+    async def _session_scope():
+        yield _QualificationSession()
+
+    monkeypatch.setattr(controller_module, "load_bootstrap_record", lambda: None)
+    saved: list[BootstrapRecord] = []
+    monkeypatch.setattr(controller_module, "save_bootstrap_record", saved.append)
+    monkeypatch.setattr(
+        "api_service.services.provider_profile_service._managed_secret_statuses_for_profiles",
+        AsyncMock(return_value={}),
+    )
+    controller = controller_module.BootstrapController(
+        session_factory=lambda: _session_scope()
+    )
+
+    async def _reconcile(*, record, api_key, principal):
+        assert api_key is None
+        assert principal is None
+        assert record.provider_profile_ref == "opencode-zen-free"
+        assert (
+            record.desired.model_display_name
+            == "opencode/muse-spark-1.2-contributor-free"
+        )
+        assert record.desired.effort == "xhigh"
+        return record.model_copy(update={"state": BootstrapState.ready})
+
+    monkeypatch.setattr(controller, "_reconcile", _reconcile)
+
+    assert await controller.reconcile_deployment_qualification()
+    assert saved[-1].provider_profile_ref == "opencode-zen-free"
+
+
+@pytest.mark.asyncio
 async def test_managed_agent_profile_advance_requalifies_default_deployment(
     monkeypatch,
 ) -> None:
@@ -747,9 +838,7 @@ async def test_managed_agent_profile_advance_requalifies_default_deployment(
             "effort": "xhigh",
         },
     )
-    stale = _ready_bootstrap_record(
-        agent_profile_ref="omnigent-opencode-default@7"
-    )
+    stale = _ready_bootstrap_record(agent_profile_ref="omnigent-opencode-default@7")
     refreshed = stale.model_copy(
         update={"agent_profile_ref": "omnigent-opencode-default@8"}
     )
@@ -804,9 +893,7 @@ async def test_current_default_qualification_avoids_repeating_live_workload(
     async def _session_scope():
         yield _QualificationSession()
 
-    current = _ready_bootstrap_record(
-        agent_profile_ref="omnigent-opencode-default@8"
-    )
+    current = _ready_bootstrap_record(agent_profile_ref="omnigent-opencode-default@8")
     current_images = ResolvedOmnigentDeploymentState(
         serverImageRef=_SERVER_IMAGE_REF,
         opencodeHostImageRef=_HOST_IMAGE_REF,

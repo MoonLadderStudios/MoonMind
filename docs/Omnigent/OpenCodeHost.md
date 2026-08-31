@@ -3,7 +3,7 @@
 **Status:** OpenCode implementation is current; shared-image migration is desired state  
 **Document Class:** System / Operator Guide  
 **Owners:** MoonMind Platform  
-**Last updated:** 2026-08-28  
+**Last updated:** 2026-08-31
 **Authority:** OpenCode runtime contract and transition from `omnigent-host-opencode` to the shared MoonMind Omnigent host image
 
 ## Related documents
@@ -29,7 +29,7 @@ OpenCode currently uses:
 ```text
 opencode-native
 + generic-omnigent-host@1
-+ opencode-auth-json@1
++ none@1 (OpenCode Zen) or opencode-auth-json@1 (OpenCode Go)
 + omnigent-opencode@1
 + ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:<digest>
 ```
@@ -123,6 +123,7 @@ integrationModes:
   - native-server
 materializerRefs:
   - opencode-auth-json@1
+  - none@1
 features:
   workspaceBind: true
   readOnlyRoot: true
@@ -157,6 +158,7 @@ binary:
   supportedRange: ">=1.17.7,<1.19.0"
 credentialMaterializers:
   - opencode-auth-json@1
+  - none@1
 forbiddenAmbientEnvironment:
   - OPENCODE_AUTH_CONTENT
   - OPENCODE_CONFIG
@@ -217,6 +219,12 @@ ANTHROPIC_API_KEY
 
 The raw key never enters an execution plan, runtime binding, Temporal history, Docker label, ordinary Docker environment variable, workspace, artifact, or cleanup handle.
 
+OpenCode Zen Contributor Free uses `none@1`. It receives no secret role, no
+credential attachment, and no API key. The OpenCode runtime wrapper is selected
+from the `opencode-native` harness identity, so its startup does not depend on
+an `auth.json` mount. A deployment-level `OPENCODE_API_KEY` belongs only to an
+explicit `opencode-go` profile and must never be inherited by the Zen profile.
+
 ## 6. Shared-image credential isolation
 
 When the image also contains Codex and Claude Code, an OpenCode execution must still receive only the OpenCode credential attachment.
@@ -234,7 +242,27 @@ The presence of the other binaries is not a support or authorization signal.
 
 ## 7. OpenCode Provider Profile
 
-A normal OpenCode Go Provider Profile has the following effective shape:
+MoonMind auto-seeds this launch-ready default without a credential:
+
+```yaml
+profileId: opencode-zen-free
+runtimeId: opencode
+providerId: opencode
+credentialSource: none
+runtimeMaterializationMode: composite
+secretRefs: {}
+enabled: true
+authState: connected
+defaultModel: opencode/muse-spark-1.2-contributor-free
+defaultEffort: xhigh
+```
+
+The seed runs before the first bootstrap reconciliation. Startup validates the
+model against the exact pinned host and publishes the same deployment evidence
+required by key-backed profiles. An existing explicit operator disable remains
+authoritative.
+
+An optional OpenCode Go Provider Profile has the following effective shape:
 
 ```yaml
 profileId: opencode-go-default
@@ -257,14 +285,15 @@ The raw key is never returned after submission.
 
 ## 8. Provider validation and model discovery
 
-Validation uses the same pinned runtime and materialization behavior as production:
+Validation uses the same pinned runtime and provider-specific materialization
+behavior as production:
 
 1. Acquire a temporary Provider Profile maintenance lease.
-2. Materialize the proposed key through `opencode-auth-json@1`.
+2. Select `none@1` for `opencode` or materialize the proposed key through `opencode-auth-json@1` for `opencode-go`.
 3. Launch the exact digest-pinned OpenCode Host Class on restricted egress.
-4. Stage the credential into the writable runtime home.
+4. Stage the credential into the writable runtime home only for the key-backed route.
 5. Query the exact-host OpenCode model catalog.
-6. Require at least one `opencode-go/<model-id>` result.
+6. Require at least one model for the selected OpenCode provider route.
 7. Require the selected default model to appear in the observed catalog.
 8. Delete the validation host and run-owned credential state.
 9. Release the maintenance lease.
@@ -294,7 +323,10 @@ Evidence is invalid when:
 - the observation exceeds the configured age
 - the observation is implausibly far in the future
 
-The bootstrap reconciler revalidates connected profiles through the existing SecretRef. It does not request a new key. While a valid revalidation is pending, authoring reports `provider_runtime_revalidation_pending`.
+The bootstrap reconciler revalidates connected profiles through their selected
+materializer: the existing SecretRef for OpenCode Go and no credential for
+OpenCode Zen. It does not request a new key. While a valid revalidation is
+pending, authoring reports `provider_runtime_revalidation_pending`.
 
 Revalidation attempts are bounded per image and credential generation. Failure to acquire the maintenance lease does not spend a provider probe attempt because no probe occurred.
 
@@ -320,6 +352,7 @@ credentialSlots:
   - id: primary-model
     acceptedAuthModels:
       - own-auth
+      - none
     acceptedProviderIds:
       - opencode
       - opencode-go
@@ -367,8 +400,8 @@ opencode --version is within >=1.17.7,<1.19.0
 selected runtime pack matches opencode-native
 host advertises the exact opencode-native implementation
 credential generation is the acquired generation
-credential file exists without printing its contents
-credential ownership and modes are correct
+credential file exists without printing its contents when the selected materializer requires one
+credential ownership and modes are correct when credential state is materialized
 non-selected runtime credentials are absent
 workspace, Skills, and mounted tools match the plan
 restricted egress is active
@@ -432,7 +465,7 @@ host image digest and architecture
 opencode-native implementation
 opencode-native-pack version
 OpenCode CLI version
-opencode-auth-json materializer version
+selected credential materializer version (`none@1` or `opencode-auth-json@1`)
 Provider Profile compatibility class
 Agent Profile version
 Host Class and launch policy

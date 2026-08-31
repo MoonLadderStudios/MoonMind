@@ -33,11 +33,13 @@ from uuid import uuid4
 
 from sqlalchemy import select
 
+from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+
 logger = logging.getLogger(__name__)
 
 # The runtime-backed model catalog evidence contract exists for the OpenCode
 # family. Keep both OpenCode routes explicit because they share the same host
-# image, materializer, and secret role.
+# image while retaining distinct credential materializers.
 OPENCODE_RUNTIME_ID = "opencode"
 OPENCODE_PROVIDER_ID = "opencode-go"
 OPENCODE_PROVIDER_IDS = (OPENCODE_PROVIDER_ID, "opencode")
@@ -191,7 +193,18 @@ def evidence_matches_launchable_identity(
         return False
     if not isinstance(evidence.get("runtimeVersions"), dict):
         return False
-    if str(evidence.get("materializerRef") or "") != "opencode-auth-json@1":
+    from moonmind.omnigent.harness_platform.materializers import (
+        materializer_ref_for_provider,
+    )
+
+    try:
+        expected_materializer_ref = materializer_ref_for_provider(
+            str(profile.runtime_id or ""),
+            str(profile.provider_id or ""),
+        )
+    except HarnessPlatformError:
+        return False
+    if str(evidence.get("materializerRef") or "") != expected_materializer_ref:
         return False
     models = {
         str(item.get("qualifiedId") or "")
@@ -226,8 +239,8 @@ def evidence_is_current(
     return evidence_observation_is_current(evidence, env=env, now=now)
 
 
-def _has_enrolled_credential(profile: Any) -> bool:
-    """Report whether this profile already carries an enrolled credential.
+def _has_configured_runtime_authority(profile: Any) -> bool:
+    """Report whether this profile can authorize an OpenCode runtime probe.
 
     Deliberately independent of ``enabled``. Enrollment applies API-key setup
     with ``enabled=True``, so treating a disabled-but-connected profile as
@@ -241,10 +254,19 @@ def _has_enrolled_credential(profile: Any) -> bool:
     from api_service.db.models import ProviderProfileAuthState
 
     state = getattr(profile.auth_state, "value", profile.auth_state)
+    credential_source = getattr(
+        getattr(profile, "credential_source", None),
+        "value",
+        getattr(profile, "credential_source", None),
+    )
+    if (
+        str(getattr(profile, "provider_id", "") or "") == "opencode"
+        and state == ProviderProfileAuthState.CONNECTED.value
+        and credential_source == "none"
+    ):
+        return True
     secret_ref = str((profile.secret_refs or {}).get(OPENCODE_SECRET_ROLE) or "")
-    return (
-        state == ProviderProfileAuthState.CONNECTED.value and bool(secret_ref)
-    ) or (
+    return (state == ProviderProfileAuthState.CONNECTED.value and bool(secret_ref)) or (
         state == ProviderProfileAuthState.API_KEY_PENDING.value
         and secret_ref == OPENCODE_DEPLOYMENT_SECRET_REF
     )
@@ -282,7 +304,9 @@ async def _opencode_profiles(session_factory: Any) -> list[Any]:
                 await session.execute(
                     select(ManagedAgentProviderProfile).where(
                         ManagedAgentProviderProfile.runtime_id == OPENCODE_RUNTIME_ID,
-                        ManagedAgentProviderProfile.provider_id.in_(OPENCODE_PROVIDER_IDS),
+                        ManagedAgentProviderProfile.provider_id.in_(
+                            OPENCODE_PROVIDER_IDS
+                        ),
                     )
                 )
             ).scalars()
@@ -321,14 +345,38 @@ async def reconcile_opencode_provider_readiness(
         profiles = [
             profile for profile in profiles if profile.profile_id in selected_ids
         ]
-    enrolled = [profile for profile in profiles if _has_enrolled_credential(profile)]
+    enrolled = [
+        profile for profile in profiles if _has_configured_runtime_authority(profile)
+    ]
+    api_key = resolved_opencode_api_key(env=env)
+    key_backed_enrolled = any(
+        str(getattr(profile, "provider_id", "") or "") == OPENCODE_PROVIDER_ID
+        for profile in enrolled
+    )
+    # OpenCode Zen and OpenCode Go are distinct provider routes. A launchable
+    # credential-free Zen profile must not consume an explicitly configured Go
+    # credential or prevent its separate enrollment.
+    if api_key and not key_backed_enrolled and profile_ids is None:
+        if not allow_enrollment:
+            return ProviderReconcileOutcome(
+                ready=False,
+                checked=len(profiles),
+                reason="waiting for immutable image and harness catalog authority",
+            )
+        return await _enroll_from_deployment_config(
+            session_factory=session_factory,
+            api_key=api_key,
+            accepted=opencode_contributor_data_use_accepted(env=env),
+            image_ref=image_ref or "",
+            checked=len(profiles),
+            controller=controller,
+        )
     # A disabled profile cannot launch, and re-validating it would neither help
     # nor honor the operator. Its credential still counts as enrolled above, so
     # deployment configuration never re-enables it.
     launchable = [profile for profile in enrolled if profile.enabled]
 
     if not enrolled:
-        api_key = resolved_opencode_api_key(env=env)
         if not api_key:
             # Nothing configured: the console enrollment path stays available and
             # readiness correctly reports that no compatible profile exists.
@@ -515,7 +563,15 @@ async def _revalidate_stale_evidence(
         )
     pending = [p for p in stale if p.profile_id not in exhausted_ids]
 
-    resolver = build_omnigent_secret_resolver() if pending else None
+    from moonmind.omnigent.harness_platform.materializers import (
+        materializer_ref_for_provider,
+    )
+
+    needs_secret_resolution = any(
+        materializer_ref_for_provider(row.runtime_id, row.provider_id) != "none@1"
+        for row in pending
+    )
+    resolver = build_omnigent_secret_resolver() if needs_secret_resolution else None
     refreshed: list[str] = []
     deferred: list[str] = sorted(exhausted_ids)
     for row in pending:
@@ -676,11 +732,19 @@ async def _persist_evidence(
             profile=profile,
             image_ref=str(evidence.get("imageRef") or ""),
         )
+        from moonmind.omnigent.harness_platform.materializers import (
+            materializer_ref_for_provider,
+        )
+
+        credentialless = (
+            materializer_ref_for_provider(profile.runtime_id, profile.provider_id)
+            == "none@1"
+        )
         readiness = dict(behavior.get("auth_readiness") or {})
         readiness.update(
             {
                 "connected": launchable,
-                "backing_secret_exists": True,
+                "backing_secret_exists": not credentialless,
                 "launch_ready": launchable,
             }
         )
@@ -688,7 +752,9 @@ async def _persist_evidence(
             readiness.pop("failure_reason", None)
             profile.auth_state = ProviderProfileAuthState.CONNECTED
             behavior["auth_state"] = "connected"
-            behavior["auth_status_label"] = "OpenCode API key ready"
+            behavior["auth_status_label"] = (
+                "No API key required" if credentialless else "OpenCode API key ready"
+            )
         else:
             readiness["failure_reason"] = (
                 "The selected model was not observed by the pinned OpenCode runtime."

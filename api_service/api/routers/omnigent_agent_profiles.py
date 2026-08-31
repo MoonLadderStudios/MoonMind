@@ -384,7 +384,7 @@ async def ensure_builtin_opencode_agent_profile(
             omnigent_version=catalog.snapshot.omnigentVersion,
             omnigent_build_digest=catalog.snapshot.omnigentBuildDigest,
             integration_mode=harness.capabilities.integrationMode or "native-server",
-            materializer_refs=["opencode-auth-json@1"],
+            materializer_refs=["opencode-auth-json@1", "none@1"],
             requested_host_mode="on-demand",
         )
     except Exception:
@@ -406,7 +406,7 @@ async def ensure_builtin_opencode_agent_profile(
             "credentialSlots": [
                 {
                     "id": "primary-model",
-                    "acceptedAuthModels": ["own-auth"],
+                    "acceptedAuthModels": ["own-auth", "none"],
                     "acceptedProviderIds": ["opencode-go", "opencode"],
                 }
             ],
@@ -1119,8 +1119,7 @@ async def validate_profile(
     target.upstream_snapshot = outcome.upstream_snapshot
     validation_schema = (
         "moonmind.omnigent-agent-profile-validation.v2"
-        if target.document.get("schemaVersion")
-        == "moonmind.omnigent-agent-profile.v2"
+        if target.document.get("schemaVersion") == "moonmind.omnigent-agent-profile.v2"
         else "moonmind.omnigent-agent-profile-validation.v1"
     )
     target.validation_result = {

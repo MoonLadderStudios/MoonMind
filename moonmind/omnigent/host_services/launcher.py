@@ -172,6 +172,10 @@ class DockerOmnigentHostLauncher:
             tool_attachments=spec.toolAttachments,
             github_credential_attachment=spec.githubCredentialAttachment,
             control_attachment=spec.controlAttachment,
+            enable_opencode_runtime=any(
+                item.harnessId == "opencode-native"
+                for item in host_class.declaredHarnessImplementations
+            ),
         )
         command = [
             "docker",

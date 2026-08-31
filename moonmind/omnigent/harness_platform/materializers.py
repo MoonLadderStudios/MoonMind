@@ -121,7 +121,10 @@ BUILTIN_MATERIALIZERS: dict[str, CredentialMaterializer] = {}
 
 _PROVIDER_MATERIALIZER_REFS: dict[tuple[str, str], str] = {
     ("opencode", "opencode-go"): "opencode-auth-json@1",
-    ("opencode", "opencode"): "opencode-auth-json@1",
+    # OpenCode's built-in Zen Contributor Free provider is credentialless.
+    # Keep the paid Go route on its explicit auth.json materializer so a
+    # deployment key can never bleed into the free provider implicitly.
+    ("opencode", "opencode"): "none@1",
     ("codex_cli", "openai"): "codex-oauth-home@1",
     ("omnigent", "anthropic"): "omnigent-provider-config@1",
     ("omnigent", "openai"): "omnigent-provider-config@1",
@@ -317,9 +320,7 @@ def _assert_no_forbidden_ambient_env() -> None:
         )
 
 
-def _opencode_auth_json_payload(
-    *, api_key: str, provider_key: str
-) -> dict[str, Any]:
+def _opencode_auth_json_payload(*, api_key: str, provider_key: str) -> dict[str, Any]:
     """Exact OpenCode credential structure for the pinned version.
 
     Verified against opencode-ai 1.18.x auth.json shape:
@@ -342,9 +343,7 @@ def _opencode_auth_json_payload(
     return {provider_key: {"type": "api", "key": key}}
 
 
-def build_opencode_auth_json_bytes(
-    *, api_key: str, provider_key: str
-) -> bytes:
+def build_opencode_auth_json_bytes(*, api_key: str, provider_key: str) -> bytes:
     """Return canonical JSON bytes for auth.json without touching filesystem."""
     payload = _opencode_auth_json_payload(api_key=api_key, provider_key=provider_key)
     return json.dumps(

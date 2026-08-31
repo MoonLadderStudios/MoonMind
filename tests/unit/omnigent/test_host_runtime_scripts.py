@@ -5,7 +5,12 @@ from moonmind.omnigent.host_services.runtime_scripts import (
 )
 
 
-def _build(*, target_path: str, github_attachment=None):
+def _build(
+    *,
+    target_path: str,
+    github_attachment=None,
+    enable_opencode_runtime: bool = False,
+):
     return OmnigentRuntimeScriptService().build_entrypoint(
         credential_handles=[
             {
@@ -16,6 +21,7 @@ def _build(*, target_path: str, github_attachment=None):
         skill_attachment={"targetPath": "/opt/moonmind-skills"},
         step_execution_id="workflow:run:node-1:execution:1",
         github_credential_attachment=github_attachment,
+        enable_opencode_runtime=enable_opencode_runtime,
     )
 
 
@@ -44,13 +50,12 @@ def test_opencode_materializer_pins_deterministic_server_startup_environment():
         | {"MOONMIND_ACTIVE_SKILLS_DIR", "MOONMIND_STEP_EXECUTION_ID"}
     )
     assert (
-        environment["MOONMIND_STEP_EXECUTION_ID"]
-        == "workflow:run:node-1:execution:1"
+        environment["MOONMIND_STEP_EXECUTION_ID"] == "workflow:run:node-1:execution:1"
     )
     assert "> /home/app/.omnigent/moonmind/bin/moonmind-opencode-context" in script
     assert "> /home/app/.omnigent/moonmind/bin/opencode" in script
     assert (
-        'exec /home/app/.omnigent/moonmind/bin/moonmind-opencode-context '
+        "exec /home/app/.omnigent/moonmind/bin/moonmind-opencode-context "
         '/usr/local/bin/opencode "$@"'
     ) in script
     assert "MOONMIND_STEP_EXECUTION_ID=$(cat" in script
@@ -73,6 +78,26 @@ def test_non_opencode_materializer_does_not_inject_opencode_runtime_flags():
         "MOONMIND_ACTIVE_SKILLS_DIR",
         "MOONMIND_STEP_EXECUTION_ID",
     }
+
+
+def test_credentialless_opencode_runtime_builds_wrapper_without_auth_mount():
+    script, environment = _build(
+        target_path="",
+        enable_opencode_runtime=True,
+    )
+
+    assert environment["MOONMIND_OPENCODE_RUNTIME"] == "1"
+    assert environment["OPENCODE_DISABLE_MODELS_FETCH"] == "1"
+    assert "> /home/app/.omnigent/moonmind/bin/opencode" in script
+    assert 'if [ -d "/run/mm-credentials/opencode" ]; then cp ' in script
+    syntax = subprocess.run(
+        ["/bin/sh", "-n"],
+        input=script,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert syntax.returncode == 0, syntax.stderr
 
 
 def test_github_projection_exposes_only_non_secret_cli_environment():

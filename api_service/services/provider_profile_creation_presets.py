@@ -525,7 +525,7 @@ def _credential_free_preset(
             "auth_status_label": "Connected",
             "auth_readiness": {
                 "connected": True,
-                "backing_secret_exists": True,
+                "backing_secret_exists": False,
                 "launch_ready": True,
             },
         },
@@ -622,22 +622,6 @@ def _supported_presets() -> dict[
                 "ANTHROPIC_API_KEY": {"from_secret_ref": "anthropic_api_key"}
             },
             auth_strategy="api_key_env",
-        ),
-        _api_key_preset(
-            runtime_id="opencode",
-            provider_id="opencode",
-            materialization_mode="composite",
-            secret_role="opencode_api_key",
-            clear_env_keys=[
-                "OPENCODE_AUTH_CONTENT",
-                "OPENCODE_CONFIG",
-                "OPENCODE_CONFIG_CONTENT",
-                "OPENAI_API_KEY",
-                "ANTHROPIC_API_KEY",
-            ],
-            env_template={},
-            auth_strategy="opencode_auth_json",
-            system_tags=["api-key", "opencode", "zen"],
         ),
         _api_key_preset(
             runtime_id="opencode",
