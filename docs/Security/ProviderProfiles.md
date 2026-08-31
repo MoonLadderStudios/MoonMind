@@ -448,7 +448,7 @@ For first-party Claude and Codex setup stubs, the default must be:
 
 ```yaml
 enabled: false
-auth_state: not_configured
+auth_state: oauth_pending
 disabled_reason: missing_credentials
 ```
 
@@ -611,7 +611,7 @@ runtime_materialization_mode: api_key_env
 
 enabled: false
 is_default: false
-auth_state: not_configured
+auth_state: oauth_pending
 disabled_reason: missing_credentials
 tags: ["oauth", "first-party"]
 priority: 100
@@ -1425,7 +1425,7 @@ New unconfigured first-party setup stubs should default to:
 
 ```yaml
 enabled: false
-auth_state: not_configured
+auth_state: oauth_pending
 disabled_reason: missing_credentials
 credential_source: none
 ```
@@ -1540,7 +1540,7 @@ runtime_materialization_mode: api_key_env
 account_label: null
 enabled: false
 is_default: false
-auth_state: not_configured
+auth_state: oauth_pending
 disabled_reason: missing_credentials
 tags: ["oauth", "first-party"]
 priority: 100

@@ -371,6 +371,7 @@ async def test_requalification_uses_the_current_provider_profile_model(
     )
     provider_profile = SimpleNamespace(
         profile_id="opencode-go-default",
+        provider_id="opencode-go",
         is_default=True,
         enabled=True,
         auth_state=ProviderProfileAuthState.CONNECTED,
@@ -465,6 +466,7 @@ async def test_requalification_follows_the_current_default_provider_profile(
     previous = SimpleNamespace(
         **shared,
         profile_id="opencode-go-default",
+        provider_id="opencode-go",
         is_default=False,
         secret_refs={"opencode_api_key": "db://opencode-go-default-api-key"},
         default_model="opencode-go/muse-spark-1.2-contributor",
@@ -473,6 +475,7 @@ async def test_requalification_follows_the_current_default_provider_profile(
     current = SimpleNamespace(
         **shared,
         profile_id="opencode-zen-free",
+        provider_id="opencode",
         is_default=True,
         secret_refs={"opencode_api_key": "db://opencode-zen-free-api-key"},
         default_model="opencode/muse-spark-1.2-contributor-free",
@@ -560,6 +563,7 @@ async def test_requalification_rejects_an_unlaunchable_provider_profile(
     )
     provider_profile = SimpleNamespace(
         profile_id="opencode-go-default",
+        provider_id="opencode-go",
         is_default=True,
         enabled=enabled,
         auth_state=ProviderProfileAuthState.CONNECTED,
@@ -625,6 +629,7 @@ async def test_requalification_stops_when_runtime_revalidation_fails(
     )
     provider_profile = SimpleNamespace(
         profile_id="opencode-go-default",
+        provider_id="opencode-go",
         is_default=True,
         enabled=True,
         auth_state=ProviderProfileAuthState.CONNECTED,

@@ -277,12 +277,12 @@ async def test_readiness_ready_when_projection_fresh_and_provider_compatible(ses
         ManagedAgentProviderProfile(
             profile_id="prov-1",
             runtime_id="codex_cli",
-            provider_id="prov",
+            provider_id="openai",
             credential_source=ProviderCredentialSource.SECRET_REF,
             runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
             enabled=True,
             auth_state=ProviderProfileAuthState.CONNECTED,
-            secret_refs={"provider_api_key": "env://OPENAI_API_KEY"},
+            secret_refs={"openai_api_key": "env://OPENAI_API_KEY"},
         )
     )
     await session.commit()
@@ -401,7 +401,7 @@ async def _seed_opencode_smoke_admission(session, *, validated_at: datetime):
         runtime_id="opencode",
         provider_id="opencode-go",
         credential_source=ProviderCredentialSource.SECRET_REF,
-        runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+        runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
         enabled=True,
         auth_state=ProviderProfileAuthState.CONNECTED,
         secret_refs={"opencode_api_key": "env://OPENCODE_API_KEY"},

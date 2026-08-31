@@ -1148,12 +1148,16 @@ async def test_finalize_oauth_session_rejects_failed_volume_verification(
                 runtime_id="codex_cli",
                 provider_id="openai",
                 provider_label="OpenAI",
-                credential_source=ProviderCredentialSource.NONE,
+                credential_source=ProviderCredentialSource.SECRET_REF,
                 runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                secret_refs={"openai_api_key": "env://OPENAI_API_KEY"},
+                max_parallel_runs=1,
+                cooldown_after_429_seconds=300,
                 enabled=True,
                 is_default=False,
                 priority=10_000,
                 auth_state=ProviderProfileAuthState.CONNECTED,
+                last_auth_method=ProviderProfileAuthMethod.SECRET_REF,
             )
         )
         await session.commit()
