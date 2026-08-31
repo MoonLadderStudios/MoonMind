@@ -27,6 +27,10 @@ from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 from moonmind.omnigent.host_services.legacy_host_containers import (
     LegacyOmnigentHostContainerService,
 )
+from moonmind.omnigent.host_services.registration import (
+    HOST_REGISTRATION_ATTEMPTS,
+    HOST_REGISTRATION_INTERVAL_SECONDS,
+)
 from moonmind.omnigent.oauth_hosts import (
     HostPreflightFailure,
     deterministic_host_container_name,
@@ -229,12 +233,6 @@ _SAFE_STEP_EXECUTION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,510}[A-Za-z
 _MAX_RESTORE_INPUT_REFS = 64
 _MAX_RESTORE_INPUT_BYTES = 64 * 1024 * 1024
 _MAX_RESTORE_TOTAL_BYTES = 256 * 1024 * 1024
-# Stock Omnigent first publishes an offline catalog row, then replaces it with
-# the live host identity after the runner tunnel is ready. Cold image and
-# catalog startup has exceeded one minute on the supported local Compose path;
-# keep the wait bounded but large enough for that authoritative online edge.
-_HOST_REGISTRATION_ATTEMPTS = 91
-_HOST_REGISTRATION_INTERVAL_SECONDS = 2
 _HOST_EXEC_PREFLIGHT_ATTEMPTS = 11
 _HOST_EXEC_PREFLIGHT_INTERVAL_SECONDS = 1
 # Restore payloads are read through the durable artifact contract as raw bytes,
@@ -3646,7 +3644,7 @@ class OmnigentOAuthHostRuntime:
             host_lease.lease_id
         )
         adapter = self._runtime_adapter(binding)
-        for attempt in range(_HOST_REGISTRATION_ATTEMPTS):
+        for attempt in range(HOST_REGISTRATION_ATTEMPTS):
             hosts = await self._client.list_hosts()
             if expected_id:
                 matches = [
@@ -3671,8 +3669,8 @@ class OmnigentOAuthHostRuntime:
                 return dict(online[0])
             if len(online) > 1:
                 break
-            if attempt + 1 < _HOST_REGISTRATION_ATTEMPTS:
-                await asyncio.sleep(_HOST_REGISTRATION_INTERVAL_SECONDS)
+            if attempt + 1 < HOST_REGISTRATION_ATTEMPTS:
+                await asyncio.sleep(HOST_REGISTRATION_INTERVAL_SECONDS)
         raise OmnigentOAuthHostError(
             "expected exactly one compatible online host after bounded registration wait",
             code=HostPreflightFailure.HOST_NOT_REGISTERED.value,

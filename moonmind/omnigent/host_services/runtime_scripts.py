@@ -45,6 +45,14 @@ _GITHUB_RUNTIME_ENV = {
     "GH_NO_UPDATE_NOTIFIER": "1",
     "GH_NO_EXTENSION_UPDATE_NOTIFIER": "1",
 }
+_MOONMIND_RUNTIME_ENV_FILES = {
+    "MOONMIND_URL": "moonmind-url",
+    "MOONMIND_AGENT_RUN_ID": "agent-run-id",
+    "MOONMIND_TASK_WORKFLOW_ID": "task-workflow-id",
+    "MOONMIND_STEP_ID": "step-id",
+    "MOONMIND_RUNTIME_ID": "runtime-id",
+    "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE": "execution-fanout-file",
+}
 
 
 class OmnigentRuntimeScriptService:
@@ -57,7 +65,9 @@ class OmnigentRuntimeScriptService:
         tool_attachments: tuple[dict[str, Any], ...] = (),
         github_credential_attachment: dict[str, Any] | None = None,
         control_attachment: dict[str, Any] | None = None,
+        control_credential_available: bool = True,
         enable_opencode_runtime: bool = False,
+        runtime_environment: dict[str, str] | None = None,
     ) -> tuple[str, dict[str, str]]:
         generation_checks: list[str] = []
         for handle in credential_handles:
@@ -73,6 +83,16 @@ class OmnigentRuntimeScriptService:
             "MOONMIND_ACTIVE_SKILLS_DIR": str(skill_attachment["targetPath"]),
             "MOONMIND_STEP_EXECUTION_ID": step_execution_id,
         }
+        supplied_runtime_environment = dict(runtime_environment or {})
+        if set(supplied_runtime_environment) - set(_MOONMIND_RUNTIME_ENV_FILES):
+            raise ValueError("unsupported MoonMind runtime environment")
+        for key, value in supplied_runtime_environment.items():
+            normalized = str(value or "").strip()
+            if not normalized or any(
+                character in normalized for character in ("\0", "\r", "\n")
+            ):
+                raise ValueError(f"invalid MoonMind runtime environment {key}")
+            environment[key] = normalized
         staging_dir = "/run/mm-credentials/opencode"
         opencode_data = "/home/app/.local/share/opencode"
         has_opencode_materializer = any(
@@ -110,7 +130,7 @@ class OmnigentRuntimeScriptService:
                 environment[key] = str(value)
         control_path = (
             f"{control_attachment['targetPath']}/api-token"
-            if control_attachment is not None
+            if control_attachment is not None and control_credential_available
             else ""
         )
         environment["MOONMIND_OMNIGENT_CONTROL_CREDENTIAL_FILE"] = control_path
@@ -136,11 +156,22 @@ class OmnigentRuntimeScriptService:
             *(_OPENCODE_RUNTIME_ENV if opencode_runtime else {}),
             *(_OPENCODE_PROXY_ENV_NAMES if opencode_runtime else {}),
             *(_GITHUB_RUNTIME_ENV if github_credential_attachment is not None else {}),
+            *supplied_runtime_environment,
         }
         if passthrough_names:
             environment["OMNIGENT_RUNNER_ENV_PASSTHROUGH"] = ",".join(
                 sorted(passthrough_names)
             )
+        runtime_context_writes = "".join(
+            f'printf \'%s\\n\' "${key}" > {runtime_context_dir}/{filename}; '
+            for key, filename in _MOONMIND_RUNTIME_ENV_FILES.items()
+            if key in supplied_runtime_environment
+        )
+        runtime_context_exports = "".join(
+            f"'export {key}=$(cat {runtime_context_dir}/{filename})' "
+            for key, filename in _MOONMIND_RUNTIME_ENV_FILES.items()
+            if key in supplied_runtime_environment
+        )
         script = (
             "set -eu; "
             "unset OPENAI_API_KEY ANTHROPIC_API_KEY OPENCODE_AUTH_CONTENT "
@@ -170,7 +201,8 @@ class OmnigentRuntimeScriptService:
             "printf '%s\\n' \"$MOONMIND_STEP_EXECUTION_ID\" > "
             + runtime_context_dir
             + "/step-execution-id; "
-            "chmod 0600 " + runtime_context_dir + "/*; "
+            + runtime_context_writes
+            + "chmod 0600 " + runtime_context_dir + "/*; "
             "printf '%s\\n' '#!/bin/sh' "
             "'export MOONMIND_ACTIVE_SKILLS_DIR=$(cat "
             + runtime_context_dir
@@ -178,7 +210,8 @@ class OmnigentRuntimeScriptService:
             "'export MOONMIND_STEP_EXECUTION_ID=$(cat "
             + runtime_context_dir
             + "/step-execution-id)' "
-            "'if [ -r /home/app/.config/gh/hosts.yml ]; then' "
+            + runtime_context_exports
+            + "'if [ -r /home/app/.config/gh/hosts.yml ]; then' "
             "'  export GH_CONFIG_DIR=/home/app/.config/gh' "
             "'  export GH_PROMPT_DISABLED=1' "
             "'  export GH_NO_UPDATE_NOTIFIER=1' "

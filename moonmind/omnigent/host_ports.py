@@ -168,6 +168,7 @@ class OmnigentHostLauncherPort(Protocol):
         host_class: HostClass,
         launch_policy: LaunchPolicy,
         credential_handles: list[dict[str, Any]],
+        runtime_environment: Mapping[str, str] | None = None,
     ) -> dict[str, Any]: ...
 
 
@@ -176,7 +177,11 @@ class OmnigentHostRegistrationPort(Protocol):
     """Wait for the launched host to register its harness with the endpoint."""
 
     async def wait_for_registration(
-        self, *, correlation_name: str, harness_id: str
+        self,
+        *,
+        correlation_name: str,
+        harness_id: str,
+        credentialless: bool = False,
     ) -> dict[str, Any]: ...
 
 

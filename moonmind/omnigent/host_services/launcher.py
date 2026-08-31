@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -56,8 +57,13 @@ class DockerOmnigentHostLauncher:
     def server_url(self) -> str:
         return self._server_url
 
-    def control_attachment(self, host_lease_ref: str) -> dict[str, Any] | None:
-        if not self._host_api_token:
+    def control_attachment(
+        self,
+        host_lease_ref: str,
+        *,
+        require_capability_mount: bool = False,
+    ) -> dict[str, Any] | None:
+        if not self._host_api_token and not require_capability_mount:
             return None
         digest = hashlib.sha256(host_lease_ref.encode("utf-8")).hexdigest()[:32]
         return {
@@ -74,6 +80,7 @@ class DockerOmnigentHostLauncher:
         host_class: HostClass,
         launch_policy: LaunchPolicy,
         credential_handles: list[dict[str, Any]],
+        runtime_environment: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         if spec.serverUrl != self._server_url:
             raise HarnessPlatformError(
@@ -87,6 +94,30 @@ class DockerOmnigentHostLauncher:
             if spec.controlAttachment is not None
             else ""
         )
+        supplied_runtime_environment = dict(runtime_environment or {})
+        fanout_bearer = str(
+            supplied_runtime_environment.pop(
+                "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN", ""
+            )
+            or ""
+        ).strip()
+        allowed_runtime_environment = {
+            "MOONMIND_URL",
+            "MOONMIND_AGENT_RUN_ID",
+            "MOONMIND_TASK_WORKFLOW_ID",
+            "MOONMIND_STEP_ID",
+            "MOONMIND_RUNTIME_ID",
+        }
+        if set(supplied_runtime_environment) - allowed_runtime_environment:
+            raise HarnessPlatformError(
+                "generic host received unsupported runtime environment names",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            )
+        if fanout_bearer and not control_volume:
+            raise HarnessPlatformError(
+                "execution fan-out requires a lease-owned capability mount",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            )
         await self._backend.run(
             [
                 "docker",
@@ -117,26 +148,48 @@ class DockerOmnigentHostLauncher:
                         control_volume,
                     ]
                 )
-                await self._backend.run(
-                    [
-                        "docker",
-                        "run",
-                        "--rm",
-                        "-i",
-                        "--user",
-                        "0:0",
-                        "--network",
-                        "none",
-                        "--mount",
-                        f"type=volume,src={control_volume},dst=/control",
-                        "--entrypoint",
-                        "/bin/sh",
-                        host_class.imageRef,
-                        "-ceu",
-                        "umask 077; cat > /control/api-token; chown 1000:1000 /control/api-token; chmod 0400 /control/api-token",
-                    ],
-                    input_bytes=self._host_api_token.encode("utf-8"),
-                )
+                if self._host_api_token:
+                    await self._backend.run(
+                        [
+                            "docker",
+                            "run",
+                            "--rm",
+                            "-i",
+                            "--user",
+                            "0:0",
+                            "--network",
+                            "none",
+                            "--mount",
+                            f"type=volume,src={control_volume},dst=/control",
+                            "--entrypoint",
+                            "/bin/sh",
+                            host_class.imageRef,
+                            "-ceu",
+                            "umask 077; cat > /control/api-token; chown 1000:1000 /control/api-token; chmod 0400 /control/api-token",
+                        ],
+                        input_bytes=self._host_api_token.encode("utf-8"),
+                    )
+                if fanout_bearer:
+                    await self._backend.run(
+                        [
+                            "docker",
+                            "run",
+                            "--rm",
+                            "-i",
+                            "--user",
+                            "0:0",
+                            "--network",
+                            "none",
+                            "--mount",
+                            f"type=volume,src={control_volume},dst=/control",
+                            "--entrypoint",
+                            "/bin/sh",
+                            host_class.imageRef,
+                            "-ceu",
+                            "umask 077; cat > /control/execution-fanout; chown 1000:1000 /control/execution-fanout; chmod 0400 /control/execution-fanout",
+                        ],
+                        input_bytes=fanout_bearer.encode("utf-8"),
+                    )
             # Initialize the writable host-state volume before a read-only-root launch.
             await self._backend.run(
                 [
@@ -165,6 +218,10 @@ class DockerOmnigentHostLauncher:
                 ["docker", "volume", "rm", state_volume], check=False
             )
             raise
+        if fanout_bearer:
+            supplied_runtime_environment[
+                "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE"
+            ] = "/run/moonmind-host-auth/execution-fanout"
         script, runtime_environment = self._scripts.build_entrypoint(
             credential_handles=credential_handles,
             skill_attachment=spec.skillAttachment,
@@ -172,10 +229,12 @@ class DockerOmnigentHostLauncher:
             tool_attachments=spec.toolAttachments,
             github_credential_attachment=spec.githubCredentialAttachment,
             control_attachment=spec.controlAttachment,
+            control_credential_available=bool(self._host_api_token),
             enable_opencode_runtime=any(
                 item.harnessId == "opencode-native"
                 for item in host_class.declaredHarnessImplementations
             ),
+            runtime_environment=supplied_runtime_environment,
         )
         command = [
             "docker",

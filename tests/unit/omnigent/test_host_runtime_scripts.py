@@ -10,6 +10,7 @@ def _build(
     target_path: str,
     github_attachment=None,
     enable_opencode_runtime: bool = False,
+    runtime_environment=None,
 ):
     return OmnigentRuntimeScriptService().build_entrypoint(
         credential_handles=[
@@ -22,6 +23,7 @@ def _build(
         step_execution_id="workflow:run:node-1:execution:1",
         github_credential_attachment=github_attachment,
         enable_opencode_runtime=enable_opencode_runtime,
+        runtime_environment=runtime_environment,
     )
 
 
@@ -142,3 +144,38 @@ def test_github_projection_exposes_only_non_secret_cli_environment():
     assert "> /home/app/.omnigent/moonmind/bin/gh" in _script
     assert "export GH_CONFIG_DIR=/home/app/.config/gh" in _script
     assert "GIT_CONFIG_VALUE_0" in _script
+
+
+def test_opencode_projection_restores_scoped_fanout_file_selector() -> None:
+    runtime_environment = {
+        "MOONMIND_URL": "http://api:8000",
+        "MOONMIND_AGENT_RUN_ID": "agent-run-1",
+        "MOONMIND_TASK_WORKFLOW_ID": "workflow-1",
+        "MOONMIND_STEP_ID": "step-1",
+        "MOONMIND_RUNTIME_ID": "opencode-native",
+        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE": (
+            "/run/moonmind-host-auth/execution-fanout"
+        ),
+    }
+    script, environment = _build(
+        target_path="",
+        enable_opencode_runtime=True,
+        runtime_environment=runtime_environment,
+    )
+
+    passthrough = set(environment["OMNIGENT_RUNNER_ENV_PASSTHROUGH"].split(","))
+    assert set(runtime_environment) <= passthrough
+    assert {
+        key: environment[key] for key in runtime_environment
+    } == runtime_environment
+    for key in runtime_environment:
+        assert f"export {key}=$(cat " in script
+    assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN=" not in script
+    syntax = subprocess.run(
+        ["/bin/sh", "-n"],
+        input=script,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert syntax.returncode == 0, syntax.stderr

@@ -1,0 +1,19 @@
+{
+  "invariant": "caller inheritance preserves the parent's exact immutable Agent Profile and keeps Omnigent execution-target and launch-policy selectors at the API request level consumed by admission",
+  "providerProfileRef": "opencode-zen-free",
+  "agentProfile": {
+    "profileId": "omnigent-opencode-default",
+    "version": 11,
+    "digest": "sha256:a40d86b5a425308cebc144392c0ef9d69733a37f7abe005ee0cf0439767e6e91",
+    "providerProfileRef": "opencode-zen-free"
+  },
+  "omnigent": {
+    "agentProfileRef": {
+      "profileId": "omnigent-opencode-default",
+      "version": 11,
+      "digest": "sha256:a40d86b5a425308cebc144392c0ef9d69733a37f7abe005ee0cf0439767e6e91"
+    },
+    "launchPolicyRef": "omnigent-on-demand@1",
+    "executionTargetRef": "omnigent-opencode@1"
+  }
+}

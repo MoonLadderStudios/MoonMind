@@ -12,21 +12,46 @@ from moonmind.omnigent.harness_platform.failures import (
 )
 
 
-def _harness_ready(host: dict[str, Any], harness_id: str) -> bool:
+# Stock Omnigent first publishes an offline catalog row, then replaces it with
+# the live host identity after the runner tunnel and harness discovery are
+# ready. Cold startup on the supported local Compose path can exceed one
+# minute, including the bounded direct-spawn fallback when the optional runner
+# zygote is unavailable. Keep one shared, bounded registration policy for both
+# host lifecycle implementations.
+HOST_REGISTRATION_ATTEMPTS = 91
+HOST_REGISTRATION_INTERVAL_SECONDS = 2.0
+
+
+def _harness_readiness(host: dict[str, Any], harness_id: str) -> Any:
     readiness = host.get("configured_harnesses") or host.get("harnesses") or {}
     if isinstance(readiness, dict):
-        value = readiness.get(harness_id)
-        return value is True or str(value).lower() in {
+        return readiness.get(harness_id)
+    return harness_id in {str(item) for item in readiness} if isinstance(
+        readiness, list
+    ) else False
+
+
+def _harness_ready(
+    host: dict[str, Any],
+    harness_id: str,
+    *,
+    credentialless: bool,
+) -> bool:
+    value = _harness_readiness(host, harness_id)
+    if value is True or str(value).lower() in {
             "ready",
             "available",
             "authenticated",
             "true",
-        }
-    return (
-        harness_id in {str(item) for item in readiness}
-        if isinstance(readiness, list)
-        else False
-    )
+    }:
+        return True
+    # A credentialless provider route deliberately has no host auth material.
+    # Stock Omnigent therefore reports the installed OpenCode harness as
+    # ``needs-auth`` even though the selected provider/model is usable. Exact
+    # host attestation immediately follows registration and proves the selected
+    # model through that host, so admit this structural readiness only when the
+    # immutable plan selected the credentialless materializer.
+    return credentialless and str(value).lower() == "needs-auth"
 
 
 class OmnigentHostRegistrationService:
@@ -35,8 +60,8 @@ class OmnigentHostRegistrationService:
         *,
         client: Any,
         expected_owner: str,
-        attempts: int = 30,
-        interval_seconds: float = 2.0,
+        attempts: int = HOST_REGISTRATION_ATTEMPTS,
+        interval_seconds: float = HOST_REGISTRATION_INTERVAL_SECONDS,
     ) -> None:
         self._client = client
         self._owner = expected_owner.strip()
@@ -53,6 +78,7 @@ class OmnigentHostRegistrationService:
         *,
         correlation_name: str,
         harness_id: str,
+        credentialless: bool = False,
     ) -> dict[str, Any]:
         for attempt in range(self._attempts):
             observed_at = datetime.now(UTC)
@@ -65,7 +91,12 @@ class OmnigentHostRegistrationService:
                 and str(item.get("owner") or "") == self._owner
                 and str(item.get("status") or "").lower() == "online"
             ]
-            if len(matches) == 1 and _harness_ready(matches[0], harness_id):
+            if len(matches) == 1 and _harness_ready(
+                matches[0],
+                harness_id,
+                credentialless=credentialless,
+            ):
+                readiness = _harness_readiness(matches[0], harness_id)
                 return {
                     "host": matches[0],
                     "omnigentHostId": str(
@@ -73,6 +104,8 @@ class OmnigentHostRegistrationService:
                     ),
                     "observedAt": observed_at.isoformat(),
                     "harnessReady": True,
+                    "observedHarnessReadiness": readiness,
+                    "credentialless": credentialless,
                 }
             if len(matches) > 1:
                 raise HarnessPlatformError(
@@ -87,4 +120,8 @@ class OmnigentHostRegistrationService:
         )
 
 
-__all__ = ["OmnigentHostRegistrationService"]
+__all__ = [
+    "HOST_REGISTRATION_ATTEMPTS",
+    "HOST_REGISTRATION_INTERVAL_SECONDS",
+    "OmnigentHostRegistrationService",
+]

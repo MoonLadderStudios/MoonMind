@@ -109,6 +109,8 @@ def _parent_record(
     effort: str | None = "high",
     profile_id: str | None = "codex_default",
     execution_profile_ref: str | None = "codex_default",
+    agent_profile: dict[str, Any] | None = None,
+    agent_profile_snapshot: dict[str, Any] | None = None,
     omnigent: dict[str, Any] | None = None,
 ) -> SimpleNamespace:
     parameters: dict[str, Any] = {}
@@ -125,10 +127,14 @@ def _parent_record(
         workflow_runtime["mode"] = target_runtime
     if execution_profile_ref is not None:
         workflow_runtime["executionProfileRef"] = execution_profile_ref
+    if agent_profile is not None:
+        workflow_runtime["agentProfile"] = agent_profile
     if workflow_runtime:
         parameters["workflow"] = {"runtime": workflow_runtime}
     if omnigent is not None:
         parameters["omnigent"] = omnigent
+    if agent_profile_snapshot is not None:
+        parameters["agentProfileSnapshot"] = agent_profile_snapshot
     return SimpleNamespace(
         workflow_id=workflow_id,
         owner_id=owner_id,
@@ -415,15 +421,27 @@ def test_apply_inherited_runtime_writes_target_and_task_runtime_fields() -> None
 
 @pytest.mark.asyncio
 async def test_github_3453_child_inherits_complete_omnigent_selection() -> None:
+    agent_profile = {
+        "profileId": "omnigent-opencode-default",
+        "version": 11,
+        "digest": "sha256:" + "a" * 64,
+    }
+    expected_agent_profile = {
+        **agent_profile,
+        "providerProfileRef": "opencode-zen-free",
+    }
     selection = {
-        "executionTargetRef": "omnigent-codex@1",
-        "launchPolicyRef": "codex-on-demand@1",
-        "agent": {"harnessOverride": "codex-native"},
+        "executionTargetRef": "omnigent-opencode@1",
+        "launchPolicyRef": "omnigent-on-demand@1",
     }
     parent = _parent_record(
         target_runtime="omnigent",
-        profile_id=None,
-        execution_profile_ref="codex-oauth-profile",
+        model="opencode/muse-spark-1.2-contributor-free",
+        effort="xhigh",
+        profile_id="opencode-zen-free",
+        execution_profile_ref="opencode-zen-free",
+        agent_profile=agent_profile,
+        agent_profile_snapshot=expected_agent_profile,
         omnigent=selection,
     )
     service = _FakeService({"mm:parent": parent})
@@ -450,11 +468,14 @@ async def test_github_3453_child_inherits_complete_omnigent_selection() -> None:
     assert payload["targetRuntime"] == "omnigent"
     assert payload["task"]["runtime"] == {
         "mode": "omnigent",
-        "model": "gpt-5.4",
-        "effort": "high",
-        "executionProfileRef": "codex-oauth-profile",
-        "omnigent": selection,
+        "model": "opencode/muse-spark-1.2-contributor-free",
+        "effort": "xhigh",
+        "executionProfileRef": "opencode-zen-free",
+        "profileId": "opencode-zen-free",
+        "agentProfile": expected_agent_profile,
     }
+    assert payload["omnigent"] == selection
+    assert "omnigent" not in payload["task"]["runtime"]
 
 
 def test_github_3453_explicit_child_omnigent_selection_wins_inheritance() -> None:
@@ -472,11 +493,12 @@ def test_github_3453_explicit_child_omnigent_selection_wins_inheritance() -> Non
     }
     payload: dict[str, Any] = {
         "targetRuntime": "omnigent",
+        "omnigent": child_selection,
+        "agentProfile": {"profileId": "child-agent", "version": 2},
         "task": {
             "runtime": {
                 "mode": "omnigent",
                 "executionProfileRef": "child-profile",
-                "omnigent": child_selection,
             }
         },
     }
@@ -488,7 +510,9 @@ def test_github_3453_explicit_child_omnigent_selection_wins_inheritance() -> Non
     )
 
     assert payload["task"]["runtime"]["executionProfileRef"] == "child-profile"
-    assert payload["task"]["runtime"]["omnigent"] == child_selection
+    assert payload["omnigent"] == child_selection
+    assert payload["agentProfile"] == {"profileId": "child-agent", "version": 2}
+    assert "agentProfile" not in payload["task"]["runtime"]
 
 
 def test_apply_inherited_runtime_does_not_overwrite_existing_runtime_fields() -> None:

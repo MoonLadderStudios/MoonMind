@@ -12,6 +12,8 @@ composition root (:mod:`moonmind.omnigent.production`).
 from __future__ import annotations
 
 import hashlib
+import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
@@ -35,6 +37,13 @@ from moonmind.omnigent.host_ports import (
     OmnigentSkillDeliveryPort,
     OmnigentWorkspaceMaterializationPort,
     host_correlation_identity,
+)
+from moonmind.omnigent.workspace_intent import authored_required_capabilities
+from moonmind.security.execution_fanout_capabilities import (
+    EXECUTION_FANOUT_REQUIRED_CAPABILITY,
+    ExecutionFanoutCapabilityError,
+    mint_execution_fanout_capability,
+    require_execution_fanout_authorization,
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
@@ -104,6 +113,87 @@ class GenericOmnigentHostRuntime:
         self._registration = registration_waiter
         self._attestor = host_attestor
         self._cleanup = cleanup_service
+
+    @staticmethod
+    def _execution_fanout_authorization(
+        request: AgentExecutionRequest,
+    ) -> Mapping[str, Any] | None:
+        step_execution = request.step_execution
+        if step_execution is None:
+            return None
+        policy = step_execution.skill_source_policy
+        if "executionFanout" not in policy:
+            return None
+        evidence = policy.get("executionFanout")
+        if not isinstance(evidence, Mapping):
+            raise HarnessPlatformError(
+                "execution fan-out authorization evidence is malformed",
+                code="authorization_denied",
+            )
+        return evidence
+
+    @classmethod
+    def _runtime_environment(
+        cls,
+        *,
+        request: AgentExecutionRequest,
+        plan: OmnigentExecutionPlanEnvelope,
+        host_lease_ref: str,
+        launch_policy: LaunchPolicy,
+    ) -> dict[str, str]:
+        """Mint only the execution capabilities authorized for this host lease."""
+
+        required_capabilities = authored_required_capabilities(request)
+        if EXECUTION_FANOUT_REQUIRED_CAPABILITY not in required_capabilities:
+            return {}
+        try:
+            require_execution_fanout_authorization(
+                required_capabilities,
+                cls._execution_fanout_authorization(request),
+            )
+        except ExecutionFanoutCapabilityError as exc:
+            raise HarnessPlatformError(str(exc), code="authorization_denied") from exc
+        step_execution = request.step_execution
+        workflow_id = (
+            str(step_execution.workflow_id or "").strip()
+            if step_execution is not None
+            else str(request.correlation_id or "").strip()
+        )
+        step_execution_id = (
+            str(step_execution.step_execution_id or "").strip()
+            if step_execution is not None
+            else str(request.correlation_id or "").strip()
+        )
+        runtime_id = str(plan.payload.harnessId or "").strip()
+        moonmind_url = str(
+            os.environ.get("MOONMIND_URL") or "http://api:8000"
+        ).strip()
+        if not workflow_id or not step_execution_id or not runtime_id or not moonmind_url:
+            raise HarnessPlatformError(
+                "execution fan-out runtime identity is incomplete",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            )
+        from moonmind.config.settings import settings
+
+        return {
+            "MOONMIND_URL": moonmind_url,
+            "MOONMIND_AGENT_RUN_ID": step_execution_id,
+            "MOONMIND_TASK_WORKFLOW_ID": workflow_id,
+            "MOONMIND_STEP_ID": step_execution_id,
+            "MOONMIND_RUNTIME_ID": runtime_id,
+            "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN": (
+                mint_execution_fanout_capability(
+                    secret=str(settings.security.JWT_SECRET_KEY or ""),
+                    parent_workflow_id=workflow_id,
+                    agent_run_id=step_execution_id,
+                    step_id=step_execution_id,
+                    session_id=host_lease_ref,
+                    runtime_id=runtime_id,
+                    source_kind="omnigent",
+                    lifetime_seconds=int(launch_policy.limits["timeoutSeconds"]),
+                )
+            ),
+        }
 
     async def prepare(
         self,
@@ -236,6 +326,12 @@ class GenericOmnigentHostRuntime:
                 prepared.egress_attestation["appliedRuleDigest"]
             ),
         }
+        runtime_environment = self._runtime_environment(
+            request=request,
+            plan=plan,
+            host_lease_ref=host_lease_ref,
+            launch_policy=launch_policy,
+        )
         spec = HostLaunchSpec.model_validate(
             {
                 "executionPlanRef": plan.planRef,
@@ -263,7 +359,10 @@ class GenericOmnigentHostRuntime:
                 ),
                 "credentialAttachments": list(credential_attachments),
                 "controlAttachment": (
-                    self._launcher.control_attachment(host_lease_ref)
+                    self._launcher.control_attachment(
+                        host_lease_ref,
+                        require_capability_mount=bool(runtime_environment),
+                    )
                     if hasattr(self._launcher, "control_attachment")
                     else None
                 ),
@@ -299,11 +398,19 @@ class GenericOmnigentHostRuntime:
             host_class=host_class,
             launch_policy=launch_policy,
             credential_handles=credential_handles,
+            runtime_environment=runtime_environment,
         )
         try:
             registration = await self._registration.wait_for_registration(
                 correlation_name=correlation,
                 harness_id=plan.payload.harnessId,
+                credentialless=(
+                    bool(credential_handles)
+                    and all(
+                        str(handle.get("materializerRef") or "") == "none@1"
+                        for handle in credential_handles
+                    )
+                ),
             )
             attestations = await self._attestor.attest(
                 request=request,
