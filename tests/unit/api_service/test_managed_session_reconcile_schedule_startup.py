@@ -600,3 +600,44 @@ async def test_provider_readiness_is_skipped_without_resolved_images(
     assert called is False
     assert outcome.provider_ready is False
     assert outcome.ready is False
+
+
+@pytest.mark.asyncio
+async def test_default_qualification_runs_when_an_unrelated_provider_is_unready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-default profile must not strand the default support combination."""
+
+    calls: list[str] = []
+
+    async def ready(*args, **kwargs) -> bool:
+        del args, kwargs
+        return True
+
+    async def provider(*, allow_enrollment: bool) -> bool:
+        assert allow_enrollment is True
+        calls.append("provider")
+        return False
+
+    async def qualification() -> bool:
+        calls.append("qualification")
+        return True
+
+    monkeypatch.setattr(api_main, "_sync_omnigent_deployment_images", ready)
+    monkeypatch.setattr(api_main, "_sync_omnigent_bootstrap_policies", ready)
+    monkeypatch.setattr(api_main, "_sync_omnigent_bootstrap_agent_profile", ready)
+    monkeypatch.setattr(api_main, "_sync_omnigent_harness_catalog", ready)
+    monkeypatch.setattr(
+        api_main, "_sync_managed_bootstrap_recurring_schedules", ready
+    )
+    monkeypatch.setattr(api_main, "_sync_omnigent_provider_readiness", provider)
+    monkeypatch.setattr(
+        api_main, "_sync_omnigent_deployment_qualification", qualification
+    )
+
+    outcome = await api_main._reconcile_omnigent_bootstrap_once(refresh_images=False)
+
+    assert calls == ["provider", "qualification"]
+    assert outcome.provider_ready is False
+    assert outcome.qualification_ready is True
+    assert outcome.ready is False

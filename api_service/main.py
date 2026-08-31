@@ -597,7 +597,7 @@ async def _reconcile_omnigent_bootstrap_once(
     )
     qualification_ready = (
         await _sync_omnigent_deployment_qualification()
-        if images_ready and catalog_ready and provider_ready
+        if images_ready and catalog_ready
         else False
     )
     return OmnigentBootstrapReadiness(
@@ -1412,12 +1412,12 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 "provider_id": "opencode",
                 "provider_label": "OpenCode Zen",
                 "default_model": "opencode/muse-spark-1.2-contributor-free",
-                "default_effort": None,
+                "default_effort": "xhigh",
                 "model_tiers": [
                     {
                         "label": "Muse Spark 1.2 Contributor Free",
                         "model": "opencode/muse-spark-1.2-contributor-free",
-                        "effort": None,
+                        "effort": "xhigh",
                         "parameters": {},
                         "annotations": {},
                     }
@@ -1454,12 +1454,12 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 "provider_id": "opencode",
                 "provider_label": "OpenCode Zen",
                 "default_model": "opencode/muse-spark-1.2-contributor-free",
-                "default_effort": None,
+                "default_effort": "xhigh",
                 "model_tiers": [
                     {
                         "label": "Muse Spark 1.2 Contributor Free",
                         "model": "opencode/muse-spark-1.2-contributor-free",
-                        "effort": None,
+                        "effort": "xhigh",
                         "parameters": {},
                         "annotations": {},
                     }
