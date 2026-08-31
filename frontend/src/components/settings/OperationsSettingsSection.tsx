@@ -311,8 +311,10 @@ function workerDisplayName(shard: WorkerShard): string {
 
 export function OperationsSettingsSection({
   workerPauseConfig,
+  canInvokeOperations,
 }: {
   workerPauseConfig: WorkerPauseConfig | null;
+  canInvokeOperations: boolean;
 }) {
   const queryClient = useQueryClient();
   const [notice, setNotice] = useState<{ level: 'ok' | 'error'; text: string } | null>(
@@ -790,15 +792,12 @@ export function OperationsSettingsSection({
 
   return (
     <div className="space-y-6">
-      <section className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
-        <div className="space-y-2">
-          <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Operations</h3>
-          <p className="max-w-3xl text-sm text-slate-600 dark:text-slate-400">
-            Worker pause, drain, quiesce, and recent operational audit actions live
-            here under Settings.
-          </p>
-        </div>
-      </section>
+      {!canInvokeOperations ? (
+        <section className="rounded-3xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-600 shadow-sm dark:border-slate-800 dark:bg-slate-900/40 dark:text-slate-400">
+          Operational state is available for inspection. Commands are read-only because{' '}
+          <code>operations.invoke</code> is not granted.
+        </section>
+      ) : null}
 
       <section
         className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm"
@@ -884,7 +883,7 @@ export function OperationsSettingsSection({
 
               <button
                 type="submit"
-                disabled={deploymentMutation.isPending}
+                disabled={deploymentMutation.isPending || !canInvokeOperations}
                 className="inline-flex items-center justify-center rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-slate-200"
               >
                 Update MoonMind
@@ -969,6 +968,7 @@ export function OperationsSettingsSection({
                             <button
                               type="button"
                               className="text-sm font-medium text-sky-700 hover:text-sky-600 dark:text-sky-400"
+                              disabled={!canInvokeOperations || rollbackMutation.isPending}
                               onClick={() => rollbackMutation.mutate(action)}
                             >
                               Roll back to {action.rollbackEligibility.targetImage.reference}
@@ -1287,7 +1287,7 @@ export function OperationsSettingsSection({
                 </p>
 
                 <form className="mt-5 space-y-4" onSubmit={handlePause}>
-                  <fieldset className="space-y-3" disabled={actionMutation.isPending}>
+                  <fieldset className="space-y-3" disabled={actionMutation.isPending || !canInvokeOperations}>
                     <legend className="text-sm font-medium text-slate-700 dark:text-300">
                       Pause workers
                     </legend>
@@ -1325,7 +1325,7 @@ export function OperationsSettingsSection({
                 <div className="my-6 border-t border-slate-200 dark:border-slate-800" />
 
                 <form className="space-y-4" onSubmit={handleResume}>
-                  <fieldset className="space-y-3" disabled={actionMutation.isPending}>
+                  <fieldset className="space-y-3" disabled={actionMutation.isPending || !canInvokeOperations}>
                     <legend className="text-sm font-medium text-slate-700 dark:text-slate-300">
                       Resume workers
                     </legend>

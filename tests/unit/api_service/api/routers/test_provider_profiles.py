@@ -32,6 +32,10 @@ from api_service.services.provider_profile_creation import (
     ExpertManualCredentialCapability,
     RuntimeProviderAuthenticationCapability,
 )
+from api_service.services.provider_profile_creation_presets import (
+    ProviderProfileAuthenticationMethod,
+    get_provider_profile_creation_preset,
+)
 from api_service.services.provider_profile_service import (
     _managed_secret_statuses_for_profiles,
     _manager_profile_payload,
@@ -41,6 +45,18 @@ from api_service.services.provider_profile_readiness import (
     provider_profile_launch_ready,
     provider_profile_launch_ready_from_payload,
 )
+
+
+CODEX_OPENAI_API_KEY_PRESET_VERSION = get_provider_profile_creation_preset(
+    runtime_id="codex_cli",
+    provider_id="openai",
+    authentication_method=ProviderProfileAuthenticationMethod.API_KEY,
+).version
+CODEX_OPENAI_OAUTH_PRESET_VERSION = get_provider_profile_creation_preset(
+    runtime_id="codex_cli",
+    provider_id="openai",
+    authentication_method=ProviderProfileAuthenticationMethod.OAUTH,
+).version
 
 def test_codex_oauth_profile_rejects_parallel_capacity_above_one() -> None:
     with pytest.raises(ValueError, match="require max_parallel_runs=1"):
@@ -227,7 +243,7 @@ async def test_creation_preset_exposes_only_backend_supported_authentication_met
 
     async with client_app as client:
         response = await client.get(
-            "/api/v1/provider-profiles/creation-preset",
+            "/api/v1/provider-profiles/creation-capabilities",
             params={"runtime_id": "codex_cli", "provider_id": "openai"},
         )
 
@@ -258,13 +274,13 @@ async def test_guided_api_key_creation_uses_backend_preset_and_stays_disabled(
                 "runtime_id": "codex_cli",
                 "provider_id": "openai",
                 "authentication_method": "api_key",
-                "preset_version": "provider-profile-creation-v1",
+                "preset_version": CODEX_OPENAI_API_KEY_PRESET_VERSION,
             },
         )
 
     assert response.status_code == 201
     payload = response.json()
-    assert payload["credential_source"] == "secret_ref"
+    assert payload["credential_source"] == "none"
     assert payload["runtime_materialization_mode"] == "api_key_env"
     assert payload["secret_refs"] == {}
     assert payload["auth_state"] == "api_key_pending"
@@ -288,7 +304,7 @@ async def test_guided_oauth_creation_persists_typed_pending_setup_state(
                 "runtime_id": "codex_cli",
                 "provider_id": "openai",
                 "authentication_method": "oauth",
-                "preset_version": "provider-profile-creation-v1",
+                "preset_version": CODEX_OPENAI_OAUTH_PRESET_VERSION,
             },
         )
 
@@ -296,7 +312,7 @@ async def test_guided_oauth_creation_persists_typed_pending_setup_state(
     payload = response.json()
     assert payload["authentication_method"] == "oauth"
     assert payload["credential_source"] == "none"
-    assert payload["runtime_materialization_mode"] == "api_key_env"
+    assert payload["runtime_materialization_mode"] == "oauth_home"
     assert payload["auth_state"] == "oauth_pending"
     assert payload["enabled"] is False
     assert payload["launch_ready"] is False
@@ -465,11 +481,19 @@ async def test_explicit_credential_free_capability_creates_launch_ready_profile(
     created_profile_id = f"mm3820-none-created-{capability_suffix}"
 
     async with client_app as client:
+        capabilities_response = await client.get(
+            "/api/v1/provider-profiles/creation-capabilities",
+            params={
+                "runtime_id": capability.runtime_id,
+                "provider_id": capability.provider_id,
+            },
+        )
         preset_response = await client.get(
             "/api/v1/provider-profiles/creation-preset",
             params={
                 "runtime_id": capability.runtime_id,
                 "provider_id": capability.provider_id,
+                "authentication_method": "none",
             },
         )
         create_response = await client.post(
@@ -479,13 +503,13 @@ async def test_explicit_credential_free_capability_creates_launch_ready_profile(
                 "runtime_id": capability.runtime_id,
                 "provider_id": capability.provider_id,
                 "authentication_method": "none",
-                "preset_version": "provider-profile-creation-v1",
+                "preset_version": preset_response.json()["version"],
             },
         )
 
     assert [
         method["id"]
-        for method in preset_response.json()["authentication_methods"]
+        for method in capabilities_response.json()["authentication_methods"]
     ] == ["none"]
     assert create_response.status_code == 201
     created = create_response.json()
@@ -522,7 +546,7 @@ async def test_mutable_profile_metadata_cannot_advertise_credential_free_support
 
     async with client_app as client:
         preset_response = await client.get(
-            "/api/v1/provider-profiles/creation-preset",
+            "/api/v1/provider-profiles/creation-capabilities",
             params={"runtime_id": runtime_id, "provider_id": provider_id},
         )
         profile_response = await client.get(
@@ -637,7 +661,7 @@ async def test_imported_credential_volume_uses_derived_mount_and_validation(
                 "runtime_id": "codex_cli",
                 "provider_id": "openai",
                 "authentication_method": "oauth",
-                "preset_version": "provider-profile-creation-v1",
+                "preset_version": CODEX_OPENAI_OAUTH_PRESET_VERSION,
                 "import_existing_credential_volume": True,
                 "volume_ref": "existing-codex-home",
             },
@@ -1255,6 +1279,442 @@ async def test_create_codex_oauth_profile_requires_volume_ref_and_mount_path(
     assert "volume_ref is required" in response.text
     assert "volume_mount_path is required" in response.text
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    (
+        "runtime_id",
+        "provider_id",
+        "authentication_method",
+        "credential_source",
+        "materialization_mode",
+    ),
+    [
+        ("codex_cli", "openai", "oauth", "none", "oauth_home"),
+        ("codex_cli", "openai", "api_key", "none", "api_key_env"),
+        ("claude_code", "anthropic", "oauth", "none", "oauth_home"),
+        (
+            "claude_code",
+            "anthropic",
+            "api_key",
+            "none",
+            "api_key_env",
+        ),
+        ("opencode", "opencode", "api_key", "none", "composite"),
+    ],
+)
+async def test_creation_preset_conformance_matrix(
+    client_app: AsyncClient,
+    _module_db,
+    runtime_id: str,
+    provider_id: str,
+    authentication_method: str,
+    credential_source: str,
+    materialization_mode: str,
+) -> None:
+    async with client_app as client:
+        response = await client.get(
+            "/api/v1/provider-profiles/creation-preset",
+            params={
+                "runtime_id": runtime_id,
+                "provider_id": provider_id,
+                "authentication_method": authentication_method,
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["supported"] is True
+    assert payload["version"].startswith("provider-profile-create-v1-")
+    assert payload["runtime_id"] == runtime_id
+    assert payload["provider_id"] == provider_id
+    assert payload["authentication_method"] == authentication_method
+    assert payload["fields"]["credential_source"]["value"] == credential_source
+    assert (
+        payload["fields"]["runtime_materialization_mode"]["value"]
+        == materialization_mode
+    )
+    required_metadata = {"value", "source", "editable", "required", "lock_reason"}
+    for field_name in (
+        "credential_source",
+        "runtime_materialization_mode",
+        "max_parallel_runs",
+        "cooldown_after_429_seconds",
+        "rate_limit_policy",
+        "priority",
+        "user_tags",
+        "system_tags",
+        "volume_ref",
+        "volume_mount_path",
+        "secret_ref_roles",
+        "command_behavior",
+        "clear_env_keys",
+        "enabled",
+        "auth_state",
+        "first_authenticated_at",
+        "last_validated_at",
+        "may_become_runtime_default",
+    ):
+        assert required_metadata == set(payload["fields"][field_name])
+    assert payload["fields"]["enabled"]["value"] is False
+    assert payload["fields"]["enabled"]["editable"] is False
+    assert payload["diagnostics"][0]["code"] == "credential_setup_required"
+
+
+@pytest.mark.asyncio
+async def test_creation_preset_reports_actionable_unsupported_combination(
+    client_app: AsyncClient,
+    _module_db,
+) -> None:
+    async with client_app as client:
+        response = await client.get(
+            "/api/v1/provider-profiles/creation-preset",
+            params={
+                "runtime_id": "custom_runtime",
+                "provider_id": "custom_provider",
+                "authentication_method": "api_key",
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["supported"] is False
+    assert payload["manual_creation_allowed"] is True
+    assert payload["required_manual_fields"] == [
+        "credential_source",
+        "runtime_materialization_mode",
+        "clear_env_keys",
+        "command_behavior",
+    ]
+    assert payload["diagnostics"] == [
+        {
+            "code": "no_safe_standard_creation_preset",
+            "severity": "error",
+            "message": (
+                "No validated standard creation preset exists for this runtime, "
+                "provider, and authentication method. Use the authorized manual "
+                "profile path and supply every required launch field."
+            ),
+            "field": None,
+            "action": "open_manual_profile",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_create_applies_preset_to_omitted_advanced_fields_atomically(
+    client_app: AsyncClient,
+    _module_db,
+) -> None:
+    profile_id = f"preset-omission-{uuid4().hex}"
+    async with client_app as client:
+        preset_response = await client.get(
+            "/api/v1/provider-profiles/creation-preset",
+            params={
+                "runtime_id": "codex_cli",
+                "provider_id": "openai",
+                "authentication_method": "api_key",
+            },
+        )
+        preset = preset_response.json()
+        response = await client.post(
+            "/api/v1/provider-profiles",
+            json={
+                "profile_id": profile_id,
+                "runtime_id": "codex_cli",
+                "provider_id": "openai",
+                "authentication_method": "api_key",
+                "preset_version": preset["version"],
+            },
+        )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["credential_source"] == "none"
+    assert payload["runtime_materialization_mode"] == "api_key_env"
+    assert payload["max_parallel_runs"] == 1
+    assert payload["cooldown_after_429_seconds"] == 300
+    assert payload["rate_limit_policy"] == "backoff"
+    assert payload["priority"] == 100
+    assert payload["tags"] == ["api-key", "first-party"]
+    assert payload["secret_refs"] == {}
+    assert payload["env_template"] == {
+        "OPENAI_API_KEY": {"from_secret_ref": "openai_api_key"}
+    }
+    assert "MINIMAX_API_KEY" in payload["clear_env_keys"]
+    assert payload["command_behavior"]["auth_strategy"] == "api_key_env"
+    assert payload["enabled"] is False
+    assert payload["auth_state"] == "api_key_pending"
+    assert payload["disabled_reason"] == "missing_credentials"
+    assert payload["launch_ready"] is False
+    assert payload["is_default"] is False
+
+
+@pytest.mark.asyncio
+async def test_create_accepts_editable_preset_override_and_preserves_system_tags(
+    client_app: AsyncClient,
+    _module_db,
+) -> None:
+    profile_id = f"preset-override-{uuid4().hex}"
+    async with client_app as client:
+        preset = (
+            await client.get(
+                "/api/v1/provider-profiles/creation-preset",
+                params={
+                    "runtime_id": "claude_code",
+                    "provider_id": "anthropic",
+                    "authentication_method": "api_key",
+                },
+            )
+        ).json()
+        response = await client.post(
+            "/api/v1/provider-profiles",
+            json={
+                "profile_id": profile_id,
+                "runtime_id": "claude_code",
+                "provider_id": "anthropic",
+                "authentication_method": "api_key",
+                "preset_version": preset["version"],
+                "max_parallel_runs": 3,
+                "cooldown_after_429_seconds": 42,
+                "rate_limit_policy": "queue",
+                "tags": ["team-a"],
+            },
+        )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["max_parallel_runs"] == 3
+    assert payload["cooldown_after_429_seconds"] == 42
+    assert payload["rate_limit_policy"] == "queue"
+    assert payload["tags"] == ["api-key", "first-party", "team-a"]
+
+
+@pytest.mark.asyncio
+async def test_create_rejects_locked_preset_override_before_persistence(
+    client_app: AsyncClient,
+    _module_db,
+) -> None:
+    profile_id = f"locked-preset-{uuid4().hex}"
+    async with client_app as client:
+        preset = (
+            await client.get(
+                "/api/v1/provider-profiles/creation-preset",
+                params={
+                    "runtime_id": "codex_cli",
+                    "provider_id": "openai",
+                    "authentication_method": "api_key",
+                },
+            )
+        ).json()
+        response = await client.post(
+            "/api/v1/provider-profiles",
+            json={
+                "profile_id": profile_id,
+                "runtime_id": "codex_cli",
+                "provider_id": "openai",
+                "authentication_method": "api_key",
+                "preset_version": preset["version"],
+                "credential_source": "secret_ref",
+            },
+        )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "provider_profile_creation_preset_field_locked"
+    assert detail["field"] == "credential_source"
+    assert detail["expected_value"] == "none"
+    assert "validated credential setup" in detail["lock_reason"]
+    async with db_base.async_session_maker() as session:
+        assert await session.get(ManagedAgentProviderProfile, profile_id) is None
+
+
+@pytest.mark.asyncio
+async def test_create_rejects_stale_preset_before_persistence(
+    client_app: AsyncClient,
+    _module_db,
+) -> None:
+    profile_id = f"stale-preset-{uuid4().hex}"
+    async with client_app as client:
+        response = await client.post(
+            "/api/v1/provider-profiles",
+            json={
+                "profile_id": profile_id,
+                "runtime_id": "codex_cli",
+                "provider_id": "openai",
+                "authentication_method": "api_key",
+                "preset_version": "stale-browser-version",
+            },
+        )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["code"] == "provider_profile_creation_preset_version_mismatch"
+    assert detail["requested_version"] == "stale-browser-version"
+    assert detail["current_version"].startswith("provider-profile-create-v1-")
+    async with db_base.async_session_maker() as session:
+        assert await session.get(ManagedAgentProviderProfile, profile_id) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "timestamp_field",
+    ["first_authenticated_at", "last_validated_at"],
+)
+async def test_create_rejects_guided_authentication_history_override(
+    client_app: AsyncClient,
+    _module_db,
+    timestamp_field: str,
+) -> None:
+    profile_id = f"preset-auth-history-{timestamp_field}-{uuid4().hex}"
+    async with client_app as client:
+        preset = (
+            await client.get(
+                "/api/v1/provider-profiles/creation-preset",
+                params={
+                    "runtime_id": "codex_cli",
+                    "provider_id": "openai",
+                    "authentication_method": "api_key",
+                },
+            )
+        ).json()
+        response = await client.post(
+            "/api/v1/provider-profiles",
+            json={
+                "profile_id": profile_id,
+                "runtime_id": "codex_cli",
+                "provider_id": "openai",
+                "authentication_method": "api_key",
+                "preset_version": preset["version"],
+                timestamp_field: "2026-08-30T20:00:00Z",
+            },
+        )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "provider_profile_creation_preset_field_locked"
+    assert detail["field"] == timestamp_field
+    assert detail["expected_value"] is None
+    async with db_base.async_session_maker() as session:
+        assert await session.get(ManagedAgentProviderProfile, profile_id) is None
+
+
+@pytest.mark.asyncio
+async def test_create_guided_profile_persists_preset_normalized_identity(
+    client_app: AsyncClient,
+    _module_db,
+) -> None:
+    profile_id = f"preset-normalized-identity-{uuid4().hex}"
+    async with client_app as client:
+        preset = (
+            await client.get(
+                "/api/v1/provider-profiles/creation-preset",
+                params={
+                    "runtime_id": "codex_cli",
+                    "provider_id": "openai",
+                    "authentication_method": "api_key",
+                },
+            )
+        ).json()
+        response = await client.post(
+            "/api/v1/provider-profiles",
+            json={
+                "profile_id": profile_id,
+                "runtime_id": " codex_cli ",
+                "provider_id": " openai ",
+                "authentication_method": "api_key",
+                "preset_version": preset["version"],
+            },
+        )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["runtime_id"] == "codex_cli"
+    assert payload["provider_id"] == "openai"
+    async with db_base.async_session_maker() as session:
+        row = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert row is not None
+        assert row.runtime_id == "codex_cli"
+        assert row.provider_id == "openai"
+
+
+@pytest.mark.asyncio
+async def test_create_rejects_unsupported_standard_combination_before_persistence(
+    client_app: AsyncClient,
+    _module_db,
+) -> None:
+    profile_id = f"unsupported-preset-{uuid4().hex}"
+    async with client_app as client:
+        preset = (
+            await client.get(
+                "/api/v1/provider-profiles/creation-preset",
+                params={
+                    "runtime_id": "custom_runtime",
+                    "provider_id": "custom_provider",
+                    "authentication_method": "api_key",
+                },
+            )
+        ).json()
+        response = await client.post(
+            "/api/v1/provider-profiles",
+            json={
+                "profile_id": profile_id,
+                "runtime_id": "custom_runtime",
+                "provider_id": "custom_provider",
+                "authentication_method": "api_key",
+                "preset_version": preset["version"],
+            },
+        )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "provider_profile_creation_preset_unsupported"
+    assert detail["manual_creation_allowed"] is True
+    assert detail["required_manual_fields"]
+    async with db_base.async_session_maker() as session:
+        assert await session.get(ManagedAgentProviderProfile, profile_id) is None
+
+
+@pytest.mark.asyncio
+async def test_create_guided_oauth_profile_is_disabled_until_enrollment(
+    client_app: AsyncClient,
+    _module_db,
+) -> None:
+    profile_id = f"oauth-preset-{uuid4().hex}"
+    async with client_app as client:
+        preset = (
+            await client.get(
+                "/api/v1/provider-profiles/creation-preset",
+                params={
+                    "runtime_id": "codex_cli",
+                    "provider_id": "openai",
+                    "authentication_method": "oauth",
+                },
+            )
+        ).json()
+        response = await client.post(
+            "/api/v1/provider-profiles",
+            json={
+                "profile_id": profile_id,
+                "runtime_id": "codex_cli",
+                "provider_id": "openai",
+                "authentication_method": "oauth",
+                "preset_version": preset["version"],
+                "is_default": True,
+            },
+        )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["credential_source"] == "none"
+    assert payload["runtime_materialization_mode"] == "oauth_home"
+    assert payload["volume_ref"] is None
+    assert payload["volume_mount_path"] is None
+    assert payload["max_parallel_runs"] == 1
+    assert payload["enabled"] is False
+    assert payload["launch_ready"] is False
+    assert payload["is_default"] is False
+
 @pytest.mark.asyncio
 async def test_provider_profile_update_rejects_non_owner(
     client_app: AsyncClient, _module_db
@@ -1410,7 +1870,7 @@ async def test_provider_profile_tier_policy_round_trips_through_get_and_update(
         "runtime_id": "codex_cli",
         "provider_id": "openai",
         "authentication_method": "api_key",
-        "preset_version": "provider-profile-creation-v1",
+        "preset_version": CODEX_OPENAI_API_KEY_PRESET_VERSION,
         "model_tiers": [
             {"label": "Review", "model": "gpt-5-mini", "effort": "low"},
             {"label": "Implement", "model": "gpt-5.5", "effort": "high"},
@@ -1482,7 +1942,7 @@ async def test_provider_profile_model_tier_preview_returns_advisory_resolution(
         "runtime_id": "codex_cli",
         "provider_id": "openai",
         "authentication_method": "api_key",
-        "preset_version": "provider-profile-creation-v1",
+        "preset_version": CODEX_OPENAI_API_KEY_PRESET_VERSION,
         "model_tiers": [
             {"label": "Plan", "model": "gpt-5-mini", "effort": "low"},
             {"label": "Implement", "model": "gpt-5.5", "effort": "xhigh"},
@@ -1542,7 +2002,7 @@ async def test_provider_profile_model_tier_preview_preserves_strict_error_code(
         "runtime_id": "codex_cli",
         "provider_id": "openai",
         "authentication_method": "api_key",
-        "preset_version": "provider-profile-creation-v1",
+        "preset_version": CODEX_OPENAI_API_KEY_PRESET_VERSION,
         "model_tiers": [
             {"label": "Plan", "model": "gpt-5-mini", "effort": "low"},
             {"label": "Implement", "model": "gpt-5.5", "effort": "xhigh"},
@@ -1647,7 +2107,7 @@ async def test_mm1169_create_provider_profile_persists_explicit_model_tiers(
         "runtime_id": "codex_cli",
         "provider_id": "openai",
         "authentication_method": "api_key",
-        "preset_version": "provider-profile-creation-v1",
+        "preset_version": CODEX_OPENAI_API_KEY_PRESET_VERSION,
         "model_tiers": [
             {
                 "label": "Plan",
@@ -1734,7 +2194,7 @@ async def test_mm1169_create_profile_accepts_safe_token_parameter_names(
         "runtime_id": "codex_cli",
         "provider_id": "openai",
         "authentication_method": "api_key",
-        "preset_version": "provider-profile-creation-v1",
+        "preset_version": CODEX_OPENAI_API_KEY_PRESET_VERSION,
         "model_tiers": [
             {
                 "label": "Safe metadata",
@@ -1770,7 +2230,7 @@ async def test_mm1169_reordering_model_tiers_persists_policy_order(
         "runtime_id": "codex_cli",
         "provider_id": "openai",
         "authentication_method": "api_key",
-        "preset_version": "provider-profile-creation-v1",
+        "preset_version": CODEX_OPENAI_API_KEY_PRESET_VERSION,
         "model_tiers": [
             {"label": "Tier A", "model": "model-a", "effort": "low"},
             {"label": "Tier B", "model": "model-b", "effort": "high"},
@@ -1821,7 +2281,7 @@ async def test_mm1169_update_legacy_default_refreshes_single_default_tier(
         "runtime_id": "codex_cli",
         "provider_id": "openai",
         "authentication_method": "api_key",
-        "preset_version": "provider-profile-creation-v1",
+        "preset_version": CODEX_OPENAI_API_KEY_PRESET_VERSION,
         "default_model": "old-model",
         "default_effort": "low",
     }
@@ -1860,7 +2320,7 @@ async def test_mm1169_update_legacy_default_preserves_explicit_tiers(
         "runtime_id": "codex_cli",
         "provider_id": "openai",
         "authentication_method": "api_key",
-        "preset_version": "provider-profile-creation-v1",
+        "preset_version": CODEX_OPENAI_API_KEY_PRESET_VERSION,
         "default_model": "old-model",
         "model_tiers": [
             {"label": "Tier A", "model": "tier-model", "effort": "medium"}
@@ -1899,7 +2359,7 @@ async def test_migrated_runtime_default_tier_refreshes_on_legacy_default_update(
         "runtime_id": "codex_cli",
         "provider_id": "openai",
         "authentication_method": "api_key",
-        "preset_version": "provider-profile-creation-v1",
+        "preset_version": CODEX_OPENAI_API_KEY_PRESET_VERSION,
         "model_tiers": [
             {
                 "label": "Runtime default",
@@ -1946,7 +2406,7 @@ async def test_migrated_legacy_default_tier_refreshes_on_legacy_default_update(
         "runtime_id": "codex_cli",
         "provider_id": "openai",
         "authentication_method": "api_key",
-        "preset_version": "provider-profile-creation-v1",
+        "preset_version": CODEX_OPENAI_API_KEY_PRESET_VERSION,
         "default_model": "old-model",
         "default_effort": "low",
         "model_tiers": [
@@ -1996,7 +2456,7 @@ async def test_operator_annotated_tier_survives_legacy_default_update(
         "runtime_id": "codex_cli",
         "provider_id": "openai",
         "authentication_method": "api_key",
-        "preset_version": "provider-profile-creation-v1",
+        "preset_version": CODEX_OPENAI_API_KEY_PRESET_VERSION,
         "default_model": "old-model",
         "model_tiers": [
             {

@@ -689,16 +689,42 @@ def test_proposal_review_routes_are_not_dashboard_surfaces(client: TestClient) -
         assert response.status_code == 404
 
 
-def test_legacy_settings_subroutes_redirect_to_unified_settings(
-    client: TestClient,
+def test_legacy_settings_subroutes_redirect_to_canonical_routes(
 ) -> None:
-    workers = client.get("/workers", follow_redirects=False)
+    with _client_with_mock_service(
+        user_settings_permissions={"provider_profiles.read", "operations.read"}
+    ) as (client, _mock_service):
+        workers = client.get("/workers", follow_redirects=False)
+        secrets = client.get("/secrets", follow_redirects=False)
+
     assert workers.status_code == 307
     assert workers.headers["location"] == "/settings/operations"
-
-    secrets = client.get("/secrets", follow_redirects=False)
     assert secrets.status_code == 307
     assert secrets.headers["location"] == "/settings/providers-secrets"
+
+
+def test_legacy_settings_subroutes_fall_back_to_first_authorized_destination() -> None:
+    with _client_with_mock_service(
+        user_settings_permissions={"settings.catalog.read"}
+    ) as (client, _mock_service):
+        workers = client.get("/workers", follow_redirects=False)
+        secrets = client.get("/secrets", follow_redirects=False)
+
+    assert workers.status_code == 307
+    assert workers.headers["location"] == "/settings/user-workspace"
+    assert secrets.status_code == 307
+    assert secrets.headers["location"] == "/settings/user-workspace"
+
+
+def test_legacy_settings_subroutes_fall_back_to_bare_entry_without_permissions() -> None:
+    with _client_with_mock_service() as (client, _mock_service):
+        workers = client.get("/workers", follow_redirects=False)
+        secrets = client.get("/secrets", follow_redirects=False)
+
+    assert workers.status_code == 307
+    assert workers.headers["location"] == "/settings"
+    assert secrets.status_code == 307
+    assert secrets.headers["location"] == "/settings"
 
 
 def test_react_tasks_list_and_detail_boot_exclude_route_specific_config(

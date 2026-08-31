@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -8,7 +8,6 @@ import {
   type ConfigurationHealthSummaryProps,
 } from './ConfigurationHealthSummary';
 import type { ProviderProfile } from './ProviderProfilesManager';
-import type { WorkerPauseConfig } from './OperationsSettingsSection';
 
 function makeProfile(overrides: Partial<ProviderProfile> = {}): ProviderProfile {
   return {
@@ -39,7 +38,6 @@ function renderSummary(props: Partial<ConfigurationHealthSummaryProps> = {}) {
         secrets={props.secrets ?? []}
         isLoading={props.isLoading ?? false}
         isError={props.isError ?? false}
-        workerPauseConfig={props.workerPauseConfig ?? null}
         canWriteProviderProfiles={props.canWriteProviderProfiles ?? true}
         canRunGithubTokenProbe={props.canRunGithubTokenProbe ?? true}
       />
@@ -57,8 +55,6 @@ describe('summarizeConfigurationHealth', () => {
     const summary = summarizeConfigurationHealth({
       providerProfiles: [makeProfile({ is_default: true })],
       secrets: [{ slug: 'OPENAI_API_KEY', status: 'active' }],
-      workerPauseConfigured: true,
-      workersPaused: false,
     });
 
     expect(summary.level).toBe('ready');
@@ -74,7 +70,6 @@ describe('summarizeConfigurationHealth', () => {
     const summary = summarizeConfigurationHealth({
       providerProfiles: [],
       secrets: [],
-      workerPauseConfigured: true,
     });
 
     expect(summary.level).toBe('blocked');
@@ -85,7 +80,6 @@ describe('summarizeConfigurationHealth', () => {
     const summary = summarizeConfigurationHealth({
       providerProfiles: [makeProfile({ is_default: false })],
       secrets: [],
-      workerPauseConfigured: true,
     });
 
     expect(summary.level).toBe('warning');
@@ -105,7 +99,6 @@ describe('summarizeConfigurationHealth', () => {
         { slug: 'OPENAI_API_KEY', status: 'active' },
         { slug: 'GH_TOKEN', status: 'invalid' },
       ],
-      workerPauseConfigured: true,
     });
 
     expect(summary.level).toBe('blocked');
@@ -131,7 +124,6 @@ describe('summarizeConfigurationHealth', () => {
         { slug: 'OPENAI_API_KEY', status: 'active' },
         { slug: 'GH_TOKEN', status: 'invalid' },
       ],
-      workerPauseConfigured: true,
     });
 
     expect(summary.level).toBe('ready');
@@ -140,35 +132,6 @@ describe('summarizeConfigurationHealth', () => {
     expect(summary.warnings.map((w) => w.id)).not.toContain('broken-secret-refs');
   });
 
-  it('warns when workers are paused even if configuration is otherwise ready', () => {
-    const summary = summarizeConfigurationHealth({
-      providerProfiles: [makeProfile({ is_default: true })],
-      secrets: [{ slug: 'OPENAI_API_KEY', status: 'active' }],
-      workerPauseConfigured: true,
-      workersPaused: true,
-      workerMode: 'drain',
-    });
-
-    expect(summary.level).toBe('warning');
-    expect(summary.warnings.map((w) => w.id)).toContain('workers-paused');
-    expect(
-      summary.warnings.find((w) => w.id === 'workers-paused')?.message,
-    ).toMatch(/paused/i);
-  });
-
-  it('describes quiesced workers in the paused warning', () => {
-    const summary = summarizeConfigurationHealth({
-      providerProfiles: [makeProfile({ is_default: true })],
-      secrets: [{ slug: 'OPENAI_API_KEY', status: 'active' }],
-      workerPauseConfigured: true,
-      workersPaused: true,
-      workerMode: 'quiesce',
-    });
-
-    expect(
-      summary.warnings.find((w) => w.id === 'workers-paused')?.message,
-    ).toMatch(/quiesced/i);
-  });
 });
 
 describe('ConfigurationHealthSummary', () => {
@@ -182,7 +145,6 @@ describe('ConfigurationHealthSummary', () => {
         { slug: 'OPENAI_API_KEY', status: 'active' },
         { slug: 'ANTHROPIC_API_KEY', status: 'active' },
       ],
-      workerPauseConfig: null,
     });
 
     expect(
@@ -205,7 +167,6 @@ describe('ConfigurationHealthSummary', () => {
         }),
       ],
       secrets: [{ slug: 'GH_TOKEN', status: 'missing' }],
-      workerPauseConfig: null,
     });
 
     const warnings = screen.getByRole('list', { name: /Configuration warnings/i });
@@ -220,7 +181,6 @@ describe('ConfigurationHealthSummary', () => {
       providerProfiles: [makeProfile({ is_default: true })],
       canWriteProviderProfiles: false,
       canRunGithubTokenProbe: true,
-      workerPauseConfig: null,
     });
 
     expect(screen.getByText(/Provider profile writes disabled/i)).toBeTruthy();
@@ -233,37 +193,10 @@ describe('ConfigurationHealthSummary', () => {
       providerProfiles: [makeProfile({ is_default: true })],
       canWriteProviderProfiles: true,
       canRunGithubTokenProbe: false,
-      workerPauseConfig: null,
     });
 
     expect(screen.getByText(/GitHub token probe unavailable/i)).toBeTruthy();
     expect(screen.getByText(/settings\.effective\.read/i)).toBeTruthy();
-  });
-
-  it('reports the live worker pause state when worker controls are configured', async () => {
-    const workerPauseConfig: WorkerPauseConfig = {
-      get: '/api/v1/operations/workers',
-      post: '/api/v1/operations/workers',
-    };
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({ system: { workersPaused: true, mode: 'drain' } }),
-    });
-    vi.stubGlobal('fetch', fetchMock);
-
-    renderSummary({
-      providerProfiles: [makeProfile({ is_default: true })],
-      workerPauseConfig,
-    });
-
-    await waitFor(() => {
-      expect(screen.getByText('Paused')).toBeTruthy();
-    });
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/v1/operations/workers',
-      expect.objectContaining({ headers: expect.objectContaining({ Accept: 'application/json' }) }),
-    );
   });
 
   it('renders a loading state without querying', () => {

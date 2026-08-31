@@ -9,7 +9,10 @@ export type DashboardPage =
   | 'oauth-terminal'
   | 'remediations'
   | 'schedules'
-  | 'settings'
+  | 'settings-entry'
+  | 'settings-operations'
+  | 'settings-providers-secrets'
+  | 'settings-user-workspace'
   | 'skills'
   | 'workflow-start'
   | 'workflows-workspace'
@@ -94,9 +97,9 @@ export const DASHBOARD_DESTINATIONS: readonly DashboardDestination[] = [
   { key: 'omnigent-policies', label: 'Policies', iconKey: 'shield-check', canonicalPath: '/omnigent/policies', pathPatterns: ['/omnigent/policies/*'], navigationGroup: 'operations', pageClassification: 'collection', capabilityKey: 'omnigentPolicies', endpointKey: 'omnigentPolicies', page: 'omnigent-inventory', dataWidePanel: true },
   { key: 'remediation', label: 'Remediation', iconKey: 'wrench', canonicalPath: '/remediations', pathPatterns: ['/remediations/*'], navigationGroup: 'operations', pageClassification: 'collection', capabilityKey: 'remediationCollection', endpointKey: 'remediations', page: 'remediations', dataWidePanel: true },
   { key: 'artifacts', label: 'Artifacts', iconKey: 'archive', canonicalPath: '/artifacts', pathPatterns: ['/artifacts/*', '/observability/*'], navigationGroup: 'operations', pageClassification: 'collection', capabilityKey: 'artifacts', endpointKey: 'artifacts', page: 'artifacts', dataWidePanel: true },
-  { key: 'settings-providers-secrets', label: 'Providers & Secrets', iconKey: 'settings', canonicalPath: '/settings/providers-secrets', pathPatterns: ['/settings/providers-secrets'], navigationGroup: 'system', pageClassification: 'utility', capabilityKey: 'settingsProvidersSecrets', endpointKey: 'settings', menuGroupKey: 'configuration', page: 'settings', dataWidePanel: true },
-  { key: 'settings-user-workspace', label: 'User / Workspace', iconKey: 'settings', canonicalPath: '/settings/user-workspace', pathPatterns: ['/settings/user-workspace'], navigationGroup: 'system', pageClassification: 'utility', capabilityKey: 'settingsUserWorkspace', endpointKey: 'settings', menuGroupKey: 'configuration', page: 'settings', dataWidePanel: true },
-  { key: 'settings-operations', label: 'Operations', iconKey: 'settings', canonicalPath: '/settings/operations', pathPatterns: ['/settings/operations'], navigationGroup: 'system', pageClassification: 'utility', capabilityKey: 'settingsOperations', endpointKey: 'settings', menuGroupKey: 'configuration', page: 'settings', dataWidePanel: true },
+  { key: 'settings-providers-secrets', label: 'Providers & Secrets', iconKey: 'settings', canonicalPath: '/settings/providers-secrets', pathPatterns: ['/settings/providers-secrets'], navigationGroup: 'system', pageClassification: 'utility', capabilityKey: 'settingsProvidersSecrets', endpointKey: 'settings', menuGroupKey: 'configuration', page: 'settings-providers-secrets', dataWidePanel: true },
+  { key: 'settings-user-workspace', label: 'User / Workspace', iconKey: 'settings', canonicalPath: '/settings/user-workspace', pathPatterns: ['/settings/user-workspace'], navigationGroup: 'system', pageClassification: 'utility', capabilityKey: 'settingsUserWorkspace', endpointKey: 'settings', menuGroupKey: 'configuration', page: 'settings-user-workspace', dataWidePanel: true },
+  { key: 'settings-operations', label: 'Operations', iconKey: 'settings', canonicalPath: '/settings/operations', pathPatterns: ['/settings/operations'], navigationGroup: 'system', pageClassification: 'utility', capabilityKey: 'settingsOperations', endpointKey: 'settings', menuGroupKey: 'configuration', page: 'settings-operations', dataWidePanel: true },
 ];
 
 export type DashboardDestinationState = 'shown' | 'hidden' | 'unavailable';
@@ -265,8 +268,17 @@ export function resolveDashboardRoute(pathname: string): DashboardRoute | null {
   if (isWorkflowDetailPath(path) && path !== '/workflows/new') {
     return { page: 'workflows-workspace', dataWidePanel: true, currentPath: path };
   }
-  if (path === '/settings' || path.startsWith('/settings/')) {
-    return { page: 'settings', dataWidePanel: true, currentPath: path };
+  if (path === '/settings') {
+    return { page: 'settings-entry', dataWidePanel: true, currentPath: path };
+  }
+  if (path === '/settings/providers-secrets') {
+    return { page: 'settings-providers-secrets', dataWidePanel: true, currentPath: path };
+  }
+  if (path === '/settings/user-workspace') {
+    return { page: 'settings-user-workspace', dataWidePanel: true, currentPath: path };
+  }
+  if (path === '/settings/operations') {
+    return { page: 'settings-operations', dataWidePanel: true, currentPath: path };
   }
   if (path === '/skills' || path.startsWith('/skills/')) {
     return { page: 'skills', dataWidePanel: true, currentPath: path };
@@ -296,14 +308,6 @@ export function destinationForPath(pathname: string): DashboardDestination | nul
   const route = resolveDashboardRoute(pathname);
   if (!route) return null;
   if (pathname === '/workflows/new') return DASHBOARD_DESTINATIONS[1] ?? null;
-  if (route.page === 'settings') {
-    const path = withoutTrailingSlash(pathname);
-    return DASHBOARD_DESTINATIONS.find((destination) => (
-      destination.page === 'settings' && (
-        path === destination.canonicalPath || path.startsWith(`${destination.canonicalPath}/`)
-      )
-    )) ?? null;
-  }
   return DASHBOARD_DESTINATIONS.find((destination) => (
     destination.page === route.page && (
       destination.key !== 'artifacts' || pathname.startsWith('/artifacts') || pathname.startsWith('/observability')
@@ -360,7 +364,7 @@ export function payloadForDashboardRoute(
   initialData.layout = layout;
   initialData.uiEndpoints = objectValue(uiInfo?.endpoints) ?? {};
 
-  if (route.page === 'settings') {
+  if (route.page.startsWith('settings-')) {
     initialData.workerPause = objectValue(uiInfo?.workerPause) ?? initialData.workerPause ?? {
       get: '/api/system/worker-pause',
       post: '/api/system/worker-pause',

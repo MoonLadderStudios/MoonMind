@@ -195,7 +195,7 @@ The canonical route remains:
 /settings/providers-secrets
 ```
 
-No new top-level Settings section is required.
+No new Settings destination is required.
 
 Within the Provider Profile form, the desired section order is:
 

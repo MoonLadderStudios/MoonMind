@@ -100,13 +100,9 @@ describe('dashboard route resolution', () => {
     'resolves the extensionless collection deep link %s',
     (path) => expect(resolveDashboardRoute(path)).not.toBeNull(),
   );
-  it('routes extensionless Settings aliases through the Settings page for normalization', () => {
+  it('keeps extensionless unknown Settings aliases outside the route-owned page registry', () => {
     expect(DASHBOARD_REACT_ROUTE_PATHS).toContain('/settings/*');
-    expect(resolveDashboardRoute('/settings/provider-profiles')).toEqual({
-      page: 'settings',
-      dataWidePanel: true,
-      currentPath: '/settings/provider-profiles',
-    });
+    expect(resolveDashboardRoute('/settings/provider-profiles')).toBeNull();
   });
   it.each(['/omnigent/agents', '/omnigent/policies'])(
     'resolves the %s inventory route independently',
@@ -118,6 +114,18 @@ describe('dashboard route resolution', () => {
       });
     },
   );
+  it.each([
+    ['/settings', 'settings-entry'],
+    ['/settings/providers-secrets', 'settings-providers-secrets'],
+    ['/settings/user-workspace', 'settings-user-workspace'],
+    ['/settings/operations', 'settings-operations'],
+  ])('resolves the canonical Settings route %s to %s', (path, page) => {
+    expect(resolveDashboardRoute(path)).toEqual({
+      page,
+      dataWidePanel: true,
+      currentPath: path,
+    });
+  });
   it.each(['/artifacts', '/observability'])('resolves the %s evidence collection route', (path) => {
     expect(resolveDashboardRoute(path)).toEqual({
       page: 'artifacts',

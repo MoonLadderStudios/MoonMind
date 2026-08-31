@@ -30,15 +30,19 @@ from api_service.db.models import (
     User,
 )
 from api_service.services.provider_profile_creation import (
-    CREATION_PRESET_VERSION,
     ProviderApiKeyStrategy,
-    authentication_method_preset,
     infer_authentication_method,
     provider_api_key_strategy,
     provider_profile_creation_capabilities,
     required_secret_roles,
     validate_credential_contract,
     validate_manual_credential_contract,
+)
+from api_service.services.provider_profile_creation_presets import (
+    CreationPresetError,
+    ProviderProfileAuthenticationMethod,
+    apply_provider_profile_creation_preset,
+    get_provider_profile_creation_preset,
 )
 from api_service.services.settings_catalog import has_settings_permission
 from moonmind.auth.secret_refs import (
@@ -218,10 +222,8 @@ class ProviderProfileCreate(BaseModel):
     default_model_tier: Optional[int] = Field(default=None, ge=1)
     model_overrides: Optional[dict[str, str]] = None
 
-    authentication_method: Optional[str] = Field(
-        default=None, pattern="^(oauth|api_key|none)$"
-    )
-    preset_version: Optional[str] = None
+    authentication_method: Optional[ProviderProfileAuthenticationMethod] = None
+    preset_version: Optional[str] = Field(default=None, max_length=128)
     credential_source: Optional[str] = Field(
         default=None, pattern="^(oauth_volume|secret_ref|none)$"
     )
@@ -235,7 +237,7 @@ class ProviderProfileCreate(BaseModel):
     account_label: Optional[str] = None
 
     tags: Optional[list[str]] = None
-    priority: int = Field(default=100)
+    priority: Optional[int] = None
 
     secret_refs: Optional[dict[str, str]] = None
     clear_env_keys: Optional[list[str]] = None
@@ -244,20 +246,20 @@ class ProviderProfileCreate(BaseModel):
     home_path_overrides: Optional[dict[str, str]] = None
     command_behavior: Optional[dict[str, Any]] = None
 
-    max_parallel_runs: int = Field(default=1, ge=1)
-    cooldown_after_429_seconds: int = Field(default=900, ge=0)
-    rate_limit_policy: str = Field(
-        default="backoff", pattern="^(backoff|queue|fail_fast)$"
+    max_parallel_runs: Optional[int] = Field(default=None, ge=1)
+    cooldown_after_429_seconds: Optional[int] = Field(default=None, ge=0)
+    rate_limit_policy: Optional[str] = Field(
+        default=None, pattern="^(backoff|queue|fail_fast)$"
     )
-    enabled: bool = False
-    is_default: bool = False
-    max_lease_duration_seconds: int = Field(default=7200, ge=60)
-    auth_state: str = Field(
-        default="not_configured",
+    enabled: Optional[bool] = None
+    is_default: Optional[bool] = None
+    max_lease_duration_seconds: Optional[int] = Field(default=None, ge=60)
+    auth_state: Optional[str] = Field(
+        default=None,
         pattern="^(not_configured|oauth_pending|api_key_pending|connected|validation_failed|disconnected)$",
     )
     disabled_reason: Optional[str] = Field(
-        default="missing_credentials",
+        default=None,
         pattern="^(missing_credentials|auth_invalid|user_disabled|policy_disabled|disconnected)$",
     )
     first_authenticated_at: Optional[datetime] = None
@@ -315,14 +317,6 @@ class ProviderProfileCreate(BaseModel):
             validate_credential_contract(
                 credential_source=self.credential_source,
                 runtime_materialization_mode=self.runtime_materialization_mode,
-            )
-        elif (
-            self.credential_source is not None
-            or self.runtime_materialization_mode is not None
-        ):
-            raise ValueError(
-                "Guided authentication methods do not accept credential_source or "
-                "runtime_materialization_mode overrides"
             )
         if self.import_existing_credential_volume:
             if self.authentication_method != "oauth":
@@ -526,6 +520,34 @@ class ProviderProfileResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ProviderProfileCreationPresetField(BaseModel):
+    value: Any
+    source: str
+    editable: bool
+    required: bool
+    lock_reason: Optional[str] = None
+
+
+class ProviderProfileCreationPresetDiagnostic(BaseModel):
+    code: str
+    severity: str = Field(..., pattern="^(info|warning|error)$")
+    message: str
+    field: Optional[str] = None
+    action: Optional[str] = None
+
+
+class ProviderProfileCreationPresetResponse(BaseModel):
+    version: str
+    supported: bool
+    runtime_id: str
+    provider_id: str
+    authentication_method: ProviderProfileAuthenticationMethod
+    fields: dict[str, ProviderProfileCreationPresetField]
+    diagnostics: list[ProviderProfileCreationPresetDiagnostic]
+    manual_creation_allowed: bool = False
+    required_manual_fields: list[str] = Field(default_factory=list)
+
+
 class ProviderProfileTierPreviewStep(BaseModel):
     step_id: str = Field(..., alias="id")
     model_tier: Optional[int] = Field(default=None, ge=1, alias="modelTier")
@@ -637,6 +659,86 @@ def _get_session() -> Any:
     return get_async_session
 
 
+def _normalized_create_values(body: ProviderProfileCreate) -> dict[str, Any]:
+    values = body.model_dump(
+        exclude={"authentication_method", "preset_version"},
+        mode="python",
+    )
+    supplied_fields = set(body.model_fields_set)
+    supplied_fields.difference_update({"authentication_method", "preset_version"})
+
+    if body.authentication_method is not None:
+        preset = get_provider_profile_creation_preset(
+            runtime_id=body.runtime_id,
+            provider_id=body.provider_id,
+            authentication_method=body.authentication_method,
+        )
+        try:
+            return apply_provider_profile_creation_preset(
+                preset=preset,
+                requested_version=body.preset_version,
+                values=values,
+                supplied_fields=supplied_fields,
+            )
+        except CreationPresetError as exc:
+            status_code = (
+                409
+                if exc.code
+                == "provider_profile_creation_preset_version_mismatch"
+                else 422
+            )
+            raise HTTPException(status_code=status_code, detail=exc.as_detail()) from exc
+
+    missing_manual_fields = [
+        field_name
+        for field_name in ("credential_source", "runtime_materialization_mode")
+        if values.get(field_name) is None
+    ]
+    if missing_manual_fields:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "provider_profile_manual_fields_required",
+                "message": (
+                    "Manual Provider Profile creation requires explicit launch-policy fields."
+                ),
+                "required_fields": missing_manual_fields,
+            },
+        )
+
+    capabilities = provider_profile_creation_capabilities(
+        runtime_id=body.runtime_id,
+        provider_id=body.provider_id,
+    )
+    try:
+        validate_manual_credential_contract(
+            credential_source=values["credential_source"],
+            runtime_materialization_mode=values["runtime_materialization_mode"],
+            authentication_methods=capabilities["authentication_methods"],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    manual_defaults: dict[str, Any] = {
+        "priority": 100,
+        "max_parallel_runs": 1,
+        "cooldown_after_429_seconds": 900,
+        "rate_limit_policy": "backoff",
+        "enabled": False,
+        "is_default": False,
+        "max_lease_duration_seconds": 7200,
+        "auth_state": "not_configured",
+    }
+    for field_name, default_value in manual_defaults.items():
+        if field_name not in supplied_fields:
+            values[field_name] = default_value
+    if "disabled_reason" not in supplied_fields:
+        values["disabled_reason"] = (
+            None if values["enabled"] else "missing_credentials"
+        )
+    return values
+
+
 async def _credential_validation_guard(
     profile_id: str,
     request: Request,
@@ -675,21 +777,18 @@ async def _validate_imported_credential_volume(
     provider_id: str,
     volume_ref: str,
 ) -> tuple[str, str]:
-    try:
-        preset = authentication_method_preset(
-            runtime_id=runtime_id,
-            provider_id=provider_id,
-            authentication_method="oauth",
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    imported_volume = preset.get("imported_volume")
-    if not isinstance(imported_volume, dict) or not imported_volume.get("supported"):
+    preset = get_provider_profile_creation_preset(
+        runtime_id=runtime_id,
+        provider_id=provider_id,
+        authentication_method=ProviderProfileAuthenticationMethod.OAUTH,
+    )
+    mount_path_field = preset.fields.get("volume_mount_path_after_setup")
+    if not preset.supported or mount_path_field is None:
         raise HTTPException(
             status_code=422,
             detail="This runtime and provider do not support imported credential volumes.",
         )
-    mount_path = imported_volume.get("mount_path")
+    mount_path = mount_path_field.value
     if not isinstance(mount_path, str) or not mount_path:
         raise HTTPException(
             status_code=422,
@@ -767,9 +866,29 @@ async def list_profiles(
 
 @router.get(
     "/creation-preset",
-    response_model=ProviderProfileCreationCapabilitiesResponse,
+    response_model=ProviderProfileCreationPresetResponse,
 )
 async def get_creation_preset(
+    runtime_id: str,
+    provider_id: str,
+    authentication_method: ProviderProfileAuthenticationMethod,
+    current_user: User = Depends(get_current_user()),
+) -> dict[str, Any]:
+    """Preview the versioned backend policy used by standard profile creation."""
+
+    _require_provider_profile_permission(current_user, "provider_profiles.read")
+    return get_provider_profile_creation_preset(
+        runtime_id=runtime_id,
+        provider_id=provider_id,
+        authentication_method=authentication_method,
+    ).as_dict()
+
+
+@router.get(
+    "/creation-capabilities",
+    response_model=ProviderProfileCreationCapabilitiesResponse,
+)
+async def get_creation_capabilities(
     runtime_id: str,
     provider_id: str,
     current_user: User = Depends(get_current_user()),
@@ -841,159 +960,55 @@ async def create_profile(
     existing = await session.get(ManagedAgentProviderProfile, body.profile_id)
     if existing:
         raise HTTPException(status_code=409, detail="Profile already exists")
-    if body.preset_version not in {None, CREATION_PRESET_VERSION}:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "Provider Profile creation preset changed; reload capabilities and "
-                "review the authentication method."
-            ),
+    normalization_body = body
+    if body.import_existing_credential_volume:
+        normalization_body = body.model_copy(
+            update={
+                "volume_ref": None,
+                "volume_mount_path": None,
+                "import_existing_credential_volume": False,
+            }
         )
-
-    capabilities = provider_profile_creation_capabilities(
-        runtime_id=body.runtime_id,
-        provider_id=body.provider_id,
-    )
-
-    credential_source = body.credential_source
-    runtime_materialization_mode = body.runtime_materialization_mode
-    volume_ref = body.volume_ref
-    volume_mount_path = body.volume_mount_path
-    max_parallel_runs = body.max_parallel_runs
-    enabled = body.enabled
-    auth_state = body.auth_state
-    disabled_reason = body.disabled_reason
-    first_authenticated_at = body.first_authenticated_at
-    last_validated_at = body.last_validated_at
-    last_auth_method = body.last_auth_method
-    clear_env_keys = body.clear_env_keys
-    command_behavior = dict(body.command_behavior or {})
-
-    if body.authentication_method is not None:
-        try:
-            preset = authentication_method_preset(
-                runtime_id=body.runtime_id,
-                provider_id=body.provider_id,
-                authentication_method=body.authentication_method,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        fields = preset["fields"]
-        credential_source = str(fields["credential_source"]["value"])
-        runtime_materialization_mode = str(
-            fields["runtime_materialization_mode"]["value"]
+    values = _normalized_create_values(normalization_body)
+    if body.import_existing_credential_volume:
+        volume_ref, volume_mount_path = await _validate_imported_credential_volume(
+            runtime_id=body.runtime_id,
+            provider_id=body.provider_id,
+            volume_ref=body.volume_ref or "",
         )
         now = datetime.now(UTC)
-
-        if body.authentication_method == "oauth":
-            max_parallel_runs = 1
-            if body.import_existing_credential_volume:
-                volume_ref, volume_mount_path = (
-                    await _validate_imported_credential_volume(
-                        runtime_id=body.runtime_id,
-                        provider_id=body.provider_id,
-                        volume_ref=body.volume_ref or "",
-                    )
-                )
-                enabled = True
-                auth_state = ProviderProfileAuthState.CONNECTED.value
-                disabled_reason = None
-                first_authenticated_at = first_authenticated_at or now
-                last_validated_at = now
-                last_auth_method = ProviderProfileAuthMethod.OAUTH_VOLUME.value
-            else:
-                # Enrollment owns both values.  Persist a disabled setup row until
-                # OAuth finalization atomically installs the verified volume pair.
-                credential_source = ProviderCredentialSource.NONE.value
-                runtime_materialization_mode = RuntimeMaterializationMode.API_KEY_ENV.value
-                volume_ref = None
-                volume_mount_path = None
-                enabled = False
-                auth_state = ProviderProfileAuthState.OAUTH_PENDING.value
-                disabled_reason = ProviderProfileDisabledReason.MISSING_CREDENTIALS.value
-                last_auth_method = None
-        elif body.authentication_method == "api_key":
-            volume_ref = None
-            volume_mount_path = None
-            enabled = False
-            auth_state = ProviderProfileAuthState.API_KEY_PENDING.value
-            disabled_reason = ProviderProfileDisabledReason.MISSING_CREDENTIALS.value
-            last_auth_method = None
-            preset_clear_env_keys = fields.get("clear_env_keys", {}).get("value")
-            if clear_env_keys is None and isinstance(preset_clear_env_keys, list):
-                clear_env_keys = [str(value) for value in preset_clear_env_keys]
-        else:
-            volume_ref = None
-            volume_mount_path = None
-            enabled = True
-            auth_state = ProviderProfileAuthState.CONNECTED.value
-            disabled_reason = None
-            first_authenticated_at = first_authenticated_at or now
-            last_validated_at = now
-            last_auth_method = ProviderProfileAuthMethod.MANUAL.value
-
-        supported_method_ids = [
-            method["id"] for method in capabilities["authentication_methods"]
-        ]
-        low_level_methods = [
-            {"oauth": "oauth_volume", "api_key": "secret_ref", "none": "none"}[
-                method_id
-            ]
-            for method_id in supported_method_ids
-        ]
-        actions: list[str] = []
-        if "oauth" in supported_method_ids:
-            actions.append("connect_oauth")
-        if "api_key" in supported_method_ids:
-            actions.append("use_api_key")
-        if enabled and body.authentication_method == "oauth":
-            actions.extend(["validate_oauth", "disconnect_oauth"])
+        command_behavior = dict(values.get("command_behavior") or {})
         command_behavior.update(
             {
-                "supported_auth_methods": low_level_methods,
-                "auth_actions": actions,
-                "auth_state": auth_state,
-                "auth_status_label": (
-                    "Connected"
-                    if enabled
-                    else (
-                        "OAuth setup required"
-                        if body.authentication_method == "oauth"
-                        else "API key setup required"
-                    )
-                ),
+                "auth_actions": [
+                    "connect_oauth",
+                    "validate_oauth",
+                    "disconnect_oauth",
+                ],
+                "auth_state": "connected",
+                "auth_status_label": "Connected",
                 "auth_readiness": {
-                    "connected": enabled,
-                    "backing_secret_exists": bool(
-                        body.authentication_method == "none"
-                        or body.import_existing_credential_volume
-                    ),
-                    "launch_ready": enabled,
+                    "connected": True,
+                    "backing_secret_exists": True,
+                    "launch_ready": True,
                 },
             }
         )
-    else:
-        try:
-            validate_manual_credential_contract(
-                credential_source=credential_source,
-                runtime_materialization_mode=runtime_materialization_mode,
-                authentication_methods=capabilities["authentication_methods"],
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-    if credential_source is None or runtime_materialization_mode is None:
-        raise HTTPException(
-            status_code=422,
-            detail="A validated credential source and materialization mode are required.",
+        values.update(
+            {
+                "credential_source": ProviderCredentialSource.OAUTH_VOLUME.value,
+                "runtime_materialization_mode": RuntimeMaterializationMode.OAUTH_HOME.value,
+                "volume_ref": volume_ref,
+                "volume_mount_path": volume_mount_path,
+                "enabled": True,
+                "auth_state": ProviderProfileAuthState.CONNECTED.value,
+                "disabled_reason": None,
+                "first_authenticated_at": values.get("first_authenticated_at") or now,
+                "last_validated_at": now,
+                "last_auth_method": ProviderProfileAuthMethod.OAUTH_VOLUME.value,
+                "command_behavior": command_behavior,
+            }
         )
-    try:
-        validate_credential_contract(
-            credential_source=credential_source,
-            runtime_materialization_mode=runtime_materialization_mode,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
     try:
         model_tiers, default_model_tier = coerce_model_effort_tier_policy(
             model_tiers=(
@@ -1010,52 +1025,60 @@ async def create_profile(
 
     profile = ManagedAgentProviderProfile(
         profile_id=body.profile_id,
-        runtime_id=body.runtime_id,
-        provider_id=body.provider_id,
+        runtime_id=values["runtime_id"],
+        provider_id=values["provider_id"],
         provider_label=body.provider_label,
         default_model=body.default_model,
         default_effort=body.default_effort,
         model_tiers=model_tiers,
         default_model_tier=default_model_tier,
         model_overrides=body.model_overrides,
-        credential_source=ProviderCredentialSource(credential_source),
+        credential_source=ProviderCredentialSource(values["credential_source"]),
         runtime_materialization_mode=RuntimeMaterializationMode(
-            runtime_materialization_mode
+            values["runtime_materialization_mode"]
         ),
-        volume_ref=volume_ref,
-        volume_mount_path=volume_mount_path,
+        volume_ref=values["volume_ref"],
+        volume_mount_path=values["volume_mount_path"],
         account_label=body.account_label,
-        tags=body.tags,
-        priority=body.priority,
-        secret_refs=body.secret_refs,
-        clear_env_keys=clear_env_keys,
-        env_template=body.env_template,
-        file_templates=body.file_templates,
-        home_path_overrides=body.home_path_overrides,
-        command_behavior=command_behavior or None,
+        tags=values["tags"],
+        priority=values["priority"],
+        secret_refs=values["secret_refs"],
+        clear_env_keys=values["clear_env_keys"],
+        env_template=values["env_template"],
+        file_templates=values["file_templates"],
+        home_path_overrides=values["home_path_overrides"],
+        command_behavior=values["command_behavior"],
         owner_user_id=getattr(current_user, "id", None),
-        max_parallel_runs=max_parallel_runs,
-        cooldown_after_429_seconds=body.cooldown_after_429_seconds,
-        rate_limit_policy=ManagedAgentRateLimitPolicy(body.rate_limit_policy),
-        enabled=enabled,
+        max_parallel_runs=values["max_parallel_runs"],
+        cooldown_after_429_seconds=values["cooldown_after_429_seconds"],
+        rate_limit_policy=ManagedAgentRateLimitPolicy(values["rate_limit_policy"]),
+        enabled=values["enabled"],
         is_default=False,
-        max_lease_duration_seconds=body.max_lease_duration_seconds,
-        auth_state=ProviderProfileAuthState(auth_state),
+        max_lease_duration_seconds=values["max_lease_duration_seconds"],
+        auth_state=ProviderProfileAuthState(values["auth_state"]),
         disabled_reason=(
-            ProviderProfileDisabledReason(disabled_reason)
-            if disabled_reason is not None
+            ProviderProfileDisabledReason(values["disabled_reason"])
+            if values["disabled_reason"] is not None
             else None
         ),
-        first_authenticated_at=first_authenticated_at,
-        last_validated_at=last_validated_at,
+        first_authenticated_at=values["first_authenticated_at"],
+        last_validated_at=values["last_validated_at"],
         last_auth_method=(
-            ProviderProfileAuthMethod(last_auth_method)
-            if last_auth_method is not None
+            ProviderProfileAuthMethod(values["last_auth_method"])
+            if values["last_auth_method"] is not None
             else None
         ),
     )
     _validate_profile_tier_policy(profile)
-    _validate_codex_oauth_profile_row(profile)
+    incomplete_preset_oauth = (
+        body.authentication_method == ProviderProfileAuthenticationMethod.OAUTH
+        and not profile.enabled
+        and profile.auth_state != ProviderProfileAuthState.CONNECTED
+        and profile.volume_ref is None
+        and profile.volume_mount_path is None
+    )
+    if not incomplete_preset_oauth:
+        _validate_codex_oauth_profile_row(profile)
     session.add(profile)
     await session.flush()
     if profile.enabled:
@@ -1072,13 +1095,15 @@ async def create_profile(
         )
     await normalize_runtime_default_profile(
         session=session,
-        runtime_id=body.runtime_id,
-        preferred_profile_id=profile.profile_id if body.is_default else None,
+        runtime_id=profile.runtime_id,
+        preferred_profile_id=(
+            profile.profile_id if values["is_default"] else None
+        ),
     )
     await session.commit()
     await session.refresh(profile)
 
-    await sync_provider_profile_manager(session=session, runtime_id=body.runtime_id)
+    await sync_provider_profile_manager(session=session, runtime_id=profile.runtime_id)
 
     secret_ref_results = _secret_ref_results_for_rows([profile])
     secret_statuses = await _managed_secret_statuses_for_rows(
@@ -2461,7 +2486,10 @@ def _secret_refs_check(
     managed_secret_statuses: dict[str, str],
     secret_ref_results: dict[str, _SecretRefParseResult],
 ) -> dict[str, str]:
-    if credential_source != "secret_ref":
+    api_key_setup_pending = (
+        row.auth_state == ProviderProfileAuthState.API_KEY_PENDING
+    )
+    if credential_source != "secret_ref" and not api_key_setup_pending:
         return _readiness_check(
             "secret_refs",
             "SecretRef bindings",
@@ -2477,7 +2505,7 @@ def _secret_refs_check(
             "secret_refs",
             "SecretRef bindings",
             "error",
-            "credential_source secret_ref requires SecretRef bindings"
+            "API-key credential setup requires SecretRef bindings"
             f"{required_suffix}.",
         )
 

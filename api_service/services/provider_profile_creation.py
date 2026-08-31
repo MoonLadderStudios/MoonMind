@@ -186,6 +186,19 @@ def _runtime_provider_authentication_capability(
     return None
 
 
+def credential_free_authentication_supported(
+    runtime_id: str,
+    provider_id: str,
+) -> bool:
+    """Return whether trusted runtime metadata authorizes credential-free setup."""
+
+    capability = _runtime_provider_authentication_capability(
+        runtime_id.strip(),
+        provider_id.strip(),
+    )
+    return bool(capability and capability.credential_free)
+
+
 def _locked_field(value: object, source: str, lock_reason: str) -> dict[str, Any]:
     return {
         "value": value,
@@ -451,7 +464,7 @@ def infer_authentication_method(
     if (
         normalized_state == "oauth_pending"
         and source == "none"
-        and materialization == "api_key_env"
+        and materialization in {"api_key_env", "oauth_home"}
         and "oauth" in method_ids
     ):
         return "oauth"
@@ -465,7 +478,7 @@ def infer_authentication_method(
         normalized_state == "disconnected"
         and normalized_last_method == "oauth_volume"
         and source == "none"
-        and materialization == "api_key_env"
+        and materialization in {"api_key_env", "oauth_home"}
         and "oauth" in method_ids
     ):
         return "oauth"
@@ -546,6 +559,7 @@ __all__ = [
     "ProviderApiKeyStrategy",
     "RuntimeProviderAuthenticationCapability",
     "authentication_method_preset",
+    "credential_free_authentication_supported",
     "infer_authentication_method",
     "provider_api_key_strategy",
     "provider_profile_creation_capabilities",
