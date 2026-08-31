@@ -516,12 +516,13 @@ async def _sync_omnigent_provider_readiness(*, allow_enrollment: bool) -> bool:
 
 
 async def _sync_omnigent_deployment_qualification() -> bool:
-    """Refresh signed execution evidence after managed default drift.
+    """Refresh signed execution evidence after managed authority drift.
 
     The built-in OpenCode Agent Profile is compiled from authenticated catalog
     inventory and can legitimately advance after a deployment refresh. Keep the
-    qualification bound to that new immutable profile instead of requiring an
-    operator to repeat a bootstrap action for an already-enrolled API key.
+    qualification entries bound to that new immutable profile for every
+    launch-ready materializer class instead of requiring an operator to change
+    the runtime default or repeat bootstrap for an already-enrolled API key.
     """
 
     try:

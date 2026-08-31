@@ -122,3 +122,54 @@ async def test_default_evidence_admits_opencode_zen_model(
         payload.supportIdentity.modelConfigDigest
         != qualified_plan.supportIdentity.modelConfigDigest
     ) is expected["modelConfigDigestMayVary"]
+
+
+async def test_selected_zen_materializer_has_independent_deployment_evidence(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    replay_id = "opencode-selected-materializer-evidence-admission"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", manifest["evidencePolicy"])
+    monkeypatch.setenv(
+        "MOONMIND_DEPLOYMENT_EVIDENCE_KEY_PATH",
+        str(tmp_path / "deployment_evidence_key"),
+    )
+    launch_policy_ref = default_launch_policy_ref(_OPENCODE_ALLOWED_LAUNCH_POLICIES)
+
+    go_plan = await _capture_plan_payload(
+        launch_policy_ref=launch_policy_ref,
+        provider_id=manifest["defaultProviderId"],
+    )
+    _write_deployment_evidence(
+        tmp_path,
+        monkeypatch,
+        plan_payload=go_plan,
+        launch_policy_ref=launch_policy_ref,
+    )
+    zen_plan = await _capture_plan_payload(
+        launch_policy_ref=launch_policy_ref,
+        provider_id=manifest["selectedProviderId"],
+    )
+    _write_deployment_evidence(
+        tmp_path,
+        monkeypatch,
+        plan_payload=zen_plan,
+        launch_policy_ref=launch_policy_ref,
+    )
+
+    result = await _compile_opencode_plan(
+        monkeypatch,
+        artifacts=_ArtifactService(),
+        launch_policy_ref=launch_policy_ref,
+        plan_store=_PlanStore(None),
+        provider_id=manifest["selectedProviderId"],
+    )
+
+    payload = result.envelope.payload
+    assert payload.admissionAuthority.supportTier == expected["supportTier"]
+    assert (
+        payload.credentialBindings["primary-model"].materializerRef
+        == expected["selectedMaterializerRef"]
+    )

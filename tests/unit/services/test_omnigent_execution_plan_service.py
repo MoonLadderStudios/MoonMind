@@ -684,7 +684,11 @@ async def test_resolved_fanout_is_admitted_as_platform_owned_capability(
     assert result.envelope.payload.resolvedTools["tools"] == []
 
 
-async def _capture_plan_payload(*, launch_policy_ref: str):
+async def _capture_plan_payload(
+    *,
+    launch_policy_ref: str,
+    provider_id: str = "opencode-go",
+):
     """Return the compiled plan payload deployment qualification must match.
 
     Bootstrap qualification compiles the same plan to learn the exact support
@@ -704,6 +708,7 @@ async def _capture_plan_payload(*, launch_policy_ref: str):
                 patch,
                 artifacts=_ArtifactService(),
                 launch_policy_ref=launch_policy_ref,
+                provider_id=provider_id,
             )
     return captured["payload"]
 
@@ -713,7 +718,10 @@ def _write_deployment_evidence(
 ) -> None:
     """Sign and publish deployment evidence for one exact combination."""
 
-    from moonmind.omnigent.bootstrap.evidence import build_deployment_evidence
+    from moonmind.omnigent.bootstrap.evidence import (
+        build_deployment_evidence,
+        write_deployment_evidence,
+    )
     from moonmind.omnigent.harness_platform.support import (
         compute_support_combination_key,
     )
@@ -736,7 +744,7 @@ def _write_deployment_evidence(
         resolved_state=None,
     )
     destination = tmp_path / "deployment-execution-evidence.json"
-    destination.write_text(json.dumps(evidence), encoding="utf-8")
+    write_deployment_evidence(evidence, path=destination)
     monkeypatch.setenv("MOONMIND_OMNIGENT_DEPLOYMENT_EVIDENCE", str(destination))
 
 

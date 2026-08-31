@@ -1,0 +1,9 @@
+{
+  "incidentReference": "user-report-2026-08-31-opencode-zen-materializer-evidence",
+  "terminalFailureCode": "OMNIGENT_EXECUTION_EVIDENCE_UNAVAILABLE",
+  "failureShape": "an upgraded deployment retained OpenCode Go as the runtime default, so its sole qualification used opencode-auth-json@1 and rejected an explicitly selected OpenCode Zen plan requiring none@1",
+  "targetRuntime": "omnigent",
+  "evidencePolicy": "either",
+  "defaultProviderId": "opencode-go",
+  "selectedProviderId": "opencode"
+}
