@@ -157,6 +157,7 @@ class BootstrapController:
         revalidation = await reconcile_opencode_provider_readiness(
             session_factory=self._session_factory,
             allow_enrollment=False,
+            profile_ids=(provider_profile_ref,),
         )
         if not revalidation.ready:
             raise ValueError(

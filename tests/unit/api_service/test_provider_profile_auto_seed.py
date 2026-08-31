@@ -192,12 +192,12 @@ async def test_auto_seed_creates_default_profiles(_module_db, monkeypatch):
 
     zen_profile = next(p for p in profiles if p.profile_id == "opencode-zen-free")
     assert zen_profile.default_model == "opencode/muse-spark-1.2-contributor-free"
-    assert zen_profile.default_effort is None
+    assert zen_profile.default_effort == "xhigh"
     assert zen_profile.model_tiers == [
         {
             "label": "Muse Spark 1.2 Contributor Free",
             "model": "opencode/muse-spark-1.2-contributor-free",
-            "effort": None,
+            "effort": "xhigh",
             "parameters": {},
             "annotations": {},
         }
@@ -225,8 +225,8 @@ async def test_auto_seed_keeps_configured_zen_credential_validation_pending(
     assert profile.enabled is True
     assert profile.auth_state == ProviderProfileAuthState.API_KEY_PENDING
     assert profile.disabled_reason is None
-    assert profile.default_effort is None
-    assert profile.model_tiers[0]["effort"] is None
+    assert profile.default_effort == "xhigh"
+    assert profile.model_tiers[0]["effort"] == "xhigh"
     assert profile.model_catalog_evidence_json is None
     readiness = profile.command_behavior["auth_readiness"]
     assert readiness["connected"] is False
