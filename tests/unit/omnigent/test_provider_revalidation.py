@@ -469,6 +469,31 @@ async def test_current_evidence_is_left_untouched(
 
 
 @pytest.mark.asyncio
+async def test_targeted_revalidation_ignores_an_unrelated_stale_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default qualification must not inherit another profile's failure."""
+
+    _install_stubs(monkeypatch)
+    selected = _profile(
+        profile_id="opencode-zen-free",
+        evidence_image=CURRENT_IMAGE,
+    )
+    unrelated = _profile(
+        profile_id="opencode-go-default",
+        evidence_image=PREVIOUS_IMAGE,
+    )
+
+    outcome = await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory([selected, unrelated]),
+        profile_ids=(selected.profile_id,),
+        controller=_Controller(),
+    )
+
+    assert outcome == ProviderReconcileOutcome(ready=True, checked=1)
+
+
+@pytest.mark.asyncio
 async def test_stale_host_image_evidence_is_revalidated_and_refreshed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
