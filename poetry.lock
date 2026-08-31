@@ -234,14 +234,14 @@ files = [
 
 [[package]]
 name = "anthropic"
-version = "1.0.0"
+version = "1.2.0"
 description = "The official Python library for the anthropic API"
 optional = false
 python-versions = ">=3.10"
 groups = ["main"]
 files = [
-    {file = "anthropic-1.0.0-py3-none-any.whl", hash = "sha256:32dd52e9e1d774393b27182f451398ba4262287a4d0eab30887f89f1481b3ae4"},
-    {file = "anthropic-1.0.0.tar.gz", hash = "sha256:42be3c97604af7252c5898413aee076ace6c46e9bca0d0d90ceb77c7d3719027"},
+    {file = "anthropic-1.2.0-py3-none-any.whl", hash = "sha256:b60642b3e3cd6b8e3e328a2d3f2863ad2b6e743f1037e42cc0143f7df99f63c6"},
+    {file = "anthropic-1.2.0.tar.gz", hash = "sha256:12f8eedee7b7fb5685837b1371b7bfae1b281703f62355f4632598ec2fc53b34"},
 ]
 
 [package.dependencies]
@@ -6542,4 +6542,4 @@ tests = ["pytest", "pytest-asyncio", "pytest-mock", "pytest-timeout", "pytest-xd
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.14"
-content-hash = "8f898058e22e40cca5e05925eda9f18f6e04009141dbcc53cc4527f277a1c182"
+content-hash = "5ffe65faa66dd91fe62be85c7d82afb9fbd60483518e449b6509bcab641b31ab"
