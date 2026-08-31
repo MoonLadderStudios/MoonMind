@@ -279,12 +279,18 @@ vi.mock('./workflow-start', () => ({
   },
 }));
 
-vi.mock('./settings', () => ({
-  default: ({ payload }: { payload: BootPayload }) => {
+vi.mock('./settings', () => {
+  const MockSettingsPage = ({ payload }: { payload: BootPayload }) => {
     const initialData = payload.initialData as { settingsPermissions?: string[] } | undefined;
     return <div>Settings permissions: {(initialData?.settingsPermissions ?? []).join(',')}</div>;
-  },
-}));
+  };
+  return {
+    SettingsEntryPage: MockSettingsPage,
+    OperationsSettingsPage: MockSettingsPage,
+    ProvidersSecretsSettingsPage: MockSettingsPage,
+    UserWorkspaceSettingsPage: MockSettingsPage,
+  };
+});
 
 function uiInfo(overrides: Record<string, unknown> = {}) {
   return {
@@ -298,7 +304,9 @@ function uiInfo(overrides: Record<string, unknown> = {}) {
       artifacts: true,
       schedules: true,
       skills: true,
-      settings: true,
+      settingsProvidersSecrets: true,
+      settingsUserWorkspace: true,
+      settingsOperations: true,
       manifests: true,
       remediationCollection: false,
       omnigentAgents: false,
@@ -428,13 +436,18 @@ describe('Dashboard shared entry', () => {
     expect(screen.getByText('Workflow resources')).toBeTruthy();
     expect(screen.getByRole('menuitem', { name: 'Manifests' })).toBeTruthy();
     expect(screen.getByRole('menuitem', { name: 'Artifacts' })).toBeTruthy();
-    expect(screen.getByRole('menuitem', { name: 'Settings' })).toBeTruthy();
+    const configuration = screen.getByText('Configuration').closest('.dashboard-system-menu-section');
+    expect(configuration).not.toBeNull();
+    expect(within(configuration as HTMLElement).getAllByRole('menuitem').map((item) => item.textContent?.trim())).toEqual([
+      'Providers & Secrets', 'User / Workspace', 'Operations',
+    ]);
+    expect(screen.getAllByText('Configuration')).toHaveLength(1);
     expect(screen.queryByRole('menuitem', { name: 'Remediation' })).toBeNull();
 
     const first = screen.getByRole('menuitem', { name: 'Recurring' });
     first.focus();
     fireEvent.keyDown(first, { key: 'End' });
-    expect(document.activeElement).toBe(screen.getByRole('menuitem', { name: 'Settings' }));
+    expect(document.activeElement).toBe(screen.getByRole('menuitem', { name: 'Operations' }));
     fireEvent.keyDown(document.activeElement as Element, { key: 'Escape' });
     expect(trigger.getAttribute('aria-expanded')).toBe('false');
     expect(document.activeElement).toBe(trigger);
@@ -481,7 +494,7 @@ describe('Dashboard shared entry', () => {
     const trigger = screen.getByRole('button', { name: 'System' });
     fireEvent.click(trigger);
     expect(screen.getByRole('menuitem', { name: 'Skills' })).toBeTruthy();
-    expect(screen.getByRole('menuitem', { name: 'Settings' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'Providers & Secrets' })).toBeTruthy();
   });
 
   it.each([
@@ -489,12 +502,14 @@ describe('Dashboard shared entry', () => {
     ['/artifacts/example', 'Artifacts'],
     ['/observability/example', 'Artifacts'],
     ['/remediations/example', 'Remediation'],
-    ['/settings/providers', 'Settings'],
+    ['/settings/providers-secrets', 'Settings'],
+    ['/settings/user-workspace', 'Settings'],
+    ['/settings/operations', 'Settings'],
     ['/schedules', 'Recurring'],
     ['/schedules/nightly-build', 'Recurring'],
     ['/skills', 'Skills'],
     ['/skills/speckit-orchestrate', 'Skills'],
-  ])('MM-1200 marks the System menu active and relabels it for the child route %s', (path, label) => {
+  ])('MM-1200 marks the System menu active and uses the correct trigger for child route %s', (path, label) => {
     renderWithClient(
       <MemoryRouter initialEntries={[path]}>
         <nav aria-label="Test navigation">
@@ -507,19 +522,32 @@ describe('Dashboard shared entry', () => {
       </MemoryRouter>,
     );
 
-    // The trigger takes on the active selection's one-word label in place of
-    // "System" while carrying the active underline treatment.
+    // Configuration children share one stable Settings trigger; other System
+    // destinations retain their selected labels.
     const trigger = screen.getByRole('button', { name: label });
     expect(trigger.classList.contains('active')).toBe(true);
     expect(screen.queryByRole('button', { name: 'System' })).toBeNull();
     expect(screen.getByRole('link', { name: 'Workflows' }).classList.contains('active')).toBe(false);
+    if (path.startsWith('/settings/') && path !== '/settings/provider-profiles') {
+      expect(trigger.querySelector('.lucide-settings')).not.toBeNull();
+      fireEvent.click(trigger);
+      const activeLink = screen.getByRole('menuitem', {
+        name: path.endsWith('providers-secrets')
+          ? 'Providers & Secrets'
+          : path.endsWith('user-workspace')
+            ? 'User / Workspace'
+            : 'Operations',
+      });
+      expect(activeLink.getAttribute('aria-current')).toBe('page');
+      expect(activeLink.classList.contains('active')).toBe(true);
+    }
   });
 
   it.each([
     ['Enter', 'Recurring'],
     [' ', 'Recurring'],
     ['ArrowDown', 'Recurring'],
-    ['ArrowUp', 'Settings'],
+    ['ArrowUp', 'Operations'],
   ])('MM-1200 opens System with %s and focuses %s', async (key, expectedItem) => {
     renderWithClient(
       <MemoryRouter initialEntries={['/workflows']}>
@@ -541,7 +569,7 @@ describe('Dashboard shared entry', () => {
     const trigger = screen.getByRole('button', { name: 'System' });
     fireEvent.click(trigger);
     const first = screen.getByRole('menuitem', { name: 'Recurring' });
-    const last = screen.getByRole('menuitem', { name: 'Settings' });
+    const last = screen.getByRole('menuitem', { name: 'Operations' });
     first.focus();
     fireEvent.keyDown(first, { key: 'ArrowDown' });
     expect(document.activeElement).toBe(screen.getByRole('menuitem', { name: 'Skills' }));
@@ -567,8 +595,8 @@ describe('Dashboard shared entry', () => {
     );
     const trigger = screen.getByRole('button', { name: 'System' });
     fireEvent.click(trigger);
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Settings' }));
-    expect(screen.getByRole('status', { name: 'Current path' }).textContent).toBe('/settings');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'User / Workspace' }));
+    expect(screen.getByRole('status', { name: 'Current path' }).textContent).toBe('/settings/user-workspace');
     expect(trigger.getAttribute('aria-expanded')).toBe('false');
 
     fireEvent.click(trigger);
@@ -578,7 +606,7 @@ describe('Dashboard shared entry', () => {
 
   it('MM-1200 renders enabled System children inline on mobile without a nested popover', () => {
     renderWithClient(
-      <MemoryRouter initialEntries={['/workflows']}>
+      <MemoryRouter initialEntries={['/settings/operations']}>
         <DashboardSystemMenu
           uiInfo={uiInfo({ features: { ...uiInfo().features, manifests: false, artifacts: false } })}
           mobileDrawerOpen
@@ -587,12 +615,86 @@ describe('Dashboard shared entry', () => {
     );
     const inline = screen.getByLabelText('System destinations');
     expect(inline.querySelector('[role="menu"]')).toBeNull();
-    expect(screen.getByRole('link', { name: 'Settings' })).toBeTruthy();
+    const configuration = within(inline).getByText('Configuration').closest('.dashboard-system-menu-section');
+    expect(configuration).not.toBeNull();
+    expect(within(configuration as HTMLElement).getAllByRole('link').map((link) => link.textContent?.trim())).toEqual([
+      'Providers & Secrets', 'User / Workspace', 'Operations',
+    ]);
+    expect(within(configuration as HTMLElement).getByRole('link', { name: 'Operations' }).getAttribute('aria-current')).toBe('page');
     // Recurring and Skills render as normal inline links, not a nested popover.
     expect(within(inline).getByRole('link', { name: 'Recurring' })).toBeTruthy();
     expect(within(inline).getByRole('link', { name: 'Skills' })).toBeTruthy();
     expect(screen.queryByRole('link', { name: 'Manifests' })).toBeNull();
     expect(screen.queryByRole('link', { name: 'Artifacts' })).toBeNull();
+  });
+
+  it('MoonLadderStudios/MoonMind#3817 scopes the Configuration group to exposed children', () => {
+    const features: Record<string, boolean> = { ...uiInfo().features };
+    delete features.settingsProvidersSecrets;
+    delete features.settingsOperations;
+    renderWithClient(
+      <MemoryRouter initialEntries={['/settings/user-workspace']}>
+        <DashboardSystemMenu uiInfo={uiInfo({ features })} mobileDrawerOpen={false} />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+    expect(screen.getAllByText('Configuration')).toHaveLength(1);
+    expect(screen.queryByRole('menuitem', { name: 'Providers & Secrets' })).toBeNull();
+    expect(screen.getByRole('menuitem', { name: 'User / Workspace' })).toBeTruthy();
+    expect(screen.queryByRole('menuitem', { name: 'Operations' })).toBeNull();
+  });
+
+  it('MoonLadderStudios/MoonMind#3817 omits an unexposed group and disables intentionally unavailable children', () => {
+    const hiddenFeatures: Record<string, boolean> = { ...uiInfo().features };
+    delete hiddenFeatures.settingsProvidersSecrets;
+    delete hiddenFeatures.settingsUserWorkspace;
+    delete hiddenFeatures.settingsOperations;
+    const { unmount } = renderWithClient(
+      <MemoryRouter initialEntries={['/workflows']}>
+        <DashboardSystemMenu uiInfo={uiInfo({ features: hiddenFeatures })} mobileDrawerOpen={false} />
+      </MemoryRouter>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'System' }));
+    expect(screen.queryByText('Configuration')).toBeNull();
+    unmount();
+
+    renderWithClient(
+      <MemoryRouter initialEntries={['/workflows']}>
+        <DashboardSystemMenu
+          uiInfo={uiInfo({
+            features: {
+              ...hiddenFeatures,
+              settingsOperations: false,
+            },
+          })}
+          mobileDrawerOpen={false}
+        />
+      </MemoryRouter>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'System' }));
+    expect(screen.getAllByText('Configuration')).toHaveLength(1);
+    const unavailable = screen.getByRole('menuitem', { name: /Operations/ });
+    expect(unavailable.tagName).toBe('SPAN');
+    expect(unavailable.getAttribute('aria-disabled')).toBe('true');
+    expect(unavailable.tabIndex).toBe(-1);
+  });
+
+  it('MoonLadderStudios/MoonMind#3817 includes unavailable destinations in keyboard focus movement', async () => {
+    renderWithClient(
+      <MemoryRouter initialEntries={['/workflows']}>
+        <DashboardSystemMenu
+          uiInfo={uiInfo({ features: { settingsOperations: false } })}
+          mobileDrawerOpen={false}
+        />
+      </MemoryRouter>,
+    );
+
+    const trigger = screen.getByRole('button', { name: 'System' });
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+    const unavailable = await screen.findByRole('menuitem', { name: /Operations/ });
+    await waitFor(() => expect(document.activeElement).toBe(unavailable));
+    expect(unavailable.getAttribute('aria-disabled')).toBe('true');
   });
 
   it('MM-1192 traps mobile navigation focus, locks scrolling, and restores focus on Escape', async () => {
@@ -604,7 +706,7 @@ describe('Dashboard shared entry', () => {
     fireEvent.click(trigger);
 
     const workflowsLink = screen.getByRole('link', { name: 'Workflows' });
-    const settingsLink = screen.getByRole('link', { name: 'Settings' });
+    const settingsLink = screen.getByRole('link', { name: 'Operations' });
     expect(trigger.getAttribute('aria-expanded')).toBe('true');
     expect(screen.getByRole('button', { name: 'Close navigation menu' })).toBeTruthy();
     expect(document.body.style.overflow).toBe('hidden');
@@ -1789,7 +1891,7 @@ describe('Dashboard shared entry', () => {
 
     expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'System' }));
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Settings' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Providers & Secrets' }));
 
     expect(
       await screen.findByText('Settings permissions: provider_profiles.write,settings.effective.read'),
@@ -2123,7 +2225,7 @@ describe('Dashboard shared entry', () => {
     fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
     expect((await screen.findByRole('status')).textContent).toContain('Opening first workflow...');
     fireEvent.click(screen.getByRole('button', { name: 'System' }));
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Settings' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Providers & Secrets' }));
     expect(await screen.findByText('Settings permissions:')).toBeTruthy();
 
     const completeList = resolveList;
@@ -2136,7 +2238,7 @@ describe('Dashboard shared entry', () => {
     } as Response);
 
     await waitFor(() => {
-      expect(window.location.pathname).toBe('/settings');
+      expect(window.location.pathname).toBe('/settings/providers-secrets');
     });
     expect(window.location.search).toBe('');
     expect(screen.queryByText(/stale-row/i)).toBeNull();
@@ -2840,77 +2942,6 @@ describe('Dashboard shared entry', () => {
     expect(narrowLastScheduledBlock).toContain('display: none');
     expect(mobileTableBlock).toContain('display: none');
     expect(mobileCardListBlock).toContain('display: grid');
-  });
-
-  it('stacks Settings section radio controls on mobile viewports', async () => {
-    const settingsLoudSelector = '.settings-page .segmented-control[data-intensity="loud"]';
-    const settingsLoudItemSelector = `${settingsLoudSelector} .segmented-control-item`;
-    const mobileSettingsNavBlock = cssRuleBlockMatching(dashboardCss, (rule) => {
-      return (
-        normalizeCssSelector(rule.selector) === settingsLoudSelector &&
-        rule.parent?.type === 'atrule' &&
-        rule.parent.name === 'media' &&
-        rule.parent.params.includes('max-width: 640px')
-      );
-    });
-    const mobileSettingsOptionBlock = cssRuleBlockMatching(dashboardCss, (rule) => {
-      return (
-        normalizeCssSelector(rule.selector) === settingsLoudItemSelector &&
-        rule.parent?.type === 'atrule' &&
-        rule.parent.name === 'media' &&
-        rule.parent.params.includes('max-width: 640px')
-      );
-    });
-    const mobileFirstSettingsOptionBlock = cssRuleBlockMatching(dashboardCss, (rule) => {
-      return (
-        normalizeCssSelector(rule.selector) === `${settingsLoudItemSelector}:first-of-type` &&
-        rule.parent?.type === 'atrule' &&
-        rule.parent.name === 'media' &&
-        rule.parent.params.includes('max-width: 640px')
-      );
-    });
-    const mobileLastSettingsOptionBlock = cssRuleBlockMatching(dashboardCss, (rule) => {
-      return (
-        normalizeCssSelector(rule.selector) === `${settingsLoudItemSelector}:last-of-type` &&
-        rule.parent?.type === 'atrule' &&
-        rule.parent.name === 'media' &&
-        rule.parent.params.includes('max-width: 640px')
-      );
-    });
-    const mobileSettingsLabelBlock = cssRuleBlockMatching(dashboardCss, (rule) => {
-      return (
-        normalizeCssSelector(rule.selector) === `${settingsLoudSelector} .segmented-control-item-label` &&
-        rule.parent?.type === 'atrule' &&
-        rule.parent.name === 'media' &&
-        rule.parent.params.includes('max-width: 640px')
-      );
-    });
-    const mobileSettingsActiveBlock = cssRuleBlockMatching(dashboardCss, (rule) => {
-      return (
-        normalizeCssSelector(rule.selector) === `${settingsLoudItemSelector}:has(input:checked)` &&
-        rule.parent?.type === 'atrule' &&
-        rule.parent.name === 'media' &&
-        rule.parent.params.includes('max-width: 640px')
-      );
-    });
-
-    expect(mobileSettingsNavBlock).toContain('display: grid');
-    expect(mobileSettingsNavBlock).toContain('grid-template-columns: minmax(0, 1fr)');
-    expect(mobileSettingsNavBlock).toContain('width: 100%');
-    expect(mobileSettingsNavBlock).toContain('padding: 0');
-    expect(mobileSettingsOptionBlock).toContain('justify-content: flex-start');
-    expect(mobileSettingsOptionBlock).toContain('width: 100%');
-    expect(mobileFirstSettingsOptionBlock).toContain('border-top-left-radius: 9px');
-    expect(mobileFirstSettingsOptionBlock).toContain('border-top-right-radius: 9px');
-    expect(mobileLastSettingsOptionBlock).toContain('border-bottom-left-radius: 9px');
-    expect(mobileLastSettingsOptionBlock).toContain('border-bottom-right-radius: 9px');
-    expect(mobileSettingsActiveBlock).toContain('0 0 18px rgb(var(--mm-accent) / 0.55)');
-    expect(mobileSettingsActiveBlock).toContain('0 0 32px rgb(var(--mm-accent-2) / 0.22)');
-    // MM-1138 Q3/B2: the active pill keeps its neon glow but no longer runs the
-    // perpetual shimmer animation, so no reduced-motion override is needed.
-    expect(mobileSettingsActiveBlock).not.toContain('animation');
-    expect(mobileSettingsLabelBlock).toContain('white-space: normal');
-    expect(mobileSettingsLabelBlock).toContain('overflow-wrap: anywhere');
   });
 
   it('keeps liquidGL opt-in and away from default dense surfaces', async () => {

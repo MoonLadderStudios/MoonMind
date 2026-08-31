@@ -357,6 +357,14 @@ async def test_real_three_workflow_topology_requests_review_then_merges() -> Non
                     second_messages.append(f"{type(current).__name__}: {current}")
                     current = getattr(current, "cause", None) or current.__cause__
                 second_result = " <- ".join(second_messages)
+            first_description = await env.client.get_workflow_handle(
+                f"{resolver_base}:1"
+            ).describe()
+            second_description = await env.client.get_workflow_handle(
+                f"{resolver_base}:2"
+            ).describe()
+            first_memo = await first_description.memo()
+            second_memo = await second_description.memo()
 
     assert result["status"] == "merged", (
         result.get("summary"),
@@ -367,3 +375,5 @@ async def test_real_three_workflow_topology_requests_review_then_merges() -> Non
     assert result["continuationCounters"]["continuation_cycle_completed"] == 1
     assert result["reviewLoop"]["cycles"] == 1
     assert _terminal_evidence_calls == 2
+    assert first_memo["title"] == "Resolve PR #1209 (Attempt 1)"
+    assert second_memo["title"] == "Resolve PR #1209 (Attempt 2)"

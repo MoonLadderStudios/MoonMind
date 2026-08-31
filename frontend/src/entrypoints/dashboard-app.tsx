@@ -79,7 +79,18 @@ const PAGE_IMPORTS = {
   'oauth-terminal': () => import('./oauth-terminal'),
   remediations: () => import('./remediations'),
   schedules: () => import('./schedules'),
-  settings: () => import('./settings'),
+  'settings-entry': async () => ({
+    default: (await import('./settings')).SettingsEntryPage,
+  }),
+  'settings-operations': async () => ({
+    default: (await import('./settings')).OperationsSettingsPage,
+  }),
+  'settings-providers-secrets': async () => ({
+    default: (await import('./settings')).ProvidersSecretsSettingsPage,
+  }),
+  'settings-user-workspace': async () => ({
+    default: (await import('./settings')).UserWorkspaceSettingsPage,
+  }),
   skills: () => import('./skills'),
   'workflow-start': () => import('./workflow-start'),
   'workflows-workspace': () => import('./workflows-workspace'),
@@ -985,7 +996,7 @@ function AppShell({
               Workers: Running
             </span>
             <span className="worker-pause-reason" data-worker-pause-reason />
-            <Link className="worker-pause-manage" to="/settings?section=operations" data-worker-pause-manage>
+            <Link className="worker-pause-manage" to="/settings/operations" data-worker-pause-manage>
               Manage operations
             </Link>
           </p>
@@ -1435,7 +1446,11 @@ function RoutedDashboardPage({
 
   if (
     isUiInfoPending &&
-    (route.page === 'workflow-start' || route.currentPath === '/workflows/new')
+    (
+      route.page === 'workflow-start' ||
+      route.currentPath === '/workflows/new' ||
+      route.page.startsWith('settings-')
+    )
   ) {
     return (
       <AppShell
@@ -1488,7 +1503,9 @@ function RoutedDashboardPage({
     ? 'workflows-workspace'
     : route.page === 'skills'
       ? 'skills'
-      : `${route.page}:${route.currentPath}${location.search}${location.hash}`;
+      : route.page.startsWith('settings-')
+        ? `${route.page}:${route.currentPath}`
+        : `${route.page}:${route.currentPath}${location.search}${location.hash}`;
 
   return (
     <AppShell

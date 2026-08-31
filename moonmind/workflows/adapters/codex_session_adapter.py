@@ -608,6 +608,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         task_workflow_id: str | None = None,
         defer_turn_instructions_until_session_launch: bool = True,
         replace_existing_on_resume_mismatch: bool = False,
+        selected_model_capacity_retry_enabled: bool = True,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
@@ -632,6 +633,9 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         )
         self._replace_existing_on_resume_mismatch = bool(
             replace_existing_on_resume_mismatch
+        )
+        self._selected_model_capacity_retry_enabled = bool(
+            selected_model_capacity_retry_enabled
         )
         self._run_states: dict[str, CodexSessionExecutionState] = {}
 
@@ -2462,7 +2466,12 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         classification_source = (
             summary if str(summary or "").strip() else default_summary
         )
-        classification = classify_provider_failure(classification_source)
+        classification = classify_provider_failure(
+            classification_source,
+            include_selected_model_capacity=(
+                self._selected_model_capacity_retry_enabled
+            ),
+        )
         summary_text = _clamp_agent_run_result_summary(
             summary,
             default=default_summary,

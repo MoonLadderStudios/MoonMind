@@ -314,6 +314,12 @@ AGENT_RUN_STRUCTURED_PROVIDER_FAILURE_PATCH_ID = (
 AGENT_RUN_PROVIDER_COOLDOWN_EXPONENTIAL_BACKOFF_PATCH_ID = (
     "agent-run-provider-cooldown-exponential-backoff-v1"
 )
+AGENT_RUN_PROVIDER_COOLDOWN_RETRY_BUDGET_PATCH_ID = (
+    "agent-run-provider-cooldown-retry-budget-v1"
+)
+AGENT_RUN_SELECTED_MODEL_CAPACITY_RETRY_PATCH_ID = (
+    "agent-run-selected-model-capacity-retry-v1"
+)
 AGENT_RUN_MANAGED_NO_PROGRESS_RECONCILIATION_PATCH_ID = (
     "agent-run-managed-no-progress-reconciliation-v1"
 )
@@ -379,6 +385,7 @@ _CLAUDE_CODE_NO_PROGRESS_TIMEOUT_SECONDS = 2400
 _CLAUDE_CODE_NO_PROGRESS_GRACE_SECONDS = 900
 _DEFAULT_MANAGED_429_RETRY_DELAY_SECONDS = 900
 _MAX_PROVIDER_COOLDOWN_BACKOFF_SECONDS = 3600
+_MAX_PROVIDER_COOLDOWN_RETRY_ATTEMPTS = 3
 _MANAGED_RUNTIME_STORE_ROOT = os.environ.get(
     "MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"
 )
@@ -713,6 +720,7 @@ class MoonMindAgentRun:
         self._slot_wait_timeout_override_seconds: int | None = None
         self._skip_default_profile_pin_once: bool = False
         self._provider_cooldown_retry_counts: dict[str, int] = {}
+        self._provider_cooldown_retry_attempts: int = 0
         self._terminal_result_payload_compacted_for_history: bool = False
         self._terminal_contract_fresh_process_history: list[dict[str, Any]] = []
         self._managed_process_loss_recovery_history: list[dict[str, Any]] = []
@@ -962,6 +970,33 @@ class MoonMindAgentRun:
         multiplier = 2 ** min(prior_failures, 10)
         cap = max(seconds, _MAX_PROVIDER_COOLDOWN_BACKOFF_SECONDS)
         return min(seconds * multiplier, cap)
+
+    def _provider_cooldown_retry_exhausted_result(
+        self,
+        result: AgentRunResult,
+    ) -> AgentRunResult:
+        retry_attempts = self._provider_cooldown_retry_attempts
+        summary = (
+            "Provider cooldown retry budget exhausted after "
+            f"{retry_attempts} retries."
+        )
+        previous_summary = str(result.summary or "").strip()
+        if previous_summary:
+            summary = f"{summary} Last provider result: {previous_summary}"
+        if len(summary) > _MAX_SUMMARY_CHARS:
+            summary = summary[: _MAX_SUMMARY_CHARS - 3] + "..."
+        metadata = dict(result.metadata or {})
+        metadata["providerCooldownRetry"] = {
+            "attempts": retry_attempts,
+            "maxAttempts": _MAX_PROVIDER_COOLDOWN_RETRY_ATTEMPTS,
+            "exhausted": True,
+        }
+        return result.model_copy(
+            update={
+                "summary": summary,
+                "metadata": metadata,
+            }
+        )
 
     @staticmethod
     def _profile_selector_has_constraints(selector: Any) -> bool:
@@ -2027,7 +2062,12 @@ class MoonMindAgentRun:
                 mode="json",
                 by_alias=True,
             )
-        classification = classify_provider_failure(summary)
+        classification = classify_provider_failure(
+            summary,
+            include_selected_model_capacity=workflow.patched(
+                AGENT_RUN_SELECTED_MODEL_CAPACITY_RETRY_PATCH_ID
+            ),
+        )
         provider_failure_event = build_provider_failure_event(
             classification=classification,
         )
@@ -5342,6 +5382,9 @@ class MoonMindAgentRun:
                             replace_existing_on_resume_mismatch=(
                                 replace_existing_on_resume_mismatch
                             ),
+                            selected_model_capacity_retry_enabled=workflow.patched(
+                                AGENT_RUN_SELECTED_MODEL_CAPACITY_RETRY_PATCH_ID
+                            ),
                         )
                     else:
                         adapter = ManagedAgentAdapter(
@@ -6259,11 +6302,32 @@ class MoonMindAgentRun:
                 else:
                     requires_provider_cooldown = False
 
+                provider_retry_budget_enabled = workflow.patched(
+                    AGENT_RUN_PROVIDER_COOLDOWN_RETRY_BUDGET_PATCH_ID
+                )
+                if (
+                    provider_retry_budget_enabled
+                    and request.agent_kind == "managed"
+                    and manager_handle
+                    and requires_provider_cooldown
+                    and self.final_result is not None
+                    and self._provider_cooldown_retry_attempts
+                    >= _MAX_PROVIDER_COOLDOWN_RETRY_ATTEMPTS
+                ):
+                    self.final_result = (
+                        self._provider_cooldown_retry_exhausted_result(
+                            self.final_result
+                        )
+                    )
+                    requires_provider_cooldown = False
+
                 if (
                     request.agent_kind == "managed"
                     and manager_handle
                     and requires_provider_cooldown
                 ):
+                    if provider_retry_budget_enabled:
+                        self._provider_cooldown_retry_attempts += 1
                     if workflow.patched("gemini-429-cooldown-retry-signal"):
                         runtime_id = self._managed_runtime_id(request.agent_id)
                         profile_id = str(request.execution_profile_ref or self._assigned_profile_id or "").strip() or None
@@ -6387,7 +6451,7 @@ class MoonMindAgentRun:
                         )
                         continue  # Retries loop
 
-                # Not a 429 or external agent
+                # No provider cooldown retry remains, or this is an external agent.
                 if manager_handle and request.execution_profile_ref:
                     await manager_handle.signal(
                         "release_slot",

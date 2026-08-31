@@ -1,10 +1,15 @@
-import { useEffect, useMemo, useState, type CSSProperties, type ReactElement } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { BootPayload } from '../boot/parseBootPayload';
+import { Navigate, useSearchParams } from 'react-router-dom';
+
+import type { BootPayload } from '../boot/parseBootPayload';
 import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
 import { SecretManager } from '../components/secrets/SecretManager';
 import { ConfigurationHealthSummary } from '../components/settings/ConfigurationHealthSummary';
-import { GeneratedSettingsSection } from '../components/settings/GeneratedSettingsSection';
+import {
+  GeneratedSettingsSection,
+  type SettingScope,
+} from '../components/settings/GeneratedSettingsSection';
 import { GithubTokenProbePanel } from '../components/settings/GithubTokenProbePanel';
 import {
   OperationsSettingsSection,
@@ -16,68 +21,13 @@ import {
   ProviderProfilesManager,
   type ProviderProfile,
 } from '../components/settings/ProviderProfilesManager';
+import {
+  SettingsDraftGuardProvider,
+  useSettingsDraftGuard,
+} from '../components/settings/SettingsDraftGuard';
 import { resetDashboardPreferences } from '../utils/dashboardPreferences';
 
-// `omnigent` is an execution facade, not a Provider Profile owner: every
-// profile it launches is owned by the underlying managed runtime, so it is
-// never offered as a Provider Profile runtime filter.
 const NON_PROFILE_OWNING_RUNTIMES = new Set(['omnigent']);
-
-function ProvidersKeyIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      aria-hidden="true"
-      focusable="false"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <circle cx="8" cy="14" r="3.5" />
-      <path d="M10.5 12L20 4" />
-      <path d="M17 7l2 2" />
-      <path d="M14 10l2 2" />
-    </svg>
-  );
-}
-
-function UserWorkspaceIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      aria-hidden="true"
-      focusable="false"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <circle cx="12" cy="8" r="3.5" />
-      <path d="M5 20c0-3.5 3-6 7-6s7 2.5 7 6" />
-    </svg>
-  );
-}
-
-function OperationsGearIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      aria-hidden="true"
-      focusable="false"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <circle cx="12" cy="12" r="3" />
-      <path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1" />
-    </svg>
-  );
-}
 
 interface ProfileData {
   id?: string | number;
@@ -101,136 +51,138 @@ interface SecretsListResponse {
   items: SecretMetadata[];
 }
 
-const SETTINGS_SECTIONS: ReadonlyArray<{
-  id: 'providers-secrets' | 'user-workspace' | 'operations';
-  label: string;
+interface SettingsInitialData {
+  settingsPermissions?: string[];
+  workerPause?: WorkerPauseConfig | null;
+  runtimeConfig?: {
+    system?: {
+      defaultTaskModelByRuntime?: Record<string, string>;
+      supportedRuntimes?: string[];
+    };
+  };
+}
+
+function settingsInitialData(payload: BootPayload): SettingsInitialData {
+  return (payload.initialData as SettingsInitialData | undefined) ?? {};
+}
+
+function settingsPermissions(payload: BootPayload): Set<string> {
+  return new Set(settingsInitialData(payload).settingsPermissions ?? []);
+}
+
+function SettingsPageFrame({
+  title,
+  description,
+  children,
+}: {
+  title: string;
   description: string;
-  Icon: () => ReactElement;
-}> = [
-  {
-    id: 'providers-secrets',
-    label: 'Providers & Secrets',
-    description:
-      'Configure provider profiles, managed secrets, and the bindings that make runtimes launchable.',
-    Icon: ProvidersKeyIcon,
-  },
-  {
-    id: 'user-workspace',
-    label: 'User / Workspace',
-    description:
-      'Hold user-scoped and workspace-scoped settings as the dashboard exposes more of the broader configuration model.',
-    Icon: UserWorkspaceIcon,
-  },
-  {
-    id: 'operations',
-    label: 'Operations',
-    description:
-      'Keep worker pause, drain, quiesce, and related operational controls under Settings.',
-    Icon: OperationsGearIcon,
-  },
-] as const;
-
-type SettingsSectionId = (typeof SETTINGS_SECTIONS)[number]['id'];
-
-function isSettingsSection(value: string | null): value is SettingsSectionId {
-  return SETTINGS_SECTIONS.some((section) => section.id === value);
-}
-
-function readSectionFromLocation(): SettingsSectionId {
-  const params = new URLSearchParams(window.location.search);
-  const section = params.get('section');
-  return isSettingsSection(section) ? section : 'providers-secrets';
-}
-
-function updateSectionInLocation(section: SettingsSectionId): void {
-  const url = new URL(window.location.href);
-  url.searchParams.set('section', section);
-  window.history.pushState({}, '', url.toString());
-}
-
-export function SettingsPage({ payload }: { payload: BootPayload }) {
-  const queryClient = useQueryClient();
-  const [notice, setNotice] = useState<Notice | null>(null);
-  const [section, setSection] = useState<SettingsSectionId>(() => readSectionFromLocation());
-  // Settings is the administrative exception to runtime-scoped Provider Profile
-  // selection: it enters on the All-runtimes view and can narrow the table to a
-  // single runtime without narrowing global configuration health.
-  const [providerProfileRuntimeFilter, setProviderProfileRuntimeFilter] = useState<string>(
-    ALL_RUNTIMES_FILTER_VALUE,
-  );
-  const workerPauseConfig =
-    (payload.initialData as { workerPause?: WorkerPauseConfig } | undefined)?.workerPause ??
-    null;
-  const runtimeSystemConfig =
-    (payload.initialData as {
-      runtimeConfig?: {
-        system?: {
-          defaultTaskModelByRuntime?: Record<string, string>;
-          supportedRuntimes?: string[];
-        };
-      };
-    } | undefined)?.runtimeConfig?.system ?? {};
-  const defaultTaskModelByRuntime: Record<string, string> =
-    runtimeSystemConfig.defaultTaskModelByRuntime ?? {};
-  const supportedRuntimes: string[] = runtimeSystemConfig.supportedRuntimes ?? [];
-  const settingsPermissions = new Set(
-    ((payload.initialData as { settingsPermissions?: string[] } | undefined)
-      ?.settingsPermissions ?? []),
-  );
-  const canWriteProviderProfiles = settingsPermissions.has('provider_profiles.write');
-  const canRunGithubTokenProbe = settingsPermissions.has('settings.effective.read');
-
+  children: ReactNode;
+}) {
   useEffect(() => {
-    const handlePopState = () => {
-      setSection(readSectionFromLocation());
-      setNotice(null);
-    };
+    document.title = `${title} | MoonMind`;
+  }, [title]);
 
-    window.addEventListener('popstate', handlePopState);
-    return () => {
-      window.removeEventListener('popstate', handlePopState);
-    };
-  }, []);
+  return (
+    <div className="settings-page mx-auto w-full space-y-6 px-4 py-6 sm:px-6 lg:px-8">
+      <header className="rounded-[2rem] border border-mm-border/80 bg-transparent px-6 py-6 shadow-sm">
+        <div className="space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500 dark:text-slate-400">
+            Configuration
+          </p>
+          <h2 className="text-3xl font-semibold tracking-tight text-slate-950 dark:text-white">
+            {title}
+          </h2>
+          <p className="max-w-3xl text-sm text-slate-600 dark:text-slate-400">
+            {description}
+          </p>
+        </div>
+      </header>
+      {children}
+    </div>
+  );
+}
 
-  const { data: profile, isLoading, isError } = useQuery<ProfileData>({
-    queryKey: ['profile'],
-    queryFn: async () => {
-      const response = await fetch('/me', {
-        credentials: 'include',
-        headers: {
-          Accept: 'application/json',
-        },
-      });
-      if (!response.ok) {
-        throw new Error(`Failed to fetch profile: ${response.statusText}`);
-      }
-      return response.json();
-    },
-    enabled: section === 'user-workspace',
-  });
+function SettingsUnavailableState({
+  title,
+  permissions,
+}: {
+  title: string;
+  permissions: string[];
+}) {
+  return (
+    <section
+      aria-label={`${title} unavailable`}
+      className="rounded-3xl border border-amber-200 bg-amber-50 p-6 shadow-sm dark:border-amber-900/50 dark:bg-amber-900/20"
+    >
+      <h3 className="text-lg font-semibold text-amber-950 dark:text-amber-100">
+        This configuration page is unavailable
+      </h3>
+      <p className="mt-2 text-sm text-amber-800 dark:text-amber-200">
+        Your account cannot inspect this destination. Direct navigation remains on this route so
+        the authorization boundary is explicit.
+      </p>
+      <p className="mt-3 text-xs text-amber-700 dark:text-amber-300">
+        Required inspection permission: {permissions.map((permission) => (
+          <code key={permission} className="ml-1">{permission}</code>
+        ))}
+      </p>
+    </section>
+  );
+}
 
-  const {
-    data: secretsData,
-    isLoading: areSecretsLoading,
-    isError: areSecretsErrored,
-  } = useQuery<SecretsListResponse>({
+function RegionUnavailable({ children }: { children: ReactNode }) {
+  return (
+    <section className="rounded-3xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-600 shadow-sm dark:border-slate-800 dark:bg-slate-900/40 dark:text-slate-400">
+      {children}
+    </section>
+  );
+}
+
+function NoticeBanner({ notice }: { notice: Notice | null }) {
+  if (!notice) return null;
+  return (
+    <div
+      className={`rounded-3xl border px-5 py-4 text-sm shadow-sm ${
+        notice.level === 'error'
+          ? 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900/50 dark:bg-rose-900/20 dark:text-rose-400'
+          : 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-900/20 dark:text-emerald-400'
+      }`}
+    >
+      {notice.text}
+    </div>
+  );
+}
+
+function ProvidersSecretsSettingsContent({ payload }: { payload: BootPayload }) {
+  const queryClient = useQueryClient();
+  const { requestDeparture } = useSettingsDraftGuard();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const permissions = settingsPermissions(payload);
+  const canReadProviderProfiles = permissions.has('provider_profiles.read');
+  const canWriteProviderProfiles = permissions.has('provider_profiles.write');
+  const canReadSecretMetadata = permissions.has('secrets.metadata.read');
+  const canRunGithubTokenProbe = permissions.has('settings.effective.read');
+  const runtimeSystemConfig = settingsInitialData(payload).runtimeConfig?.system ?? {};
+  const defaultTaskModelByRuntime = runtimeSystemConfig.defaultTaskModelByRuntime ?? {};
+  const supportedRuntimes = runtimeSystemConfig.supportedRuntimes ?? [];
+  const providerProfileRuntimeFilter =
+    searchParams.get('runtime')?.trim() || ALL_RUNTIMES_FILTER_VALUE;
+
+  const secretsQuery = useQuery<SecretsListResponse>({
     queryKey: ['secrets'],
     queryFn: async () => {
       const response = await fetch('/api/v1/secrets', {
         headers: { Accept: 'application/json' },
       });
-      if (!response.ok) {
-        throw new Error(`Failed to fetch secrets: ${response.statusText}`);
-      }
+      if (!response.ok) throw new Error(`Failed to fetch secrets: ${response.statusText}`);
       return response.json();
     },
+    enabled: canReadSecretMetadata,
   });
 
-  const {
-    data: providerProfiles,
-    isLoading: areProfilesLoading,
-    isError: areProfilesErrored,
-  } = useQuery<ProviderProfile[]>({
+  const providerProfilesQuery = useQuery<ProviderProfile[]>({
     queryKey: PROVIDER_PROFILE_QUERY_KEY,
     queryFn: async () => {
       const response = await fetch('/api/v1/provider-profiles', {
@@ -241,11 +193,10 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
       }
       return response.json();
     },
+    enabled: canReadProviderProfiles,
   });
 
-  // The complete collection stays the single source for configuration health so
-  // global counts and diagnostics never follow the table filter.
-  const allProviderProfiles = providerProfiles ?? [];
+  const allProviderProfiles = providerProfilesQuery.data ?? [];
   const providerProfileRuntimeOptions = useMemo(() => {
     const runtimeIds: string[] = [];
     for (const runtimeId of [
@@ -262,7 +213,7 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
       }
     }
     return runtimeIds;
-  }, [supportedRuntimes, allProviderProfiles]);
+  }, [allProviderProfiles, supportedRuntimes]);
   const visibleProviderProfiles =
     providerProfileRuntimeFilter === ALL_RUNTIMES_FILTER_VALUE
       ? allProviderProfiles
@@ -270,235 +221,290 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
           (profile) => profile.runtime_id === providerProfileRuntimeFilter,
         );
 
-  const fallbackSection = SETTINGS_SECTIONS[0]!;
-  const currentSection =
-    SETTINGS_SECTIONS.find((candidate) => candidate.id === section) ?? fallbackSection;
-
-  const handleSelectSection = (nextSection: SettingsSectionId) => {
-    if (nextSection === section) {
-      return;
-    }
-    updateSectionInLocation(nextSection);
-    setSection(nextSection);
-    setNotice(null);
+  const selectRuntime = (runtimeId: string | undefined) => {
+    const nextRuntime = runtimeId ?? ALL_RUNTIMES_FILTER_VALUE;
+    if (nextRuntime === providerProfileRuntimeFilter) return;
+    requestDeparture(() => {
+      setSearchParams((current) => {
+        const next = new URLSearchParams(current);
+        if (nextRuntime === ALL_RUNTIMES_FILTER_VALUE) next.delete('runtime');
+        else next.set('runtime', nextRuntime);
+        return next;
+      });
+      setNotice(null);
+    }, 'Change the runtime filter? Your unsaved Provider Profile draft will be discarded.');
   };
 
   return (
-    <div className="settings-page mx-auto w-full space-y-6 px-4 py-6 sm:px-6 lg:px-8">
-      <header className="rounded-[2rem] border border-mm-border/80 bg-transparent px-6 py-6 shadow-sm">
-        <div className="space-y-2">
-          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500 dark:text-slate-400">
-            Dashboard Settings
-          </p>
-          <h2 className="text-3xl font-semibold tracking-tight text-slate-950 dark:text-white">Settings</h2>
-          <p className="max-w-3xl text-sm text-slate-600 dark:text-slate-400">{currentSection.description}</p>
-        </div>
-      </header>
+    <SettingsPageFrame
+      title="Providers & Secrets"
+      description="Manage launch-ready Provider Profiles, credential references, OAuth lifecycle, and managed secret metadata."
+    >
+      {canReadProviderProfiles && canReadSecretMetadata ? (
+        <ConfigurationHealthSummary
+          providerProfiles={allProviderProfiles}
+          secrets={secretsQuery.data?.items ?? []}
+          isLoading={providerProfilesQuery.isLoading || secretsQuery.isLoading}
+          isError={providerProfilesQuery.isError || secretsQuery.isError}
+          canWriteProviderProfiles={canWriteProviderProfiles}
+          canRunGithubTokenProbe={canRunGithubTokenProbe}
+        />
+      ) : (
+        <RegionUnavailable>
+          The complete launch-readiness summary requires both <code>provider_profiles.read</code>{' '}
+          and <code>secrets.metadata.read</code>. Accessible regions remain available below.
+        </RegionUnavailable>
+      )}
 
-      <ConfigurationHealthSummary
-        providerProfiles={allProviderProfiles}
-        secrets={secretsData?.items ?? []}
-        isLoading={areProfilesLoading || areSecretsLoading}
-        isError={areProfilesErrored || areSecretsErrored}
-        workerPauseConfig={workerPauseConfig}
-        canWriteProviderProfiles={canWriteProviderProfiles}
-        canRunGithubTokenProbe={canRunGithubTokenProbe}
-      />
+      <NoticeBanner notice={notice} />
 
-      <section className="rounded-[2rem] border border-mm-border/80 bg-transparent p-3 shadow-sm">
-        <fieldset className="segmented-control-field">
-          <legend className="sr-only">Settings Section</legend>
-          <div
-            className="segmented-control"
-            data-intensity="loud"
-            style={{
-              '--segmented-control-count': SETTINGS_SECTIONS.length,
-            } as CSSProperties}
-          >
-            {SETTINGS_SECTIONS.map((candidate) => {
-              const Icon = candidate.Icon;
-              return (
-                <label
-                  key={candidate.id}
-                  className="segmented-control-item"
-                  title={candidate.description}
-                >
-                  <input
-                    type="radio"
-                    name="settings-section"
-                    value={candidate.id}
-                    checked={candidate.id === section}
-                    onChange={() => handleSelectSection(candidate.id)}
-                  />
-                  <span className="segmented-control-item-icon">
-                    <Icon />
-                  </span>
-                  <span className="segmented-control-item-label">
-                    {candidate.label}
-                  </span>
-                </label>
-              );
-            })}
-          </div>
-        </fieldset>
+      <section className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
+        <p className="text-sm text-slate-600 dark:text-slate-400">
+          Provider Profiles keep launch metadata and SecretRefs. Managed Secrets keep encrypted
+          values or external references; profiles never expose those values after creation.
+        </p>
       </section>
 
-      {notice ? (
-        <div
-          className={`rounded-3xl border px-5 py-4 text-sm shadow-sm ${
-            notice.level === 'error'
-              ? 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900/50 dark:bg-rose-900/20 dark:text-rose-400'
-              : 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-900/20 dark:text-emerald-400'
-          }`}
-        >
-          {notice.text}
-        </div>
-      ) : null}
-
-      {section === 'providers-secrets' ? (
-        <div className="space-y-6">
-          <section className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
-            <div className="grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
-              <div className="space-y-2">
-                <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Providers & Secrets</h3>
-                <p className="text-sm text-slate-600 dark:text-slate-400">
-                  Provider profiles are the durable runtime and provider launch contract.
-                  Managed secrets back those profiles without re-exposing raw credential
-                  values after creation.
-                </p>
-              </div>
-              <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 p-4 text-sm text-slate-600 dark:text-slate-400">
-                Use secret refs such as <code>db://OPENAI_API_KEY</code> inside provider
-                profiles. Secrets stay in the managed secret store; profiles only keep the
-                refs and launch metadata.
-              </div>
-            </div>
-          </section>
-
-          {areProfilesLoading ? (
-            <LoadingPlaceholder
-              surface="settings"
-              region="provider profiles"
-              variant="table"
-              density="compact"
-              preserveContext
-            />
-          ) : areProfilesErrored ? (
-            <div className="rounded-3xl border border-rose-200 dark:border-rose-900/50 bg-rose-50 dark:bg-rose-900/20 p-6 text-sm text-rose-700 dark:text-rose-400 shadow-sm">
-              Failed to load provider profiles.
-            </div>
-          ) : (
-            <ProviderProfilesManager
-              profiles={visibleProviderProfiles}
-              secretSlugs={(secretsData?.items ?? []).map((secret) => secret.slug)}
-              onNotice={setNotice}
-              queryClient={queryClient}
-              defaultTaskModelByRuntime={defaultTaskModelByRuntime}
-              canWriteProviderProfiles={canWriteProviderProfiles}
-              selectedRuntimeId={
-                providerProfileRuntimeFilter === ALL_RUNTIMES_FILTER_VALUE
-                  ? undefined
-                  : providerProfileRuntimeFilter
-              }
-              runtimeFilterOptions={providerProfileRuntimeOptions}
-              onSelectRuntimeId={(runtimeId) =>
-                setProviderProfileRuntimeFilter(runtimeId ?? ALL_RUNTIMES_FILTER_VALUE)
-              }
-            />
-          )}
-
-          {areSecretsLoading ? (
-            <LoadingPlaceholder
-              surface="settings"
-              region="managed secrets"
-              variant="table"
-              density="compact"
-              preserveContext
-            />
-          ) : areSecretsErrored ? (
-            <div className="rounded-3xl border border-rose-200 dark:border-rose-900/50 bg-rose-50 dark:bg-rose-900/20 p-6 text-sm text-rose-700 dark:text-rose-400 shadow-sm">
-              Failed to load managed secrets.
-            </div>
-          ) : (
-            <SecretManager
-              secrets={secretsData?.items ?? []}
-              onNotice={setNotice}
-              queryClient={queryClient}
-              permissions={settingsPermissions}
-            />
-          )}
-
-          <GithubTokenProbePanel
-            canRunProbe={canRunGithubTokenProbe}
+      {canReadProviderProfiles ? (
+        providerProfilesQuery.isLoading ? (
+          <LoadingPlaceholder surface="settings" region="provider profiles" variant="table" density="compact" preserveContext />
+        ) : providerProfilesQuery.isError ? (
+          <div className="rounded-3xl border border-rose-200 bg-rose-50 p-6 text-sm text-rose-700 shadow-sm dark:border-rose-900/50 dark:bg-rose-900/20 dark:text-rose-400">
+            Failed to load provider profiles.
+          </div>
+        ) : (
+          <ProviderProfilesManager
+            profiles={visibleProviderProfiles}
+            secretSlugs={(secretsQuery.data?.items ?? []).map((secret) => secret.slug)}
             onNotice={setNotice}
+            queryClient={queryClient}
+            defaultTaskModelByRuntime={defaultTaskModelByRuntime}
+            canWriteProviderProfiles={canWriteProviderProfiles}
+            selectedRuntimeId={providerProfileRuntimeFilter === ALL_RUNTIMES_FILTER_VALUE ? undefined : providerProfileRuntimeFilter}
+            runtimeFilterOptions={providerProfileRuntimeOptions}
+            onSelectRuntimeId={selectRuntime}
           />
-        </div>
-      ) : null}
+        )
+      ) : (
+        <RegionUnavailable>
+          Provider Profiles are unavailable because <code>provider_profiles.read</code> is not granted.
+        </RegionUnavailable>
+      )}
 
-      {section === 'user-workspace' ? (
-        <div className="space-y-6">
-          <GeneratedSettingsSection />
+      {canReadSecretMetadata ? (
+        secretsQuery.isLoading ? (
+          <LoadingPlaceholder surface="settings" region="managed secrets" variant="table" density="compact" preserveContext />
+        ) : secretsQuery.isError ? (
+          <div className="rounded-3xl border border-rose-200 bg-rose-50 p-6 text-sm text-rose-700 shadow-sm dark:border-rose-900/50 dark:bg-rose-900/20 dark:text-rose-400">
+            Failed to load managed secrets.
+          </div>
+        ) : (
+          <SecretManager
+            secrets={secretsQuery.data?.items ?? []}
+            onNotice={setNotice}
+            queryClient={queryClient}
+            permissions={permissions}
+          />
+        )
+      ) : (
+        <RegionUnavailable>
+          Managed Secret metadata is unavailable because <code>secrets.metadata.read</code> is not granted.
+        </RegionUnavailable>
+      )}
 
-          <section className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
-            <h3 className="text-base font-semibold text-slate-900 dark:text-white">
-              Dashboard preferences
-            </h3>
-            <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
-              Clear saved list layouts, selected workflows and recurring schedules, and other
-              browser-local dashboard choices.
-            </p>
-            <button
-              type="button"
-              className="mt-4 rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mm-accent dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
-              onClick={() => {
-                resetDashboardPreferences();
-                setNotice({ level: 'ok', text: 'Dashboard preferences reset.' });
-              }}
-            >
-              Reset dashboard preferences
-            </button>
-          </section>
-
-          <section className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
-            {isLoading ? (
-              <LoadingPlaceholder
-                surface="settings"
-                region="current user"
-                variant="settings"
-                density="normal"
-                preserveContext
-              />
-            ) : isError ? (
-              <p className="text-sm text-rose-700 dark:text-rose-400">Failed to load profile data.</p>
-            ) : (
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 p-5">
-                  <div className="text-sm font-medium text-slate-500 dark:text-slate-400">Signed-in user</div>
-                  <div className="mt-2 text-base font-semibold text-slate-900 dark:text-white">
-                    {profile?.email || 'Unknown user'}
-                  </div>
-                  {profile?.id ? (
-                    <div className="mt-1 font-mono text-xs text-slate-500 dark:text-slate-400">
-                      {profile.id}
-                    </div>
-                  ) : null}
-                </div>
-                <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 p-5 text-sm text-slate-600 dark:text-slate-400">
-                  Future user and workspace settings should land here instead of adding
-                  more top-level tabs. This keeps the main product surface centered on
-                  tasks while still leaving room for the project&apos;s wider configuration
-                  model.
-                </div>
-              </div>
-            )}
-          </section>
-        </div>
-      ) : null}
-
-      {section === 'operations' ? (
-        <OperationsSettingsSection workerPauseConfig={workerPauseConfig} />
-      ) : null}
-    </div>
+      <GithubTokenProbePanel canRunProbe={canRunGithubTokenProbe} onNotice={setNotice} />
+    </SettingsPageFrame>
   );
 }
-export default SettingsPage;
+
+export function ProvidersSecretsSettingsPage({ payload }: { payload: BootPayload }) {
+  const permissions = settingsPermissions(payload);
+  const canInspect =
+    permissions.has('provider_profiles.read') ||
+    permissions.has('secrets.metadata.read') ||
+    permissions.has('settings.effective.read');
+
+  return (
+    <SettingsDraftGuardProvider>
+      {canInspect ? (
+        <ProvidersSecretsSettingsContent payload={payload} />
+      ) : (
+        <SettingsPageFrame
+          title="Providers & Secrets"
+          description="Manage launch-ready Provider Profiles, credential references, OAuth lifecycle, and managed secret metadata."
+        >
+          <SettingsUnavailableState title="Providers & Secrets" permissions={['provider_profiles.read', 'secrets.metadata.read']} />
+        </SettingsPageFrame>
+      )}
+    </SettingsDraftGuardProvider>
+  );
+}
+
+function UserWorkspaceSettingsContent({ payload }: { payload: BootPayload }) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const permissions = settingsPermissions(payload);
+  const scope: SettingScope = searchParams.get('scope') === 'user' ? 'user' : 'workspace';
+  const canWriteScope = permissions.has(`settings.${scope}.write`);
+
+  const profileQuery = useQuery<ProfileData>({
+    queryKey: ['profile'],
+    queryFn: async () => {
+      const response = await fetch('/me', {
+        credentials: 'include',
+        headers: { Accept: 'application/json' },
+      });
+      if (!response.ok) throw new Error(`Failed to fetch profile: ${response.statusText}`);
+      return response.json();
+    },
+  });
+
+  const changeScope = (nextScope: SettingScope) => {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.set('scope', nextScope);
+      return next;
+    });
+  };
+
+  return (
+    <SettingsPageFrame
+      title="User / Workspace"
+      description="Review descriptor-driven preferences and defaults at user or workspace scope, including validation and application diagnostics."
+    >
+      <section aria-label="User and workspace settings summary" className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
+              {scope === 'user' ? 'User scope' : 'Workspace scope'}
+            </h3>
+            <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+              {canWriteScope
+                ? 'Overrides can be reviewed and saved at this scope.'
+                : 'Safe inspection is available; changes at this scope are read-only.'}
+            </p>
+          </div>
+          <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+            {canWriteScope ? 'Writable' : 'Read-only'}
+          </span>
+        </div>
+      </section>
+
+      <NoticeBanner notice={notice} />
+      <GeneratedSettingsSection
+        scope={scope}
+        onScopeChange={changeScope}
+        canReadAudit={permissions.has('settings.audit.read')}
+      />
+
+      <section className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
+        <h3 className="text-base font-semibold text-slate-900 dark:text-white">
+          Dashboard preferences
+        </h3>
+        <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
+          Clear browser-local list layouts, selected workflows and recurring schedules, and other dashboard choices.
+        </p>
+        <button
+          type="button"
+          className="mt-4 rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+          onClick={() => {
+            resetDashboardPreferences();
+            setNotice({ level: 'ok', text: 'Dashboard preferences reset.' });
+          }}
+        >
+          Reset dashboard preferences
+        </button>
+      </section>
+
+      <section className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
+        {profileQuery.isLoading ? (
+          <LoadingPlaceholder surface="settings" region="current user" variant="settings" density="normal" preserveContext />
+        ) : profileQuery.isError ? (
+          <p className="text-sm text-rose-700 dark:text-rose-400">Failed to load profile data.</p>
+        ) : (
+          <div>
+            <div className="text-sm font-medium text-slate-500 dark:text-slate-400">Signed-in user</div>
+            <div className="mt-2 text-base font-semibold text-slate-900 dark:text-white">
+              {profileQuery.data?.email || 'Unknown user'}
+            </div>
+            {profileQuery.data?.id ? (
+              <div className="mt-1 font-mono text-xs text-slate-500 dark:text-slate-400">
+                {profileQuery.data.id}
+              </div>
+            ) : null}
+          </div>
+        )}
+      </section>
+    </SettingsPageFrame>
+  );
+}
+
+export function UserWorkspaceSettingsPage({ payload }: { payload: BootPayload }) {
+  const canInspect = settingsPermissions(payload).has('settings.catalog.read');
+  return (
+    <SettingsDraftGuardProvider>
+      {canInspect ? (
+        <UserWorkspaceSettingsContent payload={payload} />
+      ) : (
+        <SettingsPageFrame
+          title="User / Workspace"
+          description="Review descriptor-driven preferences and defaults at user or workspace scope, including validation and application diagnostics."
+        >
+          <SettingsUnavailableState title="User / Workspace" permissions={['settings.catalog.read']} />
+        </SettingsPageFrame>
+      )}
+    </SettingsDraftGuardProvider>
+  );
+}
+
+export function OperationsSettingsPage({ payload }: { payload: BootPayload }) {
+  const permissions = settingsPermissions(payload);
+  const canInspect = permissions.has('operations.read');
+  const workerPauseConfig = settingsInitialData(payload).workerPause ?? null;
+
+  return (
+    <SettingsDraftGuardProvider>
+      <SettingsPageFrame
+        title="Operations"
+        description="Inspect worker, queue, runtime, deployment, and maintenance state and run authorized operational commands."
+      >
+        {canInspect ? (
+          <OperationsSettingsSection
+            workerPauseConfig={workerPauseConfig}
+            canInvokeOperations={permissions.has('operations.invoke')}
+          />
+        ) : (
+          <SettingsUnavailableState title="Operations" permissions={['operations.read']} />
+        )}
+      </SettingsPageFrame>
+    </SettingsDraftGuardProvider>
+  );
+}
+
+export function SettingsEntryPage({ payload }: { payload: BootPayload }) {
+  const permissions = settingsPermissions(payload);
+  if (
+    permissions.has('provider_profiles.read') ||
+    permissions.has('secrets.metadata.read') ||
+    permissions.has('settings.effective.read')
+  ) {
+    return <Navigate to="/settings/providers-secrets" replace />;
+  }
+  if (permissions.has('settings.catalog.read')) {
+    return <Navigate to="/settings/user-workspace" replace />;
+  }
+  if (permissions.has('operations.read')) {
+    return <Navigate to="/settings/operations" replace />;
+  }
+  return (
+    <SettingsPageFrame
+      title="Configuration"
+      description="No configuration destination is available for this account."
+    >
+      <SettingsUnavailableState
+        title="Configuration"
+        permissions={['provider_profiles.read', 'settings.catalog.read', 'operations.read']}
+      />
+    </SettingsPageFrame>
+  );
+}

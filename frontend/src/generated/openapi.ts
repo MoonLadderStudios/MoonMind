@@ -824,6 +824,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/provider-profiles/creation-preset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Creation Preset
+         * @description Preview the versioned backend policy used by standard profile creation.
+         */
+        get: operations["get_creation_preset_api_v1_provider_profiles_creation_preset_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/provider-profiles/{profile_id}": {
         parameters: {
             query?: never;
@@ -4049,7 +4069,7 @@ export interface paths {
         };
         /**
          * Secrets Route
-         * @description Redirect the legacy secrets page into unified settings.
+         * @description Redirect the legacy secrets page to its canonical Settings route.
          */
         get: operations["secrets_route_secrets_get"];
         put?: never;
@@ -4269,7 +4289,7 @@ export interface paths {
         };
         /**
          * Task Workers Route
-         * @description Redirect the legacy workers page into unified settings.
+         * @description Redirect the legacy workers page to its canonical Settings route.
          */
         get: operations["task_workers_route_workers_get"];
         put?: never;
@@ -11042,6 +11062,11 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /**
+         * ProviderProfileAuthenticationMethod
+         * @enum {string}
+         */
+        ProviderProfileAuthenticationMethod: "oauth" | "api_key" | "none";
         /** ProviderProfileCreate */
         ProviderProfileCreate: {
             /** Profile Id */
@@ -11067,10 +11092,13 @@ export interface components {
             model_overrides?: {
                 [key: string]: string;
             } | null;
+            authentication_method?: components["schemas"]["ProviderProfileAuthenticationMethod"] | null;
+            /** Preset Version */
+            preset_version?: string | null;
             /** Credential Source */
-            credential_source: string;
+            credential_source?: string | null;
             /** Runtime Materialization Mode */
-            runtime_materialization_mode: string;
+            runtime_materialization_mode?: string | null;
             /** Volume Ref */
             volume_ref?: string | null;
             /** Volume Mount Path */
@@ -11079,11 +11107,8 @@ export interface components {
             account_label?: string | null;
             /** Tags */
             tags?: string[] | null;
-            /**
-             * Priority
-             * @default 100
-             */
-            priority: number;
+            /** Priority */
+            priority?: number | null;
             /** Secret Refs */
             secret_refs?: {
                 [key: string]: string;
@@ -11106,52 +11131,79 @@ export interface components {
             command_behavior?: {
                 [key: string]: unknown;
             } | null;
-            /**
-             * Max Parallel Runs
-             * @default 1
-             */
-            max_parallel_runs: number;
-            /**
-             * Cooldown After 429 Seconds
-             * @default 900
-             */
-            cooldown_after_429_seconds: number;
-            /**
-             * Rate Limit Policy
-             * @default backoff
-             */
-            rate_limit_policy: string;
-            /**
-             * Enabled
-             * @default false
-             */
-            enabled: boolean;
-            /**
-             * Is Default
-             * @default false
-             */
-            is_default: boolean;
-            /**
-             * Max Lease Duration Seconds
-             * @default 7200
-             */
-            max_lease_duration_seconds: number;
-            /**
-             * Auth State
-             * @default not_configured
-             */
-            auth_state: string;
-            /**
-             * Disabled Reason
-             * @default missing_credentials
-             */
-            disabled_reason: string | null;
+            /** Max Parallel Runs */
+            max_parallel_runs?: number | null;
+            /** Cooldown After 429 Seconds */
+            cooldown_after_429_seconds?: number | null;
+            /** Rate Limit Policy */
+            rate_limit_policy?: string | null;
+            /** Enabled */
+            enabled?: boolean | null;
+            /** Is Default */
+            is_default?: boolean | null;
+            /** Max Lease Duration Seconds */
+            max_lease_duration_seconds?: number | null;
+            /** Auth State */
+            auth_state?: string | null;
+            /** Disabled Reason */
+            disabled_reason?: string | null;
             /** First Authenticated At */
             first_authenticated_at?: string | null;
             /** Last Validated At */
             last_validated_at?: string | null;
             /** Last Auth Method */
             last_auth_method?: string | null;
+        };
+        /** ProviderProfileCreationPresetDiagnostic */
+        ProviderProfileCreationPresetDiagnostic: {
+            /** Code */
+            code: string;
+            /** Severity */
+            severity: string;
+            /** Message */
+            message: string;
+            /** Field */
+            field?: string | null;
+            /** Action */
+            action?: string | null;
+        };
+        /** ProviderProfileCreationPresetField */
+        ProviderProfileCreationPresetField: {
+            /** Value */
+            value: unknown;
+            /** Source */
+            source: string;
+            /** Editable */
+            editable: boolean;
+            /** Required */
+            required: boolean;
+            /** Lock Reason */
+            lock_reason?: string | null;
+        };
+        /** ProviderProfileCreationPresetResponse */
+        ProviderProfileCreationPresetResponse: {
+            /** Version */
+            version: string;
+            /** Supported */
+            supported: boolean;
+            /** Runtime Id */
+            runtime_id: string;
+            /** Provider Id */
+            provider_id: string;
+            authentication_method: components["schemas"]["ProviderProfileAuthenticationMethod"];
+            /** Fields */
+            fields: {
+                [key: string]: components["schemas"]["ProviderProfileCreationPresetField"];
+            };
+            /** Diagnostics */
+            diagnostics: components["schemas"]["ProviderProfileCreationPresetDiagnostic"][];
+            /**
+             * Manual Creation Allowed
+             * @default false
+             */
+            manual_creation_allowed: boolean;
+            /** Required Manual Fields */
+            required_manual_fields?: string[];
         };
         /** ProviderProfilePolicy */
         ProviderProfilePolicy: {
@@ -16063,6 +16115,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProviderProfileResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_creation_preset_api_v1_provider_profiles_creation_preset_get: {
+        parameters: {
+            query: {
+                runtime_id: string;
+                provider_id: string;
+                authentication_method: components["schemas"]["ProviderProfileAuthenticationMethod"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderProfileCreationPresetResponse"];
                 };
             };
             /** @description Validation Error */

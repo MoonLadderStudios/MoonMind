@@ -293,6 +293,7 @@ async def reconcile_opencode_provider_readiness(
     *,
     session_factory: Any,
     allow_enrollment: bool = True,
+    profile_ids: Collection[str] | None = None,
     env: Mapping[str, Any] | None = None,
     controller: Any | None = None,
 ) -> ProviderReconcileOutcome:
@@ -311,6 +312,15 @@ async def reconcile_opencode_provider_readiness(
 
     image_ref = _pinned_image_ref()
     profiles = await _opencode_profiles(session_factory)
+    if profile_ids is not None:
+        selected_ids = {
+            str(profile_id).strip()
+            for profile_id in profile_ids
+            if str(profile_id).strip()
+        }
+        profiles = [
+            profile for profile in profiles if profile.profile_id in selected_ids
+        ]
     enrolled = [profile for profile in profiles if _has_enrolled_credential(profile)]
     # A disabled profile cannot launch, and re-validating it would neither help
     # nor honor the operator. Its credential still counts as enrolled above, so

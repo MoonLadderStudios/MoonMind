@@ -1952,9 +1952,7 @@ class ManagedRuntimeLauncher:
             metadata["moonmind"] = moonmind_metadata
         resolution_metadata = resolved.as_metadata()
         moonmind_metadata["modelEffortResolution"] = resolution_metadata
-        if requested_tier is not None or isinstance(
-            parameters.get("tierPreview"), Mapping
-        ):
+        if resolved.effective_model_tier is not None:
             parameters["modelTierResolution"] = {
                 **resolution_metadata,
                 "providerProfileId": profile.profile_id,
