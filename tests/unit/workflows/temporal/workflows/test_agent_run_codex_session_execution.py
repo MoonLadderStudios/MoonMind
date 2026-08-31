@@ -2416,10 +2416,43 @@ async def test_agent_run_managed_session_start_runtime_error_truncates_summary(
     assert result.summary.endswith("...")
     assert result.summary.startswith("managed start failed: ")
 
+@pytest.mark.parametrize(
+    ("patch_enabled", "expected_failure_class", "expected_provider_error_code"),
+    [
+        (False, "execution_error", None),
+        (True, "integration_error", "provider_capacity"),
+    ],
+)
+async def test_managed_start_capacity_retry_preserves_pre_patch_replay(
+    monkeypatch: pytest.MonkeyPatch,
+    patch_enabled: bool,
+    expected_failure_class: str,
+    expected_provider_error_code: str | None,
+) -> None:
+    patch_id = agent_run_module.AGENT_RUN_SELECTED_MODEL_CAPACITY_RETRY_PATCH_ID
+    monkeypatch.setattr(
+        agent_run_module.workflow,
+        "patched",
+        lambda candidate: patch_enabled if candidate == patch_id else True,
+    )
+
+    result = MoonMindAgentRun()._managed_start_failure_result(
+        request=_managed_session_request(),
+        error=RuntimeError(
+            "Selected model is at capacity. Please try a different model."
+        ),
+    )
+
+    assert result.failure_class == expected_failure_class
+    assert result.provider_error_code == expected_provider_error_code
+
 async def _run_default_profile_cooldown_retry_case(
     monkeypatch: pytest.MonkeyPatch,
     *,
     sticky_patch_enabled: bool,
+    capacity_failure_count: int = 1,
+    cooldown_seconds: int = 0,
+    retry_budget_patch_enabled: bool = True,
 ) -> tuple[
     AgentRunResult,
     list[str | None],
@@ -2432,23 +2465,39 @@ async def _run_default_profile_cooldown_retry_case(
     manager_signals: list[tuple[str, dict[str, Any]]] = []
     fetch_results = [
         AgentRunResult(
-            failureClass="execution_error",
+            outputRefs=["artifact:capacity-attempt"],
+            diagnosticsRef="artifact:capacity-diagnostics",
+            failureClass="integration_error",
             providerErrorCode="provider_capacity",
             retryRecommendation="retry_after_cooldown",
             summary="provider capacity",
-        ),
+            metadata={
+                "providerFailure": {
+                    "providerErrorClass": "capacity",
+                    "providerErrorCode": "provider_capacity",
+                    "retryRecommendation": "retry_after_cooldown",
+                }
+            },
+        )
+        for _ in range(capacity_failure_count)
+    ] + [
         AgentRunResult(summary="Recovered on pinned profile."),
     ]
 
     _configure_workflow_runtime(monkeypatch)
-    if not sticky_patch_enabled:
+    if not sticky_patch_enabled or not retry_budget_patch_enabled:
         sticky_patch_id = (
             agent_run_module.STICKY_PINNED_PROFILE_COOLDOWN_RETRY_PATCH_ID
+        )
+        retry_budget_patch_id = (
+            agent_run_module.AGENT_RUN_PROVIDER_COOLDOWN_RETRY_BUDGET_PATCH_ID
         )
 
         def patched(patch_id: str) -> bool:
             if patch_id == sticky_patch_id:
-                return False
+                return sticky_patch_enabled
+            if patch_id == retry_budget_patch_id:
+                return retry_budget_patch_enabled
             return _patch_all_enabled(patch_id)
 
         monkeypatch.setattr(agent_run_module.workflow, "patched", patched)
@@ -2505,12 +2554,12 @@ async def _run_default_profile_cooldown_retry_case(
     ) -> int:
         run._profile_snapshots = {
             "codex_openrouter_qwen36_plus": {
-                "cooldown_after_429_seconds": 0,
+                "cooldown_after_429_seconds": cooldown_seconds,
                 "enabled": True,
                 "is_default": False,
             },
             "codex-default": {
-                "cooldown_after_429_seconds": 0,
+                "cooldown_after_429_seconds": cooldown_seconds,
                 "enabled": True,
                 "is_default": True,
             },
@@ -2585,6 +2634,86 @@ async def test_agent_run_pins_default_profile_after_provider_cooldown_retry(
             },
         ),
     ]
+
+
+async def test_agent_run_retries_provider_capacity_three_times_with_default_backoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, ensure_profile_refs, _selectors, manager_signals = (
+        await _run_default_profile_cooldown_retry_case(
+            monkeypatch,
+            sticky_patch_enabled=True,
+            capacity_failure_count=3,
+            cooldown_seconds=900,
+        )
+    )
+
+    assert result.summary == "Recovered on pinned profile."
+    assert ensure_profile_refs == ["codex-default"] * 4
+    assert [
+        payload["cooldown_seconds"]
+        for signal_name, payload in manager_signals
+        if signal_name == "report_cooldown"
+    ] == [900, 1800, 3600]
+
+
+async def test_agent_run_returns_final_capacity_result_after_retry_budget_exhaustion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, ensure_profile_refs, _selectors, manager_signals = (
+        await _run_default_profile_cooldown_retry_case(
+            monkeypatch,
+            sticky_patch_enabled=True,
+            capacity_failure_count=4,
+            cooldown_seconds=900,
+        )
+    )
+
+    assert result.failure_class == "integration_error"
+    assert result.provider_error_code == "provider_capacity"
+    assert result.retry_recommendation == "retry_after_cooldown"
+    assert result.output_refs == ["artifact:capacity-attempt"]
+    assert result.diagnostics_ref == "artifact:capacity-diagnostics"
+    assert result.metadata["providerFailure"]["providerErrorClass"] == "capacity"
+    assert result.summary is not None
+    assert result.summary.startswith(
+        "Provider cooldown retry budget exhausted after 3 retries."
+    )
+    assert result.metadata["providerCooldownRetry"] == {
+        "attempts": 3,
+        "maxAttempts": 3,
+        "exhausted": True,
+    }
+    assert ensure_profile_refs == ["codex-default"] * 4
+    assert [
+        payload["cooldown_seconds"]
+        for signal_name, payload in manager_signals
+        if signal_name == "report_cooldown"
+    ] == [900, 1800, 3600]
+
+
+async def test_agent_run_preserves_unbounded_cooldown_replay_before_budget_patch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, ensure_profile_refs, _selectors, manager_signals = (
+        await _run_default_profile_cooldown_retry_case(
+            monkeypatch,
+            sticky_patch_enabled=True,
+            capacity_failure_count=4,
+            cooldown_seconds=0,
+            retry_budget_patch_enabled=False,
+        )
+    )
+
+    assert result.summary == "Recovered on pinned profile."
+    assert ensure_profile_refs == ["codex-default"] * 5
+    assert len(
+        [
+            signal_name
+            for signal_name, _payload in manager_signals
+            if signal_name == "report_cooldown"
+        ]
+    ) == 4
 
 
 async def test_agent_run_replays_legacy_default_fallback_retry_when_patch_unset(
