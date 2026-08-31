@@ -423,6 +423,7 @@ async def test_requalification_uses_the_current_provider_profile_model(
     revalidate.assert_awaited_once_with(
         session_factory=controller._session_factory,
         allow_enrollment=False,
+        profile_ids=("opencode-go-default",),
     )
 
 

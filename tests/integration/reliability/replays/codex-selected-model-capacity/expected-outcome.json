@@ -1,0 +1,12 @@
+{
+  "failureClass": "integration_error",
+  "providerErrorClass": "capacity",
+  "providerErrorCode": "provider_capacity",
+  "retryRecommendation": "retry_after_cooldown",
+  "cooldownSeconds": [
+    900,
+    1800,
+    3600
+  ],
+  "model": "gpt-5.6-sol"
+}

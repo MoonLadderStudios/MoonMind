@@ -2626,17 +2626,51 @@ async def test_start_does_not_clear_session_for_codex_usage_limit_failure(
     assert result.metadata["turnMetadata"]["failureClass"] == "integration_error"
 
 
+@pytest.mark.parametrize(
+    (
+        "reason",
+        "raw_marker",
+        "summary_contains_raw_marker",
+        "selected_model_capacity_retry_enabled",
+        "expected_capacity_failure",
+    ),
+    [
+        (
+            "provider emitted verbose diagnostics "
+            + ("x" * 5000)
+            + " http 503 high demand",
+            "high demand",
+            False,
+            False,
+            True,
+        ),
+        (
+            "Selected model is at capacity. Please try a different model.",
+            "at capacity",
+            True,
+            True,
+            True,
+        ),
+        (
+            "Selected model is at capacity. Please try a different model.",
+            "at capacity",
+            True,
+            False,
+            False,
+        ),
+    ],
+)
 async def test_start_classifies_codex_provider_capacity_failure_and_publishes_artifacts(
     tmp_path: Path,
+    reason: str,
+    raw_marker: str,
+    summary_contains_raw_marker: bool,
+    selected_model_capacity_retry_enabled: bool,
+    expected_capacity_failure: bool,
 ) -> None:
     binding = _binding()
     workspace_path = tmp_path / "agent_jobs" / binding.agent_run_id / "repo"
     run_store = ManagedRunStore(tmp_path / "managed_runs")
-    reason = (
-        "provider emitted verbose diagnostics "
-        + ("x" * 5000)
-        + " http 503 high demand"
-    )
 
     async def _load_snapshot(_workflow_id: str) -> CodexManagedSessionSnapshot:
         return _snapshot(binding=binding)
@@ -2693,16 +2727,16 @@ async def test_start_classifies_codex_provider_capacity_failure_and_publishes_ar
         apply_session_control_action=_async_noop,
         workspace_root=str(tmp_path / "agent_jobs"),
         session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
+        selected_model_capacity_retry_enabled=(
+            selected_model_capacity_retry_enabled
+        ),
     )
 
     with pytest.raises(RuntimeError) as excinfo:
         await adapter.start(_request(binding, workspace_path=str(workspace_path)))
 
     result = excinfo.value.agent_run_result
-    assert result.failure_class == "integration_error"
-    assert result.provider_error_code == "provider_capacity"
-    assert result.retry_recommendation == "retry_after_cooldown"
-    assert "high demand" not in result.summary
+    assert (raw_marker in result.summary) is summary_contains_raw_marker
     assert result.output_refs == [
         "artifact:turn-output",
         "artifact:stdout",
@@ -2712,23 +2746,36 @@ async def test_start_classifies_codex_provider_capacity_failure_and_publishes_ar
         "artifact:session-summary",
         "artifact:session-checkpoint",
     ]
-    provider_failure = result.metadata["providerFailure"]
-    assert provider_failure["providerErrorCode"] == "provider_capacity"
-    # MM-882: the adapter emits the canonical structured failure envelope with a
-    # distinct sanitized summary and no raw provider text ("high demand").
-    assert provider_failure["providerErrorClass"] == "capacity"
-    assert provider_failure["retryRecommendation"] == "retry_after_cooldown"
-    assert "high demand" not in provider_failure["sanitizedSummary"].lower()
-    assert "reason" not in provider_failure
     assert result.metadata["profileId"] == "codex-default"
 
     persisted_record = run_store.load(binding.agent_run_id)
     assert persisted_record is not None
-    assert persisted_record.failure_class == "integration_error"
-    assert persisted_record.provider_error_code == "provider_capacity"
     assert persisted_record.stdout_artifact_ref == "artifact:stdout"
     assert persisted_record.stderr_artifact_ref == "artifact:stderr"
     assert persisted_record.diagnostics_ref == "artifact:diagnostics"
+
+    if not expected_capacity_failure:
+        assert result.failure_class == "execution_error"
+        assert result.provider_error_code is None
+        assert result.retry_recommendation is None
+        assert "providerFailure" not in result.metadata
+        assert persisted_record.failure_class == "execution_error"
+        assert persisted_record.provider_error_code is None
+        return
+
+    assert result.failure_class == "integration_error"
+    assert result.provider_error_code == "provider_capacity"
+    assert result.retry_recommendation == "retry_after_cooldown"
+    provider_failure = result.metadata["providerFailure"]
+    assert provider_failure["providerErrorCode"] == "provider_capacity"
+    # MM-882: the adapter emits the canonical structured failure envelope with a
+    # distinct sanitized summary and no raw provider text.
+    assert provider_failure["providerErrorClass"] == "capacity"
+    assert provider_failure["retryRecommendation"] == "retry_after_cooldown"
+    assert raw_marker not in provider_failure["sanitizedSummary"].lower()
+    assert "reason" not in provider_failure
+    assert persisted_record.failure_class == "integration_error"
+    assert persisted_record.provider_error_code == "provider_capacity"
 
 async def test_start_classifies_send_turn_timeout_with_actionable_summary(
     tmp_path: Path,

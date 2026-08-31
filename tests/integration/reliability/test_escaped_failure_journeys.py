@@ -126,7 +126,10 @@ from moonmind.workflows.executions.runtime_capabilities import (
     resolve_runtime_execution_capabilities,
 )
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
-from moonmind.workflows.provider_failures import classify_provider_failure
+from moonmind.workflows.provider_failures import (
+    build_provider_failure_event,
+    classify_provider_failure,
+)
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
     TemporalSandboxActivities,
@@ -4641,6 +4644,52 @@ async def test_retry_before_execution_captures_terminal_prior_workspace(
 
     assert capture["status"] == expected["checkpointStatus"]
     assert capture["workspace"]["kind"] == expected["checkpointKind"]
+
+
+async def test_codex_selected_model_capacity_uses_default_cooldown_retries() -> None:
+    """Replay mm:6508e9bb at the provider-failure and AgentRun boundaries."""
+
+    replay_id = "codex-selected-model-capacity"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+
+    classified = classify_provider_failure(manifest["providerReason"])
+    assert classified is not None
+    assert classified.failure_class == expected["failureClass"]
+    assert classified.provider_error_class == expected["providerErrorClass"]
+    assert classified.provider_error_code == expected["providerErrorCode"]
+    assert classified.retry_recommendation == expected["retryRecommendation"]
+
+    provider_failure = build_provider_failure_event(classification=classified)
+    assert provider_failure is not None
+    result = AgentRunResult(
+        summary=manifest["providerReason"],
+        failureClass=classified.failure_class,
+        providerErrorCode=classified.provider_error_code,
+        retryRecommendation=classified.retry_recommendation,
+        metadata={
+            "model": manifest["model"],
+            "providerFailure": provider_failure.to_metadata(),
+        },
+    )
+    agent_run = MoonMindAgentRun()
+    agent_run._profile_snapshots = {
+        manifest["profileId"]: manifest["profileSnapshot"]
+    }
+
+    assert agent_run._result_requires_provider_cooldown(result)
+    base_seconds = agent_run._cooldown_seconds_for_profile(manifest["profileId"])
+    cooldowns = [
+        agent_run._next_provider_cooldown_seconds(
+            runtime_id=manifest["runtime"],
+            profile_id=manifest["profileId"],
+            base_seconds=base_seconds,
+        )
+        for _ in expected["cooldownSeconds"]
+    ]
+
+    assert cooldowns == expected["cooldownSeconds"]
+    assert result.metadata["model"] == expected["model"]
 
 
 async def test_codex_oauth_failure_preserves_primary_error_and_managed_authority(
