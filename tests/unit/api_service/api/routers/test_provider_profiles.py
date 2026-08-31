@@ -223,10 +223,183 @@ async def test_guided_api_key_creation_uses_backend_preset_and_stays_disabled(
     assert payload["credential_source"] == "secret_ref"
     assert payload["runtime_materialization_mode"] == "api_key_env"
     assert payload["secret_refs"] == {}
+    assert payload["auth_state"] == "api_key_pending"
     assert payload["enabled"] is False
     assert payload["launch_ready"] is False
     checks = {check["id"]: check for check in payload["readiness"]["checks"]}
     assert "openai_api_key" in checks["secret_refs"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_guided_oauth_creation_persists_typed_pending_setup_state(
+    client_app: AsyncClient, _module_db
+) -> None:
+    _override_current_user()
+
+    async with client_app as client:
+        response = await client.post(
+            "/api/v1/provider-profiles",
+            json={
+                "profile_id": "mm3820-guided-openai-oauth-pending",
+                "runtime_id": "codex_cli",
+                "provider_id": "openai",
+                "authentication_method": "oauth",
+                "preset_version": "provider-profile-creation-v1",
+            },
+        )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["authentication_method"] == "oauth"
+    assert payload["credential_source"] == "none"
+    assert payload["runtime_materialization_mode"] == "api_key_env"
+    assert payload["auth_state"] == "oauth_pending"
+    assert payload["enabled"] is False
+    assert payload["launch_ready"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("credential_source", "materialization_mode"),
+    [
+        ("none", "api_key_env"),
+        ("secret_ref", "config_bundle"),
+        ("secret_ref", "api_key_env"),
+    ],
+)
+async def test_known_provider_rejects_unadvertised_manual_credential_contracts(
+    client_app: AsyncClient,
+    _module_db,
+    credential_source: str,
+    materialization_mode: str,
+) -> None:
+    _override_current_user()
+    profile_id = f"mm3820-reject-manual-{credential_source}-{materialization_mode}"
+
+    async with client_app as client:
+        response = await client.post(
+            "/api/v1/provider-profiles",
+            json={
+                "profile_id": profile_id,
+                "runtime_id": "codex_cli",
+                "provider_id": "openai",
+                "credential_source": credential_source,
+                "runtime_materialization_mode": materialization_mode,
+                "secret_refs": {"openai_api_key": "env://OPENAI_API_KEY"},
+                "enabled": True,
+                "auth_state": "connected",
+                "disabled_reason": None,
+            },
+        )
+        persisted = await client.get(f"/api/v1/provider-profiles/{profile_id}")
+
+    assert response.status_code == 422
+    assert "credential" in response.json()["detail"].lower()
+    assert persisted.status_code == 404
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("credential_source", "materialization_mode"),
+    [
+        ("none", "api_key_env"),
+        ("secret_ref", "api_key_env"),
+    ],
+)
+async def test_known_provider_rejects_unadvertised_manual_contract_updates(
+    client_app: AsyncClient,
+    _module_db,
+    credential_source: str,
+    materialization_mode: str,
+) -> None:
+    _override_current_user()
+    profile_id = f"mm3820-reject-manual-update-{credential_source}"
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="codex_cli",
+                provider_id="openai",
+                credential_source=ProviderCredentialSource.SECRET_REF,
+                runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                secret_refs={"openai_api_key": "env://OPENAI_API_KEY"},
+                enabled=False,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+                disabled_reason=ProviderProfileDisabledReason.USER_DISABLED,
+            )
+        )
+        await session.commit()
+
+    async with client_app as client:
+        response = await client.patch(
+            f"/api/v1/provider-profiles/{profile_id}",
+            json={
+                "credential_source": credential_source,
+                "runtime_materialization_mode": materialization_mode,
+            },
+        )
+
+    assert response.status_code == 422
+    assert "credential" in response.json()["detail"].lower()
+    async with db_base.async_session_maker() as session:
+        persisted = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert persisted is not None
+        assert persisted.credential_source is ProviderCredentialSource.SECRET_REF
+        assert (
+            persisted.runtime_materialization_mode
+            is RuntimeMaterializationMode.API_KEY_ENV
+        )
+
+
+@pytest.mark.asyncio
+async def test_known_provider_stale_contract_cannot_be_enabled_or_launch_ready(
+    client_app: AsyncClient, _module_db
+) -> None:
+    _override_current_user()
+    profile_id = "mm3820-stale-openai-contract"
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="codex_cli",
+                provider_id="openai",
+                credential_source=ProviderCredentialSource.NONE,
+                runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                enabled=False,
+                auth_state=ProviderProfileAuthState.NOT_CONFIGURED,
+                disabled_reason=ProviderProfileDisabledReason.MISSING_CREDENTIALS,
+            )
+        )
+        await session.commit()
+
+    async with client_app as client:
+        before = await client.get(f"/api/v1/provider-profiles/{profile_id}")
+        update = await client.patch(
+            f"/api/v1/provider-profiles/{profile_id}",
+            json={
+                "enabled": True,
+                "auth_state": "connected",
+                "disabled_reason": None,
+            },
+        )
+
+    assert before.status_code == 200
+    assert before.json()["authentication_method"] is None
+    assert before.json()["launch_ready"] is False
+    capability_check = next(
+        check
+        for check in before.json()["readiness"]["checks"]
+        if check["id"] == "credential_capability"
+    )
+    assert capability_check["status"] == "error"
+    assert update.status_code == 422
+    assert "supported authentication preset" in update.json()["detail"]
+
+    async with db_base.async_session_maker() as session:
+        persisted = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert persisted is not None
+        assert persisted.enabled is False
+        assert persisted.auth_state is ProviderProfileAuthState.NOT_CONFIGURED
 
 
 @pytest.mark.asyncio
@@ -613,6 +786,7 @@ def test_launch_ready_requires_backend_declared_secret_role() -> None:
                 "runtimeId": "codex_cli",
                 "providerId": "openai",
                 "credentialSource": "secret_ref",
+                "runtimeMaterializationMode": "api_key_env",
                 "secretRefs": {"unknown_role": "env://UNRELATED_TOKEN"},
             }
         )
@@ -622,6 +796,35 @@ def test_launch_ready_requires_backend_declared_secret_role() -> None:
     profile.secret_refs["openai_api_key"] = "env://OPENAI_API_KEY"
 
     assert provider_profile_launch_ready(profile) is True
+
+
+def test_launch_ready_rejects_capability_mismatched_known_provider_contract() -> None:
+    profile = _TrackedProfile(
+        profile_id="unsupported_openai_credential_free",
+        runtime_id="codex_cli",
+        provider_id="openai",
+        enabled=True,
+        priority=100,
+        is_default=False,
+        events=[],
+        auth_state=ProviderProfileAuthState.CONNECTED,
+        credential_source=ProviderCredentialSource.NONE,
+        runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+    )
+
+    assert provider_profile_launch_ready(profile) is False
+    assert (
+        provider_profile_launch_ready_from_payload(
+            {
+                "runtimeId": "codex_cli",
+                "providerId": "openai",
+                "credentialSource": "none",
+                "runtimeMaterializationMode": "api_key_env",
+                "enabled": True,
+            }
+        )
+        is False
+    )
 
 
 def test_launch_ready_rejects_nonexclusive_codex_oauth_profile() -> None:
@@ -1034,8 +1237,8 @@ async def test_provider_profile_tier_policy_round_trips_through_get_and_update(
         "profile_id": profile_id,
         "runtime_id": "codex_cli",
         "provider_id": "openai",
-        "credential_source": "none",
-        "runtime_materialization_mode": "composite",
+        "authentication_method": "api_key",
+        "preset_version": "provider-profile-creation-v1",
         "model_tiers": [
             {"label": "Review", "model": "gpt-5-mini", "effort": "low"},
             {"label": "Implement", "model": "gpt-5.5", "effort": "high"},
@@ -1106,8 +1309,8 @@ async def test_provider_profile_model_tier_preview_returns_advisory_resolution(
         "profile_id": profile_id,
         "runtime_id": "codex_cli",
         "provider_id": "openai",
-        "credential_source": "none",
-        "runtime_materialization_mode": "composite",
+        "authentication_method": "api_key",
+        "preset_version": "provider-profile-creation-v1",
         "model_tiers": [
             {"label": "Plan", "model": "gpt-5-mini", "effort": "low"},
             {"label": "Implement", "model": "gpt-5.5", "effort": "xhigh"},
@@ -1166,8 +1369,8 @@ async def test_provider_profile_model_tier_preview_preserves_strict_error_code(
         "profile_id": profile_id,
         "runtime_id": "codex_cli",
         "provider_id": "openai",
-        "credential_source": "none",
-        "runtime_materialization_mode": "composite",
+        "authentication_method": "api_key",
+        "preset_version": "provider-profile-creation-v1",
         "model_tiers": [
             {"label": "Plan", "model": "gpt-5-mini", "effort": "low"},
             {"label": "Implement", "model": "gpt-5.5", "effort": "xhigh"},
@@ -1271,8 +1474,8 @@ async def test_mm1169_create_provider_profile_persists_explicit_model_tiers(
         "profile_id": "explicit_model_tier_profile",
         "runtime_id": "codex_cli",
         "provider_id": "openai",
-        "credential_source": "none",
-        "runtime_materialization_mode": "composite",
+        "authentication_method": "api_key",
+        "preset_version": "provider-profile-creation-v1",
         "model_tiers": [
             {
                 "label": "Plan",
@@ -1358,8 +1561,8 @@ async def test_mm1169_create_profile_accepts_safe_token_parameter_names(
         "profile_id": "safe_token_parameter_profile",
         "runtime_id": "codex_cli",
         "provider_id": "openai",
-        "credential_source": "none",
-        "runtime_materialization_mode": "composite",
+        "authentication_method": "api_key",
+        "preset_version": "provider-profile-creation-v1",
         "model_tiers": [
             {
                 "label": "Safe metadata",
@@ -1394,8 +1597,8 @@ async def test_mm1169_reordering_model_tiers_persists_policy_order(
         "profile_id": profile_id,
         "runtime_id": "codex_cli",
         "provider_id": "openai",
-        "credential_source": "none",
-        "runtime_materialization_mode": "composite",
+        "authentication_method": "api_key",
+        "preset_version": "provider-profile-creation-v1",
         "model_tiers": [
             {"label": "Tier A", "model": "model-a", "effort": "low"},
             {"label": "Tier B", "model": "model-b", "effort": "high"},
@@ -1445,8 +1648,8 @@ async def test_mm1169_update_legacy_default_refreshes_single_default_tier(
         "profile_id": profile_id,
         "runtime_id": "codex_cli",
         "provider_id": "openai",
-        "credential_source": "none",
-        "runtime_materialization_mode": "composite",
+        "authentication_method": "api_key",
+        "preset_version": "provider-profile-creation-v1",
         "default_model": "old-model",
         "default_effort": "low",
     }
@@ -1484,8 +1687,8 @@ async def test_mm1169_update_legacy_default_preserves_explicit_tiers(
         "profile_id": profile_id,
         "runtime_id": "codex_cli",
         "provider_id": "openai",
-        "credential_source": "none",
-        "runtime_materialization_mode": "composite",
+        "authentication_method": "api_key",
+        "preset_version": "provider-profile-creation-v1",
         "default_model": "old-model",
         "model_tiers": [
             {"label": "Tier A", "model": "tier-model", "effort": "medium"}
@@ -1523,8 +1726,8 @@ async def test_migrated_runtime_default_tier_refreshes_on_legacy_default_update(
         "profile_id": profile_id,
         "runtime_id": "codex_cli",
         "provider_id": "openai",
-        "credential_source": "none",
-        "runtime_materialization_mode": "composite",
+        "authentication_method": "api_key",
+        "preset_version": "provider-profile-creation-v1",
         "model_tiers": [
             {
                 "label": "Runtime default",
@@ -1570,8 +1773,8 @@ async def test_migrated_legacy_default_tier_refreshes_on_legacy_default_update(
         "profile_id": profile_id,
         "runtime_id": "codex_cli",
         "provider_id": "openai",
-        "credential_source": "none",
-        "runtime_materialization_mode": "composite",
+        "authentication_method": "api_key",
+        "preset_version": "provider-profile-creation-v1",
         "default_model": "old-model",
         "default_effort": "low",
         "model_tiers": [
@@ -1620,8 +1823,8 @@ async def test_operator_annotated_tier_survives_legacy_default_update(
         "profile_id": profile_id,
         "runtime_id": "codex_cli",
         "provider_id": "openai",
-        "credential_source": "none",
-        "runtime_materialization_mode": "composite",
+        "authentication_method": "api_key",
+        "preset_version": "provider-profile-creation-v1",
         "default_model": "old-model",
         "model_tiers": [
             {
@@ -2674,7 +2877,7 @@ async def test_provider_api_key_setup_failed_validation_updates_state_without_se
                     runtime_id=runtime_id,
                     provider_id="openai",
                     provider_label="OpenAI",
-                    credential_source=ProviderCredentialSource.NONE,
+                    credential_source=ProviderCredentialSource.SECRET_REF,
                     runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
                     enabled=True,
                     is_default=True,
@@ -2690,8 +2893,9 @@ async def test_provider_api_key_setup_failed_validation_updates_state_without_se
                     runtime_id=runtime_id,
                     provider_id="openai",
                     provider_label="OpenAI",
-                    credential_source=ProviderCredentialSource.NONE,
+                    credential_source=ProviderCredentialSource.SECRET_REF,
                     runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                    secret_refs={"openai_api_key": "env://OPENAI_API_KEY"},
                     enabled=True,
                     is_default=False,
                     priority=10_000,

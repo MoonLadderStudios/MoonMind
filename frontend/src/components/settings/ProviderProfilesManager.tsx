@@ -290,16 +290,6 @@ export function defaultFormState(runtimeId = ''): ProviderProfileFormState {
 }
 
 export function toFormState(profile: ProviderProfile): ProviderProfileFormState {
-  const inferredAuthenticationMethod =
-    profile.authentication_method ??
-    (profile.credential_source === 'oauth_volume' &&
-    profile.runtime_materialization_mode === 'oauth_home'
-      ? 'oauth'
-      : profile.credential_source === 'secret_ref'
-        ? 'api_key'
-        : profile.credential_source === 'none' && profile.auth_state === 'connected'
-          ? 'none'
-          : '');
   return {
     profileId: profile.profile_id,
     runtimeId: profile.runtime_id,
@@ -307,7 +297,7 @@ export function toFormState(profile: ProviderProfile): ProviderProfileFormState 
     providerLabel: profile.provider_label ?? '',
     defaultModel: profile.default_model ?? '',
     defaultEffort: profile.default_effort ?? '',
-    authenticationMethod: inferredAuthenticationMethod,
+    authenticationMethod: profile.authentication_method ?? '',
     credentialSource: profile.credential_source,
     runtimeMaterializationMode: profile.runtime_materialization_mode,
     secretRefsText: JSON.stringify(profile.secret_refs ?? {}, null, 2),
@@ -793,9 +783,6 @@ function buildSavePayload(
   if (isEditing) {
     if (importExistingCredentialVolume) {
       payload.import_existing_credential_volume = true;
-    } else {
-      payload.credential_source = form.credentialSource;
-      payload.runtime_materialization_mode = form.runtimeMaterializationMode;
     }
     payload.volume_ref = form.volumeRef.trim() || null;
     payload.volume_mount_path = form.volumeMountPath.trim() || null;

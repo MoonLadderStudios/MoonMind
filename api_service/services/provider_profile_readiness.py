@@ -9,7 +9,11 @@ from api_service.db.models import (
     RuntimeMaterializationMode,
     SecretStatus,
 )
-from api_service.services.provider_profile_creation import required_secret_roles
+from api_service.services.provider_profile_creation import (
+    infer_authentication_method,
+    provider_profile_creation_capabilities,
+    required_secret_roles,
+)
 from moonmind.auth.secret_refs import SecretBackend, SecretReferenceError, parse_secret_ref
 from moonmind.provider_profiles.oauth_policy import is_codex_oauth_profile
 
@@ -36,6 +40,16 @@ def provider_profile_launch_ready(
     ) and row.max_parallel_runs != 1:
         return False
     if row.cooldown_after_429_seconds is None or row.cooldown_after_429_seconds < 0:
+        return False
+    if not _credential_contract_launch_ready(
+        runtime_id=row.runtime_id,
+        provider_id=row.provider_id,
+        credential_source=row.credential_source,
+        materialization_mode=row.runtime_materialization_mode,
+        auth_state=row.auth_state,
+        last_auth_method=getattr(row, "last_auth_method", None),
+        command_behavior=row.command_behavior,
+    ):
         return False
     if not _credential_bindings_launch_ready(
         row,
@@ -68,6 +82,25 @@ def provider_profile_launch_ready_from_payload(profile: dict[str, Any]) -> bool:
         "credential_source",
         profile.get("credentialSource"),
     )
+    materialization_mode = profile.get(
+        "runtime_materialization_mode",
+        profile.get("runtimeMaterializationMode"),
+    )
+    command_behavior = profile.get("command_behavior")
+    if command_behavior is None:
+        command_behavior = profile.get("commandBehavior")
+    if not _credential_contract_launch_ready(
+        runtime_id=profile.get("runtime_id", profile.get("runtimeId")),
+        provider_id=profile.get("provider_id", profile.get("providerId")),
+        credential_source=credential_source,
+        materialization_mode=materialization_mode,
+        auth_state=profile.get("auth_state", profile.get("authState")),
+        last_auth_method=profile.get(
+            "last_auth_method", profile.get("lastAuthMethod")
+        ),
+        command_behavior=command_behavior,
+    ):
+        return False
     if str(getattr(credential_source, "value", credential_source) or "") == "secret_ref":
         secret_refs = profile.get("secret_refs", profile.get("secretRefs"))
         if not isinstance(secret_refs, dict) or not secret_refs:
@@ -87,11 +120,49 @@ def provider_profile_launch_ready_from_payload(profile: dict[str, Any]) -> bool:
         if launch_ready is False:
             return False
 
-    command_behavior = profile.get("command_behavior")
     if isinstance(command_behavior, dict):
         return _provider_validation_launch_ready(command_behavior)
 
     return True
+
+
+def _credential_contract_launch_ready(
+    *,
+    runtime_id: object,
+    provider_id: object,
+    credential_source: object,
+    materialization_mode: object,
+    auth_state: object,
+    last_auth_method: object,
+    command_behavior: object,
+) -> bool:
+    declared_methods: list[str] = []
+    raw_methods = (
+        command_behavior.get("supported_auth_methods")
+        if isinstance(command_behavior, dict)
+        else None
+    )
+    if isinstance(raw_methods, list):
+        declared_methods = [
+            value for value in raw_methods if isinstance(value, str) and value
+        ]
+    capabilities = provider_profile_creation_capabilities(
+        runtime_id=str(runtime_id or ""),
+        provider_id=str(provider_id or ""),
+        declared_auth_methods=declared_methods,
+    )
+    if not capabilities["supported"]:
+        return True
+    return (
+        infer_authentication_method(
+            credential_source=credential_source,
+            runtime_materialization_mode=materialization_mode,
+            authentication_methods=capabilities["authentication_methods"],
+            auth_state=auth_state,
+            last_auth_method=last_auth_method,
+        )
+        is not None
+    )
 
 
 def _credential_bindings_launch_ready(

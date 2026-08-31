@@ -7,8 +7,9 @@ these presets; it does not reconstruct credential-source/materialization pairs.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any
 
 from moonmind.workflows.temporal.runtime.providers.registry import (
     get_provider,
@@ -302,25 +303,107 @@ def infer_authentication_method(
     *,
     credential_source: object,
     runtime_materialization_mode: object,
-    declared_method_ids: Iterable[object],
+    authentication_methods: Iterable[object],
+    auth_state: object = None,
+    last_auth_method: object = None,
 ) -> str | None:
-    declared = _normalize_declared_auth_methods(declared_method_ids)
+    """Infer a method only from an exact preset or explicit typed setup state."""
+
     source = str(getattr(credential_source, "value", credential_source) or "")
     materialization = str(
         getattr(runtime_materialization_mode, "value", runtime_materialization_mode)
         or ""
     )
+    methods = [
+        method for method in authentication_methods if isinstance(method, Mapping)
+    ]
+    method_ids = {str(method.get("id") or "") for method in methods}
+    for method in methods:
+        fields = method.get("fields")
+        if not isinstance(fields, Mapping):
+            continue
+        source_field = fields.get("credential_source")
+        materialization_field = fields.get("runtime_materialization_mode")
+        if not isinstance(source_field, Mapping) or not isinstance(
+            materialization_field, Mapping
+        ):
+            continue
+        if (
+            str(source_field.get("value") or "") == source
+            and str(materialization_field.get("value") or "") == materialization
+        ):
+            return str(method.get("id") or "") or None
+
+    normalized_state = str(getattr(auth_state, "value", auth_state) or "")
     if (
-        source == "oauth_volume"
-        and materialization == "oauth_home"
-        and "oauth" in declared
+        normalized_state == "oauth_pending"
+        and source == "none"
+        and materialization == "api_key_env"
+        and "oauth" in method_ids
     ):
         return "oauth"
-    if source == "secret_ref" and "api_key" in declared:
+    if normalized_state == "api_key_pending" and "api_key" in method_ids:
         return "api_key"
-    if source == "none" and "none" in declared:
-        return "none"
+
+    normalized_last_method = str(
+        getattr(last_auth_method, "value", last_auth_method) or ""
+    )
+    if (
+        normalized_state == "disconnected"
+        and normalized_last_method == "oauth_volume"
+        and source == "none"
+        and materialization == "api_key_env"
+        and "oauth" in method_ids
+    ):
+        return "oauth"
     return None
+
+
+def validate_manual_credential_contract(
+    *,
+    credential_source: object,
+    runtime_materialization_mode: object,
+    authentication_methods: Iterable[object],
+) -> None:
+    """Require an exact capability match whose low-level fields are editable."""
+
+    validate_credential_contract(
+        credential_source=credential_source,
+        runtime_materialization_mode=runtime_materialization_mode,
+    )
+    source = str(getattr(credential_source, "value", credential_source) or "")
+    materialization = str(
+        getattr(runtime_materialization_mode, "value", runtime_materialization_mode)
+        or ""
+    )
+    for method in authentication_methods:
+        if not isinstance(method, Mapping):
+            continue
+        fields = method.get("fields")
+        if not isinstance(fields, Mapping):
+            continue
+        source_field = fields.get("credential_source")
+        materialization_field = fields.get("runtime_materialization_mode")
+        if not isinstance(source_field, Mapping) or not isinstance(
+            materialization_field, Mapping
+        ):
+            continue
+        if (
+            str(source_field.get("value") or "") != source
+            or str(materialization_field.get("value") or "") != materialization
+        ):
+            continue
+        if bool(source_field.get("editable")) and bool(
+            materialization_field.get("editable")
+        ):
+            return
+        raise ValueError(
+            "This runtime and provider does not advertise expert manual "
+            "credential overrides; choose the supported authentication method."
+        )
+    raise ValueError(
+        "Credential contract does not match a supported authentication preset."
+    )
 
 
 def validate_credential_contract(
@@ -353,4 +436,5 @@ __all__ = [
     "provider_profile_creation_capabilities",
     "required_secret_roles",
     "validate_credential_contract",
+    "validate_manual_credential_contract",
 ]

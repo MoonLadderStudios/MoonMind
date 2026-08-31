@@ -1449,7 +1449,7 @@ describe('MoonLadderStudios/MoonMind#3820 guided provider-profile creation', () 
       cooldown_after_429_seconds: 300,
       rate_limit_policy: 'backoff',
       enabled: false,
-      auth_state: 'not_configured',
+      auth_state: 'api_key_pending',
       disabled_reason: 'missing_credentials',
       creation_capabilities: openAiCapabilities,
     } as ProviderProfile;
@@ -1509,7 +1509,7 @@ describe('MoonLadderStudios/MoonMind#3820 guided provider-profile creation', () 
       cooldown_after_429_seconds: 300,
       rate_limit_policy: 'backoff',
       enabled: false,
-      auth_state: 'not_configured',
+      auth_state: 'oauth_pending',
       disabled_reason: 'missing_credentials',
       creation_capabilities: openAiCapabilities,
     } as ProviderProfile;
@@ -1591,6 +1591,48 @@ describe('MoonLadderStudios/MoonMind#3820 guided provider-profile creation', () 
     expect(screen.getByText(/Unknown existing method: secret_ref → api_key_env/)).toBeTruthy();
     expect(screen.getByText('Unknown existing role: future_provider_role')).toBeTruthy();
     expect(screen.getByDisplayValue('env://FUTURE_PROVIDER_TOKEN')).toBeTruthy();
+  });
+
+  it('uses a production-shaped null method to preserve stale stored contract values', async () => {
+    const staleProfile = {
+      profile_id: 'codex-stale-contract',
+      runtime_id: 'codex_cli',
+      provider_id: 'openai',
+      authentication_method: null,
+      credential_source: 'secret_ref',
+      runtime_materialization_mode: 'config_bundle',
+      secret_refs: { openai_api_key: 'db://OPENAI_API_KEY' },
+      max_parallel_runs: 1,
+      cooldown_after_429_seconds: 300,
+      rate_limit_policy: 'backoff',
+      enabled: false,
+      auth_state: 'disconnected',
+      disabled_reason: 'disconnected',
+      creation_capabilities: openAiCapabilities,
+    } as ProviderProfile;
+    let updatePayload: Record<string, unknown> | null = null;
+    vi.spyOn(window, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === '/api/v1/provider-profiles/codex-stale-contract') {
+        updatePayload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return { ok: true, json: async () => staleProfile } as Response;
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    renderProviderProfilesManager([staleProfile]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+
+    expect((screen.getByLabelText('Show advanced options') as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByText('Unknown existing method: secret_ref → config_bundle. The stored contract remains inspectable and is not replaced by a supported method automatically.')).toBeTruthy();
+    expect(screen.getByText('Credential source: secret_ref')).toBeTruthy();
+    expect(screen.getByText('Materialization mode: config_bundle')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Update provider profile' }));
+    await waitFor(() => expect(updatePayload).not.toBeNull());
+    expect(updatePayload).not.toHaveProperty('authentication_method');
+    expect(updatePayload).not.toHaveProperty('credential_source');
+    expect(updatePayload).not.toHaveProperty('runtime_materialization_mode');
   });
 
   it('validates imported OAuth volumes through the distinct expert flow', async () => {

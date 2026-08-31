@@ -38,6 +38,7 @@ from api_service.services.provider_profile_creation import (
     provider_profile_creation_capabilities,
     required_secret_roles,
     validate_credential_contract,
+    validate_manual_credential_contract,
 )
 from api_service.services.settings_catalog import has_settings_permission
 from moonmind.auth.secret_refs import (
@@ -890,6 +891,17 @@ async def create_profile(
             ),
         )
 
+    declared_methods = await _declared_auth_methods_for_pair(
+        session,
+        runtime_id=body.runtime_id,
+        provider_id=body.provider_id,
+    )
+    capabilities = provider_profile_creation_capabilities(
+        runtime_id=body.runtime_id,
+        provider_id=body.provider_id,
+        declared_auth_methods=declared_methods,
+    )
+
     credential_source = body.credential_source
     runtime_materialization_mode = body.runtime_materialization_mode
     volume_ref = body.volume_ref
@@ -905,11 +917,6 @@ async def create_profile(
     command_behavior = dict(body.command_behavior or {})
 
     if body.authentication_method is not None:
-        declared_methods = await _declared_auth_methods_for_pair(
-            session,
-            runtime_id=body.runtime_id,
-            provider_id=body.provider_id,
-        )
         try:
             preset = authentication_method_preset(
                 runtime_id=body.runtime_id,
@@ -950,14 +957,14 @@ async def create_profile(
                 volume_ref = None
                 volume_mount_path = None
                 enabled = False
-                auth_state = ProviderProfileAuthState.NOT_CONFIGURED.value
+                auth_state = ProviderProfileAuthState.OAUTH_PENDING.value
                 disabled_reason = ProviderProfileDisabledReason.MISSING_CREDENTIALS.value
                 last_auth_method = None
         elif body.authentication_method == "api_key":
             volume_ref = None
             volume_mount_path = None
             enabled = False
-            auth_state = ProviderProfileAuthState.NOT_CONFIGURED.value
+            auth_state = ProviderProfileAuthState.API_KEY_PENDING.value
             disabled_reason = ProviderProfileDisabledReason.MISSING_CREDENTIALS.value
             last_auth_method = None
             preset_clear_env_keys = fields.get("clear_env_keys", {}).get("value")
@@ -973,11 +980,6 @@ async def create_profile(
             last_validated_at = now
             last_auth_method = ProviderProfileAuthMethod.MANUAL.value
 
-        capabilities = provider_profile_creation_capabilities(
-            runtime_id=body.runtime_id,
-            provider_id=body.provider_id,
-            declared_auth_methods=declared_methods,
-        )
         supported_method_ids = [
             method["id"] for method in capabilities["authentication_methods"]
         ]
@@ -1018,6 +1020,15 @@ async def create_profile(
                 },
             }
         )
+    elif capabilities["supported"]:
+        try:
+            validate_manual_credential_contract(
+                credential_source=credential_source,
+                runtime_materialization_mode=runtime_materialization_mode,
+                authentication_methods=capabilities["authentication_methods"],
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     if credential_source is None or runtime_materialization_mode is None:
         raise HTTPException(
@@ -1147,10 +1158,44 @@ async def update_profile(
     import_existing_credential_volume = bool(
         update_data.pop("import_existing_credential_volume", False)
     )
-    credential_contract_changed = import_existing_credential_volume or bool(
+    manual_contract_overridden = bool(
         {"credential_source", "runtime_materialization_mode"}.intersection(update_data)
     )
+    credential_contract_changed = (
+        import_existing_credential_volume
+        or manual_contract_overridden
+        or "provider_id" in update_data
+    )
     requested_is_default = update_data.pop("is_default", None)
+    target_provider_id = update_data.get("provider_id") or profile.provider_id
+    declared_methods = await _declared_auth_methods_for_pair(
+        session,
+        runtime_id=profile.runtime_id,
+        provider_id=target_provider_id,
+    )
+    capabilities = provider_profile_creation_capabilities(
+        runtime_id=profile.runtime_id,
+        provider_id=target_provider_id,
+        declared_auth_methods=declared_methods,
+    )
+    if (
+        manual_contract_overridden
+        and not import_existing_credential_volume
+        and capabilities["supported"]
+    ):
+        try:
+            validate_manual_credential_contract(
+                credential_source=update_data.get(
+                    "credential_source", profile.credential_source
+                ),
+                runtime_materialization_mode=update_data.get(
+                    "runtime_materialization_mode",
+                    profile.runtime_materialization_mode,
+                ),
+                authentication_methods=capabilities["authentication_methods"],
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     if import_existing_credential_volume:
         requested_volume_ref = update_data.get("volume_ref")
         if not isinstance(requested_volume_ref, str) or not requested_volume_ref.strip():
@@ -1279,6 +1324,20 @@ async def update_profile(
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if capabilities["supported"] and infer_authentication_method(
+            credential_source=profile.credential_source,
+            runtime_materialization_mode=profile.runtime_materialization_mode,
+            authentication_methods=capabilities["authentication_methods"],
+            auth_state=profile.auth_state,
+            last_auth_method=profile.last_auth_method,
+        ) is None:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Credential contract does not match a supported "
+                    "authentication preset."
+                ),
+            )
 
     if profile.enabled:
         if profile.auth_state != ProviderProfileAuthState.CONNECTED:
@@ -2272,6 +2331,7 @@ def _provider_profile_readiness(
 
     checks = [
         _required_fields_check(row),
+        _credential_capability_check(row),
         _enabled_check(row),
         _auth_state_check(row),
         _secret_refs_check(
@@ -2355,6 +2415,43 @@ def _required_fields_check(row: ManagedAgentProviderProfile) -> dict[str, str]:
             "Missing required fields: " + ", ".join(missing_required)
             if missing_required
             else "Required provider profile fields are present."
+        ),
+    )
+
+
+def _credential_capability_check(
+    row: ManagedAgentProviderProfile,
+) -> dict[str, str]:
+    capabilities = provider_profile_creation_capabilities(
+        runtime_id=row.runtime_id,
+        provider_id=row.provider_id,
+        declared_auth_methods=_declared_auth_methods_from_rows([row]),
+    )
+    if not capabilities["supported"]:
+        return _readiness_check(
+            "credential_capability",
+            "Credential capability",
+            "pass",
+            (
+                "No guided authentication capability is registered for this "
+                "expert profile."
+            ),
+        )
+    authentication_method = infer_authentication_method(
+        credential_source=row.credential_source,
+        runtime_materialization_mode=row.runtime_materialization_mode,
+        authentication_methods=capabilities["authentication_methods"],
+        auth_state=row.auth_state,
+        last_auth_method=row.last_auth_method,
+    )
+    return _readiness_check(
+        "credential_capability",
+        "Credential capability",
+        "pass" if authentication_method is not None else "error",
+        (
+            f"Credential contract matches the supported {authentication_method} preset."
+            if authentication_method is not None
+            else "Credential contract does not match a supported authentication preset."
         ),
     )
 
@@ -2582,21 +2679,13 @@ def _row_to_dict(
         provider_id=row.provider_id,
         declared_auth_methods=declared_auth_methods,
     )
-    method_ids = [
-        method["id"] for method in creation_capabilities["authentication_methods"]
-    ]
     authentication_method = infer_authentication_method(
         credential_source=row.credential_source,
         runtime_materialization_mode=row.runtime_materialization_mode,
-        declared_method_ids=method_ids,
+        authentication_methods=creation_capabilities["authentication_methods"],
+        auth_state=row.auth_state,
+        last_auth_method=row.last_auth_method,
     )
-    if authentication_method is None and isinstance(row.command_behavior, dict):
-        auth_actions = row.command_behavior.get("auth_actions")
-        if isinstance(auth_actions, list):
-            if "connect_oauth" in auth_actions and "oauth" in method_ids:
-                authentication_method = "oauth"
-            elif "use_api_key" in auth_actions and "api_key" in method_ids:
-                authentication_method = "api_key"
     payload = {
         "profile_id": row.profile_id,
         "runtime_id": row.runtime_id,
