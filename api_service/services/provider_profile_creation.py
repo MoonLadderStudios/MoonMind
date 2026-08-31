@@ -33,6 +33,71 @@ class ProviderApiKeyStrategy:
     ready_label: str
 
 
+@dataclass(frozen=True, slots=True)
+class ExpertManualCredentialCapability:
+    """One exact low-level contract explicitly authorized for expert use."""
+
+    authentication_method: str
+    label: str
+    credential_source: str
+    runtime_materialization_mode: str
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeProviderAuthenticationCapability:
+    """Trusted authentication declarations owned by a runtime/provider pair."""
+
+    runtime_id: str
+    provider_id: str
+    credential_free: bool = False
+    expert_manual_credentials: tuple[ExpertManualCredentialCapability, ...] = ()
+
+
+# This immutable registry is the independent authority for authentication methods
+# that cannot be derived from the OAuth or API-key strategy registries. Ordinary
+# Provider Profile rows and their mutable command_behavior never extend it.
+_RUNTIME_PROVIDER_AUTHENTICATION_CAPABILITIES: tuple[
+    RuntimeProviderAuthenticationCapability, ...
+] = (
+    RuntimeProviderAuthenticationCapability(
+        runtime_id="claude_code",
+        provider_id="minimax",
+        expert_manual_credentials=(
+            ExpertManualCredentialCapability(
+                authentication_method="api_key",
+                label="MiniMax API key (expert)",
+                credential_source="secret_ref",
+                runtime_materialization_mode="env_bundle",
+            ),
+        ),
+    ),
+    RuntimeProviderAuthenticationCapability(
+        runtime_id="codex_cli",
+        provider_id="minimax",
+        expert_manual_credentials=(
+            ExpertManualCredentialCapability(
+                authentication_method="api_key",
+                label="MiniMax API key (expert)",
+                credential_source="secret_ref",
+                runtime_materialization_mode="composite",
+            ),
+        ),
+    ),
+    RuntimeProviderAuthenticationCapability(
+        runtime_id="codex_cli",
+        provider_id="openrouter",
+        expert_manual_credentials=(
+            ExpertManualCredentialCapability(
+                authentication_method="api_key",
+                label="OpenRouter API key (expert)",
+                credential_source="secret_ref",
+                runtime_materialization_mode="composite",
+            ),
+        ),
+    ),
+)
+
+
 _API_KEY_STRATEGIES: dict[tuple[str, str], ProviderApiKeyStrategy] = {
     ("claude_code", "anthropic"): ProviderApiKeyStrategy(
         runtime_id="claude_code",
@@ -108,18 +173,17 @@ def required_secret_roles(runtime_id: str, provider_id: str) -> tuple[str, ...]:
     return (strategy.secret_role,) if strategy is not None else ()
 
 
-def _normalize_declared_auth_methods(methods: Iterable[object]) -> set[str]:
-    normalized: set[str] = set()
-    for raw_method in methods:
-        value = str(getattr(raw_method, "value", raw_method) or "").strip()
-        mapped = {
-            "oauth_volume": "oauth",
-            "secret_ref": "api_key",
-            "manual": "api_key",
-        }.get(value, value)
-        if mapped in {"oauth", "api_key", "none"}:
-            normalized.add(mapped)
-    return normalized
+def _runtime_provider_authentication_capability(
+    runtime_id: str,
+    provider_id: str,
+) -> RuntimeProviderAuthenticationCapability | None:
+    for capability in _RUNTIME_PROVIDER_AUTHENTICATION_CAPABILITIES:
+        if (
+            capability.runtime_id == runtime_id
+            and capability.provider_id == provider_id
+        ):
+            return capability
+    return None
 
 
 def _locked_field(value: object, source: str, lock_reason: str) -> dict[str, Any]:
@@ -128,6 +192,15 @@ def _locked_field(value: object, source: str, lock_reason: str) -> dict[str, Any
         "source": source,
         "editable": False,
         "lock_reason": lock_reason,
+    }
+
+
+def _editable_field(value: object) -> dict[str, Any]:
+    return {
+        "value": value,
+        "source": "runtime_provider_capability",
+        "editable": True,
+        "lock_reason": "Backend capability permits this expert manual override.",
     }
 
 
@@ -228,17 +301,46 @@ def _no_credentials_method() -> dict[str, Any]:
     }
 
 
+def _expert_manual_method(
+    capability: ExpertManualCredentialCapability,
+) -> dict[str, Any]:
+    if capability.authentication_method not in {"oauth", "api_key", "none"}:
+        raise ValueError(
+            "Expert manual credential capability has an unsupported "
+            f"authentication method: {capability.authentication_method!r}."
+        )
+    return {
+        "id": capability.authentication_method,
+        "label": capability.label,
+        "setup_action": capability.authentication_method,
+        "launch_ready_after_setup": False,
+        "fields": {
+            "credential_source": _editable_field(capability.credential_source),
+            "runtime_materialization_mode": _editable_field(
+                capability.runtime_materialization_mode
+            ),
+        },
+        "secret_roles": [],
+        "imported_volume": {
+            "supported": False,
+            "mount_path": None,
+            "source": "runtime_provider_capability",
+            "lock_reason": (
+                "This expert manual credential contract does not import a volume."
+            ),
+        },
+    }
+
+
 def provider_profile_creation_capabilities(
     *,
     runtime_id: str,
     provider_id: str,
-    declared_auth_methods: Iterable[object] = (),
 ) -> dict[str, Any]:
     """Return the coherent creation methods the backend explicitly supports."""
 
     runtime_id = runtime_id.strip()
     provider_id = provider_id.strip()
-    declared = _normalize_declared_auth_methods(declared_auth_methods)
     methods: list[dict[str, Any]] = []
 
     oauth_provider = get_provider(runtime_id)
@@ -252,19 +354,32 @@ def provider_profile_creation_capabilities(
     if api_key_strategy is not None:
         methods.append(_api_key_method(api_key_strategy))
 
-    if "none" in declared:
+    independent_capability = _runtime_provider_authentication_capability(
+        runtime_id,
+        provider_id,
+    )
+    if independent_capability is not None and independent_capability.credential_free:
         methods.append(_no_credentials_method())
+    if independent_capability is not None:
+        for expert_capability in independent_capability.expert_manual_credentials:
+            expert_method = _expert_manual_method(expert_capability)
+            existing_index = next(
+                (
+                    index
+                    for index, method in enumerate(methods)
+                    if method["id"] == expert_capability.authentication_method
+                ),
+                None,
+            )
+            if existing_index is None:
+                methods.append(expert_method)
+            else:
+                methods[existing_index] = expert_method
 
     diagnostics: list[str] = []
     if not methods:
         diagnostics.append(
             "No validated creation preset exists for this runtime and provider."
-        )
-    unrepresented = sorted(declared.difference({method["id"] for method in methods}))
-    if unrepresented:
-        diagnostics.append(
-            "Declared authentication methods lack a guided backend strategy: "
-            + ", ".join(unrepresented)
         )
 
     return {
@@ -282,12 +397,10 @@ def authentication_method_preset(
     runtime_id: str,
     provider_id: str,
     authentication_method: str,
-    declared_auth_methods: Iterable[object] = (),
 ) -> dict[str, Any]:
     capabilities = provider_profile_creation_capabilities(
         runtime_id=runtime_id,
         provider_id=provider_id,
-        declared_auth_methods=declared_auth_methods,
     )
     for method in capabilities["authentication_methods"]:
         if method["id"] == authentication_method:
@@ -429,7 +542,9 @@ def validate_credential_contract(
 
 __all__ = [
     "CREATION_PRESET_VERSION",
+    "ExpertManualCredentialCapability",
     "ProviderApiKeyStrategy",
+    "RuntimeProviderAuthenticationCapability",
     "authentication_method_preset",
     "infer_authentication_method",
     "provider_api_key_strategy",

@@ -27,6 +27,11 @@ from api_service.db.models import (
     SecretStatus,
 )
 from api_service.main import app
+from api_service.services import provider_profile_creation
+from api_service.services.provider_profile_creation import (
+    ExpertManualCredentialCapability,
+    RuntimeProviderAuthenticationCapability,
+)
 from api_service.services.provider_profile_service import (
     _managed_secret_statuses_for_profiles,
     _manager_profile_payload,
@@ -145,6 +150,45 @@ def _override_current_user(
     for dependency in dependencies:
         app.dependency_overrides[dependency] = lambda user=user: user
     return user
+
+
+def _advertise_expert_manual_contracts(
+    monkeypatch: pytest.MonkeyPatch,
+    *contracts: tuple[str, str, str, str],
+) -> None:
+    """Install typed runtime/provider authority for legacy CRUD test fixtures."""
+
+    capabilities = tuple(
+        RuntimeProviderAuthenticationCapability(
+            runtime_id=runtime_id,
+            provider_id=provider_id,
+            expert_manual_credentials=(
+                ExpertManualCredentialCapability(
+                    authentication_method=(
+                        "oauth"
+                        if credential_source == "oauth_volume"
+                        else "api_key"
+                        if credential_source == "secret_ref"
+                        else "none"
+                    ),
+                    label="Expert manual test contract",
+                    credential_source=credential_source,
+                    runtime_materialization_mode=materialization_mode,
+                ),
+            ),
+        )
+        for (
+            runtime_id,
+            provider_id,
+            credential_source,
+            materialization_mode,
+        ) in contracts
+    )
+    monkeypatch.setattr(
+        provider_profile_creation,
+        "_RUNTIME_PROVIDER_AUTHENTICATION_CAPABILITIES",
+        capabilities,
+    )
 
 
 @pytest.mark.asyncio
@@ -404,17 +448,66 @@ async def test_known_provider_stale_contract_cannot_be_enabled_or_launch_ready(
 
 @pytest.mark.asyncio
 async def test_explicit_credential_free_capability_creates_launch_ready_profile(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _override_current_user()
+    capability_suffix = uuid4().hex
+    capability = RuntimeProviderAuthenticationCapability(
+        runtime_id=f"mm3820-local-runtime-{capability_suffix}",
+        provider_id=f"mm3820-local-provider-{capability_suffix}",
+        credential_free=True,
+    )
+    monkeypatch.setattr(
+        provider_profile_creation,
+        "_RUNTIME_PROVIDER_AUTHENTICATION_CAPABILITIES",
+        (capability,),
+    )
+    created_profile_id = f"mm3820-none-created-{capability_suffix}"
+
+    async with client_app as client:
+        preset_response = await client.get(
+            "/api/v1/provider-profiles/creation-preset",
+            params={
+                "runtime_id": capability.runtime_id,
+                "provider_id": capability.provider_id,
+            },
+        )
+        create_response = await client.post(
+            "/api/v1/provider-profiles",
+            json={
+                "profile_id": created_profile_id,
+                "runtime_id": capability.runtime_id,
+                "provider_id": capability.provider_id,
+                "authentication_method": "none",
+                "preset_version": "provider-profile-creation-v1",
+            },
+        )
+
+    assert [
+        method["id"]
+        for method in preset_response.json()["authentication_methods"]
+    ] == ["none"]
+    assert create_response.status_code == 201
+    created = create_response.json()
+    assert created["credential_source"] == "none"
+    assert created["runtime_materialization_mode"] == "composite"
+    assert created["auth_state"] == "connected"
+    assert created["enabled"] is True
+    assert created["launch_ready"] is True
+
+
+@pytest.mark.asyncio
+async def test_mutable_profile_metadata_cannot_advertise_credential_free_support(
     client_app: AsyncClient, _module_db
 ) -> None:
     _override_current_user()
-    runtime_id = "mm3820-local-runtime"
-    provider_id = "mm3820-local-provider"
-    capability_profile_id = "mm3820-none-capability"
-    created_profile_id = "mm3820-none-created"
+    runtime_id = "mm3820-untrusted-runtime"
+    provider_id = "mm3820-untrusted-provider"
+    profile_id = "mm3820-untrusted-none-declaration"
     async with db_base.async_session_maker() as session:
         session.add(
             ManagedAgentProviderProfile(
-                profile_id=capability_profile_id,
+                profile_id=profile_id,
                 runtime_id=runtime_id,
                 provider_id=provider_id,
                 credential_source=ProviderCredentialSource.NONE,
@@ -432,28 +525,83 @@ async def test_explicit_credential_free_capability_creates_launch_ready_profile(
             "/api/v1/provider-profiles/creation-preset",
             params={"runtime_id": runtime_id, "provider_id": provider_id},
         )
-        create_response = await client.post(
-            "/api/v1/provider-profiles",
+        profile_response = await client.get(
+            f"/api/v1/provider-profiles/{profile_id}"
+        )
+        unrelated_update = await client.patch(
+            f"/api/v1/provider-profiles/{profile_id}",
+            json={"account_label": "Inspectable legacy profile"},
+        )
+        manual_contract_update = await client.patch(
+            f"/api/v1/provider-profiles/{profile_id}",
             json={
-                "profile_id": created_profile_id,
-                "runtime_id": runtime_id,
-                "provider_id": provider_id,
-                "authentication_method": "none",
-                "preset_version": "provider-profile-creation-v1",
+                "credential_source": "none",
+                "runtime_materialization_mode": "composite",
+            },
+        )
+        activation_response = await client.patch(
+            f"/api/v1/provider-profiles/{profile_id}",
+            json={
+                "enabled": True,
+                "auth_state": "connected",
+                "disabled_reason": None,
             },
         )
 
-    assert [
-        method["id"]
-        for method in preset_response.json()["authentication_methods"]
-    ] == ["none"]
-    assert create_response.status_code == 201
-    created = create_response.json()
-    assert created["credential_source"] == "none"
-    assert created["runtime_materialization_mode"] == "composite"
-    assert created["auth_state"] == "connected"
-    assert created["enabled"] is True
-    assert created["launch_ready"] is True
+    assert preset_response.status_code == 200
+    assert preset_response.json()["authentication_methods"] == []
+    assert profile_response.status_code == 200
+    profile_payload = profile_response.json()
+    assert profile_payload["authentication_method"] is None
+    assert profile_payload["launch_ready"] is False
+    checks = {
+        check["id"]: check for check in profile_payload["readiness"]["checks"]
+    }
+    assert checks["credential_capability"]["status"] == "error"
+    assert unrelated_update.status_code == 200
+    assert unrelated_update.json()["account_label"] == "Inspectable legacy profile"
+    assert unrelated_update.json()["launch_ready"] is False
+    assert manual_contract_update.status_code == 422
+    assert "supported authentication preset" in manual_contract_update.json()["detail"]
+    assert activation_response.status_code == 422
+    assert "No authoritative authentication capability" in activation_response.json()[
+        "detail"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_unrelated_update_preserves_enabled_unknown_profile_without_authority(
+    client_app: AsyncClient, _module_db
+) -> None:
+    _override_current_user()
+    profile_id = "mm3820-enabled-unknown-inspection"
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="mm3820-legacy-runtime",
+                provider_id="mm3820-legacy-provider",
+                credential_source=ProviderCredentialSource.NONE,
+                runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
+                enabled=True,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+                disabled_reason=None,
+            )
+        )
+        await session.commit()
+
+    async with client_app as client:
+        response = await client.patch(
+            f"/api/v1/provider-profiles/{profile_id}",
+            json={"account_label": "Legacy account"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["enabled"] is True
+    assert payload["account_label"] == "Legacy account"
+    assert payload["authentication_method"] is None
+    assert payload["launch_ready"] is False
 
 
 @pytest.mark.asyncio
@@ -673,17 +821,25 @@ async def test_runtime_default_switch_flushes_old_default_first():
     minimax = _TrackedProfile(
         profile_id="claude_minimax",
         runtime_id="claude_code",
+        provider_id="anthropic",
         enabled=True,
         priority=200,
         is_default=True,
+        credential_source=ProviderCredentialSource.SECRET_REF,
+        runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+        secret_refs={"anthropic_api_key": "env://ANTHROPIC_API_KEY"},
         events=events,
     )
     anthropic = _TrackedProfile(
         profile_id="claude_anthropic",
         runtime_id="claude_code",
+        provider_id="anthropic",
         enabled=True,
         priority=100,
         is_default=False,
+        credential_source=ProviderCredentialSource.SECRET_REF,
+        runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+        secret_refs={"anthropic_api_key": "env://ANTHROPIC_API_KEY"},
         events=events,
     )
     session = _TrackedDefaultSession([minimax, anthropic], events)
@@ -715,20 +871,28 @@ async def test_runtime_default_normalization_skips_not_launch_ready_profiles():
     blocked_default = _TrackedProfile(
         profile_id="claude_blocked",
         runtime_id="claude_code",
+        provider_id="anthropic",
         enabled=True,
         priority=500,
         is_default=True,
         auth_state=ProviderProfileAuthState.CONNECTED,
+        credential_source=ProviderCredentialSource.SECRET_REF,
+        runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+        secret_refs={"anthropic_api_key": "env://ANTHROPIC_API_KEY"},
         command_behavior={"auth_readiness": {"launch_ready": False}},
         events=events,
     )
     ready_fallback = _TrackedProfile(
         profile_id="claude_ready",
         runtime_id="claude_code",
+        provider_id="anthropic",
         enabled=True,
         priority=100,
         is_default=False,
         auth_state=ProviderProfileAuthState.CONNECTED,
+        credential_source=ProviderCredentialSource.SECRET_REF,
+        runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+        secret_refs={"anthropic_api_key": "env://ANTHROPIC_API_KEY"},
         command_behavior={"auth_readiness": {"launch_ready": True}},
         events=events,
     )
@@ -1170,8 +1334,16 @@ async def test_provider_profile_update_allows_ownerless_shared_profile(
     assert data["volume_mount_path"] == "/home/app/.codex"
 
 @pytest.mark.asyncio
-async def test_create_provider_profile(client_app: AsyncClient, _module_db):
+async def test_create_provider_profile(
+    client_app: AsyncClient,
+    _module_db,
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Test creating a new provider profile."""
+    _advertise_expert_manual_contracts(
+        monkeypatch,
+        ("claude_v1", "unknown", "secret_ref", "api_key_env"),
+    )
     payload = {
         "profile_id": "new_profile",
         "runtime_id": "claude_v1",
@@ -1883,8 +2055,17 @@ async def test_mm1169_orm_insert_uses_legacy_defaults_for_model_tiers(
 
 @pytest.mark.asyncio
 async def test_create_enabled_provider_profile_clears_default_disabled_reason(
-    client_app: AsyncClient, _module_db
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _advertise_expert_manual_contracts(
+        monkeypatch,
+        (
+            "enabled_profile_clear_runtime",
+            "unknown",
+            "secret_ref",
+            "api_key_env",
+        ),
+    )
     payload = {
         "profile_id": "enabled_profile_clears_disabled_reason",
         "runtime_id": "enabled_profile_clear_runtime",
@@ -1907,7 +2088,7 @@ async def test_create_enabled_provider_profile_clears_default_disabled_reason(
 
 
 @pytest.mark.asyncio
-async def test_create_provider_profile_defaults_to_unconfigured_not_launchable(
+async def test_create_provider_profile_rejects_unadvertised_manual_contract(
     client_app: AsyncClient, _module_db
 ) -> None:
     payload = {
@@ -1920,26 +2101,25 @@ async def test_create_provider_profile_defaults_to_unconfigured_not_launchable(
 
     async with client_app as client:
         response = await client.post("/api/v1/provider-profiles", json=payload)
+        persisted = await client.get(
+            "/api/v1/provider-profiles/unconfigured_custom_profile"
+        )
 
-    assert response.status_code == 201
-    data = response.json()
-    assert data["enabled"] is False
-    assert data["auth_state"] == "not_configured"
-    assert data["disabled_reason"] == "missing_credentials"
-    assert data["credential_source"] == "none"
-    assert data["is_default"] is False
-    readiness = data["readiness"]
-    assert readiness["launch_ready"] is False
-    checks = {check["id"]: check for check in readiness["checks"]}
-    assert checks["enabled"]["status"] == "error"
-    assert checks["auth_state"]["status"] == "error"
+    assert response.status_code == 422
+    assert "supported authentication preset" in response.json()["detail"]
+    assert persisted.status_code == 404
 
 @pytest.mark.asyncio
 async def test_create_second_profile_can_become_runtime_default(
     client_app: AsyncClient,
     _module_db,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     """Creating a second profile with is_default should move the runtime default."""
+    _advertise_expert_manual_contracts(
+        monkeypatch,
+        ("codex_cli", "unknown", "secret_ref", "api_key_env"),
+    )
     first_payload = {
         "profile_id": "runtime_default_first",
         "runtime_id": "codex_cli",
@@ -1983,7 +2163,12 @@ async def test_create_second_profile_can_become_runtime_default(
 async def test_update_profile_can_become_runtime_default(
     client_app: AsyncClient,
     _module_db,
+    monkeypatch: pytest.MonkeyPatch,
 ):
+    _advertise_expert_manual_contracts(
+        monkeypatch,
+        ("patch_runtime_default", "unknown", "secret_ref", "api_key_env"),
+    )
     first_payload = {
         "profile_id": "patch_runtime_default_first",
         "runtime_id": "patch_runtime_default",
@@ -2035,7 +2220,12 @@ async def test_update_profile_can_become_runtime_default(
 async def test_update_profile_rejects_enabled_without_connected_auth_state(
     client_app: AsyncClient,
     _module_db,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _advertise_expert_manual_contracts(
+        monkeypatch,
+        ("patch_enabled_requires_connected", "unknown", "none", "composite"),
+    )
     payload = {
         "profile_id": "patch_enabled_requires_connected_auth",
         "runtime_id": "patch_enabled_requires_connected",
@@ -2061,7 +2251,12 @@ async def test_update_profile_rejects_enabled_without_connected_auth_state(
 async def test_update_profile_clears_disabled_reason_when_enabled(
     client_app: AsyncClient,
     _module_db,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _advertise_expert_manual_contracts(
+        monkeypatch,
+        ("patch_enabled_clears", "unknown", "secret_ref", "api_key_env"),
+    )
     payload = {
         "profile_id": "patch_enabled_clears_disabled_reason",
         "runtime_id": "patch_enabled_clears",
@@ -2091,10 +2286,15 @@ async def test_update_profile_clears_disabled_reason_when_enabled(
 async def test_update_profile_enabled_accepts_active_database_secret_ref(
     client_app: AsyncClient,
     _module_db,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     suffix = uuid4().hex
     profile_id = f"patch_enabled_db_secret_{suffix}"
     secret_slug = f"patch-enabled-db-secret-{suffix}"
+    _advertise_expert_manual_contracts(
+        monkeypatch,
+        ("patch_enabled_db_secret", "unknown", "secret_ref", "api_key_env"),
+    )
     async with db_base.async_session_maker() as session:
         session.add(
             ManagedSecret(
@@ -2135,7 +2335,17 @@ async def test_update_profile_enabled_accepts_active_database_secret_ref(
 async def test_create_enabled_profile_rejects_missing_database_secret_ref(
     client_app: AsyncClient,
     _module_db,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _advertise_expert_manual_contracts(
+        monkeypatch,
+        (
+            "create_enabled_missing_db_secret",
+            "unknown",
+            "secret_ref",
+            "api_key_env",
+        ),
+    )
     payload = {
         "profile_id": f"create_enabled_missing_db_secret_{uuid4().hex}",
         "runtime_id": "create_enabled_missing_db_secret",
@@ -3778,9 +3988,14 @@ def _mm3788_profile_payload(
 
 @pytest.mark.asyncio
 async def test_mm3788_runtime_filter_excludes_other_runtime_profiles(
-    client_app: AsyncClient, _module_db
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _override_current_user(is_superuser=True)
+    _advertise_expert_manual_contracts(
+        monkeypatch,
+        ("codex_cli", "minimax", "secret_ref", "api_key_env"),
+        ("claude_code", "minimax", "secret_ref", "api_key_env"),
+    )
 
     async with client_app as client:
         codex_response = await client.post(
@@ -3827,9 +4042,14 @@ async def test_mm3788_runtime_filter_excludes_other_runtime_profiles(
 
 @pytest.mark.asyncio
 async def test_mm3788_runtime_filter_composes_with_enabled_only(
-    client_app: AsyncClient, _module_db
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _override_current_user(is_superuser=True)
+    _advertise_expert_manual_contracts(
+        monkeypatch,
+        ("mm3788_compose_runtime", "minimax", "secret_ref", "api_key_env"),
+        ("mm3788_compose_other", "minimax", "secret_ref", "api_key_env"),
+    )
 
     async with client_app as client:
         enabled_response = await client.post(

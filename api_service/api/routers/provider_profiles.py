@@ -669,40 +669,6 @@ async def _credential_disconnect_guard(
         yield guard
 
 
-def _declared_auth_methods_from_rows(
-    rows: list[ManagedAgentProviderProfile],
-) -> tuple[str, ...]:
-    declared: list[str] = []
-    for row in rows:
-        behavior = row.command_behavior
-        raw_methods = (
-            behavior.get("supported_auth_methods")
-            if isinstance(behavior, dict)
-            else None
-        )
-        if not isinstance(raw_methods, list):
-            continue
-        for raw_method in raw_methods:
-            if isinstance(raw_method, str) and raw_method not in declared:
-                declared.append(raw_method)
-    return tuple(declared)
-
-
-async def _declared_auth_methods_for_pair(
-    session: AsyncSession,
-    *,
-    runtime_id: str,
-    provider_id: str,
-) -> tuple[str, ...]:
-    result = await session.execute(
-        select(ManagedAgentProviderProfile).where(
-            ManagedAgentProviderProfile.runtime_id == runtime_id,
-            ManagedAgentProviderProfile.provider_id == provider_id,
-        )
-    )
-    return _declared_auth_methods_from_rows(list(result.scalars().all()))
-
-
 async def _validate_imported_credential_volume(
     *,
     runtime_id: str,
@@ -806,19 +772,12 @@ async def list_profiles(
 async def get_creation_preset(
     runtime_id: str,
     provider_id: str,
-    session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
     current_user: User = Depends(get_current_user()),
 ) -> dict[str, Any]:
     _require_provider_profile_permission(current_user, "provider_profiles.read")
-    declared_methods = await _declared_auth_methods_for_pair(
-        session,
-        runtime_id=runtime_id,
-        provider_id=provider_id,
-    )
     return provider_profile_creation_capabilities(
         runtime_id=runtime_id,
         provider_id=provider_id,
-        declared_auth_methods=declared_methods,
     )
 
 
@@ -891,15 +850,9 @@ async def create_profile(
             ),
         )
 
-    declared_methods = await _declared_auth_methods_for_pair(
-        session,
-        runtime_id=body.runtime_id,
-        provider_id=body.provider_id,
-    )
     capabilities = provider_profile_creation_capabilities(
         runtime_id=body.runtime_id,
         provider_id=body.provider_id,
-        declared_auth_methods=declared_methods,
     )
 
     credential_source = body.credential_source
@@ -922,7 +875,6 @@ async def create_profile(
                 runtime_id=body.runtime_id,
                 provider_id=body.provider_id,
                 authentication_method=body.authentication_method,
-                declared_auth_methods=declared_methods,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -1020,7 +972,7 @@ async def create_profile(
                 },
             }
         )
-    elif capabilities["supported"]:
+    else:
         try:
             validate_manual_credential_contract(
                 credential_source=credential_source,
@@ -1166,22 +1118,37 @@ async def update_profile(
         or manual_contract_overridden
         or "provider_id" in update_data
     )
+    launch_authority_changed = bool(
+        {
+            "provider_id",
+            "credential_source",
+            "runtime_materialization_mode",
+            "volume_ref",
+            "volume_mount_path",
+            "secret_refs",
+            "clear_env_keys",
+            "env_template",
+            "file_templates",
+            "home_path_overrides",
+            "command_behavior",
+            "max_parallel_runs",
+            "cooldown_after_429_seconds",
+            "auth_state",
+            "disabled_reason",
+            "last_auth_method",
+        }.intersection(update_data)
+        or update_data.get("enabled") is True
+        or import_existing_credential_volume
+    )
     requested_is_default = update_data.pop("is_default", None)
     target_provider_id = update_data.get("provider_id") or profile.provider_id
-    declared_methods = await _declared_auth_methods_for_pair(
-        session,
-        runtime_id=profile.runtime_id,
-        provider_id=target_provider_id,
-    )
     capabilities = provider_profile_creation_capabilities(
         runtime_id=profile.runtime_id,
         provider_id=target_provider_id,
-        declared_auth_methods=declared_methods,
     )
     if (
         manual_contract_overridden
         and not import_existing_credential_volume
-        and capabilities["supported"]
     ):
         try:
             validate_manual_credential_contract(
@@ -1324,7 +1291,7 @@ async def update_profile(
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        if capabilities["supported"] and infer_authentication_method(
+        if infer_authentication_method(
             credential_source=profile.credential_source,
             runtime_materialization_mode=profile.runtime_materialization_mode,
             authentication_methods=capabilities["authentication_methods"],
@@ -1339,7 +1306,7 @@ async def update_profile(
                 ),
             )
 
-    if profile.enabled:
+    if profile.enabled and launch_authority_changed:
         if profile.auth_state != ProviderProfileAuthState.CONNECTED:
             raise HTTPException(
                 status_code=422,
@@ -2425,16 +2392,15 @@ def _credential_capability_check(
     capabilities = provider_profile_creation_capabilities(
         runtime_id=row.runtime_id,
         provider_id=row.provider_id,
-        declared_auth_methods=_declared_auth_methods_from_rows([row]),
     )
     if not capabilities["supported"]:
         return _readiness_check(
             "credential_capability",
             "Credential capability",
-            "pass",
+            "error",
             (
-                "No guided authentication capability is registered for this "
-                "expert profile."
+                "No authoritative authentication capability is registered for "
+                "this profile."
             ),
         )
     authentication_method = infer_authentication_method(
@@ -2673,11 +2639,9 @@ def _row_to_dict(
         legacy_default_effort=row.default_effort,
         empty_as_missing=True,
     )
-    declared_auth_methods = _declared_auth_methods_from_rows([row])
     creation_capabilities = provider_profile_creation_capabilities(
         runtime_id=row.runtime_id,
         provider_id=row.provider_id,
-        declared_auth_methods=declared_auth_methods,
     )
     authentication_method = infer_authentication_method(
         credential_source=row.credential_source,

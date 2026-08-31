@@ -48,7 +48,6 @@ def provider_profile_launch_ready(
         materialization_mode=row.runtime_materialization_mode,
         auth_state=row.auth_state,
         last_auth_method=getattr(row, "last_auth_method", None),
-        command_behavior=row.command_behavior,
     ):
         return False
     if not _credential_bindings_launch_ready(
@@ -98,7 +97,6 @@ def provider_profile_launch_ready_from_payload(profile: dict[str, Any]) -> bool:
         last_auth_method=profile.get(
             "last_auth_method", profile.get("lastAuthMethod")
         ),
-        command_behavior=command_behavior,
     ):
         return False
     if str(getattr(credential_source, "value", credential_source) or "") == "secret_ref":
@@ -134,25 +132,13 @@ def _credential_contract_launch_ready(
     materialization_mode: object,
     auth_state: object,
     last_auth_method: object,
-    command_behavior: object,
 ) -> bool:
-    declared_methods: list[str] = []
-    raw_methods = (
-        command_behavior.get("supported_auth_methods")
-        if isinstance(command_behavior, dict)
-        else None
-    )
-    if isinstance(raw_methods, list):
-        declared_methods = [
-            value for value in raw_methods if isinstance(value, str) and value
-        ]
     capabilities = provider_profile_creation_capabilities(
         runtime_id=str(runtime_id or ""),
         provider_id=str(provider_id or ""),
-        declared_auth_methods=declared_methods,
     )
     if not capabilities["supported"]:
-        return True
+        return False
     return (
         infer_authentication_method(
             credential_source=credential_source,

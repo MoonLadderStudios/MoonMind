@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import pytest
 
+from api_service.services import provider_profile_creation
 from api_service.services.provider_profile_creation import (
+    ExpertManualCredentialCapability,
+    RuntimeProviderAuthenticationCapability,
     infer_authentication_method,
     provider_profile_creation_capabilities,
     required_secret_roles,
@@ -48,23 +51,34 @@ def test_first_party_openai_creation_capabilities_are_guided_and_locked() -> Non
     ]
 
 
-def test_credential_free_method_requires_explicit_backend_declaration() -> None:
+def test_credential_free_method_requires_authoritative_backend_capability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    capability = RuntimeProviderAuthenticationCapability(
+        runtime_id="custom_runtime",
+        provider_id="local_provider",
+        credential_free=True,
+    )
+    monkeypatch.setattr(
+        provider_profile_creation,
+        "_RUNTIME_PROVIDER_AUTHENTICATION_CAPABILITIES",
+        (capability,),
+    )
     unsupported = provider_profile_creation_capabilities(
         runtime_id="custom_runtime",
-        provider_id="local_provider",
+        provider_id="unsupported_provider",
     )
-    declared = provider_profile_creation_capabilities(
-        runtime_id="custom_runtime",
-        provider_id="local_provider",
-        declared_auth_methods=("none",),
+    authorized = provider_profile_creation_capabilities(
+        runtime_id=capability.runtime_id,
+        provider_id=capability.provider_id,
     )
 
     assert unsupported["supported"] is False
     assert unsupported["authentication_methods"] == []
-    assert [method["id"] for method in declared["authentication_methods"]] == [
+    assert [method["id"] for method in authorized["authentication_methods"]] == [
         "none"
     ]
-    assert declared["authentication_methods"][0]["label"] == "No credentials"
+    assert authorized["authentication_methods"][0]["label"] == "No credentials"
 
 
 def test_required_secret_roles_are_backend_declared() -> None:
@@ -153,5 +167,43 @@ def test_locked_guided_contract_cannot_be_submitted_as_manual_overrides() -> Non
         validate_manual_credential_contract(
             credential_source="secret_ref",
             runtime_materialization_mode="api_key_env",
+            authentication_methods=capabilities["authentication_methods"],
+        )
+
+
+def test_exact_expert_manual_contract_requires_typed_backend_capability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    capability = RuntimeProviderAuthenticationCapability(
+        runtime_id="custom_runtime",
+        provider_id="custom_provider",
+        expert_manual_credentials=(
+            ExpertManualCredentialCapability(
+                authentication_method="api_key",
+                label="Expert API key",
+                credential_source="secret_ref",
+                runtime_materialization_mode="config_bundle",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        provider_profile_creation,
+        "_RUNTIME_PROVIDER_AUTHENTICATION_CAPABILITIES",
+        (capability,),
+    )
+    capabilities = provider_profile_creation_capabilities(
+        runtime_id=capability.runtime_id,
+        provider_id=capability.provider_id,
+    )
+
+    validate_manual_credential_contract(
+        credential_source="secret_ref",
+        runtime_materialization_mode="config_bundle",
+        authentication_methods=capabilities["authentication_methods"],
+    )
+    with pytest.raises(ValueError, match="does not match"):
+        validate_manual_credential_contract(
+            credential_source="none",
+            runtime_materialization_mode="composite",
             authentication_methods=capabilities["authentication_methods"],
         )
