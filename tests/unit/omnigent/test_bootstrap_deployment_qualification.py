@@ -786,9 +786,16 @@ async def test_credentialless_default_initializes_deployment_qualification(
         return record.model_copy(update={"state": BootstrapState.ready})
 
     monkeypatch.setattr(controller, "_reconcile", _reconcile)
+    ensure_materializers = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        controller,
+        "_ensure_launchable_materializer_qualifications",
+        ensure_materializers,
+    )
 
     assert await controller.reconcile_deployment_qualification()
     assert saved[-1].provider_profile_ref == "opencode-zen-free"
+    ensure_materializers.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -856,6 +863,11 @@ async def test_managed_agent_profile_advance_requalifies_default_deployment(
     )
     requalify = AsyncMock(return_value=refreshed)
     monkeypatch.setattr(controller, "requalify", requalify)
+    monkeypatch.setattr(
+        controller,
+        "_ensure_launchable_materializer_qualifications",
+        AsyncMock(return_value=True),
+    )
 
     assert await controller.reconcile_deployment_qualification()
     requalify.assert_awaited_once_with()
@@ -922,6 +934,157 @@ async def test_current_default_qualification_avoids_repeating_live_workload(
     )
     requalify = AsyncMock()
     monkeypatch.setattr(controller, "requalify", requalify)
+    ensure_materializers = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        controller,
+        "_ensure_launchable_materializer_qualifications",
+        ensure_materializers,
+    )
 
     assert await controller.reconcile_deployment_qualification()
     requalify.assert_not_awaited()
+    ensure_materializers.assert_awaited_once_with(current)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("zen_already_published", "expected_qualification_count"),
+    [(False, 1), (True, 0)],
+)
+async def test_launchable_materializer_classes_are_qualified_once(
+    monkeypatch,
+    zen_already_published: bool,
+    expected_qualification_count: int,
+) -> None:
+    """A non-default Zen profile must retain exact ``none@1`` evidence."""
+
+    from moonmind.omnigent.bootstrap.provider_revalidation import (
+        ProviderReconcileOutcome,
+    )
+    from moonmind.omnigent.harness_platform.support import SupportKeyPayload
+
+    def _support_identity(materializer_ref: str) -> SupportKeyPayload:
+        return SupportKeyPayload(
+            omnigentServerBuildRef="sha256:" + "a" * 64,
+            omnigentHostBuildRef="sha256:" + "a" * 64,
+            harnessImplementationRef=(
+                "omnigent-harness-implementation:sha256:" + "c" * 64
+            ),
+            vendorRuntimeRefs=["opencode@1.18.11#sha256:" + "d" * 64],
+            agentSourceRef="agent-source:sha256:" + "e" * 64,
+            materializerRefs=[materializer_ref],
+            providerCompatibilityClass="opencode-native.primary-model",
+            hostClassRef="omnigent-opencode@1",
+            architecture="linux/amd64",
+            launchPolicyRef="omnigent-on-demand@1",
+            modelConfigDigest="sha256:" + "f" * 64,
+            executionRealizerRef="generic-omnigent-host@1",
+            requiredCapabilitiesDigest="sha256:" + "1" * 64,
+        )
+
+    def _evidence(profile, materializer_ref: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            support_identity=_support_identity(materializer_ref),
+            host_image_ref=_HOST_IMAGE_REF,
+            provider={
+                "profileRef": profile.profile_id,
+                "credentialGeneration": profile.credential_generation,
+            },
+            model={
+                "qualifiedId": profile.default_model,
+                "effort": profile.default_effort,
+            },
+        )
+
+    shared = {
+        "runtime_id": "opencode",
+        "enabled": True,
+        "priority": 100,
+        "credential_generation": 1,
+    }
+    go_profile = SimpleNamespace(
+        **shared,
+        profile_id="opencode-go-default",
+        provider_id="opencode-go",
+        is_default=True,
+        default_model="opencode-go/muse-spark-1.2-contributor",
+        default_effort="xhigh",
+    )
+    zen_profile = SimpleNamespace(
+        **shared,
+        profile_id="opencode-zen-free",
+        provider_id="opencode",
+        is_default=False,
+        default_model="opencode/muse-spark-1.2-contributor-free",
+        default_effort="xhigh",
+    )
+    profiles = [go_profile, zen_profile]
+
+    class _QualificationSession:
+        async def execute(self, _statement):
+            return SimpleNamespace(
+                scalars=lambda: SimpleNamespace(all=lambda: profiles)
+            )
+
+        async def get(self, _model, identity):
+            return {profile.profile_id: profile for profile in profiles}.get(identity)
+
+    @asynccontextmanager
+    async def _session_scope():
+        yield _QualificationSession()
+
+    current_images = ResolvedOmnigentDeploymentState(
+        serverImageRef=_SERVER_IMAGE_REF,
+        opencodeHostImageRef=_HOST_IMAGE_REF,
+        omnigentBuildDigest="sha256:" + "a" * 64,
+        architecture="linux/amd64",
+    )
+    go_evidence = _evidence(go_profile, "opencode-auth-json@1")
+    zen_evidence = _evidence(zen_profile, "none@1")
+    published = [go_evidence]
+    if zen_already_published:
+        published.append(zen_evidence)
+
+    monkeypatch.setattr(
+        "moonmind.omnigent.bootstrap.store.load_resolved_state",
+        lambda: current_images,
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.deployment_evidence.load_deployment_evidence_for_support_combination",
+        lambda _key: go_evidence,
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.deployment_evidence.load_deployment_evidence_entries",
+        lambda: tuple(published),
+    )
+    monkeypatch.setattr(
+        "api_service.services.provider_profile_service._managed_secret_statuses_for_profiles",
+        AsyncMock(return_value={}),
+    )
+    monkeypatch.setattr(
+        "api_service.services.provider_profile_readiness.provider_profile_launch_ready",
+        lambda *_args, **_kwargs: True,
+    )
+    revalidate = AsyncMock(return_value=ProviderReconcileOutcome(ready=True))
+    monkeypatch.setattr(
+        "moonmind.omnigent.bootstrap.provider_revalidation.reconcile_opencode_provider_readiness",
+        revalidate,
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.deployment_evidence.validate_deployment_evidence",
+        lambda _payload: zen_evidence,
+    )
+    controller = controller_module.BootstrapController(
+        session_factory=lambda: _session_scope()
+    )
+    qualify = AsyncMock(return_value={})
+    monkeypatch.setattr(controller, "_qualify_and_publish", qualify)
+
+    record = _ready_bootstrap_record(agent_profile_ref="omnigent-opencode-default@8")
+    assert await controller._ensure_launchable_materializer_qualifications(record)
+    assert qualify.await_count == expected_qualification_count
+    assert revalidate.await_count == expected_qualification_count
+    if expected_qualification_count:
+        assert qualify.await_args.kwargs["provider_profile_ref"] == (
+            "opencode-zen-free"
+        )

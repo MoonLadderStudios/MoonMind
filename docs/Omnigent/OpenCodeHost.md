@@ -262,6 +262,13 @@ model against the exact pinned host and publishes the same deployment evidence
 required by key-backed profiles. An existing explicit operator disable remains
 authoritative.
 
+Deployment qualification is independent of runtime-default selection. MoonMind
+publishes one exact signed entry for each launch-ready OpenCode materializer
+class, so an explicitly selected Zen profile retains `none@1` evidence while an
+OpenCode Go default retains separate `opencode-auth-json@1` evidence. Changing
+the default does not invalidate another launch-ready class or transfer its
+credential authority.
+
 An optional OpenCode Go Provider Profile has the following effective shape:
 
 ```yaml
@@ -482,7 +489,10 @@ The default local deployment-qualification path instead binds the immutable
 runtime substrate and credential compatibility class. Per-run model/options
 and Required Capabilities are admitted independently through class admission,
 provider/runtime validation, and exact-host model attestation, so selecting a
-valid default Provider Profile does not require manual requalification.
+valid launch-ready Provider Profile does not require changing the runtime
+default or manual requalification. The deployment evidence publication retains
+one independently signed entry per launchable materializer class; entries are
+replaced only by a newly qualified entry for the same deployment-scoped class.
 
 ## 16. Migration and rollback
 

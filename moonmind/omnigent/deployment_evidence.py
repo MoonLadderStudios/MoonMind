@@ -358,10 +358,57 @@ def _unqualified_combination_message(
     return (
         "this deployment is not qualified for the requested execution "
         f"combination {plan_payload.supportCombinationKey} ({detail}). "
-        "Qualification follows the current Provider and Agent Profile defaults; "
-        "align those defaults with the requested host and launch policy before "
-        "qualifying the deployment."
+        "Qualification follows the current launch-ready Provider Profile "
+        "materializer classes and Agent Profile launch policy; revalidate the "
+        "requested profile and retry deployment qualification."
     )
+
+
+def _load_deployment_evidence_candidates(
+    path: str | Path | None,
+) -> list[Any]:
+    configured = str(
+        path
+        or os.getenv(
+            _DEPLOYMENT_EVIDENCE_ENV,
+            "/workspace/omnigent-evidence/deployment-execution-evidence.json",
+        )
+    ).strip()
+    if not configured:
+        raise ValueError("deployment execution evidence is not configured")
+    try:
+        raw = json.loads(Path(configured).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("deployment execution evidence is unavailable") from exc
+    if not isinstance(raw, Mapping):
+        raise ValueError("deployment evidence must be an object")
+    entries = raw.get("entries")
+    return list(entries) if isinstance(entries, list) else [raw]
+
+
+def load_deployment_evidence_entries(
+    *,
+    path: str | Path | None = None,
+    now: datetime | None = None,
+) -> tuple[DeploymentExecutionEvidence, ...]:
+    """Load every independently valid local qualification entry.
+
+    Invalid unrelated entries do not make a valid exact combination
+    inadmissible. Callers receive only HMAC-verified, current evidence and can
+    decide which deployment qualification class they own.
+    """
+
+    validated: list[DeploymentExecutionEvidence] = []
+    for candidate in _load_deployment_evidence_candidates(path):
+        if not isinstance(candidate, Mapping):
+            continue
+        try:
+            validated.append(validate_deployment_evidence(candidate, now=now))
+        except ValueError:
+            continue
+    if not validated:
+        raise ValueError("deployment execution evidence is unavailable")
+    return tuple(validated)
 
 
 def load_deployment_evidence_for_support_combination(
@@ -381,23 +428,7 @@ def load_deployment_evidence_for_support_combination(
     expected_key = str(support_combination_key or "").strip()
     if not expected_key.startswith("omnigent-support:sha256:"):
         raise ValueError("deployment support combination key is unavailable")
-    configured = str(
-        path
-        or os.getenv(
-            _DEPLOYMENT_EVIDENCE_ENV,
-            "/workspace/omnigent-evidence/deployment-execution-evidence.json",
-        )
-    ).strip()
-    if not configured:
-        raise ValueError("deployment execution evidence is not configured")
-    try:
-        raw = json.loads(Path(configured).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError("deployment execution evidence is unavailable") from exc
-    if not isinstance(raw, Mapping):
-        raise ValueError("deployment evidence must be an object")
-    entries = raw.get("entries")
-    candidates = list(entries) if isinstance(entries, list) else [raw]
+    candidates = _load_deployment_evidence_candidates(path)
     matching = [
         value
         for value in candidates
@@ -418,22 +449,7 @@ def load_deployment_evidence(
     path: str | Path | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    configured = str(
-        path or os.getenv(_DEPLOYMENT_EVIDENCE_ENV, "/workspace/omnigent-evidence/deployment-execution-evidence.json")
-    ).strip()
-    # Also try alternative env MOONMIND_OMNIGENT_DEPLOYMENT_EVIDENCE
-    if not configured:
-        configured = str(os.getenv("MOONMIND_OMNIGENT_DEPLOYMENT_EVIDENCE", "")).strip()
-    if not configured:
-        raise ValueError("deployment execution evidence is not configured")
-    try:
-        raw = json.loads(Path(configured).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError("deployment execution evidence is unavailable") from exc
-    if not isinstance(raw, Mapping):
-        raise ValueError("deployment evidence must be an object")
-    entries = raw.get("entries")
-    candidates = list(entries) if isinstance(entries, list) else [raw]
+    candidates = _load_deployment_evidence_candidates(path)
     requested_qualification_key = compute_deployment_qualification_key(
         plan_payload.supportIdentity
     )
@@ -460,6 +476,7 @@ __all__ = [
     "assert_deployment_evidence_matches_plan",
     "get_or_create_signing_key",
     "load_deployment_evidence",
+    "load_deployment_evidence_entries",
     "load_deployment_evidence_for_support_combination",
     "sign_deployment_evidence",
     "validate_deployment_evidence",

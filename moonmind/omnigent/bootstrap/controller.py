@@ -269,7 +269,11 @@ class BootstrapController:
                 api_key=None,
                 principal=None,
             )
-            return initialized.state == BootstrapState.ready
+            if initialized.state != BootstrapState.ready:
+                return False
+            return await self._ensure_launchable_materializer_qualifications(
+                initialized
+            )
 
         from sqlalchemy import select
 
@@ -374,7 +378,7 @@ class BootstrapController:
         if record.state != BootstrapState.ready:
             drift.append("bootstrap_state")
         if not drift:
-            return True
+            return await self._ensure_launchable_materializer_qualifications(record)
 
         logger.info(
             "Refreshing OpenCode deployment qualification after managed "
@@ -387,13 +391,178 @@ class BootstrapController:
                 "OpenCode deployment qualification now matches Agent Profile %s",
                 refreshed.agent_profile_ref,
             )
-            return True
+            return await self._ensure_launchable_materializer_qualifications(refreshed)
         failure_code = str((refreshed.failure or {}).get("code") or "unknown")
         logger.warning(
             "OpenCode deployment qualification refresh deferred: code=%s",
             failure_code,
         )
         return False
+
+    async def _ensure_launchable_materializer_qualifications(
+        self,
+        record: BootstrapRecord,
+    ) -> bool:
+        """Publish exact evidence for every launchable materializer class.
+
+        Provider Profile default selection chooses the representative used for
+        the primary bootstrap record. It must not make another explicitly
+        selected, launch-ready credential class unusable. One validated
+        representative per materializer is sufficient because profile and
+        model readiness remain independently enforced during plan compilation
+        and launch.
+        """
+
+        from sqlalchemy import select
+
+        from api_service.db.models import ManagedAgentProviderProfile
+        from api_service.services.provider_profile_readiness import (
+            provider_profile_launch_ready,
+        )
+        from api_service.services.provider_profile_service import (
+            _managed_secret_statuses_for_profiles,
+        )
+        from moonmind.omnigent.bootstrap.provider_revalidation import (
+            reconcile_opencode_provider_readiness,
+        )
+        from moonmind.omnigent.bootstrap.store import load_resolved_state
+        from moonmind.omnigent.deployment_evidence import (
+            load_deployment_evidence_entries,
+            load_deployment_evidence_for_support_combination,
+            validate_deployment_evidence,
+        )
+        from moonmind.omnigent.harness_platform.materializers import (
+            materializer_ref_for_provider,
+        )
+        from moonmind.omnigent.harness_platform.support import (
+            DEPLOYMENT_QUALIFICATION_EXCLUDED_FIELDS,
+        )
+
+        resolved = load_resolved_state()
+        if resolved is None:
+            return False
+        try:
+            primary_evidence = load_deployment_evidence_for_support_combination(
+                str(record.last_evidence_ref or "")
+            )
+            published = list(load_deployment_evidence_entries())
+        except ValueError:
+            return False
+
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(ManagedAgentProviderProfile)
+                .where(
+                    ManagedAgentProviderProfile.runtime_id == "opencode",
+                    ManagedAgentProviderProfile.enabled.is_(True),
+                )
+                .order_by(
+                    ManagedAgentProviderProfile.is_default.desc(),
+                    ManagedAgentProviderProfile.priority.desc(),
+                    ManagedAgentProviderProfile.profile_id.asc(),
+                )
+            )
+            profiles = list(result.scalars().all())
+            secret_statuses = await _managed_secret_statuses_for_profiles(
+                session=session,
+                rows=profiles,
+            )
+            profiles = [
+                profile
+                for profile in profiles
+                if provider_profile_launch_ready(
+                    profile,
+                    managed_secret_statuses=secret_statuses,
+                )
+            ]
+
+        representatives: dict[str, Any] = {}
+        for profile in profiles:
+            materializer_ref = materializer_ref_for_provider(
+                str(profile.runtime_id or ""),
+                str(profile.provider_id or ""),
+            )
+            representatives.setdefault(materializer_ref, profile)
+
+        shared_exclusions = DEPLOYMENT_QUALIFICATION_EXCLUDED_FIELDS | {
+            "materializerRefs"
+        }
+
+        def _shared_identity(evidence: Any) -> dict[str, Any]:
+            identity = evidence.support_identity.model_dump(mode="json", by_alias=True)
+            return {
+                key: value
+                for key, value in identity.items()
+                if key not in shared_exclusions
+            }
+
+        primary_shared_identity = _shared_identity(primary_evidence)
+        for materializer_ref, profile in representatives.items():
+            profile_ref = str(profile.profile_id)
+            qualified_model = str(profile.default_model or "").strip()
+            effort = str(profile.default_effort or "xhigh").strip()
+            credential_generation = int(profile.credential_generation)
+            current = next(
+                (
+                    evidence
+                    for evidence in published
+                    if evidence.support_identity.materializerRefs == (materializer_ref,)
+                    and _shared_identity(evidence) == primary_shared_identity
+                    and evidence.host_image_ref == resolved.opencode_host_image_ref
+                    and evidence.provider.get("profileRef") == profile_ref
+                    and evidence.provider.get("credentialGeneration")
+                    == credential_generation
+                    and evidence.model.get("qualifiedId") == qualified_model
+                    and evidence.model.get("effort") == effort
+                ),
+                None,
+            )
+            if current is not None:
+                continue
+            if not qualified_model:
+                logger.warning(
+                    "OpenCode deployment qualification deferred: Provider Profile "
+                    "%s has no default model",
+                    profile_ref,
+                )
+                return False
+
+            revalidation = await reconcile_opencode_provider_readiness(
+                session_factory=self._session_factory,
+                allow_enrollment=False,
+                profile_ids=(profile_ref,),
+            )
+            if not revalidation.ready:
+                logger.warning(
+                    "OpenCode deployment qualification deferred: Provider Profile "
+                    "%s could not be revalidated",
+                    profile_ref,
+                )
+                return False
+            async with self._session_factory() as session:
+                refreshed = await session.get(
+                    ManagedAgentProviderProfile,
+                    profile_ref,
+                )
+            if refreshed is None:
+                return False
+            qualified_model = str(refreshed.default_model or "").strip()
+            effort = validate_effort(str(refreshed.default_effort or "xhigh").strip())
+            evidence_payload = await self._qualify_and_publish(
+                provider_profile_ref=profile_ref,
+                qualified_model=qualified_model,
+                effort=effort,
+                resolved=resolved,
+                record=record,
+            )
+            published.append(validate_deployment_evidence(evidence_payload))
+            logger.info(
+                "Published OpenCode deployment qualification for materializer %s "
+                "using Provider Profile %s",
+                materializer_ref,
+                profile_ref,
+            )
+        return True
 
     async def _reconcile(
         self,

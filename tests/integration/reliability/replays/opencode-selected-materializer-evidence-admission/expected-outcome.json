@@ -1,0 +1,5 @@
+{
+  "invariant": "each launchable OpenCode credential materializer class retains independent exact deployment qualification evidence",
+  "supportTier": "deployment_qualified",
+  "selectedMaterializerRef": "none@1"
+}
