@@ -13,6 +13,9 @@ from moonmind.omnigent.host_services.legacy_host_containers import (
 )
 from moonmind.omnigent.host_services.mounted_tools import OmnigentMountedToolService
 from moonmind.omnigent.host_services.registration import OmnigentHostRegistrationService
+from moonmind.omnigent.host_services.runtime_environment import (
+    OmnigentRuntimeEnvironmentService,
+)
 from moonmind.omnigent.host_services.runtime_scripts import OmnigentRuntimeScriptService
 from moonmind.omnigent.host_services.skills import OmnigentSkillDeliveryService
 from moonmind.omnigent.host_services.workspace import OmnigentWorkspaceMaterializer
@@ -27,6 +30,7 @@ __all__ = [
     "OmnigentGithubCredentialService",
     "OmnigentHostRegistrationService",
     "OmnigentMountedToolService",
+    "OmnigentRuntimeEnvironmentService",
     "OmnigentRuntimeScriptService",
     "OmnigentSkillDeliveryService",
     "OmnigentWorkspaceMaterializer",

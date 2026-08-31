@@ -173,6 +173,20 @@ class OmnigentHostLauncherPort(Protocol):
 
 
 @runtime_checkable
+class OmnigentRuntimeEnvironmentPort(Protocol):
+    """Build lease-scoped runtime capabilities at the infrastructure boundary."""
+
+    def build(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        plan: OmnigentExecutionPlanEnvelope,
+        host_lease_ref: str,
+        launch_policy: LaunchPolicy,
+    ) -> Mapping[str, str]: ...
+
+
+@runtime_checkable
 class OmnigentHostRegistrationPort(Protocol):
     """Wait for the launched host to register its harness with the endpoint."""
 

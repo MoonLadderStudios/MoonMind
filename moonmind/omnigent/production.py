@@ -14,6 +14,7 @@ from moonmind.auth.resolvers import (
     RootSecretResolver,
 )
 from moonmind.auth.secret_refs import SecretBackend
+from moonmind.config.settings import settings
 from moonmind.omnigent.bridge_artifacts import TemporalOmnigentArtifactGateway
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.omnigent.credential_materializers import (
@@ -55,6 +56,7 @@ from moonmind.omnigent.host_services import (
     OmnigentGithubCredentialService,
     OmnigentHostRegistrationService,
     OmnigentMountedToolService,
+    OmnigentRuntimeEnvironmentService,
     OmnigentRuntimeScriptService,
     OmnigentSkillDeliveryService,
     OmnigentWorkspaceMaterializer,
@@ -249,6 +251,10 @@ def build_generic_omnigent_execution_services(
         tool_service=OmnigentMountedToolService(backend=docker),
         github_credential_service=OmnigentGithubCredentialService(docker),
         egress_service=OmnigentEgressService(backend=docker, artifacts=artifacts),
+        runtime_environment_service=OmnigentRuntimeEnvironmentService(
+            moonmind_url=str(os.getenv("MOONMIND_URL") or "http://api:8000"),
+            signing_secret=str(settings.security.JWT_SECRET_KEY or ""),
+        ),
         registration_waiter=OmnigentHostRegistrationService(
             client=client, expected_owner=expected_owner
         ),

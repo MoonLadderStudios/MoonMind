@@ -50,7 +50,6 @@ from moonmind.omnigent.harness_platform.stores import (
     InMemoryExecutionPlanUsageStore,
 )
 from moonmind.omnigent.host_leases import InMemoryOmnigentHostLeaseRepository
-from moonmind.omnigent.host_runtime import GenericOmnigentHostRuntime
 from moonmind.omnigent.host_services.attestation import (
     _assert_exact_omnigent_build,
     _attest_workspace_mount,
@@ -67,6 +66,9 @@ from moonmind.omnigent.host_services.launcher import DockerOmnigentHostLauncher
 from moonmind.omnigent.host_services.mounted_tools import (
     OmnigentMountedToolService,
     deployment_mounted_tool_names,
+)
+from moonmind.omnigent.host_services.runtime_environment import (
+    OmnigentRuntimeEnvironmentService,
 )
 from moonmind.omnigent.host_services.workspace import OmnigentWorkspaceMaterializer
 from moonmind.omnigent.provider_leases import (
@@ -1075,7 +1077,10 @@ def test_generic_host_mints_scoped_fanout_from_step_authority(
         }
     )
 
-    environment = GenericOmnigentHostRuntime._runtime_environment(
+    environment = OmnigentRuntimeEnvironmentService(
+        moonmind_url="http://api:8000",
+        signing_secret="test_jwt_secret_key",
+    ).build(
         request=request,
         plan=_plan("opencode/muse-spark-1.2-contributor-free"),
         host_lease_ref="host-lease-1",
