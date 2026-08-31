@@ -32,6 +32,21 @@ from moonmind.omnigent.harness_platform.support import (
 logger = logging.getLogger(__name__)
 
 
+def _resolve_profile_model_effort(profile: Any) -> tuple[str, str]:
+    """Resolve one Provider Profile through the canonical launch authority."""
+
+    from moonmind.workflows.executions.model_resolver import resolve_model_effort
+
+    resolved = resolve_model_effort(
+        runtime_id=str(getattr(profile, "runtime_id", None) or "opencode"),
+        profile=profile,
+        require_launch_ready=False,
+    )
+    model = str(resolved.model or "").strip()
+    effort = validate_effort(str(resolved.effort or "xhigh").strip())
+    return model, effort
+
+
 class BootstrapController:
     """Idempotent controller driven by desired state."""
 
@@ -179,12 +194,11 @@ class BootstrapController:
         if provider_profile is None:
             raise ValueError("the persisted OpenCode Provider Profile no longer exists")
         desired_updates: dict[str, Any] = {}
-        current_model = str(provider_profile.default_model or "").strip()
+        current_model, current_effort = _resolve_profile_model_effort(provider_profile)
         if current_model:
             desired_updates["model_display_name"] = current_model
-        current_effort = str(provider_profile.default_effort or "").strip()
         if current_effort:
-            desired_updates["effort"] = validate_effort(current_effort)
+            desired_updates["effort"] = current_effort
         record = record.model_copy(
             update={
                 "state": BootstrapState.resolving_images,
@@ -226,42 +240,64 @@ class BootstrapController:
             )
 
             async with self._session_factory() as session:
-                default_profile = await session.scalar(
+                result = await session.execute(
                     select(ManagedAgentProviderProfile)
                     .where(
                         ManagedAgentProviderProfile.runtime_id == "opencode",
                         ManagedAgentProviderProfile.enabled.is_(True),
-                        ManagedAgentProviderProfile.is_default.is_(True),
                     )
                     .order_by(
+                        ManagedAgentProviderProfile.is_default.desc(),
                         ManagedAgentProviderProfile.priority.desc(),
                         ManagedAgentProviderProfile.profile_id.asc(),
                     )
-                    .limit(1)
                 )
-                if default_profile is None:
+                profiles = list(result.scalars().all())
+                if not profiles:
                     return True
                 secret_statuses = await _managed_secret_statuses_for_profiles(
                     session=session,
-                    rows=[default_profile],
+                    rows=profiles,
                 )
-                if not provider_profile_launch_ready(
-                    default_profile,
-                    managed_secret_statuses=secret_statuses,
-                ):
+                launch_ready_profiles = [
+                    profile
+                    for profile in profiles
+                    if provider_profile_launch_ready(
+                        profile,
+                        managed_secret_statuses=secret_statuses,
+                    )
+                ]
+                if not launch_ready_profiles:
                     return True
-            default_model = str(default_profile.default_model or "").strip()
+            representative = launch_ready_profiles[0]
+            try:
+                default_model, default_effort = _resolve_profile_model_effort(
+                    representative
+                )
+            except ValueError as exc:
+                logger.warning(
+                    "OpenCode deployment qualification deferred: Provider Profile "
+                    "%s model authority is invalid: %s",
+                    representative.profile_id,
+                    exc,
+                )
+                return False
             if not default_model:
-                return True
+                logger.warning(
+                    "OpenCode deployment qualification deferred: Provider Profile "
+                    "%s has no resolvable default model",
+                    representative.profile_id,
+                )
+                return False
             record = BootstrapRecord(
                 state=BootstrapState.resolving_images,
                 desired=BootstrapDesired(
-                    provider=str(default_profile.provider_id or ""),
+                    provider=str(representative.provider_id or ""),
                     modelDisplayName=default_model,
-                    effort=str(default_profile.default_effort or "xhigh"),
+                    effort=default_effort,
                     acceptContributorDataUse=True,
                 ),
-                providerProfileRef=str(default_profile.profile_id),
+                providerProfileRef=str(representative.profile_id),
             )
             save_bootstrap_record(record)
             initialized = await self._reconcile(
@@ -269,8 +305,6 @@ class BootstrapController:
                 api_key=None,
                 principal=None,
             )
-            if initialized.state != BootstrapState.ready:
-                return False
             return await self._ensure_launchable_materializer_qualifications(
                 initialized
             )
@@ -337,8 +371,9 @@ class BootstrapController:
                 drift.append("omnigent_build_digest")
 
         if provider_profile is not None:
-            current_model = str(provider_profile.default_model or "").strip()
-            current_effort = str(provider_profile.default_effort or "").strip()
+            current_model, current_effort = _resolve_profile_model_effort(
+                provider_profile
+            )
             if current_model and record.resolved.qualified_model_id != current_model:
                 drift.append("model")
             if current_effort and record.desired.effort != current_effort:
@@ -364,28 +399,37 @@ class BootstrapController:
             ) != int(provider_profile.credential_generation):
                 drift.append("evidence_credential_generation")
             if provider_profile is not None:
-                if (
-                    evidence.model.get("qualifiedId")
-                    != str(provider_profile.default_model or "").strip()
-                ):
+                if evidence.model.get("qualifiedId") != current_model:
                     drift.append("evidence_model")
-                if (
-                    evidence.model.get("effort")
-                    != str(provider_profile.default_effort or "").strip()
-                ):
+                if evidence.model.get("effort") != current_effort:
                     drift.append("evidence_effort")
+
+        # Materializer qualification is independent of whether the default
+        # bootstrap record remains current. In particular, a launch-ready Zen
+        # profile must not lose ``none@1`` evidence because a disabled or
+        # drifted OpenCode Go default cannot be requalified.
+        materializers_ready = await self._ensure_launchable_materializer_qualifications(
+            record
+        )
 
         if record.state != BootstrapState.ready:
             drift.append("bootstrap_state")
         if not drift:
-            return await self._ensure_launchable_materializer_qualifications(record)
+            return materializers_ready
 
         logger.info(
             "Refreshing OpenCode deployment qualification after managed "
             "default drift: fields=%s",
             ",".join(sorted(set(drift))),
         )
-        refreshed = await self.requalify()
+        try:
+            refreshed = await self.requalify()
+        except ValueError as exc:
+            logger.warning(
+                "OpenCode default deployment qualification refresh deferred: %s",
+                exc,
+            )
+            return materializers_ready
         if refreshed.state == BootstrapState.ready:
             logger.info(
                 "OpenCode deployment qualification now matches Agent Profile %s",
@@ -397,7 +441,7 @@ class BootstrapController:
             "OpenCode deployment qualification refresh deferred: code=%s",
             failure_code,
         )
-        return False
+        return materializers_ready
 
     async def _ensure_launchable_materializer_qualifications(
         self,
@@ -442,12 +486,15 @@ class BootstrapController:
         if resolved is None:
             return False
         try:
+            published = list(load_deployment_evidence_entries())
+        except ValueError:
+            published = []
+        try:
             primary_evidence = load_deployment_evidence_for_support_combination(
                 str(record.last_evidence_ref or "")
             )
-            published = list(load_deployment_evidence_entries())
         except ValueError:
-            return False
+            primary_evidence = None
 
         async with self._session_factory() as session:
             result = await session.execute(
@@ -496,17 +543,30 @@ class BootstrapController:
                 if key not in shared_exclusions
             }
 
-        primary_shared_identity = _shared_identity(primary_evidence)
+        primary_shared_identity = (
+            _shared_identity(primary_evidence) if primary_evidence is not None else None
+        )
+        all_materializers_ready = True
         for materializer_ref, profile in representatives.items():
             profile_ref = str(profile.profile_id)
-            qualified_model = str(profile.default_model or "").strip()
-            effort = str(profile.default_effort or "xhigh").strip()
+            try:
+                qualified_model, effort = _resolve_profile_model_effort(profile)
+            except ValueError as exc:
+                logger.warning(
+                    "OpenCode deployment qualification deferred: Provider Profile "
+                    "%s model authority is invalid: %s",
+                    profile_ref,
+                    exc,
+                )
+                all_materializers_ready = False
+                continue
             credential_generation = int(profile.credential_generation)
             current = next(
                 (
                     evidence
                     for evidence in published
                     if evidence.support_identity.materializerRefs == (materializer_ref,)
+                    and primary_shared_identity is not None
                     and _shared_identity(evidence) == primary_shared_identity
                     and evidence.host_image_ref == resolved.opencode_host_image_ref
                     and evidence.provider.get("profileRef") == profile_ref
@@ -525,7 +585,8 @@ class BootstrapController:
                     "%s has no default model",
                     profile_ref,
                 )
-                return False
+                all_materializers_ready = False
+                continue
 
             revalidation = await reconcile_opencode_provider_readiness(
                 session_factory=self._session_factory,
@@ -538,31 +599,67 @@ class BootstrapController:
                     "%s could not be revalidated",
                     profile_ref,
                 )
-                return False
+                all_materializers_ready = False
+                continue
             async with self._session_factory() as session:
                 refreshed = await session.get(
                     ManagedAgentProviderProfile,
                     profile_ref,
                 )
             if refreshed is None:
-                return False
-            qualified_model = str(refreshed.default_model or "").strip()
-            effort = validate_effort(str(refreshed.default_effort or "xhigh").strip())
-            evidence_payload = await self._qualify_and_publish(
-                provider_profile_ref=profile_ref,
-                qualified_model=qualified_model,
-                effort=effort,
-                resolved=resolved,
-                record=record,
-            )
-            published.append(validate_deployment_evidence(evidence_payload))
+                all_materializers_ready = False
+                continue
+            try:
+                qualified_model, effort = _resolve_profile_model_effort(refreshed)
+            except ValueError as exc:
+                logger.warning(
+                    "OpenCode deployment qualification deferred: Provider Profile "
+                    "%s refreshed model authority is invalid: %s",
+                    profile_ref,
+                    exc,
+                )
+                all_materializers_ready = False
+                continue
+            try:
+                evidence_payload = await self._qualify_and_publish(
+                    provider_profile_ref=profile_ref,
+                    qualified_model=qualified_model,
+                    effort=effort,
+                    resolved=resolved,
+                    record=record,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "OpenCode deployment qualification deferred for materializer "
+                    "%s using Provider Profile %s: %s",
+                    materializer_ref,
+                    profile_ref,
+                    exc,
+                )
+                all_materializers_ready = False
+                continue
+            try:
+                validated_evidence = validate_deployment_evidence(evidence_payload)
+            except ValueError as exc:
+                logger.warning(
+                    "OpenCode deployment qualification produced invalid evidence "
+                    "for materializer %s using Provider Profile %s: %s",
+                    materializer_ref,
+                    profile_ref,
+                    exc,
+                )
+                all_materializers_ready = False
+                continue
+            published.append(validated_evidence)
+            if primary_shared_identity is None:
+                primary_shared_identity = _shared_identity(validated_evidence)
             logger.info(
                 "Published OpenCode deployment qualification for materializer %s "
                 "using Provider Profile %s",
                 materializer_ref,
                 profile_ref,
             )
-        return True
+        return all_materializers_ready
 
     async def _reconcile(
         self,
@@ -862,9 +959,7 @@ class BootstrapController:
                         cand = str(_persisted.opencode_host_image_ref).strip()
                         if "@sha256:" in cand:
                             image_ref = cand
-                except (
-                    Exception
-                ):  # best-effort fallback to passed resolved if persisted state unavailable
+                except Exception:  # best-effort fallback to passed resolved if persisted state unavailable
                     pass
 
             def _is_substrate_unavailable(exc: Exception) -> bool:
