@@ -148,6 +148,11 @@ from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
     TemporalSandboxActivities,
 )
+from moonmind.workflows.temporal.artifacts import (
+    LocalTemporalArtifactStore,
+    TemporalArtifactRepository,
+    TemporalArtifactService,
+)
 from moonmind.workflows.temporal import activity_runtime as activity_runtime_module
 from moonmind.workflows.temporal.activity_catalog import build_default_activity_catalog
 from moonmind.workflows.temporal.remediation_loop import (
@@ -5637,8 +5642,11 @@ async def test_instructionless_remediation_verifier_is_rejected_before_dispatch(
         )
 
 
-async def test_remediation_does_not_declare_initial_assessment_output() -> None:
-    """Replay mm:14460d13 at preset compilation before AgentRun dispatch."""
+async def test_remediation_does_not_declare_initial_assessment_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay mm:14460d13 through request construction and publication."""
 
     replay_id = "remediation-assessment-output-contract"
     manifest = load_replay(replay_id, "manifest.json")
@@ -5665,6 +5673,69 @@ async def test_remediation_does_not_declare_initial_assessment_output() -> None:
         workspace_head_ref=None,
         runtime={"mode": "omnigent"},
     )
+    workflow_info = SimpleNamespace(
+        namespace="default",
+        workflow_id=manifest["incidentWorkflowId"],
+        run_id="incident-replay",
+        task_queue="mm.workflow.default",
+        search_attributes={},
+        start_time=datetime(2026, 9, 1, tzinfo=timezone.utc),
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", lambda: workflow_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
+    parent = MoonMindRunWorkflow()
+    request = parent._build_agent_execution_request(
+        node_inputs=remediation["inputs"],
+        node_id=remediation["id"],
+        tool_name=remediation["tool"]["name"],
+    )
+    agent_run_info = SimpleNamespace(
+        workflow_id=f"{manifest['incidentWorkflowId']}:agent:remediation-1",
+        run_id="incident-agent-replay",
+    )
+    monkeypatch.setattr(agent_run_module.workflow, "info", lambda: agent_run_info)
+    enriched = MoonMindAgentRun()._enrich_result_metadata(
+        request=request,
+        result=AgentRunResult(summary="Remediation completed."),
+        include_parent_execution=True,
+    )
+
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{tmp_path}/remediation-publication.db"
+    )
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        session_maker = async_sessionmaker(engine, expire_on_commit=False)
+        async with session_maker() as session:
+            artifact_service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            activities = TemporalAgentRuntimeActivities(
+                artifact_service=artifact_service
+            )
+
+            async def _skip_notify(
+                *_args: object, **_kwargs: object
+            ) -> dict[str, str]:
+                return {"status": "skipped"}
+
+            monkeypatch.setattr(
+                activities, "execution_notify_completion", _skip_notify
+            )
+            monkeypatch.setattr(
+                activity,
+                "info",
+                lambda: SimpleNamespace(
+                    namespace="default",
+                    workflow_id=agent_run_info.workflow_id,
+                    workflow_run_id=agent_run_info.run_id,
+                ),
+            )
+            published = await activities.agent_runtime_publish_artifacts(enriched)
+    finally:
+        await engine.dispose()
 
     assert manifest["incidentWorkflowId"] == (
         "mm:14460d13-a81d-49b8-a83e-11010801dc90"
@@ -5681,9 +5752,15 @@ async def test_remediation_does_not_declare_initial_assessment_output() -> None:
     assert "assessment_artifact_path" in verification_inputs
     assert "assessment_artifact_path" not in remediation["inputs"]
     assert "assessment_artifact_path" in verification["inputs"]
-    assert expected["publisherBehaviorWithoutDeclaredAssessmentOutput"] == (
-        "skip_assessment_publication"
-    )
+    assert "assessment_artifact_path" not in request.parameters
+    assert enriched is not None
+    assert "assessment_artifact_path" not in enriched.metadata
+    assert isinstance(published, AgentRunResult)
+    assert published.diagnostics_ref is not None
+    assert (
+        "assessmentArtifactRef" in published.metadata
+    ) is expected["assessmentArtifactPublished"]
+    assert expected["publisherCompleted"] is True
 
 
 async def test_instructionless_inflight_remediation_loop_remains_replayable(
