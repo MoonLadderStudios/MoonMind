@@ -4289,7 +4289,7 @@ async def test_agent_runtime_prepare_turn_instructions_adds_jira_tool_hint(
 
 
 @pytest.mark.asyncio
-async def test_agent_runtime_prepare_turn_instructions_adds_batch_jira_search_hint() -> None:
+async def test_agent_runtime_prepare_turn_instructions_leaves_batch_semantics_to_skill() -> None:
     activities = TemporalAgentRuntimeActivities()
 
     result = await activities.agent_runtime_prepare_turn_instructions(
@@ -4315,21 +4315,9 @@ async def test_agent_runtime_prepare_turn_instructions_adds_batch_jira_search_hi
         }
     )
 
-    assert "MoonMind trusted Jira tools:" in result
-    assert "GET $MOONMIND_URL/mcp/tools" in result
-    assert "POST $MOONMIND_URL/mcp/tools/call" in result
-    assert "jira.search_issues" in result
-    example_line = next(
-        line
-        for line in result.splitlines()
-        if line.startswith("- Example batch search call: ")
-    )
-    example_payload = json.loads(example_line.split("`", 2)[1])
-    assert example_payload["arguments"]["jql"] == (
-        'project = <PROJECT_KEY> AND status = "<STATUS>"'
-    )
-    assert "do not request an external Jira/Atlassian connector" in result
-    assert "do not wait for connector discovery" in result
+    assert "MoonMind trusted Jira tools:" not in result
+    assert "jira.search_issues" not in result
+    assert "Resolve project THOR issues" in result
     assert "Managed Codex CLI note:" in result
 
 

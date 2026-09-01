@@ -1392,6 +1392,42 @@ def test_enqueue_children_skill_derives_execution_fanout_capability() -> None:
     assert "execution.fanout" in result["requiredCapabilities"]
 
 
+@pytest.mark.parametrize(
+    ("skill_id", "expected", "forbidden"),
+    [
+        (
+            "batch-workflows",
+            {"git", "gh", "jira", "execution.fanout"},
+            set(),
+        ),
+        (
+            "batch-github-workflows",
+            {"git", "gh", "execution.fanout"},
+            {"jira"},
+        ),
+    ],
+)
+def test_batch_provider_skills_preserve_direct_selection_readiness(
+    skill_id: str,
+    expected: set[str],
+    forbidden: set[str],
+) -> None:
+    result = build_canonical_workflow_view(
+        job_type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "task": {
+                "instructions": "Queue provider issues.",
+                "skill": {"id": skill_id},
+            },
+        },
+    )
+
+    capabilities = set(result["requiredCapabilities"])
+    assert expected <= capabilities
+    assert forbidden.isdisjoint(capabilities)
+
+
 def test_mm569_tool_validation_error_identifies_required_field_path() -> None:
     invalid = tool_step()
     invalid["tool"].pop("id")
@@ -1409,6 +1445,7 @@ def test_mm569_tool_validation_error_identifies_required_field_path() -> None:
         "batch-pr-resolver",
         "batch-dependabot-resolver",
         "batch-workflows",
+        "batch-github-workflows",
         "jira-issue-creator",
         "jira-pr-verify",
         "jira-verify",
@@ -1471,7 +1508,12 @@ def test_non_capable_skill_rejects_auto_publish_mode() -> None:
 
 @pytest.mark.parametrize(
     "skill_id",
-    ["batch-pr-resolver", "batch-dependabot-resolver", "batch-workflows"],
+    [
+        "batch-pr-resolver",
+        "batch-dependabot-resolver",
+        "batch-workflows",
+        "batch-github-workflows",
+    ],
 )
 def test_batch_parent_skills_are_side_effect_not_auto_publish(
     skill_id: str,

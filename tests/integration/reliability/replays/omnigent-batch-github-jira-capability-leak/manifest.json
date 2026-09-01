@@ -22,7 +22,7 @@
         {
           "instructions": "Run the provider-specific GitHub batch workflow.",
           "skill": {
-            "id": "batch-workflows",
+            "id": "batch-github-workflows",
             "requiredCapabilities": [
               "git",
               "gh"
