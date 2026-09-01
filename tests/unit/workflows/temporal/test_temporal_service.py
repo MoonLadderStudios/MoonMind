@@ -6801,7 +6801,9 @@ async def test_cancel_execution_dispatches_temporal_cancel_before_session_cleanu
             service.cancel_execution(
                 workflow_id=created.workflow_id, reason="stop", graceful=True
             ),
-            timeout=0.2,
+            # This is a deadlock guard, not a database performance assertion.
+            # The mocked cleanup still has the 0.01s production timeout above.
+            timeout=2.0,
         )
 
         assert cancel_dispatched.is_set()
