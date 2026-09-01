@@ -1,0 +1,13 @@
+{
+  "acceptCurrentTurnProgress": false,
+  "terminalBoundarySource": "marker",
+  "statusOnlyRunningCountsAsTurnStart": false,
+  "activeResponseDefersOnlyWhilePresent": true,
+  "transientActiveResponsePermanentlyDisarms": false,
+  "turnStartTimeoutSeconds": 300,
+  "noProgressTimeoutSeconds": 1800,
+  "failureCode": "OMNIGENT_CURRENT_TURN_NOT_STARTED",
+  "failureClass": "integration_error",
+  "retryRecommendation": "retry_step_execution",
+  "boundedByTurnStartBudget": true
+}
