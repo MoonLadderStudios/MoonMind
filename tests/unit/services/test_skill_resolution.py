@@ -91,6 +91,31 @@ async def test_tactics_test_declares_canonical_docker_capability() -> None:
     ) == ("docker",)
 
 
+@pytest.mark.parametrize(
+    ("skill_name", "expected"),
+    [
+        ("batch-workflows", ("git", "jira", "gh", "execution.fanout")),
+        ("batch-github-workflows", ("git", "gh", "execution.fanout")),
+    ],
+)
+async def test_batch_provider_skills_declare_exact_readiness_capabilities(
+    skill_name: str,
+    expected: tuple[str, ...],
+) -> None:
+    skill_path = (
+        Path(__file__).parents[3]
+        / ".agents"
+        / "skills"
+        / skill_name
+        / "SKILL.md"
+    )
+
+    assert extract_required_capabilities_from_skill_markdown(
+        skill_path.read_text(encoding="utf-8"),
+        skill_name=skill_name,
+    ) == expected
+
+
 async def test_terminal_contract_rejects_rooted_posix_path() -> None:
     with pytest.raises(ValueError, match="outcomeArtifact is unsafe"):
         _terminal_contract_from_side_effect(
@@ -154,6 +179,23 @@ async def test_built_in_loader_discovers_packaged_agent_skills():
     assert discovered["moonspec-breakdown"].content_ref is None
     assert discovered["moonspec-breakdown"].provenance.source_kind == AgentSkillSourceKind.BUILT_IN
     assert discovered["moonspec-breakdown"].provenance.source_path
+
+
+async def test_built_in_loader_resolves_github_batch_provider_contract():
+    result = await AgentSkillResolver(loaders=[BuiltInSkillLoader()]).resolve(
+        SkillSelector(include=[{"name": "batch-github-workflows"}]),
+        SkillResolutionContext(snapshot_id="snap-batch-github"),
+    )
+
+    entry = next(
+        item for item in result.skills if item.skill_name == "batch-github-workflows"
+    )
+    assert entry.required_capabilities == ["git", "gh", "execution.fanout"]
+    assert entry.terminal_contract is not None
+    assert entry.terminal_contract.contract_id == "batch_workflows_fanout.v1"
+    assert entry.terminal_contract.relative_path == (
+        "artifacts/batch-workflows-result.json"
+    )
 
 
 async def test_built_in_pr_resolver_requires_skill_owned_cli_execution():

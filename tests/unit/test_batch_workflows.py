@@ -28,18 +28,25 @@ from moonmind.workflows.executions.execution_contract import (
 )
 
 
-def _load_module() -> dict[str, Any]:
+def _load_module(skill_id: str = "batch-workflows") -> dict[str, Any]:
     repo_root = Path(__file__).resolve().parents[2]
     return runpy.run_path(
         str(
             repo_root
             / ".agents"
             / "skills"
-            / "batch-workflows"
+            / skill_id
             / "bin"
             / "batch_workflows.py"
         )
     )
+
+
+def test_provider_entrypoints_load_the_shared_portable_engine() -> None:
+    for skill_id in ("batch-workflows", "batch-github-workflows"):
+        module = _load_module(skill_id)
+        assert callable(module["main"])
+        assert module["SUPPORTED_RUN_REFS"]
 
 
 def test_http_error_body_read_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -848,15 +855,16 @@ def test_normalize_publish_mode_falls_back_to_pr():
     assert module["_normalize_publish_mode"]("bogus") == "pr"
 
 
-def test_batch_workflows_parent_is_side_effect_only_publish():
+@pytest.mark.parametrize("skill_id", ["batch-workflows", "batch-github-workflows"])
+def test_batch_workflows_parent_is_side_effect_only_publish(skill_id: str):
     # The parent orchestration queues children and performs no repo publish, so
     # its own publish mode is not resolved to agent-owned repository publishing.
-    assert is_self_managed_publish_skill("batch-workflows") is False
-    assert resolve_publish_mode_for_skill("batch-workflows", None) == "none"
+    assert is_self_managed_publish_skill(skill_id) is False
+    assert resolve_publish_mode_for_skill(skill_id, None) == "none"
     with pytest.raises(WorkflowContractError):
-        resolve_publish_mode_for_skill("batch-workflows", "auto")
+        resolve_publish_mode_for_skill(skill_id, "auto")
     with pytest.raises(WorkflowContractError):
-        resolve_publish_mode_for_skill("batch-workflows", "pr")
+        resolve_publish_mode_for_skill(skill_id, "pr")
 
 
 def test_materialized_snapshot_queues_five_targets_from_external_repo(tmp_path):

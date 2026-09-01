@@ -1,0 +1,35 @@
+{
+  "incidentReference": "user-report-2026-09-01-batch-github-omnigent-jira-capability",
+  "terminalFailureCode": "OMNIGENT_CAPABILITY_REQUIRED_UNKNOWN",
+  "failureShape": "the provider-neutral batch-workflows Skill declared both Jira and GitHub requirements, so backend normalization leaked jira into a Batch GitHub Workflows run and Omnigent rejected the unknown requirement before launch",
+  "launchPolicyRef": "omnigent-on-demand@1",
+  "authoredPayload": {
+    "repository": "MoonLadderStudios/MoonMind",
+    "targetRuntime": "omnigent",
+    "requiredCapabilities": [
+      "git",
+      "gh"
+    ],
+    "workflow": {
+      "instructions": "Resolve open GitHub issues and queue one implementation workflow per issue.",
+      "runtime": {
+        "mode": "omnigent"
+      },
+      "publish": {
+        "mode": "none"
+      },
+      "steps": [
+        {
+          "instructions": "Run the provider-specific GitHub batch workflow.",
+          "skill": {
+            "id": "batch-github-workflows",
+            "requiredCapabilities": [
+              "git",
+              "gh"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

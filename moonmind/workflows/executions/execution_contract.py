@@ -76,6 +76,7 @@ _NON_REPOSITORY_SIDE_EFFECT_SKILLS = frozenset(
         "batch-pr-resolver",
         "batch-dependabot-resolver",
         "batch-workflows",
+        "batch-github-workflows",
         "jira-issue-creator",
         "jira-issue-updater",
         "jira-pr-verify",

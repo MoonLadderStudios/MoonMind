@@ -99,6 +99,7 @@ class BuiltInSkillLoader(SkillLoader):
             "batch-pr-resolver",
             "batch-dependabot-resolver",
             "batch-workflows",
+            "batch-github-workflows",
             "fix-comments",
             "fix-ci",
             "fix-merge-conflicts",

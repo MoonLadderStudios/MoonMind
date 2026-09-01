@@ -8,6 +8,9 @@ from api_service.services import omnigent_execution_plan_service as service
 from api_service.services.omnigent_agent_profile_selection import (
     default_launch_policy_ref,
 )
+from moonmind.workflows.executions.execution_contract import (
+    build_canonical_workflow_view,
+)
 from tests.integration.reliability.helpers import load_replay
 from tests.unit.services.test_omnigent_execution_plan_service import (
     _ArtifactService,
@@ -97,6 +100,53 @@ async def test_omnigent_fanout_capability_is_platform_admitted(
         artifacts=_ArtifactService(),
         launch_policy_ref=manifest["launchPolicyRef"],
         plan_store=_PlanStore(object()),
+    )
+
+    assert (
+        result.envelope.payload.classAdmissionDecision
+        == expected["classAdmissionDecision"]
+    )
+    assert result.envelope.payload.resolvedTools["tools"] == expected[
+        "resolvedTools"
+    ]
+
+
+async def test_batch_github_capabilities_do_not_leak_jira_into_omnigent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    replay_id = "omnigent-batch-github-jira-capability-leak"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+
+    canonical = build_canonical_workflow_view(
+        job_type="task",
+        payload=manifest["authoredPayload"],
+    )
+
+    assert canonical["requiredCapabilities"] == expected[
+        "normalizedRequiredCapabilities"
+    ]
+    assert set(expected["forbiddenCapabilities"]).isdisjoint(
+        canonical["requiredCapabilities"]
+    )
+
+    monkeypatch.setattr(
+        service,
+        "resolve_execution_evidence",
+        lambda plan_payload, **_kwargs: (
+            _protected_support_evidence(plan_payload),
+            "supported",
+        ),
+    )
+    result = await _compile_opencode_plan(
+        monkeypatch,
+        artifacts=_ArtifactService(),
+        launch_policy_ref=manifest["launchPolicyRef"],
+        plan_store=_PlanStore(object()),
+        extra_parameters={
+            "requiredCapabilities": canonical["requiredCapabilities"],
+            "workflow": canonical["workflow"],
+        },
     )
 
     assert (
