@@ -217,6 +217,55 @@ async def test_capture_policy_disables_stream_and_evidence_artifacts(tmp_path) -
 
 
 @pytest.mark.asyncio
+async def test_capture_redacts_credentials_from_provider_snapshots(tmp_path) -> None:
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path)
+    fake_token = "ghp_" + "a" * 36
+    credential_url = (
+        f"https://x-access-token:{fake_token}@github.com/example/repository.git"
+    )
+    snapshot = {
+        "id": "session-1",
+        "status": "completed",
+        "items": [
+            {
+                "type": "function_call_output",
+                "data": {"output": f"origin\t{credential_url} (fetch)"},
+            }
+        ],
+    }
+
+    await _build_capture_bundle_impl(
+        client=None,
+        artifact_gateway=gateway,
+        request=_request(),
+        session_id="session-1",
+        agent_id="agent-1",
+        initial_snapshot=snapshot,
+        final_snapshot=snapshot,
+        first_message_request=None,
+        first_message_response=None,
+        first_message_posted=True,
+        first_message_response_identifiers=None,
+        raw_events=[],
+        normalized_events=[],
+        terminal_status="completed",
+        diagnostics={},
+        harvest_resources=False,
+    )
+
+    initial = (
+        tmp_path / "corr-1" / "runtime.omnigent.snapshot.initial.json"
+    ).read_text(encoding="utf-8")
+    final = (
+        tmp_path / "corr-1" / "output.omnigent.snapshot.final.json"
+    ).read_text(encoding="utf-8")
+    assert fake_token not in initial
+    assert fake_token not in final
+    assert "[REDACTED]" in initial
+    assert "[REDACTED]" in final
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("reader", ["read_text", "read_bytes"])
 @pytest.mark.parametrize(
     "escaping_ref",

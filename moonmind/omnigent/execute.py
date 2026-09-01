@@ -109,6 +109,31 @@ class OmnigentSessionStillRunningError(OmnigentClientError):
     code = "OMNIGENT_CURRENT_TURN_TERMINAL_AMBIGUOUS"
 
 
+class OmnigentSameSessionContinuationRequired(OmnigentSessionStillRunningError):
+    """Raised when a completed response still lacks session-terminal evidence.
+
+    The provider emitted a post-dispatch completion event and the marked turn
+    has a stable, fully matched tool-output boundary, but its authoritative
+    session projection remains active.  This is recovery evidence, not terminal
+    evidence: a profile-bound owner may submit one fenced continuation while
+    retaining the host and workspace leases; other callers must preserve the
+    ambiguous-session cleanup fence.
+    """
+
+    code = "OMNIGENT_SAME_SESSION_CONTINUATION_REQUIRED"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        session_id: str,
+        snapshot: Mapping[str, Any],
+    ) -> None:
+        super().__init__(message)
+        self.session_id = session_id
+        self.snapshot = dict(snapshot)
+
+
 class OmnigentTurnNotStartedError(OmnigentSessionStillRunningError):
     """Raised when the provider accepted the marked turn but never started it.
 
@@ -1081,12 +1106,21 @@ async def _await_marked_turn_terminal(
 ) -> tuple[str, dict[str, Any]]:
     """Wait until a terminal event is stably projected into the marked turn.
 
-    Omnigent sessions are interactive and return to ``idle`` after a Codex
+    Omnigent sessions are interactive and normally return to ``idle`` after a
     turn, so the session snapshot itself does not become terminal. Stock native
     sessions can replay the prior SSE terminal frame and can briefly project an
     assistant preamble as their last item before its next tool appears. Marked
     item ordering plus a bounded stable period therefore owns the terminal
     decision; neither a terminal frame nor a transient last assistant does.
+
+    OpenCode can leave the interactive session status at ``running`` after a
+    post-dispatch terminal event when the bounded transcript ends with a tool
+    output instead of final assistant text. After the longer tool-only quiet
+    period, that shape raises
+    :class:`OmnigentSameSessionContinuationRequired`; elapsed time never turns
+    an active provider projection into terminal success. A profile-bound owner
+    can use the typed signal to continue the same session without releasing the
+    authoritative workspace.
 
     A turn that never starts is distinct from a turn that is slow. The
     :class:`_MarkedTurnStartWatchdog` (the caller's dispatch-scoped instance
@@ -1154,8 +1188,17 @@ async def _await_marked_turn_terminal(
             turn_state,
             observation_started_at=observation_started_at,
         )
+        terminal_event_tool_only_candidate = bool(
+            not inactive
+            and terminal_status == "completed"
+            and progress
+            and not turn_state["terminalAssistantAfterWork"]
+            and not turn_state["unfinishedToolCall"]
+        )
         stable_candidate = bool(
-            progress and inactive and not turn_state["unfinishedToolCall"]
+            progress
+            and not turn_state["unfinishedToolCall"]
+            and (inactive or terminal_event_tool_only_candidate)
         )
         signature = turn_state["signature"]
         if stable_candidate and isinstance(signature, tuple):
@@ -1175,9 +1218,18 @@ async def _await_marked_turn_terminal(
             ):
                 # A preamble assistant can launch another tool after the stale
                 # idle/completed projection, and some turns end immediately
-                # after a tool result without a final assistant. Accept either
-                # shape only after the ordered transcript is inactive and
-                # unchanged for a bounded quiet period.
+                # after a tool result without a final assistant. Accept an
+                # inactive shape only after its bounded quiet period. A live
+                # completion event plus quiet matched tool output is enough to
+                # request bounded same-session recovery, never enough to
+                # override an explicitly active provider projection.
+                if terminal_event_tool_only_candidate:
+                    raise OmnigentSameSessionContinuationRequired(
+                        "Omnigent completed a response with stable matched tool "
+                        "output while the provider session remained active",
+                        session_id=session_id,
+                        snapshot=snapshot,
+                    )
                 return (
                     normalized
                     if normalized in {"failed", "canceled", "timed_out"}
@@ -1201,6 +1253,9 @@ async def _await_marked_turn_terminal(
                     turn_state["terminalAssistantAfterWork"]
                 ),
                 "unfinishedToolCall": bool(turn_state["unfinishedToolCall"]),
+                "terminalEventToolOnlyCandidate": (
+                    terminal_event_tool_only_candidate
+                ),
                 "turnQuietSeconds": (
                     round(loop.time() - quiet_since, 3)
                     if quiet_since is not None
@@ -3222,6 +3277,7 @@ async def run_omnigent_execution(
 __all__ = [
     "OmnigentContractError",
     "OmnigentSessionStillRunningError",
+    "OmnigentSameSessionContinuationRequired",
     "OmnigentTurnNotStartedError",
     "normalize_omnigent_observation",
     "run_omnigent_execution",

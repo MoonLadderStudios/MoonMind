@@ -37,7 +37,10 @@ from moonmind.omnigent.checkpoints import (
     validate_cold_restore_target,
     validate_restore_material,
 )
-from moonmind.omnigent.execute import OmnigentSessionStillRunningError
+from moonmind.omnigent.execute import (
+    OmnigentSameSessionContinuationRequired,
+    OmnigentSessionStillRunningError,
+)
 from moonmind.omnigent.effective_capabilities import (
     CAPABILITY_NAMES,
     adapt_provider_capabilities,
@@ -3984,8 +3987,8 @@ async def _drive_authority_chain_coordinator(
             if "authorityChain" in metadata:
                 authority_metadata.append(metadata["authorityChain"])
 
-        async def mark_terminal(self, *_args, **_kwargs):
-            return None
+        async def mark_terminal(self, idempotency_key, **_kwargs):
+            ordered.append(f"bridge_terminal:{idempotency_key}")
 
     coordinator = OmnigentProfileBoundExecutionCoordinator(
         session_factory=lambda: None,
@@ -4320,6 +4323,68 @@ async def test_coordinator_continues_same_session_until_terminal_answer() -> Non
     assert checkpoint["idempotencyKey"].endswith(
         ":repository-continuation:1"
     )
+
+
+@pytest.mark.asyncio
+async def test_coordinator_recovers_running_tool_output_without_terminalizing_it(
+) -> None:
+    """A quiet active projection triggers a fenced continuation, not success."""
+
+    runner_calls: list[tuple[str, dict]] = []
+
+    async def execute(request, **kwargs):
+        runner_calls.append((request.idempotency_key, dict(kwargs)))
+        if len(runner_calls) == 1:
+            raise OmnigentSameSessionContinuationRequired(
+                "response completed while session remained active",
+                session_id="session-1",
+                snapshot={"status": "running", "items": []},
+            )
+        return AgentRunResult(
+            summary="continuation reached inactive terminal",
+            metadata={
+                "omnigentSessionId": "session-1",
+                "deferredBridgeTerminal": {
+                    "idempotencyKey": request.idempotency_key,
+                    "status": "completed",
+                    "terminalRefs": {"summary": "continuation completed"},
+                },
+            },
+        )
+
+    ordered, _authority, metadata, result = (
+        await _drive_authority_chain_coordinator(
+            execute,
+            completion_evidence=[
+                {
+                    "sessionStatus": "running",
+                    "itemCount": 5,
+                    "assistantMessageCount": 2,
+                    "toolResultCount": 1,
+                    # Even a newly projected assistant does not let the
+                    # coordinator publish before the claimed recovery turn.
+                    "terminalAssistantAfterWork": True,
+                },
+                {
+                    "sessionStatus": "idle",
+                    "itemCount": 7,
+                    "assistantMessageCount": 3,
+                    "toolResultCount": 1,
+                    "terminalAssistantAfterWork": True,
+                },
+            ],
+        )
+    )
+
+    assert result.failure_class is None
+    assert metadata["push_status"] == "pushed"
+    assert metadata["repositoryContinuationCount"] == 1
+    assert len(runner_calls) == 2
+    assert runner_calls[1][0].endswith(":repository-continuation:1")
+    assert runner_calls[1][1]["resume_session_id"] == "session-1"
+    assert "repository_continuation_1" in ordered
+    assert "bridge_terminal:idem-1" in ordered
+    assert "bridge_terminal:idem-1:repository-continuation:1" in ordered
 
 
 @pytest.mark.asyncio
