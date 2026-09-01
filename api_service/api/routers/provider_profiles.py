@@ -353,6 +353,9 @@ class ProviderProfileUpdate(BaseModel):
     model_tiers: Optional[list[ProviderModelEffortTier]] = None
     default_model_tier: Optional[int] = Field(default=None, ge=1)
     model_overrides: Optional[dict[str, str]] = None
+    # Concurrency authority for tier-policy saves (issue #3348 §15.4)
+    expected_updated_at: Optional[str] = None
+    expected_version: Optional[str] = None
     credential_source: Optional[str] = Field(
         default=None, pattern="^(oauth_volume|secret_ref|none)$"
     )
@@ -985,6 +988,195 @@ async def get_creation_capabilities(
     )
 
 
+# ── Tier editor capabilities (canonical §12) ──
+
+
+class ProviderProfileTierCapabilitiesEvidence(BaseModel):
+    source: str
+    credential_generation: Optional[int] = None
+    image_ref: Optional[str] = None
+    observed_at: Optional[str] = None
+    stale: bool = False
+
+
+class ProviderProfileTierCapabilitiesTierConstraints(BaseModel):
+    min_count: int = 1
+    max_count: Optional[int] = None
+
+
+class ProviderProfileTierModelOption(BaseModel):
+    value: str
+    label: str
+    description: Optional[str] = None
+    status: str = Field(default="available", pattern="^(available|deprecated|unavailable)$")
+    recommended: bool = False
+
+
+class ProviderProfileTierEffortOption(BaseModel):
+    value: str
+    label: str
+    description: Optional[str] = None
+    status: str = Field(default="available", pattern="^(available|deprecated|unavailable)$")
+    compatible_models: Optional[list[str]] = None
+
+
+class ProviderProfileTierModelCapabilities(BaseModel):
+    runtime_default: Optional[str] = None
+    allow_custom: bool = True
+    options: list[ProviderProfileTierModelOption] = Field(default_factory=list)
+
+
+class ProviderProfileTierEffortCapabilities(BaseModel):
+    supported: bool = True
+    runtime_default: Optional[str] = None
+    allow_custom: bool = False
+    application: str = Field(default="native", pattern="^(native|config|environment|metadata_only|unsupported|unknown)$")
+    options: list[ProviderProfileTierEffortOption] = Field(default_factory=list)
+
+
+class ProviderProfileTierCapabilitiesResponse(BaseModel):
+    version: str
+    profile_id: Optional[str] = None
+    runtime_id: str
+    provider_id: str
+    evidence: ProviderProfileTierCapabilitiesEvidence
+    tier_constraints: ProviderProfileTierCapabilitiesTierConstraints = Field(
+        default_factory=ProviderProfileTierCapabilitiesTierConstraints
+    )
+    model: ProviderProfileTierModelCapabilities = Field(
+        default_factory=ProviderProfileTierModelCapabilities
+    )
+    effort: ProviderProfileTierEffortCapabilities = Field(
+        default_factory=ProviderProfileTierEffortCapabilities
+    )
+    diagnostics: list[str] = Field(default_factory=list)
+
+
+def _tier_model_options_for_runtime_provider(
+    runtime_id: str, provider_id: str
+) -> list[dict[str, Any]]:
+    rid = runtime_id.strip()
+    pid = provider_id.strip()
+    if rid == "codex_cli" and pid == "openai":
+        return [
+            {"value": "gpt-5.5", "label": "GPT-5.5", "description": "General coding model", "status": "available", "recommended": True},
+            {"value": "gpt-5.6", "label": "GPT-5.6", "description": "Latest coding model", "status": "available", "recommended": False},
+            {"value": "gpt-5.3-codex-spark", "label": "GPT-5.3 Codex Spark", "status": "available", "recommended": False},
+        ]
+    if rid == "claude_code" and pid == "anthropic":
+        return [
+            {"value": "claude-sonnet-4", "label": "Claude Sonnet 4", "status": "available", "recommended": True},
+            {"value": "claude-opus-4", "label": "Claude Opus 4", "status": "available", "recommended": False},
+        ]
+    if rid == "opencode" and pid in {"opencode-go", "opencode"}:
+        return [
+            {"value": "opencode-default", "label": "OpenCode Default", "status": "available", "recommended": True},
+        ]
+    return [
+        {"value": "gpt-5.5", "label": "GPT-5.5", "status": "available", "recommended": True},
+        {"value": "custom-model", "label": "Custom model", "status": "available", "recommended": False},
+    ]
+
+
+def _tier_effort_options() -> list[dict[str, Any]]:
+    return [
+        {"value": "low", "label": "Low", "status": "available", "compatible_models": None},
+        {"value": "medium", "label": "Medium", "status": "available", "compatible_models": None},
+        {"value": "high", "label": "High", "status": "available", "compatible_models": None},
+        {"value": "xhigh", "label": "Extra high", "status": "available", "compatible_models": None},
+    ]
+
+
+def _build_tier_capabilities(
+    *,
+    runtime_id: str,
+    provider_id: str,
+    profile_id: Optional[str] = None,
+    evidence_source: str = "runtime_draft",
+    credential_generation: Optional[int] = None,
+    image_ref: Optional[str] = None,
+    observed_at: Optional[str] = None,
+    stale: bool = False,
+) -> dict[str, Any]:
+    version = f"{runtime_id}:{provider_id}:{credential_generation or 0}:{image_ref or 'none'}"
+    return {
+        "version": version,
+        "profile_id": profile_id,
+        "runtime_id": runtime_id,
+        "provider_id": provider_id,
+        "evidence": {
+            "source": evidence_source,
+            "credential_generation": credential_generation,
+            "image_ref": image_ref,
+            "observed_at": observed_at,
+            "stale": stale,
+        },
+        "tier_constraints": {"min_count": 1, "max_count": None},
+        "model": {
+            "runtime_default": None,
+            "allow_custom": True,
+            "options": _tier_model_options_for_runtime_provider(runtime_id, provider_id),
+        },
+        "effort": {
+            "supported": True,
+            "runtime_default": None,
+            "allow_custom": False,
+            "application": "native",
+            "options": _tier_effort_options(),
+        },
+        "diagnostics": [],
+    }
+
+
+@router.get(
+    "/capabilities",
+    response_model=ProviderProfileTierCapabilitiesResponse,
+)
+async def get_tier_capabilities_draft(
+    runtime_id: str,
+    provider_id: str,
+    current_user: User = Depends(get_current_user()),
+) -> dict[str, Any]:
+    _require_provider_profile_permission(current_user, "provider_profiles.read")
+    return _build_tier_capabilities(
+        runtime_id=runtime_id,
+        provider_id=provider_id,
+        evidence_source="runtime_draft",
+    )
+
+
+@router.get(
+    "/{profile_id}/capabilities",
+    response_model=ProviderProfileTierCapabilitiesResponse,
+)
+async def get_tier_capabilities_for_profile(
+    profile_id: str,
+    session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
+    current_user: User = Depends(get_current_user()),
+) -> dict[str, Any]:
+    _require_provider_profile_permission(current_user, "provider_profiles.read")
+    row = await session.get(ManagedAgentProviderProfile, profile_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if not _can_view_profile(row, current_user):
+        raise HTTPException(status_code=403, detail="Not authorized to view this provider profile.")
+    evidence = row.model_catalog_evidence_json if isinstance(row.model_catalog_evidence_json, dict) else {}
+    image_ref = evidence.get("imageRef") if isinstance(evidence, dict) else None
+    observed_at = evidence.get("validatedAt") if isinstance(evidence, dict) else None
+    # stale if no evidence
+    stale = not bool(evidence)
+    return _build_tier_capabilities(
+        runtime_id=row.runtime_id,
+        provider_id=row.provider_id,
+        profile_id=row.profile_id,
+        evidence_source="profile_catalog_evidence",
+        credential_generation=row.credential_generation,
+        image_ref=image_ref if isinstance(image_ref, str) else None,
+        observed_at=observed_at if isinstance(observed_at, str) else None,
+        stale=stale,
+    )
+
+
 @router.post(
     "/credential-volume/validate",
     response_model=ProviderCredentialVolumeImportResponse,
@@ -1229,6 +1421,7 @@ async def create_profile(
 async def update_profile(
     profile_id: str,
     body: ProviderProfileUpdate,
+    request: Request,
     session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
     current_user: User = Depends(get_current_user()),
 ) -> dict[str, Any]:
@@ -1237,8 +1430,30 @@ async def update_profile(
         raise HTTPException(status_code=404, detail="Profile not found")
     _require_provider_profile_permission(current_user, "provider_profiles.write")
     _require_profile_management(profile, current_user)
+    # Concurrency authority: header takes precedence, payload fields are fallback (issue #3348 §15.4)
+    header_version = request.headers.get("If-Match") or request.headers.get("if-match")
+    body_expected_at = body.expected_updated_at
+    body_expected_ver = body.expected_version
+    if header_version:
+        current_ver = provider_profile_version(profile)
+        if current_ver and str(current_ver).strip() != header_version.strip().strip('"'):
+            # Also allow matching updated_at isoformat when version is timestamp-based
+            updated_iso = profile.updated_at.isoformat() if getattr(profile, "updated_at", None) else None
+            if not updated_iso or updated_iso != header_version.strip().strip('"'):
+                raise HTTPException(status_code=409, detail="Profile has been modified concurrently. Reload latest profile.")
+    elif body_expected_at or body_expected_ver:
+        expected = (body_expected_ver or body_expected_at or "").strip()
+        if expected:
+            current_ver = provider_profile_version(profile)
+            updated_iso = profile.updated_at.isoformat() if getattr(profile, "updated_at", None) else None
+            candidates = {str(current_ver).strip() if current_ver else "", updated_iso or ""}
+            if expected not in candidates:
+                raise HTTPException(status_code=409, detail="Profile has been modified concurrently. Reload latest profile.")
 
     update_data = body.model_dump(exclude_unset=True)
+    # concurrency fields are authority, not persisted attributes
+    update_data.pop("expected_updated_at", None)
+    update_data.pop("expected_version", None)
     import_existing_credential_volume = bool(
         update_data.pop("import_existing_credential_volume", False)
     )

@@ -41,6 +41,8 @@ export interface ProviderProfile {
   readiness?: ProviderProfileReadiness | null;
   authentication_method?: AuthenticationMethod | null;
   creation_capabilities?: ProviderProfileCreationCapabilities | null;
+  updated_at?: string | null;
+  created_at?: string | null;
 }
 
 type AuthenticationMethod = 'oauth' | 'api_key' | 'none';
@@ -1436,39 +1438,132 @@ export function ProviderProfilesManager({
     setFormBaseline(nextForm);
   }, [editingProfileId, form.runtimeId, selectedRuntimeId]);
 
-  // Tier capability loading: saved profile uses profile-scoped evidence, create uses advisory runtime/provider.
-  // No dedicated tier-capability endpoint is published yet; preserve existing values and allow custom entry.
-  // This keeps model/effort choices backend-governed via the profile's creation_capabilities when available,
-  // and degrades gracefully without inventing product-wide React constants.
+  // Tier capability loading: profile-scoped for existing profile, advisory runtime/provider for create.
+  // Uses backend tier-capabilities endpoints per §12; degrades gracefully on failure.
   useEffect(() => {
-    setTierCapabilitiesError(null);
-    setTierCapabilities(null);
-    setTierCapabilitiesLoading(false);
     const runtimeId = form.runtimeId.trim();
     const providerId = form.providerId.trim();
     if (!runtimeId || !providerId) {
+      setTierCapabilities(null);
+      setTierCapabilitiesError(null);
+      setTierCapabilitiesLoading(false);
       return;
     }
-    // If creation capabilities are available, they are the backend source of truth for provider policy.
-    // Tier model/effort choices remain permissive until a dedicated endpoint is available.
-    setTierCapabilities({
-      models: [],
-      efforts: [
-        { value: 'low', label: 'low' },
-        { value: 'medium', label: 'medium' },
-        { value: 'high', label: 'high' },
-        { value: 'xhigh', label: 'xhigh' },
-      ],
-      customModelAllowed: true,
-      customEffortAllowed: true,
-      stale: false,
-    });
-    if (!editingProfileId && !creationCapabilities) {
-      setTierCapabilitiesError('Tier capabilities advisory; existing values preserved. Select a validated runtime and provider for stricter choices.');
-    } else if (editingProfileId && !editingProfile?.creation_capabilities) {
-      setTierCapabilitiesError('Tier capabilities unavailable for this profile; existing values preserved.');
+    if (editingProfileId) {
+      // Saved profile: scoped evidence by profile_id
+      const controller = new AbortController();
+      setTierCapabilitiesLoading(true);
+      setTierCapabilitiesError(null);
+      void fetch(`/api/v1/provider-profiles/${encodeURIComponent(editingProfileId)}/capabilities`, {
+        headers: { Accept: 'application/json' },
+        signal: controller.signal,
+      })
+        .then(async (response) => {
+          if (!response.ok) {
+            const payload = await response.json().catch(() => ({}));
+            throw new Error(extractErrorMessage(payload, 'Failed to load tier capabilities.'));
+          }
+          return response.json();
+        })
+        .then((data: Record<string, unknown>) => {
+          const model = data.model as Record<string, unknown> | null;
+          const effort = data.effort as Record<string, unknown> | null;
+          const evidence = data.evidence as Record<string, unknown> | null;
+          setTierCapabilities({
+            models: (Array.isArray(model?.options) ? (model?.options as TierCapabilityOption[]) : []).map((o) => ({
+              value: o.value as string | null,
+              label: (o.label as string) ?? String(o.value ?? ''),
+              deprecated: (o.status as string) === 'deprecated',
+            })),
+            efforts: (Array.isArray(effort?.options) ? (effort?.options as TierCapabilityOption[]) : []).map((o) => ({
+              value: o.value as string | null,
+              label: (o.label as string) ?? String(o.value ?? ''),
+            })),
+            customModelAllowed: Boolean(model?.allow_custom ?? true),
+            customEffortAllowed: Boolean(effort?.allow_custom ?? false),
+            stale: Boolean(evidence?.stale),
+            evidence: evidence as Record<string, unknown> | null,
+          });
+          if (evidence?.stale) {
+            setTierCapabilitiesError('Tier catalog evidence is stale; existing values preserved. Refresh may be required.');
+          }
+        })
+        .catch((error: unknown) => {
+          if ((error as DOMException)?.name === 'AbortError') return;
+          setTierCapabilities({
+            models: [],
+            efforts: [
+              { value: 'low', label: 'low' },
+              { value: 'medium', label: 'medium' },
+              { value: 'high', label: 'high' },
+              { value: 'xhigh', label: 'xhigh' },
+            ],
+            customModelAllowed: true,
+            customEffortAllowed: true,
+            stale: true,
+          });
+          setTierCapabilitiesError((error instanceof Error ? error.message : 'Tier capabilities unavailable for this profile; existing values preserved.'));
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) setTierCapabilitiesLoading(false);
+        });
+      return () => controller.abort();
     }
-  }, [creationCapabilities, editingProfile, editingProfileId, form.providerId, form.runtimeId]);
+    // Create form: advisory runtime/provider capabilities
+    const controller = new AbortController();
+    setTierCapabilitiesLoading(true);
+    setTierCapabilitiesError(null);
+    void fetch(`/api/v1/provider-profiles/capabilities?runtime_id=${encodeURIComponent(runtimeId)}&provider_id=${encodeURIComponent(providerId)}`, {
+      headers: { Accept: 'application/json' },
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(extractErrorMessage(payload, 'Failed to load tier capabilities.'));
+        }
+        return response.json();
+      })
+      .then((data: Record<string, unknown>) => {
+        const model = data.model as Record<string, unknown> | null;
+        const effort = data.effort as Record<string, unknown> | null;
+        setTierCapabilities({
+          models: (Array.isArray(model?.options) ? (model?.options as TierCapabilityOption[]) : []).map((o) => ({
+            value: o.value as string | null,
+            label: (o.label as string) ?? String(o.value ?? ''),
+            deprecated: (o.status as string) === 'deprecated',
+          })),
+          efforts: (Array.isArray(effort?.options) ? (effort?.options as TierCapabilityOption[]) : []).map((o) => ({
+            value: o.value as string | null,
+            label: (o.label as string) ?? String(o.value ?? ''),
+          })),
+          customModelAllowed: Boolean(model?.allow_custom ?? true),
+          customEffortAllowed: Boolean(effort?.allow_custom ?? false),
+          stale: false,
+          evidence: data.evidence as Record<string, unknown> | null,
+        });
+      })
+      .catch((error: unknown) => {
+        if ((error as DOMException)?.name === 'AbortError') return;
+        setTierCapabilities({
+          models: [],
+          efforts: [
+            { value: 'low', label: 'low' },
+            { value: 'medium', label: 'medium' },
+            { value: 'high', label: 'high' },
+            { value: 'xhigh', label: 'xhigh' },
+          ],
+          customModelAllowed: true,
+          customEffortAllowed: true,
+          stale: true,
+        });
+        setTierCapabilitiesError((error instanceof Error ? error.message : 'Tier capabilities advisory; existing values preserved. Select a validated runtime and provider for stricter choices.'));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setTierCapabilitiesLoading(false);
+      });
+    return () => controller.abort();
+  }, [editingProfile, editingProfileId, form.providerId, form.runtimeId]);
 
   useEffect(() => {
     const handleProviderProfileRefresh = (event: StorageEvent) => {
@@ -1482,6 +1577,45 @@ export function ProviderProfilesManager({
       window.removeEventListener('storage', handleProviderProfileRefresh);
     };
   }, [queryClient]);
+
+  // Dialog focus and Escape handling for tier removal confirmation (a11y §20)
+  const tierDialogRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!tierRemoveConfirm) return;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const dialogEl = tierDialogRef.current;
+    // Focus first focusable element inside dialog
+    setTimeout(() => {
+      const focusable = dialogEl?.querySelector<HTMLElement>('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+      focusable?.focus();
+    }, 0);
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setTierRemoveConfirm(null);
+        setTierReplaceDefaultChoice(null);
+        // return focus to initiating remove button if possible
+        if (previouslyFocused) previouslyFocused.focus();
+      }
+      if (event.key === 'Tab' && dialogEl) {
+        const focusableEls = Array.from(dialogEl.querySelectorAll<HTMLElement>('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')).filter((el) => !el.hasAttribute('disabled'));
+        if (focusableEls.length === 0) return;
+        const first = focusableEls[0]!;
+        const last = focusableEls[focusableEls.length - 1]!;
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      if (previouslyFocused) previouslyFocused.focus();
+    };
+  }, [tierRemoveConfirm]);
 
   const handleAddTier = () => {
     const newTier = runtimeDefaultTierDraft();
@@ -2023,16 +2157,26 @@ export function ProviderProfilesManager({
         defaultTierDraftId,
         tierBaseline: { drafts: tierDraftBaseline, defaultDraftId: defaultTierBaselineId },
       });
+      // Concurrency authority: include updated_at / version for tier-policy PATCH (canonical §15.4)
+      const concurrencyAt = editingProfile?.updated_at ?? null;
+      const concurrencyPayload: Record<string, unknown> = { ...payload };
+      if (isEditing && concurrencyAt) {
+        concurrencyPayload.expected_updated_at = concurrencyAt;
+      }
       const endpoint = isEditing
         ? `/api/v1/provider-profiles/${encodeURIComponent(payload.profile_id)}`
         : '/api/v1/provider-profiles';
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      };
+      if (isEditing && concurrencyAt) {
+        headers['If-Match'] = concurrencyAt;
+      }
       const response = await fetch(endpoint, {
         method: isEditing ? 'PATCH' : 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-        },
-        body: JSON.stringify(payload),
+        headers,
+        body: JSON.stringify(concurrencyPayload),
       });
       if (!response.ok) {
         const errorPayload = await response.json().catch(() => ({}));
@@ -2600,6 +2744,14 @@ export function ProviderProfilesManager({
                 Provider
               </th>
               <th
+                id="provider-profile-header-model-policy"
+                scope="col"
+                role="columnheader"
+                className="px-3 py-3 font-medium text-slate-600 dark:text-slate-400"
+              >
+                Model policy
+              </th>
+              <th
                 id="provider-profile-header-credential"
                 scope="col"
                 role="columnheader"
@@ -2636,7 +2788,7 @@ export function ProviderProfilesManager({
           <tbody className="divide-y divide-mm-border/80 bg-transparent" role="rowgroup">
             {profiles.length === 0 ? (
               <tr role="row">
-                <td className="px-3 py-6 text-slate-500 dark:text-slate-400" colSpan={7} role="cell">
+                <td className="px-3 py-6 text-slate-500 dark:text-slate-400" colSpan={8} role="cell">
                   {selectedRuntimeId
                     ? `No provider profiles are configured for ${formatRuntimeLabel(selectedRuntimeId)}.`
                     : 'No provider profiles configured yet.'}
@@ -2693,13 +2845,49 @@ export function ProviderProfilesManager({
                         Runtime default
                       </div>
                     ) : null}
+                  </td>
+                  <td
+                    className="px-3 py-4 text-slate-700 dark:text-slate-300"
+                    data-label="Runtime"
+                    headers="provider-profile-header-runtime"
+                    role="cell"
+                  >
+                    {profile.runtime_id}
+                  </td>
+                  <td
+                    className="px-3 py-4"
+                    data-label="Provider"
+                    headers="provider-profile-header-provider"
+                    role="cell"
+                  >
+                    <div className="text-slate-700 dark:text-slate-300">{profile.provider_id}</div>
+                    {profile.provider_label ? (
+                      <div className="text-xs text-slate-500 dark:text-slate-400">{profile.provider_label}</div>
+                    ) : null}
+                    {profile.tags && profile.tags.length > 0 ? (
+                      <div className="text-xs text-slate-500 dark:text-slate-400">
+                        Tags: {profile.tags.join(', ')}
+                      </div>
+                    ) : null}
+                    {profile.priority != null ? (
+                      <div className="text-xs text-slate-500 dark:text-slate-400">
+                        Priority: {profile.priority}
+                      </div>
+                    ) : null}
+                  </td>
+                  <td
+                    className="px-3 py-4"
+                    data-label="Model policy"
+                    headers="provider-profile-header-model-policy"
+                    role="cell"
+                  >
                     {isRepairModelTiers(profile) ? (
-                      <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-300">
+                      <div className="rounded-lg border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-300">
                         Tier policy unavailable · needs repair
                       </div>
                     ) : (
                       <>
-                        <div className="mt-1 text-xs font-medium text-slate-600 dark:text-slate-400">
+                        <div className="text-xs font-medium text-slate-600 dark:text-slate-400">
                           {modelTiers!.length} tiers · Default: Tier {defaultModelTier}
                         </div>
                         <div className="mt-2 space-y-1" aria-label={`${profile.profile_id} model tier mapping`}>
@@ -2758,35 +2946,6 @@ export function ProviderProfilesManager({
                         ) : null}
                       </>
                     )}
-                  </td>
-                  <td
-                    className="px-3 py-4 text-slate-700 dark:text-slate-300"
-                    data-label="Runtime"
-                    headers="provider-profile-header-runtime"
-                    role="cell"
-                  >
-                    {profile.runtime_id}
-                  </td>
-                  <td
-                    className="px-3 py-4"
-                    data-label="Provider"
-                    headers="provider-profile-header-provider"
-                    role="cell"
-                  >
-                    <div className="text-slate-700 dark:text-slate-300">{profile.provider_id}</div>
-                    {profile.provider_label ? (
-                      <div className="text-xs text-slate-500 dark:text-slate-400">{profile.provider_label}</div>
-                    ) : null}
-                    {profile.tags && profile.tags.length > 0 ? (
-                      <div className="text-xs text-slate-500 dark:text-slate-400">
-                        Tags: {profile.tags.join(', ')}
-                      </div>
-                    ) : null}
-                    {profile.priority != null ? (
-                      <div className="text-xs text-slate-500 dark:text-slate-400">
-                        Priority: {profile.priority}
-                      </div>
-                    ) : null}
                   </td>
                   <td
                     className="px-3 py-4 text-slate-700 dark:text-slate-300"
@@ -3736,7 +3895,7 @@ export function ProviderProfilesManager({
                               </div>
                             </details>
                             <div className="flex flex-wrap gap-2">
-                              <button type="button" className="rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-semibold disabled:opacity-50" disabled={isOnly} onClick={() => {
+                              <button type="button" className="rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-semibold disabled:opacity-50" disabled={isOnly} aria-label={`Remove Tier ${tierNumber}`} onClick={() => {
                                 if (isOnly) return;
                                 const isMiddleTier = idx !== tierDrafts.length - 1;
                                 const isDefaultTier = draft._draftId === defaultTierDraftId;
@@ -3753,7 +3912,7 @@ export function ProviderProfilesManager({
                               }}>
                                 Remove tier
                               </button>
-                              <button type="button" className="rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-semibold" onClick={() => handleDuplicateTier(draft._draftId)}>
+                              <button type="button" className="rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-semibold" aria-label={`Duplicate Tier ${tierNumber} as new last tier`} onClick={() => handleDuplicateTier(draft._draftId)}>
                                 Duplicate as new last tier
                               </button>
                             </div>
@@ -3772,9 +3931,14 @@ export function ProviderProfilesManager({
                     </div>
                   ) : null}
                   {tierRemoveConfirm ? (
-                    <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
-                      <div className="w-full max-w-lg rounded-xl bg-white p-5 shadow-xl dark:bg-slate-900">
-                        <h4 className="text-base font-semibold">Confirm tier removal</h4>
+                    <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" onMouseDown={(event) => {
+                      if (event.target === event.currentTarget) {
+                        setTierRemoveConfirm(null);
+                        setTierReplaceDefaultChoice(null);
+                      }
+                    }}>
+                      <div ref={tierDialogRef} className="w-full max-w-lg rounded-xl bg-white p-5 shadow-xl dark:bg-slate-900" role="document">
+                        <h4 id="tier-remove-dialog-title" className="text-base font-semibold">Confirm tier removal</h4>
                         <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
                           Removing Tier {tierRemoveConfirm.index + 1} will renumber later tiers. Future launches change while historical run records do not.
                         </p>
@@ -3813,7 +3977,35 @@ export function ProviderProfilesManager({
           ) : (
             <fieldset className="rounded-2xl border border-slate-200 dark:border-slate-700 p-5 space-y-3">
               <legend className="px-2 text-sm font-semibold">Model & effort tiers</legend>
-              <p className="text-sm text-slate-600 dark:text-slate-400">Read-only: inspect the complete ordered policy in the Provider Profiles table above. Values are shown as text, not disabled controls.</p>
+              <p className="text-sm text-slate-600 dark:text-slate-400">Read-only: complete ordered policy shown as values rather than disabled controls.</p>
+              {profiles.length === 0 ? (
+                <p className="text-sm text-slate-500">No provider profiles to display.</p>
+              ) : (
+                <div className="space-y-4">
+                  {profiles.map((profile) => {
+                    const tiers = providerProfileModelTiers(profile);
+                    if (!tiers) {
+                      return (
+                        <div key={profile.profile_id} className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-700 dark:bg-amber-950/30">
+                          {profile.profile_id}: Tier policy unavailable · needs repair
+                        </div>
+                      );
+                    }
+                    return (
+                      <div key={profile.profile_id} className="rounded-lg border border-slate-200 dark:border-slate-700 p-3">
+                        <div className="text-sm font-semibold">{profile.profile_id} · {tiers.length} tiers · Default: Tier {profile.default_model_tier ?? 1}</div>
+                        <ol className="mt-2 space-y-1" aria-label={`${profile.profile_id} tier policy`}>
+                          {tiers.map((tier, idx) => (
+                            <li key={`${profile.profile_id}-ro-${idx}`} className="text-xs font-mono text-slate-600 dark:text-slate-300">
+                              Tier {idx + 1}{idx + 1 === (profile.default_model_tier ?? 1) ? ' default' : ''} · {tier.label || `Tier ${idx + 1}`} · {tier.model ?? 'Runtime default'} · {tier.effort ?? 'Runtime default'}
+                            </li>
+                          ))}
+                        </ol>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </fieldset>
           )}
 
@@ -4164,6 +4356,25 @@ export function ProviderProfilesManager({
             </div>
           ) : null}
 
+          {tierDraftChanged ? (
+            <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 p-4 text-sm" aria-live="polite">
+              <div className="font-semibold">Tier policy changes</div>
+              <ul className="mt-2 list-disc pl-5 text-xs text-slate-600 dark:text-slate-300">
+                {tierDrafts.length !== tierDraftBaseline.length ? (
+                  <li>
+                    Tier count: {tierDraftBaseline.length} → {tierDrafts.length} {tierDrafts.length > tierDraftBaseline.length ? `(Added Tier ${tierDraftBaseline.length + 1})` : `(Removed ${tierDraftBaseline.length - tierDrafts.length} tier(s))`}
+                  </li>
+                ) : null}
+                {defaultTierDraftId !== defaultTierBaselineId ? (
+                  <li>
+                    Default changes from Tier {(tierDraftBaseline.findIndex((d) => d._draftId === defaultTierBaselineId) + 1) || 1} to Tier {(tierDrafts.findIndex((d) => d._draftId === defaultTierDraftId) + 1) || 1}
+                  </li>
+                ) : null}
+                {tierDrafts.length > tierDraftBaseline.length ? <li>Future launches use the saved policy. Historical runs keep their record.</li> : null}
+                {tierDrafts.length < tierDraftBaseline.length ? <li>Removed tier numbers will renumber remaining tiers. Historical runs do not change.</li> : null}
+              </ul>
+            </div>
+          ) : null}
           <div className="flex flex-wrap gap-3">
             <button
               type="submit"
