@@ -9,7 +9,6 @@ from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformFailure,
 )
 from moonmind.omnigent.host_services.cleanup import (
-    _HOST_LOG_READ_LIMIT_BYTES,
     _HOST_LOG_RETAINED_BYTES,
     _HOST_LOG_TAIL_LINES,
     _HOST_LOG_TRUNCATION_MARKER,
@@ -83,7 +82,9 @@ async def test_cleanup_captures_bounded_log_tail_before_removing_container() -> 
     ]
     logs_kwargs = backend.kwargs[logs_index]
     assert logs_kwargs["check"] is False
-    assert logs_kwargs["output_limit_bytes"] == _HOST_LOG_READ_LIMIT_BYTES
+    # The backend's retention bound truncates from the head; the tail is the
+    # evidence, so the byte bound is applied here from the end instead.
+    assert logs_kwargs["output_limit_bytes"] is None
     assert evidence["containerRemoved"] is True
     assert evidence["hostLogs"] == "runner: turn accepted\nopencode: exited 1\n"
     assert evidence["hostLogsTruncated"] is False

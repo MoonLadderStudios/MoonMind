@@ -1932,6 +1932,221 @@ async def test_generic_realizer_records_host_log_publication_failure() -> None:
 
 
 @pytest.mark.asyncio
+async def test_generic_realizer_publishes_host_logs_from_failed_host_realization() -> (
+    None
+):
+    """Logs captured when the runtime removes an unattested host are still published.
+
+    ``GenericOmnigentHostRuntime.realize`` removes the container itself when
+    registration or attestation fails and carries the cleanup evidence on the
+    failure. The realizer's own cleanup then finds no container; the earlier
+    capture must reach the single publication point instead of being lost.
+    """
+
+    harness = await _generic_publication_harness(_PUSHED_PUBLICATION)
+    realizer = harness.realizer
+
+    class Artifacts:
+        def __init__(self) -> None:
+            self.text_writes: list[dict[str, object]] = []
+            self.json_writes: list[dict[str, object]] = []
+
+        async def write_text(self, **kwargs):
+            self.text_writes.append(kwargs)
+            return "artifact:host-logs-realize-1"
+
+        async def write_json(self, **kwargs):
+            self.json_writes.append(kwargs)
+            return "artifact:cleanup-realize-1"
+
+    artifacts = Artifacts()
+    realizer._artifacts = artifacts
+
+    class RegistrationFailed(RuntimeError):
+        pass
+
+    async def realize_fails(**kwargs):
+        # Production persists the deterministic cleanup authority before the
+        # first launch mutation, then removes the host on the failure path.
+        await kwargs["authority_sink"](
+            {
+                "kind": "host",
+                "containerName": "mm-host-1",
+                "stateVolumeRef": "mm-state-1",
+                "controlVolumeRef": None,
+            }
+        )
+        harness.events.append("host-realize-failed")
+        failure = RegistrationFailed("host never registered")
+        failure.host_cleanup_evidence = {
+            "containerRemoved": True,
+            "hostLogs": "runner: registration timed out\nopencode: exited 1\n",
+            "hostLogsTruncated": False,
+        }
+        raise failure
+
+    async def cleanup_without_container(**_kwargs):
+        harness.events.append("host-cleaned")
+        return {"containerRemoved": True}
+
+    realizer._host_runtime.realize = realize_fails
+    realizer._host_runtime.cleanup = cleanup_without_container
+
+    with pytest.raises(RegistrationFailed):
+        await realizer.execute(harness.publish_request, _plan("opencode-go/model"))
+
+    assert "host-cleaned" in harness.events
+    assert [write["name"] for write in artifacts.text_writes] == [
+        "generic-host-logs.txt"
+    ]
+    assert artifacts.text_writes[0]["link_type"] == "evidence.host_logs"
+    assert artifacts.text_writes[0]["payload"].startswith(
+        "runner: registration timed out"
+    )
+    host_results = next(
+        write["payload"]
+        for write in artifacts.json_writes
+        if write["name"] == "generic-host-cleanup.json"
+    )["results"]["host"]
+    assert host_results["hostLogsRef"] == "artifact:host-logs-realize-1"
+    assert host_results["containerRemoved"] is True
+    assert "hostLogs" not in host_results
+
+
+@pytest.mark.asyncio
+async def test_generic_host_runtime_carries_cleanup_evidence_on_failed_realization() -> (
+    None
+):
+    """The runtime's own failure cleanup keeps the host log tail on the failure."""
+
+    from moonmind.omnigent.host_runtime import (
+        GenericOmnigentHostRuntime,
+        PreparedHostInputs,
+    )
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+
+    plan = _plan("opencode-go/model")
+    host_class = HostClass.model_validate(
+        {
+            "hostClassId": "omnigent-opencode",
+            "version": 1,
+            "imageRef": "ghcr.io/example/opencode@sha256:" + "f" * 64,
+            "omnigentVersion": "0.11.0",
+            "omnigentBuildDigest": "sha256:" + "1" * 64,
+            "architectures": ["linux/amd64"],
+            "declaredHarnessImplementations": [
+                {
+                    "harnessId": "opencode-native",
+                    "implementationRef": "omnigent-harness-implementation:sha256:"
+                    + "3" * 64,
+                    "runtimeDependencies": [{"name": "opencode", "version": "1.18.11"}],
+                }
+            ],
+            "integrationModes": ["native-server"],
+            "materializerRefs": ["opencode-auth-json@1"],
+            "features": {
+                "workspaceBind": True,
+                "restrictedEgress": True,
+                "mountedSkills": True,
+            },
+            "runtime": {"uid": 1000, "gid": 1000, "home": "/home/app"},
+        }
+    )
+    launch_policy = get_launch_policy("omnigent-on-demand@1")
+    cleanup_calls: list[dict[str, object]] = []
+
+    class Cleanup:
+        async def cleanup(self, **kwargs):
+            cleanup_calls.append(dict(kwargs))
+            return {
+                "containerRemoved": True,
+                "hostLogs": "runner: registration never completed\n",
+                "hostLogsTruncated": False,
+            }
+
+    class Launcher:
+        server_url = "http://omnigent:8080"
+
+        async def launch(self, **_kwargs):
+            return {
+                "containerName": "mm-host-realize-1",
+                "stateVolumeRef": "mm-state-realize-1",
+                "controlVolumeRef": None,
+                "hostCleanupRef": "host-cleanup:realize-1",
+                "stateCleanupRef": "state-cleanup:realize-1",
+            }
+
+    class Registration:
+        async def wait_for_registration(self, **_kwargs):
+            raise TimeoutError("host never registered")
+
+    class RuntimeEnvironment:
+        def build(self, **_kwargs):
+            return {}
+
+    class Unused:
+        """Port that ``realize`` does not reach before the injected failure."""
+
+    runtime = GenericOmnigentHostRuntime(
+        launcher=Launcher(),
+        workspace_service=Unused(),
+        skill_service=Unused(),
+        tool_service=Unused(),
+        github_credential_service=Unused(),
+        egress_service=Unused(),
+        runtime_environment_service=RuntimeEnvironment(),
+        registration_waiter=Registration(),
+        host_attestor=Unused(),
+        cleanup_service=Cleanup(),
+    )
+    prepared = PreparedHostInputs(
+        workspace_attachment={
+            "kind": "bind",
+            "sourceRef": "/tmp/work",
+            "targetPath": "/workspaces/run",
+            "accessMode": "read-write",
+        },
+        skill_attachment={
+            "kind": "bind",
+            "sourceRef": "/tmp/skills",
+            "targetPath": "/opt/moonmind-skills",
+            "accessMode": "read-only",
+        },
+        tool_attachments=(),
+        egress_attestation={
+            "networkRef": "egress",
+            "profileRef": "egress-profile:default",
+            "profileDigest": "sha256:" + "a" * 64,
+            "appliedRuleDigest": "sha256:" + "b" * 64,
+            "attestationRef": "artifact://egress",
+        },
+    )
+
+    with pytest.raises(TimeoutError) as excinfo:
+        await runtime.realize(
+            request=AgentExecutionRequest(
+                agentKind="external",
+                agentId="omnigent",
+                correlationId="workflow-realize-fails",
+                idempotencyKey="idem-realize-fails",
+            ),
+            plan=plan,
+            runtime_binding_id="omnigent-runtime-binding:realize-1",
+            host_lease_ref="omnigent-host-lease:sha256:" + "c" * 64,
+            host_lease_generation=1,
+            host_class=host_class,
+            launch_policy=launch_policy,
+            prepared=prepared,
+            credential_handles=[],
+        )
+
+    assert [call["container_name"] for call in cleanup_calls] == ["mm-host-realize-1"]
+    evidence = excinfo.value.host_cleanup_evidence
+    assert evidence["containerRemoved"] is True
+    assert evidence["hostLogs"].startswith("runner: registration never completed")
+
+
+@pytest.mark.asyncio
 async def test_generic_realizer_accepts_remotely_verified_no_commit_publication() -> (
     None
 ):

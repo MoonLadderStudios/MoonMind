@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -26,11 +27,14 @@ from moonmind.omnigent.execute import (
     OmnigentContractError,
     OmnigentSessionStillRunningError,
     OmnigentTurnNotStartedError,
+    _ACTIVITY_HEARTBEAT_STATE,
+    _MarkedTurnStartWatchdog,
     _agent_items,
     _await_marked_turn_terminal,
     _build_omnigent_first_message,
     _first_message_text,
     _enqueue_stream_events,
+    _reconcile_inactive_marked_turn,
     _resolve_agent_id,
     _resolve_initial_context_message,
     _restore_active_journals,
@@ -843,25 +847,60 @@ async def test_snapshot_polling_start_watchdog_requires_fresh_post_deadline_read
     assert snapshot is completed
 
 
-@pytest.mark.asyncio
-async def test_run_omnigent_execution_fails_never_started_turn_from_heartbeats(
-    monkeypatch,
-    tmp_path,
-) -> None:
-    """Replay mm:00166f20 with a heartbeat-only stream: no terminal frame ever arrives.
+class _RecordingBridgeStore:
+    """Permissive bridge-store double that records terminal finalization only."""
 
-    The start budget is owned by the post-dispatch path, so heartbeat
-    reconciliation must fire it without waiting on a terminal SSE candidate.
-    """
+    def __init__(self) -> None:
+        self.terminal_calls: list[dict[str, Any]] = []
+        self.row = SimpleNamespace(
+            bridge_session_id="bridge-never-started",
+            omnigent_session_id=None,
+            status="created",
+            first_message_state="created",
+            first_message_posted_at=None,
+            first_message_pending_id=None,
+            first_message_item_id=None,
+            omnigent_endpoint_ref=None,
+            terminal_refs={},
+            metadata_={},
+        )
 
-    correlation_id = "corr-heartbeat-never-started"
-    idempotency_key = "idem-heartbeat-never-started"
-    marker = (
-        "MoonMind-Omnigent-Run:\n"
-        f"  correlationId: {correlation_id}\n"
-        f"  idempotencyKey: {idempotency_key}"
-    )
-    idle_without_work = {
+    async def get_binding(self, *_args: object, **_kwargs: object) -> None:
+        return None
+
+    async def list_events(self, *_args: object, **_kwargs: object) -> list[dict]:
+        return []
+
+    async def mark_terminal(
+        self,
+        idempotency_key: str,
+        *,
+        status: str,
+        terminal_refs: dict[str, Any] | None = None,
+        events: list[dict[str, Any]] | None = None,
+    ) -> SimpleNamespace:
+        self.terminal_calls.append(
+            {
+                "idempotencyKey": idempotency_key,
+                "status": status,
+                "terminalRefs": dict(terminal_refs or {}),
+                "eventCount": len(events or []),
+            }
+        )
+        return self.row
+
+    def __getattr__(self, name: str):
+        if name.startswith("_"):
+            raise AttributeError(name)
+
+        async def _record(*_args: object, **_kwargs: object) -> SimpleNamespace:
+            return self.row
+
+        return _record
+
+
+def _never_started_snapshot(marker: str) -> dict[str, Any]:
+    return {
         "status": "idle",
         "active_response_id": None,
         "items": [
@@ -877,7 +916,22 @@ async def test_run_omnigent_execution_fails_never_started_turn_from_heartbeats(
             },
         ],
     }
-    heartbeats_streamed = {"value": 0}
+
+
+def _never_started_client(
+    marker: str,
+    *,
+    stream_shape: str,
+    streamed: dict[str, int],
+) -> type:
+    """Provider double that accepts the marked message and never starts the turn.
+
+    ``stream_shape`` selects the SSE behaviour after acceptance: ``heartbeats``
+    emits only liveness frames, ``silent`` keeps the stream open without ever
+    emitting, and ``closes`` ends the stream cleanly after one heartbeat.
+    """
+
+    idle_without_work = _never_started_snapshot(marker)
 
     class FakeClient:
         def __init__(self, **_: object) -> None:
@@ -899,10 +953,16 @@ async def test_run_omnigent_execution_fails_never_started_turn_from_heartbeats(
 
         async def stream_events(self, session_id: str):
             await self.posted.wait()
-            while True:
-                heartbeats_streamed["value"] += 1
+            if stream_shape == "silent":
+                await asyncio.Event().wait()
+            elif stream_shape == "closes":
+                streamed["value"] += 1
                 yield {"type": "session.heartbeat", "status": "running"}
-                await asyncio.sleep(0.005)
+            else:
+                while True:
+                    streamed["value"] += 1
+                    yield {"type": "session.heartbeat", "status": "running"}
+                    await asyncio.sleep(0.005)
 
         async def get_session(self, session_id: str) -> dict[str, object]:
             if not self.posted.is_set():
@@ -913,9 +973,51 @@ async def test_run_omnigent_execution_fails_never_started_turn_from_heartbeats(
                 }
             return idle_without_work
 
+    return FakeClient
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stream_shape", "expected_source"),
+    [
+        ("heartbeats", "session_heartbeat_snapshot"),
+        ("silent", "stream_idle_snapshot"),
+        ("closes", None),
+    ],
+)
+async def test_run_omnigent_execution_finalizes_never_started_turn(
+    monkeypatch,
+    tmp_path,
+    stream_shape: str,
+    expected_source: str | None,
+) -> None:
+    """Replay mm:00166f20 through the production boundary for every stream shape.
+
+    The start budget is owned by the post-dispatch path, so it must fire whether
+    the stream carries only heartbeats, stays open in silence, or closes before
+    any terminal frame. The failure is finalized here rather than raised: the
+    decisive idle snapshot is captured as evidence, the bridge row is marked
+    terminal, and the typed result is returned so every execution shape
+    releases its authorities through normal cleanup.
+    """
+
+    correlation_id = f"corr-never-started-{stream_shape}"
+    idempotency_key = f"idem-never-started-{stream_shape}"
+    marker = (
+        "MoonMind-Omnigent-Run:\n"
+        f"  correlationId: {correlation_id}\n"
+        f"  idempotencyKey: {idempotency_key}"
+    )
+    streamed = {"value": 0}
+    store = _RecordingBridgeStore()
+    heartbeat_state: dict[str, Any] = {}
+
     monkeypatch.setenv("OMNIGENT_ENABLED", "true")
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
-    monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute.OmnigentHttpClient",
+        _never_started_client(marker, stream_shape=stream_shape, streamed=streamed),
+    )
     monkeypatch.setattr(
         "moonmind.omnigent.execute._TERMINAL_RECONCILIATION_INTERVAL_SECONDS", 0.0
     )
@@ -925,8 +1027,9 @@ async def test_run_omnigent_execution_fails_never_started_turn_from_heartbeats(
 
     loop = asyncio.get_running_loop()
     started = loop.time()
-    with pytest.raises(OmnigentTurnNotStartedError) as excinfo:
-        await run_omnigent_execution(
+    token = _ACTIVITY_HEARTBEAT_STATE.set(heartbeat_state)
+    try:
+        result = await run_omnigent_execution(
             AgentExecutionRequest(
                 agentKind="external",
                 agentId="omnigent",
@@ -941,12 +1044,150 @@ async def test_run_omnigent_execution_fails_never_started_turn_from_heartbeats(
                 },
             ),
             artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+            run_store=store,
         )
+    finally:
+        _ACTIVITY_HEARTBEAT_STATE.reset(token)
 
-    assert loop.time() - started < 10.0
-    assert heartbeats_streamed["value"] >= 1
-    assert excinfo.value.code == "OMNIGENT_CURRENT_TURN_NOT_STARTED"
+    assert loop.time() - started < 10.0, (
+        "the never-started turn must fail inside the turn-start budget, not the "
+        "no-progress or Activity budget"
+    )
+    if stream_shape == "heartbeats":
+        assert streamed["value"] >= 1
+    # Typed terminal result, returned rather than raised.
+    assert result.failure_class == "integration_error"
+    assert result.provider_error_code == "OMNIGENT_CURRENT_TURN_NOT_STARTED"
+    assert result.retry_recommendation == "retry_step_execution"
+    assert "never started" in result.summary
+    assert result.metadata["normalizedStatus"] == "failed"
+    assert result.metadata["omnigentSessionId"] == "session-1"
+    # Evidence: the decisive idle snapshot is in the bundle and the bridge row
+    # is finalized with terminal refs.
+    assert result.diagnostics_ref
+    assert result.output_refs
+    persisted = [
+        path.read_text(encoding="utf-8", errors="ignore")
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    ]
+    assert any("marked-user" in text for text in persisted), (
+        "the decisive idle snapshot must be captured as terminal evidence"
+    )
+    assert any("OMNIGENT_CURRENT_TURN_NOT_STARTED" in text for text in persisted)
+    assert [call["status"] for call in store.terminal_calls] == ["failed"]
+    assert store.terminal_calls[0]["idempotencyKey"] == idempotency_key
+    assert store.terminal_calls[0]["terminalRefs"]
+    # Operator contract: the watchdog fields are heartbeated while waiting.
+    assert heartbeat_state["turnEverActive"] is False
+    assert heartbeat_state["turnStartTimeoutSeconds"] == 0.05
+    assert heartbeat_state["turnStartWaitSeconds"] is not None
+    if expected_source is not None:
+        assert heartbeat_state["markedTurnObservationSource"] == expected_source
 
+
+@pytest.mark.asyncio
+async def test_start_watchdog_budget_is_anchored_at_dispatch_acceptance() -> None:
+    """The budget runs from when the provider accepted the message, not from construction."""
+
+    loop = asyncio.get_running_loop()
+    accepted_at = loop.time() - 10.0
+    watchdog = _MarkedTurnStartWatchdog(
+        loop=loop, timeout_seconds=300.0, started_at=accepted_at
+    )
+
+    assert watchdog.started_at == accepted_at
+    assert watchdog.deadline == pytest.approx(accepted_at + 300.0)
+    assert watchdog.heartbeat_fields()["turnStartWaitSeconds"] >= 10.0
+
+    unanchored = _MarkedTurnStartWatchdog(loop=loop, timeout_seconds=300.0)
+    assert unanchored.started_at >= accepted_at + 10.0
+
+
+@pytest.mark.asyncio
+async def test_reconcile_inactive_marked_turn_observes_supplied_snapshot_first() -> (
+    None
+):
+    """A reattach snapshot projecting live work disarms the budget before any early return."""
+
+    marker = "MoonMind-Omnigent-Run: reattach-active"
+    running_without_items = {
+        "status": "running",
+        "active_response_id": "resp-1",
+        "items": [_marked_user_item(marker)],
+    }
+
+    class Client:
+        async def get_session(self, _session_id: str) -> dict[str, Any]:
+            raise AssertionError("the supplied snapshot must be observed, not re-read")
+
+    loop = asyncio.get_running_loop()
+    watchdog = _MarkedTurnStartWatchdog(loop=loop, timeout_seconds=0.0)
+
+    reconciled = await _reconcile_inactive_marked_turn(
+        client=Client(),
+        session_id="session-1",
+        marker=marker,
+        baseline_item_ids=None,
+        event_count=3,
+        snapshot=running_without_items,
+        snapshot_observed_at=loop.time() - 1.0,
+        start_watchdog=watchdog,
+    )
+
+    assert reconciled is None, "an active turn with no items is not terminal"
+    assert watchdog.ever_active is True
+    assert watchdog.armed is False
+
+
+@pytest.mark.asyncio
+async def test_reconcile_inactive_marked_turn_fires_only_on_fresh_read() -> None:
+    """An idle no-work snapshot read before the deadline cannot fire the budget."""
+
+    marker = "MoonMind-Omnigent-Run: reattach-idle"
+    idle_without_work = {
+        "status": "idle",
+        "active_response_id": None,
+        "items": [_marked_user_item(marker)],
+    }
+
+    class Client:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def get_session(self, _session_id: str) -> dict[str, Any]:
+            self.calls += 1
+            return idle_without_work
+
+    loop = asyncio.get_running_loop()
+    watchdog = _MarkedTurnStartWatchdog(loop=loop, timeout_seconds=0.0)
+    client = Client()
+
+    stale = await _reconcile_inactive_marked_turn(
+        client=client,
+        session_id="session-1",
+        marker=marker,
+        baseline_item_ids=None,
+        event_count=3,
+        snapshot=idle_without_work,
+        snapshot_observed_at=watchdog.deadline - 1.0,
+        start_watchdog=watchdog,
+    )
+    assert stale is None
+    assert watchdog.armed is True
+    assert client.calls == 0
+
+    with pytest.raises(OmnigentTurnNotStartedError) as excinfo:
+        await _reconcile_inactive_marked_turn(
+            client=client,
+            session_id="session-1",
+            marker=marker,
+            baseline_item_ids=None,
+            event_count=3,
+            start_watchdog=watchdog,
+        )
+    assert client.calls == 1
+    assert excinfo.value.snapshot == idle_without_work
 
 @pytest.mark.asyncio
 async def test_snapshot_polling_start_watchdog_requires_visible_boundary() -> None:

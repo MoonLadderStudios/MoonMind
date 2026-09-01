@@ -52,6 +52,7 @@ from moonmind.omnigent.failure_classification import (
     classify_omnigent_failure,
     failure_class_for_terminal_status,
 )
+from moonmind.omnigent.harness_platform.failures import remediation_for
 from moonmind.omnigent.settings import (
     OMNIGENT_DISABLED_MESSAGE,
     OMNIGENT_RUNTIME_ACTIVE_SKILLS_DIR,
@@ -119,13 +120,28 @@ class OmnigentTurnNotStartedError(OmnigentSessionStillRunningError):
 
     code = "OMNIGENT_CURRENT_TURN_NOT_STARTED"
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        snapshot: Mapping[str, Any] | None = None,
+        waited_seconds: float | None = None,
+    ) -> None:
+        super().__init__(message)
+        # The decisive inactive snapshot is the terminal evidence for this
+        # failure; the execution boundary captures it before finalizing.
+        self.snapshot = dict(snapshot) if snapshot is not None else None
+        self.waited_seconds = waited_seconds
+
 
 class _MarkedTurnStartWatchdog:
     """Bound the wait for the first evidence that an accepted marked turn started.
 
     One watchdog is owned by the post-dispatch path of an execution attempt and
-    shared by heartbeat reconciliation and the terminal poll, so the budget is
-    measured from dispatch rather than from whichever SSE frame arrived. It is
+    shared by reattach, heartbeat and idle-stream reconciliation, the
+    stream-closed snapshot, and the terminal poll, so the budget is measured
+    from the moment the provider accepted the marked message rather than from
+    whichever SSE frame arrived or whenever durable bookkeeping finished. It is
     armed only while every observation so far projected an inactive turn with
     no active response id and no ordered item after the visible boundary; an
     active projection or any progress disarms it for the rest of the attempt.
@@ -133,9 +149,15 @@ class _MarkedTurnStartWatchdog:
     read that began before the deadline never releases live-work authority.
     """
 
-    def __init__(self, *, loop: asyncio.AbstractEventLoop, timeout_seconds: float):
+    def __init__(
+        self,
+        *,
+        loop: asyncio.AbstractEventLoop,
+        timeout_seconds: float,
+        started_at: float | None = None,
+    ):
         self._loop = loop
-        self.started_at = loop.time()
+        self.started_at = loop.time() if started_at is None else float(started_at)
         self.timeout_seconds = max(0.0, float(timeout_seconds))
         self.deadline = self.started_at + self.timeout_seconds
         self.ever_active = False
@@ -168,7 +190,9 @@ class _MarkedTurnStartWatchdog:
             "started it: the session stayed inactive with no active response "
             f"and projected no item after the marked message for {waited_seconds}s "
             f"(turn-start budget {self.timeout_seconds:g}s); no provider work "
-            "exists, retry as a new step execution"
+            "exists, retry as a new step execution",
+            snapshot=snapshot,
+            waited_seconds=waited_seconds,
         )
 
     def heartbeat_fields(self) -> dict[str, Any]:
@@ -1238,6 +1262,7 @@ async def _reconcile_inactive_marked_turn(
     baseline_item_ids: frozenset[str] | None,
     event_count: int,
     snapshot: dict[str, Any] | None = None,
+    snapshot_observed_at: float | None = None,
     timeout_seconds: float = 1800.0,
     interval_seconds: float = 2.0,
     quiet_period_seconds: float = _MARKED_TURN_QUIET_PERIOD_SECONDS,
@@ -1253,9 +1278,34 @@ async def _reconcile_inactive_marked_turn(
     the provider snapshot is inactive and the marked turn has completed tool
     structure; the existing bounded quiet-period poll remains the terminal
     authority and prevents stale idle projections from ending active work.
+
+    When a ``start_watchdog`` is supplied, every candidate snapshot is observed
+    by it *before* terminal eligibility is tested, so an active projection seen
+    on reattach or heartbeat is never forgotten by an early return. A caller
+    that supplies ``snapshot`` also supplies ``snapshot_observed_at`` (the loop
+    time its read was initiated); a read initiated before the watchdog deadline
+    can only disarm the budget, never fire it.
     """
 
-    candidate = snapshot or await client.get_session(session_id)
+    if snapshot is None:
+        snapshot_observed_at = asyncio.get_running_loop().time()
+        candidate = await client.get_session(session_id)
+    else:
+        candidate = snapshot
+    if start_watchdog is not None:
+        start_watchdog.observe(
+            candidate,
+            _marked_turn_item_state(
+                candidate,
+                marker=marker,
+                baseline_item_ids=baseline_item_ids,
+            ),
+            observation_started_at=(
+                snapshot_observed_at
+                if snapshot_observed_at is not None
+                else start_watchdog.started_at
+            ),
+        )
     terminal_status = _inactive_marked_turn_terminal_status(
         candidate,
         marker=marker,
@@ -1296,13 +1346,34 @@ async def _enqueue_stream_events(
         await queue.put(None)
 
 
+_STREAM_IDLE_TICK: Any = object()
+
+
 async def _queued_stream_events(
     *,
     queue: asyncio.Queue[tuple[dict[str, Any], bool] | BaseException | None],
     stream_task: asyncio.Task[None],
-) -> AsyncIterator[tuple[dict[str, Any], bool]]:
+    idle_tick_seconds: float | None = None,
+) -> AsyncIterator[tuple[dict[str, Any], bool] | Any]:
+    """Yield queued stream items, interleaving idle ticks while the stream is silent.
+
+    An open SSE stream that emits nothing would otherwise block the consumer
+    indefinitely; the provider client's stream read timeout is unbounded by
+    design. Waiting on the queue (rather than on the SSE iterator itself) lets
+    the wait be bounded without cancelling the provider read mid-frame.
+    """
+
     while True:
-        event = await queue.get()
+        if idle_tick_seconds is None:
+            event = await queue.get()
+        else:
+            try:
+                event = await asyncio.wait_for(
+                    queue.get(), timeout=max(0.01, idle_tick_seconds)
+                )
+            except TimeoutError:
+                yield _STREAM_IDLE_TICK
+                continue
         if event is None:
             break
         if isinstance(event, BaseException):
@@ -1578,6 +1649,11 @@ async def run_omnigent_execution(
     client: OmnigentHttpClient | None = None
     session_id = ""
     stream_task: asyncio.Task[None] | None = None
+    # Loop times of the two observations the turn-start budget is anchored to:
+    # when this attempt learned the marked message was accepted, and when the
+    # pre-dispatch session snapshot was read.
+    turn_dispatched_at: float | None = None
+    initial_snapshot_observed_at: float | None = None
     heartbeat_task: asyncio.Task[None] | None = None
     artifact_gateway = artifact_gateway or LocalOmnigentArtifactGateway()
     first_message: dict[str, Any] | None = None
@@ -1873,6 +1949,7 @@ async def run_omnigent_execution(
                 # The realizer's durable runtime binding must own the session id
                 # before snapshot retrieval, prompt preparation, or message POST.
                 await session_authority_sink.session_created(session_id)
+            initial_snapshot_observed_at = asyncio.get_running_loop().time()
             with suppress(Exception):
                 initial_snapshot = await client.get_session(session_id)
             record_session_created = (
@@ -2120,6 +2197,9 @@ async def run_omnigent_execution(
                 if run_store is not None:
                     await run_store.mark_posted(request.idempotency_key)
                 first_message_posted = True
+                # A prior attempt posted this message; the budget runs from
+                # this attempt's first knowledge that it was accepted.
+                turn_dispatched_at = asyncio.get_running_loop().time()
                 external_state["retry"].update(
                     {
                         "firstMessageOutcome": "reconciled",
@@ -2155,6 +2235,10 @@ async def run_omnigent_execution(
                         session_id, first_message
                     )
                 first_message_posted = True
+                # The provider accepted the marked message at this instant; the
+                # turn-start budget is anchored here, before the durable
+                # bookkeeping and journal restoration that follow.
+                turn_dispatched_at = asyncio.get_running_loop().time()
                 first_message_response_identifiers = (
                     _first_message_response_identifiers(first_message_response)
                 )
@@ -2256,12 +2340,15 @@ async def run_omnigent_execution(
                     "status": durable_terminal_status,
                 }
             # One start watchdog per execution attempt: the budget for the first
-            # evidence that the accepted turn started runs from here, whichever
-            # path (reattach, heartbeat reconciliation, or a terminal frame)
-            # observes the provider snapshot.
+            # evidence that the accepted turn started runs from the dispatch
+            # acceptance recorded above (or from reattach when a prior attempt
+            # posted the message), whichever path (reattach, heartbeat or idle
+            # stream reconciliation, stream close, or a terminal frame) observes
+            # the provider snapshot.
             start_watchdog = _MarkedTurnStartWatchdog(
                 loop=asyncio.get_running_loop(),
                 timeout_seconds=_MARKED_TURN_START_TIMEOUT_SECONDS,
+                started_at=turn_dispatched_at,
             )
             if (
                 terminal_status is None
@@ -2276,6 +2363,7 @@ async def run_omnigent_execution(
                     baseline_item_ids=pre_dispatch_item_ids,
                     event_count=event_count["value"],
                     snapshot=initial_snapshot,
+                    snapshot_observed_at=initial_snapshot_observed_at,
                     start_watchdog=start_watchdog,
                 )
                 if reattached_terminal is not None:
@@ -2300,6 +2388,7 @@ async def run_omnigent_execution(
                         raw_events=raw_events,
                         normalized_events=normalized_events,
                     )
+            stream_events: AsyncIterator[Any] | None = None
             if terminal_status is None:
                 heartbeat_task = asyncio.create_task(
                     _periodic_stream_heartbeat(
@@ -2308,24 +2397,102 @@ async def run_omnigent_execution(
                         status=heartbeat_status,
                     )
                 )
-            next_terminal_reconciliation_at = 0.0
-            try:
-                stream_events = None
-                if terminal_status is None:
-                    stream_events = (
-                        _queued_stream_events(
+                if stream_queue is None or stream_task is None:
+                    # Every live stream is consumed through the queue so the
+                    # wait for the next frame can be bounded (idle ticks below)
+                    # without cancelling the provider's SSE read mid-frame.
+                    stream_queue = asyncio.Queue()
+                    live_stream_gate = asyncio.Event()
+                    live_stream_gate.set()
+                    stream_task = asyncio.create_task(
+                        _enqueue_stream_events(
+                            client=client,
+                            session_id=session_id,
                             queue=stream_queue,
-                            stream_task=stream_task,
+                            message_posted=live_stream_gate,
                         )
-                        if stream_queue is not None and stream_task is not None
-                        else client.stream_events(session_id)
                     )
+                stream_events = _queued_stream_events(
+                    queue=stream_queue,
+                    stream_task=stream_task,
+                    idle_tick_seconds=_TERMINAL_RECONCILIATION_INTERVAL_SECONDS,
+                )
+            next_terminal_reconciliation_at = 0.0
+
+            async def observe_marked_turn(source: str) -> bool:
+                """Read the provider snapshot and evaluate the marked turn once.
+
+                Owned by the post-dispatch path and run on provider heartbeats
+                and on idle stream ticks alike, so the turn-start budget and
+                inactive-turn reconciliation never depend on an SSE frame
+                arriving. Returns ``True`` when a terminal turn was reconciled.
+                """
+
+                nonlocal terminal_status, terminal_snapshot_override
+                nonlocal next_terminal_reconciliation_at
+                observed_at = asyncio.get_running_loop().time()
+                next_terminal_reconciliation_at = (
+                    observed_at + _TERMINAL_RECONCILIATION_INTERVAL_SECONDS
+                )
+                observed_snapshot = await client.get_session(session_id)
+                reconciled = await _reconcile_inactive_marked_turn(
+                    client=client,
+                    session_id=session_id,
+                    marker=marker,
+                    baseline_item_ids=pre_dispatch_item_ids,
+                    event_count=event_count["value"],
+                    snapshot=observed_snapshot,
+                    snapshot_observed_at=observed_at,
+                    start_watchdog=start_watchdog,
+                )
+                observed_status = normalize_omnigent_observation(observed_snapshot)
+                _safe_heartbeat(
+                    {
+                        "omnigentSessionId": session_id,
+                        "normalizedStatus": (
+                            observed_status
+                            if observed_status in _NON_TERMINAL_STATUSES
+                            else "running"
+                        ),
+                        "eventsCaptured": event_count["value"],
+                        "firstMessagePosted": True,
+                        "markedTurnObservationSource": source,
+                        **start_watchdog.heartbeat_fields(),
+                    }
+                )
+                if reconciled is None:
+                    return False
+                terminal_status, terminal_snapshot_override = reconciled
+                external_state["terminalReconciliation"] = {
+                    "source": source,
+                    "status": terminal_status,
+                }
+                await _append_reconciled_terminal_snapshot(
+                    artifact_gateway=artifact_gateway,
+                    request=request,
+                    run_store=run_store,
+                    bridge_session_id=bridge_session_id,
+                    session_id=session_id,
+                    terminal_status=terminal_status,
+                    snapshot=terminal_snapshot_override,
+                    source=source,
+                    event_count=event_count,
+                    raw_events=raw_events,
+                    normalized_events=normalized_events,
+                )
+                heartbeat_status["value"] = terminal_status
+                return True
+
+            try:
                 async for stream_item in _optional_stream_events(stream_events):
-                    if isinstance(stream_item, tuple):
-                        event, arrived_after_message_post = stream_item
-                    else:
-                        event = stream_item
-                        arrived_after_message_post = True
+                    if stream_item is _STREAM_IDLE_TICK:
+                        # The stream is open but silent. Neither the start
+                        # budget nor terminal reconciliation may wait on a frame
+                        # that is not coming.
+                        if await observe_marked_turn("stream_idle_snapshot"):
+                            break
+                        continue
+                    event, arrived_after_message_post = stream_item
                     event_count["value"] += 1
                     raw_events.append(dict(event))
                     normalized_bridge_event = build_omnigent_bridge_event(
@@ -2386,61 +2553,14 @@ async def run_omnigent_execution(
                     }:
                         loop_time = asyncio.get_running_loop().time()
                         if loop_time >= next_terminal_reconciliation_at:
-                            next_terminal_reconciliation_at = (
-                                loop_time + _TERMINAL_RECONCILIATION_INTERVAL_SECONDS
-                            )
                             # Heartbeats are the only stream evidence while a
-                            # native harness works (or never starts), so this is
-                            # where the start budget must be evaluated when no
-                            # terminal frame ever arrives.
-                            heartbeat_snapshot = await client.get_session(session_id)
-                            start_watchdog.observe(
-                                heartbeat_snapshot,
-                                _marked_turn_item_state(
-                                    heartbeat_snapshot,
-                                    marker=marker,
-                                    baseline_item_ids=pre_dispatch_item_ids,
-                                ),
-                                observation_started_at=loop_time,
-                            )
-                            reconciled_terminal = await _reconcile_inactive_marked_turn(
-                                client=client,
-                                session_id=session_id,
-                                marker=marker,
-                                baseline_item_ids=pre_dispatch_item_ids,
-                                event_count=event_count["value"],
-                                snapshot=heartbeat_snapshot,
-                                start_watchdog=start_watchdog,
-                            )
-                            if reconciled_terminal is not None:
-                                (
-                                    terminal_status,
-                                    terminal_snapshot_override,
-                                ) = reconciled_terminal
-                                heartbeat_reconciliation_source = (
-                                    normalized_bridge_event.event["type"].replace(
-                                        ".", "_"
-                                    )
-                                    + "_snapshot"
-                                )
-                                external_state["terminalReconciliation"] = {
-                                    "source": heartbeat_reconciliation_source,
-                                    "status": terminal_status,
-                                }
-                                await _append_reconciled_terminal_snapshot(
-                                    artifact_gateway=artifact_gateway,
-                                    request=request,
-                                    run_store=run_store,
-                                    bridge_session_id=bridge_session_id,
-                                    session_id=session_id,
-                                    terminal_status=terminal_status,
-                                    snapshot=terminal_snapshot_override,
-                                    source=heartbeat_reconciliation_source,
-                                    event_count=event_count,
-                                    raw_events=raw_events,
-                                    normalized_events=normalized_events,
-                                )
-                                heartbeat_status["value"] = terminal_status
+                            # native harness works (or never starts); evaluate
+                            # the start budget and inactive-turn reconciliation
+                            # without waiting for a terminal frame.
+                            if await observe_marked_turn(
+                                normalized_bridge_event.event["type"].replace(".", "_")
+                                + "_snapshot"
+                            ):
                                 break
                     if normalized in {
                         "completed",
@@ -2562,36 +2682,77 @@ async def run_omnigent_execution(
             )
             if terminal_status is None:
                 normalized_snapshot = normalize_omnigent_observation(final_snapshot)
-                if normalized_snapshot in {
+                closed_turn_state = (
+                    _marked_turn_item_state(
+                        final_snapshot,
+                        marker=marker,
+                        baseline_item_ids=pre_dispatch_item_ids,
+                    )
+                    if isinstance(final_snapshot.get("items"), list)
+                    else None
+                )
+                if (
+                    closed_turn_state is not None
+                    and closed_turn_state["boundarySource"] is not None
+                    and not closed_turn_state["progress"]
+                    and start_watchdog.armed
+                    and _snapshot_projects_inactive_turn(final_snapshot)
+                    and not _snapshot_projects_active_response(final_snapshot)
+                ):
+                    # The stream closed before the accepted turn produced any
+                    # work: the never-started signature. The start budget owns
+                    # it rather than an immediate ambiguous failure. Keep
+                    # polling the ordered snapshot; the watchdog fails with the
+                    # typed code at its deadline, or the poll follows the turn
+                    # to its terminal if work appears.
+                    terminal_status, final_snapshot = await _await_marked_turn_terminal(
+                        client=client,
+                        session_id=session_id,
+                        marker=marker,
+                        baseline_item_ids=pre_dispatch_item_ids,
+                        event_count=event_count["value"],
+                        terminal_status=(
+                            normalized_snapshot
+                            if normalized_snapshot in {"failed", "canceled", "timed_out"}
+                            else "completed"
+                        ),
+                        start_watchdog=start_watchdog,
+                    )
+                    external_state["terminalReconciliation"] = {
+                        "source": "stream_closed_snapshot",
+                        "status": terminal_status,
+                    }
+                elif normalized_snapshot in {
                     "completed",
                     "failed",
                     "canceled",
                     "timed_out",
                 }:
-                    if isinstance(final_snapshot.get("items"), list):
-                        turn_state = _marked_turn_item_state(
-                            final_snapshot,
-                            marker=marker,
-                            baseline_item_ids=pre_dispatch_item_ids,
-                        )
-                        if not turn_state["progress"]:
+                    if closed_turn_state is not None:
+                        if not closed_turn_state["progress"]:
                             raise OmnigentSessionStillRunningError(
                                 "Omnigent stream ended before the current marked turn "
                                 "produced provider work"
                             )
-                        terminal_status, final_snapshot = (
-                            await _await_marked_turn_terminal(
-                                client=client,
-                                session_id=session_id,
-                                marker=marker,
-                                baseline_item_ids=pre_dispatch_item_ids,
-                                event_count=event_count["value"],
-                                terminal_status=normalized_snapshot,
-                                start_watchdog=start_watchdog,
-                            )
+                        (
+                            terminal_status,
+                            final_snapshot,
+                        ) = await _await_marked_turn_terminal(
+                            client=client,
+                            session_id=session_id,
+                            marker=marker,
+                            baseline_item_ids=pre_dispatch_item_ids,
+                            event_count=event_count["value"],
+                            terminal_status=normalized_snapshot,
+                            start_watchdog=start_watchdog,
                         )
                     else:
                         terminal_status = normalized_snapshot
+                elif normalized_snapshot in _NON_TERMINAL_STATUSES:
+                    raise OmnigentSessionStillRunningError(
+                        "Omnigent stream ended while the provider session is still running"
+                    )
+                if terminal_status is not None:
                     # The stream ended without emitting a terminal event but the
                     # final snapshot is terminal. Append an indexed terminal event
                     # derived from the snapshot so the durable event index records
@@ -2625,10 +2786,6 @@ async def run_omnigent_execution(
                         await run_store.append_events(
                             bridge_session_id, [normalized_bridge_event.event]
                         )
-                elif normalized_snapshot in _NON_TERMINAL_STATUSES:
-                    raise OmnigentSessionStillRunningError(
-                        "Omnigent stream ended while the provider session is still running"
-                    )
             if terminal_status is None:
                 raise OmnigentContractError(
                     "Omnigent stream ended before a terminal session outcome"
@@ -2929,6 +3086,79 @@ async def run_omnigent_execution(
                 "providerName": "omnigent",
                 **bundle.metadata_refs,
             },
+        )
+    except OmnigentTurnNotStartedError as exc:
+        # The provider accepted the marked turn and dropped it. No live work
+        # exists to reattach to, so this attempt owns the terminal evidence:
+        # capture the decisive inactive snapshot, finalize the durable bridge
+        # row, and return the typed failure as the terminal result that every
+        # execution shape (realizer, coordinator, unprofiled) consumes through
+        # its normal cleanup. The ambiguous parent keeps raising below so an
+        # Activity retry can reattach to work that may still be live.
+        await _cancel_task(heartbeat_task)
+        await _cancel_task(stream_task)
+        final_snapshot = dict(exc.snapshot or {"status": "idle"})
+        bundle = await _build_capture_bundle(
+            client=client,
+            artifact_gateway=artifact_gateway,
+            request=request,
+            session_id=session_id,
+            agent_id=target_agent_id,
+            initial_snapshot=initial_snapshot,
+            final_snapshot=final_snapshot,
+            first_message_request=first_message,
+            first_message_response=first_message_response,
+            first_message_posted=first_message_posted,
+            first_message_response_identifiers=first_message_response_identifiers,
+            raw_events=raw_events,
+            normalized_events=normalized_events,
+            terminal_status="failed",
+            diagnostics={
+                "error": str(exc),
+                "failureClass": "integration_error",
+                "providerErrorCode": exc.code,
+                "turnStartWaitSeconds": exc.waited_seconds,
+                "turnStartTimeoutSeconds": _MARKED_TURN_START_TIMEOUT_SECONDS,
+            },
+            harvest_resources=False,
+            external_state=external_state,
+            capture_policy=capture_policy,
+        )
+        terminal_refs = build_omnigent_terminal_refs(
+            bundle,
+            terminal_status="failed",
+            final_snapshot=final_snapshot,
+        )
+        result_metadata: dict[str, Any] = {
+            "normalizedStatus": "failed",
+            "providerName": "omnigent",
+            "omnigentSessionId": session_id,
+            **bundle.metadata_refs,
+        }
+        if defer_bridge_terminal:
+            result_metadata["deferredBridgeTerminal"] = {
+                "idempotencyKey": request.idempotency_key,
+                "status": "failed",
+                "terminalRefs": terminal_refs,
+            }
+        elif run_store is not None:
+            await run_store.mark_terminal(
+                request.idempotency_key,
+                status="failed",
+                terminal_refs=terminal_refs,
+                events=normalized_events,
+            )
+        return AgentRunResult(
+            outputRefs=bundle.output_refs,
+            summary=_compact_summary(
+                exc,
+                fallback="Omnigent accepted the marked turn but never started it",
+            ),
+            diagnosticsRef=bundle.diagnostics_ref,
+            failureClass="integration_error",
+            providerErrorCode=exc.code,
+            retryRecommendation=remediation_for(exc.code),
+            metadata=result_metadata,
         )
     except OmnigentSessionStillRunningError:
         raise

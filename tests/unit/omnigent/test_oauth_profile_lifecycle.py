@@ -4904,6 +4904,7 @@ async def _run_coordinator_failure_case(
     release_failures: int = 0,
     request: AgentExecutionRequest | None = None,
     injected_error: BaseException | None = None,
+    injected_result: AgentRunResult | None = None,
 ):
     events: list[tuple[str, dict]] = []
     actions: list[str] = []
@@ -5138,6 +5139,9 @@ async def _run_coordinator_failure_case(
             "resource_harvest",
         ):
             await owners.fail(owner)
+        if injected_result is not None:
+            # The runner returned a terminal failed result instead of raising.
+            return injected_result
         return AgentRunResult(summary="done")
 
     artifact_directory = tempfile.TemporaryDirectory(
@@ -5328,6 +5332,73 @@ async def test_ambiguous_terminal_attempt_preserves_exact_host_for_temporal_retr
         and payload["status"] == "waiting"
         for event_type, payload in events
     )
+
+
+@pytest.mark.asyncio
+async def test_never_started_turn_result_releases_host_and_profile_authority() -> None:
+    """A never-started turn is terminal, not ambiguous: nothing live is retained.
+
+    ``run_omnigent_execution`` returns the typed ``OMNIGENT_CURRENT_TURN_NOT_STARTED``
+    result instead of raising the ambiguous still-running exception, so the
+    coordinator must not take the ``ambiguous_terminal_state`` deferral that
+    keeps the exact host, mounted credentials, and provider lease for a retry.
+    The advertised ``retry_step_execution`` is a new attempt that would otherwise
+    be blocked by capacity retained for work that never existed.
+    """
+
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="codex",
+        correlationId="workflow-1",
+        idempotencyKey="idem-never-started",
+        workspaceSpec={
+            "workspaceLocator": {
+                "kind": "sandbox",
+                "workspaceId": hashlib.sha256(
+                    b"workflow-1:idem-never-started"
+                ).hexdigest()[:24],
+            }
+        },
+        parameters={
+            "omnigent": {
+                "launchPolicyRef": "codex-on-demand@1",
+                "session": {"workspace": "https://example.com/repo.git"},
+            }
+        },
+    )
+    events, actions, owner_calls = await _run_coordinator_failure_case(
+        fail_at="none",
+        code="OMNIGENT_CURRENT_TURN_NOT_STARTED",
+        request=request,
+        injected_result=AgentRunResult(
+            summary=(
+                "Omnigent accepted the marked turn but the provider never started it"
+            ),
+            failureClass="integration_error",
+            providerErrorCode="OMNIGENT_CURRENT_TURN_NOT_STARTED",
+            retryRecommendation="retry_step_execution",
+            metadata={"normalizedStatus": "failed"},
+        ),
+    )
+
+    assert "host_remove" in owner_calls
+    assert "provider_released" in actions
+    assert not any(
+        event_type == "host_cleanup" and payload["status"] == "waiting"
+        for event_type, payload in events
+    )
+    assert not any(
+        event_type == "profile_lease_release" and payload["status"] == "waiting"
+        for event_type, payload in events
+    )
+    harvest = next(
+        payload
+        for event_type, payload in events
+        if event_type == "resource_harvest" and payload["status"] == "failed"
+    )
+    assert harvest["code"] == "OMNIGENT_CURRENT_TURN_NOT_STARTED"
+    assert harvest["failure_class"] == "integration_error"
 
 
 @pytest.mark.asyncio

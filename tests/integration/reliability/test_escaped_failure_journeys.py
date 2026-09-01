@@ -3842,7 +3842,10 @@ async def test_replayed_terminal_event_waits_for_current_marked_turn() -> None:
     assert expected["toolOnlyQuietPeriodSeconds"] == 300
 
 
-async def test_accepted_turn_that_never_starts_fails_within_start_budget() -> None:
+async def test_accepted_turn_that_never_starts_fails_within_start_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
     """Replay mm:00166f20 at the terminal-authority and dispatch boundaries."""
 
     from moonmind.omnigent import execute as execute_module
@@ -3908,6 +3911,96 @@ async def test_accepted_turn_that_never_starts_fails_within_start_budget() -> No
     assert client.calls >= 2
     assert excinfo.value.code == expected["failureCode"]
 
+    # Production journey: ``run_omnigent_execution`` against a provider that
+    # accepts the marked message, replays the observed frames (ending in the
+    # ``response.completed`` emitted for the injection itself), then carries
+    # only heartbeats while the ordered snapshot stays idle with no work.
+
+    correlation_id = manifest["incidentWorkflowId"]
+    idempotency_key = "step-never-started"
+    run_marker = (
+        "MoonMind-Omnigent-Run:\n"
+        f"  correlationId: {correlation_id}\n"
+        f"  idempotencyKey: {idempotency_key}"
+    )
+    live_snapshot = json.loads(json.dumps(idle_snapshot))
+    for item in live_snapshot["items"]:
+        for content in (item.get("data") or {}).get("content") or []:
+            if content.get("text") == marker:
+                content["text"] = run_marker
+    observed_events = [dict(event) for event in manifest["observedProviderEvents"]]
+
+    class NeverStartedClient:
+        def __init__(self, **_: object) -> None:
+            self.posted = asyncio.Event()
+
+        async def list_agents(self) -> dict[str, object]:
+            return {"items": [{"id": "agent-1", "name": "opencode-native-ui"}]}
+
+        async def create_session(self, payload: dict[str, object]) -> dict[str, object]:
+            return {"id": manifest["sessionId"]}
+
+        async def post_event(
+            self, session_id: str, payload: dict[str, object]
+        ) -> dict[str, object]:
+            self.posted.set()
+            return {"pending_id": "pending-1"}
+
+        async def stream_events(self, session_id: str):
+            await self.posted.wait()
+            for event in observed_events:
+                yield dict(event)
+            while True:
+                yield {"type": "session.heartbeat"}
+                await asyncio.sleep(0.005)
+
+        async def get_session(self, session_id: str) -> dict[str, object]:
+            if not self.posted.is_set():
+                return {
+                    "status": "idle",
+                    "active_response_id": None,
+                    "items": [live_snapshot["items"][0]],
+                }
+            return live_snapshot
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr(execute_module, "OmnigentHttpClient", NeverStartedClient)
+    monkeypatch.setattr(
+        execute_module, "_TERMINAL_RECONCILIATION_INTERVAL_SECONDS", 0.0
+    )
+    monkeypatch.setattr(execute_module, "_MARKED_TURN_START_TIMEOUT_SECONDS", 0.05)
+
+    started = loop.time()
+    result = await execute_module.run_omnigent_execution(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId=correlation_id,
+            idempotencyKey=idempotency_key,
+            parameters={
+                "omnigent": {
+                    "agent": {"agentName": "opencode-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
+                    "prompt": {"text": "implement the issue"},
+                },
+            },
+        ),
+        artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+    )
+    assert loop.time() - started < 30.0
+    assert result.failure_class == expected["failureClass"]
+    assert result.provider_error_code == expected["failureCode"]
+    assert result.retry_recommendation == expected["retryRecommendation"]
+    assert result.diagnostics_ref, (
+        "the decisive idle snapshot must be captured as terminal evidence"
+    )
+    assert result.summary != manifest["observedFailureSummary"], (
+        "the terminal result must name the never-started cause"
+    )
+    assert "never started" in result.summary
+
+    # The realizer dispatch boundary passes the typed terminal result through.
     plan = _plan("opencode-go/model")
 
     class PlanStore:
@@ -3917,33 +4010,30 @@ async def test_accepted_turn_that_never_starts_fails_within_start_budget() -> No
 
     class Realizer:
         async def execute(self, request, admitted):
-            raise excinfo.value
+            return result
 
     class Registry:
         def require(self, ref):
             assert ref == manifest["executionRealizerRef"]
             return Realizer()
 
-    result = await _try_generic_realizer_dispatch(
+    dispatched = await _try_generic_realizer_dispatch(
         AgentExecutionRequest(
             agentKind="external",
             agentId="omnigent",
-            correlationId=manifest["incidentWorkflowId"],
-            idempotencyKey="step-never-started",
+            correlationId=correlation_id,
+            idempotencyKey=idempotency_key,
             resolvedSkillsetRef="artifact:skills",
             parameters={"executionPlanRef": plan.planRef},
         ),
         plan_store=PlanStore(),
         realizer_registry=Registry(),
     )
-    assert result is not None
-    assert result.failure_class == expected["failureClass"]
-    assert result.provider_error_code == expected["failureCode"]
-    assert result.retry_recommendation == expected["retryRecommendation"]
-    assert result.summary != manifest["observedFailureSummary"], (
-        "the dispatch projection must name the never-started cause"
-    )
-    assert expected["failureCode"] in result.summary
+    assert dispatched is not None
+    assert dispatched.failure_class == expected["failureClass"]
+    assert dispatched.provider_error_code == expected["failureCode"]
+    assert dispatched.retry_recommendation == expected["retryRecommendation"]
+    assert dispatched.diagnostics_ref == result.diagnostics_ref
 
 
 async def test_omnigent_server_is_reachable_from_isolated_host_network() -> None:

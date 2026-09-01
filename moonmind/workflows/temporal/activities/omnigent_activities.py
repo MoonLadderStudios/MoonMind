@@ -654,31 +654,17 @@ def _typed_platform_failure_result(exc: BaseException) -> AgentRunResult | None:
 async def _omnigent_execute_activity(
     request: AgentExecutionRequest,
 ) -> AgentRunResult:
-    """Run one Omnigent streaming execution and classify it at one boundary.
+    """Run one Omnigent streaming execution.
 
-    Every execution shape (plan-dispatched realizer, unprofiled direct run,
-    profile-bound coordinator) crosses this function. An accepted turn the
-    provider never started has no live work to reattach to, so an Activity
-    retry would only re-wait the start budget; it is returned as the typed
-    failure here. The ambiguous parent (``OmnigentSessionStillRunningError``)
-    keeps raising so the retry can reattach to work that may still be live.
+    An accepted turn the provider never started is finalized inside
+    ``run_omnigent_execution`` itself (decisive snapshot captured, bridge row
+    terminal) and returned as a typed ``AgentRunResult``, so every execution
+    shape below (plan-dispatched realizer, unprofiled direct run, profile-bound
+    coordinator) consumes one classification with its evidence attached and
+    releases its authorities through normal cleanup. The ambiguous parent
+    (``OmnigentSessionStillRunningError``) keeps raising so a retry can reattach
+    to work that may still be live.
     """
-
-    from moonmind.omnigent.execute import OmnigentTurnNotStartedError
-
-    try:
-        return await _dispatch_omnigent_execution(request)
-    except OmnigentTurnNotStartedError as exc:
-        typed = _typed_platform_failure_result(exc)
-        if typed is None:  # pragma: no cover - the subclass always carries a code
-            raise
-        return typed
-
-
-async def _dispatch_omnigent_execution(
-    request: AgentExecutionRequest,
-) -> AgentRunResult:
-    """Select and run the execution shape for one request."""
 
     import httpx
 

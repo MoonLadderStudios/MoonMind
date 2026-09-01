@@ -143,17 +143,28 @@ async def test_generic_dispatch_projects_typed_turn_not_started_code() -> None:
 
 @pytest.mark.asyncio
 @patch("moonmind.omnigent.execute.run_omnigent_execution")
-async def test_unprofiled_activity_projects_turn_not_started_as_typed_result(
+async def test_unprofiled_activity_passes_through_typed_turn_not_started_result(
     mock_run, monkeypatch: pytest.MonkeyPatch, isolated_control_plane
 ) -> None:
-    """The direct (non-plan) path must return the same typed classification."""
+    """The direct (non-plan) path consumes the typed terminal result unchanged.
 
-    from moonmind.omnigent.execute import OmnigentTurnNotStartedError
+    ``run_omnigent_execution`` finalizes a never-started turn itself (evidence
+    captured, bridge row terminal) and returns the typed failure; the canonical
+    turn wrapper on this path must settle it and keep its classification.
+    """
+
+    typed = AgentRunResult(
+        summary="Omnigent accepted the marked turn but the provider never started it",
+        failureClass="integration_error",
+        providerErrorCode="OMNIGENT_CURRENT_TURN_NOT_STARTED",
+        retryRecommendation="retry_step_execution",
+        diagnosticsRef="artifact://diagnostics-never-started",
+        outputRefs=["artifact://output-never-started"],
+        metadata={"normalizedStatus": "failed", "omnigentSessionId": "session-1"},
+    )
 
     async def never_started(*_args, **_kwargs):
-        raise OmnigentTurnNotStartedError(
-            "Omnigent accepted the marked turn but the provider never started it"
-        )
+        return typed
 
     mock_run.side_effect = never_started
     req = AgentExecutionRequest(
@@ -168,8 +179,9 @@ async def test_unprofiled_activity_projects_turn_not_started_as_typed_result(
     assert result.failure_class == "integration_error"
     assert result.provider_error_code == "OMNIGENT_CURRENT_TURN_NOT_STARTED"
     assert result.retry_recommendation == "retry_step_execution"
-    assert "OMNIGENT_CURRENT_TURN_NOT_STARTED" in result.summary
-    assert "never started" not in result.summary
+    assert result.diagnostics_ref == "artifact://diagnostics-never-started"
+    assert result.output_refs == ["artifact://output-never-started"]
+    assert result.metadata["omnigentSessionId"] == "session-1"
     mock_run.assert_called_once()
 
 

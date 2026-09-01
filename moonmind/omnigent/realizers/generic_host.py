@@ -48,6 +48,30 @@ _GENERIC_HOST_CLEANUP_OWNER = "omnigent_generic_host"
 _CLEANUP_NOT_OWNED = object()
 
 
+def _carry_host_logs(host_evidence: Any, prior_host_evidence: Any) -> Any:
+    """Fold a host log tail captured by an earlier removal into this evidence.
+
+    When the runtime removed the host on a registration or attestation failure,
+    the realizer's own cleanup finds no container and captures nothing; the
+    earlier capture is the only log evidence and must not be discarded.
+    """
+
+    if not isinstance(host_evidence, dict) or not isinstance(prior_host_evidence, dict):
+        return host_evidence
+    if "hostLogs" in host_evidence or not any(
+        key.startswith("hostLogs") for key in prior_host_evidence
+    ):
+        return host_evidence
+    return {
+        **host_evidence,
+        **{
+            key: value
+            for key, value in prior_host_evidence.items()
+            if key.startswith("hostLogs")
+        },
+    }
+
+
 class GenericOmnigentHostRealizer:
     ref = "generic-omnigent-host@1"
 
@@ -427,6 +451,12 @@ class GenericOmnigentHostRealizer:
                     prepared=prepared,
                     credential_handles=credential_handles,
                     acquired=acquired,
+                    # A host that failed registration or attestation was already
+                    # removed by the runtime; its cleanup evidence (host log
+                    # tail included) travels on the failure.
+                    prior_host_evidence=getattr(
+                        primary_error, "host_cleanup_evidence", None
+                    ),
                 )
             except BaseException as exc:
                 cleanup_error = exc
@@ -614,6 +644,7 @@ class GenericOmnigentHostRealizer:
         prepared: Any | None,
         credential_handles: tuple[CredentialRuntimeHandle, ...],
         acquired: tuple[Any, ...],
+        prior_host_evidence: Any = None,
     ) -> tuple[StableRuntimeBinding, Any | None]:
         if binding.state is RuntimeBindingState.session_active:
             binding = await self._update_binding(
@@ -653,10 +684,13 @@ class GenericOmnigentHostRealizer:
             if context is not None:
                 cleanup_evidence["host"] = await self._publish_host_logs(
                     request,
-                    await self._host_runtime.cleanup(
-                        host_context=context,
-                        host_lease_ref=host_lease.leaseRef,
-                        host_lease_generation=host_lease.launchGeneration,
+                    _carry_host_logs(
+                        await self._host_runtime.cleanup(
+                            host_context=context,
+                            host_lease_ref=host_lease.leaseRef,
+                            host_lease_generation=host_lease.launchGeneration,
+                        ),
+                        prior_host_evidence,
                     ),
                 )
             host_lease = await self._host_leases.mark_cleaned(
@@ -975,6 +1009,10 @@ class GenericOmnigentHostRealizer:
                 host_lease.leaseRef, expected_generation=host_lease.generation
             )
             if claimed.cleanupHandle:
+                # Janitor recovery has no admitted request and therefore no
+                # artifact scope; like the rest of this recovery path it
+                # publishes no evidence artifacts, so the host log tail the
+                # cleanup service returns has nowhere durable to go here.
                 await self._host_runtime.cleanup(
                     host_context=claimed.cleanupHandle,
                     host_lease_ref=claimed.leaseRef,
