@@ -229,8 +229,12 @@ export function SkillCombobox({
     [],
   );
 
-  const handleDescriptionToggle = useCallback(() => {
-    setIsDescriptionOpen((prev) => !prev);
+  const handleDescriptionHoverEnter = useCallback(() => {
+    setIsDescriptionOpen(true);
+  }, []);
+
+  const handleDescriptionHoverLeave = useCallback(() => {
+    setIsDescriptionOpen(false);
   }, []);
 
   const handleOptionPick = useCallback(
@@ -372,15 +376,14 @@ export function SkillCombobox({
           <button
             type="button"
             className="queue-info-toggle skill-combobox-description-toggle"
-            aria-label={
-              isDescriptionOpen ? "Hide skill description" : "Show skill description"
-            }
+            aria-label="Skill description"
             aria-expanded={isDescriptionOpen}
             aria-controls={linkedDescriptionId}
-            title={
-              isDescriptionOpen ? "Hide skill description" : "Show skill description"
-            }
-            onClick={handleDescriptionToggle}
+            title="Skill description"
+            onMouseEnter={handleDescriptionHoverEnter}
+            onMouseLeave={handleDescriptionHoverLeave}
+            onFocus={handleDescriptionHoverEnter}
+            onBlur={handleDescriptionHoverLeave}
             onKeyDown={(event) => {
               if (event.key === "Escape" && isDescriptionOpen) {
                 event.preventDefault();
