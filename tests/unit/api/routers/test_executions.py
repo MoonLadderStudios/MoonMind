@@ -15101,7 +15101,11 @@ def test_exact_rerun_returns_actionable_stale_plan_conflict(
     app.dependency_overrides[_get_service] = lambda: service
     _override_temporal_client(app)
     _override_user_dependencies(app, is_superuser=True)
-    app.dependency_overrides[get_async_session] = lambda: AsyncMock()
+
+    async def override_session() -> AsyncMock:
+        return AsyncMock()
+
+    app.dependency_overrides[get_async_session] = override_session
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
     monkeypatch.setattr(
         settings.temporal_dashboard,

@@ -27,6 +27,35 @@ from moonmind.omnigent.realizers.registry import (
     reset_default_registry,
 )
 
+_SERVER_IMAGE_REF = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "b" * 64
+_OPENCODE_IMAGE_REF = (
+    "ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:" + "a" * 64
+)
+
+
+@pytest.fixture(autouse=True)
+def _ready_opencode_image_pair(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    from moonmind.omnigent.bootstrap import store
+
+    monkeypatch.setattr(
+        store,
+        "load_resolved_state",
+        lambda: SimpleNamespace(
+            server_image_ref=_SERVER_IMAGE_REF,
+            opencode_host_image_ref=_OPENCODE_IMAGE_REF,
+            details={
+                "opencodeHostCompatibility": {
+                    "status": "ready",
+                    "failureCode": None,
+                    "serverImageRef": _SERVER_IMAGE_REF,
+                    "hostImageRef": _OPENCODE_IMAGE_REF,
+                }
+            },
+        ),
+    )
+
 
 def _make_catalog(harness_id="opencode-native", digest="sha256:" + "a" * 64):
     return create_catalog_snapshot(
@@ -63,8 +92,8 @@ def _make_catalog(harness_id="opencode-native", digest="sha256:" + "a" * 64):
 def _select_opencode_host_class(catalog):
     return OmnigentHostClassSelector(
         environment={
-            "OMNIGENT_OPENCODE_HOST_IMAGE_REF": "ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:"
-            + "a" * 64
+            "OMNIGENT_IMAGE_REF": _SERVER_IMAGE_REF,
+            "OMNIGENT_OPENCODE_HOST_IMAGE_REF": _OPENCODE_IMAGE_REF,
         }
     ).select(
         harness=catalog.harnesses[0],

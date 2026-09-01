@@ -11,6 +11,7 @@ BEFORE the production fix, so it will FAIL until the code is corrected:
 
 import json
 import os
+from types import SimpleNamespace
 
 import pytest
 
@@ -73,10 +74,29 @@ def test_get_opencode_host_image_ref_requires_real_digest(monkeypatch):
             get_opencode_host_image_ref,
         )
 
-        monkeypatch.setattr(
-            "moonmind.omnigent.harness_platform.host_classes._persisted_image_ref",
-            lambda _key: "",
-        )
+        from moonmind.omnigent.bootstrap import store
+
+        server_ref = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "b" * 64
+        monkeypatch.setenv("OMNIGENT_IMAGE_REF", server_ref)
+
+        def load_state():
+            host_ref = os.environ.get("OMNIGENT_OPENCODE_HOST_IMAGE_REF", "")
+            if not host_ref:
+                return None
+            return SimpleNamespace(
+                server_image_ref=server_ref,
+                opencode_host_image_ref=host_ref,
+                details={
+                    "opencodeHostCompatibility": {
+                        "status": "ready",
+                        "failureCode": None,
+                        "serverImageRef": server_ref,
+                        "hostImageRef": host_ref,
+                    }
+                },
+            )
+
+        monkeypatch.setattr(store, "load_resolved_state", load_state)
 
         with pytest.raises(HarnessPlatformError) as exc:
             get_opencode_host_image_ref()

@@ -45,6 +45,36 @@ from moonmind.omnigent.harness_platform.materializers import (
 
 
 _RELEASE_WORKFLOW = Path(".github/workflows/docker-publish-opencode-host.yml")
+_SERVER_REF = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "b" * 64
+
+
+@pytest.fixture(autouse=True)
+def _ready_image_pair_evidence(monkeypatch):
+    """Provide exact compatibility evidence for tests selecting OpenCode."""
+
+    from moonmind.omnigent.bootstrap import store
+
+    monkeypatch.setenv("OMNIGENT_IMAGE_REF", _SERVER_REF)
+
+    def load_state():
+        host_ref = os.environ.get("OMNIGENT_OPENCODE_HOST_IMAGE_REF", "")
+        if not host_ref:
+            return None
+        return SimpleNamespace(
+            server_image_ref=_SERVER_REF,
+            opencode_host_image_ref=host_ref,
+            pi_host_image_ref=None,
+            details={
+                "opencodeHostCompatibility": {
+                    "status": "ready",
+                    "failureCode": None,
+                    "serverImageRef": _SERVER_REF,
+                    "hostImageRef": host_ref,
+                }
+            },
+        )
+
+    monkeypatch.setattr(store, "load_resolved_state", load_state)
 
 
 def test_opencode_release_recurs_and_only_rebuilds_on_upstream_drift():
@@ -64,6 +94,10 @@ def test_opencode_release_recurs_and_only_rebuilds_on_upstream_drift():
         workflow["jobs"]["merge"]["if"]
         == "needs.metadata.outputs.rebuild_required == 'true'"
     )
+    assert workflow["concurrency"] == {
+        "group": "release-omnigent-host-opencode",
+        "cancel-in-progress": True,
+    }
 
 
 def _ensure_opencode_env(
@@ -250,6 +284,22 @@ def test_opencode_image_ref_fail_closed(monkeypatch):
     # Valid pinned passes
     valid = "ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:" + "a" * 64
     os.environ["OMNIGENT_OPENCODE_HOST_IMAGE_REF"] = valid
+    monkeypatch.setattr(
+        store,
+        "load_resolved_state",
+        lambda: SimpleNamespace(
+            server_image_ref=_SERVER_REF,
+            opencode_host_image_ref=valid,
+            details={
+                "opencodeHostCompatibility": {
+                    "status": "ready",
+                    "failureCode": None,
+                    "serverImageRef": _SERVER_REF,
+                    "hostImageRef": valid,
+                }
+            },
+        ),
+    )
     assert get_opencode_host_image_ref() == valid
     os.environ.pop("OMNIGENT_OPENCODE_HOST_IMAGE_REF", None)
 

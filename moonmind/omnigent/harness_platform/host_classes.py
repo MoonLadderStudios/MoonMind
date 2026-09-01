@@ -59,6 +59,7 @@ def _persisted_image_ref(key: str) -> str:
 
 
 def _require_image_ref(environment: Mapping[str, str], key: str) -> str:
+    state = None
     if key == OMNIGENT_OPENCODE_HOST_IMAGE_ENV:
         try:
             from moonmind.omnigent.bootstrap.store import load_resolved_state
@@ -66,28 +67,12 @@ def _require_image_ref(environment: Mapping[str, str], key: str) -> str:
             state = load_resolved_state()
         except Exception:
             state = None
-        details = getattr(state, "details", None)
-        compatibility = (
-            details.get("opencodeHostCompatibility")
-            if isinstance(details, Mapping)
-            else None
-        )
-        if (
-            isinstance(compatibility, Mapping)
-            and compatibility.get("status") == "blocked"
-        ):
-            failure_code = str(
-                compatibility.get("failureCode") or "omnigent_server_host_incompatible"
-            )
-            raise HarnessPlatformError(
-                "OpenCode Host Class is quarantined because the resolved "
-                "Omnigent server and host images are incompatible "
-                f"({failure_code})",
-                code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
-            )
     raw = str(environment.get(key) or "").strip()
     if not raw:
-        raw = _persisted_image_ref(key)
+        if key == OMNIGENT_OPENCODE_HOST_IMAGE_ENV and state is not None:
+            raw = str(getattr(state, "opencode_host_image_ref", "") or "").strip()
+        else:
+            raw = _persisted_image_ref(key)
     if not raw or not _IMAGE_RE.fullmatch(raw):
         raise HarnessPlatformError(
             f"{key} must be set to a digest-pinned image ref",
@@ -98,6 +83,47 @@ def _require_image_ref(environment: Mapping[str, str], key: str) -> str:
             f"{key} digest must not be a placeholder",
             code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
         )
+    if key == OMNIGENT_OPENCODE_HOST_IMAGE_ENV:
+        details = getattr(state, "details", None)
+        compatibility = (
+            details.get("opencodeHostCompatibility")
+            if isinstance(details, Mapping)
+            else None
+        )
+        selected_server_ref = str(
+            environment.get("OMNIGENT_IMAGE_REF")
+            or getattr(state, "server_image_ref", "")
+            or ""
+        ).strip()
+        evidence_matches = (
+            state is not None
+            and isinstance(compatibility, Mapping)
+            and getattr(state, "server_image_ref", None) == selected_server_ref
+            and getattr(state, "opencode_host_image_ref", None) == raw
+            and compatibility.get("serverImageRef") == selected_server_ref
+            and compatibility.get("hostImageRef") == raw
+        )
+        if not evidence_matches:
+            raise HarnessPlatformError(
+                "OpenCode Host Class compatibility evidence does not match the "
+                "selected Omnigent server and host image refs",
+                code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+            )
+        if compatibility.get("status") == "blocked":
+            failure_code = str(
+                compatibility.get("failureCode") or "omnigent_server_host_incompatible"
+            )
+            raise HarnessPlatformError(
+                "OpenCode Host Class is quarantined because the resolved "
+                "Omnigent server and host images are incompatible "
+                f"({failure_code})",
+                code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+            )
+        if compatibility.get("status") != "ready":
+            raise HarnessPlatformError(
+                "OpenCode Host Class compatibility evidence is not ready",
+                code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+            )
     return raw
 
 

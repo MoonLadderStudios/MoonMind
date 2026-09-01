@@ -30,6 +30,14 @@ def _state(**overrides) -> ResolvedOmnigentDeploymentState:
         "architecture": "linux/amd64",
         "resolvedAt": datetime(2026, 8, 25, tzinfo=UTC),
         "source": "auto",
+        "details": {
+            "opencodeHostCompatibility": {
+                "status": "ready",
+                "failureCode": None,
+                "serverImageRef": SERVER_REF,
+                "hostImageRef": HOST_REF,
+            }
+        },
     }
     payload.update(overrides)
     return ResolvedOmnigentDeploymentState.model_validate(payload)
@@ -67,6 +75,153 @@ async def test_mutable_image_resolution_refreshes_a_cached_tag(
 
 
 @pytest.mark.asyncio
+async def test_compatibility_uses_the_running_compose_server_image(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A registry pull cannot change authority before Compose cuts over."""
+
+    from moonmind.omnigent.bootstrap import store
+
+    registry_server_ref = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "9" * 64
+    resolved_inputs: list[str] = []
+
+    async def running_server(image, env):
+        assert image == "ghcr.io/omnigent-ai/omnigent-server"
+        assert env["OMNIGENT_IMAGE_TAG"] == "latest"
+        return SERVER_REF
+
+    async def resolve_image(image_env, tag_env, ref_env, env=None):
+        del tag_env, ref_env, env
+        resolved_inputs.append(image_env)
+        if image_env == "OMNIGENT_IMAGE":
+            raise AssertionError(
+                f"must not resolve the registry server {registry_server_ref}"
+            )
+        if image_env == "OMNIGENT_OPENCODE_HOST_IMAGE":
+            return HOST_REF, "sha256:" + "2" * 64
+        return None, None
+
+    async def build_identity(_image_ref):
+        return "sha256:" + "1" * 64
+
+    async def version(_image_ref):
+        return "0.12.0"
+
+    async def run(cmd, timeout=30):
+        del timeout
+        if cmd[:4] == ["docker", "image", "inspect", HOST_REF]:
+            return 0, "amd64", ""
+        raise AssertionError(cmd)
+
+    monkeypatch.setattr(
+        image_resolution, "_resolve_running_server_image", running_server
+    )
+    monkeypatch.setattr(image_resolution, "_resolve_image", resolve_image)
+    monkeypatch.setattr(image_resolution, "_image_build_identity", build_identity)
+    monkeypatch.setattr(image_resolution, "_image_omnigent_version", version)
+    monkeypatch.setattr(image_resolution, "_run", run)
+    monkeypatch.setattr(store, "load_resolved_state", lambda: None)
+
+    resolved = await image_resolution.resolve_omnigent_images(
+        {
+            "OMNIGENT_IMAGE": "ghcr.io/omnigent-ai/omnigent-server",
+            "OMNIGENT_IMAGE_TAG": "latest",
+            "OMNIGENT_OPENCODE_HOST_IMAGE_REF": HOST_REF,
+        }
+    )
+
+    assert resolved.server_image_ref == SERVER_REF
+    assert resolved.details["serverImageDigest"] == "sha256:" + "1" * 64
+    assert resolved.details["opencodeHostCompatibility"]["status"] == "ready"
+    assert "OMNIGENT_IMAGE" not in resolved_inputs
+
+
+@pytest.mark.asyncio
+async def test_mutable_server_fails_closed_without_live_compose_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Neither a registry pull nor persisted state can impersonate Compose."""
+
+    from moonmind.omnigent.bootstrap import store
+
+    async def running_server(_image, _env):
+        return None
+
+    async def resolve_image(image_env, tag_env, ref_env, env=None):
+        del tag_env, ref_env, env
+        if image_env == "OMNIGENT_IMAGE":
+            raise AssertionError("mutable server registry state is not authority")
+        if image_env == "OMNIGENT_OPENCODE_HOST_IMAGE":
+            return HOST_REF, "sha256:" + "2" * 64
+        return None, None
+
+    async def build_identity(_image_ref):
+        return BUILD_DIGEST
+
+    async def version(_image_ref):
+        return "0.12.0"
+
+    async def run(cmd, timeout=30):
+        del timeout
+        if cmd[:4] == ["docker", "image", "inspect", HOST_REF]:
+            return 0, "amd64", ""
+        raise AssertionError(cmd)
+
+    monkeypatch.setattr(
+        image_resolution, "_resolve_running_server_image", running_server
+    )
+    monkeypatch.setattr(image_resolution, "_resolve_image", resolve_image)
+    monkeypatch.setattr(image_resolution, "_image_build_identity", build_identity)
+    monkeypatch.setattr(image_resolution, "_image_omnigent_version", version)
+    monkeypatch.setattr(image_resolution, "_run", run)
+    monkeypatch.setattr(store, "load_resolved_state", _state)
+
+    resolved = await image_resolution.resolve_omnigent_images(
+        {
+            "OMNIGENT_IMAGE": "ghcr.io/omnigent-ai/omnigent-server",
+            "OMNIGENT_IMAGE_TAG": "latest",
+            "OMNIGENT_OPENCODE_HOST_IMAGE_REF": HOST_REF,
+        }
+    )
+
+    assert resolved.server_image_ref is None
+    assert resolved.details["opencodeHostCompatibility"]["failureCode"] == (
+        "omnigent_server_build_unavailable"
+    )
+
+
+@pytest.mark.asyncio
+async def test_running_server_resolution_selects_the_compose_repository_digest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image_id = "sha256:" + "8" * 64
+    unrelated = "ghcr.io/example/unrelated@sha256:" + "7" * 64
+    calls: list[list[str]] = []
+
+    async def run(cmd, timeout=30):
+        del timeout
+        calls.append(cmd)
+        if cmd[1] == "ps":
+            return 0, "container-id\n", ""
+        if cmd[1] == "inspect":
+            return 0, image_id + "\n", ""
+        if cmd[1:3] == ["image", "inspect"]:
+            return 0, f'["{unrelated}", "{SERVER_REF}"]\n', ""
+        raise AssertionError(cmd)
+
+    monkeypatch.setattr(image_resolution, "_run", run)
+
+    resolved = await image_resolution._resolve_running_server_image(
+        "ghcr.io/omnigent-ai/omnigent-server",
+        {"MOONMIND_DEPLOYMENT_PROJECT_NAME": "moonmind-test"},
+    )
+
+    assert resolved == SERVER_REF
+    assert "label=com.docker.compose.project=moonmind-test" in calls[0]
+    assert "label=com.docker.compose.service=omnigent" in calls[0]
+
+
+@pytest.mark.asyncio
 async def test_publication_exports_resolved_digests_and_persists_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -83,6 +238,7 @@ async def test_publication_exports_resolved_digests_and_persists_state(
 
     monkeypatch.setattr(image_resolution, "resolve_omnigent_images", resolve)
     monkeypatch.setattr(store, "save_resolved_state", saved.append)
+    monkeypatch.setattr(store, "load_resolved_state", _state)
     image_resolution.reset_operator_image_configuration()
     # The default Compose path ships these unset.
     for key in (
@@ -158,6 +314,8 @@ async def test_default_resolution_requires_paired_build_identity_and_version(
         "opencodeHostCompatibility": {
             "status": "ready",
             "failureCode": None,
+            "serverImageRef": SERVER_REF,
+            "hostImageRef": HOST_REF,
             "serverBuildDigest": server_image_digest,
             "hostBuildDigest": BUILD_DIGEST,
             "serverVersion": "0.12.0",
@@ -209,10 +367,13 @@ async def test_resolution_quarantines_operator_and_host_build_identity_mismatch(
         {"OMNIGENT_BUILD_DIGEST": "sha256:" + "4" * 64}
     )
 
-    assert resolved.omnigent_build_digest == BUILD_DIGEST
+    assert resolved.omnigent_build_digest == "sha256:" + "4" * 64
+    assert resolved.details["buildIdentitySource"] == "operator-quarantine"
     assert resolved.details["opencodeHostCompatibility"] == {
         "status": "blocked",
         "failureCode": "omnigent_operator_host_build_mismatch",
+        "serverImageRef": SERVER_REF,
+        "hostImageRef": HOST_REF,
         "serverBuildDigest": BUILD_DIGEST,
         "hostBuildDigest": BUILD_DIGEST,
         "serverVersion": "0.12.0",
@@ -316,6 +477,8 @@ async def test_resolution_quarantines_server_and_host_build_drift(
     assert resolved.details["opencodeHostCompatibility"] == {
         "status": "blocked",
         "failureCode": "omnigent_server_host_build_mismatch",
+        "serverImageRef": SERVER_REF,
+        "hostImageRef": HOST_REF,
         "serverBuildDigest": server_build,
         "hostBuildDigest": stale_host_build,
         "serverVersion": "0.12.0",
@@ -473,6 +636,8 @@ def test_selectors_reject_a_quarantined_server_host_pair(
             "opencodeHostCompatibility": {
                 "status": "blocked",
                 "failureCode": "omnigent_server_host_build_mismatch",
+                "serverImageRef": SERVER_REF,
+                "hostImageRef": HOST_REF,
             }
         }
     )
@@ -483,6 +648,23 @@ def test_selectors_reject_a_quarantined_server_host_pair(
         Exception,
         match="OpenCode Host Class is quarantined.*server_host_build_mismatch",
     ):
+        host_classes.get_opencode_host_image_ref()
+
+
+def test_selectors_reject_compatibility_evidence_for_a_different_image_pair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A ready verdict cannot authorize refs selected after reconciliation."""
+
+    from moonmind.omnigent.bootstrap import store
+    from moonmind.omnigent.harness_platform import host_classes
+
+    changed_host = "ghcr.io/example/opencode-host@sha256:" + "5" * 64
+    monkeypatch.setenv("OMNIGENT_IMAGE_REF", SERVER_REF)
+    monkeypatch.setenv("OMNIGENT_OPENCODE_HOST_IMAGE_REF", changed_host)
+    monkeypatch.setattr(store, "load_resolved_state", _state)
+
+    with pytest.raises(Exception, match="evidence does not match"):
         host_classes.get_opencode_host_image_ref()
 
 

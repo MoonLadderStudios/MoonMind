@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import os
 import re
-import subprocess
 from typing import Any
 
 from moonmind.omnigent.harness_platform.failures import (
@@ -53,25 +51,6 @@ def resolve_deployed_server_build_digest() -> str:
     match = _IMAGE_REF.fullmatch(image_ref)
     if match:
         return f"sha256:{match.group(1)}"
-    try:
-        output = subprocess.check_output(
-            [
-                "docker",
-                "image",
-                "inspect",
-                "ghcr.io/omnigent-ai/omnigent-server:latest",
-                "--format",
-                "{{json .RepoDigests}}",
-            ],
-            text=True,
-            timeout=5,
-        )
-        for value in json.loads(output.strip()):
-            inspected = _IMAGE_REF.fullmatch(str(value))
-            if inspected:
-                return f"sha256:{inspected.group(1)}"
-    except Exception:
-        pass
     raise HarnessPlatformError(
         "OMNIGENT_IMAGE_REF must identify the exact Omnigent server digest",
         code=HarnessPlatformFailure.OMNIGENT_GENERIC_REALIZER_NOT_READY,
