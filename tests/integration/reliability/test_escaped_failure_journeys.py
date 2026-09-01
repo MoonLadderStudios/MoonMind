@@ -4083,6 +4083,62 @@ async def test_accepted_turn_that_never_starts_fails_within_start_budget(
     assert dispatched.diagnostics_ref == result.diagnostics_ref
 
 
+async def test_transient_injection_response_does_not_hide_never_started_turn() -> None:
+    """Replay mm:21d74b07 at the marked-turn start-authority boundary."""
+
+    replay_id = "omnigent-transient-active-never-started"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    running_snapshot = manifest["runningSnapshot"]
+    marker = manifest["currentTurnMarker"]
+
+    state = _marked_turn_item_state(running_snapshot, marker=marker)
+    assert state["boundarySource"] == expected["terminalBoundarySource"]
+    assert state["progress"] is expected["acceptCurrentTurnProgress"]
+    assert expected["statusOnlyRunningCountsAsTurnStart"] is False
+    assert expected["activeResponseDefersOnlyWhilePresent"] is True
+    assert expected["transientActiveResponsePermanentlyDisarms"] is False
+    assert manifest["observedTerminalPollingSeconds"] >= expected[
+        "noProgressTimeoutSeconds"
+    ]
+
+    active_snapshot = json.loads(json.dumps(running_snapshot))
+    active_snapshot["active_response_id"] = manifest["observedWatchdogSequence"][1][
+        "activeResponseId"
+    ]
+
+    class TransientActiveClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def get_session(self, _session_id: str) -> dict[str, object]:
+            self.calls += 1
+            if self.calls == 1:
+                return active_snapshot
+            return running_snapshot
+
+    client = TransientActiveClient()
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    with pytest.raises(OmnigentTurnNotStartedError) as excinfo:
+        await _await_marked_turn_terminal(
+            client=client,
+            session_id=manifest["sessionId"],
+            marker=marker,
+            event_count=len(manifest["observedProviderEvents"]),
+            terminal_status="completed",
+            timeout_seconds=1.0,
+            interval_seconds=0.001,
+            turn_start_timeout_seconds=0.05,
+        )
+
+    assert expected["boundedByTurnStartBudget"] is True
+    assert loop.time() - started < 10.0
+    assert client.calls >= 2
+    assert excinfo.value.code == expected["failureCode"]
+    assert excinfo.value.snapshot == running_snapshot
+
+
 async def test_omnigent_server_is_reachable_from_isolated_host_network() -> None:
     """Replay mm:89e60946 at the host-to-server network boundary."""
 

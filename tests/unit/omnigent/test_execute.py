@@ -750,6 +750,50 @@ async def test_snapshot_polling_fails_fast_when_accepted_turn_never_starts() -> 
 
 
 @pytest.mark.asyncio
+async def test_snapshot_polling_rearms_after_transient_active_response() -> None:
+    """A completed injection response cannot permanently prove agent work started."""
+
+    marker = "MoonMind-Omnigent-Run: transient-active-never-started"
+    transient_active = {
+        "status": "running",
+        "active_response_id": "injection-response",
+        "items": [_marked_user_item(marker)],
+    }
+    running_without_work = {
+        "status": "running",
+        "active_response_id": None,
+        "items": [_marked_user_item(marker)],
+    }
+
+    class Client:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def get_session(self, _session_id: str) -> dict[str, Any]:
+            self.calls += 1
+            if self.calls == 1:
+                return transient_active
+            return running_without_work
+
+    client = Client()
+    with pytest.raises(OmnigentTurnNotStartedError) as excinfo:
+        await _await_marked_turn_terminal(
+            client=client,
+            session_id="session-1",
+            marker=marker,
+            event_count=3,
+            terminal_status="completed",
+            timeout_seconds=1.0,
+            interval_seconds=0.001,
+            turn_start_timeout_seconds=0.02,
+        )
+
+    assert client.calls >= 2
+    assert excinfo.value.code == "OMNIGENT_CURRENT_TURN_NOT_STARTED"
+    assert excinfo.value.snapshot == running_without_work
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "active_without_items",
     [
