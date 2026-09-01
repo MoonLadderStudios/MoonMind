@@ -746,13 +746,23 @@ async def test_snapshot_polling_fails_fast_when_accepted_turn_never_starts() -> 
 
 
 @pytest.mark.asyncio
-async def test_snapshot_polling_start_watchdog_defers_to_active_projection() -> None:
-    """A running projection without items is slow work, not a dropped turn."""
+@pytest.mark.parametrize(
+    "active_without_items",
+    [
+        {"status": "running", "active_response_id": "resp-1"},
+        # Stale idle status with a live response id: the response id wins.
+        {"status": "idle", "active_response_id": "resp-1"},
+    ],
+    ids=["running-status", "idle-status-with-active-response"],
+)
+async def test_snapshot_polling_start_watchdog_defers_to_active_projection(
+    active_without_items: dict[str, Any],
+) -> None:
+    """An active projection without items is slow work, not a dropped turn."""
 
     marker = "MoonMind-Omnigent-Run: slow-start"
     running_without_items = {
-        "status": "running",
-        "active_response_id": "resp-1",
+        **active_without_items,
         "items": [_marked_user_item(marker)],
     }
 
@@ -774,6 +784,168 @@ async def test_snapshot_polling_start_watchdog_defers_to_active_projection() -> 
 
     assert not isinstance(excinfo.value, OmnigentTurnNotStartedError)
     assert excinfo.value.code == "OMNIGENT_CURRENT_TURN_TERMINAL_AMBIGUOUS"
+
+
+@pytest.mark.asyncio
+async def test_snapshot_polling_start_watchdog_requires_fresh_post_deadline_read() -> (
+    None
+):
+    """A read that began before the deadline cannot prove the turn never started."""
+
+    marker = "MoonMind-Omnigent-Run: slow-read-at-deadline"
+    idle_without_work = {
+        "status": "idle",
+        "active_response_id": None,
+        "items": [_marked_user_item(marker)],
+    }
+    completed = {
+        "status": "idle",
+        "active_response_id": None,
+        "items": [
+            _marked_user_item(marker),
+            {
+                "id": "assistant-final",
+                "type": "message",
+                "status": "completed",
+                "data": {
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Done"}],
+                },
+            },
+        ],
+    }
+
+    class Client:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def get_session(self, _session_id: str) -> dict[str, Any]:
+            self.calls += 1
+            if self.calls == 1:
+                # Started before the 0.02s deadline, completes after it while
+                # the provider begins work behind the blocked read.
+                await asyncio.sleep(0.05)
+                return idle_without_work
+            return completed
+
+    status, snapshot = await _await_marked_turn_terminal(
+        client=Client(),
+        session_id="session-1",
+        marker=marker,
+        event_count=4,
+        terminal_status="completed",
+        interval_seconds=0.001,
+        quiet_period_seconds=0.002,
+        turn_start_timeout_seconds=0.02,
+    )
+
+    assert status == "completed"
+    assert snapshot is completed
+
+
+@pytest.mark.asyncio
+async def test_run_omnigent_execution_fails_never_started_turn_from_heartbeats(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Replay mm:00166f20 with a heartbeat-only stream: no terminal frame ever arrives.
+
+    The start budget is owned by the post-dispatch path, so heartbeat
+    reconciliation must fire it without waiting on a terminal SSE candidate.
+    """
+
+    correlation_id = "corr-heartbeat-never-started"
+    idempotency_key = "idem-heartbeat-never-started"
+    marker = (
+        "MoonMind-Omnigent-Run:\n"
+        f"  correlationId: {correlation_id}\n"
+        f"  idempotencyKey: {idempotency_key}"
+    )
+    idle_without_work = {
+        "status": "idle",
+        "active_response_id": None,
+        "items": [
+            {"id": "prior-item", "type": "message"},
+            {
+                "id": "marked-user",
+                "type": "message",
+                "status": "completed",
+                "data": {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": marker}],
+                },
+            },
+        ],
+    }
+    heartbeats_streamed = {"value": 0}
+
+    class FakeClient:
+        def __init__(self, **_: object) -> None:
+            self.posted = asyncio.Event()
+
+        async def list_agents(self) -> dict[str, object]:
+            return {"items": [{"id": "agent-1", "name": "opencode-native-ui"}]}
+
+        async def create_session(self, payload: dict[str, object]) -> dict[str, object]:
+            return {"id": "session-1"}
+
+        async def post_event(
+            self,
+            session_id: str,
+            payload: dict[str, object],
+        ) -> dict[str, object]:
+            self.posted.set()
+            return {"pending_id": "pending-1"}
+
+        async def stream_events(self, session_id: str):
+            await self.posted.wait()
+            while True:
+                heartbeats_streamed["value"] += 1
+                yield {"type": "session.heartbeat", "status": "running"}
+                await asyncio.sleep(0.005)
+
+        async def get_session(self, session_id: str) -> dict[str, object]:
+            if not self.posted.is_set():
+                return {
+                    "status": "idle",
+                    "active_response_id": None,
+                    "items": [{"id": "prior-item", "type": "message"}],
+                }
+            return idle_without_work
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute._TERMINAL_RECONCILIATION_INTERVAL_SECONDS", 0.0
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute._MARKED_TURN_START_TIMEOUT_SECONDS", 0.05
+    )
+
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    with pytest.raises(OmnigentTurnNotStartedError) as excinfo:
+        await run_omnigent_execution(
+            AgentExecutionRequest(
+                agentKind="external",
+                agentId="omnigent",
+                correlationId=correlation_id,
+                idempotencyKey=idempotency_key,
+                parameters={
+                    "omnigent": {
+                        "agent": {"agentName": "opencode-native-ui"},
+                        "session": {"allowEmptyWorkspace": True},
+                        "prompt": {"text": "do the work"},
+                    },
+                },
+            ),
+            artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+        )
+
+    assert loop.time() - started < 10.0
+    assert heartbeats_streamed["value"] >= 1
+    assert excinfo.value.code == "OMNIGENT_CURRENT_TURN_NOT_STARTED"
 
 
 @pytest.mark.asyncio

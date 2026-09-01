@@ -368,6 +368,11 @@ def test_runtime_scripts_are_snapshotted_under_daemon_mapping(
         ("server_endpoint_invalid", "integration_error", "repair_server_endpoint"),
         ("session_create_failed", "integration_error", "retry_transient_upstream"),
         ("first_message_reconcile_failed", "integration_error", "retry_transient_upstream"),
+        (
+            "OMNIGENT_CURRENT_TURN_NOT_STARTED",
+            "integration_error",
+            "retry_step_execution",
+        ),
     ],
 )
 def test_failure_evidence_classifies_operator_action(

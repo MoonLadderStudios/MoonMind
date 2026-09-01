@@ -103,7 +103,7 @@ _FAILURE_REMEDIATION: dict[str, str] = {
     HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT: "reconcile_runtime_binding",
     HarnessPlatformFailure.OMNIGENT_CLEANUP_DEFERRED: "delegate_to_janitor",
     HarnessPlatformFailure.OMNIGENT_GENERIC_REALIZER_NOT_READY: "enable_generic_omnigent_after_setup",
-    HarnessPlatformFailure.OMNIGENT_CURRENT_TURN_NOT_STARTED: "retry_turn_dispatch",
+    HarnessPlatformFailure.OMNIGENT_CURRENT_TURN_NOT_STARTED: "retry_step_execution",
 }
 
 

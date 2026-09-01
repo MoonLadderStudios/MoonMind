@@ -134,11 +134,67 @@ async def test_generic_dispatch_projects_typed_turn_not_started_code() -> None:
     assert result is not None
     assert result.failure_class == "integration_error"
     assert result.provider_error_code == "OMNIGENT_CURRENT_TURN_NOT_STARTED"
-    assert result.retry_recommendation == "retry_turn_dispatch"
+    assert result.retry_recommendation == "retry_step_execution"
     # Provider-boundary exception text stays out of workflow history; the
     # typed code is the operator-facing cause.
     assert "OMNIGENT_CURRENT_TURN_NOT_STARTED" in result.summary
     assert "never started" not in result.summary
+
+
+@pytest.mark.asyncio
+@patch("moonmind.omnigent.execute.run_omnigent_execution")
+async def test_unprofiled_activity_projects_turn_not_started_as_typed_result(
+    mock_run, monkeypatch: pytest.MonkeyPatch, isolated_control_plane
+) -> None:
+    """The direct (non-plan) path must return the same typed classification."""
+
+    from moonmind.omnigent.execute import OmnigentTurnNotStartedError
+
+    async def never_started(*_args, **_kwargs):
+        raise OmnigentTurnNotStartedError(
+            "Omnigent accepted the marked turn but the provider never started it"
+        )
+
+    mock_run.side_effect = never_started
+    req = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="corr-unprofiled-never-started",
+        idempotencyKey="idem-unprofiled-never-started",
+    )
+
+    result = await ActivityEnvironment().run(omnigent_execute_activity, req)
+
+    assert result.failure_class == "integration_error"
+    assert result.provider_error_code == "OMNIGENT_CURRENT_TURN_NOT_STARTED"
+    assert result.retry_recommendation == "retry_step_execution"
+    assert "OMNIGENT_CURRENT_TURN_NOT_STARTED" in result.summary
+    assert "never started" not in result.summary
+    mock_run.assert_called_once()
+
+
+@pytest.mark.asyncio
+@patch("moonmind.omnigent.execute.run_omnigent_execution")
+async def test_unprofiled_activity_keeps_raising_ambiguous_terminal(
+    mock_run, monkeypatch: pytest.MonkeyPatch, isolated_control_plane
+) -> None:
+    """Ambiguous still-running turns keep failing the Activity so a retry reattaches."""
+
+    from moonmind.omnigent.execute import OmnigentSessionStillRunningError
+
+    async def still_running(*_args, **_kwargs):
+        raise OmnigentSessionStillRunningError("current marked turn is ambiguous")
+
+    mock_run.side_effect = still_running
+    req = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="corr-unprofiled-ambiguous",
+        idempotencyKey="idem-unprofiled-ambiguous",
+    )
+
+    with pytest.raises(OmnigentSessionStillRunningError):
+        await ActivityEnvironment().run(omnigent_execute_activity, req)
 
 
 @pytest.mark.asyncio

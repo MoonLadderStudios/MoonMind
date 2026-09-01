@@ -6,6 +6,7 @@
   "noProgressTimeoutSeconds": 1800,
   "failureCode": "OMNIGENT_CURRENT_TURN_NOT_STARTED",
   "failureClass": "integration_error",
-  "retryRecommendation": "retry_turn_dispatch",
-  "boundedByTurnStartBudget": true
+  "retryRecommendation": "retry_step_execution",
+  "boundedByTurnStartBudget": true,
+  "retryAuthority": "new_step_execution_attempt"
 }

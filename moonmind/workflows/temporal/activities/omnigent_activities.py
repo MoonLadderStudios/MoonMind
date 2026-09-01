@@ -602,17 +602,9 @@ async def _try_generic_realizer_dispatch(
         # provider or infrastructure details. Known boundaries above preserve
         # their actionable typed failure codes, and a MoonMind-typed platform
         # code carried by any other cause is projected the same way.
-        typed_code = str(getattr(exc, "code", "") or "").strip()
-        if typed_code in HarnessPlatformFailure.__members__:
-            return AgentRunResult(
-                summary=(
-                    "Generic Omnigent dispatch failed before a terminal provider "
-                    f"result ({typed_code})."
-                ),
-                failureClass="integration_error",
-                providerErrorCode=typed_code,
-                retryRecommendation=remediation_for(typed_code),
-            )
+        typed = _typed_platform_failure_result(exc)
+        if typed is not None:
+            return typed
         return AgentRunResult(
             summary="Generic Omnigent dispatch failed before a terminal provider result.",
             failureClass="integration_error",
@@ -633,10 +625,60 @@ async def omnigent_execute_activity(
         return await _omnigent_execute_activity(request)
 
 
+def _typed_platform_failure_result(exc: BaseException) -> AgentRunResult | None:
+    """Project a MoonMind-typed platform failure code without provider text.
+
+    Returns ``None`` for causes that carry no :class:`HarnessPlatformFailure`
+    code so callers keep their generic boundary handling.
+    """
+
+    from moonmind.omnigent.harness_platform.failures import (
+        HarnessPlatformFailure,
+        remediation_for,
+    )
+
+    typed_code = str(getattr(exc, "code", "") or "").strip()
+    if typed_code not in HarnessPlatformFailure.__members__:
+        return None
+    return AgentRunResult(
+        summary=(
+            "Omnigent dispatch failed before a terminal provider result "
+            f"({typed_code})."
+        ),
+        failureClass="integration_error",
+        providerErrorCode=typed_code,
+        retryRecommendation=remediation_for(typed_code),
+    )
+
+
 async def _omnigent_execute_activity(
     request: AgentExecutionRequest,
 ) -> AgentRunResult:
-    """Run one Omnigent streaming execution."""
+    """Run one Omnigent streaming execution and classify it at one boundary.
+
+    Every execution shape (plan-dispatched realizer, unprofiled direct run,
+    profile-bound coordinator) crosses this function. An accepted turn the
+    provider never started has no live work to reattach to, so an Activity
+    retry would only re-wait the start budget; it is returned as the typed
+    failure here. The ambiguous parent (``OmnigentSessionStillRunningError``)
+    keeps raising so the retry can reattach to work that may still be live.
+    """
+
+    from moonmind.omnigent.execute import OmnigentTurnNotStartedError
+
+    try:
+        return await _dispatch_omnigent_execution(request)
+    except OmnigentTurnNotStartedError as exc:
+        typed = _typed_platform_failure_result(exc)
+        if typed is None:  # pragma: no cover - the subclass always carries a code
+            raise
+        return typed
+
+
+async def _dispatch_omnigent_execution(
+    request: AgentExecutionRequest,
+) -> AgentRunResult:
+    """Select and run the execution shape for one request."""
 
     import httpx
 
