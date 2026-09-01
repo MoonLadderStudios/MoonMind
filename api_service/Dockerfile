@@ -7,7 +7,7 @@ ARG CODEX_CLI_VERSION=latest
 # which does not exist). npm then omits the unresolvable optional dependency and
 # the launcher aborts with "claude native binary not installed", breaking every
 # image build until upstream catches up. Bump this deliberately.
-ARG CLAUDE_CLI_VERSION=2.1.236
+ARG CLAUDE_CLI_VERSION=2.1.257
 # Build the shared runtime image with Codex/Claude CLIs by default so the API
 # and Temporal workers can run from the same image tag. Disable selectively in
 # test-only or constrained builds.
