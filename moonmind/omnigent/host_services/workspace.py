@@ -32,7 +32,8 @@ class DaemonCommandRunner(Protocol):
         self,
         argv: list[str],
         input_bytes: bytes | None = None,
-    ) -> Awaitable[tuple[int, str, str]]: ...
+    ) -> Awaitable[tuple[int, str, str]]:
+        pass
 
 
 async def resolve_daemon_workspace_root(

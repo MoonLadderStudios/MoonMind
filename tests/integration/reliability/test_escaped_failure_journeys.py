@@ -48,6 +48,7 @@ from moonmind.omnigent.bridge_store import (
     OmnigentBridgeSessionStore,
 )
 from moonmind.omnigent.execute import (
+    OmnigentSameSessionContinuationRequired,
     OmnigentSessionStillRunningError,
     OmnigentTurnNotStartedError,
     _await_marked_turn_terminal,
@@ -1017,8 +1018,8 @@ async def test_evicted_turn_marker_preserves_terminal_and_retry_authority() -> N
     assert expected["retryAuthority"] == "same_host_profile_and_bridge"
 
 
-async def test_running_session_accepts_quiet_tool_output_after_terminal_event() -> None:
-    """Replay mm:44e4f122 at the terminal-event/session-status boundary."""
+async def test_running_session_requests_continuation_after_quiet_tool_output() -> None:
+    """Replay mm:44e4f122 without treating an active session as terminal."""
 
     replay_id = "omnigent-running-tool-output-terminal"
     manifest = load_replay(replay_id, "manifest.json")
@@ -1042,22 +1043,25 @@ async def test_running_session_accepts_quiet_tool_output_after_terminal_event() 
         async def get_session(self, _session_id: str) -> dict[str, object]:
             return terminal_snapshot
 
-    status, snapshot = await _await_marked_turn_terminal(
-        client=StableRunningSnapshotClient(),
-        session_id=manifest["sessionId"],
-        marker=manifest["currentTurnMarker"],
-        baseline_item_ids=baseline_item_ids,
-        event_count=1,
-        terminal_status=manifest["terminalEventStatus"],
-        timeout_seconds=0.01,
-        interval_seconds=0.001,
-        quiet_period_seconds=0.002,
-        tool_only_quiet_period_seconds=0.002,
-    )
+    with pytest.raises(OmnigentSameSessionContinuationRequired) as excinfo:
+        await _await_marked_turn_terminal(
+            client=StableRunningSnapshotClient(),
+            session_id=manifest["sessionId"],
+            marker=manifest["currentTurnMarker"],
+            baseline_item_ids=baseline_item_ids,
+            event_count=1,
+            terminal_status=manifest["terminalEventStatus"],
+            timeout_seconds=0.01,
+            interval_seconds=0.001,
+            quiet_period_seconds=0.002,
+            tool_only_quiet_period_seconds=0.002,
+        )
 
-    assert expected["acceptTerminalEventAfterToolOnlyQuietPeriod"] is True
-    assert status == expected["terminalStatus"]
-    assert snapshot is terminal_snapshot
+    assert expected["acceptTerminalEventAfterToolOnlyQuietPeriod"] is False
+    assert expected["requestSameSessionContinuationAfterToolOnlyQuietPeriod"] is True
+    assert excinfo.value.code == expected["recoveryCode"]
+    assert excinfo.value.session_id == manifest["sessionId"]
+    assert excinfo.value.snapshot == terminal_snapshot
 
 
 async def test_pr_resolver_child_compiles_bindable_stock_agent_identity(

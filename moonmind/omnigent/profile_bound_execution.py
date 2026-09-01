@@ -35,7 +35,10 @@ from moonmind.omnigent.checkpoints import (
     recovery_mode,
     validate_cold_restore_target,
 )
-from moonmind.omnigent.execute import OmnigentSessionStillRunningError
+from moonmind.omnigent.execute import (
+    OmnigentSameSessionContinuationRequired,
+    OmnigentSessionStillRunningError,
+)
 from moonmind.omnigent.execution_ports import (
     ExecutionAttemptPort,
     ExecutionPolicyAuthorityPort,
@@ -1528,34 +1531,61 @@ class OmnigentProfileBoundExecutionCoordinator:
             await emit("first_message_post", "started")
             await emit("session_running", "started")
             await emit("resource_harvest", "started")
-            result = await self._execute_with_host_lease_heartbeat(
-                self._execute(
-                    bind_exact_host(
-                        request,
-                        host_id=host_id,
-                        workspace_path=str(preflight["workspacePath"]),
-                        profile_authorization={
-                            "providerProfileId": profile_id,
-                            "credentialGeneration": host_lease.credential_generation,
-                            "providerLeaseRef": provider_lease.lease_id,
-                            "hostBindingRef": binding.binding_ref,
-                            "hostLeaseRef": host_lease.lease_id,
-                            "endpointRef": binding.endpoint_ref,
-                            "omnigentHostId": host_id,
-                            "bridgeSessionId": bridge.bridge_session_id,
-                            "effectiveLaunchRef": effective_launch["snapshotRef"],
-                        },
-                        harness=str(effective_launch["harness"]),
-                        agent_name=str(effective_launch["agentName"]),
-                    ),
-                    artifact_gateway=self._artifact_gateway,
-                    run_store=self._run_store,
-                    defer_bridge_terminal=True,
-                ),
-                host_lease_ref=host_lease.lease_id,
-                ttl_seconds=int(effective_launch["limits"]["timeoutSeconds"]),
+            publish_mode = str(
+                (request.parameters or {}).get("publishMode") or "none"
+            ).strip().lower()
+            running_turn_recovery: OmnigentSameSessionContinuationRequired | None = (
+                None
             )
-            result = collect_deferred_bridge_terminal(result)
+            try:
+                result = await self._execute_with_host_lease_heartbeat(
+                    self._execute(
+                        bind_exact_host(
+                            request,
+                            host_id=host_id,
+                            workspace_path=str(preflight["workspacePath"]),
+                            profile_authorization={
+                                "providerProfileId": profile_id,
+                                "credentialGeneration": host_lease.credential_generation,
+                                "providerLeaseRef": provider_lease.lease_id,
+                                "hostBindingRef": binding.binding_ref,
+                                "hostLeaseRef": host_lease.lease_id,
+                                "endpointRef": binding.endpoint_ref,
+                                "omnigentHostId": host_id,
+                                "bridgeSessionId": bridge.bridge_session_id,
+                                "effectiveLaunchRef": effective_launch["snapshotRef"],
+                            },
+                            harness=str(effective_launch["harness"]),
+                            agent_name=str(effective_launch["agentName"]),
+                        ),
+                        artifact_gateway=self._artifact_gateway,
+                        run_store=self._run_store,
+                        defer_bridge_terminal=True,
+                    ),
+                    host_lease_ref=host_lease.lease_id,
+                    ttl_seconds=int(effective_launch["limits"]["timeoutSeconds"]),
+                )
+            except OmnigentSameSessionContinuationRequired as exc:
+                if publish_mode not in {"branch", "pr"}:
+                    raise
+                # The provider response is complete enough to admit recovery,
+                # but the active session projection is explicitly non-terminal.
+                # Keep every lease and the original bridge authoritative until
+                # a separately claimed same-session continuation reaches a real
+                # terminal boundary.
+                running_turn_recovery = exc
+                attempt_cleanup_deferred_code = (
+                    "same_session_continuation_pending"
+                )
+                result = AgentRunResult(
+                    summary=(
+                        "Provider response requires same-session continuation "
+                        "before terminalization"
+                    ),
+                    metadata={"omnigentSessionId": exc.session_id},
+                )
+            else:
+                result = collect_deferred_bridge_terminal(result)
             if recorded_plan is not None and runtime_binding_ref is not None:
                 provider_session_id = str(
                     (result.metadata or {}).get("omnigentSessionId") or ""
@@ -1600,9 +1630,6 @@ class OmnigentProfileBoundExecutionCoordinator:
                         ),
                     )
                     runtime_binding_ref = updated_binding.runtimeBindingRef
-            publish_mode = str(
-                (request.parameters or {}).get("publishMode") or "none"
-            ).strip().lower()
             if result.failure_class is None and publish_mode in {"branch", "pr"}:
                 publication_stage = "repository_publication"
                 no_commit_policy = _trusted_no_commit_repository_policy(request)
@@ -1612,6 +1639,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                     session_id = str(
                         (result.metadata or {}).get("omnigentSessionId") or ""
                     ).strip()
+                    recovering_running_turn = running_turn_recovery is not None
                     try:
                         completion = await self._session_inspection.inspect_session_completion(
                             session_id
@@ -1647,7 +1675,10 @@ class OmnigentProfileBoundExecutionCoordinator:
                         break
 
                     publication: Mapping[str, Any] = {"push_status": "not_attempted"}
-                    if completion.get("terminalAssistantAfterWork") is True:
+                    if (
+                        completion.get("terminalAssistantAfterWork") is True
+                        and not recovering_running_turn
+                    ):
                         await emit(
                             publication_stage,
                             "started",
@@ -1903,7 +1934,25 @@ class OmnigentProfileBoundExecutionCoordinator:
                             effective_launch["limits"]["timeoutSeconds"]
                         ),
                     )
+                    deferred_count = len(deferred_bridge_terminals)
                     result = collect_deferred_bridge_terminal(continuation_result)
+                    if recovering_running_turn:
+                        if len(deferred_bridge_terminals) <= deferred_count:
+                            raise HarnessPlatformError(
+                                "same-session recovery returned without deferred "
+                                "terminal bridge evidence",
+                                code=(
+                                    HarnessPlatformFailure.
+                                    OMNIGENT_RUNTIME_BINDING_CONFLICT
+                                ),
+                            )
+                        recovered_terminal = dict(deferred_bridge_terminals[-1])
+                        recovered_terminal["idempotencyKey"] = (
+                            request.idempotency_key
+                        )
+                        deferred_bridge_terminals.append(recovered_terminal)
+                        running_turn_recovery = None
+                        attempt_cleanup_deferred_code = None
                     await self._settle_continuation_turn(
                         claim=continuation_claim,
                         workflow_id=workflow_id,

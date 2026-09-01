@@ -1,6 +1,7 @@
 {
-  "acceptTerminalEventAfterToolOnlyQuietPeriod": true,
-  "terminalStatus": "completed",
+  "acceptTerminalEventAfterToolOnlyQuietPeriod": false,
+  "requestSameSessionContinuationAfterToolOnlyQuietPeriod": true,
+  "recoveryCode": "OMNIGENT_SAME_SESSION_CONTINUATION_REQUIRED",
   "terminalBoundarySource": "pre_dispatch_item_ids",
   "terminalAssistantAfterWork": false,
   "unfinishedToolCall": false

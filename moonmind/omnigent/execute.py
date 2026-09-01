@@ -109,6 +109,31 @@ class OmnigentSessionStillRunningError(OmnigentClientError):
     code = "OMNIGENT_CURRENT_TURN_TERMINAL_AMBIGUOUS"
 
 
+class OmnigentSameSessionContinuationRequired(OmnigentSessionStillRunningError):
+    """Raised when a completed response still lacks session-terminal evidence.
+
+    The provider emitted a post-dispatch completion event and the marked turn
+    has a stable, fully matched tool-output boundary, but its authoritative
+    session projection remains active.  This is recovery evidence, not terminal
+    evidence: a profile-bound owner may submit one fenced continuation while
+    retaining the host and workspace leases; other callers must preserve the
+    ambiguous-session cleanup fence.
+    """
+
+    code = "OMNIGENT_SAME_SESSION_CONTINUATION_REQUIRED"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        session_id: str,
+        snapshot: Mapping[str, Any],
+    ) -> None:
+        super().__init__(message)
+        self.session_id = session_id
+        self.snapshot = dict(snapshot)
+
+
 class OmnigentTurnNotStartedError(OmnigentSessionStillRunningError):
     """Raised when the provider accepted the marked turn but never started it.
 
@@ -1090,10 +1115,12 @@ async def _await_marked_turn_terminal(
 
     OpenCode can leave the interactive session status at ``running`` after a
     post-dispatch terminal event when the bounded transcript ends with a tool
-    output instead of final assistant text. That shape is eligible only for the
-    longer tool-only quiet period. The profile-bound coordinator can then use
-    its existing same-session continuation instead of losing the authoritative
-    workspace to the no-progress timeout.
+    output instead of final assistant text. After the longer tool-only quiet
+    period, that shape raises
+    :class:`OmnigentSameSessionContinuationRequired`; elapsed time never turns
+    an active provider projection into terminal success. A profile-bound owner
+    can use the typed signal to continue the same session without releasing the
+    authoritative workspace.
 
     A turn that never starts is distinct from a turn that is slow. The
     :class:`_MarkedTurnStartWatchdog` (the caller's dispatch-scoped instance
@@ -1163,7 +1190,7 @@ async def _await_marked_turn_terminal(
         )
         terminal_event_tool_only_candidate = bool(
             not inactive
-            and terminal_status in _TERMINAL_STATUSES
+            and terminal_status == "completed"
             and progress
             and not turn_state["terminalAssistantAfterWork"]
             and not turn_state["unfinishedToolCall"]
@@ -1191,11 +1218,18 @@ async def _await_marked_turn_terminal(
             ):
                 # A preamble assistant can launch another tool after the stale
                 # idle/completed projection, and some turns end immediately
-                # after a tool result without a final assistant. Accept either
-                # shape only after the ordered transcript is unchanged for its
-                # bounded quiet period. A still-running tool-only projection is
-                # admitted solely because the caller already observed the live
-                # post-dispatch terminal event.
+                # after a tool result without a final assistant. Accept an
+                # inactive shape only after its bounded quiet period. A live
+                # completion event plus quiet matched tool output is enough to
+                # request bounded same-session recovery, never enough to
+                # override an explicitly active provider projection.
+                if terminal_event_tool_only_candidate:
+                    raise OmnigentSameSessionContinuationRequired(
+                        "Omnigent completed a response with stable matched tool "
+                        "output while the provider session remained active",
+                        session_id=session_id,
+                        snapshot=snapshot,
+                    )
                 return (
                     normalized
                     if normalized in {"failed", "canceled", "timed_out"}
@@ -3243,6 +3277,7 @@ async def run_omnigent_execution(
 __all__ = [
     "OmnigentContractError",
     "OmnigentSessionStillRunningError",
+    "OmnigentSameSessionContinuationRequired",
     "OmnigentTurnNotStartedError",
     "normalize_omnigent_observation",
     "run_omnigent_execution",
