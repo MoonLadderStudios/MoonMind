@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Jira batch entrypoint for the shared portable fan-out engine."""
+"""GitHub batch entrypoint for the shared portable fan-out engine."""
 
 from __future__ import annotations
 

@@ -68,6 +68,7 @@ async def test_batch_github_workflows_seed_and_expansion_contract(tmp_path):
     assert sorted(expanded["capabilities"]) == ["gh", "git"]
     assert len(expanded["steps"]) == 1
     step = expanded["steps"][0]
+    assert step["skill"]["requiredCapabilities"] == ["git", "gh"]
     orchestration = step["batchOrchestration"]
     assert orchestration["source"] == {
         "kind": "github_issue_range",
@@ -88,6 +89,10 @@ async def test_batch_github_workflows_seed_and_expansion_contract(tmp_path):
         in step["instructions"]
     )
     assert "only for open Issue objects returned by GitHub" in step["instructions"]
+    assert (
+        "$MOONMIND_ACTIVE_SKILLS_DIR/batch-github-workflows/bin/batch_workflows.py"
+        in step["instructions"]
+    )
     assert (
         "--targets artifacts/batch-workflows-targets.json"
         not in step["instructions"]
@@ -189,4 +194,4 @@ async def test_batch_github_workflows_uses_repository_context(tmp_path):
     assert source["githubIssueRange"]["repository"] == (
         "MoonLadderStudios/MoonMind"
     )
-    assert expanded["steps"][0]["skill"]["id"] == "batch-workflows"
+    assert expanded["steps"][0]["skill"]["id"] == "batch-github-workflows"

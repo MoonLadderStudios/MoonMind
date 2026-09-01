@@ -3644,6 +3644,7 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
     assert loop["remediationTool"]["inputs"]["selectedSkill"] == (
         "remediate-issue"
     )
+    assert "assessment_artifact_path" not in loop["remediationTool"]["inputs"]
     assert "authoritative verifier evidence materialized by MoonMind" in (
         loop["remediationTool"]["inputs"]["instructions"]
     )
@@ -3655,6 +3656,9 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
     )
     assert loop["verificationTool"]["name"] == "auto"
     assert loop["verificationTool"]["inputs"]["selectedSkill"] == "moonspec-verify"
+    assert loop["verificationTool"]["inputs"]["assessment_artifact_path"] == (
+        "artifacts/github-issue-implement-assessment.json"
+    )
     assert "Run the selected moonspec-verify Skill" in (
         loop["verificationTool"]["inputs"]["instructions"]
     )
