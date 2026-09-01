@@ -90,11 +90,13 @@ _logger = logging.getLogger(__name__)
 _ACTIVITY_HEARTBEAT_INTERVAL_SECONDS = 30.0
 _MARKED_TURN_QUIET_PERIOD_SECONDS = 60.0
 _MARKED_TOOL_ONLY_QUIET_PERIOD_SECONDS = 300.0
-# A native harness that accepted the marked message projects an active turn
-# (running status or an active response id) or its first ordered item within
-# seconds. An idle snapshot with no item after the marker for this long proves
-# the provider dropped the turn; waiting the full no-progress budget for work
-# that can never appear only delays an already-known failure.
+# A native harness that accepted the marked message projects its first ordered
+# item within seconds. A current active response temporarily defers this budget,
+# but only ordered progress permanently proves the marked turn started: the
+# injection response itself can briefly appear active and a session-level
+# ``running`` status is not correlated turn evidence. Once no response remains,
+# a visible marker with no later item proves the provider dropped the turn;
+# waiting the full no-progress budget only delays an already-known failure.
 _MARKED_TURN_START_TIMEOUT_SECONDS = 300.0
 _TERMINAL_RECONCILIATION_INTERVAL_SECONDS = 30.0
 _ACTIVITY_HEARTBEAT_STATE: ContextVar[dict[str, Any] | None] = ContextVar(
@@ -137,10 +139,11 @@ class OmnigentSameSessionContinuationRequired(OmnigentSessionStillRunningError):
 class OmnigentTurnNotStartedError(OmnigentSessionStillRunningError):
     """Raised when the provider accepted the marked turn but never started it.
 
-    The marked user item is projected, the session never leaves its inactive
-    projection, and no ordered item follows the marker within the bounded
-    turn-start budget. No provider work exists to preserve, so the failure is
-    reported as a distinct, retryable code instead of an ambiguous terminal.
+    The marked user item is projected, no ordered item follows it within the
+    bounded turn-start budget, and no active response remains. A transient
+    injection response or session-level ``running`` status is not current-turn
+    progress. No provider work exists to preserve, so the failure is reported
+    as a distinct, retryable code instead of an ambiguous terminal.
     """
 
     code = "OMNIGENT_CURRENT_TURN_NOT_STARTED"
@@ -167,9 +170,12 @@ class _MarkedTurnStartWatchdog:
     stream-closed snapshot, and the terminal poll, so the budget is measured
     from the moment the provider accepted the marked message rather than from
     whichever SSE frame arrived or whenever durable bookkeeping finished. It is
-    armed only while every observation so far projected an inactive turn with
-    no active response id and no ordered item after the visible boundary; an
-    active projection or any progress disarms it for the rest of the attempt.
+    armed while no current active response exists and no ordered item follows
+    the visible boundary. A current active response defers it only until that
+    response clears; this is necessary because stock runners briefly project
+    the message-injection response as active before the harness starts. Only
+    ordered progress permanently disarms the watchdog. A session-level
+    ``running`` status alone is not correlated evidence for the marked turn.
     Only an observation *initiated* after the deadline can fire it, so a slow
     read that began before the deadline never releases live-work authority.
     """
@@ -186,11 +192,12 @@ class _MarkedTurnStartWatchdog:
         self.timeout_seconds = max(0.0, float(timeout_seconds))
         self.deadline = self.started_at + self.timeout_seconds
         self.ever_active = False
+        self.currently_active = False
         self.progress = False
 
     @property
     def armed(self) -> bool:
-        return not (self.ever_active or self.progress)
+        return not (self.currently_active or self.progress)
 
     def observe(
         self,
@@ -199,9 +206,8 @@ class _MarkedTurnStartWatchdog:
         *,
         observation_started_at: float,
     ) -> None:
-        if not _snapshot_projects_inactive_turn(
-            snapshot
-        ) or _snapshot_projects_active_response(snapshot):
+        self.currently_active = _snapshot_projects_active_response(snapshot)
+        if self.currently_active:
             self.ever_active = True
         if bool(turn_state.get("progress")):
             self.progress = True
@@ -212,8 +218,8 @@ class _MarkedTurnStartWatchdog:
         waited_seconds = round(self._loop.time() - self.started_at, 3)
         raise OmnigentTurnNotStartedError(
             "Omnigent accepted the marked turn but the provider never "
-            "started it: the session stayed inactive with no active response "
-            f"and projected no item after the marked message for {waited_seconds}s "
+            "started it: the session has no active response and projected no "
+            f"item after the marked message for {waited_seconds}s "
             f"(turn-start budget {self.timeout_seconds:g}s); no provider work "
             "exists, retry as a new step execution",
             snapshot=snapshot,
@@ -223,10 +229,15 @@ class _MarkedTurnStartWatchdog:
     def heartbeat_fields(self) -> dict[str, Any]:
         return {
             "turnEverActive": self.ever_active,
+            "turnCurrentlyActive": self.currently_active,
             "turnStartWaitSeconds": (
-                round(self._loop.time() - self.started_at, 3) if self.armed else None
+                round(self._loop.time() - self.started_at, 3)
+                if not self.progress
+                else None
             ),
-            "turnStartTimeoutSeconds": self.timeout_seconds if self.armed else None,
+            "turnStartTimeoutSeconds": (
+                self.timeout_seconds if not self.progress else None
+            ),
         }
 
 
@@ -1126,9 +1137,11 @@ async def _await_marked_turn_terminal(
     :class:`_MarkedTurnStartWatchdog` (the caller's dispatch-scoped instance
     when given, otherwise one bounded by ``turn_start_timeout_seconds``) raises
     :class:`OmnigentTurnNotStartedError` while the marked boundary is visible,
-    every observation has been inactive with no active response, and no item
-    follows the marker. Any active projection or ordered progress disarms it;
-    the no-progress ``timeout_seconds`` budget then owns the ambiguous case.
+    no active response remains, and no item follows the marker. An active
+    response defers the check only while present; only ordered progress
+    permanently disarms it. Session-level ``running`` alone is not marked-turn
+    start evidence. The no-progress ``timeout_seconds`` budget owns a turn that
+    produced progress but never reached a terminal boundary.
     """
 
     loop = asyncio.get_running_loop()
@@ -2732,9 +2745,12 @@ async def run_omnigent_execution(
                 await _cancel_task(heartbeat_task)
                 await _cancel_task(stream_task)
 
-            final_snapshot = terminal_snapshot_override or await client.get_session(
-                session_id
-            )
+            final_snapshot_observed_at: float | None = None
+            if terminal_snapshot_override is not None:
+                final_snapshot = terminal_snapshot_override
+            else:
+                final_snapshot_observed_at = asyncio.get_running_loop().time()
+                final_snapshot = await client.get_session(session_id)
             if terminal_status is None:
                 normalized_snapshot = normalize_omnigent_observation(final_snapshot)
                 closed_turn_state = (
@@ -2746,6 +2762,21 @@ async def run_omnigent_execution(
                     if isinstance(final_snapshot.get("items"), list)
                     else None
                 )
+                if (
+                    closed_turn_state is not None
+                    and final_snapshot_observed_at is not None
+                ):
+                    # A heartbeat snapshot may have projected the transient
+                    # injection response as active immediately before the SSE
+                    # stream closed. Refresh the shared watchdog from the
+                    # stream-closed snapshot before deciding whether the start
+                    # budget owns recovery; only ordered progress permanently
+                    # disarms it.
+                    start_watchdog.observe(
+                        final_snapshot,
+                        closed_turn_state,
+                        observation_started_at=final_snapshot_observed_at,
+                    )
                 if (
                     closed_turn_state is not None
                     and closed_turn_state["boundarySource"] is not None

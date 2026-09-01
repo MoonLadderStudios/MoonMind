@@ -750,6 +750,50 @@ async def test_snapshot_polling_fails_fast_when_accepted_turn_never_starts() -> 
 
 
 @pytest.mark.asyncio
+async def test_snapshot_polling_rearms_after_transient_active_response() -> None:
+    """A completed injection response cannot permanently prove agent work started."""
+
+    marker = "MoonMind-Omnigent-Run: transient-active-never-started"
+    transient_active = {
+        "status": "running",
+        "active_response_id": "injection-response",
+        "items": [_marked_user_item(marker)],
+    }
+    running_without_work = {
+        "status": "running",
+        "active_response_id": None,
+        "items": [_marked_user_item(marker)],
+    }
+
+    class Client:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def get_session(self, _session_id: str) -> dict[str, Any]:
+            self.calls += 1
+            if self.calls == 1:
+                return transient_active
+            return running_without_work
+
+    client = Client()
+    with pytest.raises(OmnigentTurnNotStartedError) as excinfo:
+        await _await_marked_turn_terminal(
+            client=client,
+            session_id="session-1",
+            marker=marker,
+            event_count=3,
+            terminal_status="completed",
+            timeout_seconds=1.0,
+            interval_seconds=0.001,
+            turn_start_timeout_seconds=0.02,
+        )
+
+    assert client.calls >= 2
+    assert excinfo.value.code == "OMNIGENT_CURRENT_TURN_NOT_STARTED"
+    assert excinfo.value.snapshot == running_without_work
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "active_without_items",
     [
@@ -923,6 +967,7 @@ def _never_started_client(
     *,
     stream_shape: str,
     streamed: dict[str, int],
+    transient_active_before_close: bool = False,
 ) -> type:
     """Provider double that accepts the marked message and never starts the turn.
 
@@ -932,10 +977,16 @@ def _never_started_client(
     """
 
     idle_without_work = _never_started_snapshot(marker)
+    transient_active = {
+        **idle_without_work,
+        "status": "running",
+        "active_response_id": "injection-response",
+    }
 
     class FakeClient:
         def __init__(self, **_: object) -> None:
             self.posted = asyncio.Event()
+            self.post_dispatch_snapshot_count = 0
 
         async def list_agents(self) -> dict[str, object]:
             return {"items": [{"id": "agent-1", "name": "opencode-native-ui"}]}
@@ -971,6 +1022,12 @@ def _never_started_client(
                     "active_response_id": None,
                     "items": [{"id": "prior-item", "type": "message"}],
                 }
+            self.post_dispatch_snapshot_count += 1
+            if (
+                transient_active_before_close
+                and self.post_dispatch_snapshot_count == 1
+            ):
+                return transient_active
             return idle_without_work
 
     return FakeClient
@@ -978,18 +1035,21 @@ def _never_started_client(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("stream_shape", "expected_source"),
+    ("scenario", "stream_shape", "expected_source", "transient_active"),
     [
-        ("heartbeats", "session_heartbeat_snapshot"),
-        ("silent", "stream_idle_snapshot"),
-        ("closes", None),
+        ("heartbeats", "heartbeats", "session_heartbeat_snapshot", False),
+        ("silent", "silent", "stream_idle_snapshot", False),
+        ("closes", "closes", None, False),
+        ("closes-after-transient-active", "closes", None, True),
     ],
 )
 async def test_run_omnigent_execution_finalizes_never_started_turn(
     monkeypatch,
     tmp_path,
+    scenario: str,
     stream_shape: str,
     expected_source: str | None,
+    transient_active: bool,
 ) -> None:
     """Replay mm:00166f20 through the production boundary for every stream shape.
 
@@ -1001,8 +1061,8 @@ async def test_run_omnigent_execution_finalizes_never_started_turn(
     releases its authorities through normal cleanup.
     """
 
-    correlation_id = f"corr-never-started-{stream_shape}"
-    idempotency_key = f"idem-never-started-{stream_shape}"
+    correlation_id = f"corr-never-started-{scenario}"
+    idempotency_key = f"idem-never-started-{scenario}"
     marker = (
         "MoonMind-Omnigent-Run:\n"
         f"  correlationId: {correlation_id}\n"
@@ -1016,7 +1076,12 @@ async def test_run_omnigent_execution_finalizes_never_started_turn(
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
     monkeypatch.setattr(
         "moonmind.omnigent.execute.OmnigentHttpClient",
-        _never_started_client(marker, stream_shape=stream_shape, streamed=streamed),
+        _never_started_client(
+            marker,
+            stream_shape=stream_shape,
+            streamed=streamed,
+            transient_active_before_close=transient_active,
+        ),
     )
     monkeypatch.setattr(
         "moonmind.omnigent.execute._TERMINAL_RECONCILIATION_INTERVAL_SECONDS", 0.0
@@ -1079,11 +1144,39 @@ async def test_run_omnigent_execution_finalizes_never_started_turn(
     assert store.terminal_calls[0]["idempotencyKey"] == idempotency_key
     assert store.terminal_calls[0]["terminalRefs"]
     # Operator contract: the watchdog fields are heartbeated while waiting.
-    assert heartbeat_state["turnEverActive"] is False
+    assert heartbeat_state["turnEverActive"] is transient_active
     assert heartbeat_state["turnStartTimeoutSeconds"] == 0.05
     assert heartbeat_state["turnStartWaitSeconds"] is not None
     if expected_source is not None:
         assert heartbeat_state["markedTurnObservationSource"] == expected_source
+
+
+@pytest.mark.asyncio
+async def test_start_watchdog_keeps_budget_visible_while_activity_defers_it() -> None:
+    """Transient activity defers enforcement without hiding the start budget."""
+
+    loop = asyncio.get_running_loop()
+    watchdog = _MarkedTurnStartWatchdog(loop=loop, timeout_seconds=300.0)
+    watchdog.observe(
+        {"status": "running", "active_response_id": "injection-response"},
+        {"boundarySource": "marker", "progress": False},
+        observation_started_at=loop.time(),
+    )
+
+    active_fields = watchdog.heartbeat_fields()
+    assert watchdog.armed is False
+    assert active_fields["turnCurrentlyActive"] is True
+    assert active_fields["turnStartWaitSeconds"] is not None
+    assert active_fields["turnStartTimeoutSeconds"] == 300.0
+
+    watchdog.observe(
+        {"status": "running", "active_response_id": None},
+        {"boundarySource": "marker", "progress": True},
+        observation_started_at=loop.time(),
+    )
+    progressed_fields = watchdog.heartbeat_fields()
+    assert progressed_fields["turnStartWaitSeconds"] is None
+    assert progressed_fields["turnStartTimeoutSeconds"] is None
 
 
 @pytest.mark.asyncio
