@@ -1,0 +1,9 @@
+{
+  "incidentWorkflowId": "mm:ed856a13-58ef-42ae-9763-f673198c0e9a",
+  "failureShape": "the exact ARM64 host registered with credentialless OpenCode reported as needs-auth, which the generic realizer rejected until its one-minute registration window expired",
+  "boundary": "exact generic host launch to harness-ready catalog publication",
+  "emptyCatalogReads": 40,
+  "containerName": "mm-host-a76b18a1c964dddd3ebdc59a",
+  "expectedOwner": "moonmind",
+  "harnessId": "opencode-native"
+}

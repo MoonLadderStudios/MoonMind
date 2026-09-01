@@ -4934,6 +4934,172 @@ def test_api_execution_compiles_opencode_plan_before_temporal_schedule(
     )
 
 
+@pytest.mark.parametrize(
+    (
+        "provider_default_model",
+        "provider_model_tiers",
+        "provider_default_tier",
+        "expected_model",
+        "expected_model_source",
+    ),
+    [
+        (
+            "opencode/muse-spark-1.2-contributor-free",
+            [
+                {
+                    "label": "Muse Spark 1.2 Contributor Free",
+                    "model": "opencode/muse-spark-1.2-contributor-free",
+                    "effort": "xhigh",
+                    "parameters": {},
+                    "annotations": {},
+                }
+            ],
+            1,
+            "opencode/muse-spark-1.2-contributor-free",
+            "profile_default_tier",
+        ),
+        (
+            None,
+            [],
+            None,
+            "opencode-go/muse-spark-1.2-contributor",
+            "none",
+        ),
+    ],
+)
+def test_api_execution_keeps_authoritative_model_in_opencode_plan(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    provider_default_model: str | None,
+    provider_model_tiers: list[dict[str, object]],
+    provider_default_tier: int | None,
+    expected_model: str,
+    expected_model_source: str,
+) -> None:
+    """Replay Provider Profile and Agent Profile model authority handoffs."""
+
+    test_client, temporal_service, _user = client
+    temporal_service.create_execution.return_value = _build_execution_record()
+    provider_profile = SimpleNamespace(
+        profile_id="opencode-zen-free",
+        runtime_id="opencode",
+        provider_id="opencode",
+        default_model=provider_default_model,
+        default_effort="xhigh",
+        model_tiers=provider_model_tiers,
+        default_model_tier=provider_default_tier,
+        enabled=True,
+        auth_state="connected",
+        disabled_reason=None,
+    )
+    db_session = SimpleNamespace(
+        get=AsyncMock(
+            side_effect=[provider_profile, provider_profile, None]
+        ),
+        commit=AsyncMock(),
+        refresh=AsyncMock(),
+    )
+    test_client.app.dependency_overrides[get_async_session] = lambda: db_session
+    snapshot = {
+        "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
+        "profileId": "omnigent-opencode-default",
+        "version": 11,
+        "digest": "sha256:" + "a" * 64,
+        "providerProfileRef": "opencode-zen-free",
+        "executionProfileRef": "generic-omnigent-host@1",
+        "allowedLaunchPolicyRefs": ["omnigent-on-demand@1"],
+        "launchPolicyRef": "omnigent-on-demand@1",
+        "agentId": "opencode-native-ui",
+        "document": {
+            # The Agent Profile remains authoritative unless Provider Profile
+            # resolution establishes a more specific model source.
+            "model": {
+                "qualifiedId": "opencode-go/muse-spark-1.2-contributor",
+                "effort": "xhigh",
+                "settings": {},
+            },
+            "rag": {},
+            "capture": {"stream": True},
+            "workspace": {"mutation": "allowed"},
+            "harness": {"id": "opencode-native"},
+            "schemaVersion": "moonmind.omnigent-agent-profile.v2",
+        },
+    }
+    plan_binding = OmnigentExecutionPlanBinding(
+        planRef="omnigent-execution-plan:sha256:" + "b" * 64,
+        planDigest="sha256:" + "b" * 64,
+        planArtifactRef="art_zen_plan",
+        taskInputSnapshotRef="art_zen_task",
+        taskInputSnapshotDigest="sha256:" + "c" * 64,
+    )
+    compiled_parameters: dict[str, object] = {}
+
+    async def compile_plan(**kwargs):
+        compiled_parameters.update(kwargs["initial_parameters"])
+        return SimpleNamespace(
+            binding=plan_binding,
+            artifact_refs=("art_profile", "art_skills", "art_zen_plan"),
+            resolved_skillset_ref="art_skills",
+        )
+
+    with (
+        patch(
+            "api_service.api.routers.executions.resolve_agent_profile_snapshot",
+            new=AsyncMock(return_value=snapshot),
+        ),
+        patch(
+            "api_service.services.omnigent_execution_plan_service.persist_json_artifact",
+            new=AsyncMock(return_value=("art_zen_task", "sha256:" + "c" * 64)),
+        ),
+        patch(
+            "api_service.services.omnigent_execution_plan_service.compile_and_persist_execution_plan",
+            new=compile_plan,
+        ),
+        patch(
+            "api_service.api.routers.executions.get_temporal_artifact_service",
+            return_value=SimpleNamespace(),
+        ),
+    ):
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "workflow",
+                "payload": {
+                    "targetRuntime": "omnigent",
+                    "agentProfile": {
+                        "profileId": "omnigent-opencode-default",
+                        "providerProfileRef": "opencode-zen-free",
+                    },
+                    "omnigent": {
+                        "executionTargetRef": "omnigent-opencode-default@11",
+                        "launchPolicyRef": "omnigent-on-demand@1",
+                    },
+                    "workflow": {
+                        "instructions": "Run credentialless OpenCode.",
+                        "runtime": {
+                            "mode": "omnigent",
+                            "profileId": "opencode-zen-free",
+                        },
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 201, response.text
+    assert compiled_parameters["model"] == expected_model
+    assert compiled_parameters["effort"] == "xhigh"
+    assert compiled_parameters["modelSource"] == expected_model_source
+    initial_parameters = temporal_service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["model"] == expected_model
+    if provider_model_tiers:
+        assert initial_parameters["modelTierResolution"]["resolvedModel"] == (
+            expected_model
+        )
+    else:
+        assert "modelTierResolution" not in initial_parameters
+
+
 def test_api_idempotent_omnigent_retry_reuses_recorded_plan_before_resolution(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -9039,6 +9205,172 @@ def test_create_task_shaped_execution_accepts_scoped_fanout_bearer(
     assert initial_parameters["parentWorkflowId"] == "mm:parent-task"
     assert initial_parameters["targetRuntime"] == "codex_cli"
     assert service.create_execution.await_args.kwargs["owner_id"] == user.id
+
+
+def test_execution_fanout_inherits_exact_omnigent_agent_profile(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    """Replay mm:4b70984f through fan-out admission and plan compilation."""
+
+    test_client, service, user = client
+    for dependency in tuple(test_client.app.dependency_overrides):
+        if getattr(dependency, "__name__", "") == "_current_user_fallback":
+            test_client.app.dependency_overrides[dependency] = lambda: None
+    service.create_execution.return_value = _build_execution_record(owner_id=str(user.id))
+    digest = "sha256:a40d86b5a425308cebc144392c0ef9d69733a37f7abe005ee0cf0439767e6e91"
+    agent_profile = {
+        "profileId": "omnigent-opencode-default",
+        "version": 11,
+        "digest": digest,
+    }
+    omnigent_selection = {
+        "agentProfileRef": agent_profile,
+        "launchPolicyRef": "omnigent-on-demand@1",
+        "executionTargetRef": "omnigent-opencode@1",
+    }
+    service.describe_execution.return_value = SimpleNamespace(
+        workflow_id="mm:parent-task",
+        owner_id=user.id,
+        owner_type="user",
+        parameters={
+            "targetRuntime": "omnigent",
+            "model": "opencode/muse-spark-1.2-contributor-free",
+            "effort": "xhigh",
+            "profileId": "opencode-zen-free",
+            "agentProfile": agent_profile,
+            "agentProfileSnapshot": {
+                **agent_profile,
+                "providerProfileRef": "opencode-zen-free",
+            },
+            "omnigent": omnigent_selection,
+            "workflow": {
+                "runtime": {
+                    "mode": "omnigent",
+                    "model": "opencode/muse-spark-1.2-contributor-free",
+                    "effort": "xhigh",
+                    "profileId": "opencode-zen-free",
+                    "executionProfileRef": "opencode-zen-free",
+                }
+            },
+        },
+        memo={},
+        search_attributes={},
+    )
+    provider_profile = SimpleNamespace(
+        profile_id="opencode-zen-free",
+        runtime_id="opencode",
+        provider_id="opencode",
+        default_model="opencode/muse-spark-1.2-contributor-free",
+        default_effort="xhigh",
+        model_tiers=[],
+        default_model_tier=None,
+        enabled=True,
+        auth_state="connected",
+        disabled_reason=None,
+    )
+    db_session = SimpleNamespace(
+        get=AsyncMock(
+            side_effect=[provider_profile, None, provider_profile, None]
+        ),
+        commit=AsyncMock(),
+        refresh=AsyncMock(),
+    )
+    test_client.app.dependency_overrides[get_async_session] = lambda: db_session
+    snapshot = {
+        "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
+        **agent_profile,
+        "providerProfileRef": "opencode-zen-free",
+        "executionProfileRef": "omnigent-opencode@1",
+        "allowedLaunchPolicyRefs": [
+            "omnigent-on-demand@1",
+            "opencode-on-demand@1",
+        ],
+        "launchPolicyRef": "omnigent-on-demand@1",
+        "agentId": "opencode-native-ui",
+        "document": {
+            "model": {"settings": {}},
+            "rag": {},
+            "capture": {"stream": True},
+            "workspace": {"mutation": "allowed"},
+            "harness": {"id": "opencode-native"},
+            "schemaVersion": "moonmind.omnigent-agent-profile.v2",
+        },
+    }
+    plan_binding = OmnigentExecutionPlanBinding(
+        planRef="omnigent-execution-plan:sha256:" + "b" * 64,
+        planDigest="sha256:" + "b" * 64,
+        planArtifactRef="art_inherited_plan",
+        taskInputSnapshotRef="art_inherited_task",
+        taskInputSnapshotDigest="sha256:" + "c" * 64,
+    )
+    profile_resolver = AsyncMock(return_value=snapshot)
+    compile_plan = AsyncMock(
+        return_value=SimpleNamespace(
+            binding=plan_binding,
+            artifact_refs=("art_profile", "art_skills", "art_inherited_plan"),
+            resolved_skillset_ref="art_skills",
+        )
+    )
+
+    with (
+        patch(
+            "api_service.api.routers.executions.resolve_agent_profile_snapshot",
+            new=profile_resolver,
+        ),
+        patch(
+            "api_service.services.omnigent_execution_plan_service.persist_json_artifact",
+            new=AsyncMock(
+                return_value=("art_inherited_task", "sha256:" + "c" * 64)
+            ),
+        ),
+        patch(
+            "api_service.services.omnigent_execution_plan_service.compile_and_persist_execution_plan",
+            new=compile_plan,
+        ),
+        patch(
+            "api_service.api.routers.executions.get_temporal_artifact_service",
+            return_value=SimpleNamespace(),
+        ),
+    ):
+        response = test_client.post(
+            "/api/executions",
+            headers={
+                "Authorization": f"Bearer {_execution_fanout_token()}",
+                "X-MoonMind-Execution-Fanout": "v1",
+            },
+            json={
+                "type": "workflow",
+                "payload": {
+                    "runtimeInheritance": "caller",
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "workflow": {
+                        "instructions": "Resolve PR #3861.",
+                        "idempotencyKey": "parent:pr:3861",
+                        "skill": {"name": "pr-resolver"},
+                        "inputs": {
+                            "repo": "MoonLadderStudios/MoonMind",
+                            "pr": "3861",
+                        },
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 201, response.text
+    assert profile_resolver.await_args.kwargs["selection"] == {
+        **agent_profile,
+        "providerProfileRef": "opencode-zen-free",
+        "launchPolicyRef": "omnigent-on-demand@1",
+    }
+    compile_parameters = compile_plan.await_args.kwargs["initial_parameters"]
+    assert compile_parameters["profileId"] == "opencode-zen-free"
+    assert compile_parameters["model"] == (
+        "opencode/muse-spark-1.2-contributor-free"
+    )
+    assert compile_parameters["omnigent"]["executionTargetRef"] == (
+        "omnigent-opencode@1"
+    )
+    assert compile_parameters["parentWorkflowId"] == "mm:parent-task"
 
 
 @pytest.mark.parametrize(

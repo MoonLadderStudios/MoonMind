@@ -84,8 +84,11 @@ python3 .agents/skills/batch-pr-resolver/bin/batch_pr_resolver.py \
      require the canonical `workflowId` in the response, and verify that ID via
      `GET /api/executions/{workflowId}` before counting it as queued;
      `MOONMIND_URL` must point at the MoonMind API from the managed session.
-     When MoonMind supplies `MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN`, forward it
-     as the execution-scoped bearer and mark both calls as fan-out v1.
+     When MoonMind supplies `MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE`
+     (preferred) or `MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN`, read and forward
+     the execution-scoped bearer and mark both calls as fan-out v1. A declared
+     token file that is missing or empty is a hard failure; do not fall back to
+     the ambient value.
 4. Write one summary artifact at `batch_pr_resolver_result.json` under the managed session artifact spool path when available, otherwise under the configured `--artifacts-dir`.
 5. On any submission or verification error, write `skill_outcome.json` with a
    `failed` or `partial` status so the managed runtime cannot report the batch

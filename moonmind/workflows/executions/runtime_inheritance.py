@@ -75,6 +75,7 @@ class InheritedRuntime:
     effort: Optional[str] = None
     profile_id: Optional[str] = None
     execution_profile_ref: Optional[str] = None
+    agent_profile: Optional[dict[str, Any]] = None
     omnigent: Optional[dict[str, Any]] = None
     source_workflow_id: Optional[str] = None
 
@@ -258,6 +259,37 @@ def _extract_parent_runtime_fields(record: Any) -> InheritedRuntime:
     execution_profile_ref = (
         _coerce_str(workflow_runtime.get("executionProfileRef")) or profile_id
     )
+    raw_agent_profile = (
+        workflow_runtime.get("agentProfile")
+        if isinstance(workflow_runtime.get("agentProfile"), Mapping)
+        else parameters.get("agentProfile")
+    )
+    raw_agent_profile_snapshot = parameters.get("agentProfileSnapshot")
+    agent_profile_snapshot = (
+        raw_agent_profile_snapshot
+        if isinstance(raw_agent_profile_snapshot, Mapping)
+        else {}
+    )
+    agent_profile = (
+        dict(raw_agent_profile) if isinstance(raw_agent_profile, Mapping) else {}
+    )
+    # Persisted ``agentProfile`` is intentionally a compact immutable identity,
+    # while admission also requires the selected Provider Profile authority.
+    # Reconstruct the authorable exact selector from the full immutable
+    # snapshot; never copy the snapshot document itself into a child request.
+    for key in ("profileId", "version", "digest", "providerProfileRef"):
+        if agent_profile.get(key) in (None, "") and agent_profile_snapshot.get(
+            key
+        ) not in (None, ""):
+            agent_profile[key] = agent_profile_snapshot[key]
+    if (
+        agent_profile
+        and not _coerce_str(agent_profile.get("providerProfileRef"))
+        and profile_id
+    ):
+        agent_profile["providerProfileRef"] = profile_id
+    if not agent_profile:
+        agent_profile = None
     raw_omnigent = (
         workflow_runtime.get("omnigent")
         if isinstance(workflow_runtime.get("omnigent"), Mapping)
@@ -273,6 +305,7 @@ def _extract_parent_runtime_fields(record: Any) -> InheritedRuntime:
         effort=effort,
         profile_id=profile_id,
         execution_profile_ref=execution_profile_ref,
+        agent_profile=agent_profile,
         omnigent=omnigent,
         source_workflow_id=workflow_id,
     )
@@ -468,14 +501,21 @@ def apply_inherited_runtime_to_payload(
         runtime_block["executionProfileRef"] = inherited.execution_profile_ref
     if inherited.profile_id and not explicit_profile_id:
         runtime_block["profileId"] = inherited.profile_id
-    if inherited.omnigent:
-        explicit_omnigent = (
-            runtime_block.get("omnigent")
-            if isinstance(runtime_block.get("omnigent"), Mapping)
-            else payload.get("omnigent")
-        )
-        if not isinstance(explicit_omnigent, Mapping):
-            runtime_block["omnigent"] = dict(inherited.omnigent)
+    if inherited.agent_profile:
+        explicit_agent_profile = payload.get("agentProfile")
+        if not isinstance(explicit_agent_profile, Mapping):
+            explicit_agent_profile = runtime_block.get("agentProfile")
+        if (
+            not isinstance(explicit_agent_profile, Mapping)
+            and not explicit_profile_id
+        ):
+            runtime_block["agentProfile"] = dict(inherited.agent_profile)
+    if inherited.omnigent and not isinstance(payload.get("omnigent"), Mapping):
+        # Omnigent launch and execution-target selectors are request-level
+        # fields.  The create router deliberately does not consume
+        # workflow.runtime.omnigent, so nesting inherited selectors there
+        # silently discards the parent's effective execution target.
+        payload["omnigent"] = dict(inherited.omnigent)
 
     if runtime_block:
         task_payload["runtime"] = runtime_block

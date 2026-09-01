@@ -225,7 +225,11 @@ def _snapshot(*, harness: str, policy: str, provider_id: str) -> dict:
 
 
 def _policy_snapshot(
-    *, harness: str, policy: str, host_image_ref: str | None = None
+    *,
+    harness: str,
+    policy: str,
+    host_image_ref: str | None = None,
+    architecture: str | None = None,
 ) -> dict:
     profile_ref = f"omnigent-{harness.removesuffix('-native')}@1"
     host_image_digest = "7" if harness == "opencode-native" else "f"
@@ -243,6 +247,8 @@ def _policy_snapshot(
     document["providerProfile"]["compatibleProviders"] = [
         "opencode" if harness == "opencode-native" else "codex"
     ]
+    if architecture is not None:
+        document["host"]["architectures"] = [architecture]
     policy_id, _, version = policy.rpartition("@")
     return compile_policy_snapshot(
         policy_id=policy_id,
@@ -349,7 +355,15 @@ async def test_product_boundary_persists_secret_free_plan_and_exact_realizer(
     assert result.envelope.payload.effectiveLaunchSnapshotRef.startswith("artifact:")
     assert result.envelope.payload.effectiveLaunchSnapshotDigest.startswith("sha256:")
     assert result.envelope.payload.hostImageRef
-    assert result.envelope.payload.hostArchitecture == "linux/amd64"
+    assert result.envelope.payload.hostArchitecture in {
+        "linux/amd64",
+        "linux/arm64",
+    }
+    assert result.envelope.payload.supportIdentity is not None
+    assert (
+        result.envelope.payload.supportIdentity.architecture
+        == result.envelope.payload.hostArchitecture
+    )
     assert result.envelope.payload.authority is not None
     assert result.envelope.payload.authority.taskInputSnapshotRef == "art_request_1"
     admission = result.envelope.payload.admissionAuthority
@@ -379,6 +393,74 @@ async def test_product_boundary_persists_secret_free_plan_and_exact_realizer(
         "secretBody",
     ):
         assert forbidden not in serialized
+
+
+@pytest.mark.asyncio
+async def test_product_boundary_uses_exact_arm64_architecture_for_support_identity(
+    monkeypatch,
+) -> None:
+    """A multi-architecture Host Class must bind support to the selected host."""
+
+    monkeypatch.setattr(service, "DbExecutionPlanStore", _PlanStore)
+    monkeypatch.setattr(
+        service,
+        "resolve_execution_evidence",
+        lambda plan_payload, **_kwargs: (
+            _protected_support_evidence(plan_payload),
+            "supported",
+        ),
+    )
+
+    async def resolve_policy(**_kwargs):
+        return _policy_snapshot(
+            harness="opencode-native",
+            policy="opencode-on-demand@1",
+            architecture="arm64",
+        )
+
+    monkeypatch.setattr(service, "_resolve_runtime_policy_snapshot", resolve_policy)
+    monkeypatch.setenv(
+        "OMNIGENT_OPENCODE_HOST_IMAGE_REF",
+        "ghcr.io/example/omnigent-host@sha256:" + "7" * 64,
+    )
+    artifacts = _ArtifactService()
+    result = await service.compile_and_persist_execution_plan(
+        session_factory=object(),
+        artifact_service=artifacts,
+        principal="user-1",
+        workflow_id="mm:test-arm64-support-identity",
+        agent_profile_snapshot=_snapshot(
+            harness="opencode-native",
+            policy="opencode-on-demand@1",
+            provider_id="provider-opencode-native",
+        ),
+        provider_profile=SimpleNamespace(
+            profile_id="provider-opencode-native",
+            runtime_id="opencode",
+            provider_id="opencode-go",
+        ),
+        initial_parameters={
+            "model": "example/model",
+            "targetRuntime": "omnigent",
+            "publishMode": "none",
+            "maxAttempts": 2,
+            "workflow": {"instructions": "Use the selected ARM64 host."},
+        },
+        authored_request_ref="art_request_arm64",
+        authored_request_digest="sha256:" + "1" * 64,
+        task_input_snapshot_ref="art_request_arm64",
+        task_input_snapshot_digest="sha256:" + "1" * 64,
+    )
+
+    assert result.envelope.payload.hostArchitecture == "linux/arm64"
+    assert result.envelope.payload.supportIdentity is not None
+    assert result.envelope.payload.supportIdentity.architecture == "linux/arm64"
+
+    from moonmind.workflows.temporal.activities.omnigent_session_activities import (
+        _validate_plan_support_authority,
+    )
+
+    _validate_plan_support_authority(result.envelope)
 
 
 @pytest.mark.asyncio

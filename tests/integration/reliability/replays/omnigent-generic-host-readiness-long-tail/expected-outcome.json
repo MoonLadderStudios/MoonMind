@@ -1,0 +1,7 @@
+{
+  "invariant": "the generic exact-host lifecycle covers supported cold-start tails and admits needs-auth only for a credentialless plan whose exact selected model is attested next",
+  "hostId": "host-generic-long-readiness-replay",
+  "catalogReadCount": 41,
+  "sleepCount": 40,
+  "sleepSeconds": 2.0
+}

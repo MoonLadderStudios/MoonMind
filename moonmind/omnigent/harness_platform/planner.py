@@ -390,6 +390,20 @@ def compile_execution_plan(
     agent_source_ref = (
         "agent-source:sha256:" + _hashlib.sha256(agent_source_ref.encode()).hexdigest()
     )
+    support_architecture = (
+        host_architecture
+        or (
+            selected_host_class.architectures[0]
+            if selected_host_class.architectures
+            else "linux/amd64"
+        )
+    )
+    if support_architecture not in selected_host_class.architectures:
+        raise HarnessPlatformError(
+            f"selected Host Class {selected_host_class.ref} does not support "
+            f"architecture {support_architecture}",
+            code=HarnessPlatformFailure.OMNIGENT_HOST_CLASS_UNAVAILABLE,
+        )
 
     support_payload = SupportKeyPayload.model_validate(
         {
@@ -401,11 +415,7 @@ def compile_execution_plan(
             "materializerRefs": sorted(materializer_refs),
             "providerCompatibilityClass": credential_binding_set.bindingSetId,
             "hostClassRef": selected_host_class.ref,
-            "architecture": (
-                selected_host_class.architectures[0]
-                if selected_host_class.architectures
-                else "linux/amd64"
-            ),
+            "architecture": support_architecture,
             "launchPolicyRef": launch_policy.ref,
             "modelConfigDigest": model_digest,
             "executionRealizerRef": realizer,

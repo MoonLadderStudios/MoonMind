@@ -1,0 +1,45 @@
+{
+  "incidentWorkflowId": "mm:4b70984f-1b70-452a-9a4c-528357740faf",
+  "sourceWorkflowId": "mm:171981b9-8988-40e5-ab5c-e3b66d6dee61",
+  "terminalFailureCode": "CHILD_WORKFLOW_QUEUE_FAILED",
+  "matchedPrs": 7,
+  "queuedWorkflows": 0,
+  "failureShape": "the execution-scoped fan-out transport reached POST /api/executions, but caller inheritance discarded the exact Agent Profile and nested Omnigent launch selectors under workflow.runtime, so every child was rejected with an incompatible Provider Profile conflict",
+  "parentEffectiveParameters": {
+    "targetRuntime": "omnigent",
+    "model": "opencode/muse-spark-1.2-contributor-free",
+    "effort": "xhigh",
+    "profileId": "opencode-zen-free",
+    "agentProfile": {
+      "profileId": "omnigent-opencode-default",
+      "version": 11,
+      "digest": "sha256:a40d86b5a425308cebc144392c0ef9d69733a37f7abe005ee0cf0439767e6e91"
+    },
+    "agentProfileSnapshot": {
+      "profileId": "omnigent-opencode-default",
+      "version": 11,
+      "digest": "sha256:a40d86b5a425308cebc144392c0ef9d69733a37f7abe005ee0cf0439767e6e91",
+      "providerProfileRef": "opencode-zen-free",
+      "executionProfileRef": "omnigent-opencode@1",
+      "launchPolicyRef": "omnigent-on-demand@1"
+    },
+    "omnigent": {
+      "agentProfileRef": {
+        "profileId": "omnigent-opencode-default",
+        "version": 11,
+        "digest": "sha256:a40d86b5a425308cebc144392c0ef9d69733a37f7abe005ee0cf0439767e6e91"
+      },
+      "launchPolicyRef": "omnigent-on-demand@1",
+      "executionTargetRef": "omnigent-opencode@1"
+    },
+    "workflow": {
+      "runtime": {
+        "mode": "omnigent",
+        "model": "opencode/muse-spark-1.2-contributor-free",
+        "effort": "xhigh",
+        "profileId": "opencode-zen-free",
+        "executionProfileRef": "opencode-zen-free"
+      }
+    }
+  }
+}

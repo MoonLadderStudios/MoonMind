@@ -32,6 +32,7 @@ from moonmind.omnigent.host_ports import (
     OmnigentHostLauncherPort,
     OmnigentHostRegistrationPort,
     OmnigentMountedToolPort,
+    OmnigentRuntimeEnvironmentPort,
     OmnigentSkillDeliveryPort,
     OmnigentWorkspaceMaterializationPort,
     host_correlation_identity,
@@ -75,6 +76,7 @@ class GenericOmnigentHostRuntime:
         tool_service: OmnigentMountedToolPort,
         github_credential_service: OmnigentGithubCredentialPort,
         egress_service: OmnigentEgressAttestationPort,
+        runtime_environment_service: OmnigentRuntimeEnvironmentPort,
         registration_waiter: OmnigentHostRegistrationPort,
         host_attestor: OmnigentHostAttestationPort,
         cleanup_service: OmnigentHostCleanupPort,
@@ -86,6 +88,7 @@ class GenericOmnigentHostRuntime:
             tool_service,
             github_credential_service,
             egress_service,
+            runtime_environment_service,
             registration_waiter,
             host_attestor,
             cleanup_service,
@@ -101,6 +104,7 @@ class GenericOmnigentHostRuntime:
         self._tools = tool_service
         self._github_credentials = github_credential_service
         self._egress = egress_service
+        self._runtime_environment = runtime_environment_service
         self._registration = registration_waiter
         self._attestor = host_attestor
         self._cleanup = cleanup_service
@@ -236,6 +240,14 @@ class GenericOmnigentHostRuntime:
                 prepared.egress_attestation["appliedRuleDigest"]
             ),
         }
+        runtime_environment = dict(
+            self._runtime_environment.build(
+                request=request,
+                plan=plan,
+                host_lease_ref=host_lease_ref,
+                launch_policy=launch_policy,
+            )
+        )
         spec = HostLaunchSpec.model_validate(
             {
                 "executionPlanRef": plan.planRef,
@@ -263,7 +275,10 @@ class GenericOmnigentHostRuntime:
                 ),
                 "credentialAttachments": list(credential_attachments),
                 "controlAttachment": (
-                    self._launcher.control_attachment(host_lease_ref)
+                    self._launcher.control_attachment(
+                        host_lease_ref,
+                        require_capability_mount=bool(runtime_environment),
+                    )
                     if hasattr(self._launcher, "control_attachment")
                     else None
                 ),
@@ -299,11 +314,19 @@ class GenericOmnigentHostRuntime:
             host_class=host_class,
             launch_policy=launch_policy,
             credential_handles=credential_handles,
+            runtime_environment=runtime_environment,
         )
         try:
             registration = await self._registration.wait_for_registration(
                 correlation_name=correlation,
                 harness_id=plan.payload.harnessId,
+                credentialless=(
+                    bool(credential_handles)
+                    and all(
+                        str(handle.get("materializerRef") or "") == "none@1"
+                        for handle in credential_handles
+                    )
+                ),
             )
             attestations = await self._attestor.attest(
                 request=request,

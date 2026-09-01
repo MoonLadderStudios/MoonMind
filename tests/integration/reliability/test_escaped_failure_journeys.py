@@ -62,6 +62,12 @@ from moonmind.omnigent.execute import (
 )
 from moonmind.omnigent.execution_profiles import compile_effective_launch
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+from moonmind.omnigent.host_services.registration import (
+    OmnigentHostRegistrationService,
+)
+from moonmind.omnigent.host_services.runtime_scripts import (
+    OmnigentRuntimeScriptService,
+)
 from moonmind.omnigent.oauth_host_janitor import OmnigentOAuthHostJanitor
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.omnigent.host_failures import OmnigentOAuthHostError
@@ -124,6 +130,13 @@ from moonmind.workflows.executions.repository_contract import (
 )
 from moonmind.workflows.executions.runtime_capabilities import (
     resolve_runtime_execution_capabilities,
+)
+from moonmind.workflows.executions.runtime_inheritance import (
+    SCOPE_CREATE_CHILD,
+    SCOPE_INHERIT_RUNTIME,
+    ExecutionPrincipal,
+    apply_inherited_runtime_to_payload,
+    resolve_child_runtime_inheritance,
 )
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
 from moonmind.workflows.provider_failures import (
@@ -3196,6 +3209,76 @@ async def test_omnigent_host_registration_covers_observed_long_tail(
     sleep.assert_awaited_with(expected["sleepSeconds"])
 
 
+async def test_generic_host_registration_covers_direct_spawn_readiness_tail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay mm:ed856a13 after generic-host readiness exceeded one minute."""
+
+    replay_id = "omnigent-generic-host-readiness-long-tail"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    ready_host = {
+        "host_id": expected["hostId"],
+        "name": manifest["containerName"],
+        "owner": manifest["expectedOwner"],
+        "status": "online",
+        "configured_harnesses": {manifest["harnessId"]: "needs-auth"},
+    }
+    client = SimpleNamespace(
+        list_hosts=AsyncMock(
+            side_effect=[
+                *([[]] * manifest["emptyCatalogReads"]),
+                [ready_host],
+            ]
+        )
+    )
+    waiter = OmnigentHostRegistrationService(
+        client=client,
+        expected_owner=manifest["expectedOwner"],
+    )
+    sleep = AsyncMock()
+    monkeypatch.setattr(
+        "moonmind.omnigent.host_services.registration.asyncio.sleep",
+        sleep,
+    )
+
+    registration = await waiter.wait_for_registration(
+        correlation_name=manifest["containerName"],
+        harness_id=manifest["harnessId"],
+        credentialless=True,
+    )
+
+    assert registration["omnigentHostId"] == expected["hostId"]
+    assert registration["harnessReady"] is True
+    assert client.list_hosts.await_count == expected["catalogReadCount"]
+    assert sleep.await_count == expected["sleepCount"]
+    sleep.assert_awaited_with(expected["sleepSeconds"])
+
+
+async def test_generic_host_registration_rejects_needs_auth_for_credentialed_plan(
+) -> None:
+    host = {
+        "host_id": "host-needs-auth",
+        "name": "mm-host-credentialed",
+        "owner": "moonmind",
+        "status": "online",
+        "configured_harnesses": {"opencode-native": "needs-auth"},
+    }
+    waiter = OmnigentHostRegistrationService(
+        client=SimpleNamespace(list_hosts=AsyncMock(return_value=[host])),
+        expected_owner="moonmind",
+        attempts=1,
+        interval_seconds=0.001,
+    )
+
+    with pytest.raises(HarnessPlatformError):
+        await waiter.wait_for_registration(
+            correlation_name="mm-host-credentialed",
+            harness_id="opencode-native",
+            credentialless=False,
+        )
+
+
 async def test_tool_output_only_omnigent_turn_continues_before_publication(
     tmp_path: Path,
 ) -> None:
@@ -3958,6 +4041,98 @@ async def test_omnigent_codex_tool_shell_receives_moonmind_execution_environment
         runtime_environment["MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN"]
     )
     assert "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN" not in runtime_environment
+
+
+async def test_generic_omnigent_fanout_crosses_runner_and_opencode_shell() -> None:
+    """Replay mm:eb37130f after the original mm:171981b9 admission fix."""
+
+    replay_id = "omnigent-generic-fanout-env-handoff"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    runtime_environment = {
+        "MOONMIND_URL": manifest["moonmindUrl"],
+        "MOONMIND_AGENT_RUN_ID": manifest["stepExecutionId"],
+        "MOONMIND_TASK_WORKFLOW_ID": manifest["incidentWorkflowId"],
+        "MOONMIND_STEP_ID": manifest["stepExecutionId"],
+        "MOONMIND_RUNTIME_ID": "opencode-native",
+        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE": expected[
+            "capabilityFile"
+        ],
+    }
+
+    script, environment = OmnigentRuntimeScriptService().build_entrypoint(
+        credential_handles=[],
+        skill_attachment={"targetPath": "/opt/moonmind-skills"},
+        step_execution_id=manifest["stepExecutionId"],
+        control_attachment={"targetPath": "/run/moonmind-host-auth"},
+        enable_opencode_runtime=True,
+        runtime_environment=runtime_environment,
+    )
+
+    assert manifest["sourceWorkflowId"] == "mm:171981b9-8988-40e5-ab5c-e3b66d6dee61"
+    assert manifest["matchedPrs"] == 7
+    assert manifest["queuedWorkflows"] == 0
+    passthrough = set(environment["OMNIGENT_RUNNER_ENV_PASSTHROUGH"].split(","))
+    for name in expected["visibleEnvironmentNames"]:
+        assert environment[name] == runtime_environment[name]
+        assert name in passthrough
+        assert f"export {name}=$(cat " in script
+    for name in expected["excludedEnvironmentNames"]:
+        assert name not in environment
+        assert f"export {name}=" not in script
+    syntax = subprocess.run(
+        ["/bin/sh", "-n"],
+        input=script,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert syntax.returncode == 0, syntax.stderr
+
+
+async def test_generic_omnigent_fanout_preserves_exact_caller_runtime() -> None:
+    """Replay mm:4b70984f at the API runtime-inheritance boundary."""
+
+    replay_id = "omnigent-fanout-runtime-inheritance"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    parent = SimpleNamespace(
+        workflow_id=manifest["incidentWorkflowId"],
+        owner_id="replay-owner",
+        parameters=manifest["parentEffectiveParameters"],
+        memo={},
+        search_attributes={},
+    )
+    service = SimpleNamespace(describe_execution=AsyncMock(return_value=parent))
+    principal = ExecutionPrincipal(
+        user_id="replay-owner",
+        workflow_id=manifest["incidentWorkflowId"],
+        scopes=frozenset({SCOPE_CREATE_CHILD, SCOPE_INHERIT_RUNTIME}),
+    )
+    payload = {
+        "runtimeInheritance": "caller",
+        "workflow": {"instructions": "Resolve the selected pull request."},
+    }
+
+    inherited = await resolve_child_runtime_inheritance(
+        request_payload=payload,
+        task_payload=payload["workflow"],
+        principal=principal,
+        service=service,
+    )
+    assert inherited is not None
+    apply_inherited_runtime_to_payload(
+        payload=payload,
+        task_payload=payload["workflow"],
+        inherited=inherited,
+    )
+
+    runtime = payload["workflow"]["runtime"]
+    assert runtime["mode"] == "omnigent"
+    assert runtime["profileId"] == expected["providerProfileRef"]
+    assert runtime["agentProfile"] == expected["agentProfile"]
+    assert payload["omnigent"] == expected["omnigent"]
+    assert "omnigent" not in runtime
 
 
 async def test_omnigent_batch_fanout_crosses_only_scoped_execution_proxy_routes(

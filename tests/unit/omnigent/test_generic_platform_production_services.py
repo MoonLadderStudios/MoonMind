@@ -67,6 +67,9 @@ from moonmind.omnigent.host_services.mounted_tools import (
     OmnigentMountedToolService,
     deployment_mounted_tool_names,
 )
+from moonmind.omnigent.host_services.runtime_environment import (
+    OmnigentRuntimeEnvironmentService,
+)
 from moonmind.omnigent.host_services.workspace import OmnigentWorkspaceMaterializer
 from moonmind.omnigent.provider_leases import (
     AcquiredProviderLease,
@@ -84,6 +87,9 @@ from moonmind.omnigent.secret_resolution import (
 from moonmind.provider_profiles.lease_client import (
     CredentialLease,
     CredentialLeasePurpose,
+)
+from moonmind.security.execution_fanout_capabilities import (
+    verify_execution_fanout_capability,
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 
@@ -910,7 +916,20 @@ async def test_github_credential_projection_transports_secret_only_on_stdin(
 
 
 @pytest.mark.asyncio
-async def test_host_volume_initializers_use_setup_authority() -> None:
+@pytest.mark.parametrize(
+    ("host_api_token", "expected_secret_payloads"),
+    [
+        (
+            "host-control-token",
+            [b"host-control-token", b"scoped-fanout-token"],
+        ),
+        ("", [b"scoped-fanout-token"]),
+    ],
+)
+async def test_host_volume_initializers_use_setup_authority(
+    host_api_token: str,
+    expected_secret_payloads: list[bytes],
+) -> None:
     calls: list[tuple[list[str], dict[str, object]]] = []
 
     class Backend:
@@ -918,8 +937,11 @@ async def test_host_volume_initializers_use_setup_authority() -> None:
             calls.append((list(argv), dict(kwargs)))
             return (0, "container-id" if argv[1] == "create" else "", "")
 
+    script_inputs = {}
+
     class Scripts:
-        def build_entrypoint(self, **_kwargs):
+        def build_entrypoint(self, **kwargs):
+            script_inputs.update(kwargs)
             return "exec true", {}
 
     backend = Backend()
@@ -927,7 +949,7 @@ async def test_host_volume_initializers_use_setup_authority() -> None:
         backend=backend,
         runtime_scripts=Scripts(),
         server_url="http://omnigent:8000",
-        host_api_token="host-control-token",
+        host_api_token=host_api_token,
     )
     host_class = HostClass.model_validate(
         {
@@ -973,7 +995,10 @@ async def test_host_volume_initializers_use_setup_authority() -> None:
                     "targetPath": "/opt/moonmind-skills",
                     "accessMode": "read-only",
                 },
-                "controlAttachment": launcher.control_attachment(owner_ref),
+                "controlAttachment": launcher.control_attachment(
+                    owner_ref,
+                    require_capability_mount=True,
+                ),
                 "stateAttachment": {
                     "kind": "volume",
                     "sourceRef": "mm-host-state-test",
@@ -986,14 +1011,92 @@ async def test_host_volume_initializers_use_setup_authority() -> None:
         host_class=host_class,
         launch_policy=get_launch_policy("omnigent-on-demand@1"),
         credential_handles=[],
+        runtime_environment={
+            "MOONMIND_URL": "http://api:8000",
+            "MOONMIND_AGENT_RUN_ID": "agent-run-1",
+            "MOONMIND_TASK_WORKFLOW_ID": "workflow-1",
+            "MOONMIND_STEP_ID": "step-1",
+            "MOONMIND_RUNTIME_ID": "opencode-native",
+            "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN": "scoped-fanout-token",
+        },
     )
 
     setup_runs = [argv for argv, _kwargs in calls if argv[:2] == ["docker", "run"]]
-    assert len(setup_runs) == 2
+    assert len(setup_runs) == len(expected_secret_payloads) + 1
     for argv in setup_runs:
         assert argv[argv.index("--user") + 1] == "0:0"
     workload_create = next(argv for argv, _kwargs in calls if argv[:2] == ["docker", "create"])
     assert workload_create[workload_create.index("--user") + 1] == "1000:1000"
+    assert "scoped-fanout-token" not in json.dumps(
+        [argv for argv, _kwargs in calls]
+    )
+    assert [
+        kwargs["input_bytes"]
+        for _argv, kwargs in calls
+        if kwargs.get("input_bytes")
+    ] == expected_secret_payloads
+    assert script_inputs["runtime_environment"] == {
+        "MOONMIND_URL": "http://api:8000",
+        "MOONMIND_AGENT_RUN_ID": "agent-run-1",
+        "MOONMIND_TASK_WORKFLOW_ID": "workflow-1",
+        "MOONMIND_STEP_ID": "step-1",
+        "MOONMIND_RUNTIME_ID": "opencode-native",
+        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE": (
+            "/run/moonmind-host-auth/execution-fanout"
+        ),
+    }
+    assert script_inputs["control_credential_available"] is bool(host_api_token)
+
+
+def test_generic_host_mints_scoped_fanout_from_step_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MOONMIND_URL", "http://api:8000")
+    request = AgentExecutionRequest.model_validate(
+        {
+            "agentKind": "external",
+            "agentId": "omnigent",
+            "correlationId": "workflow-1",
+            "idempotencyKey": "idem-1",
+            "parameters": {"requiredCapabilities": ["gh", "execution.fanout"]},
+            "stepExecution": {
+                "workflowId": "workflow-1",
+                "runId": "run-1",
+                "logicalStepId": "node-1",
+                "executionOrdinal": 1,
+                "stepExecutionId": "workflow-1:run-1:node-1:execution:1",
+                "runtimeContextPolicy": "fresh_agent_run",
+                "skillSourcePolicy": {
+                    "executionFanout": {
+                        "authorized": True,
+                        "selectedSkill": "batch-dependabot-resolver",
+                        "sourceKind": "built_in",
+                    }
+                },
+            },
+        }
+    )
+
+    environment = OmnigentRuntimeEnvironmentService(
+        moonmind_url="http://api:8000",
+        signing_secret="test_jwt_secret_key",
+    ).build(
+        request=request,
+        plan=_plan("opencode/muse-spark-1.2-contributor-free"),
+        host_lease_ref="host-lease-1",
+        launch_policy=get_launch_policy("omnigent-on-demand@1"),
+    )
+    capability = verify_execution_fanout_capability(
+        environment["MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN"],
+        secret="test_jwt_secret_key",
+    )
+
+    assert environment["MOONMIND_URL"] == "http://api:8000"
+    assert capability.parent_workflow_id == "workflow-1"
+    assert capability.agent_run_id == "workflow-1:run-1:node-1:execution:1"
+    assert capability.session_id == "host-lease-1"
+    assert capability.runtime_id == "opencode-native"
+    assert capability.source_kind == "omnigent"
 
 
 @pytest.mark.asyncio
