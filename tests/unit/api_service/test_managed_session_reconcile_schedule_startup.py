@@ -3,10 +3,49 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 
 import pytest
 
 from api_service import main as api_main
+
+
+@pytest.mark.asyncio
+async def test_image_sync_blocks_a_quarantined_opencode_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.omnigent.bootstrap import image_resolution
+    from moonmind.omnigent.bootstrap.models import ResolvedOmnigentDeploymentState
+    from moonmind.omnigent import settings
+
+    async def resolve() -> ResolvedOmnigentDeploymentState:
+        return ResolvedOmnigentDeploymentState.model_validate(
+            {
+                "serverImageRef": "ghcr.io/example/server@sha256:" + "1" * 64,
+                "opencodeHostImageRef": (
+                    "ghcr.io/example/opencode-host@sha256:" + "2" * 64
+                ),
+                "omnigentBuildDigest": "sha256:" + "1" * 64,
+                "architecture": "linux/amd64",
+                "resolvedAt": datetime(2026, 8, 31, tzinfo=UTC),
+                "details": {
+                    "opencodeHostCompatibility": {
+                        "status": "blocked",
+                        "failureCode": "omnigent_server_host_build_mismatch",
+                    }
+                },
+            }
+        )
+
+    class _EnabledGate:
+        enabled = True
+
+    monkeypatch.setattr(image_resolution, "publish_resolved_omnigent_images", resolve)
+    monkeypatch.setattr(settings, "build_omnigent_gate", _EnabledGate)
+    monkeypatch.setattr(settings, "generic_host_enabled", lambda: True)
+    monkeypatch.setattr(settings, "opencode_support_enabled", lambda: True)
+
+    assert await api_main._sync_omnigent_deployment_images() is False
 
 
 @pytest.mark.asyncio
@@ -48,9 +87,7 @@ async def test_omnigent_bootstrap_retries_with_capped_backoff_and_maintains_inve
     )
 
     with pytest.raises(asyncio.CancelledError):
-        await api_main._maintain_omnigent_bootstrap_reconciliation(
-            initial_ready=False
-        )
+        await api_main._maintain_omnigent_bootstrap_reconciliation(initial_ready=False)
 
     assert delays == [5, 10, 120, 120]
     assert reconciliations == [True, True, False]
@@ -82,9 +119,7 @@ async def test_api_startup_bootstrap_uses_only_local_image_evidence(
     monkeypatch.setattr(omnigent_policies, "seed_bootstrap_policies", seed)
     monkeypatch.setattr(omnigent_policies, "bootstrap_policies_ready", ready)
 
-    assert await api_main._sync_omnigent_bootstrap_policies(
-        refresh_images=False
-    )
+    assert await api_main._sync_omnigent_bootstrap_policies(refresh_images=False)
     assert observed_resolver is omnigent_policies.resolve_local_bootstrap_image_ref
     # The registry-acquiring leg keys on the configured refs, so it must read the
     # operator's own configuration rather than a digest publication exported.
@@ -458,9 +493,7 @@ async def test_catalog_outage_does_not_retry_registry_image_refresh(
     )
 
     with pytest.raises(asyncio.CancelledError):
-        await api_main._maintain_omnigent_bootstrap_reconciliation(
-            initial_ready=False
-        )
+        await api_main._maintain_omnigent_bootstrap_reconciliation(initial_ready=False)
 
     # Aggregate readiness stays false, so the loop keeps retrying with capped
     # backoff, but images are refreshed only on the first pass.
@@ -506,9 +539,7 @@ async def test_image_policy_outage_keeps_retrying_registry_refresh(
     )
 
     with pytest.raises(asyncio.CancelledError):
-        await api_main._maintain_omnigent_bootstrap_reconciliation(
-            initial_ready=False
-        )
+        await api_main._maintain_omnigent_bootstrap_reconciliation(initial_ready=False)
 
     assert image_refreshes == [True, True]
 
@@ -627,9 +658,7 @@ async def test_default_qualification_runs_when_an_unrelated_provider_is_unready(
     monkeypatch.setattr(api_main, "_sync_omnigent_bootstrap_policies", ready)
     monkeypatch.setattr(api_main, "_sync_omnigent_bootstrap_agent_profile", ready)
     monkeypatch.setattr(api_main, "_sync_omnigent_harness_catalog", ready)
-    monkeypatch.setattr(
-        api_main, "_sync_managed_bootstrap_recurring_schedules", ready
-    )
+    monkeypatch.setattr(api_main, "_sync_managed_bootstrap_recurring_schedules", ready)
     monkeypatch.setattr(api_main, "_sync_omnigent_provider_readiness", provider)
     monkeypatch.setattr(
         api_main, "_sync_omnigent_deployment_qualification", qualification

@@ -17,6 +17,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from moonmind.omnigent.harness_platform import (
     HarnessPlatformError,
@@ -41,6 +42,28 @@ from moonmind.omnigent.harness_platform.materializers import (
     OPENCODE_PROVIDER_KEY,
     materializer_ref_for_provider,
 )
+
+
+_RELEASE_WORKFLOW = Path(".github/workflows/docker-publish-opencode-host.yml")
+
+
+def test_opencode_release_recurs_and_only_rebuilds_on_upstream_drift():
+    workflow = yaml.safe_load(_RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    triggers = workflow.get("on") or workflow.get(True)
+
+    assert triggers["schedule"] == [{"cron": "23 */6 * * *"}]
+    assert (
+        workflow["jobs"]["metadata"]["outputs"]["rebuild_required"]
+        == "${{ steps.drift.outputs.rebuild_required }}"
+    )
+    assert (
+        workflow["jobs"]["build"]["if"]
+        == "needs.metadata.outputs.rebuild_required == 'true'"
+    )
+    assert (
+        workflow["jobs"]["merge"]["if"]
+        == "needs.metadata.outputs.rebuild_required == 'true'"
+    )
 
 
 def _ensure_opencode_env(

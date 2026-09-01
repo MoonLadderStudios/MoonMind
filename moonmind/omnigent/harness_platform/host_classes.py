@@ -59,6 +59,32 @@ def _persisted_image_ref(key: str) -> str:
 
 
 def _require_image_ref(environment: Mapping[str, str], key: str) -> str:
+    if key == OMNIGENT_OPENCODE_HOST_IMAGE_ENV:
+        try:
+            from moonmind.omnigent.bootstrap.store import load_resolved_state
+
+            state = load_resolved_state()
+        except Exception:
+            state = None
+        details = getattr(state, "details", None)
+        compatibility = (
+            details.get("opencodeHostCompatibility")
+            if isinstance(details, Mapping)
+            else None
+        )
+        if (
+            isinstance(compatibility, Mapping)
+            and compatibility.get("status") == "blocked"
+        ):
+            failure_code = str(
+                compatibility.get("failureCode") or "omnigent_server_host_incompatible"
+            )
+            raise HarnessPlatformError(
+                "OpenCode Host Class is quarantined because the resolved "
+                "Omnigent server and host images are incompatible "
+                f"({failure_code})",
+                code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+            )
     raw = str(environment.get(key) or "").strip()
     if not raw:
         raw = _persisted_image_ref(key)
