@@ -1,0 +1,7 @@
+{
+  "acceptTerminalEventAfterToolOnlyQuietPeriod": true,
+  "terminalStatus": "completed",
+  "terminalBoundarySource": "pre_dispatch_item_ids",
+  "terminalAssistantAfterWork": false,
+  "unfinishedToolCall": false
+}

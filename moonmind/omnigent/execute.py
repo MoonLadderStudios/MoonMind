@@ -1081,12 +1081,19 @@ async def _await_marked_turn_terminal(
 ) -> tuple[str, dict[str, Any]]:
     """Wait until a terminal event is stably projected into the marked turn.
 
-    Omnigent sessions are interactive and return to ``idle`` after a Codex
+    Omnigent sessions are interactive and normally return to ``idle`` after a
     turn, so the session snapshot itself does not become terminal. Stock native
     sessions can replay the prior SSE terminal frame and can briefly project an
     assistant preamble as their last item before its next tool appears. Marked
     item ordering plus a bounded stable period therefore owns the terminal
     decision; neither a terminal frame nor a transient last assistant does.
+
+    OpenCode can leave the interactive session status at ``running`` after a
+    post-dispatch terminal event when the bounded transcript ends with a tool
+    output instead of final assistant text. That shape is eligible only for the
+    longer tool-only quiet period. The profile-bound coordinator can then use
+    its existing same-session continuation instead of losing the authoritative
+    workspace to the no-progress timeout.
 
     A turn that never starts is distinct from a turn that is slow. The
     :class:`_MarkedTurnStartWatchdog` (the caller's dispatch-scoped instance
@@ -1154,8 +1161,17 @@ async def _await_marked_turn_terminal(
             turn_state,
             observation_started_at=observation_started_at,
         )
+        terminal_event_tool_only_candidate = bool(
+            not inactive
+            and terminal_status in _TERMINAL_STATUSES
+            and progress
+            and not turn_state["terminalAssistantAfterWork"]
+            and not turn_state["unfinishedToolCall"]
+        )
         stable_candidate = bool(
-            progress and inactive and not turn_state["unfinishedToolCall"]
+            progress
+            and not turn_state["unfinishedToolCall"]
+            and (inactive or terminal_event_tool_only_candidate)
         )
         signature = turn_state["signature"]
         if stable_candidate and isinstance(signature, tuple):
@@ -1176,8 +1192,10 @@ async def _await_marked_turn_terminal(
                 # A preamble assistant can launch another tool after the stale
                 # idle/completed projection, and some turns end immediately
                 # after a tool result without a final assistant. Accept either
-                # shape only after the ordered transcript is inactive and
-                # unchanged for a bounded quiet period.
+                # shape only after the ordered transcript is unchanged for its
+                # bounded quiet period. A still-running tool-only projection is
+                # admitted solely because the caller already observed the live
+                # post-dispatch terminal event.
                 return (
                     normalized
                     if normalized in {"failed", "canceled", "timed_out"}
@@ -1201,6 +1219,9 @@ async def _await_marked_turn_terminal(
                     turn_state["terminalAssistantAfterWork"]
                 ),
                 "unfinishedToolCall": bool(turn_state["unfinishedToolCall"]),
+                "terminalEventToolOnlyCandidate": (
+                    terminal_event_tool_only_candidate
+                ),
                 "turnQuietSeconds": (
                     round(loop.time() - quiet_since, 3)
                     if quiet_since is not None

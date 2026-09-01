@@ -1017,6 +1017,49 @@ async def test_evicted_turn_marker_preserves_terminal_and_retry_authority() -> N
     assert expected["retryAuthority"] == "same_host_profile_and_bridge"
 
 
+async def test_running_session_accepts_quiet_tool_output_after_terminal_event() -> None:
+    """Replay mm:44e4f122 at the terminal-event/session-status boundary."""
+
+    replay_id = "omnigent-running-tool-output-terminal"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    terminal_snapshot = manifest["terminalSnapshot"]
+    baseline_item_ids = frozenset(manifest["preDispatchItemIds"])
+
+    state = _marked_turn_item_state(
+        terminal_snapshot,
+        marker=manifest["currentTurnMarker"],
+        baseline_item_ids=baseline_item_ids,
+    )
+    assert state["boundarySource"] == expected["terminalBoundarySource"]
+    assert (
+        state["terminalAssistantAfterWork"]
+        is expected["terminalAssistantAfterWork"]
+    )
+    assert state["unfinishedToolCall"] is expected["unfinishedToolCall"]
+
+    class StableRunningSnapshotClient:
+        async def get_session(self, _session_id: str) -> dict[str, object]:
+            return terminal_snapshot
+
+    status, snapshot = await _await_marked_turn_terminal(
+        client=StableRunningSnapshotClient(),
+        session_id=manifest["sessionId"],
+        marker=manifest["currentTurnMarker"],
+        baseline_item_ids=baseline_item_ids,
+        event_count=1,
+        terminal_status=manifest["terminalEventStatus"],
+        timeout_seconds=0.01,
+        interval_seconds=0.001,
+        quiet_period_seconds=0.002,
+        tool_only_quiet_period_seconds=0.002,
+    )
+
+    assert expected["acceptTerminalEventAfterToolOnlyQuietPeriod"] is True
+    assert status == expected["terminalStatus"]
+    assert snapshot is terminal_snapshot
+
+
 async def test_pr_resolver_child_compiles_bindable_stock_agent_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -1,0 +1,46 @@
+{
+  "incidentWorkflowId": "mm:44e4f122-f9d9-4722-a03b-9a902864896b",
+  "failureShape": "a post-dispatch response.completed event was followed by a stable, fully matched tool-output transcript while the interactive session remained running",
+  "sessionId": "replay-running-tool-output-session",
+  "currentTurnMarker": "MoonMind-Omnigent-Run: replay-running-tool-output",
+  "preDispatchItemIds": [],
+  "terminalEventStatus": "completed",
+  "terminalSnapshot": {
+    "status": "running",
+    "items": [
+      {
+        "id": "call-1",
+        "type": "function_call",
+        "status": "completed",
+        "data": {"name": "bash", "call_id": "call-1"}
+      },
+      {
+        "id": "output-1",
+        "type": "function_call_output",
+        "status": "completed",
+        "data": {"call_id": "call-1", "output": "bounded replay output"}
+      },
+      {
+        "id": "assistant-preamble",
+        "type": "message",
+        "status": "completed",
+        "data": {
+          "role": "assistant",
+          "content": [{"type": "output_text", "text": "Checking one last thing."}]
+        }
+      },
+      {
+        "id": "call-2",
+        "type": "function_call",
+        "status": "completed",
+        "data": {"name": "bash", "call_id": "call-2"}
+      },
+      {
+        "id": "output-2",
+        "type": "function_call_output",
+        "status": "completed",
+        "data": {"call_id": "call-2", "output": "terminal evidence written"}
+      }
+    ]
+  }
+}
