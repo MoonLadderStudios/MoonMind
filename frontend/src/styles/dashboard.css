@@ -7699,10 +7699,35 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .queue-info-tooltip:hover .queue-info-tooltip-panel,
-.queue-info-tooltip:focus-within .queue-info-tooltip-panel {
+.queue-info-tooltip:focus-within .queue-info-tooltip-panel,
+.queue-info-tooltip--visible .queue-info-tooltip-panel {
   opacity: 1;
   visibility: visible;
   pointer-events: auto;
+}
+
+.queue-info-tooltip--dismissed .queue-info-tooltip-panel {
+  opacity: 0 !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+.queue-info-tooltip-panel::before {
+  content: "";
+  position: absolute;
+  top: -0.5rem;
+  left: 0;
+  right: 0;
+  height: 0.5rem;
+}
+
+@media (max-width: 640px) {
+  .queue-info-tooltip-panel {
+    left: 0;
+    right: auto;
+    transform: none;
+    max-width: min(22rem, calc(100vw - 1rem));
+  }
 }
 
 .queue-info-tooltip-panel .notice {

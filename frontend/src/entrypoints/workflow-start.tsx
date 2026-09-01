@@ -5484,14 +5484,41 @@ function InfoTooltip({
   className?: string;
   children: React.ReactNode;
 }) {
+  const [isHovered, setIsHovered] = useState(false);
+  const [isFocused, setIsFocused] = useState(false);
+  const [isDismissed, setIsDismissed] = useState(false);
+  const isVisible = (isHovered || isFocused) && !isDismissed;
+  const visibilityClass = isVisible
+    ? " queue-info-tooltip--visible"
+    : isDismissed
+      ? " queue-info-tooltip--dismissed"
+      : "";
   return (
-    <span className={`queue-info-tooltip${className ? ` ${className}` : ""}`}>
+    <span
+      className={`queue-info-tooltip${className ? ` ${className}` : ""}${visibilityClass}`}
+      onMouseEnter={() => {
+        setIsHovered(true);
+        setIsDismissed(false);
+      }}
+      onMouseLeave={() => setIsHovered(false)}
+    >
       <button
         type="button"
         className="queue-step-icon-button queue-info-toggle"
         aria-label={label}
         aria-describedby={panelId}
         title={title}
+        onFocus={() => {
+          setIsFocused(true);
+          setIsDismissed(false);
+        }}
+        onBlur={() => setIsFocused(false)}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.preventDefault();
+            setIsDismissed(true);
+          }
+        }}
       >
         <InfoIcon />
       </button>

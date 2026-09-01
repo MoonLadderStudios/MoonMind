@@ -60,7 +60,9 @@ export function SkillCombobox({
 }: SkillComboboxProps): ReactElement {
   const [isOpen, setIsOpen] = useState<boolean>(false);
   const [highlightedIndex, setHighlightedIndex] = useState<number>(-1);
-  const [isDescriptionOpen, setIsDescriptionOpen] = useState<boolean>(false);
+  const [isDescriptionHovered, setIsDescriptionHovered] = useState<boolean>(false);
+  const [isDescriptionFocused, setIsDescriptionFocused] = useState<boolean>(false);
+  const isDescriptionOpen = isDescriptionHovered || isDescriptionFocused;
   const [hasLinkedDescription, setHasLinkedDescription] = useState<boolean>(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -76,7 +78,8 @@ export function SkillCombobox({
   );
 
   useEffect(() => {
-    setIsDescriptionOpen(false);
+    setIsDescriptionHovered(false);
+    setIsDescriptionFocused(false);
   }, [value]);
 
   const restoreLinkedDescription = useCallback(
@@ -230,11 +233,19 @@ export function SkillCombobox({
   );
 
   const handleDescriptionHoverEnter = useCallback(() => {
-    setIsDescriptionOpen(true);
+    setIsDescriptionHovered(true);
   }, []);
 
   const handleDescriptionHoverLeave = useCallback(() => {
-    setIsDescriptionOpen(false);
+    setIsDescriptionHovered(false);
+  }, []);
+
+  const handleDescriptionFocus = useCallback(() => {
+    setIsDescriptionFocused(true);
+  }, []);
+
+  const handleDescriptionBlur = useCallback(() => {
+    setIsDescriptionFocused(false);
   }, []);
 
   const handleOptionPick = useCallback(
@@ -382,12 +393,13 @@ export function SkillCombobox({
             title="Skill description"
             onMouseEnter={handleDescriptionHoverEnter}
             onMouseLeave={handleDescriptionHoverLeave}
-            onFocus={handleDescriptionHoverEnter}
-            onBlur={handleDescriptionHoverLeave}
+            onFocus={handleDescriptionFocus}
+            onBlur={handleDescriptionBlur}
             onKeyDown={(event) => {
               if (event.key === "Escape" && isDescriptionOpen) {
                 event.preventDefault();
-                setIsDescriptionOpen(false);
+                setIsDescriptionHovered(false);
+                setIsDescriptionFocused(false);
               }
             }}
           >
