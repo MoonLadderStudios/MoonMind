@@ -49,6 +49,7 @@ from moonmind.omnigent.bridge_store import (
 )
 from moonmind.omnigent.execute import (
     OmnigentSessionStillRunningError,
+    OmnigentTurnNotStartedError,
     _await_marked_turn_terminal,
     _build_omnigent_first_message,
     _first_message_text,
@@ -3839,6 +3840,110 @@ async def test_replayed_terminal_event_waits_for_current_marked_turn() -> None:
     assert expected["assistantPreambleRequiresStableQuietPeriod"] is True
     assert expected["unfinishedToolCallBlocksCompletion"] is True
     assert expected["toolOnlyQuietPeriodSeconds"] == 300
+
+
+async def test_accepted_turn_that_never_starts_fails_within_start_budget() -> None:
+    """Replay mm:00166f20 at the terminal-authority and dispatch boundaries."""
+
+    from moonmind.omnigent import execute as execute_module
+    from moonmind.workflows.temporal.activities.omnigent_activities import (
+        _try_generic_realizer_dispatch,
+    )
+    from tests.unit.omnigent.test_generic_platform_production_services import _plan
+
+    replay_id = "omnigent-accepted-turn-never-started"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    idle_snapshot = manifest["idleSnapshot"]
+    marker = manifest["currentTurnMarker"]
+
+    assert (
+        execute_module._MARKED_TURN_START_TIMEOUT_SECONDS
+        == expected["turnStartTimeoutSeconds"]
+    )
+    assert expected["turnStartTimeoutSeconds"] < expected["noProgressTimeoutSeconds"]
+    assert (
+        manifest["observedTerminalPollingSeconds"]
+        > expected["noProgressTimeoutSeconds"]
+    )
+    assert manifest["observedProviderEvents"][-1]["type"] == "response.completed"
+
+    state = _marked_turn_item_state(idle_snapshot, marker=marker)
+    assert state["boundarySource"] == expected["terminalBoundarySource"]
+    assert state["progress"] is expected["acceptCurrentTurnProgress"]
+    assert _snapshot_contains_current_turn_progress(
+        idle_snapshot, marker=marker
+    ) is expected["acceptCurrentTurnProgress"]
+    assert _snapshot_confirms_current_turn_terminal(
+        idle_snapshot, marker=marker
+    ) is expected["acceptCurrentTurnTerminal"]
+
+    class IdleForeverClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def get_session(self, _session_id: str) -> dict[str, object]:
+            self.calls += 1
+            return idle_snapshot
+
+    client = IdleForeverClient()
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    with pytest.raises(OmnigentTurnNotStartedError) as excinfo:
+        await _await_marked_turn_terminal(
+            client=client,
+            session_id=manifest["sessionId"],
+            marker=marker,
+            event_count=len(manifest["observedProviderEvents"]),
+            terminal_status="completed",
+            timeout_seconds=60.0,
+            interval_seconds=0.001,
+            turn_start_timeout_seconds=0.05,
+        )
+    assert expected["boundedByTurnStartBudget"] is True
+    assert loop.time() - started < 10.0, (
+        "the never-started turn must fail inside the turn-start budget, not the "
+        "no-progress budget"
+    )
+    assert client.calls >= 2
+    assert excinfo.value.code == expected["failureCode"]
+
+    plan = _plan("opencode-go/model")
+
+    class PlanStore:
+        async def load(self, plan_ref):
+            assert plan_ref == plan.planRef
+            return plan
+
+    class Realizer:
+        async def execute(self, request, admitted):
+            raise excinfo.value
+
+    class Registry:
+        def require(self, ref):
+            assert ref == manifest["executionRealizerRef"]
+            return Realizer()
+
+    result = await _try_generic_realizer_dispatch(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId=manifest["incidentWorkflowId"],
+            idempotencyKey="step-never-started",
+            resolvedSkillsetRef="artifact:skills",
+            parameters={"executionPlanRef": plan.planRef},
+        ),
+        plan_store=PlanStore(),
+        realizer_registry=Registry(),
+    )
+    assert result is not None
+    assert result.failure_class == expected["failureClass"]
+    assert result.provider_error_code == expected["failureCode"]
+    assert result.retry_recommendation == expected["retryRecommendation"]
+    assert result.summary != manifest["observedFailureSummary"], (
+        "the dispatch projection must name the never-started cause"
+    )
+    assert expected["failureCode"] in result.summary
 
 
 async def test_omnigent_server_is_reachable_from_isolated_host_network() -> None:

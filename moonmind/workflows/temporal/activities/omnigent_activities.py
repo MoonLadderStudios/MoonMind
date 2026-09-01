@@ -458,18 +458,23 @@ async def _try_generic_realizer_dispatch(
                 exc,
                 exc_info=True,
             )
+            # A typed platform code on the cause is the operator-facing
+            # classification; only an untyped cause collapses to the generic
+            # dispatch code and its contact_administrator remediation.
+            provider_error_code = (
+                HarnessPlatformFailure.OMNIGENT_GENERIC_DISPATCH_FAILED.value
+            )
+            typed_code = str(getattr(exc, "code", "") or "").strip()
+            if typed_code in HarnessPlatformFailure.__members__:
+                provider_error_code = typed_code
             return AgentRunResult(
                 summary=(
                     "Admitted Omnigent execution-plan dispatch failed: "
                     f"{str(exc)[:400]}"
                 ),
                 failureClass="integration_error",
-                providerErrorCode=(
-                    HarnessPlatformFailure.OMNIGENT_GENERIC_DISPATCH_FAILED.value
-                ),
-                retryRecommendation=remediation_for(
-                    HarnessPlatformFailure.OMNIGENT_GENERIC_DISPATCH_FAILED.value
-                ),
+                providerErrorCode=provider_error_code,
+                retryRecommendation=remediation_for(provider_error_code),
                 metadata={"dispatchError": str(exc)[:1000]},
             )
 
@@ -591,11 +596,23 @@ async def _try_generic_realizer_dispatch(
             providerErrorCode=code,
             retryRecommendation=remediation_for(code),
         )
-    except Exception:
+    except Exception as exc:
         # Unknown implementation defects retain one generic boundary code; do
         # not copy exception text into workflow history because it may include
         # provider or infrastructure details. Known boundaries above preserve
-        # their actionable typed failure codes.
+        # their actionable typed failure codes, and a MoonMind-typed platform
+        # code carried by any other cause is projected the same way.
+        typed_code = str(getattr(exc, "code", "") or "").strip()
+        if typed_code in HarnessPlatformFailure.__members__:
+            return AgentRunResult(
+                summary=(
+                    "Generic Omnigent dispatch failed before a terminal provider "
+                    f"result ({typed_code})."
+                ),
+                failureClass="integration_error",
+                providerErrorCode=typed_code,
+                retryRecommendation=remediation_for(typed_code),
+            )
         return AgentRunResult(
             summary="Generic Omnigent dispatch failed before a terminal provider result.",
             failureClass="integration_error",

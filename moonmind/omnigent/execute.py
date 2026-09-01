@@ -89,6 +89,12 @@ _logger = logging.getLogger(__name__)
 _ACTIVITY_HEARTBEAT_INTERVAL_SECONDS = 30.0
 _MARKED_TURN_QUIET_PERIOD_SECONDS = 60.0
 _MARKED_TOOL_ONLY_QUIET_PERIOD_SECONDS = 300.0
+# A native harness that accepted the marked message projects an active turn
+# (running status or an active response id) or its first ordered item within
+# seconds. An idle snapshot with no item after the marker for this long proves
+# the provider dropped the turn; waiting the full no-progress budget for work
+# that can never appear only delays an already-known failure.
+_MARKED_TURN_START_TIMEOUT_SECONDS = 300.0
 _TERMINAL_RECONCILIATION_INTERVAL_SECONDS = 30.0
 _ACTIVITY_HEARTBEAT_STATE: ContextVar[dict[str, Any] | None] = ContextVar(
     "omnigent_activity_heartbeat_state",
@@ -100,6 +106,18 @@ class OmnigentSessionStillRunningError(OmnigentClientError):
     """Raised when the stream ends while the provider session is still active."""
 
     code = "OMNIGENT_CURRENT_TURN_TERMINAL_AMBIGUOUS"
+
+
+class OmnigentTurnNotStartedError(OmnigentSessionStillRunningError):
+    """Raised when the provider accepted the marked turn but never started it.
+
+    The marked user item is projected, the session never leaves its inactive
+    projection, and no ordered item follows the marker within the bounded
+    turn-start budget. No provider work exists to preserve, so the failure is
+    reported as a distinct, retryable code instead of an ambiguous terminal.
+    """
+
+    code = "OMNIGENT_CURRENT_TURN_NOT_STARTED"
 
 
 def _session_id(payload: dict[str, Any]) -> str:
@@ -959,6 +977,7 @@ async def _await_marked_turn_terminal(
     interval_seconds: float = 2.0,
     quiet_period_seconds: float = _MARKED_TURN_QUIET_PERIOD_SECONDS,
     tool_only_quiet_period_seconds: float = (_MARKED_TOOL_ONLY_QUIET_PERIOD_SECONDS),
+    turn_start_timeout_seconds: float = _MARKED_TURN_START_TIMEOUT_SECONDS,
 ) -> tuple[str, dict[str, Any]]:
     """Wait until a terminal event is stably projected into the marked turn.
 
@@ -968,12 +987,22 @@ async def _await_marked_turn_terminal(
     assistant preamble as their last item before its next tool appears. Marked
     item ordering plus a bounded stable period therefore owns the terminal
     decision; neither a terminal frame nor a transient last assistant does.
+
+    A turn that never starts is distinct from a turn that is slow. While the
+    marked boundary is projected, the snapshot has only ever been inactive, and
+    no item follows the marker, ``turn_start_timeout_seconds`` bounds the wait
+    and raises :class:`OmnigentTurnNotStartedError`. Any active projection or
+    any ordered progress disables that watchdog; the no-progress
+    ``timeout_seconds`` budget then owns the ambiguous case.
     """
 
     loop = asyncio.get_running_loop()
-    deadline = loop.time() + max(1.0, timeout_seconds)
+    started_at = loop.time()
+    deadline = started_at + max(1.0, timeout_seconds)
+    turn_start_deadline = started_at + max(0.0, turn_start_timeout_seconds)
     quiet_signature: tuple[Any, ...] | None = None
     quiet_since: float | None = None
+    turn_ever_active = False
     while loop.time() < deadline:
         observation_started_at = loop.time()
         snapshot = await client.get_session(session_id)
@@ -1019,6 +1048,21 @@ async def _await_marked_turn_terminal(
             # first place that discovers the failed turn.
             return normalized, snapshot
         inactive = _snapshot_projects_inactive_turn(snapshot)
+        turn_ever_active = turn_ever_active or not inactive
+        if (
+            not progress
+            and not turn_ever_active
+            and turn_state["boundarySource"] is not None
+            and observation_completed_at >= turn_start_deadline
+        ):
+            waited_seconds = round(observation_completed_at - started_at, 3)
+            raise OmnigentTurnNotStartedError(
+                "Omnigent accepted the marked turn but the provider never "
+                "started it: the session stayed inactive and projected no "
+                f"item after the marked message for {waited_seconds}s "
+                f"(turn-start budget {turn_start_timeout_seconds:g}s); "
+                "no provider work exists, retry the step dispatch"
+            )
         stable_candidate = bool(
             progress and inactive and not turn_state["unfinishedToolCall"]
         )
@@ -1085,6 +1129,17 @@ async def _await_marked_turn_terminal(
                 ),
                 "snapshotLatencySeconds": round(observation_latency_seconds, 3),
                 "snapshotLatencyResetQuietWindow": observation_was_slow,
+                "turnEverActive": turn_ever_active,
+                "turnStartWaitSeconds": (
+                    round(loop.time() - started_at, 3)
+                    if not progress and not turn_ever_active
+                    else None
+                ),
+                "turnStartTimeoutSeconds": (
+                    max(0.0, turn_start_timeout_seconds)
+                    if not progress and not turn_ever_active
+                    else None
+                ),
             }
         )
         await asyncio.sleep(max(0.1, interval_seconds))
@@ -2851,6 +2906,7 @@ async def run_omnigent_execution(
 __all__ = [
     "OmnigentContractError",
     "OmnigentSessionStillRunningError",
+    "OmnigentTurnNotStartedError",
     "normalize_omnigent_observation",
     "run_omnigent_execution",
 ]

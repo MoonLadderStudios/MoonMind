@@ -95,6 +95,89 @@ async def test_generic_dispatch_loads_persisted_plan_and_invokes_selected_realiz
 
 
 @pytest.mark.asyncio
+async def test_generic_dispatch_projects_typed_turn_not_started_code() -> None:
+    """A typed realizer cause must reach the operator, not a generic code."""
+
+    from moonmind.omnigent.execute import OmnigentTurnNotStartedError
+    from tests.unit.omnigent.test_generic_platform_production_services import _plan
+
+    plan = _plan("opencode-go/model")
+
+    class PlanStore:
+        async def load(self, plan_ref):
+            assert plan_ref == plan.planRef
+            return plan
+
+    class Realizer:
+        async def execute(self, request, admitted):
+            raise OmnigentTurnNotStartedError(
+                "Omnigent accepted the marked turn but the provider never started it"
+            )
+
+    class Registry:
+        def require(self, ref):
+            return Realizer()
+
+    result = await _try_generic_realizer_dispatch(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="workflow-not-started",
+            idempotencyKey="step-not-started",
+            resolvedSkillsetRef="artifact:skills",
+            parameters={"executionPlanRef": plan.planRef},
+        ),
+        plan_store=PlanStore(),
+        realizer_registry=Registry(),
+    )
+
+    assert result is not None
+    assert result.failure_class == "integration_error"
+    assert result.provider_error_code == "OMNIGENT_CURRENT_TURN_NOT_STARTED"
+    assert result.retry_recommendation == "retry_turn_dispatch"
+    # Provider-boundary exception text stays out of workflow history; the
+    # typed code is the operator-facing cause.
+    assert "OMNIGENT_CURRENT_TURN_NOT_STARTED" in result.summary
+    assert "never started" not in result.summary
+
+
+@pytest.mark.asyncio
+async def test_generic_dispatch_keeps_generic_code_for_untyped_cause() -> None:
+    from tests.unit.omnigent.test_generic_platform_production_services import _plan
+
+    plan = _plan("opencode-go/model")
+
+    class PlanStore:
+        async def load(self, plan_ref):
+            return plan
+
+    class Realizer:
+        async def execute(self, request, admitted):
+            raise RuntimeError("boom")
+
+    class Registry:
+        def require(self, ref):
+            return Realizer()
+
+    result = await _try_generic_realizer_dispatch(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="workflow-untyped",
+            idempotencyKey="step-untyped",
+            resolvedSkillsetRef="artifact:skills",
+            parameters={"executionPlanRef": plan.planRef},
+        ),
+        plan_store=PlanStore(),
+        realizer_registry=Registry(),
+    )
+
+    assert result is not None
+    assert result.provider_error_code == "OMNIGENT_GENERIC_DISPATCH_FAILED"
+    assert result.retry_recommendation == "contact_administrator"
+
+
+@pytest.mark.asyncio
 async def test_generic_profile_selection_fails_typed_when_host_plane_is_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

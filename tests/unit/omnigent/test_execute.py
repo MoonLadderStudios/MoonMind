@@ -25,6 +25,7 @@ from moonmind.omnigent.bridge_store import (
 from moonmind.omnigent.execute import (
     OmnigentContractError,
     OmnigentSessionStillRunningError,
+    OmnigentTurnNotStartedError,
     _agent_items,
     _await_marked_turn_terminal,
     _build_omnigent_first_message,
@@ -679,6 +680,180 @@ async def test_snapshot_polling_waits_for_quiet_after_stale_idle_tool_output() -
     assert status == "completed"
     assert snapshot["items"][-1]["id"] == "output-2"
     assert client.calls >= 6
+
+
+def _marked_user_item(marker: str) -> dict[str, Any]:
+    return {
+        "id": "item-user",
+        "type": "message",
+        "status": "completed",
+        "data": {
+            "role": "user",
+            "content": [{"type": "input_text", "text": marker}],
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_snapshot_polling_fails_fast_when_accepted_turn_never_starts() -> None:
+    """Replay mm:00166f20: idle session, marker visible, zero provider work.
+
+    The stock native runner emitted ``response.completed`` for the message
+    injection itself while the harness never began the turn. Waiting the full
+    no-progress budget cannot produce work that does not exist.
+    """
+
+    marker = "MoonMind-Omnigent-Run: never-started"
+    idle_without_work = {
+        "status": "idle",
+        "active_response_id": None,
+        "items": [
+            {"id": "terminal-created", "type": "resource_event", "data": {}},
+            _marked_user_item(marker),
+            {"id": "terminal-deleted", "type": "resource_event", "data": {}},
+        ],
+    }
+
+    class Client:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def get_session(self, _session_id: str) -> dict[str, Any]:
+            self.calls += 1
+            return idle_without_work
+
+    client = Client()
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    with pytest.raises(OmnigentTurnNotStartedError) as excinfo:
+        await _await_marked_turn_terminal(
+            client=client,
+            session_id="session-1",
+            marker=marker,
+            event_count=10,
+            terminal_status="completed",
+            timeout_seconds=30.0,
+            interval_seconds=0.001,
+            turn_start_timeout_seconds=0.02,
+        )
+
+    assert loop.time() - started < 5.0
+    assert client.calls >= 2
+    assert excinfo.value.code == "OMNIGENT_CURRENT_TURN_NOT_STARTED"
+    assert isinstance(excinfo.value, OmnigentSessionStillRunningError)
+    assert "never started" in str(excinfo.value)
+    assert "no provider work exists" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_snapshot_polling_start_watchdog_defers_to_active_projection() -> None:
+    """A running projection without items is slow work, not a dropped turn."""
+
+    marker = "MoonMind-Omnigent-Run: slow-start"
+    running_without_items = {
+        "status": "running",
+        "active_response_id": "resp-1",
+        "items": [_marked_user_item(marker)],
+    }
+
+    class Client:
+        async def get_session(self, _session_id: str) -> dict[str, Any]:
+            return running_without_items
+
+    with pytest.raises(OmnigentSessionStillRunningError) as excinfo:
+        await _await_marked_turn_terminal(
+            client=Client(),
+            session_id="session-1",
+            marker=marker,
+            event_count=4,
+            terminal_status="completed",
+            timeout_seconds=1.0,
+            interval_seconds=0.001,
+            turn_start_timeout_seconds=0.01,
+        )
+
+    assert not isinstance(excinfo.value, OmnigentTurnNotStartedError)
+    assert excinfo.value.code == "OMNIGENT_CURRENT_TURN_TERMINAL_AMBIGUOUS"
+
+
+@pytest.mark.asyncio
+async def test_snapshot_polling_start_watchdog_requires_visible_boundary() -> None:
+    """Without a marker or item frontier the turn boundary cannot be proven."""
+
+    marker = "MoonMind-Omnigent-Run: evicted"
+    idle_unmarked = {
+        "status": "idle",
+        "active_response_id": None,
+        "items": [{"id": "prior-1", "type": "function_call_output", "data": {}}],
+    }
+
+    class Client:
+        async def get_session(self, _session_id: str) -> dict[str, Any]:
+            return idle_unmarked
+
+    with pytest.raises(OmnigentSessionStillRunningError) as excinfo:
+        await _await_marked_turn_terminal(
+            client=Client(),
+            session_id="session-1",
+            marker=marker,
+            event_count=4,
+            terminal_status="completed",
+            timeout_seconds=1.0,
+            interval_seconds=0.001,
+            turn_start_timeout_seconds=0.01,
+        )
+
+    assert not isinstance(excinfo.value, OmnigentTurnNotStartedError)
+
+
+@pytest.mark.asyncio
+async def test_snapshot_polling_start_watchdog_accepts_late_first_item() -> None:
+    """Work that appears inside the start budget completes normally."""
+
+    marker = "MoonMind-Omnigent-Run: late-start"
+    idle_without_work = {
+        "status": "idle",
+        "active_response_id": None,
+        "items": [_marked_user_item(marker)],
+    }
+    completed = {
+        "status": "idle",
+        "active_response_id": None,
+        "items": [
+            _marked_user_item(marker),
+            {
+                "id": "assistant-final",
+                "type": "message",
+                "status": "completed",
+                "data": {
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Done"}],
+                },
+            },
+        ],
+    }
+
+    class Client:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def get_session(self, _session_id: str) -> dict[str, Any]:
+            self.calls += 1
+            return idle_without_work if self.calls <= 3 else completed
+
+    status, snapshot = await _await_marked_turn_terminal(
+        client=Client(),
+        session_id="session-1",
+        marker=marker,
+        event_count=4,
+        terminal_status="completed",
+        interval_seconds=0.001,
+        quiet_period_seconds=0.002,
+        turn_start_timeout_seconds=5.0,
+    )
+
+    assert status == "completed"
+    assert snapshot is completed
 
 
 @pytest.mark.asyncio

@@ -616,6 +616,18 @@ The scan covers text-bearing message fields, supported slash-command arguments, 
 
 When high-security mode is enabled, an unknown or unparsable native event schema, unavailable scanner, or required textual payload that cannot be inspected fails closed. The bridge never forwards first and diagnoses later.
 
+### 9.5 Marked-turn terminal authority
+
+A native runner acknowledges the message injection itself: `session.status running`, `response.in_progress`, and `response.completed` can all arrive within a second of `Turn started` while the harness has not begun the turn. A terminal SSE frame is therefore only a completion candidate. The ordered session snapshot owns the terminal decision:
+
+1. **Boundary.** The marked user item (or, when the bounded snapshot evicted it, the item-id frontier captured before dispatch) fixes where the current turn begins.
+2. **Progress.** Provider work is a `function_call`, `function_call_output`, or assistant `message` ordered after the boundary. Resource events and the marked message itself are not progress.
+3. **Quiescence.** A structurally complete turn (no unmatched tool call) must stay unchanged in an inactive snapshot for 60s after a final assistant text, or 300s when the turn ended on a tool result.
+4. **Turn-start budget.** While the boundary is visible, the snapshot has only ever projected an inactive turn (no `running` status, no active response id), and no item follows the boundary, the wait is bounded at 300s. Exceeding it fails with `OMNIGENT_CURRENT_TURN_NOT_STARTED` (`integration_error`, remediation `retry_turn_dispatch`): the provider accepted the turn and dropped it, no work exists to preserve, and the step can be redispatched. Any active projection or any ordered progress disables this budget.
+5. **No-progress budget.** A turn that showed activity or progress but never settled fails after 1800s with `OMNIGENT_CURRENT_TURN_TERMINAL_AMBIGUOUS`; cleanup is deferred because provider work may still be running.
+
+Heartbeats expose `currentTurnProgress`, `turnEverActive`, `turnStartWaitSeconds`, `turnQuietSeconds`, and their budgets so an operator can tell a slow turn from a dropped one while the Activity is alive.
+
 ---
 
 ## 10. Stream and event normalization
@@ -975,6 +987,8 @@ No configuration may turn a direct upstream browser URL into an authority bypass
 | First-message digest mismatch | `user_error` | Conflicting replay. |
 | Ambiguous `posting` reconciliation | `integration_error` | Fail closed instead of duplicate post. |
 | Stream disconnect while session active | `integration_error` | Reauthorize and reconcile. |
+| Accepted turn never started (idle, no item after marker, 300s) | `integration_error` / `OMNIGENT_CURRENT_TURN_NOT_STARTED` | No provider work exists; `retry_turn_dispatch`. See §9.5. |
+| Turn active or progressed but never settled (1800s) | `integration_error` / `OMNIGENT_CURRENT_TURN_TERMINAL_AMBIGUOUS` | Defer cleanup; provider work may be live. |
 | Runtime/harness failure | `execution_error` | Preserve provider evidence. |
 | Session/host timeout | `system_error` | Keep `timed_out` distinct. |
 | Optional resource harvest failure | primary result plus diagnostics | Unless policy requires full evidence. |
