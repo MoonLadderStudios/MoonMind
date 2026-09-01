@@ -679,6 +679,141 @@ describe('provider profile tier mapping display', () => {
       'Tier 2 · Implementation · gpt-5.5 · xhigh',
     );
   });
+
+  it('shows tier count, default tier and +N more with Runtime default for null values', () => {
+    renderProviderProfilesManager([
+      {
+        profile_id: 'codex_tier_counts',
+        runtime_id: 'codex_cli',
+        provider_id: 'openai',
+        credential_source: 'secret_ref',
+        runtime_materialization_mode: 'api_key_env',
+        secret_refs: {},
+        max_parallel_runs: 1,
+        cooldown_after_429_seconds: 300,
+        rate_limit_policy: 'backoff',
+        enabled: true,
+        model_tiers: [
+          { label: null, model: null, effort: null },
+          { label: 'Impl', model: 'gpt-5.5', effort: null },
+          { label: 'Extra', model: 'gpt-5.6', effort: 'high' },
+        ],
+        default_model_tier: 2,
+      },
+    ]);
+    expect(screen.getByText('3 tiers · Default: Tier 2')).toBeTruthy();
+    expect(screen.getByText('+1 more')).toBeTruthy();
+    const mapping = screen.getByLabelText('codex_tier_counts model tier mapping');
+    expect(mapping.textContent).toContain('Tier 1 · Tier 1 · Runtime default · Runtime default');
+  });
+
+  it('treats missing tiers as repair condition', () => {
+    renderProviderProfilesManager([
+      {
+        profile_id: 'repair_profile',
+        runtime_id: 'codex_cli',
+        provider_id: 'openai',
+        credential_source: 'secret_ref',
+        runtime_materialization_mode: 'api_key_env',
+        secret_refs: {},
+        max_parallel_runs: 1,
+        cooldown_after_429_seconds: 300,
+        rate_limit_policy: 'backoff',
+        enabled: true,
+        model_tiers: null as unknown as [],
+        default_model_tier: null as unknown as number,
+      },
+    ]);
+    expect(screen.getByText('Tier policy unavailable · needs repair')).toBeTruthy();
+  });
+});
+
+describe('provider profile tier editor', () => {
+  it('adds a tier appending Runtime default without changing default', async () => {
+    const profileWithTier: ProviderProfile = {
+      profile_id: 'tier-add',
+      runtime_id: 'codex_cli',
+      provider_id: 'openai',
+      credential_source: 'secret_ref',
+      runtime_materialization_mode: 'api_key_env',
+      secret_refs: {},
+      max_parallel_runs: 1,
+      cooldown_after_429_seconds: 300,
+      rate_limit_policy: 'backoff',
+      enabled: true,
+      model_tiers: [{ label: 'A', model: 'gpt-5.5', effort: 'medium' }],
+      default_model_tier: 1,
+    };
+    renderProviderProfilesManager([profileWithTier]);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    expect(screen.getAllByText(/1 tiers · Default: Tier 1/).length).toBeGreaterThan(0);
+    const addButtons = screen.getAllByRole('button', { name: '+ Add tier' });
+    fireEvent.click(addButtons[0]!);
+    await waitFor(() => {
+      expect(screen.getAllByText(/2 tiers · Default: Tier 1/).length).toBeGreaterThan(0);
+    });
+    // default should still be Tier 1
+    const defaultRadios = screen.getAllByLabelText(/Default tier/);
+    expect(defaultRadios[0]).toBeTruthy();
+    const useTier2 = screen.getByLabelText('Use Tier 2 as default');
+    expect((useTier2 as HTMLInputElement).checked).toBe(false);
+  });
+
+  it('duplicates without duplicating default state and prevents removing only tier', async () => {
+    const profileWithTier: ProviderProfile = {
+      profile_id: 'tier-dup',
+      runtime_id: 'codex_cli',
+      provider_id: 'openai',
+      credential_source: 'secret_ref',
+      runtime_materialization_mode: 'api_key_env',
+      secret_refs: {},
+      max_parallel_runs: 1,
+      cooldown_after_429_seconds: 300,
+      rate_limit_policy: 'backoff',
+      enabled: true,
+      model_tiers: [{ label: 'Orig', model: 'gpt-5.5', effort: 'xhigh' }],
+      default_model_tier: 1,
+    };
+    renderProviderProfilesManager([profileWithTier]);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    // Only tier remove should be disabled
+    const removeBtn = screen.getByRole('button', { name: 'Remove tier' }) as HTMLButtonElement;
+    expect(removeBtn.disabled).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Duplicate as new last tier' }));
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: 'Remove tier' }).length).toBe(2);
+    });
+    // New tier should not be default
+    const radios = screen.getAllByLabelText(/Use Tier 2 as default/);
+    expect(radios.length).toBe(1);
+  });
+
+  it('requires confirmation for middle-tier removal with renumber preview', async () => {
+    const profileWithTiers: ProviderProfile = {
+      profile_id: 'tier-middle',
+      runtime_id: 'codex_cli',
+      provider_id: 'openai',
+      credential_source: 'secret_ref',
+      runtime_materialization_mode: 'api_key_env',
+      secret_refs: {},
+      max_parallel_runs: 1,
+      cooldown_after_429_seconds: 300,
+      rate_limit_policy: 'backoff',
+      enabled: true,
+      model_tiers: [
+        { label: 'A', model: 'a', effort: 'low' },
+        { label: 'B', model: 'b', effort: 'medium' },
+        { label: 'C', model: 'c', effort: 'high' },
+      ],
+      default_model_tier: 3,
+    };
+    renderProviderProfilesManager([profileWithTiers]);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    const removeButtons = screen.getAllByRole('button', { name: 'Remove tier' });
+    fireEvent.click(removeButtons[0]!);
+    expect(await screen.findByText('Confirm tier removal')).toBeTruthy();
+    expect(screen.getByText(/Tier 2 → Tier 1/)).toBeTruthy();
+  });
 });
 
 describe('parseCommandBehavior', () => {
@@ -1015,19 +1150,24 @@ describe('ProviderProfilesManager form controls', () => {
     });
   });
 
-  it('sends default effort changes when updating an edited profile', async () => {
+  it('sends tier effort changes via canonical model_tiers when updating an edited profile', async () => {
+    const profileWithTier: ProviderProfile = {
+      ...profile,
+      model_tiers: [{ label: 'Default', model: null, effort: null, parameters: {}, annotations: {} }],
+      default_model_tier: 1,
+    };
     const fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue({
       ok: true,
-      json: async () => ({ ...profile, default_effort: 'high' }),
+      json: async () => ({ ...profileWithTier, model_tiers: [{ label: 'Default', model: null, effort: 'high' }], default_model_tier: 1 }),
     } as Response);
 
-    renderProviderProfilesManager([profile]);
+    renderProviderProfilesManager([profileWithTier]);
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
-    const defaultEffort = screen.getByLabelText(/Default effort/) as HTMLInputElement;
-    expect(defaultEffort.value).toBe('');
+    const effortSelect = screen.getAllByLabelText(/Effort level/)[0] as HTMLSelectElement;
+    expect(effortSelect.value).toBe('__runtime_default__');
 
-    fireEvent.change(defaultEffort, { target: { value: 'high' } });
+    fireEvent.change(effortSelect, { target: { value: 'high' } });
     fireEvent.click(screen.getByRole('button', { name: 'Update provider profile' }));
 
     await waitFor(() => {
@@ -1041,7 +1181,10 @@ describe('ProviderProfilesManager form controls', () => {
 
     const [, requestInit] = fetchSpy.mock.calls[0] ?? [];
     const payload = JSON.parse(String((requestInit as RequestInit).body));
-    expect(payload.default_effort).toBe('high');
+    expect(payload.model_tiers).toBeDefined();
+    expect(payload.model_tiers[0].effort).toBe('high');
+    expect(payload).not.toHaveProperty('default_effort');
+    expect(payload).not.toHaveProperty('default_model');
   });
 
   it('requires a backend-supported authentication method before creation', async () => {
