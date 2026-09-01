@@ -26,6 +26,38 @@ pytestmark = [
     pytest.mark.reliability_journey,
 ]
 
+_SERVER_IMAGE_REF = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "6" * 64
+
+
+@pytest.fixture(autouse=True)
+def _ready_opencode_image_pair(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replay plan admission with resolver evidence for the selected pair."""
+
+    import os
+
+    from moonmind.omnigent.bootstrap import store
+
+    monkeypatch.setenv("OMNIGENT_IMAGE_REF", _SERVER_IMAGE_REF)
+
+    def load_state():
+        host_ref = os.environ.get("OMNIGENT_OPENCODE_HOST_IMAGE_REF", "")
+        if not host_ref:
+            return None
+        return SimpleNamespace(
+            server_image_ref=_SERVER_IMAGE_REF,
+            opencode_host_image_ref=host_ref,
+            details={
+                "opencodeHostCompatibility": {
+                    "status": "ready",
+                    "failureCode": None,
+                    "serverImageRef": _SERVER_IMAGE_REF,
+                    "hostImageRef": host_ref,
+                }
+            },
+        )
+
+    monkeypatch.setattr(store, "load_resolved_state", load_state)
+
 
 async def test_omnigent_fanout_capability_is_platform_admitted(
     monkeypatch: pytest.MonkeyPatch,
