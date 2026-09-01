@@ -68,6 +68,7 @@ async def test_batch_github_workflows_seed_and_expansion_contract(tmp_path):
     assert sorted(expanded["capabilities"]) == ["gh", "git"]
     assert len(expanded["steps"]) == 1
     step = expanded["steps"][0]
+    assert step["skill"]["requiredCapabilities"] == ["git", "gh"]
     orchestration = step["batchOrchestration"]
     assert orchestration["source"] == {
         "kind": "github_issue_range",

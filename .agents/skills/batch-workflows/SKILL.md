@@ -10,8 +10,6 @@ metadata:
     terminalSchemaVersion: moonmind.batch-workflows-result.v1
   required-capabilities:
     - git
-    - jira
-    - gh
 ---
 
 # Batch Workflows Fan-out Skill
@@ -24,6 +22,10 @@ its fixed source model and curated destination list; this shared skill handles
 queueing, runtime inheritance, publishing, idempotency, and evidence. Every child inherits the parent runtime
 (`runtimeInheritance="caller"`) and a single shared publish policy. The parent
 records a summary artifact that links every queued child workflow.
+
+Provider integration requirements belong to the owning preset: Batch Jira
+Workflows declares `jira` and `gh`, while Batch GitHub Workflows declares `gh`.
+The shared Skill must not require both providers for every invocation.
 
 This parent batch skill does not publish repository changes itself. It records
 child workflow queueing evidence in `artifacts/batch-workflows-result.json`;

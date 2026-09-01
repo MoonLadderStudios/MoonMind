@@ -1,0 +1,24 @@
+{
+  "invariant": "provider-neutral Skill metadata contributes only shared requirements; the Batch GitHub preset contributes gh and never causes Omnigent to require Jira",
+  "normalizedRequiredCapabilities": [
+    "git",
+    "gh",
+    "omnigent",
+    "execution.fanout"
+  ],
+  "forbiddenCapabilities": [
+    "jira"
+  ],
+  "classAdmissionDecision": {
+    "requiredSatisfied": [
+      "gh",
+      "git"
+    ],
+    "preferredSatisfied": [],
+    "degraded": [],
+    "unknown": []
+  },
+  "resolvedTools": [
+    "gh"
+  ]
+}
