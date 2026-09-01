@@ -12,7 +12,7 @@ requiredCapabilities:
 - git
 - gh
 annotations:
-  sourceSkill: batch-workflows
+  sourceSkill: batch-github-workflows
   output: child-workflows
   runtimeInheritance: caller
   workflowPublish:
@@ -151,7 +151,7 @@ steps:
     rejects numeric spans wider than 1,000 before querying, writes
     artifacts/batch-workflows-targets.json, applies max_workflows to the resolved
     open Issue objects, and queues the children:
-    python3 "$MOONMIND_ACTIVE_SKILLS_DIR/batch-workflows/bin/batch_workflows.py" \
+    python3 "$MOONMIND_ACTIVE_SKILLS_DIR/batch-github-workflows/bin/batch_workflows.py" \
     --github-issue-range "{{ inputs.issue_range }}" \
     --github-repository "{{ inputs.repository }}" \
     --run-ref "{{ inputs.run_ref }}" \
@@ -180,7 +180,7 @@ steps:
     summaryArtifact: artifacts/batch-workflows-result.json
     targetListArtifact: artifacts/batch-workflows-targets.json
   skill:
-    id: batch-workflows
+    id: batch-github-workflows
     requiredCapabilities:
     - git
     - gh
