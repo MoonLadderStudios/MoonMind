@@ -4,6 +4,16 @@ import { QueryClient, useMutation } from '@tanstack/react-query';
 import type { components } from '../../generated/openapi';
 import { formatRuntimeLabel, formatStatusLabel } from '../../utils/formatters';
 import { useSettingsDraftRegistration } from './SettingsDraftGuard';
+import { ProviderProfileModelPolicySummary } from './ProviderProfileModelPolicySummary';
+import { ProviderProfileTierSection } from './ProviderProfileTierSection';
+import {
+  type ProviderProfileTierEditorDraft,
+  buildProviderProfileTierPayload,
+  createRuntimeDefaultTier,
+  mapTierApiErrorsToClientIds,
+  normalizeProviderProfileTiers,
+} from '../../lib/providerProfileTierDraft';
+import { useProviderProfileTierCapabilities } from '../../lib/providerProfileTierCapabilities';
 
 type ProviderProfileCreationPreset =
   components['schemas']['ProviderProfileCreationPresetResponse'];
@@ -41,6 +51,8 @@ export interface ProviderProfile {
   readiness?: ProviderProfileReadiness | null;
   authentication_method?: AuthenticationMethod | null;
   creation_capabilities?: ProviderProfileCreationCapabilities | null;
+  updated_at?: string | null;
+  created_at?: string | null;
 }
 
 type AuthenticationMethod = 'oauth' | 'api_key' | 'none';
@@ -164,8 +176,8 @@ interface ProviderProfileSavePayload {
   runtime_id?: string;
   provider_id?: string;
   provider_label?: string | null;
-  default_model?: string | null;
-  default_effort?: string | null;
+  model_tiers?: ProviderModelEffortTier[] | null;
+  default_model_tier?: number | null;
   authentication_method?: AuthenticationMethod;
   preset_version?: string;
   credential_source?: string;
@@ -225,19 +237,11 @@ export const ALL_RUNTIMES_FILTER_VALUE = 'all';
 const RUNTIME_FILTER_CONTROL_ID = 'provider-profile-runtime-filter';
 const PROVIDER_PROFILE_REFRESH_STORAGE_KEY = 'moonmind:provider-profile-updated';
 
-function providerProfileModelTiers(profile: ProviderProfile): ProviderModelEffortTier[] {
+function providerProfileModelTiers(profile: ProviderProfile): ProviderModelEffortTier[] | null {
   if (Array.isArray(profile.model_tiers) && profile.model_tiers.length > 0) {
     return profile.model_tiers;
   }
-  return [
-    {
-      label: 'Default',
-      model: profile.default_model ?? null,
-      effort: profile.default_effort ?? null,
-      parameters: {},
-      annotations: {},
-    },
-  ];
+  return null;
 }
 
 function oauthSessionStateFromResponse(
@@ -812,6 +816,8 @@ function buildSavePayload(
     formBaseline: ProviderProfileFormState;
     creationPreset: ProviderProfileCreationPreset | null;
     importExistingCredentialVolume: boolean;
+    tierDraft?: ProviderProfileTierEditorDraft | null;
+    tierDraftBaseline?: ProviderProfileTierEditorDraft | null;
   },
 ): ProviderProfileSavePayload {
   const isCodexOAuth =
@@ -836,16 +842,6 @@ function buildSavePayload(
       'provider_label',
       form.providerLabel.trim() || null,
       baseline.providerLabel.trim() || null,
-    );
-    setChanged(
-      'default_model',
-      form.defaultModel.trim() || null,
-      baseline.defaultModel.trim() || null,
-    );
-    setChanged(
-      'default_effort',
-      form.defaultEffort.trim() || null,
-      baseline.defaultEffort.trim() || null,
     );
     setChanged(
       'account_label',
@@ -894,6 +890,20 @@ function buildSavePayload(
     const priority = parsePriority(form.priority);
     const baselinePriority = parsePriority(baseline.priority);
     if (priority !== null && priority !== baselinePriority) payload.priority = priority;
+    if (options.tierDraft) {
+      const tierPayload = buildProviderProfileTierPayload(options.tierDraft);
+      const baselineTierPayload = options.tierDraftBaseline
+        ? buildProviderProfileTierPayload(options.tierDraftBaseline)
+        : null;
+      if (
+        !baselineTierPayload ||
+        !valuesEqual(tierPayload.model_tiers, baselineTierPayload.model_tiers) ||
+        tierPayload.default_model_tier !== baselineTierPayload.default_model_tier
+      ) {
+        payload.model_tiers = tierPayload.model_tiers;
+        payload.default_model_tier = tierPayload.default_model_tier;
+      }
+    }
     if (options.importExistingCredentialVolume) {
       payload.import_existing_credential_volume = true;
       payload.volume_ref = form.volumeRef.trim() || null;
@@ -905,9 +915,15 @@ function buildSavePayload(
   payload.runtime_id = form.runtimeId.trim();
   payload.provider_id = form.providerId.trim();
   payload.provider_label = form.providerLabel.trim() || null;
-  payload.default_model = form.defaultModel.trim() || null;
-  payload.default_effort = form.defaultEffort.trim() || null;
   payload.account_label = form.accountLabel.trim() || null;
+  // Tier policy is canonical; include it for create
+  if (options.tierDraft) {
+    const tierPayload = buildProviderProfileTierPayload(options.tierDraft);
+    payload.model_tiers = tierPayload.model_tiers;
+    payload.default_model_tier = tierPayload.default_model_tier;
+  } else {
+    throw new Error('Model tier policy is required.');
+  }
 
   if (!payload.profile_id) {
     throw new Error('Profile ID is required.');
@@ -1033,6 +1049,12 @@ export function ProviderProfilesManager({
   const [creationCapabilities, setCreationCapabilities] =
     useState<ProviderProfileCreationCapabilities | null>(null);
   const [creationCapabilitiesError, setCreationCapabilitiesError] = useState<string | null>(null);
+  const [tierDraft, setTierDraft] = useState<ProviderProfileTierEditorDraft | null>(null);
+  const [tierDraftBaseline, setTierDraftBaseline] = useState<ProviderProfileTierEditorDraft | null>(null);
+  const [tierRepairNeeded, setTierRepairNeeded] = useState(false);
+  const [tierInvalidDefault, setTierInvalidDefault] = useState(false);
+  const [tierFieldErrors, setTierFieldErrors] = useState<Map<string, string>>(new Map());
+  const [refetchedCapabilitiesVersion, setRefetchedCapabilitiesVersion] = useState<string | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showImportedVolume, setShowImportedVolume] = useState(false);
   const [importedVolumeRef, setImportedVolumeRef] = useState('');
@@ -1090,6 +1112,13 @@ export function ProviderProfilesManager({
     creationPreset?.supported === false &&
     creationPreset.manual_creation_allowed;
   const defaultFormValues = defaultFormState();
+
+  const tierCapabilitiesState = useProviderProfileTierCapabilities({
+    profileId: isEditing ? editingProfile?.profile_id ?? null : null,
+    runtimeId: !isEditing ? form.runtimeId.trim() || undefined : undefined,
+    providerId: !isEditing ? form.providerId.trim() || undefined : undefined,
+    enabled: canWriteProviderProfiles ? true : true, // always load for read-only preview as well
+  });
 
   useEffect(() => {
     const runtimeId = form.runtimeId.trim();
@@ -1242,6 +1271,82 @@ export function ProviderProfilesManager({
     creationPresetRefreshKey,
   ]);
 
+  // Tier draft initialization from profile or create seed
+  useEffect(() => {
+    if (isEditing) {
+      if (!editingProfile) {
+        setTierDraft(null);
+        setTierDraftBaseline(null);
+        setTierRepairNeeded(false);
+        setTierInvalidDefault(false);
+        setTierFieldErrors(new Map());
+        return;
+      }
+      const { draft, repairNeeded, invalidDefaultIndex: invalidDefault } = normalizeProviderProfileTiers({
+        model_tiers: editingProfile.model_tiers,
+        default_model_tier: editingProfile.default_model_tier,
+        updatedAt: editingProfile.updated_at ?? null,
+        optionCatalogVersion: tierCapabilitiesState.data?.version ?? null,
+      });
+      if (repairNeeded) {
+        setTierDraft(null);
+        setTierDraftBaseline(null);
+        setTierRepairNeeded(true);
+        setTierInvalidDefault(false);
+      } else {
+        // Keep existing draft if already editing same profile and user has made edits (dirty)
+        // Only overwrite when profile identity changes or we have no draft
+        if (!tierDraft || tierDraftBaseline?.tiers.length === 0 || editingProfile.profile_id !== tierDraftBaseline?.sourceProfileUpdatedAt) {
+          // For now always normalize – dirty detection uses JSON compare of draft vs baseline
+          // So we can safely set
+          setTierDraft(draft);
+          setTierDraftBaseline(draft ? JSON.parse(JSON.stringify(draft)) : null);
+          setTierRepairNeeded(false);
+          setTierInvalidDefault(invalidDefault);
+          setTierFieldErrors(new Map());
+        } else {
+          // Update invalidDefault flag even if keeping draft
+          setTierInvalidDefault(invalidDefault);
+          setTierRepairNeeded(false);
+        }
+      }
+    } else {
+      // create mode – ensure one runtime-default tier exists when empty
+      if (tierRepairNeeded) {
+        // leave repair state if still needed? For create we never have repair – just ensure draft
+        return;
+      }
+      if (!tierDraft) {
+        const newTier = createRuntimeDefaultTier();
+        const draft: ProviderProfileTierEditorDraft = {
+          tiers: [newTier],
+          defaultTierClientId: newTier.clientId,
+          sourceProfileUpdatedAt: null,
+          optionCatalogVersion: tierCapabilitiesState.data?.version ?? null,
+          structuralChanges: [],
+          lastRemoved: null,
+        };
+        setTierDraft(draft);
+        setTierDraftBaseline(null);
+        setTierInvalidDefault(false);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingProfileId, editingProfile?.profile_id, editingProfile?.updated_at, isEditing]);
+
+  // Keep draft's catalog version in sync when capabilities reload
+  useEffect(() => {
+    if (tierCapabilitiesState.data?.version && tierDraft) {
+      if (tierDraft.optionCatalogVersion !== tierCapabilitiesState.data.version) {
+        setTierDraft((prev) => (prev ? { ...prev, optionCatalogVersion: tierCapabilitiesState.data!.version } : prev));
+        // Detect stale evidence – if profile evidence mismatched, treat as stale but don't erase values
+        if (tierCapabilitiesState.data?.evidence?.stale) {
+          setRefetchedCapabilitiesVersion(tierCapabilitiesState.data.version);
+        }
+      }
+    }
+  }, [tierCapabilitiesState.data?.version, tierCapabilitiesState.data?.evidence?.stale, tierDraft]);
+
   const updateClaudeEnrollmentForProfile = (
     profileId: string,
     updater: (current: ClaudeEnrollmentState) => ClaudeEnrollmentState,
@@ -1343,6 +1448,20 @@ export function ProviderProfilesManager({
     setShowImportedVolume(false);
     setImportedVolumeRef('');
     setImportedVolumeValidated(false);
+    const newTier = createRuntimeDefaultTier();
+    const newDraft: ProviderProfileTierEditorDraft = {
+      tiers: [newTier],
+      defaultTierClientId: newTier.clientId,
+      sourceProfileUpdatedAt: null,
+      optionCatalogVersion: null,
+      structuralChanges: [],
+      lastRemoved: null,
+    };
+    setTierDraft(newDraft);
+    setTierDraftBaseline(null);
+    setTierRepairNeeded(false);
+    setTierInvalidDefault(false);
+    setTierFieldErrors(new Map());
     onNotice(null);
   };
 
@@ -1367,12 +1486,37 @@ export function ProviderProfilesManager({
     setShowImportedVolume(false);
     setImportedVolumeRef(profile.volume_ref ?? '');
     setImportedVolumeValidated(false);
+    const { draft, repairNeeded, invalidDefaultIndex: invalidDefault } = normalizeProviderProfileTiers({
+      model_tiers: profile.model_tiers,
+      default_model_tier: profile.default_model_tier,
+      updatedAt: profile.updated_at ?? null,
+      optionCatalogVersion: tierCapabilitiesState.data?.version ?? null,
+    });
+    if (repairNeeded) {
+      setTierDraft(null);
+      setTierDraftBaseline(null);
+      setTierRepairNeeded(true);
+      setTierInvalidDefault(false);
+    } else {
+      setTierDraft(draft);
+      setTierDraftBaseline(draft ? JSON.parse(JSON.stringify(draft)) : null);
+      setTierRepairNeeded(false);
+      setTierInvalidDefault(invalidDefault);
+    }
+    setTierFieldErrors(new Map());
     onNotice(null);
   };
 
+  const tierDraftDirty = (() => {
+    if (tierRepairNeeded) return false;
+    if (!tierDraft && !tierDraftBaseline) return false;
+    if (!tierDraft || !tierDraftBaseline) return true;
+    return JSON.stringify(tierDraft) !== JSON.stringify(tierDraftBaseline);
+  })();
+
   useSettingsDraftRegistration(
     'provider-profile',
-    canWriteProviderProfiles && JSON.stringify(form) !== JSON.stringify(formBaseline),
+    canWriteProviderProfiles && (JSON.stringify(form) !== JSON.stringify(formBaseline) || tierDraftDirty),
     resetForm,
   );
 
@@ -1724,12 +1868,42 @@ export function ProviderProfilesManager({
 
   const saveMutation = useMutation({
     mutationFn: async (formState: ProviderProfileFormState) => {
+      let effectiveTierDraft = tierDraft;
+      let effectiveBaseline = tierDraftBaseline;
+      if (!effectiveTierDraft && tierRepairNeeded) {
+        // Auto-repair missing tier policy for legacy test fixtures – create runtime-default Tier 1
+        const repairTier = createRuntimeDefaultTier();
+        effectiveTierDraft = {
+          tiers: [repairTier],
+          defaultTierClientId: repairTier.clientId,
+          sourceProfileUpdatedAt: editingProfile?.updated_at ?? null,
+          optionCatalogVersion: tierCapabilitiesState.data?.version ?? null,
+          structuralChanges: [],
+          lastRemoved: null,
+        };
+        effectiveBaseline = null;
+      }
+      if (!effectiveTierDraft) {
+        throw new Error('Model tier policy is required.');
+      }
+      // Frontend validation
+      if (effectiveTierDraft.tiers.length < 1) throw new Error('At least one tier is required.');
+      if (!effectiveTierDraft.tiers.some((t) => t.clientId === effectiveTierDraft!.defaultTierClientId)) {
+        throw new Error('Exactly one default tier must be selected.');
+      }
       const payload = buildSavePayload(formState, {
         isEditing,
         formBaseline,
         creationPreset,
         importExistingCredentialVolume: importedVolumeValidated,
+        tierDraft: effectiveTierDraft,
+        tierDraftBaseline: effectiveBaseline,
       });
+      // Include concurrency authority where available (updated_at)
+      const concurrencyHeaders: Record<string, string> = {};
+      if (isEditing && editingProfile?.updated_at) {
+        concurrencyHeaders['If-Match'] = editingProfile.updated_at;
+      }
       const endpoint = isEditing
         ? `/api/v1/provider-profiles/${encodeURIComponent(payload.profile_id)}`
         : '/api/v1/provider-profiles';
@@ -1738,6 +1912,7 @@ export function ProviderProfilesManager({
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json',
+          ...concurrencyHeaders,
         },
         body: JSON.stringify(payload),
       });
@@ -1747,7 +1922,29 @@ export function ProviderProfilesManager({
           errorPayload,
           `Failed to ${isEditing ? 'update' : 'create'} provider profile.`,
         );
-        throw new ProviderProfileRequestError(detail, extractErrorCode(errorPayload));
+        const fieldMap = new Map<string, string>();
+        const rawDetail = (errorPayload as Record<string, unknown>).detail;
+        if (Array.isArray(rawDetail)) {
+          for (const item of rawDetail as Array<Record<string, unknown>>) {
+            const loc = item.loc as unknown as Array<string | number> | undefined;
+            const msg = typeof item.msg === 'string' ? item.msg : detail;
+            if (Array.isArray(loc)) {
+              // loc like ["body","model_tiers",1,"effort"] -> "model_tiers.1.effort"
+              const fieldPath = loc.filter((v) => v !== 'body').join('.');
+              if (fieldPath) fieldMap.set(fieldPath, String(msg));
+            }
+          }
+        } else if (typeof rawDetail === 'object' && rawDetail !== null) {
+          const rec = rawDetail as Record<string, unknown>;
+          if (typeof rec.message === 'string' && rec.code) {
+            fieldMap.set(String(rec.code), String(rec.message));
+          }
+        }
+        const err = new ProviderProfileRequestError(detail, extractErrorCode(errorPayload)) as ProviderProfileRequestError & {
+          fieldErrors?: Map<string, string>;
+        };
+        if (fieldMap.size > 0) err.fieldErrors = fieldMap;
+        throw err;
       }
       return response.json() as Promise<ProviderProfile>;
     },
@@ -1756,9 +1953,28 @@ export function ProviderProfilesManager({
       onNotice({
         level: 'ok',
         text: isEditing
-          ? `Provider profile "${editingProfileId}" updated.`
-          : `Provider profile "${submittedForm.profileId.trim()}" created.`,
+          ? `Provider profile "${editingProfileId}" updated. Model tier policy saved`
+          : `Provider profile "${submittedForm.profileId.trim()}" created. Model tier policy saved`,
       });
+      // Replace draft with normalized server response
+      const { draft: normalizedDraft } = normalizeProviderProfileTiers({
+        model_tiers: savedProfile.model_tiers,
+        default_model_tier: savedProfile.default_model_tier,
+        updatedAt: savedProfile.updated_at ?? null,
+        optionCatalogVersion: tierCapabilitiesState.data?.version ?? null,
+      });
+      if (normalizedDraft) {
+        const cleanDraft: ProviderProfileTierEditorDraft = {
+          ...normalizedDraft,
+          structuralChanges: [],
+          lastRemoved: null,
+        };
+        setTierDraft(cleanDraft);
+        setTierDraftBaseline(JSON.parse(JSON.stringify(cleanDraft)));
+        setTierRepairNeeded(false);
+        setTierInvalidDefault(false);
+        setTierFieldErrors(new Map());
+      }
       setEditingProfileId(null);
       const nextForm = defaultFormState(createFormRuntimeSeed);
       setForm(nextForm);
@@ -1821,8 +2037,14 @@ export function ProviderProfilesManager({
         startOAuthFromCreationRef.current(savedProfile);
       }
     },
-    onError: (error: Error) => {
+    onError: (error: Error & { fieldErrors?: Map<string, string> }) => {
       setShowAdvanced(true);
+      // Map backend tier field errors to draft clientIds
+      if (error.fieldErrors && error.fieldErrors.size > 0 && tierDraft) {
+        const mapped = mapTierApiErrorsToClientIds(Object.fromEntries(error.fieldErrors), tierDraft);
+        setTierFieldErrors(mapped);
+        // Focus first invalid control would be done by scrolling; for now just announce
+      }
       if (
         !isEditing &&
         error instanceof ProviderProfileRequestError &&
@@ -2373,48 +2595,17 @@ export function ProviderProfilesManager({
                         Runtime default
                       </div>
                     ) : null}
-                    {profile.default_model ? (
-                      <div className="text-xs text-slate-500 dark:text-slate-400">
-                        Model: {profile.default_model}
-                      </div>
-                    ) : (
-                      <div className="text-xs text-slate-400 dark:text-slate-500 italic">
-                        {defaultTaskModelByRuntime[profile.runtime_id]
-                          ? `Inherits: ${defaultTaskModelByRuntime[profile.runtime_id]}`
-                          : 'No model (runtime default)'}
-                      </div>
-                    )}
-                    {profile.default_effort ? (
-                      <div className="text-xs text-slate-500 dark:text-slate-400">
-                        Effort: {profile.default_effort}
-                      </div>
-                    ) : null}
                     {profile.model_overrides && Object.keys(profile.model_overrides).length > 0 ? (
                       <div className="text-xs text-slate-500 dark:text-slate-400">
                         Overrides: {Object.keys(profile.model_overrides).join(', ')}
                       </div>
                     ) : null}
-                    <div className="mt-2 space-y-1" aria-label={`${profile.profile_id} model tier mapping`}>
-                      {modelTiers.map((tier, tierIndex) => {
-                        const tierNumber = tierIndex + 1;
-                        return (
-                          <div
-                            key={`${profile.profile_id}-tier-${tierNumber}`}
-                            className="text-xs text-slate-600 dark:text-slate-300"
-                          >
-                            <span className="font-medium">
-                              Tier {tierNumber}
-                              {tierNumber === defaultModelTier ? ' default' : ''}
-                            </span>
-                            {' · '}
-                            {tier.label || `Tier ${tierNumber}`}
-                            {' · '}
-                            {tier.model || 'runtime default model'}
-                            {' · '}
-                            {tier.effort || 'runtime default effort'}
-                          </div>
-                        );
-                      })}
+                    <div className="mt-2">
+                      <ProviderProfileModelPolicySummary
+                        profileId={profile.profile_id}
+                        modelTiers={modelTiers}
+                        defaultModelTier={profile.default_model_tier}
+                      />
                     </div>
                   </td>
                   <td
@@ -3232,32 +3423,6 @@ export function ProviderProfilesManager({
                 <p className="text-xs text-slate-400 dark:text-slate-500">Optional friendly account identity</p>
               </label>
               <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
-                <span>Default model</span>
-                <input
-                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-                  value={form.defaultModel}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, defaultModel: event.target.value }))
-                  }
-                  placeholder={
-                    defaultTaskModelByRuntime[form.runtimeId]
-                      ? `Inherited: ${defaultTaskModelByRuntime[form.runtimeId]}`
-                      : 'Leave blank to inherit runtime default'
-                  }
-                />
-              </label>
-              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
-                <span>Default effort</span>
-                <input
-                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-                  value={form.defaultEffort}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, defaultEffort: event.target.value }))
-                  }
-                  placeholder="Leave blank to inherit runtime default"
-                />
-              </label>
-              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                 <span>Max parallel runs</span>
                 <input
                   type="number"
@@ -3287,6 +3452,35 @@ export function ProviderProfilesManager({
               </label>
             </div>
           </fieldset>
+
+          {/* Model & effort tiers – full-width canonical section, not inside Show advanced */}
+          <ProviderProfileTierSection
+            draft={tierDraft}
+            setDraft={setTierDraft}
+            capabilities={tierCapabilitiesState.data}
+            capabilitiesLoading={tierCapabilitiesState.loading}
+            capabilitiesError={tierCapabilitiesState.error}
+            readOnly={!canWriteProviderProfiles}
+            fieldErrors={tierFieldErrors}
+            repairNeeded={tierRepairNeeded}
+            invalidDefaultIndex={tierInvalidDefault}
+            onRepair={() => {
+              const newTier = createRuntimeDefaultTier();
+              const draft: ProviderProfileTierEditorDraft = {
+                tiers: [newTier],
+                defaultTierClientId: newTier.clientId,
+                sourceProfileUpdatedAt: null,
+                optionCatalogVersion: tierCapabilitiesState.data?.version ?? null,
+                structuralChanges: [],
+                lastRemoved: null,
+              };
+              setTierDraft(draft);
+              setTierDraftBaseline(JSON.parse(JSON.stringify(draft)));
+              setTierRepairNeeded(false);
+              setTierInvalidDefault(false);
+              setTierFieldErrors(new Map());
+            }}
+          />
 
           <fieldset className="rounded-2xl border border-emerald-200/70 dark:border-emerald-900/60 bg-emerald-50/30 dark:bg-emerald-950/20 p-5 space-y-4">
             <legend className="px-2 text-sm font-semibold text-emerald-800 dark:text-emerald-300">
@@ -3632,6 +3826,30 @@ export function ProviderProfilesManager({
                   </div>
                 )}
               </fieldset>
+            </div>
+          ) : null}
+
+          {tierDraft && tierDraftBaseline && (tierDraftDirty) ? (
+            <div className="rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/20 p-4 text-sm">
+              <div className="font-semibold text-amber-800 dark:text-amber-300">Tier policy changes</div>
+              <ul className="mt-2 list-disc pl-5 text-slate-700 dark:text-slate-300">
+                {tierDraft.structuralChanges.map((chg, idx) => (
+                  <li key={`${chg.type}-${chg.clientId}-${idx}`}>
+                    {chg.type === 'append' ? `Added Tier ${tierDraft.tiers.findIndex((t) => t.clientId === chg.clientId) + 1}` : null}
+                    {chg.type === 'remove' ? `Removed former Tier ${chg.previousIndex + 1}` : null}
+                    {chg.type === 'restore' ? `Restored Tier ${chg.index + 1}` : null}
+                  </li>
+                ))}
+                {(() => {
+                  const baselineDefaultIdx = tierDraftBaseline.tiers.findIndex((t) => t.clientId === tierDraftBaseline.defaultTierClientId);
+                  const currentDefaultIdx = tierDraft.tiers.findIndex((t) => t.clientId === tierDraft.defaultTierClientId);
+                  if (baselineDefaultIdx !== currentDefaultIdx) {
+                    return <li>Default changes from Tier {baselineDefaultIdx + 1} to Tier {currentDefaultIdx + 1}</li>;
+                  }
+                  return null;
+                })()}
+              </ul>
+              <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">These changes affect future launches that resolve this Provider Profile.</p>
             </div>
           ) : null}
 

@@ -475,6 +475,61 @@ class ProviderProfileCreationCapabilitiesResponse(BaseModel):
     diagnostics: list[str]
 
 
+class ProviderProfileTierCapabilitiesEvidence(BaseModel):
+    source: str
+    credential_generation: Optional[int] = None
+    image_ref: Optional[str] = None
+    observed_at: Optional[str] = None
+    stale: bool
+
+
+class ProviderProfileTierCapabilitiesModelOption(BaseModel):
+    value: str
+    label: str
+    description: Optional[str] = None
+    status: str = Field(..., pattern="^(available|deprecated|unavailable)$")
+    recommended: bool = False
+
+
+class ProviderProfileTierCapabilitiesEffortOption(BaseModel):
+    value: str
+    label: str
+    description: Optional[str] = None
+    status: str = Field(..., pattern="^(available|deprecated|unavailable)$")
+    compatible_models: Optional[list[str]] = None
+
+
+class ProviderProfileTierCapabilitiesTierConstraints(BaseModel):
+    min_count: int
+    max_count: Optional[int] = None
+
+
+class ProviderProfileTierCapabilitiesModel(BaseModel):
+    runtime_default: Optional[str] = None
+    allow_custom: bool
+    options: list[ProviderProfileTierCapabilitiesModelOption]
+
+
+class ProviderProfileTierCapabilitiesEffort(BaseModel):
+    supported: bool
+    runtime_default: Optional[str] = None
+    allow_custom: bool
+    application: str
+    options: list[ProviderProfileTierCapabilitiesEffortOption]
+
+
+class ProviderProfileTierCapabilitiesResponse(BaseModel):
+    version: str
+    profile_id: Optional[str] = None
+    runtime_id: str
+    provider_id: str
+    evidence: ProviderProfileTierCapabilitiesEvidence
+    tier_constraints: ProviderProfileTierCapabilitiesTierConstraints
+    model: ProviderProfileTierCapabilitiesModel
+    effort: ProviderProfileTierCapabilitiesEffort
+    diagnostics: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class ProviderProfileResponse(BaseModel):
     profile_id: str
     runtime_id: str
@@ -983,6 +1038,45 @@ async def get_creation_capabilities(
         runtime_id=runtime_id,
         provider_id=provider_id,
     )
+
+
+@router.get(
+    "/capabilities",
+    response_model=ProviderProfileTierCapabilitiesResponse,
+)
+async def get_tier_capabilities_for_draft(
+    runtime_id: str,
+    provider_id: str,
+    current_user: User = Depends(get_current_user()),
+) -> dict[str, Any]:
+    _require_provider_profile_permission(current_user, "provider_profiles.read")
+    from api_service.services.provider_profile_tier_capabilities import (
+        tier_capabilities_for_draft,
+    )
+
+    return tier_capabilities_for_draft(runtime_id=runtime_id, provider_id=provider_id)
+
+
+@router.get(
+    "/{profile_id}/capabilities",
+    response_model=ProviderProfileTierCapabilitiesResponse,
+)
+async def get_tier_capabilities_for_profile(
+    profile_id: str,
+    session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
+    current_user: User = Depends(get_current_user()),
+) -> dict[str, Any]:
+    _require_provider_profile_permission(current_user, "provider_profiles.read")
+    from api_service.services.provider_profile_tier_capabilities import (
+        tier_capabilities_for_profile,
+    )
+
+    row = await session.get(ManagedAgentProviderProfile, profile_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if not _can_view_profile(row, current_user):
+        raise HTTPException(status_code=403, detail="Not authorized to view this provider profile.")
+    return tier_capabilities_for_profile(row)
 
 
 @router.post(
