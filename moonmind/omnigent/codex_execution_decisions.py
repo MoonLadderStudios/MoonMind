@@ -24,6 +24,10 @@ from moonmind.omnigent.checkpoints import (
     CandidateWorkspaceAuthority,
     OmnigentRestoreMaterial,
 )
+from moonmind.omnigent.harness_platform.failures import (
+    HarnessPlatformFailure,
+    remediation_for,
+)
 from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
@@ -68,6 +72,10 @@ def classify_launch_failure_evidence(exc: Exception) -> tuple[str, str, str]:
         return code, "configuration_error", "repair_host_image"
     if "network" in lowered or "endpoint" in lowered:
         return code, "integration_error", "repair_server_endpoint"
+    if code in HarnessPlatformFailure.__members__:
+        # A platform-typed code that matched no launch keyword above still
+        # declares its own remediation; do not downgrade it to a transient retry.
+        return code, "integration_error", remediation_for(code)
     return code, "integration_error", "retry_transient_upstream"
 
 

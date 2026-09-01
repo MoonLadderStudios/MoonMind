@@ -616,6 +616,18 @@ The scan covers text-bearing message fields, supported slash-command arguments, 
 
 When high-security mode is enabled, an unknown or unparsable native event schema, unavailable scanner, or required textual payload that cannot be inspected fails closed. The bridge never forwards first and diagnoses later.
 
+### 9.5 Marked-turn terminal authority
+
+A native runner acknowledges the message injection itself: `session.status running`, `response.in_progress`, and `response.completed` can all arrive within a second of `Turn started` while the harness has not begun the turn. A terminal SSE frame is therefore only a completion candidate. The ordered session snapshot owns the terminal decision:
+
+1. **Boundary.** The marked user item (or, when the bounded snapshot evicted it, the item-id frontier captured before dispatch) fixes where the current turn begins.
+2. **Progress.** Provider work is a `function_call`, `function_call_output`, or assistant `message` ordered after the boundary. Resource events and the marked message itself are not progress.
+3. **Quiescence.** A structurally complete turn (no unmatched tool call) must stay unchanged in an inactive snapshot for 60s after a final assistant text, or 300s when the turn ended on a tool result.
+4. **Turn-start budget.** One watchdog per execution attempt is anchored at the instant the provider accepts the marked message (or at reattach, when a prior attempt posted it) and is evaluated wherever the snapshot is observed: the reattach snapshot, provider heartbeats, idle-stream ticks while the SSE stream is open but silent, the stream-closed snapshot, and the terminal poll. It depends on neither a terminal SSE frame nor any SSE frame at all. While the boundary is visible, every observation has projected an inactive turn (no `running` status and no active response id), and no item follows the boundary, the wait is bounded at 300s; only an observation initiated after the deadline can fire it, and an active projection or ordered progress observed on any of those paths disarms it for the rest of the attempt. Exceeding it fails with `OMNIGENT_CURRENT_TURN_NOT_STARTED` (`integration_error`, remediation `retry_step_execution`): the provider accepted the turn and dropped it, and no work exists to preserve. The execution boundary finalizes this failure itself: the decisive inactive snapshot is captured into the evidence bundle, the durable bridge row is marked terminal `failed`, and the typed result is returned rather than raised, so the generic-host realizer, the profile-bound coordinator, and the unprofiled path all release host, credential, and provider authority through their normal cleanup instead of deferring it for live work that does not exist. The failed attempt's runtime binding is cleaned and its canonical turn command settled, both immutably, so the retry is a new step execution attempt with a fresh idempotency key, never a same-key redispatch.
+5. **No-progress budget.** A turn that showed activity or progress but never settled fails after 1800s with `OMNIGENT_CURRENT_TURN_TERMINAL_AMBIGUOUS`; cleanup is deferred because provider work may still be running.
+
+Heartbeats expose `currentTurnProgress`, `turnEverActive`, `turnStartWaitSeconds`, `turnQuietSeconds`, and their budgets on every observation path (including heartbeat and idle-stream reconciliation, reported as `markedTurnObservationSource`) so an operator can tell a slow turn from a dropped one while the Activity is alive.
+
 ---
 
 ## 10. Stream and event normalization
@@ -789,6 +801,8 @@ runtime.omnigent.control_audit.jsonl
 ```
 
 Optional resource artifacts include changed-file, workspace-file, session-file, diff, patch-unavailable, and child-session indexes.
+
+Generic-host runs additionally publish `generic-host-cleanup.json` (`evidence.cleanup`): the fenced cleanup results for the provider session, host container, volumes, and credentials. Before the ephemeral host container is removed, cleanup captures a bounded, redacted tail of its stdout/stderr (last 2000 lines, of which the final 64 KiB is retained, so the newest output is always kept) and publishes it as `generic-host-logs.txt` (`evidence.host_logs`), linked from the cleanup evidence as `results.host.hostLogsRef`. The same tail is captured when the host runtime removes a host that failed registration or attestation; that evidence travels on the failure to the realizer's single publication point so it is published with the cleanup evidence rather than lost with the container. The runner and harness inside that container are the only source for why a provider dropped or rejected a turn; capture failures are recorded as `hostLogsCaptureError` and never block or fail cleanup. Janitor recovery of a stale binding has no admitted request and publishes no evidence artifacts.
 
 ---
 
@@ -975,6 +989,8 @@ No configuration may turn a direct upstream browser URL into an authority bypass
 | First-message digest mismatch | `user_error` | Conflicting replay. |
 | Ambiguous `posting` reconciliation | `integration_error` | Fail closed instead of duplicate post. |
 | Stream disconnect while session active | `integration_error` | Reauthorize and reconcile. |
+| Accepted turn never started (inactive, no active response, no item after marker, 300s) | `integration_error` / `OMNIGENT_CURRENT_TURN_NOT_STARTED` | No provider work exists; `retry_step_execution` as a new attempt. Finalized at the execution boundary (decisive snapshot captured, bridge row terminal) and returned as a typed result on every execution shape. See §9.5. |
+| Turn active or progressed but never settled (1800s) | `integration_error` / `OMNIGENT_CURRENT_TURN_TERMINAL_AMBIGUOUS` | Defer cleanup; provider work may be live. |
 | Runtime/harness failure | `execution_error` | Preserve provider evidence. |
 | Session/host timeout | `system_error` | Keep `timed_out` distinct. |
 | Optional resource harvest failure | primary result plus diagnostics | Unless policy requires full evidence. |
