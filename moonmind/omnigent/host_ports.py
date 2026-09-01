@@ -183,7 +183,8 @@ class OmnigentRuntimeEnvironmentPort(Protocol):
         plan: OmnigentExecutionPlanEnvelope,
         host_lease_ref: str,
         launch_policy: LaunchPolicy,
-    ) -> Mapping[str, str]: ...
+    ) -> Mapping[str, str]:
+        raise NotImplementedError
 
 
 @runtime_checkable
