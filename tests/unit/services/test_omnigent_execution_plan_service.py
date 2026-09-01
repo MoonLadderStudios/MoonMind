@@ -459,8 +459,25 @@ async def test_product_boundary_uses_exact_arm64_architecture_for_support_identi
     from moonmind.workflows.temporal.activities.omnigent_session_activities import (
         _validate_plan_support_authority,
     )
+    from moonmind.omnigent import deployment_identity
 
+    monkeypatch.setattr(
+        deployment_identity,
+        "resolve_deployed_server_build_digest",
+        lambda: result.envelope.payload.supportIdentity.omnigentServerBuildRef,
+    )
     _validate_plan_support_authority(result.envelope)
+
+    monkeypatch.setattr(
+        deployment_identity,
+        "resolve_deployed_server_build_digest",
+        lambda: "sha256:" + "9" * 64,
+    )
+    with pytest.raises(
+        deployment_identity.OmnigentDeploymentIdentityConflict,
+        match="no longer deployed",
+    ):
+        _validate_plan_support_authority(result.envelope)
 
 
 @pytest.mark.asyncio

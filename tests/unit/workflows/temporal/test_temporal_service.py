@@ -51,6 +51,7 @@ from moonmind.config.settings import settings
 from moonmind.workflows.temporal.service import (
     TemporalExecutionNotFoundError,
     TemporalExecutionRecoveryCheckpointError,
+    TemporalExecutionRerunPlanError,
     TemporalExecutionRerunSkillSnapshotError,
     TemporalExecutionService,
     TemporalExecutionValidationError,
@@ -353,6 +354,7 @@ def _write_mm730_cutover_files(tmp_path):
         "Compatibility redirects and task-shaped aliases are not kept.\n",
         encoding="utf-8",
     )
+
     cutover_record = tmp_path / "MM-730-cutover.json"
     cutover_record.write_text(
         json.dumps(
@@ -396,6 +398,47 @@ def _write_mm730_cutover_files(tmp_path):
         encoding="utf-8",
     )
     return release_notes, cutover_record
+
+
+@pytest.mark.asyncio
+async def test_exact_rerun_rejects_plan_for_replaced_server_before_creation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = TemporalExecutionService(SimpleNamespace())
+    stale_plan = SimpleNamespace(
+        payload=SimpleNamespace(
+            executionRealizerRef="generic-omnigent-host@1",
+            supportIdentity=SimpleNamespace(
+                omnigentServerBuildRef="sha256:" + "a" * 64
+            ),
+        )
+    )
+    load = AsyncMock(return_value=stale_plan)
+    monkeypatch.setattr(
+        "moonmind.omnigent.harness_platform.stores.SessionExecutionPlanStore",
+        lambda _session: SimpleNamespace(load=load),
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.deployment_identity."
+        "resolve_deployed_server_build_digest",
+        lambda: "sha256:" + "b" * 64,
+    )
+
+    with pytest.raises(TemporalExecutionRerunPlanError) as exc_info:
+        await service.validate_exact_rerun_execution_plan(
+            parameters=_historical_omnigent_rerun_parameters()
+        )
+
+    assert exc_info.value.detail == {
+        "code": "exact_rerun_execution_plan_stale",
+        "message": (
+            "Exact rerun preserves the original Omnigent execution plan, but "
+            "that plan targets a server build that is no longer deployed. Use "
+            "Edit for rerun to compile fresh runtime authority."
+        ),
+        "nextAction": "edit_for_rerun",
+    }
+    load.assert_awaited_once()
 
 
 def test_visibility_helpers_ignore_empty_parameters() -> None:
@@ -4161,6 +4204,7 @@ async def test_request_rerun_rejects_incomplete_skill_snapshot_at_shared_boundar
             "moonmind.workflows.temporal.service.TemporalArtifactService",
             lambda _repository: artifact_service,
         )
+        service.validate_exact_rerun_execution_plan = AsyncMock()
         mock_client_adapter.update_workflow.reset_mock()
 
         with pytest.raises(TemporalExecutionRerunSkillSnapshotError) as exc_info:
@@ -4232,6 +4276,7 @@ async def test_create_fresh_rerun_rejects_incomplete_skill_snapshot(
             "moonmind.workflows.temporal.service.TemporalArtifactService",
             lambda _repository: artifact_service,
         )
+        service.validate_exact_rerun_execution_plan = AsyncMock()
         mock_client_adapter.start_workflow.reset_mock()
 
         with pytest.raises(TemporalExecutionRerunSkillSnapshotError):
@@ -4268,6 +4313,7 @@ async def test_request_rerun_converts_malformed_stored_skill_selector_to_conflic
             malformed_remediation_loop=True
         )
         await session.commit()
+        service.validate_exact_rerun_execution_plan = AsyncMock()
         mock_client_adapter.update_workflow.reset_mock()
 
         with pytest.raises(TemporalExecutionRerunSkillSnapshotError) as exc_info:
