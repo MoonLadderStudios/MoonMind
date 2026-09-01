@@ -150,6 +150,10 @@ from moonmind.workflows.temporal.activity_runtime import (
 )
 from moonmind.workflows.temporal import activity_runtime as activity_runtime_module
 from moonmind.workflows.temporal.activity_catalog import build_default_activity_catalog
+from moonmind.workflows.temporal.remediation_loop import (
+    RemediationLoopSpec,
+    materialize_attempt_nodes,
+)
 from moonmind.workflows.temporal.runtime.codex_session_runtime import (
     CodexManagedSessionRuntime,
 )
@@ -5631,6 +5635,55 @@ async def test_instructionless_remediation_verifier_is_rejected_before_dispatch(
         parent._initialize_remediation_loop_controller(
             ordered_nodes=[manifest["controllerPlanNode"]]
         )
+
+
+async def test_remediation_does_not_declare_initial_assessment_output() -> None:
+    """Replay mm:14460d13 at preset compilation before AgentRun dispatch."""
+
+    replay_id = "remediation-assessment-output-contract"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    preset = yaml.safe_load(
+        (REPO_ROOT / "api_service/data/presets/issue-implement-work-pr.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    controller = next(
+        step
+        for step in preset["steps"]
+        if step["title"] == "Remediation loop controller"
+    )
+    loop = controller["annotations"]["remediationLoop"]
+    remediation_inputs = loop["remediationTool"]["inputs"]
+    verification_inputs = loop["verificationTool"]["inputs"]
+    loop["budgets"]["hardMaxAttempts"] = 6
+    remediation, verification = materialize_attempt_nodes(
+        spec=RemediationLoopSpec.model_validate(loop),
+        workflow_id=manifest["incidentWorkflowId"],
+        run_id="incident-replay",
+        ordinal=1,
+        workspace_head_ref=None,
+        runtime={"mode": "omnigent"},
+    )
+
+    assert manifest["incidentWorkflowId"] == (
+        "mm:14460d13-a81d-49b8-a83e-11010801dc90"
+    )
+    assert manifest["escapedRemediationInputs"]["assessment_artifact_path"] == (
+        "artifacts/github-issue-implement-assessment.json"
+    )
+    assert (
+        "assessment_artifact_path" in manifest["verificationInputs"]
+    ) is expected["verificationAssessmentInputRetained"]
+    assert (
+        "assessment_artifact_path" in remediation_inputs
+    ) is expected["remediationAssessmentOutputDeclared"]
+    assert "assessment_artifact_path" in verification_inputs
+    assert "assessment_artifact_path" not in remediation["inputs"]
+    assert "assessment_artifact_path" in verification["inputs"]
+    assert expected["publisherBehaviorWithoutDeclaredAssessmentOutput"] == (
+        "skip_assessment_publication"
+    )
 
 
 async def test_instructionless_inflight_remediation_loop_remains_replayable(

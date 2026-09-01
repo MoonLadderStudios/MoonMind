@@ -1,0 +1,5 @@
+{
+  "remediationAssessmentOutputDeclared": false,
+  "verificationAssessmentInputRetained": true,
+  "publisherBehaviorWithoutDeclaredAssessmentOutput": "skip_assessment_publication"
+}
