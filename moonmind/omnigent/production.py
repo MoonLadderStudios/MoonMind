@@ -159,8 +159,10 @@ def build_generic_omnigent_execution_services(
     )
     docker = DockerCommandBackend()
 
-    async def daemon_command(argv: list[str]) -> tuple[int, str, str]:
-        return await docker.run(argv, check=False)
+    async def daemon_command(
+        argv: list[str], input_bytes: bytes | None = None
+    ) -> tuple[int, str, str]:
+        return await docker.run(argv, input_bytes=input_bytes, check=False)
 
     workspace_root = os.getenv("WORKFLOW_WORKSPACE_ROOT", "/work/agent_jobs")
     workspace_volume = os.getenv(
