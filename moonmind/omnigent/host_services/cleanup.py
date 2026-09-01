@@ -14,9 +14,11 @@ from moonmind.omnigent.host_services.docker_backend import DockerCommandBackend
 # why a turn was dropped, rejected, or crashed. Capture a bounded tail before
 # the container is removed so a provider-side failure stays diagnosable.
 # ``run_runtime_command`` already redacts credential-shaped text and cuts the
-# pipe at the read limit; the retained tail keeps the most recent bytes.
+# pipe at the read limit from the head, so the read limit must comfortably hold
+# the whole requested tail (2000 lines at ~512 bytes each); the retained tail
+# then keeps only the most recent bytes.
 _HOST_LOG_TAIL_LINES = 2000
-_HOST_LOG_READ_LIMIT_BYTES = 262_144
+_HOST_LOG_READ_LIMIT_BYTES = 1_048_576
 _HOST_LOG_RETAINED_BYTES = 65_536
 _HOST_LOG_TIMEOUT_SECONDS = 30.0
 _HOST_LOG_TRUNCATION_MARKER = "[moonmind: earlier host log output truncated]\n"
