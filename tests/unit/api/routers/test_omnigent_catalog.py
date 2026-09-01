@@ -19,6 +19,31 @@ from moonmind.security.egress import (
 _DEFAULT = object()
 
 
+def _set_ready_opencode_image_pair(monkeypatch: pytest.MonkeyPatch) -> None:
+    from moonmind.omnigent.bootstrap import store
+
+    server_ref = "registry.test/server@sha256:" + "1" * 64
+    host_ref = "registry.test/opencode@sha256:" + "6" * 64
+    monkeypatch.setenv("OMNIGENT_IMAGE_REF", server_ref)
+    monkeypatch.setenv("OMNIGENT_OPENCODE_HOST_IMAGE_REF", host_ref)
+    monkeypatch.setattr(
+        store,
+        "load_resolved_state",
+        lambda: SimpleNamespace(
+            server_image_ref=server_ref,
+            opencode_host_image_ref=host_ref,
+            details={
+                "opencodeHostCompatibility": {
+                    "status": "ready",
+                    "failureCode": None,
+                    "serverImageRef": server_ref,
+                    "hostImageRef": host_ref,
+                }
+            },
+        ),
+    )
+
+
 def _attested_bridge_session(
     *,
     server_digest: str = "1",
@@ -315,10 +340,7 @@ async def test_generic_readiness_requires_both_feature_gates_and_real_launch_dat
         catalog, "_require_provider_profile_permission", lambda *_: None
     )
     monkeypatch.setattr(catalog, "_can_view_profile", lambda *_: True)
-    monkeypatch.setenv(
-        "OMNIGENT_OPENCODE_HOST_IMAGE_REF",
-        "registry.test/opencode@sha256:" + "6" * 64,
-    )
+    _set_ready_opencode_image_pair(monkeypatch)
     # Exercise the documented default catalog interval, not an inherited value.
     monkeypatch.delenv("OPENCODE_MODEL_CATALOG_MAX_AGE_HOURS", raising=False)
 
@@ -495,10 +517,7 @@ async def test_stale_host_image_evidence_reports_revalidation_instead_of_reconne
     monkeypatch.setattr(catalog, "_can_view_profile", lambda *_: True)
     monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED", "true")
     monkeypatch.setenv("MOONMIND_OMNIGENT_OPENCODE_ENABLED", "true")
-    monkeypatch.setenv(
-        "OMNIGENT_OPENCODE_HOST_IMAGE_REF",
-        "registry.test/opencode@sha256:" + "6" * 64,
-    )
+    _set_ready_opencode_image_pair(monkeypatch)
 
     profile_row = SimpleNamespace(
         profile_id="omnigent-opencode-default",
