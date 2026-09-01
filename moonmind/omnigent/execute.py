@@ -231,9 +231,13 @@ class _MarkedTurnStartWatchdog:
             "turnEverActive": self.ever_active,
             "turnCurrentlyActive": self.currently_active,
             "turnStartWaitSeconds": (
-                round(self._loop.time() - self.started_at, 3) if self.armed else None
+                round(self._loop.time() - self.started_at, 3)
+                if not self.progress
+                else None
             ),
-            "turnStartTimeoutSeconds": self.timeout_seconds if self.armed else None,
+            "turnStartTimeoutSeconds": (
+                self.timeout_seconds if not self.progress else None
+            ),
         }
 
 
@@ -2741,9 +2745,12 @@ async def run_omnigent_execution(
                 await _cancel_task(heartbeat_task)
                 await _cancel_task(stream_task)
 
-            final_snapshot = terminal_snapshot_override or await client.get_session(
-                session_id
-            )
+            final_snapshot_observed_at: float | None = None
+            if terminal_snapshot_override is not None:
+                final_snapshot = terminal_snapshot_override
+            else:
+                final_snapshot_observed_at = asyncio.get_running_loop().time()
+                final_snapshot = await client.get_session(session_id)
             if terminal_status is None:
                 normalized_snapshot = normalize_omnigent_observation(final_snapshot)
                 closed_turn_state = (
@@ -2755,6 +2762,21 @@ async def run_omnigent_execution(
                     if isinstance(final_snapshot.get("items"), list)
                     else None
                 )
+                if (
+                    closed_turn_state is not None
+                    and final_snapshot_observed_at is not None
+                ):
+                    # A heartbeat snapshot may have projected the transient
+                    # injection response as active immediately before the SSE
+                    # stream closed. Refresh the shared watchdog from the
+                    # stream-closed snapshot before deciding whether the start
+                    # budget owns recovery; only ordered progress permanently
+                    # disarms it.
+                    start_watchdog.observe(
+                        final_snapshot,
+                        closed_turn_state,
+                        observation_started_at=final_snapshot_observed_at,
+                    )
                 if (
                     closed_turn_state is not None
                     and closed_turn_state["boundarySource"] is not None
