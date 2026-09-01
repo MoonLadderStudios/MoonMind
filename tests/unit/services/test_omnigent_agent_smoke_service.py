@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
@@ -438,9 +439,27 @@ async def test_smoke_admission_rejects_an_expired_model_catalog(session, monkeyp
     those changes on a healthy deployment.
     """
 
-    monkeypatch.setenv(
-        "OMNIGENT_OPENCODE_HOST_IMAGE_REF",
-        "registry.test/opencode@sha256:" + "6" * 64,
+    from moonmind.omnigent.bootstrap import store
+
+    server_ref = "registry.test/omnigent@sha256:" + "5" * 64
+    host_ref = "registry.test/opencode@sha256:" + "6" * 64
+    monkeypatch.setenv("OMNIGENT_IMAGE_REF", server_ref)
+    monkeypatch.setenv("OMNIGENT_OPENCODE_HOST_IMAGE_REF", host_ref)
+    monkeypatch.setattr(
+        store,
+        "load_resolved_state",
+        lambda: SimpleNamespace(
+            server_image_ref=server_ref,
+            opencode_host_image_ref=host_ref,
+            details={
+                "opencodeHostCompatibility": {
+                    "status": "ready",
+                    "failureCode": None,
+                    "serverImageRef": server_ref,
+                    "hostImageRef": host_ref,
+                }
+            },
+        ),
     )
     # Exercise the documented default catalog interval, not an inherited value.
     monkeypatch.delenv("OPENCODE_MODEL_CATALOG_MAX_AGE_HOURS", raising=False)
