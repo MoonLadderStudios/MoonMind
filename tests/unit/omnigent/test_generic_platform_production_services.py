@@ -1838,6 +1838,100 @@ async def test_generic_realizer_persists_authority_and_releases_provider_last() 
 
 
 @pytest.mark.asyncio
+async def test_generic_realizer_publishes_host_log_tail_as_cleanup_artifact() -> None:
+    """The host log tail leaves cleanup evidence as a linked artifact, never inline."""
+
+    harness = await _generic_publication_harness(_PUSHED_PUBLICATION)
+    realizer = harness.realizer
+
+    class Artifacts:
+        def __init__(self) -> None:
+            self.text_writes: list[dict[str, object]] = []
+            self.json_writes: list[dict[str, object]] = []
+
+        async def write_text(self, **kwargs):
+            self.text_writes.append(kwargs)
+            return "artifact:host-logs-1"
+
+        async def write_json(self, **kwargs):
+            self.json_writes.append(kwargs)
+            return "artifact:cleanup-1"
+
+    artifacts = Artifacts()
+    realizer._artifacts = artifacts
+
+    async def cleanup_with_logs(**_kwargs):
+        harness.events.append("host-cleaned")
+        return {
+            "containerRemoved": True,
+            "hostLogs": "runner: Turn started\nopencode: provider rejected turn\n",
+            "hostLogsTruncated": False,
+        }
+
+    realizer._host_runtime.cleanup = cleanup_with_logs
+
+    result = await realizer.execute(harness.publish_request, _plan("opencode-go/model"))
+
+    assert result.summary == "done"
+    assert [write["name"] for write in artifacts.text_writes] == [
+        "generic-host-logs.txt"
+    ]
+    assert artifacts.text_writes[0]["link_type"] == "evidence.host_logs"
+    assert artifacts.text_writes[0]["payload"].startswith("runner: Turn started")
+    cleanup_payload = next(
+        write["payload"]
+        for write in artifacts.json_writes
+        if write["name"] == "generic-host-cleanup.json"
+    )
+    host_results = cleanup_payload["results"]["host"]
+    assert host_results["hostLogsRef"] == "artifact:host-logs-1"
+    assert (
+        "hostLogs" not in host_results
+    ), "raw log text must not enter cleanup evidence"
+    assert host_results["containerRemoved"] is True
+
+
+@pytest.mark.asyncio
+async def test_generic_realizer_records_host_log_publication_failure() -> None:
+    harness = await _generic_publication_harness(_PUSHED_PUBLICATION)
+    realizer = harness.realizer
+
+    class Artifacts:
+        def __init__(self) -> None:
+            self.json_writes: list[dict[str, object]] = []
+
+        async def write_text(self, **kwargs):
+            raise OSError("artifact store unavailable")
+
+        async def write_json(self, **kwargs):
+            self.json_writes.append(kwargs)
+            return "artifact:cleanup-1"
+
+    artifacts = Artifacts()
+    realizer._artifacts = artifacts
+
+    async def cleanup_with_logs(**_kwargs):
+        harness.events.append("host-cleaned")
+        return {"containerRemoved": True, "hostLogs": "some output\n"}
+
+    realizer._host_runtime.cleanup = cleanup_with_logs
+
+    result = await realizer.execute(harness.publish_request, _plan("opencode-go/model"))
+
+    assert result.summary == "done"
+    host_results = next(
+        write["payload"]
+        for write in artifacts.json_writes
+        if write["name"] == "generic-host-cleanup.json"
+    )["results"]["host"]
+    assert host_results["hostLogsRef"] is None
+    assert host_results["hostLogsCaptureError"] == (
+        "artifact publication failed: OSError"
+    )
+    assert "hostLogs" not in host_results
+
+
+@pytest.mark.asyncio
 async def test_generic_realizer_accepts_remotely_verified_no_commit_publication() -> (
     None
 ):

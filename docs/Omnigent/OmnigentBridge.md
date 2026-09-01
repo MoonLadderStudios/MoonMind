@@ -802,6 +802,8 @@ runtime.omnigent.control_audit.jsonl
 
 Optional resource artifacts include changed-file, workspace-file, session-file, diff, patch-unavailable, and child-session indexes.
 
+Generic-host runs additionally publish `generic-host-cleanup.json` (`evidence.cleanup`): the fenced cleanup results for the provider session, host container, volumes, and credentials. Before the ephemeral host container is removed, cleanup captures a bounded, redacted tail of its stdout/stderr (last 2000 lines, at most 64 KiB retained) and publishes it as `generic-host-logs.txt` (`evidence.host_logs`), linked from the cleanup evidence as `results.host.hostLogsRef`. The runner and harness inside that container are the only source for why a provider dropped or rejected a turn; capture failures are recorded as `hostLogsCaptureError` and never block or fail cleanup.
+
 ---
 
 ## 14. AgentRun integration

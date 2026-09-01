@@ -12,6 +12,9 @@ from moonmind.omnigent.harness_platform.failures import (
 from moonmind.workflows.temporal.runtime.command_runner import run_runtime_command
 
 
+_DEFAULT_OUTPUT_LIMIT_BYTES = 32_768
+
+
 class DockerCommandBackend:
     async def run(
         self,
@@ -21,12 +24,13 @@ class DockerCommandBackend:
         timeout_seconds: float = 600.0,
         failure_code: HarnessPlatformFailure = HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
         check: bool = True,
+        output_limit_bytes: int = _DEFAULT_OUTPUT_LIMIT_BYTES,
     ) -> tuple[int, str, str]:
         code, stdout, stderr = await run_runtime_command(
             argv,
             input_bytes=input_bytes,
             timeout_seconds=timeout_seconds,
-            output_limit_bytes=32_768,
+            output_limit_bytes=max(0, int(output_limit_bytes)),
         )
         out = stdout.decode("utf-8", errors="replace")
         err = stderr.decode("utf-8", errors="replace")

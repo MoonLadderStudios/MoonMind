@@ -651,10 +651,13 @@ class GenericOmnigentHostRealizer:
             )
             context = host_context or host_lease.cleanupHandle
             if context is not None:
-                cleanup_evidence["host"] = await self._host_runtime.cleanup(
-                    host_context=context,
-                    host_lease_ref=host_lease.leaseRef,
-                    host_lease_generation=host_lease.launchGeneration,
+                cleanup_evidence["host"] = await self._publish_host_logs(
+                    request,
+                    await self._host_runtime.cleanup(
+                        host_context=context,
+                        host_lease_ref=host_lease.leaseRef,
+                        host_lease_generation=host_lease.launchGeneration,
+                    ),
                 )
             host_lease = await self._host_leases.mark_cleaned(
                 host_lease.leaseRef, expected_generation=host_lease.generation
@@ -692,6 +695,45 @@ class GenericOmnigentHostRealizer:
             updates={"attestationRefs": attestation_refs},
         )
         return binding, host_lease
+
+    async def _publish_host_logs(
+        self,
+        request: AgentExecutionRequest,
+        host_evidence: Any,
+    ) -> Any:
+        """Move the captured host log tail out of the evidence into an artifact.
+
+        The cleanup evidence JSON is compact metadata; the log text itself is
+        durable evidence and belongs in an artifact linked as ``hostLogsRef``.
+        Publication failures are recorded, never raised: cleanup already
+        removed the host and must not be reported as failed over evidence.
+        """
+
+        if not isinstance(host_evidence, dict) or "hostLogs" not in host_evidence:
+            return host_evidence
+        evidence = dict(host_evidence)
+        logs = str(evidence.pop("hostLogs") or "")
+        if not logs.strip():
+            evidence["hostLogsRef"] = None
+            evidence["hostLogsEmpty"] = True
+            return evidence
+        if self._artifacts is None:
+            evidence["hostLogsRef"] = None
+            evidence["hostLogsCaptureError"] = "no artifact gateway is configured"
+            return evidence
+        try:
+            evidence["hostLogsRef"] = await self._artifacts.write_text(
+                request=request,
+                name="generic-host-logs.txt",
+                payload=logs,
+                link_type="evidence.host_logs",
+            )
+        except Exception as exc:  # noqa: BLE001 - evidence must not fail cleanup
+            evidence["hostLogsRef"] = None
+            evidence["hostLogsCaptureError"] = (
+                f"artifact publication failed: {type(exc).__name__}"
+            )
+        return evidence
 
     def _canonical_session_id(self, request: AgentExecutionRequest) -> str:
         """Return the canonical session this realizer's turn bootstrapped."""
