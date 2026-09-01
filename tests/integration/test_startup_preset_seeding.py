@@ -491,9 +491,16 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert remediation_loop["kind"] == "remediation_loop"
         assert remediation_loop["budgets"]["hardMaxAttempts"] == "6"
         assert remediation_loop["workspacePolicy"] == "continue_from_loop_head"
+        assert (
+            "assessment_artifact_path"
+            not in remediation_loop["remediationTool"]["inputs"]
+        )
         assert remediation_loop["verificationTool"]["inputs"][
             "verify_artifact_path"
         ] == "artifacts/jira-implement-verify.json"
+        assert remediation_loop["verificationTool"]["inputs"][
+            "assessment_artifact_path"
+        ] == "artifacts/jira-implement-assessment.json"
         assert "Run the selected moonspec-verify Skill" in (
             remediation_loop["verificationTool"]["inputs"]["instructions"]
         )

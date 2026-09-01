@@ -1,0 +1,18 @@
+{
+  "incidentWorkflowId": "mm:14460d13-a81d-49b8-a83e-11010801dc90",
+  "failureShapeId": "remediation-assessment-output-contract",
+  "boundary": "issue implementation preset to dynamic remediation AgentRun artifact publication",
+  "escapedFailure": {
+    "message": "Declared assessment verdict artifact was not produced: artifacts/github-issue-implement-assessment.json",
+    "cause": "The remediation tool inherited an assessment producer path even though only the initial assessment step owns that output."
+  },
+  "escapedRemediationInputs": {
+    "selectedSkill": "remediate-issue",
+    "repositoryOperation": "write",
+    "assessment_artifact_path": "artifacts/github-issue-implement-assessment.json"
+  },
+  "verificationInputs": {
+    "selectedSkill": "moonspec-verify",
+    "assessment_artifact_path": "artifacts/github-issue-implement-assessment.json"
+  }
+}

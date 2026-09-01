@@ -199,7 +199,6 @@ steps:
           issue_provider: '{{ inputs.issue_provider }}'
           issue_ref: '{{ inputs.issue_ref }}'
           brief_artifact_path: '{{ inputs.brief_artifact_path }}'
-          assessment_artifact_path: '{{ inputs.assessment_artifact_path }}'
           verify_artifact_path: '{{ inputs.verify_artifact_path }}'
           instructions: 'Run the selected remediate-issue Skill. Before editing,
             read the complete latest authoritative verifier evidence materialized by
