@@ -33,7 +33,10 @@ async def computed_launchable_harnesses(session: AsyncSession) -> set[str]:
     from moonmind.omnigent.harness_platform.catalog import HarnessCatalogSnapshot
     from moonmind.omnigent.harness_platform.host_classes import (
         DEFAULT_HOST_CLASS_TEMPLATES,
+        OMNIGENT_OPENCODE_HOST_IMAGE_ENV,
+        get_opencode_host_image_ref,
     )
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
     from moonmind.omnigent.settings import (
         generic_host_enabled,
         opencode_support_enabled,
@@ -79,7 +82,16 @@ async def computed_launchable_harnesses(session: AsyncSession) -> set[str]:
                     and not opencode_support_enabled()
                 ):
                     continue
-                image = str(os.getenv(template.image_env) or "").strip()
+                if template.image_env == OMNIGENT_OPENCODE_HOST_IMAGE_ENV:
+                    try:
+                        image = get_opencode_host_image_ref()
+                    except HarnessPlatformError:
+                        # The shared image resolver quarantines an incompatible
+                        # server/host pair. Inventory must not advertise that
+                        # runtime while plan compilation will reject it.
+                        continue
+                else:
+                    image = str(os.getenv(template.image_env) or "").strip()
                 if _IMMUTABLE_IMAGE.fullmatch(image) and not image.endswith("0" * 64):
                     launchable.add(harness.id)
     return launchable
@@ -384,8 +396,7 @@ def _overlay_synthetic_opencode(result: Any) -> Any:
         endpointRef=result.snapshot.endpointRef,
         omnigentVersion=result.snapshot.omnigentVersion,
         omnigentBuildDigest=result.snapshot.omnigentBuildDigest,
-        sourceDigest="sha256:"
-        + hashlib.sha256(merged_source.encode()).hexdigest(),
+        sourceDigest="sha256:" + hashlib.sha256(merged_source.encode()).hexdigest(),
         harnesses=harness_rows,
         observedAt=observed_at,
         pluginLoadErrors=list(result.snapshot.pluginLoadErrors),

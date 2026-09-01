@@ -427,6 +427,17 @@ async def _sync_omnigent_deployment_images() -> bool:
             return True
 
         state = await publish_resolved_omnigent_images()
+        compatibility = state.details.get("opencodeHostCompatibility")
+        if (
+            isinstance(compatibility, dict)
+            and compatibility.get("status") == "blocked"
+            and opencode_support_enabled()
+        ):
+            logger.warning(
+                "Omnigent image resolution quarantined the OpenCode host: %s",
+                compatibility.get("failureCode") or "omnigent_server_host_incompatible",
+            )
+            return False
         if not state.opencode_host_image_ref and opencode_support_enabled():
             # Only a deployment that actually runs OpenCode depends on this
             # digest. An operator who turned the harness off must not inherit

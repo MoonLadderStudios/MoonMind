@@ -1,6 +1,8 @@
 name: Release / Build omnigent-host-opencode Image
 
 on:
+  schedule:
+    - cron: "23 */6 * * *"
   push:
     branches: [ main ]
     paths:
@@ -15,6 +17,10 @@ on:
         required: false
         default: "1.18.11"
         type: string
+
+concurrency:
+  group: release-omnigent-host-opencode
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -31,6 +37,7 @@ jobs:
       image_name: ${{ steps.meta.outputs.image_name }}
       version_tag: ${{ steps.meta.outputs.version_tag }}
       opencode_version: ${{ steps.out.outputs.opencode_version }}
+      rebuild_required: ${{ steps.drift.outputs.rebuild_required }}
     steps:
       - name: Generate image metadata
         id: meta
@@ -45,8 +52,45 @@ jobs:
         run: |
           echo "opencode_version=${{ inputs.opencode_version || '1.18.11' }}" >> "$GITHUB_OUTPUT"
 
+      - name: Detect upstream Omnigent drift
+        id: drift
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          IMAGE_NAME: ${{ steps.meta.outputs.image_name }}
+          VERSION_TAG: ${{ steps.meta.outputs.version_tag }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" != "schedule" ]; then
+            echo "rebuild_required=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          SERVER_TAG="ghcr.io/omnigent-ai/omnigent-server:latest"
+          HOST_TAG="${IMAGE_NAME}:${VERSION_TAG}"
+          docker pull "$SERVER_TAG" >/dev/null
+          if ! docker pull "$HOST_TAG" >/dev/null; then
+            echo "rebuild_required=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          SERVER_REF="$(docker inspect --format='{{index .RepoDigests 0}}' "$SERVER_TAG" 2>/dev/null || true)"
+          SERVER_DIGEST="$(printf '%s' "$SERVER_REF" | grep -oE 'sha256:[0-9a-f]{64}' || true)"
+          HOST_BUILD_DIGEST="$(docker inspect --format='{{index .Config.Labels "moonmind.omnigent.build_digest"}}' "$HOST_TAG" 2>/dev/null || true)"
+          SERVER_VERSION="$(docker run --rm --entrypoint /opt/venv/bin/omnigent "$SERVER_REF" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)"
+          HOST_VERSION="$(docker run --rm --entrypoint /opt/venv/bin/omnigent "$HOST_TAG" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)"
+
+          if [ -n "$SERVER_DIGEST" ] \
+            && [ "$SERVER_DIGEST" = "$HOST_BUILD_DIGEST" ] \
+            && [ -n "$SERVER_VERSION" ] \
+            && [ "$SERVER_VERSION" = "$HOST_VERSION" ]; then
+            echo "rebuild_required=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "rebuild_required=true" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
     needs: metadata
+    if: needs.metadata.outputs.rebuild_required == 'true'
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -184,6 +228,7 @@ jobs:
 
   merge:
     runs-on: ubuntu-latest
+    if: needs.metadata.outputs.rebuild_required == 'true'
     needs:
       - metadata
       - build

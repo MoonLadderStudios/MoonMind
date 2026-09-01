@@ -480,6 +480,27 @@ class TemporalExecutionRerunSkillSnapshotError(TemporalExecutionValidationError)
         return detail
 
 
+class TemporalExecutionRerunPlanError(TemporalExecutionValidationError):
+    """Raised when a recorded plan cannot launch in the current deployment."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "exact_rerun_execution_plan_stale",
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+
+    @property
+    def detail(self) -> dict[str, Any]:
+        return {
+            "code": self.code,
+            "message": str(self),
+            "nextAction": "edit_for_rerun",
+        }
+
+
 class TemporalExecutionRecoveryCheckpointError(TemporalExecutionValidationError):
     """Raised when failed-step Recovery checkpoint evidence is missing or invalid."""
 
@@ -2639,6 +2660,62 @@ class TemporalExecutionService:
                 missing_skills=missing,
             )
 
+    async def validate_exact_rerun_execution_plan(
+        self,
+        *,
+        parameters: Mapping[str, Any],
+    ) -> None:
+        """Reject an exact rerun whose endpoint authority is no longer live."""
+
+        raw_binding = parameters.get("omnigentExecutionPlan")
+        if not isinstance(raw_binding, Mapping):
+            return
+        from moonmind.omnigent.deployment_identity import (
+            OmnigentDeploymentIdentityConflict,
+            assert_plan_matches_deployed_server,
+        )
+        from moonmind.omnigent.harness_platform.stores import (
+            SessionExecutionPlanStore,
+        )
+        from moonmind.omnigent.harness_platform.failures import (
+            HarnessPlatformError,
+        )
+        from moonmind.schemas.agent_runtime_models import (
+            OmnigentExecutionPlanBinding,
+        )
+
+        try:
+            binding = OmnigentExecutionPlanBinding.model_validate(raw_binding)
+            plan = await SessionExecutionPlanStore(self._session).load(
+                binding.plan_ref
+            )
+        except (ValidationError, TypeError, ValueError) as exc:
+            raise TemporalExecutionRerunPlanError(
+                "Exact rerun cannot verify the recorded Omnigent execution plan. "
+                "Use Edit for rerun to compile fresh runtime authority.",
+                code="exact_rerun_execution_plan_unavailable",
+            ) from exc
+        if plan is None:
+            raise TemporalExecutionRerunPlanError(
+                "Exact rerun cannot load the recorded Omnigent execution plan. "
+                "Use Edit for rerun to compile fresh runtime authority.",
+                code="exact_rerun_execution_plan_unavailable",
+            )
+        try:
+            assert_plan_matches_deployed_server(plan.payload)
+        except OmnigentDeploymentIdentityConflict as exc:
+            raise TemporalExecutionRerunPlanError(
+                "Exact rerun preserves the original Omnigent execution plan, "
+                "but that plan targets a server build that is no longer deployed. "
+                "Use Edit for rerun to compile fresh runtime authority."
+            ) from exc
+        except HarnessPlatformError as exc:
+            raise TemporalExecutionRerunPlanError(
+                "Exact rerun cannot verify the currently deployed Omnigent "
+                "server build. Repair deployment readiness before retrying.",
+                code="exact_rerun_deployment_identity_unavailable",
+            ) from exc
+
     async def update_execution(
         self,
         *,
@@ -2692,6 +2769,9 @@ class TemporalExecutionService:
             rerun_parameters = dict(record.parameters or {})
             if parameters_patch:
                 rerun_parameters.update(parameters_patch)
+            await self.validate_exact_rerun_execution_plan(
+                parameters=rerun_parameters,
+            )
             await self.validate_exact_rerun_skill_snapshot(
                 source_record=record,
                 parameters=rerun_parameters,
@@ -4143,6 +4223,7 @@ class TemporalExecutionService:
                 initial_parameters=params,
                 allow_goal_schedule=False,
             )
+        await self.validate_exact_rerun_execution_plan(parameters=params)
         await self.validate_exact_rerun_skill_snapshot(
             source_record=record,
             parameters=params,

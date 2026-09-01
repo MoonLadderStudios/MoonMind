@@ -129,6 +129,7 @@ from moonmind.schemas.temporal_models import (
 )
 from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
 from moonmind.workflows.temporal.service import (
+    TemporalExecutionRerunPlanError,
     TemporalExecutionRerunSkillSnapshotError,
     TemporalExecutionService,
 )
@@ -15068,6 +15069,119 @@ def test_exact_rerun_rejects_incomplete_dynamic_skill_snapshot(
     assert service.update_execution.await_args.kwargs["parameters_patch"][
         "resolvedSkillsetRef"
     ] == "art_old_skill_snapshot"
+
+
+def test_exact_rerun_returns_actionable_stale_plan_conflict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    service = AsyncMock()
+    source_record = _build_execution_record(
+        state=MoonMindWorkflowState.FAILED,
+        has_workflow_input_snapshot=False,
+    )
+    source_record.parameters = {
+        "targetRuntime": "omnigent",
+        "workflow": {"instructions": "Retry the original task."},
+        "omnigentExecutionPlan": {
+            "planRef": "omnigent-execution-plan:sha256:" + "a" * 64,
+            "planDigest": "sha256:" + "a" * 64,
+            "planArtifactRef": "art_old_plan",
+            "taskInputSnapshotRef": "art_old_input",
+            "taskInputSnapshotDigest": "sha256:" + "b" * 64,
+        },
+    }
+    service.describe_execution.return_value = source_record
+    service.update_execution.side_effect = TemporalExecutionRerunPlanError(
+        "Exact rerun preserves the original Omnigent execution plan, but that "
+        "plan targets a server build that is no longer deployed. Use Edit for "
+        "rerun to compile fresh runtime authority."
+    )
+    app.dependency_overrides[_get_service] = lambda: service
+    _override_temporal_client(app)
+    _override_user_dependencies(app, is_superuser=True)
+
+    async def override_session() -> AsyncMock:
+        return AsyncMock()
+
+    app.dependency_overrides[get_async_session] = override_session
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    monkeypatch.setattr(
+        settings.temporal_dashboard,
+        "temporal_workflow_editing_enabled",
+        True,
+    )
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            f"/api/executions/{source_record.workflow_id}/update",
+            json={"updateName": "RequestRerun"},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "code": "exact_rerun_execution_plan_stale",
+        "message": (
+            "Exact rerun preserves the original Omnigent execution plan, but "
+            "that plan targets a server build that is no longer deployed. Use "
+            "Edit for rerun to compile fresh runtime authority."
+        ),
+        "nextAction": "edit_for_rerun",
+    }
+
+
+def test_direct_rerun_rejects_stale_plan_before_execution_creation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    service = AsyncMock()
+    source_record = _build_execution_record(
+        state=MoonMindWorkflowState.FAILED,
+        has_workflow_input_snapshot=False,
+    )
+    source_record.parameters = {
+        "targetRuntime": "omnigent",
+        "workflow": {"instructions": "Retry the original task."},
+        "omnigentExecutionPlan": {
+            "planRef": "omnigent-execution-plan:sha256:" + "a" * 64,
+            "planDigest": "sha256:" + "a" * 64,
+            "planArtifactRef": "art_old_plan",
+            "taskInputSnapshotRef": "art_old_input",
+            "taskInputSnapshotDigest": "sha256:" + "b" * 64,
+        },
+    }
+    service.describe_execution.return_value = source_record
+    service._full_rerun_parameters = Mock(
+        side_effect=TemporalExecutionService._full_rerun_parameters
+    )
+    service.validate_exact_rerun_execution_plan.side_effect = (
+        TemporalExecutionRerunPlanError(
+            "Exact rerun preserves the original Omnigent execution plan, but "
+            "that plan targets a server build that is no longer deployed. Use "
+            "Edit for rerun to compile fresh runtime authority."
+        )
+    )
+    app.dependency_overrides[_get_service] = lambda: service
+    _override_temporal_client(app)
+    _override_user_dependencies(app, is_superuser=True)
+    session = AsyncMock()
+    session.get.return_value = source_record
+    app.dependency_overrides[get_async_session] = lambda: session
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            f"/api/executions/{source_record.workflow_id}/rerun"
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == (
+        "exact_rerun_execution_plan_stale"
+    )
+    service.validate_exact_rerun_execution_plan.assert_awaited_once()
+    service.create_execution.assert_not_awaited()
 
 
 def test_task_input_snapshot_artifact_id_strips_input_prefix_without_scheme() -> None:

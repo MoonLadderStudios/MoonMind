@@ -217,6 +217,7 @@ from moonmind.workflows.temporal import (
     TemporalExecutionCancelUndeliverableError,
     TemporalExecutionNotFoundError,
     TemporalExecutionRecoveryCheckpointError,
+    TemporalExecutionRerunPlanError,
     TemporalExecutionRerunSkillSnapshotError,
     TemporalExecutionService,
     TemporalExecutionValidationError,
@@ -17919,7 +17920,10 @@ async def update_execution(
             node_ids=payload.node_ids,
             idempotency_key=payload.idempotency_key,
         )
-    except TemporalExecutionRerunSkillSnapshotError as exc:
+    except (
+        TemporalExecutionRerunPlanError,
+        TemporalExecutionRerunSkillSnapshotError,
+    ) as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=exc.detail,
@@ -18361,11 +18365,17 @@ async def rerun_execution(
     reserved_workflow_id = f"mm:{_uuid4()}"
     if isinstance(initial_params.get("omnigentExecutionPlan"), Mapping):
         try:
+            await service.validate_exact_rerun_execution_plan(
+                parameters=initial_params,
+            )
             await service.validate_exact_rerun_skill_snapshot(
                 source_record=canonical,
                 parameters=initial_params,
             )
-        except TemporalExecutionRerunSkillSnapshotError as exc:
+        except (
+            TemporalExecutionRerunPlanError,
+            TemporalExecutionRerunSkillSnapshotError,
+        ) as exc:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=exc.detail,

@@ -146,6 +146,14 @@ def _resolved_state() -> SimpleNamespace:
         opencode_host_image_ref=_HOST_IMAGE_REF,
         server_image_ref=_SERVER_IMAGE_REF,
         architecture="linux/amd64",
+        details={
+            "opencodeHostCompatibility": {
+                "status": "ready",
+                "failureCode": None,
+                "serverImageRef": _SERVER_IMAGE_REF,
+                "hostImageRef": _HOST_IMAGE_REF,
+            }
+        },
     )
 
 
@@ -163,6 +171,7 @@ def qualification_boundary(monkeypatch, tmp_path):
     import api_service.db.base as db_base
     import moonmind.omnigent.bootstrap.evidence as evidence_module
     import moonmind.omnigent.bootstrap.qualification as qualification_module
+    import moonmind.omnigent.bootstrap.store as store_module
     from moonmind.omnigent.harness_platform import catalog_service
 
     state = SimpleNamespace(session=_Session(_version_row(_profile_document())))
@@ -193,6 +202,7 @@ def qualification_boundary(monkeypatch, tmp_path):
         }
 
     monkeypatch.setattr(qualification_module, "run_qualification", _run_qualification)
+    monkeypatch.setattr(store_module, "load_resolved_state", _resolved_state)
     monkeypatch.setattr(
         evidence_module,
         "write_deployment_evidence",

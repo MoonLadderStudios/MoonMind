@@ -1,0 +1,6 @@
+{
+  "invariant": "a new runtime binding and an exact rerun must prove that the plan's qualified server build is still deployed before any provider lease or host launch",
+  "code": "exact_rerun_execution_plan_stale",
+  "nextAction": "edit_for_rerun",
+  "hostLaunchAttempted": false
+}

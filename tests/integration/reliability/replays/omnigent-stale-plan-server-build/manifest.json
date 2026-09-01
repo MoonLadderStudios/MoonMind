@@ -1,0 +1,8 @@
+{
+  "incidentWorkflowId": "mm:93eef7b5-0695-4a51-a26d-3eff6103d25d",
+  "sourceWorkflowId": "mm:008e66ab-3715-4e22-ab46-4fbbb00cb0df",
+  "planRef": "omnigent-execution-plan:sha256:b5049234c6de5eca56db44228b0797ae74c4aa63c5cab2c142a49862f33c1857",
+  "planServerBuildRef": "sha256:4e99225823eb7afbfa6159d1425cccf9cf07f2ce130b714a672ecdd15681c2cd",
+  "deployedServerBuildRef": "sha256:a9269df84e79f28de04297e8f3d2279eb334d39b6d5033e1a8471dc24e7a0511",
+  "failureShape": "an exact rerun copied an immutable plan whose qualified Omnigent server build had been replaced, launched the stale host image, and discovered version skew only during post-launch host attestation"
+}

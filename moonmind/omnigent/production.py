@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -20,6 +19,9 @@ from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.omnigent.credential_materializers import (
     OmnigentCredentialProvisioningService,
     build_default_credential_materializer_registry,
+)
+from moonmind.omnigent.deployment_identity import (
+    resolve_deployed_server_build_digest,
 )
 from moonmind.omnigent.control_plane.cleanup_authority import (
     CanonicalCleanupAuthority,
@@ -83,9 +85,6 @@ from moonmind.provider_profiles.lease_client import ProviderProfileLeaseClient
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 
-_IMAGE_REF = re.compile(r"^.+@sha256:([0-9a-f]{64})$")
-
-
 @dataclass(frozen=True)
 class GenericOmnigentExecutionServices:
     planning_service: OmnigentExecutionPlanningService
@@ -94,60 +93,6 @@ class GenericOmnigentExecutionServices:
     runtime_binding_store: DbRuntimeBindingStore
     host_lease_repository: DbOmnigentHostLeaseRepository
     generic_realizer: GenericOmnigentHostRealizer
-
-
-def _server_build_digest() -> str:
-    # Prefer explicit build digest, then resolved state, then image ref
-    explicit = str(os.getenv("OMNIGENT_BUILD_DIGEST") or "").strip()
-    if explicit:
-        if re.fullmatch(r"sha256:[0-9a-f]{64}", explicit):
-            return explicit
-        raise HarnessPlatformError(
-            "OMNIGENT_BUILD_DIGEST must be an exact sha256 identity",
-            code=HarnessPlatformFailure.OMNIGENT_GENERIC_REALIZER_NOT_READY,
-        )
-    # Try resolved deployment state (bootstrap-aware)
-    try:
-        from moonmind.omnigent.bootstrap.store import load_resolved_state
-
-        state = load_resolved_state()
-        if state and state.omnigent_build_digest:
-            if re.fullmatch(r"sha256:[0-9a-f]{64}", state.omnigent_build_digest):
-                return state.omnigent_build_digest
-        if state and state.server_image_ref:
-            m = _IMAGE_REF.fullmatch(state.server_image_ref)
-            if m:
-                return f"sha256:{m.group(1)}"
-    except Exception:
-        # Best-effort: resolved state may be unavailable before bootstrap
-        pass
-    image_ref = str(os.getenv("OMNIGENT_IMAGE_REF") or "").strip()
-    match = _IMAGE_REF.fullmatch(image_ref)
-    if match is None:
-        # Bootstrap-aware fallback: try to resolve via docker or return a placeholder for degraded readiness
-        # For execution readiness that reports setup_required, we don't fail here; but for production services we need a digest.
-        # Attempt to inspect running omnigent container
-        try:
-            import subprocess, json
-
-            out = subprocess.check_output(
-                ["docker", "image", "inspect", "ghcr.io/omnigent-ai/omnigent-server:latest", "--format", "{{json .RepoDigests}}"],
-                text=True,
-                timeout=5,
-            )
-            digests = json.loads(out.strip())
-            for d in digests:
-                m2 = _IMAGE_REF.fullmatch(str(d))
-                if m2:
-                    return f"sha256:{m2.group(1)}"
-        except Exception:
-            # Best-effort docker inspect failed; fall through to hard error
-            pass
-        raise HarnessPlatformError(
-            "OMNIGENT_IMAGE_REF must identify the exact Omnigent server digest",
-            code=HarnessPlatformFailure.OMNIGENT_GENERIC_REALIZER_NOT_READY,
-        )
-    return f"sha256:{match.group(1)}"
 
 
 def _production_host_class_selector() -> OmnigentHostClassSelector:
@@ -318,7 +263,7 @@ def build_generic_omnigent_execution_services(
             client=client,
             repository=catalogs,
             endpoint_ref="default",
-            omnigent_build_digest=_server_build_digest(),
+            omnigent_build_digest=resolve_deployed_server_build_digest(),
             observation_overlay=catalog_observation_overlay,
         ),
         runtime_binding_store=runtime_bindings,

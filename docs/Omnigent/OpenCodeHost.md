@@ -431,6 +431,8 @@ OMNIGENT_OPENCODE_HOST_IMAGE_TAG=1.18.11
 
 Mutable image and tag coordinates are resolution inputs only. Launch authority is always the resolved digest.
 
+The deployment resolver treats the current Omnigent server and OpenCode host as one paired runtime. On the default release path, before publishing either image as launch authority, it requires the resolved server digest to match the host's `moonmind.omnigent.build_digest` label and executes `omnigent --version` in both immutable images. An explicitly configured independent build identity instead must match the host label. A build-identity or executable-version mismatch is persisted as a blocked compatibility verdict. Host Class selection and advertised harness inventory consume that verdict, so no plan or worker may launch the stale host while recurring image reconciliation waits for a matching runtime pack.
+
 ### Desired shared-image configuration
 
 ```env
@@ -458,6 +460,8 @@ The shared release workflow should:
 - generate provenance and SBOM data
 - publish a neutral manifest tag and digest
 - optionally publish the transitional `omnigent-host-opencode` alias to the same digest
+
+The transitional OpenCode image workflow also runs on a recurring schedule. It rebuilds against the current upstream server and base-host images so a new Omnigent release cannot leave the deployment's mutable server channel permanently ahead of the runtime pack. Runtime quarantine remains authoritative during the bounded publication window; successful recurring reconciliation automatically restores the Host Class when the paired image appears.
 
 A new shared image does not automatically replace any Host Class. Each harness promotes the new digest only after its own conformance row passes.
 

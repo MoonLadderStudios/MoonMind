@@ -33,6 +33,37 @@ _OPENCODE_ALLOWED_LAUNCH_POLICIES = [
     "omnigent-on-demand@1",
     "opencode-on-demand@1",
 ]
+_SERVER_IMAGE_REF = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "6" * 64
+
+
+@pytest.fixture(autouse=True)
+def _ready_opencode_image_pair(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give OpenCode plan tests exact resolver evidence for selected refs."""
+
+    from moonmind.omnigent.bootstrap import store
+
+    monkeypatch.setenv("OMNIGENT_IMAGE_REF", _SERVER_IMAGE_REF)
+
+    def load_state():
+        import os
+
+        host_ref = os.environ.get("OMNIGENT_OPENCODE_HOST_IMAGE_REF", "")
+        if not host_ref:
+            return None
+        return SimpleNamespace(
+            server_image_ref=_SERVER_IMAGE_REF,
+            opencode_host_image_ref=host_ref,
+            details={
+                "opencodeHostCompatibility": {
+                    "status": "ready",
+                    "failureCode": None,
+                    "serverImageRef": _SERVER_IMAGE_REF,
+                    "hostImageRef": host_ref,
+                }
+            },
+        )
+
+    monkeypatch.setattr(store, "load_resolved_state", load_state)
 
 
 class _LegacyClassAdmissionDecision(BaseModel):
@@ -459,8 +490,25 @@ async def test_product_boundary_uses_exact_arm64_architecture_for_support_identi
     from moonmind.workflows.temporal.activities.omnigent_session_activities import (
         _validate_plan_support_authority,
     )
+    from moonmind.omnigent import deployment_identity
 
+    monkeypatch.setattr(
+        deployment_identity,
+        "resolve_deployed_server_build_digest",
+        lambda: result.envelope.payload.supportIdentity.omnigentServerBuildRef,
+    )
     _validate_plan_support_authority(result.envelope)
+
+    monkeypatch.setattr(
+        deployment_identity,
+        "resolve_deployed_server_build_digest",
+        lambda: "sha256:" + "9" * 64,
+    )
+    with pytest.raises(
+        deployment_identity.OmnigentDeploymentIdentityConflict,
+        match="no longer deployed",
+    ):
+        _validate_plan_support_authority(result.envelope)
 
 
 @pytest.mark.asyncio

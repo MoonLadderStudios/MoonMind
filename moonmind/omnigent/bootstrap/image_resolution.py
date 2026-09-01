@@ -13,6 +13,7 @@ from moonmind.omnigent.bootstrap.models import ResolvedOmnigentDeploymentState
 
 _DIGEST_RE = re.compile(r"^.+@sha256:[0-9a-f]{64}$")
 _SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+_OMNIGENT_VERSION_RE = re.compile(r"\bomnigent\s+([0-9]+\.[0-9]+\.[0-9]+)\b")
 
 
 async def _run(cmd: list[str], timeout: int = 30) -> tuple[int, str, str]:
@@ -27,7 +28,11 @@ async def _run(cmd: list[str], timeout: int = 30) -> tuple[int, str, str]:
         proc.kill()
         await proc.communicate()
         return 124, "", "timeout"
-    return proc.returncode or 0, stdout.decode("utf-8", errors="replace"), stderr.decode("utf-8", errors="replace")
+    return (
+        proc.returncode or 0,
+        stdout.decode("utf-8", errors="replace"),
+        stderr.decode("utf-8", errors="replace"),
+    )
 
 
 def _is_digest_pinned(ref: str) -> bool:
@@ -42,24 +47,79 @@ def _extract_digest(ref: str) -> str | None:
     return None
 
 
-async def _resolve_via_docker_inspect(image: str) -> str | None:
+def _image_repository(image: str) -> str:
+    """Return the repository portion of an image tag or digest reference."""
+
+    candidate = image.strip().split("@", 1)[0]
+    slash = candidate.rfind("/")
+    colon = candidate.rfind(":")
+    return candidate[:colon] if colon > slash else candidate
+
+
+async def _resolve_via_docker_inspect(
+    image: str, *, inspect_ref: str | None = None
+) -> str | None:
     # Try docker image inspect to get RepoDigests
-    code, out, _ = await _run(["docker", "image", "inspect", image, "--format", "{{json .RepoDigests}}"])
+    code, out, _ = await _run(
+        [
+            "docker",
+            "image",
+            "inspect",
+            inspect_ref or image,
+            "--format",
+            "{{json .RepoDigests}}",
+        ]
+    )
     if code != 0:
         return None
     try:
         digests = json.loads(out.strip())
         if isinstance(digests, list) and digests:
-            # Prefer first that looks like digest-pinned
+            repository = _image_repository(image)
             for d in digests:
-                if _is_digest_pinned(str(d)):
-                    return str(d)
-            # If none pinned, construct from Id?
-            return str(digests[0])
+                candidate = str(d)
+                if (
+                    _is_digest_pinned(candidate)
+                    and _image_repository(candidate) == repository
+                ):
+                    return candidate
     except json.JSONDecodeError:
         # Best-effort: docker inspect output was not JSON; treat as unresolved
         pass
     return None
+
+
+async def _resolve_running_server_image(
+    image: str, env: Mapping[str, str]
+) -> str | None:
+    """Resolve the immutable image used by this deployment's live server."""
+
+    project_name = (
+        str(env.get("MOONMIND_DEPLOYMENT_PROJECT_NAME") or "moonmind").strip()
+        or "moonmind"
+    )
+    code, out, _ = await _run(
+        [
+            "docker",
+            "ps",
+            "--filter",
+            f"label=com.docker.compose.project={project_name}",
+            "--filter",
+            "label=com.docker.compose.service=omnigent",
+            "--format",
+            "{{.ID}}",
+        ]
+    )
+    container_ids = [line.strip() for line in out.splitlines() if line.strip()]
+    if code != 0 or len(container_ids) != 1:
+        return None
+    code, out, _ = await _run(
+        ["docker", "inspect", "--format", "{{.Image}}", container_ids[0]]
+    )
+    image_id = out.strip()
+    if code != 0 or not _SHA256_RE.fullmatch(image_id):
+        return None
+    return await _resolve_via_docker_inspect(image, inspect_ref=image_id)
 
 
 async def _resolve_via_docker_pull(image: str, tag: str) -> str | None:
@@ -82,7 +142,12 @@ async def _resolve_image(
     """Resolve one image to a digest-pinned ref and its image digest."""
     source = os.environ if env is None else env
     pinned = str(source.get(ref_env) or "").strip()
-    if pinned and _is_digest_pinned(pinned) and not pinned.endswith("0" * 64) and not pinned.endswith("c" * 64):
+    if (
+        pinned
+        and _is_digest_pinned(pinned)
+        and not pinned.endswith("0" * 64)
+        and not pinned.endswith("c" * 64)
+    ):
         # Valid pinned ref
         build_digest = _extract_digest(pinned)
         return pinned, build_digest
@@ -104,7 +169,15 @@ async def _resolve_image(
     if resolved and _is_digest_pinned(resolved):
         return resolved, _extract_digest(resolved)
     # Fallback: try docker images --digests
-    code, out, _ = await _run(["docker", "images", "--digests", "--format", "{{.Repository}}:{{.Tag}}@{{.Digest}} {{.ID}}"])
+    code, out, _ = await _run(
+        [
+            "docker",
+            "images",
+            "--digests",
+            "--format",
+            "{{.Repository}}:{{.Tag}}@{{.Digest}} {{.ID}}",
+        ]
+    )
     if code == 0:
         for line in out.splitlines():
             part = line.strip().split()[0] if line.strip() else ""
@@ -154,6 +227,33 @@ async def _image_build_identity(image_ref: str) -> str | None:
     return await inspect()
 
 
+async def _image_omnigent_version(image_ref: str) -> str | None:
+    """Read the executable Omnigent version from one immutable image.
+
+    The portable build label is release authority, but it is still metadata.
+    Probing the binary at this trusted image-resolution boundary prevents a
+    stale or incorrectly labelled runtime pack from becoming launch authority
+    and defers the more expensive exact-host check to defense in depth.
+    """
+
+    code, stdout, _ = await _run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--entrypoint",
+            "/opt/venv/bin/omnigent",
+            image_ref,
+            "--version",
+        ],
+        timeout=90,
+    )
+    if code != 0:
+        return None
+    match = _OMNIGENT_VERSION_RE.search(stdout.strip())
+    return match.group(1) if match is not None else None
+
+
 async def resolve_omnigent_images(
     env: Mapping[str, str] | None = None,
 ) -> ResolvedOmnigentDeploymentState:
@@ -172,10 +272,33 @@ async def resolve_omnigent_images(
     source = os.environ if env is None else env
     previous = load_resolved_state()
 
-    # Server image
-    server_ref, server_image_digest = await _resolve_image(
-        "OMNIGENT_IMAGE", "OMNIGENT_IMAGE_TAG", "OMNIGENT_IMAGE_REF", source
+    # A configured digest is direct authority. For the default mutable-tag
+    # path, compatibility must describe the image the Compose service is
+    # actually running, not a newer image that a reconciliation pull merely
+    # placed in the local cache.
+    configured_server_ref = str(source.get("OMNIGENT_IMAGE_REF") or "").strip()
+    configured_server_image = str(source.get("OMNIGENT_IMAGE") or "").strip()
+    server_requires_live_evidence = bool(
+        not configured_server_ref and configured_server_image
     )
+    running_server_ref = None
+    if server_requires_live_evidence:
+        running_server_ref = await _resolve_running_server_image(
+            configured_server_image, source
+        )
+    if running_server_ref:
+        server_ref = running_server_ref
+        server_image_digest = _extract_digest(running_server_ref)
+    elif server_requires_live_evidence:
+        # A registry digest or an old persisted ref cannot prove which mutable
+        # tag Compose is serving. Leave server authority unavailable so the
+        # compatibility gate retries instead of admitting an unverified pair.
+        server_ref = None
+        server_image_digest = None
+    else:
+        server_ref, server_image_digest = await _resolve_image(
+            "OMNIGENT_IMAGE", "OMNIGENT_IMAGE_TAG", "OMNIGENT_IMAGE_REF", source
+        )
 
     # OpenCode host image
     opencode_ref, _ = await _resolve_image(
@@ -193,7 +316,12 @@ async def resolve_omnigent_images(
         source,
     )
     # Fall back to previous if still None
-    if not server_ref and previous and previous.server_image_ref:
+    if (
+        not server_requires_live_evidence
+        and not server_ref
+        and previous
+        and previous.server_image_ref
+    ):
         server_ref = previous.server_image_ref
         server_image_digest = _extract_digest(server_ref)
     if not opencode_ref and previous and previous.opencode_host_image_ref:
@@ -201,48 +329,56 @@ async def resolve_omnigent_images(
     if not pi_ref and previous and previous.pi_host_image_ref:
         pi_ref = previous.pi_host_image_ref
 
-    # The server repository digest is useful deployment evidence, but it is not
-    # the Omnigent build identity attested by a harness-specific host. Preserve
-    # it separately and resolve the shared build identity from the host label.
+    # The default release embeds the exact server repository digest as its
+    # paired runtime-pack identity. It is distinct from the custom host image's
+    # own repository digest. An operator may instead provide an explicit shared
+    # build identity for an independently paired server and host.
     if not server_image_digest and server_ref:
         server_image_digest = _extract_digest(server_ref)
-    if not server_image_digest:
-        # Try to inspect omnigent server container's image
-        code, out, _ = await _run(["docker", "inspect", "--format", "{{.Image}}", "moonmind-omnigent-1"])
-        if code == 0:
-            candidate = out.strip()
-            if _SHA256_RE.fullmatch(candidate):
-                server_image_digest = candidate
-
-    configured_build_digest = str(
-        source.get("OMNIGENT_BUILD_DIGEST") or ""
-    ).strip()
-    if configured_build_digest and not _SHA256_RE.fullmatch(
-        configured_build_digest
-    ):
+    configured_build_digest = str(source.get("OMNIGENT_BUILD_DIGEST") or "").strip()
+    if configured_build_digest and not _SHA256_RE.fullmatch(configured_build_digest):
         raise ValueError("OMNIGENT_BUILD_DIGEST must be an exact sha256 identity")
     host_build_digest = (
         await _image_build_identity(opencode_ref) if opencode_ref else None
     )
-    if (
-        configured_build_digest
-        and host_build_digest
-        and configured_build_digest != host_build_digest
-    ):
-        raise ValueError(
-            "OMNIGENT_BUILD_DIGEST differs from the configured OpenCode host image"
+    server_version = (
+        await _image_omnigent_version(server_ref)
+        if server_ref and opencode_ref
+        else None
+    )
+    host_version = await _image_omnigent_version(opencode_ref) if opencode_ref else None
+    compatibility_failure: str | None = None
+    if opencode_ref:
+        if not server_ref or not server_image_digest:
+            compatibility_failure = "omnigent_server_build_unavailable"
+        elif not host_build_digest:
+            compatibility_failure = "omnigent_host_build_identity_unavailable"
+        elif configured_build_digest and configured_build_digest != host_build_digest:
+            compatibility_failure = "omnigent_operator_host_build_mismatch"
+        elif not configured_build_digest and server_image_digest != host_build_digest:
+            compatibility_failure = "omnigent_server_host_build_mismatch"
+        elif server_version is None or host_version is None:
+            compatibility_failure = "omnigent_server_host_version_probe_failed"
+        elif server_version != host_version:
+            compatibility_failure = "omnigent_server_host_version_mismatch"
+
+    if compatibility_failure:
+        # Keep the current server as catalog authority while quarantining the
+        # incompatible runtime pack. The selector consumes this same verdict,
+        # so existing signed qualification evidence cannot launch the stale
+        # image while the registry catches up.
+        omnigent_build_digest = configured_build_digest or server_image_digest
+        build_identity_source = (
+            "operator-quarantine"
+            if configured_build_digest
+            else "server-image-quarantine"
         )
-    if configured_build_digest:
+    elif configured_build_digest:
         omnigent_build_digest = configured_build_digest
         build_identity_source = "operator"
     elif host_build_digest:
         omnigent_build_digest = host_build_digest
         build_identity_source = "opencode-host-label"
-    elif opencode_ref:
-        raise ValueError(
-            "configured OpenCode host image does not declare "
-            "moonmind.omnigent.build_digest"
-        )
     elif previous and previous.omnigent_build_digest:
         omnigent_build_digest = previous.omnigent_build_digest
         build_identity_source = "persisted"
@@ -256,7 +392,9 @@ async def resolve_omnigent_images(
     # Try docker inspect for architecture
     target = opencode_ref or server_ref
     if target:
-        code, out, _ = await _run(["docker", "image", "inspect", target, "--format", "{{.Architecture}}"])
+        code, out, _ = await _run(
+            ["docker", "image", "inspect", target, "--format", "{{.Architecture}}"]
+        )
         if code == 0 and out.strip():
             reported = out.strip().lower()
             if reported in {"amd64", "arm64", "arm"}:
@@ -275,6 +413,16 @@ async def resolve_omnigent_images(
         details={
             "serverImageDigest": server_image_digest,
             "buildIdentitySource": build_identity_source,
+            "opencodeHostCompatibility": {
+                "status": "blocked" if compatibility_failure else "ready",
+                "failureCode": compatibility_failure,
+                "serverImageRef": server_ref,
+                "hostImageRef": opencode_ref,
+                "serverBuildDigest": server_image_digest,
+                "hostBuildDigest": host_build_digest,
+                "serverVersion": server_version,
+                "hostVersion": host_version,
+            },
         },
     )
     return state
