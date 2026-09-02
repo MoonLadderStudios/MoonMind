@@ -1055,6 +1055,7 @@ def build_default_activity_catalog(
                 ),
             )
             for activity_type, start_to_close, schedule_to_close in (
+                ("omnigent.prepare_child_execution_plan", 300, 600),
                 ("omnigent.ensure_provider_profile_lease", 60, 180),
                 ("omnigent.ensure_host", 300, 600),
                 ("omnigent.ensure_provider_session", 60, 180),

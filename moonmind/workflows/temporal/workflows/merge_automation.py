@@ -25,6 +25,7 @@ with workflow.unsafe.imports_passed_through():
         build_review_request_key,
     )
     from moonmind.workflows.temporal.activity_catalog import (
+        AGENT_RUNTIME_TASK_QUEUE,
         ARTIFACTS_TASK_QUEUE,
         INTEGRATIONS_TASK_QUEUE,
         WORKFLOW_TASK_QUEUE,
@@ -88,6 +89,9 @@ MERGE_AUTOMATION_CONTINUATION_OBSERVABILITY_PATCH = (
 )
 MERGE_AUTOMATION_RESOLVER_ATTEMPT_TITLE_PATCH = (
     "merge-automation-resolver-attempt-title-v1"
+)
+MERGE_AUTOMATION_OMNIGENT_RESOLVER_PLAN_PATCH = (
+    "merge-automation-omnigent-resolver-plan-v1"
 )
 # Request/remediate/request loop for one configured automated review provider.
 # Guarded so histories recorded before the loop existed keep replaying their
@@ -294,6 +298,58 @@ class MoonMindMergeAutomationWorkflow:
         if target_skill:
             memo["targetSkill"] = target_skill
         return memo
+
+    async def _prepare_omnigent_resolver_request(
+        self,
+        resolver_request: Mapping[str, Any],
+        *,
+        resolver_workflow_id: str,
+    ) -> dict[str, Any]:
+        """Compile fresh Omnigent authority for a Temporal-started child."""
+
+        if self._input is None:
+            raise RuntimeError("merge automation input is unavailable")
+        template = self._input.resolver_template
+        target_runtime = str(template.get("targetRuntime") or "").strip().lower()
+        if target_runtime != "omnigent":
+            return dict(resolver_request)
+        parent_plan = template.get("parentOmnigentExecutionPlan")
+        activity_payload: dict[str, Any] = {
+            "principal": self._principal(),
+            "parentWorkflowId": self._input.parent_workflow_id,
+            "childWorkflowId": resolver_workflow_id,
+            "childWorkflowRequest": dict(resolver_request),
+        }
+        if isinstance(parent_plan, Mapping):
+            activity_payload["parentExecutionPlan"] = dict(parent_plan)
+        prepared = await workflow.execute_activity(
+            "omnigent.prepare_child_execution_plan",
+            activity_payload,
+            task_queue=AGENT_RUNTIME_TASK_QUEUE,
+            start_to_close_timeout=timedelta(minutes=5),
+            schedule_to_close_timeout=timedelta(minutes=10),
+            retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+        )
+        if not isinstance(prepared, Mapping):
+            raise ValueError(
+                "Omnigent child execution-plan preparation returned an invalid "
+                "workflow request."
+            )
+        initial_parameters = prepared.get("initial_parameters")
+        if not isinstance(initial_parameters, Mapping):
+            raise ValueError(
+                "Omnigent child execution-plan preparation omitted initial parameters."
+            )
+        if not isinstance(initial_parameters.get("omnigentExecutionPlan"), Mapping):
+            raise ValueError(
+                "Omnigent child execution-plan preparation omitted plan authority."
+            )
+        if not str(initial_parameters.get("resolvedSkillsetRef") or "").strip():
+            raise ValueError(
+                "Omnigent child execution-plan preparation omitted Skill authority."
+            )
+        return dict(prepared)
 
     async def _write_json_artifact(self, *, name: str, payload: dict[str, Any]) -> str | None:
         try:
@@ -1254,6 +1310,11 @@ class MoonMindMergeAutomationWorkflow:
                 )
                 resolver_attempt = len(self._resolver_child_workflow_ids) + 1
                 resolver_workflow_id = f"{resolver_workflow_id}:{resolver_attempt}"
+                if workflow.patched(MERGE_AUTOMATION_OMNIGENT_RESOLVER_PLAN_PATCH):
+                    resolver_request = await self._prepare_omnigent_resolver_request(
+                        resolver_request,
+                        resolver_workflow_id=resolver_workflow_id,
+                    )
                 self._resolver_child_workflow_ids.append(resolver_workflow_id)
                 child_kwargs: dict[str, Any] = {
                     "id": resolver_workflow_id,

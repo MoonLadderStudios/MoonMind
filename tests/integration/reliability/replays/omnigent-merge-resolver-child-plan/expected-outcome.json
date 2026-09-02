@@ -1,0 +1,10 @@
+{
+  "preparationActivity": "omnigent.prepare_child_execution_plan",
+  "activityTaskQueue": "mm.activity.agent_runtime",
+  "childWorkflowId": "resolver:pr:813:head:1430266ef052:h:546a49d948b70256:1",
+  "childPlanArtifactRef": "art-child-plan",
+  "resolvedSkillsetRef": "art-child-skills",
+  "resolvedSkill": "pr-resolver",
+  "startingBranch": "main",
+  "targetBranch": "resolver-plan-replay"
+}
