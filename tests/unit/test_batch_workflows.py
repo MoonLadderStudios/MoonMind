@@ -286,6 +286,7 @@ def test_resolve_github_issue_range_excludes_non_open_issues_and_missing_numbers
     targets = module["resolve_github_issue_range"](
         "acme/widgets",
         "40-44",
+        connection_ref="repository-connection:acme",
         run_command=fake_run,
     )
 
@@ -301,7 +302,7 @@ def test_resolve_github_issue_range_excludes_non_open_issues_and_missing_numbers
     }
     assert targets[0]["repositoryTarget"] == {
         "provider": "git",
-        "connectionRef": "repository-connection:git-default",
+        "connectionRef": "repository-connection:acme",
         "repository": {"name": "acme/widgets"},
         "branch": {"name": "main"},
     }
@@ -353,8 +354,25 @@ def test_resolve_github_issue_range_requires_safe_default_branch_authority():
         module["resolve_github_issue_range"](
             "acme/widgets",
             "42-42",
+            connection_ref="repository-connection:acme",
             run_command=fake_run,
         )
+
+
+@pytest.mark.parametrize(
+    "branch",
+    ["feature/foo!bar", "feature/foo=bar", "développement"],
+)
+def test_git_branch_validation_accepts_git_valid_default_branches(branch: str):
+    module = _load_module()
+
+    assert module["_git_branch_is_valid"](branch) is True
+
+
+def test_git_branch_validation_rejects_git_invalid_default_branch():
+    module = _load_module()
+
+    assert module["_git_branch_is_valid"]("feature/../escape") is False
 
 
 def test_resolve_github_issue_range_rejects_unbounded_scan_before_querying():
@@ -373,6 +391,7 @@ def test_resolve_github_issue_range_rejects_unbounded_scan_before_querying():
         module["resolve_github_issue_range"](
             "acme/widgets",
             "1-1001",
+            connection_ref="repository-connection:acme",
             run_command=unexpected_run,
         )
 
@@ -579,6 +598,29 @@ def test_load_parent_repository_reads_task_context(tmp_path):
         load_parent_repository(str(task_context))
         == "MoonLadderStudios/Tactics"
     )
+
+
+def test_load_parent_repository_connection_reads_canonical_task_context(tmp_path):
+    module = _load_module()
+    task_context = tmp_path / "task_context.json"
+    task_context.write_text(
+        json.dumps(
+            {
+                "repository": "MoonLadderStudios/Tactics",
+                "repositoryTarget": {
+                    "provider": "git",
+                    "connectionRef": "repository-connection:tactics",
+                    "repository": {"name": "MoonLadderStudios/Tactics"},
+                    "branch": {"name": "main"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert module["_load_parent_repository_connection_ref"](
+        str(task_context)
+    ) == "repository-connection:tactics"
 
 
 def test_build_child_request_sets_runtime_inheritance_publish_and_idempotency():

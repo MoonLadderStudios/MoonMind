@@ -59,12 +59,8 @@ SUPPORTED_RUN_REFS = frozenset(
     }
 )
 _GITHUB_RANGE_PATTERN = re.compile(r"^(?P<start>\d+)-(?P<end>\d+)$")
-_SAFE_GIT_BRANCH = re.compile(
-    r"^[A-Za-z0-9][A-Za-z0-9._/@+-]{0,253}(?<!\.lock)$"
-)
 _GITHUB_GRAPHQL_CHUNK_SIZE = 50
 _GITHUB_MAX_SEARCH_WIDTH = 1000
-_DEFAULT_GIT_CONNECTION_REF = "repository-connection:git-default"
 
 
 class BatchInputError(ValueError):
@@ -132,6 +128,25 @@ def _normalize_repo(value: Any) -> str | None:
     return candidate or None
 
 
+def _git_branch_is_valid(value: Any) -> bool:
+    """Validate a branch with Git's canonical ref-name implementation."""
+
+    branch = _text(value)
+    if branch is None:
+        return False
+    try:
+        completed = subprocess.run(
+            ["git", "check-ref-format", "--branch", branch],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except OSError as exc:
+        raise RuntimeError("Git branch validation is unavailable") from exc
+    return completed.returncode == 0
+
+
 def parse_github_issue_range(value: str) -> tuple[int, int]:
     """Parse an inclusive GitHub issue-number search range."""
 
@@ -185,6 +200,7 @@ def resolve_github_issue_range(
     repository: str,
     issue_range: str,
     *,
+    connection_ref: str,
     run_command: Any = subprocess.run,
 ) -> list[dict[str, Any]]:
     """Return only open GitHub Issues whose numbers fall in ``issue_range``.
@@ -197,6 +213,11 @@ def resolve_github_issue_range(
 
     owner, name = _github_repository_parts(repository)
     normalized_repository = f"{owner}/{name}"
+    normalized_connection_ref = _text(connection_ref)
+    if normalized_connection_ref is None:
+        raise BatchInputError(
+            "GitHub issue discovery requires parent repository connection authority"
+        )
     start, end = parse_github_issue_range(issue_range)
     search_width = end - start + 1
     if search_width > _GITHUB_MAX_SEARCH_WIDTH:
@@ -278,7 +299,7 @@ def resolve_github_issue_range(
             if isinstance(default_branch_ref, dict)
             else None
         )
-        if default_branch is None or _SAFE_GIT_BRANCH.fullmatch(default_branch) is None:
+        if not _git_branch_is_valid(default_branch):
             raise RuntimeError(
                 "GitHub repository default branch is unavailable or unsafe: "
                 f"{normalized_repository}"
@@ -294,7 +315,7 @@ def resolve_github_issue_range(
         resolved_default_branch = default_branch
         repository_target = {
             "provider": "git",
-            "connectionRef": _DEFAULT_GIT_CONNECTION_REF,
+            "connectionRef": normalized_connection_ref,
             "repository": {"name": normalized_repository},
             "branch": {"name": default_branch},
         }
@@ -587,7 +608,7 @@ def build_child_request(
             or connection_ref is None
             or target_repository is None
             or target_branch is None
-            or _SAFE_GIT_BRANCH.fullmatch(target_branch) is None
+            or not _git_branch_is_valid(target_branch)
         ):
             raise BatchInputError(
                 "resolved Git repository target requires provider, connection, "
@@ -836,6 +857,38 @@ def _load_parent_repository(task_context_path: str | None = None) -> str | None:
         normalized = _normalize_repo(payload.get("repository"))
         if normalized:
             return normalized
+    return None
+
+
+def _load_parent_repository_connection_ref(
+    task_context_path: str | None = None,
+) -> str | None:
+    seen: set[str] = set()
+    for candidate in _task_context_candidates(task_context_path):
+        identity = str(candidate.expanduser())
+        if identity in seen:
+            continue
+        seen.add(identity)
+        if not candidate.exists() or not candidate.is_file():
+            continue
+        try:
+            payload = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        for target in (payload.get("repositoryTarget"), payload.get("repository")):
+            if not isinstance(target, dict):
+                continue
+            if (_text(target.get("provider")) or "").lower() != "git":
+                continue
+            connection_ref = _text(target.get("connectionRef"))
+            if connection_ref:
+                return connection_ref
+        auth = payload.get("auth") if isinstance(payload.get("auth"), dict) else {}
+        connection_ref = _text(auth.get("repoAuthRef"))
+        if connection_ref:
+            return connection_ref
     return None
 
 
@@ -1091,6 +1144,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--github-repository",
         help="GitHub owner/repository; defaults to the parent task repository.",
     )
+    parser.add_argument(
+        "--repository-connection-ref",
+        help=(
+            "Canonical repository connection authority; defaults to the parent "
+            "task context or MOONMIND_REPOSITORY_CONNECTION_REF."
+        ),
+    )
     parser.add_argument("--run-ref", required=True)
     parser.add_argument("--publish-mode", default="pr")
     parser.add_argument("--constraints", default=None)
@@ -1198,9 +1258,20 @@ def main(argv: list[str] | None = None) -> int:
                 raise BatchInputError(
                     "--github-repository is required when parent repository context is unavailable"
                 )
+            repository_connection_ref = (
+                _text(args.repository_connection_ref)
+                or _load_parent_repository_connection_ref(args.task_context_path)
+                or _text(os.getenv("MOONMIND_REPOSITORY_CONNECTION_REF"))
+            )
+            if not repository_connection_ref:
+                raise BatchInputError(
+                    "--repository-connection-ref is required when parent repository "
+                    "connection context is unavailable"
+                )
             targets = resolve_github_issue_range(
                 github_repository,
                 args.github_issue_range,
+                connection_ref=repository_connection_ref,
             )
             targets_path = artifacts_dir / "batch-workflows-targets.json"
             _write_artifacts(targets_path, {"targets": targets})

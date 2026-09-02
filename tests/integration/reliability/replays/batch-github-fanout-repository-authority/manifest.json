@@ -2,6 +2,12 @@
   "failureShapeId": "batch-github-fanout-repository-authority",
   "incidentWorkflowId": "mm:f724a9b2-5eac-5e0f-8644-d261379717f1",
   "repository": "MoonLadderStudios/MoonMind",
+  "repositoryTarget": {
+    "provider": "git",
+    "connectionRef": "repository-connection:git-default",
+    "repository": {"name": "MoonLadderStudios/MoonMind"},
+    "branch": {"name": "main"}
+  },
   "issueRange": "3815-3815",
   "failedWorkspaceSpec": {
     "repository": "MoonLadderStudios/MoonMind",

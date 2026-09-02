@@ -152,6 +152,14 @@ def test_agent_run_resolve_handoff_is_compact_with_legacy_replay_decode() -> Non
             omnigentExecutionPlan=binding,
             request={"persisted": "ambiguous-authority-payload"},
         )
+    with pytest.raises(ValidationError, match="opaque artifact reference"):
+        OmnigentResolveIntentRequest(
+            workflowId="workflow-1",
+            stepExecutionId="step-1",
+            agentRunId="agent-run-1",
+            omnigentExecutionPlan=binding,
+            workspaceCheckpointRestoreRef="/tmp/untrusted-checkpoint.tar.gz",
+        )
 
 
 def test_intent_snapshot_preserves_legacy_request_authority() -> None:
@@ -217,6 +225,7 @@ def test_intent_snapshot_keeps_plan_bound_authority_compact() -> None:
         executionInstructionDigest="sha256:" + "c" * 64,
         executionInputRefs=["art-input"],
         executionInputRefsDigest="sha256:" + "d" * 64,
+        workspaceCheckpointRestoreRef="artifact://art-checkpoint",
         omnigentExecutionPlan=binding,
     )
 
@@ -239,6 +248,7 @@ def test_intent_snapshot_keeps_plan_bound_authority_compact() -> None:
         "executionInstructionDigest": "sha256:" + "c" * 64,
         "executionInputRefs": ["art-input"],
         "executionInputRefsDigest": "sha256:" + "d" * 64,
+        "workspaceCheckpointRestoreRef": "artifact://art-checkpoint",
         "omnigentExecutionPlan": binding.model_dump(mode="json", by_alias=True),
     }
     assert artifact_name == "omnigent.agent-execution-request-snapshot.json"
@@ -344,6 +354,7 @@ async def test_compact_plan_handoff_reconstructs_selected_authored_step(
 
     continuation_instruction = "Continue using only the selected evidence."
     continuation_refs = ["art-continuation", "art-selected-evidence"]
+    checkpoint_restore_ref = "artifact://art-workspace-checkpoint"
     continued = await omnigent_session_activities._reconstruct_plan_bound_request(
         binding=binding,
         plan=plan,
@@ -365,9 +376,14 @@ async def test_compact_plan_handoff_reconstructs_selected_authored_step(
                 ).encode("utf-8")
             )
         ),
+        workspace_checkpoint_restore_ref=checkpoint_restore_ref,
     )
     assert continued.instruction_ref == continuation_instruction
     assert continued.input_refs[-2:] == continuation_refs
+    assert (
+        continued.workspace_spec["workspaceCheckpointRestoreRef"]
+        == checkpoint_restore_ref
+    )
 
     bundle_plan = SimpleNamespace(
         payload=SimpleNamespace(
@@ -1568,6 +1584,7 @@ def test_agent_run_patch_preserves_legacy_replay_and_selects_new_supervisor() ->
     assert "OMNIGENT_SESSION_SUPERVISOR_PATCH_ID" in source
     assert "OMNIGENT_SESSION_ADMISSION_PATCH_ID" in source
     assert "OMNIGENT_COMPACT_RESOLVE_INTENT_PATCH_ID" in source
+    assert "OMNIGENT_COMPACT_WORKSPACE_CHECKPOINT_PATCH_ID" in source
     assert '"omnigent.evaluate_session_admission"' in source
     assert '"MoonMind.OmnigentSession"' in source
     assert "omnigent_session_workflow_id" in source
@@ -1580,6 +1597,19 @@ def test_agent_run_patch_preserves_legacy_replay_and_selects_new_supervisor() ->
     )[0]
     assert "_omnigent_resolve_intent_payload" in resolve_call
     assert "compact_plan_authority" in resolve_call
+    assert "compact_workspace_checkpoint_authority" in resolve_call
+
+
+def test_ensure_host_materializes_canonical_execution_inputs_as_attachments() -> None:
+    source = inspect.getsource(
+        omnigent_session_activities.omnigent_ensure_host_activity
+    )
+
+    assert (
+        "OmnigentProfileBoundExecutionCoordinator._attachment_refs"
+        in source
+    )
+    assert "workspace_checkpoint_restore_ref" in source
 
 
 def test_agent_run_compact_intent_patch_preserves_legacy_activity_shape() -> None:
@@ -1598,6 +1628,10 @@ def test_agent_run_compact_intent_patch_preserves_legacy_activity_shape() -> Non
         correlationId="workflow-1",
         idempotencyKey="step-1",
         instructionRef="art_task",
+        inputRefs=["artifact://art-input"],
+        workspaceSpec={
+            "workspaceCheckpointRestoreRef": "artifact://art-workspace-checkpoint"
+        },
         parameters={"providerPayload": "must-not-enter-new-history"},
     )
     common = {
@@ -1605,6 +1639,7 @@ def test_agent_run_compact_intent_patch_preserves_legacy_activity_shape() -> Non
         "step_execution_id": "step-1",
         "agent_run_id": "agent-run-1",
         "admitted_feature_generation": OMNIGENT_SESSION_FEATURE_GENERATION,
+        "compact_workspace_checkpoint_authority": True,
     }
 
     compact = MoonMindAgentRun._omnigent_resolve_intent_payload(
@@ -1619,6 +1654,10 @@ def test_agent_run_compact_intent_patch_preserves_legacy_activity_shape() -> Non
     )
     assert compact["executionInstructionRef"] == "art_task"
     assert compact["executionInstructionDigest"].startswith("sha256:")
+    assert compact["executionInputRefs"] == ["artifact://art-input"]
+    assert compact["workspaceCheckpointRestoreRef"] == (
+        "artifact://art-workspace-checkpoint"
+    )
     assert "request" not in compact
     assert "providerPayload" not in json.dumps(compact)
     assert legacy["request"]["parameters"]["providerPayload"] == (

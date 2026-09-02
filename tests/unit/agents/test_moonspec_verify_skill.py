@@ -72,6 +72,70 @@ def test_moonspec_verify_skill_supports_issue_brief_mode() -> None:
     assert "Recoverable In Current Runtime: true | false" in text
 
 
+def test_moonspec_verify_skill_treats_publication_as_downstream_candidate_work() -> None:
+    skill_path = (
+        Path(__file__).resolve().parents[3]
+        / ".agents"
+        / "skills"
+        / "moonspec-verify"
+        / "SKILL.md"
+    )
+
+    text = skill_path.read_text(encoding="utf-8")
+
+    assert "pre-publication verification step" in text
+    assert "open issue" in text
+    assert "unmerged candidate" in text
+    assert "expected inputs" in text
+    assert "Do not require downstream commit" in text
+
+
+def test_moonspec_verify_skill_uses_managed_python_test_boundary() -> None:
+    skill_path = (
+        Path(__file__).resolve().parents[3]
+        / ".agents"
+        / "skills"
+        / "moonspec-verify"
+        / "SKILL.md"
+    )
+
+    text = skill_path.read_text(encoding="utf-8")
+
+    assert "`MOONMIND_STEP_EXECUTION_ID`" in text
+    assert "check `command -v moonmind`" in text
+    assert "moonmind container python-tests ..." in text
+    assert "route every Python" in text
+    assert "test through that command" in text
+    assert "do not run `pytest`" in text
+    assert "any command that installs pytest" in text
+    assert "Host-local Python results are invalid verification evidence" in text
+    assert "absence of `pytest`" in text
+    assert "documented `moonmind container`" in text
+
+
+def test_moonspec_verify_skill_rebuilds_post_remediation_classifications() -> None:
+    skill_path = (
+        Path(__file__).resolve().parents[3]
+        / ".agents"
+        / "skills"
+        / "moonspec-verify"
+        / "SKILL.md"
+    )
+
+    text = skill_path.read_text(encoding="utf-8")
+    normalized = " ".join(text.split())
+
+    assert "verification follows a remediation attempt" in normalized
+    assert (
+        "rebuild every controlling classification from the current repository head"
+        in normalized
+    )
+    assert "are hypotheses and process context only" in normalized
+    assert "replace the old status, evidence, line numbers, and notes" in normalized
+    assert "Never copy or incrementally edit a previous verifier JSON report" in normalized
+    assert "no gap may remain solely because the old artifact said it existed" in normalized
+
+
 def test_moonspec_verify_skill_defines_target_modes() -> None:
     skill_path = (
         Path(__file__).resolve().parents[3]

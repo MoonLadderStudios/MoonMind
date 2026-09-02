@@ -154,6 +154,7 @@ steps:
     python3 "$MOONMIND_ACTIVE_SKILLS_DIR/batch-github-workflows/bin/batch_workflows.py" \
     --github-issue-range "{{ inputs.issue_range }}" \
     --github-repository "{{ inputs.repository }}" \
+    --repository-connection-ref "$MOONMIND_REPOSITORY_CONNECTION_REF" \
     --run-ref "{{ inputs.run_ref }}" \
     --publish-mode "{{ inputs.publish_mode }}" \
     --max-workflows "{{ inputs.max_workflows }}" \
