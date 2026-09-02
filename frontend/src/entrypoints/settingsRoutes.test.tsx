@@ -144,7 +144,7 @@ describe('MoonLadderStudios/MoonMind#3818 route-owned Settings pages', () => {
     expect(requestedUrls).not.toContain('/api/system/worker-pause');
     expect(screen.queryByLabelText('Generated user and workspace settings')).toBeNull();
     expect(screen.queryByLabelText('Worker Operations')).toBeNull();
-    expect(screen.queryByRole('radio')).toBeNull();
+    expect(screen.queryByText('Default Publish Mode')).toBeNull();
   });
 
   it('mounts only User / Workspace primary data', async () => {

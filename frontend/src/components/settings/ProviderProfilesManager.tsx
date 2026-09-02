@@ -134,13 +134,22 @@ interface ProviderProfilesManagerProps {
   onSelectRuntimeId?: ((runtimeId: string | undefined) => void) | undefined;
 }
 
+export interface ProviderProfileTierDraft {
+  clientId: string;
+  label: string;
+  model: string | null;
+  effort: string | null;
+  parameters: Record<string, unknown>;
+  annotations: Record<string, unknown>;
+}
+
 interface ProviderProfileFormState {
   profileId: string;
   runtimeId: string;
   providerId: string;
   providerLabel: string;
-  defaultModel: string;
-  defaultEffort: string;
+  tiers: ProviderProfileTierDraft[];
+  defaultTierClientId: string;
   authenticationMethod: AuthenticationMethod | '';
   credentialSource: string;
   runtimeMaterializationMode: string;
@@ -164,8 +173,8 @@ interface ProviderProfileSavePayload {
   runtime_id?: string;
   provider_id?: string;
   provider_label?: string | null;
-  default_model?: string | null;
-  default_effort?: string | null;
+  model_tiers?: ProviderModelEffortTier[];
+  default_model_tier?: number;
   authentication_method?: AuthenticationMethod;
   preset_version?: string;
   credential_source?: string;
@@ -240,6 +249,47 @@ function providerProfileModelTiers(profile: ProviderProfile): ProviderModelEffor
   ];
 }
 
+function generateTierClientId(): string {
+  return `tier-${Math.random().toString(36).slice(2, 9)}-${Date.now().toString(36)}`;
+}
+
+export function createTierDraft(
+  tier?: Partial<ProviderModelEffortTier> & { clientId?: string },
+): ProviderProfileTierDraft {
+  return {
+    clientId: tier?.clientId ?? generateTierClientId(),
+    label: tier?.label ?? '',
+    model: tier?.model ?? null,
+    effort: tier?.effort ?? null,
+    parameters: (tier?.parameters as Record<string, unknown>) ?? {},
+    annotations: (tier?.annotations as Record<string, unknown>) ?? {},
+  };
+}
+
+function normalizeProfileTiersForForm(
+  profile: ProviderProfile,
+): { tiers: ProviderProfileTierDraft[]; defaultTierClientId: string } {
+  const tiers = providerProfileModelTiers(profile).map((tier) => createTierDraft(tier));
+  const defaultIndex = Math.max(0, Math.min(tiers.length - 1, (profile.default_model_tier ?? 1) - 1));
+  return { tiers, defaultTierClientId: tiers[defaultIndex]?.clientId ?? tiers[0].clientId };
+}
+
+export function buildProviderProfileTierPayload(form: ProviderProfileFormState): {
+  model_tiers: ProviderModelEffortTier[];
+  default_model_tier: number;
+} {
+  const model_tiers = form.tiers.map((tier) => ({
+    label: tier.label.trim() || null,
+    model: tier.model?.trim() ? tier.model.trim() : null,
+    effort: tier.effort?.trim() ? tier.effort.trim() : null,
+    parameters: tier.parameters ?? {},
+    annotations: tier.annotations ?? {},
+  }));
+  const defaultIndex = form.tiers.findIndex((tier) => tier.clientId === form.defaultTierClientId);
+  const default_model_tier = defaultIndex >= 0 ? defaultIndex + 1 : 1;
+  return { model_tiers, default_model_tier };
+}
+
 function oauthSessionStateFromResponse(
   session: OAuthSessionResponse,
   fallbackProfileId?: string,
@@ -268,13 +318,14 @@ function oauthSessionStatesEqual(left: OAuthSessionState, right: OAuthSessionSta
 }
 
 export function defaultFormState(runtimeId = ''): ProviderProfileFormState {
+  const initialTier = createTierDraft({ label: '', model: null, effort: null });
   return {
     profileId: '',
     runtimeId,
     providerId: '',
     providerLabel: '',
-    defaultModel: '',
-    defaultEffort: '',
+    tiers: [initialTier],
+    defaultTierClientId: initialTier.clientId,
     authenticationMethod: '',
     credentialSource: '',
     runtimeMaterializationMode: '',
@@ -295,13 +346,14 @@ export function defaultFormState(runtimeId = ''): ProviderProfileFormState {
 }
 
 export function toFormState(profile: ProviderProfile): ProviderProfileFormState {
+  const { tiers, defaultTierClientId } = normalizeProfileTiersForForm(profile);
   return {
     profileId: profile.profile_id,
     runtimeId: profile.runtime_id,
     providerId: profile.provider_id,
     providerLabel: profile.provider_label ?? '',
-    defaultModel: profile.default_model ?? '',
-    defaultEffort: profile.default_effort ?? '',
+    tiers,
+    defaultTierClientId,
     authenticationMethod: profile.authentication_method ?? '',
     credentialSource: profile.credential_source,
     runtimeMaterializationMode: profile.runtime_materialization_mode,
@@ -822,6 +874,8 @@ function buildSavePayload(
       (!options.isEditing && form.authenticationMethod === 'oauth'));
   const payload: ProviderProfileSavePayload = { profile_id: form.profileId.trim() };
 
+  const tierPayload = buildProviderProfileTierPayload(form);
+  const baselineTierPayload = buildProviderProfileTierPayload(options.formBaseline);
   if (options.isEditing) {
     const baseline = options.formBaseline;
     const setChanged = <Key extends keyof ProviderProfileSavePayload>(
@@ -837,16 +891,12 @@ function buildSavePayload(
       form.providerLabel.trim() || null,
       baseline.providerLabel.trim() || null,
     );
-    setChanged(
-      'default_model',
-      form.defaultModel.trim() || null,
-      baseline.defaultModel.trim() || null,
-    );
-    setChanged(
-      'default_effort',
-      form.defaultEffort.trim() || null,
-      baseline.defaultEffort.trim() || null,
-    );
+    if (!valuesEqual(tierPayload.model_tiers, baselineTierPayload.model_tiers)) {
+      payload.model_tiers = tierPayload.model_tiers;
+    }
+    if (tierPayload.default_model_tier !== baselineTierPayload.default_model_tier) {
+      payload.default_model_tier = tierPayload.default_model_tier;
+    }
     setChanged(
       'account_label',
       form.accountLabel.trim() || null,
@@ -905,8 +955,8 @@ function buildSavePayload(
   payload.runtime_id = form.runtimeId.trim();
   payload.provider_id = form.providerId.trim();
   payload.provider_label = form.providerLabel.trim() || null;
-  payload.default_model = form.defaultModel.trim() || null;
-  payload.default_effort = form.defaultEffort.trim() || null;
+  payload.model_tiers = tierPayload.model_tiers;
+  payload.default_model_tier = tierPayload.default_model_tier;
   payload.account_label = form.accountLabel.trim() || null;
 
   if (!payload.profile_id) {
@@ -1012,12 +1062,12 @@ export function ProviderProfilesManager({
   onSelectRuntimeId,
 }: ProviderProfilesManagerProps) {
   const createFormRuntimeSeed = selectedRuntimeId ?? '';
-  const [form, setForm] = useState<ProviderProfileFormState>(() =>
-    defaultFormState(createFormRuntimeSeed),
-  );
-  const [formBaseline, setFormBaseline] = useState<ProviderProfileFormState>(() =>
-    defaultFormState(createFormRuntimeSeed),
-  );
+  const initialFormStateRef = useRef<ProviderProfileFormState | null>(null);
+  if (initialFormStateRef.current === null) {
+    initialFormStateRef.current = defaultFormState(createFormRuntimeSeed);
+  }
+  const [form, setForm] = useState<ProviderProfileFormState>(() => initialFormStateRef.current!);
+  const [formBaseline, setFormBaseline] = useState<ProviderProfileFormState>(() => initialFormStateRef.current!);
   const [creationPreset, setCreationPreset] =
     useState<ProviderProfileCreationPreset | null>(null);
   const [creationPresetLoading, setCreationPresetLoading] = useState(false);
@@ -3232,32 +3282,6 @@ export function ProviderProfilesManager({
                 <p className="text-xs text-slate-400 dark:text-slate-500">Optional friendly account identity</p>
               </label>
               <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
-                <span>Default model</span>
-                <input
-                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-                  value={form.defaultModel}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, defaultModel: event.target.value }))
-                  }
-                  placeholder={
-                    defaultTaskModelByRuntime[form.runtimeId]
-                      ? `Inherited: ${defaultTaskModelByRuntime[form.runtimeId]}`
-                      : 'Leave blank to inherit runtime default'
-                  }
-                />
-              </label>
-              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
-                <span>Default effort</span>
-                <input
-                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-                  value={form.defaultEffort}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, defaultEffort: event.target.value }))
-                  }
-                  placeholder="Leave blank to inherit runtime default"
-                />
-              </label>
-              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                 <span>Max parallel runs</span>
                 <input
                   type="number"
@@ -3286,6 +3310,209 @@ export function ProviderProfilesManager({
                 Runtime default
               </label>
             </div>
+          </fieldset>
+
+          {/* ── Model & effort tiers (standard, not advanced) ── */}
+          <fieldset className="rounded-2xl border border-slate-200 dark:border-slate-700 p-5 space-y-4">
+            <legend className="px-2 text-sm font-semibold text-slate-700 dark:text-slate-300">
+              Model &amp; effort tiers
+            </legend>
+            <p className="text-sm text-slate-600 dark:text-slate-400">
+              Map workflow tier requests to a model and effort for this profile. {form.tiers.length} tier{form.tiers.length !== 1 ? 's' : ''} · Default: Tier {Math.max(1, form.tiers.findIndex((t) => t.clientId === form.defaultTierClientId) + 1)}
+            </p>
+            <div className="flex justify-end">
+              <button
+                type="button"
+                className="rounded-lg bg-slate-900 dark:bg-slate-100 px-4 py-2 text-sm font-semibold text-white dark:text-slate-900"
+                onClick={() => {
+                  const newTier = createTierDraft({ label: '', model: null, effort: null });
+                  setForm((current) => ({
+                    ...current,
+                    tiers: [...current.tiers, newTier],
+                  }));
+                }}
+                aria-label="Add tier"
+              >
+                Add tier
+              </button>
+            </div>
+            <ol className="space-y-4" aria-label="Model and effort tiers">
+              {form.tiers.map((tier, index) => {
+                const tierNumber = index + 1;
+                const isDefault = tier.clientId === form.defaultTierClientId;
+                const isOnlyTier = form.tiers.length === 1;
+                return (
+                  <li
+                    key={tier.clientId}
+                    className={`rounded-xl border p-4 space-y-3 ${isDefault ? 'border-violet-300 dark:border-violet-700 bg-violet-50/40 dark:bg-violet-950/20' : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900'}`}
+                  >
+                    <fieldset>
+                      <legend className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+                        Tier {tierNumber} {isDefault ? <span className="ml-2 rounded-full bg-violet-100 dark:bg-violet-900/40 px-2 py-0.5 text-xs font-semibold text-violet-700 dark:text-violet-300">Default</span> : null}
+                      </legend>
+                      <div className="mt-3 flex flex-wrap items-center gap-3">
+                        <label className="flex items-center gap-2 text-sm font-medium">
+                          <input
+                            type="radio"
+                            name="default_model_tier"
+                            checked={isDefault}
+                            onChange={() =>
+                              setForm((current) => ({
+                                ...current,
+                                defaultTierClientId: tier.clientId,
+                              }))
+                            }
+                            aria-label={isDefault ? 'Default tier' : `Use Tier ${tierNumber} as default`}
+                          />
+                          {isDefault ? 'Default tier' : `Use Tier ${tierNumber} as default`}
+                        </label>
+                        <button
+                          type="button"
+                          className="ml-auto rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium"
+                          disabled={isOnlyTier}
+                          title={isOnlyTier ? 'A profile must contain at least one tier.' : undefined}
+                          aria-label={`Remove Tier ${tierNumber}`}
+                          onClick={() => {
+                            if (isOnlyTier) return;
+                            const isLast = index === form.tiers.length - 1;
+                            const isDefaultTier = isDefault;
+                            if (!isLast || isDefaultTier) {
+                              const confirmed = window.confirm(
+                                `Remove Tier ${tierNumber}?` +
+                                  (!isLast
+                                    ? `\n\nThis changes future tier-number resolution:\n${form.tiers
+                                        .slice(index + 1)
+                                        .map((t, i) => `Tier ${index + 2 + i}: ${t.label || `Tier ${index + 2 + i}`} -> becomes Tier ${index + 1 + i}`)
+                                        .join('\n')}\n\nHistorical runs do not change.`
+                                    : isDefaultTier
+                                      ? '\n\nA new default will be assigned to the nearest surviving tier.'
+                                      : ''),
+                              );
+                              if (!confirmed) return;
+                              let newDefault = form.defaultTierClientId;
+                              if (isDefaultTier) {
+                                const survivorIndex = index < form.tiers.length - 1 ? index : index - 1;
+                                newDefault = form.tiers[survivorIndex === index ? survivorIndex - 1 : survivorIndex]?.clientId ?? form.tiers.find((t) => t.clientId !== tier.clientId)?.clientId ?? '';
+                              }
+                              setForm((current) => ({
+                                ...current,
+                                tiers: current.tiers.filter((t) => t.clientId !== tier.clientId),
+                                defaultTierClientId: newDefault,
+                              }));
+                            } else {
+                              setForm((current) => ({
+                                ...current,
+                                tiers: current.tiers.filter((t) => t.clientId !== tier.clientId),
+                              }));
+                            }
+                          }}
+                        >
+                          Remove tier
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium"
+                          aria-label={`Duplicate Tier ${tierNumber} as new last tier`}
+                          onClick={() => {
+                            const dup = createTierDraft({
+                              label: tier.label ? `${tier.label} copy` : '',
+                              model: tier.model,
+                              effort: tier.effort,
+                              parameters: { ...tier.parameters },
+                              annotations: { ...tier.annotations },
+                            });
+                            setForm((current) => ({
+                              ...current,
+                              tiers: [...current.tiers, dup],
+                            }));
+                          }}
+                        >
+                          Duplicate
+                        </button>
+                      </div>
+                      <div className="mt-4 grid gap-4 md:grid-cols-3">
+                        <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                          <span>Label</span>
+                          <input
+                            className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm"
+                            value={tier.label}
+                            onChange={(event) => {
+                              const value = event.target.value;
+                              setForm((current) => ({
+                                ...current,
+                                tiers: current.tiers.map((t) =>
+                                  t.clientId === tier.clientId ? { ...t, label: value } : t,
+                                ),
+                              }));
+                            }}
+                            placeholder={`Tier ${tierNumber}`}
+                            aria-label={`Tier ${tierNumber} label`}
+                          />
+                        </label>
+                        <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                          <span>Model</span>
+                          <input
+                            className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm font-mono"
+                            value={tier.model ?? ''}
+                            onChange={(event) => {
+                              const value = event.target.value || null;
+                              setForm((current) => ({
+                                ...current,
+                                tiers: current.tiers.map((t) =>
+                                  t.clientId === tier.clientId ? { ...t, model: value } : t,
+                                ),
+                              }));
+                            }}
+                            placeholder="Runtime default"
+                            aria-label={`Tier ${tierNumber} model`}
+                          />
+                          <span className="text-xs text-slate-500">Leave blank for runtime default</span>
+                        </label>
+                        <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                          <span>Effort level</span>
+                          <input
+                            className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm"
+                            value={tier.effort ?? ''}
+                            onChange={(event) => {
+                              const value = event.target.value || null;
+                              setForm((current) => ({
+                                ...current,
+                                tiers: current.tiers.map((t) =>
+                                  t.clientId === tier.clientId ? { ...t, effort: value } : t,
+                                ),
+                              }));
+                            }}
+                            placeholder="Runtime default"
+                            aria-label={`Tier ${tierNumber} effort level`}
+                          />
+                          <span className="text-xs text-slate-500">Leave blank for runtime default</span>
+                        </label>
+                      </div>
+                      <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                        Resolves to {tier.model?.trim() || 'runtime default model'} · {tier.effort?.trim() || 'runtime default effort'}
+                      </p>
+                    </fieldset>
+                  </li>
+                );
+              })}
+            </ol>
+            <div className="flex justify-end">
+              <button
+                type="button"
+                className="rounded-lg bg-slate-900 dark:bg-slate-100 px-4 py-2 text-sm font-semibold text-white dark:text-slate-900"
+                onClick={() => {
+                  const newTier = createTierDraft({ label: '', model: null, effort: null });
+                  setForm((current) => ({
+                    ...current,
+                    tiers: [...current.tiers, newTier],
+                  }));
+                }}
+                aria-label="Add tier"
+              >
+                Add tier
+              </button>
+            </div>
+            <p className="text-xs text-slate-500 dark:text-slate-400">Future launches use the saved policy. Historical runs keep their record.</p>
           </fieldset>
 
           <fieldset className="rounded-2xl border border-emerald-200/70 dark:border-emerald-900/60 bg-emerald-50/30 dark:bg-emerald-950/20 p-5 space-y-4">

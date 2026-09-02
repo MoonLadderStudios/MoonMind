@@ -114,7 +114,9 @@ describe('defaultFormState', () => {
     expect(state.priority).toBe('');
     expect(state.clearEnvKeysText).toBe('');
     expect(state.accountLabel).toBe('');
-    expect(state.defaultEffort).toBe('');
+    expect(state.tiers).toHaveLength(1);
+    expect(state.tiers[0]?.model).toBeNull();
+    expect(state.tiers[0]?.effort).toBeNull();
     expect(state.isDefault).toBe(false);
   });
 
@@ -605,7 +607,9 @@ describe('toFormState', () => {
     expect(state.priority).toBe('200');
     expect(state.clearEnvKeysText).toBe('OPENAI_API_KEY\nOPENAI_BASE_URL');
     expect(state.accountLabel).toBe('team-prod');
-    expect(state.defaultEffort).toBe('high');
+    expect(state.tiers).toHaveLength(1);
+    expect(state.tiers[0]?.model).toBe('gpt-4o');
+    expect(state.tiers[0]?.effort).toBe('high');
     expect(state.isDefault).toBe(true);
   });
 
@@ -616,8 +620,9 @@ describe('toFormState', () => {
     expect(state.runtimeId).toBe('codex_cli');
     expect(state.providerId).toBe('openai');
     expect(state.providerLabel).toBe('OpenAI Prod');
-    expect(state.defaultModel).toBe('gpt-4o');
-    expect(state.defaultEffort).toBe('high');
+    expect(state.tiers).toHaveLength(1);
+    expect(state.tiers[0]?.model).toBe('gpt-4o');
+    expect(state.tiers[0]?.effort).toBe('high');
     expect(state.secretRefsText).toBe(
       JSON.stringify({ OPENAI_API_KEY: 'db://OPENAI_API_KEY' }, null, 2),
     );
@@ -641,8 +646,9 @@ describe('toFormState', () => {
     const state = toFormState(profileWithNulls);
 
     expect(state.providerLabel).toBe('');
-    expect(state.defaultModel).toBe('');
-    expect(state.defaultEffort).toBe('');
+    expect(state.tiers).toHaveLength(1);
+    expect(state.tiers[0]?.model).toBeNull();
+    expect(state.tiers[0]?.effort).toBeNull();
     expect(state.volumeRef).toBe('');
     expect(state.volumeMountPath).toBe('');
   });
@@ -1015,19 +1021,19 @@ describe('ProviderProfilesManager form controls', () => {
     });
   });
 
-  it('sends default effort changes when updating an edited profile', async () => {
+  it('sends tier effort changes when updating an edited profile', async () => {
     const fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue({
       ok: true,
-      json: async () => ({ ...profile, default_effort: 'high' }),
+      json: async () => ({ ...profile, model_tiers: [{ label: null, model: null, effort: 'high', parameters: {}, annotations: {} }], default_model_tier: 1 }),
     } as Response);
 
     renderProviderProfilesManager([profile]);
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
-    const defaultEffort = screen.getByLabelText(/Default effort/) as HTMLInputElement;
-    expect(defaultEffort.value).toBe('');
+    const tierEffort = screen.getByLabelText('Tier 1 effort level') as HTMLInputElement;
+    expect(tierEffort.value).toBe('');
 
-    fireEvent.change(defaultEffort, { target: { value: 'high' } });
+    fireEvent.change(tierEffort, { target: { value: 'high' } });
     fireEvent.click(screen.getByRole('button', { name: 'Update provider profile' }));
 
     await waitFor(() => {
@@ -1041,7 +1047,7 @@ describe('ProviderProfilesManager form controls', () => {
 
     const [, requestInit] = fetchSpy.mock.calls[0] ?? [];
     const payload = JSON.parse(String((requestInit as RequestInit).body));
-    expect(payload.default_effort).toBe('high');
+    expect(payload.model_tiers[0].effort).toBe('high');
   });
 
   it('requires a backend-supported authentication method before creation', async () => {
