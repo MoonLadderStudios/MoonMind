@@ -111,6 +111,26 @@ In issue-brief verification mode:
 5. Inspect production code and tests directly; do not treat the assessment itself as proof that new work is complete.
 6. Do not require `spec.md`, `plan.md`, `tasks.md`, or a standalone constitution file.
 
+When verification follows a remediation attempt, rebuild every controlling
+classification from the current repository head. A previous verifier report,
+its `remainingWork`, and the original assessment are hypotheses and process
+context only; they are not current implementation evidence. For every prior
+`PARTIAL`, `MISSING`, or remaining-work item, inspect the current production
+code and tests and replace the old status, evidence, line numbers, and notes
+with current findings. Never copy or incrementally edit a previous verifier
+JSON report as the new report. If the current head differs from the head named
+by the assessment or previous report, no gap may remain solely because the old
+artifact said it existed or because the candidate is not on the base branch.
+
+Verify the candidate state at the boundary where this skill is invoked. In a
+pre-publication verification step, an uncommitted workspace, an absent pull
+request, an open issue, and an unmerged candidate are expected inputs, not
+implementation or documentation gaps. Do not require downstream commit, pull
+request, merge, deployment, or issue-closure evidence before returning
+`FULLY_IMPLEMENTED`. Gate on those outcomes only when the selected baseline
+explicitly makes publication itself part of this verification step and the
+workflow has already supplied the resulting publication evidence.
+
 ## Controlling vs Advisory Verification
 
 Separate verification evidence into controlling and advisory classes before choosing the verdict.
@@ -282,6 +302,21 @@ Run commands when available and safe:
 - Build, lint, or typecheck commands when they are part of the documented validation path or needed to resolve ambiguity.
 
 Record exact command results as `PASS`, `FAIL`, or `NOT RUN`.
+
+Follow the repository's managed-agent test boundary when `AGENTS.md` defines
+one. At the start of command discovery, treat a non-empty
+`MOONMIND_STEP_EXECUTION_ID` as proof that the workspace is MoonMind-managed
+and check `command -v moonmind` before attempting any Python test. When the
+boundary requires `moonmind container python-tests ...`, route every Python
+test through that command. In a managed workspace, do not run `pytest`,
+`python -m pytest`, `python3 -m pytest`, the Python portion of
+`./tools/test_unit.sh`, or any command that installs pytest into the agent
+host. Host-local Python results are invalid verification evidence at this
+boundary. The absence of `pytest` in the agent host does not make the
+repository test unavailable while the documented `moonmind container`
+capability exists. If that capability is missing or rejects the job, preserve
+its explicit container-job evidence and classify the environment according to
+`AGENTS.md`.
 
 Use `NOT RUN` with an exact reason when a command requires unavailable credentials, missing services, unsafe side effects, unsupported local tools, or excessive environment setup.
 Use the controlling/advisory split when interpreting results. Missing map assets, game/editor content assets, external services, credentials, or other non-hermetic integration/e2e prerequisites are advisory limitations unless the command output exposes a concrete in-scope implementation defect.

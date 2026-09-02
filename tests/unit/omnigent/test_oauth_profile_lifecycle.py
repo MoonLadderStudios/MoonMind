@@ -1,9 +1,11 @@
 import asyncio
 import hashlib
+import io
 import json
 import os
 import runpy
 import subprocess
+import tarfile
 import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -1192,6 +1194,9 @@ def test_runtime_script_snapshot_materializes_owned_step_identity(tmp_path) -> N
             "MOONMIND_AGENT_RUN_ID": execution_id,
             "MOONMIND_TASK_WORKFLOW_ID": "workflow-1",
             "MOONMIND_RUNTIME_ID": "codex_cli",
+            "MOONMIND_REPOSITORY_CONNECTION_REF": (
+                "repository-connection:tactics"
+            ),
             "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN": "must-not-be-persisted",
             "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN": "also-must-not-be-persisted",
         },
@@ -1206,6 +1211,8 @@ def test_runtime_script_snapshot_materializes_owned_step_identity(tmp_path) -> N
         f"export MOONMIND_AGENT_RUN_ID='{execution_id}'\n"
         "export MOONMIND_TASK_WORKFLOW_ID='workflow-1'\n"
         "export MOONMIND_RUNTIME_ID='codex_cli'\n"
+        "export MOONMIND_REPOSITORY_CONNECTION_REF="
+        "'repository-connection:tactics'\n"
         "export MOONMIND_CONTAINER_JOBS_BEARER_TOKEN_FILE="
         "'/opt/moonmind/capabilities/container-jobs'\n"
         "export MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE="
@@ -1231,9 +1238,12 @@ def test_runtime_script_snapshot_materializes_owned_step_identity(tmp_path) -> N
         runtime_environment={
             "MOONMIND_URL": "http://api:8000",
             "MOONMIND_AGENT_RUN_ID": execution_id,
-            "MOONMIND_TASK_WORKFLOW_ID": "workflow-1",
-            "MOONMIND_RUNTIME_ID": "codex_cli",
-            "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN": "retry-container-capability",
+                "MOONMIND_TASK_WORKFLOW_ID": "workflow-1",
+                "MOONMIND_RUNTIME_ID": "codex_cli",
+                "MOONMIND_REPOSITORY_CONNECTION_REF": (
+                    "repository-connection:tactics"
+                ),
+                "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN": "retry-container-capability",
             "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN": "retry-fanout-capability",
         },
     )
@@ -1957,6 +1967,7 @@ def test_omnigent_container_job_environment_is_sandbox_and_host_lease_scoped(
             "authorized": True,
             "sourceKind": "built_in",
         },
+        repository_connection_ref="repository-connection:tactics",
     )
 
     assert environment["MOONMIND_CONTAINER_JOBS_MCP_URL"] == (
@@ -1979,6 +1990,9 @@ def test_omnigent_container_job_environment_is_sandbox_and_host_lease_scoped(
     assert fanout.parent_workflow_id == "workflow-1"
     assert fanout.agent_run_id == "agent-run-1"
     assert fanout.session_id == "host-lease-1"
+    assert environment["MOONMIND_REPOSITORY_CONNECTION_REF"] == (
+        "repository-connection:tactics"
+    )
 
 
 def test_omnigent_runtime_authority_is_not_minted_without_required_capabilities(
@@ -4388,6 +4402,70 @@ async def test_coordinator_recovers_running_tool_output_without_terminalizing_it
 
 
 @pytest.mark.asyncio
+async def test_coordinator_recovers_running_tool_output_for_checkpoint_only_step(
+) -> None:
+    """Repository work can continue when its parent owns later publication."""
+
+    runner_calls: list[tuple[str, dict]] = []
+
+    async def execute(request, **kwargs):
+        runner_calls.append((request.idempotency_key, dict(kwargs)))
+        if len(runner_calls) == 1:
+            raise OmnigentSameSessionContinuationRequired(
+                "response completed while session remained active",
+                session_id="session-1",
+                snapshot={"status": "running", "items": []},
+            )
+        return AgentRunResult(
+            summary="continuation completed the checkpoint-only repository work",
+            metadata={
+                "omnigentSessionId": "session-1",
+                "deferredBridgeTerminal": {
+                    "idempotencyKey": request.idempotency_key,
+                    "status": "completed",
+                    "terminalRefs": {"summary": "continuation completed"},
+                },
+            },
+        )
+
+    ordered, _authority, metadata, result = (
+        await _drive_authority_chain_coordinator(
+            execute,
+            completion_evidence=[
+                {
+                    "sessionStatus": "running",
+                    "itemCount": 5,
+                    "assistantMessageCount": 1,
+                    "toolResultCount": 1,
+                    "terminalAssistantAfterWork": False,
+                },
+                {
+                    "sessionStatus": "idle",
+                    "itemCount": 7,
+                    "assistantMessageCount": 2,
+                    "toolResultCount": 1,
+                    "terminalAssistantAfterWork": True,
+                },
+            ],
+            request_parameters={
+                "publishMode": "none",
+                "repositoryMutationRequired": True,
+                "repositoryOperation": "write",
+            },
+        )
+    )
+
+    assert result.failure_class is None
+    assert metadata["repositoryContinuationCount"] == 1
+    assert "push_status" not in metadata
+    assert len(runner_calls) == 2
+    assert runner_calls[1][0].endswith(":repository-continuation:1")
+    assert runner_calls[1][1]["resume_session_id"] == "session-1"
+    assert "repository_continuation_1" in ordered
+    assert "repository_publication" not in ordered
+
+
+@pytest.mark.asyncio
 async def test_coordinator_projects_verified_pull_request_url() -> None:
     """Remote PR identity survives the runtime-to-finalizer handoff."""
 
@@ -5847,6 +5925,78 @@ async def test_prepare_workspace_materialization_is_idempotent(tmp_path) -> None
 
 
 @pytest.mark.asyncio
+async def test_prepare_workspace_projects_inputs_into_pre_materialized_sandbox(
+    tmp_path,
+) -> None:
+    """The host must project checkpoint and attachments after sandbox checkout."""
+
+    source = tmp_path / "source"
+    _init_source_repo(source)
+    runtime = _runtime_for(tmp_path)
+    workspace_id = _sandbox_id()
+    workspace = (
+        tmp_path / "workspaces" / "temporal_sandbox" / workspace_id / "repo"
+    )
+    subprocess.run(
+        ["git", "clone", "--branch", "main", str(source), str(workspace)],
+        check=True,
+        capture_output=True,
+    )
+
+    archive_stream = io.BytesIO()
+    with tarfile.open(fileobj=archive_stream, mode="w:gz") as archive:
+        payload = b"candidate-worktree\n"
+        member = tarfile.TarInfo("README.md")
+        member.size = len(payload)
+        archive.addfile(member, io.BytesIO(payload))
+    checkpoint_ref = "artifact://checkpoint/candidate"
+    attachment_ref = "artifact://attachment/brief"
+    service = _FakeArtifactService(
+        {
+            "checkpoint/candidate": archive_stream.getvalue(),
+            "attachment/brief": b'{"issue":"3815"}',
+        }
+    )
+    kwargs = dict(
+        workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
+        current_workflow_id="workflow-1",
+        current_step_execution_id="step-1",
+        workspace_checkpoint_restore_ref=checkpoint_ref,
+        attachment_refs=(attachment_ref,),
+        artifact_gateway=service,
+    )
+
+    resolved = await runtime._prepare_workspace(**kwargs)
+
+    assert resolved == workspace
+    assert (resolved / "README.md").read_text(encoding="utf-8") == (
+        "candidate-worktree\n"
+    )
+    attachments = list((resolved / ".moonmind" / "attachments").iterdir())
+    assert len(attachments) == 1
+    assert attachments[0].read_bytes() == b'{"issue":"3815"}'
+    assert runtime._last_workspace_evidence["materialization"] == {
+        "action": "reused_pre_materialized",
+        "checkpointRestoreRef": checkpoint_ref,
+        "attachments": [
+            {"ref": attachment_ref, "bytes": len(b'{"issue":"3815"}')}
+        ],
+    }
+
+    # A retry observes the durable completion marker and must not overwrite work
+    # produced after host launch by reapplying the checkpoint archive.
+    (resolved / "README.md").write_text("agent-progress\n", encoding="utf-8")
+    await runtime._prepare_workspace(**kwargs)
+    assert (resolved / "README.md").read_text(encoding="utf-8") == (
+        "agent-progress\n"
+    )
+    assert [call["artifact_id"] for call in service.read_calls] == [
+        "checkpoint/candidate",
+        "attachment/brief",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_prepare_workspace_honors_authored_output_branch(tmp_path) -> None:
     source = tmp_path / "source"
     _init_source_repo(source)
@@ -6286,6 +6436,41 @@ async def test_prepare_workspace_streams_restore_inputs_when_supported(
     # The payload was pre-checked from metadata and streamed via chunked reads.
     assert service.metadata_calls == ["checkpoint/big-archive"]
     assert service.chunk_calls == ["checkpoint/big-archive"]
+
+
+@pytest.mark.asyncio
+async def test_workspace_checkpoint_streams_beyond_generic_input_limit(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "moonmind.omnigent.oauth_host_runtime._MAX_RESTORE_INPUT_BYTES", 16
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.oauth_host_runtime._MAX_WORKSPACE_CHECKPOINT_BYTES",
+        4096,
+    )
+    archive_stream = io.BytesIO()
+    restored_payload = b"candidate" * 32
+    with tarfile.open(fileobj=archive_stream, mode="w:gz") as archive:
+        member = tarfile.TarInfo("candidate.txt")
+        member.size = len(restored_payload)
+        archive.addfile(member, io.BytesIO(restored_payload))
+    archive_payload = archive_stream.getvalue()
+    assert len(archive_payload) > 16
+    service = _StreamingArtifactService({"checkpoint/candidate": archive_payload})
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    await _runtime_for(tmp_path)._apply_workspace_checkpoint_restore(
+        workspace,
+        artifact_ref="artifact://checkpoint/candidate",
+        artifact_gateway=service,
+    )
+
+    assert (workspace / "candidate.txt").read_bytes() == restored_payload
+    assert service.metadata_calls == ["checkpoint/candidate"]
+    assert service.chunk_calls == ["checkpoint/candidate"]
 
 
 @pytest.mark.asyncio

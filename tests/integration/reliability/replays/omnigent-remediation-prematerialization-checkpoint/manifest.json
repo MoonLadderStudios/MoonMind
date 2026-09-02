@@ -1,0 +1,72 @@
+{
+  "failureShapeId": "omnigent-remediation-prematerialization-checkpoint",
+  "incidentWorkflowId": "mm:f724a9b2-5eac-5e0f-8644-d261379717f1",
+  "incidentChildWorkflowId": "mm:ac5b3aef-733e-523a-aedc-9e8c0c6fa75b",
+  "observedFailureCode": "REMEDIATION_HEAD_RESTORE_INVALID",
+  "repositoryTarget": {
+    "provider": "git",
+    "connectionRef": "repository-connection:git-default",
+    "repository": {"name": "MoonLadderStudios/MoonMind"},
+    "branch": {"name": "main"}
+  },
+  "remediationWorkspaceHead": {
+    "loopId": "issue-implementation-remediation",
+    "branchRef": "checkpoint-branch:issue-implementation-remediation",
+    "rootCheckpointRef": "artifact://art_01M1GK30EMCT08GVGT7S4PGD1R",
+    "rootWorkspaceDigest": "sha256:1b98577540b187965e433561532648fb8e67a2943bf3443c236c38b85e7200a3",
+    "rootWorkspaceIdentityDigest": "sha256:9ba5922484b44cc45f87dfb6f77fe26a8885359a1f5588398a33c858c8d1f26f",
+    "headCheckpointRef": "artifact://art_01M1GK30EMCT08GVGT7S4PGD1R",
+    "headWorkspaceDigest": "sha256:1b98577540b187965e433561532648fb8e67a2943bf3443c236c38b85e7200a3",
+    "headWorkspaceIdentityDigest": "sha256:9ba5922484b44cc45f87dfb6f77fe26a8885359a1f5588398a33c858c8d1f26f",
+    "headAttemptOrdinal": 0,
+    "headVersion": 1,
+    "latestVerificationRef": "artifact://art_verification_0",
+    "latestVerificationVerdict": "ADDITIONAL_WORK_NEEDED",
+    "status": "verified_incomplete"
+  },
+  "dynamicRemediationNode": {
+    "id": "dynamic-remediation-1",
+    "tool": {"type": "agent_runtime", "name": "omnigent"},
+    "annotations": {
+      "remediationLoopId": "issue-implementation-remediation",
+      "issueImplementRole": "moonspec-remediation",
+      "moonSpecRemediationAttempt": 1
+    },
+    "inputs": {
+      "runtime": {
+        "mode": "omnigent",
+        "executionProfileRef": "opencode-zen-free",
+        "workspaceSpec": {
+          "repository": "MoonLadderStudios/MoonMind",
+          "repositoryTarget": {
+            "provider": "git",
+            "connectionRef": "repository-connection:git-default",
+            "repository": {"name": "MoonLadderStudios/MoonMind"},
+            "branch": {"name": "main"}
+          },
+          "startingBranch": "main"
+        }
+      },
+      "remediationWorkspaceHeadRef": "artifact://art_01M1GK30EMCT08GVGT7S4PGD1R"
+    }
+  },
+  "publicationNode": {
+    "id": "publish-pull-request",
+    "tool": {
+      "type": "agent_runtime",
+      "name": "omnigent"
+    },
+    "annotations": {
+      "issueImplementRole": "pull-request-handoff"
+    },
+    "inputs": {
+      "runtime": {
+        "mode": "omnigent"
+      }
+    }
+  },
+  "archiveMember": {
+    "path": "artifacts/replay-candidate.txt",
+    "content": "candidate restored before provider launch\n"
+  }
+}
