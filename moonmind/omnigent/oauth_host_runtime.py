@@ -194,6 +194,7 @@ _RUNTIME_EXECUTION_PROFILE_ENV_NAMES = (
     "MOONMIND_TASK_WORKFLOW_ID",
     "MOONMIND_STEP_ID",
     "MOONMIND_RUNTIME_ID",
+    "MOONMIND_REPOSITORY_CONNECTION_REF",
     "MOONMIND_CONTAINER_JOBS_MCP_URL",
     "MOONMIND_CONTAINER_JOBS_SOURCE_KIND",
     "MOONMIND_CONTAINER_JOBS_SESSION_ID",
@@ -233,6 +234,11 @@ _SAFE_STEP_EXECUTION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,510}[A-Za-z
 _MAX_RESTORE_INPUT_REFS = 64
 _MAX_RESTORE_INPUT_BYTES = 64 * 1024 * 1024
 _MAX_RESTORE_TOTAL_BYTES = 256 * 1024 * 1024
+# A worktree checkpoint is one complete repository snapshot rather than one
+# member of the generic restore-input bundle. Keep it under the same aggregate
+# hostile-input ceiling while allowing normal repositories to exceed the
+# per-attachment limit.
+_MAX_WORKSPACE_CHECKPOINT_BYTES = _MAX_RESTORE_TOTAL_BYTES
 _HOST_EXEC_PREFLIGHT_ATTEMPTS = 11
 _HOST_EXEC_PREFLIGHT_INTERVAL_SECONDS = 1
 # Restore payloads are read through the durable artifact contract as raw bytes,
@@ -638,6 +644,7 @@ class OmnigentOAuthHostRuntime:
                 timeout_seconds=int(launch["limits"]["timeoutSeconds"]),
                 required_capabilities=required_capabilities,
                 execution_fanout_authorization=execution_fanout_authorization,
+                repository_connection_ref=repository_connection_ref,
             )
             daemon_runtime_scripts = self._prepare_daemon_runtime_scripts(
                 host_lease.lease_id,
@@ -2389,6 +2396,7 @@ class OmnigentOAuthHostRuntime:
         timeout_seconds: int,
         required_capabilities: Sequence[str] = (),
         execution_fanout_authorization: Mapping[str, Any] | None = None,
+        repository_connection_ref: str = "",
     ) -> dict[str, str]:
         """Materialize only the runtime capabilities declared for this host lease."""
 
@@ -2432,6 +2440,13 @@ class OmnigentOAuthHostRuntime:
             "MOONMIND_STEP_ID": current_step_execution_id,
             "MOONMIND_RUNTIME_ID": runtime_id,
         }
+        normalized_repository_connection_ref = str(
+            repository_connection_ref or ""
+        ).strip()
+        if normalized_repository_connection_ref:
+            environment["MOONMIND_REPOSITORY_CONNECTION_REF"] = (
+                normalized_repository_connection_ref
+            )
         if "docker" in normalized_capabilities:
             environment.update(
                 {
@@ -2748,13 +2763,20 @@ class OmnigentOAuthHostRuntime:
         #    pre-materialized by its external owner (for example a remediation
         #    workspace) and is reused as-is.
         already_materialized = workspace.is_dir()
+        materialization_complete = record_store.is_materialized(
+            locator.workspace_id
+        )
         if (
             source
             and already_materialized
-            and not record_store.is_materialized(locator.workspace_id)
+            and not materialization_complete
         ):
             shutil.rmtree(workspace)
             already_materialized = False
+        if not already_materialized:
+            # A completion marker without its owned workspace cannot authorize a
+            # skip. Rebuild from the authored source when one is available.
+            materialization_complete = False
         # 4. A workspace that is neither present nor accompanied by an authored
         #    repository source cannot be created here; reject before running any
         #    command.
@@ -2769,21 +2791,22 @@ class OmnigentOAuthHostRuntime:
         #    workspace and skip all git and archive mutation.
         self._last_workspace_denial_evidence = {}
         materialization: dict[str, Any] = {"action": "reused_pre_materialized"}
-        if not already_materialized:
+        if not materialization_complete:
             # Every mutation from here to the durable completion marker is owned by
             # this run. If any step fails, bounded reconciliation evidence records
             # whether owned partial state was created and that a retry must rebuild
             # it, because the absent completion marker forces a rebuild rather than
             # reuse of a partial directory.
             try:
-                materialization = await self._materialize_repository(
-                    workspace,
-                    repository_source=source,
-                    starting_branch=starting_branch,
-                    target_branch=target_branch,
-                    checkout_commit=checkout_commit,
-                    github_token=github_token,
-                )
+                if not already_materialized:
+                    materialization = await self._materialize_repository(
+                        workspace,
+                        repository_source=source,
+                        starting_branch=starting_branch,
+                        target_branch=target_branch,
+                        checkout_commit=checkout_commit,
+                        github_token=github_token,
+                    )
                 restore_evidence = await self._materialize_restore_inputs(
                     workspace,
                     restore_input_refs=restore_input_refs,
@@ -2794,6 +2817,9 @@ class OmnigentOAuthHostRuntime:
                         workspace,
                         artifact_ref=workspace_checkpoint_restore_ref,
                         artifact_gateway=artifact_gateway,
+                    )
+                    materialization["checkpointRestoreRef"] = (
+                        workspace_checkpoint_restore_ref
                     )
                 if restore_evidence:
                     materialization["restoreInputs"] = restore_evidence
@@ -3055,20 +3081,54 @@ class OmnigentOAuthHostRuntime:
                 code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED",
             )
         artifact_id = artifact_ref[len("artifact://") :]
-        _metadata, payload = await service.read(
-            artifact_id=artifact_id,
-            principal=_RESTORE_ARTIFACT_PRINCIPAL,
-            allow_restricted_raw=True,
+        await self._reject_oversized_restore_metadata(
+            service,
+            artifact_id,
+            _MAX_WORKSPACE_CHECKPOINT_BYTES,
         )
-        if len(payload) > _MAX_RESTORE_INPUT_BYTES:
-            raise OmnigentOAuthHostError(
-                "workspace checkpoint exceeds the authorized workspace bound",
-                code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED",
+        archive_path: Path
+        remove_archive = False
+        read_path = getattr(service, "read_path", None)
+        if read_path is not None:
+            _metadata, resolved_path = await read_path(
+                artifact_id=artifact_id,
+                principal=_RESTORE_ARTIFACT_PRINCIPAL,
+                allow_restricted_raw=True,
             )
+            archive_path = Path(resolved_path)
+            try:
+                archive_size = archive_path.stat().st_size
+            except OSError as exc:
+                raise OmnigentOAuthHostError(
+                    "workspace checkpoint archive is unavailable",
+                    code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED",
+                ) from exc
+            if archive_size > _MAX_WORKSPACE_CHECKPOINT_BYTES:
+                raise OmnigentOAuthHostError(
+                    "workspace checkpoint exceeds the authorized workspace bound",
+                    code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED",
+                )
+        else:
+            descriptor, temporary_name = tempfile.mkstemp(
+                prefix=".moonmind-checkpoint-",
+                suffix=".tar.gz",
+                dir=workspace.parent,
+            )
+            os.close(descriptor)
+            archive_path = Path(temporary_name)
+            remove_archive = True
+            try:
+                await self._write_restore_payload(
+                    service,
+                    artifact_id=artifact_id,
+                    target=archive_path,
+                    budget_bytes=_MAX_WORKSPACE_CHECKPOINT_BYTES,
+                )
+            except BaseException:
+                archive_path.unlink(missing_ok=True)
+                raise
         try:
-            with tarfile.open(
-                fileobj=__import__("io").BytesIO(payload), mode="r:gz"
-            ) as archive:
+            with tarfile.open(archive_path, mode="r:gz") as archive:
                 for member in archive.getmembers():
                     target = (workspace / member.name).resolve()
                     if not target.is_relative_to(workspace.resolve()) or member.isdev():
@@ -3089,6 +3149,9 @@ class OmnigentOAuthHostRuntime:
                 "workspace checkpoint archive could not be applied",
                 code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED",
             ) from exc
+        finally:
+            if remove_archive:
+                archive_path.unlink(missing_ok=True)
 
     async def _materialize_attachments(
         self,

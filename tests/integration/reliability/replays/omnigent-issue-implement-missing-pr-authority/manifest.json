@@ -1,0 +1,20 @@
+{
+  "failureShapeId": "omnigent-issue-implement-missing-pr-authority",
+  "incidentWorkflowId": "mm:f194565c-aa34-4e0c-86b0-db751e4a04f0",
+  "cause": "the publication sandbox reported a GitHub authorization blocker after the candidate branch was already pushed, the generic host reduced the step to no_commits, and the parent finalized the issue as done without a pull request",
+  "repository": "MoonLadderStudios/MoonMind",
+  "githubIssue": {
+    "repository": "MoonLadderStudios/MoonMind",
+    "number": 3815
+  },
+  "assessmentVerdict": "PARTIALLY_IMPLEMENTED",
+  "assessmentArtifactRef": "art_01M1HE3XHC1CA72C8WWRNB0CKX",
+  "acceptedRepositoryEvidence": {
+    "publicationAuthorized": true,
+    "candidateContaminated": false,
+    "pushStatus": "pushed",
+    "branch": "moonmind-job-50a4d228",
+    "headSha": "4e11c2fed2df7ddfb8c73306b70c9e34238db72b",
+    "baseBranch": "main"
+  }
+}
