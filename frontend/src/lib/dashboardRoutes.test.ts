@@ -6,6 +6,8 @@ import {
   DASHBOARD_REACT_ROUTE_PATHS,
   destinationState,
   destinationForPath,
+  isDashboardInternalUrl,
+  legacySettingsRedirect,
   matchesDashboardDestinationRegistry,
   payloadForDashboardRoute,
   resolveDashboardRoute,
@@ -232,5 +234,38 @@ describe('dashboard route resolution', () => {
         uiEndpoints: { remediations: '/api/executions/remediations' },
       },
     });
+  });
+
+  it('redirects legacy /secrets and /workers preserving safe filters and dropping section', () => {
+    expect(legacySettingsRedirect('/secrets', '')).toBe('/settings/providers-secrets');
+    expect(legacySettingsRedirect('/workers', '')).toBe('/settings/operations');
+    expect(legacySettingsRedirect('/secrets', '?runtime=codex')).toBe('/settings/providers-secrets?runtime=codex');
+    expect(legacySettingsRedirect('/workers', '?status=paused')).toBe('/settings/operations?status=paused');
+    expect(legacySettingsRedirect('/secrets', '?section=providers&runtime=codex')).toBe('/settings/providers-secrets?runtime=codex');
+    expect(legacySettingsRedirect('/secrets', '?runtime=codex&q=search&section=x')).toBe('/settings/providers-secrets?runtime=codex');
+    expect(legacySettingsRedirect('/workers', '?q=search&status=paused&section=x')).toBe('/settings/operations?status=paused');
+    expect(legacySettingsRedirect('/secrets', '?unknown=1')).toBe('/settings/providers-secrets');
+  });
+
+  it('treats legacy redirects as internal URLs and preserves safe query strings', () => {
+    const origin = window.location.origin;
+    expect(isDashboardInternalUrl(new URL(`${origin}/secrets?runtime=codex`))).toBe(true);
+    expect(isDashboardInternalUrl(new URL(`${origin}/workers?status=paused`))).toBe(true);
+    expect(isDashboardInternalUrl(new URL(`${origin}/settings/providers-secrets`))).toBe(true);
+    expect(isDashboardInternalUrl(new URL(`${origin}/unknown`))).toBe(false);
+    expect(isDashboardInternalUrl(new URL('https://example.com/secrets'))).toBe(false);
+  });
+
+  it('exposes canonical Settings paths with correct destination metadata', () => {
+    const providers = DASHBOARD_DESTINATIONS.find(({ key }) => key === 'settings-providers-secrets')!;
+    const workspace = DASHBOARD_DESTINATIONS.find(({ key }) => key === 'settings-user-workspace')!;
+    const ops = DASHBOARD_DESTINATIONS.find(({ key }) => key === 'settings-operations')!;
+    expect(providers.canonicalPath).toBe('/settings/providers-secrets');
+    expect(workspace.canonicalPath).toBe('/settings/user-workspace');
+    expect(ops.canonicalPath).toBe('/settings/operations');
+    for (const dest of [providers, workspace, ops]) {
+      expect(dest.menuGroupKey).toBe('configuration');
+      expect(dest.navigationGroup).toBe('system');
+    }
   });
 });
