@@ -17,6 +17,7 @@ from moonmind.omnigent.execution_support_evidence import (
     EXECUTION_SUPPORT_EVIDENCE_VERSION,
 )
 from moonmind.omnigent.harness_platform.catalog import create_catalog_snapshot
+from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from moonmind.omnigent.policies import compile_policy_snapshot
 from moonmind.omnigent.session_supervisor_rollback import (
     SUPERVISOR_ROLLBACK_POLICY_VERSION,
@@ -101,6 +102,30 @@ class _PlanStore:
     async def persist(self, envelope):
         self.__class__.persisted = envelope
         return envelope
+
+
+@pytest.mark.asyncio
+async def test_plan_compilation_gates_unseeded_policy_authority(monkeypatch) -> None:
+    from api_service.services import omnigent_policies
+
+    class _PolicyService:
+        def __init__(self, _session):
+            pass
+
+        async def resolve_runtime_snapshot(self, policy_ref: str):
+            raise omnigent_policies.PolicyNotFound(policy_ref)
+
+    monkeypatch.setattr(omnigent_policies, "OmnigentPolicyService", _PolicyService)
+
+    with pytest.raises(HarnessPlatformError) as exc_info:
+        await service._resolve_runtime_policy_snapshot(
+            policy_ref="opencode-on-demand@1",
+            session_factory=object(),
+            db_session=object(),
+        )
+
+    assert exc_info.value.code == "OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE"
+    assert "startup reconciliation" in str(exc_info.value)
 
 
 def test_skill_selector_includes_nested_dynamic_execution_skills() -> None:

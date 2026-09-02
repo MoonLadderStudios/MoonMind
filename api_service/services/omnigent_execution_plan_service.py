@@ -35,6 +35,10 @@ from moonmind.omnigent.harness_platform.execution_plan import (
     OmnigentExecutionPlanEnvelope,
     create_execution_plan_envelope,
 )
+from moonmind.omnigent.harness_platform.failures import (
+    HarnessPlatformError,
+    HarnessPlatformFailure,
+)
 from moonmind.omnigent.harness_platform.host_classes import (
     HostClass,
     OmnigentHostClassSelector,
@@ -217,20 +221,31 @@ async def _resolve_runtime_policy_snapshot(
 ) -> dict[str, Any]:
     """Read one active, validated policy before plan persistence."""
 
-    from api_service.services.omnigent_policies import OmnigentPolicyService
+    from api_service.services.omnigent_policies import (
+        OmnigentPolicyService,
+        PolicyConflict,
+        PolicyNotFound,
+    )
 
-    if db_session is not None:
-        return await OmnigentPolicyService(db_session).resolve_runtime_snapshot(
-            policy_ref
-        )
-    if not callable(session_factory):
-        raise ValueError(
-            "Omnigent execution-plan compilation requires policy storage"
-        )
-    async with session_factory() as session:
-        return await OmnigentPolicyService(session).resolve_runtime_snapshot(
-            policy_ref
-        )
+    try:
+        if db_session is not None:
+            return await OmnigentPolicyService(db_session).resolve_runtime_snapshot(
+                policy_ref
+            )
+        if not callable(session_factory):
+            raise ValueError(
+                "Omnigent execution-plan compilation requires policy storage"
+            )
+        async with session_factory() as session:
+            return await OmnigentPolicyService(session).resolve_runtime_snapshot(
+                policy_ref
+            )
+    except (PolicyConflict, PolicyNotFound) as exc:
+        raise HarnessPlatformError(
+            "Omnigent launch policy authority is not ready; wait for startup "
+            "reconciliation and retry",
+            code=HarnessPlatformFailure.OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE,
+        ) from exc
 
 
 async def persist_json_artifact(

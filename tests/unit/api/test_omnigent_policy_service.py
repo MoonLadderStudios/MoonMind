@@ -632,28 +632,77 @@ async def test_dynamic_opencode_child_resolves_bootstrapped_policy(
     monkeypatch.setenv("MOONMIND_CONTAINER_JOBS_ENABLED", "true")
     server_digest = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "1" * 64
     codex_host_digest = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "2" * 64
-    opencode_host_digest = (
+    first_opencode_host_digest = (
         "ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:" + "3" * 64
     )
+    next_opencode_host_digest = (
+        "ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:" + "4" * 64
+    )
+    resolved_opencode_host = {"image": first_opencode_host_digest}
 
     async def resolver(image_ref: str) -> str:
         if "host-opencode" in image_ref:
-            return opencode_host_digest
+            return resolved_opencode_host["image"]
         return codex_host_digest if "host" in image_ref else server_digest
 
+    async def live_server(_image_ref: str) -> str:
+        return server_digest
+
     async with policy_db(tmp_path) as sessions, sessions() as session:
-        await seed_bootstrap_policies(session, image_resolver=resolver)
+        await seed_bootstrap_policies(
+            session,
+            image_resolver=resolver,
+            live_server_image_resolver=live_server,
+        )
+        resolved_opencode_host["image"] = next_opencode_host_digest
+        await seed_bootstrap_policies(
+            session,
+            image_resolver=resolver,
+            live_server_image_resolver=live_server,
+        )
 
         profile_ref = default_execution_profile_ref_for_runtime("opencode")
         policy_ref = PROFILES[profile_ref].default_policy_ref
-        snapshot = await OmnigentPolicyService(session).resolve_runtime_snapshot(
-            policy_ref
+        policy_id = policy_ref.rpartition("@")[0]
+        snapshot = await OmnigentPolicyService(
+            session
+        ).resolve_default_runtime_snapshot(
+            policy_id
         )
 
         assert profile_ref == "omnigent-opencode@1"
         assert policy_ref == "opencode-on-demand@1"
+        assert snapshot["policyRef"] == "opencode-on-demand@2"
         assert snapshot["boundaries"]["execution"]["harness"] == "opencode-native"
-        assert snapshot["boundaries"]["host"]["hostImageRef"] == opencode_host_digest
+        assert snapshot["boundaries"]["host"]["hostImageRef"] == next_opencode_host_digest
+
+
+@pytest.mark.asyncio
+async def test_unavailable_opencode_image_does_not_withhold_codex_policies(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("MOONMIND_CONTAINER_JOBS_ENABLED", "true")
+    server_digest = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "1" * 64
+    codex_host_digest = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "2" * 64
+
+    async def resolver(image_ref: str) -> str | None:
+        if "host-opencode" in image_ref:
+            return None
+        return codex_host_digest if "host" in image_ref else server_digest
+
+    async with policy_db(tmp_path) as sessions, sessions() as session:
+        seeded = await seed_bootstrap_policies(session, image_resolver=resolver)
+
+        assert set(seeded) == {
+            "omnigent-codex",
+            "codex-static",
+            "codex-on-demand",
+        }
+        assert await OmnigentPolicyService(session).resolve_runtime_snapshot(
+            "codex-on-demand@1"
+        )
+        assert await session.get(OmnigentPolicy, "opencode-on-demand") is None
+        assert await bootstrap_policies_ready(session) is False
 
 
 @pytest.mark.asyncio
