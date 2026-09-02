@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from api_service.api.routers.omnigent_agent_profiles import (
     AgentProfileDocument,
     GuidedProfileCreate,
+    _default_builtin_opencode_launch_policy_refs,
     _digest,
     _normalized,
     _preserve_builtin_opencode_model,
@@ -51,6 +52,29 @@ def test_catalog_refresh_preserves_bootstrap_qualified_opencode_model():
 
     assert reconciled["model"] == active["model"]
     assert seed["model"] == {}
+
+
+@pytest.mark.asyncio
+async def test_builtin_opencode_profile_binds_current_policy_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _PolicyService:
+        def __init__(self, session):
+            assert session == "session"
+
+        async def resolve_default_runtime_snapshot(self, policy_id: str):
+            versions = {"omnigent-on-demand": 7, "opencode-on-demand": 9}
+            return {"policyRef": f"{policy_id}@{versions[policy_id]}"}
+
+    monkeypatch.setattr(
+        "api_service.services.omnigent_policies.OmnigentPolicyService",
+        _PolicyService,
+    )
+
+    assert await _default_builtin_opencode_launch_policy_refs("session") == [
+        "omnigent-on-demand@7",
+        "opencode-on-demand@9",
+    ]
 
 
 def test_guided_profile_rejects_unqualified_pi_preset() -> None:
