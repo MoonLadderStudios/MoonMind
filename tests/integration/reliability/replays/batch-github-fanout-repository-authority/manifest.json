@@ -1,0 +1,30 @@
+{
+  "failureShapeId": "batch-github-fanout-repository-authority",
+  "incidentWorkflowId": "mm:f724a9b2-5eac-5e0f-8644-d261379717f1",
+  "repository": "MoonLadderStudios/MoonMind",
+  "issueRange": "3815-3815",
+  "failedWorkspaceSpec": {
+    "repository": "MoonLadderStudios/MoonMind",
+    "repo": "MoonLadderStudios/MoonMind",
+    "workspaceLocator": {
+      "kind": "sandbox",
+      "workspaceId": "d4cbf0cec4185326133e3d20",
+      "relativePath": "repo"
+    }
+  },
+  "githubResponse": {
+    "data": {
+      "repository": {
+        "defaultBranchRef": {"name": "main"},
+        "issue3815": {
+          "number": 3815,
+          "title": "Settings",
+          "body": "Incident replay body omitted.",
+          "url": "https://github.com/MoonLadderStudios/MoonMind/issues/3815",
+          "state": "OPEN",
+          "labels": {"nodes": []}
+        }
+      }
+    }
+  }
+}

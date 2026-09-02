@@ -182,6 +182,12 @@ _GITHUB_TARGET: dict[str, Any] = {
         "labels": ["bug"],
     },
     "repository": "MoonLadderStudios/MoonMind",
+    "repositoryTarget": {
+        "provider": "git",
+        "connectionRef": "repository-connection:git-default",
+        "repository": {"name": "MoonLadderStudios/MoonMind"},
+        "branch": {"name": "main"},
+    },
 }
 
 
@@ -225,6 +231,7 @@ def test_resolve_github_issue_range_excludes_non_open_issues_and_missing_numbers
                 {
                     "data": {
                         "repository": {
+                            "defaultBranchRef": {"name": "main"},
                             "issue40": {
                                 "number": 40,
                                 "title": "Existing issue",
@@ -292,6 +299,12 @@ def test_resolve_github_issue_range_excludes_non_open_issues_and_missing_numbers
         "state": "open",
         "labels": ["bug"],
     }
+    assert targets[0]["repositoryTarget"] == {
+        "provider": "git",
+        "connectionRef": "repository-connection:git-default",
+        "repository": {"name": "acme/widgets"},
+        "branch": {"name": "main"},
+    }
     assert len(calls) == 1
     query_arg = next(arg for arg in calls[0] if arg.startswith("query="))
     assert "issue40: issue(number: 40)" in query_arg
@@ -299,10 +312,49 @@ def test_resolve_github_issue_range_excludes_non_open_issues_and_missing_numbers
     assert "issue42: issue(number: 42)" in query_arg
     assert "issue43: issue(number: 43)" in query_arg
     assert "issue44: issue(number: 44)" in query_arg
+    assert "defaultBranchRef { name }" in query_arg
     assert "-F" not in calls[0]
     assert calls[0].count("-f") == 3
     assert "owner=acme" in calls[0]
     assert "name=widgets" in calls[0]
+
+
+def test_resolve_github_issue_range_requires_safe_default_branch_authority():
+    module = _load_module()
+
+    def fake_run(command, **_kwargs):
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps(
+                {
+                    "data": {
+                        "repository": {
+                            "defaultBranchRef": None,
+                            "issue42": {
+                                "number": 42,
+                                "title": "Issue without checkout authority",
+                                "body": "Body",
+                                "url": "https://github.com/acme/widgets/issues/42",
+                                "state": "OPEN",
+                                "labels": {"nodes": []},
+                            },
+                        }
+                    }
+                }
+            ),
+            stderr="",
+        )
+
+    with pytest.raises(
+        RuntimeError,
+        match="default branch is unavailable or unsafe",
+    ):
+        module["resolve_github_issue_range"](
+            "acme/widgets",
+            "42-42",
+            run_command=fake_run,
+        )
 
 
 def test_resolve_github_issue_range_rejects_unbounded_scan_before_querying():
@@ -569,6 +621,20 @@ def test_build_child_request_sets_runtime_inheritance_publish_and_idempotency():
     key = payload["idempotencyKey"]
     assert key.startswith("batch-workflows:jira:THOR-123:sha256:")
     assert len(key) <= module["IDEMPOTENCY_KEY_MAX_LENGTH"]
+
+
+def test_build_github_child_request_preserves_canonical_repository_authority():
+    module = _load_module()
+    request = module["build_child_request"](
+        _GITHUB_TARGET,
+        config=_github_config(module),
+        runtime=module["RuntimeSelection"](mode="omnigent"),
+        batch_scope="run-1",
+        inherit_runtime_from_caller=True,
+    )
+
+    assert request is not None
+    assert request["payload"]["repository"] == _GITHUB_TARGET["repositoryTarget"]
 
 
 def test_build_child_request_passes_update_status_for_jira_verify():
