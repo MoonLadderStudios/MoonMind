@@ -1,5 +1,7 @@
 {
-  "markedTurnTimeoutSeconds": 9000,
+  "markedTurnTimeoutSeconds": 8400,
+  "activityBudgetSeconds": 9000,
+  "retryReserveSeconds": 600,
   "currentTurnProgress": true,
   "unfinishedToolCall": true,
   "lastItemType": "function_call",

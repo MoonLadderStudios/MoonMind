@@ -4465,6 +4465,10 @@ async def test_active_tool_turn_uses_published_budget_and_preserves_retry() -> N
         _resolved_marked_turn_timeout_seconds(request)
         == expected["markedTurnTimeoutSeconds"]
     )
+    assert (
+        expected["activityBudgetSeconds"] - expected["markedTurnTimeoutSeconds"]
+        == expected["retryReserveSeconds"]
+    )
     coarse_bridge_projection = SimpleNamespace(
         status=manifest["bridgeProjection"]["status"],
         first_message_posted_at=(
