@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import os
 import stat
 import tarfile
 from types import SimpleNamespace
@@ -17,6 +18,7 @@ from moonmind.omnigent.host_services.workspace import (
     build_daemon_workspace_chown_argv,
     normalize_github_clone_source,
 )
+from moonmind.omnigent.workspace_artifacts import WorkspaceArtifactProjector
 from moonmind.schemas.workspace_locator_models import SandboxWorkspaceLocator
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
@@ -320,7 +322,11 @@ async def test_materializer_projects_checkpoint_and_declared_inputs_before_mount
         command_runner=fail_runner,
         workspace_root=tmp_path,
         artifact_service=service,
-    ).materialize(request)
+    ).materialize(
+        request,
+        runtime_uid=os.getuid(),
+        runtime_gid=os.getgid(),
+    )
 
     assert (existing / "tracked.txt").read_text() == "implementation checkpoint\n"
     assert (existing / "candidate.txt").read_text() == "new candidate file\n"
@@ -336,14 +342,39 @@ async def test_materializer_projects_checkpoint_and_declared_inputs_before_mount
     assert not (existing / ".moonmind" / "restore" / "stale-restore").exists()
     assert stat.S_IMODE(restore_path.stat().st_mode) == 0o400
     assert stat.S_IMODE(attachment_path.stat().st_mode) == 0o400
-    assert restore_path.stat().st_uid == 1000
-    assert restore_path.stat().st_gid == 1000
-    assert attachment_path.stat().st_uid == 1000
-    assert attachment_path.stat().st_gid == 1000
+    assert restore_path.stat().st_uid == os.getuid()
+    assert restore_path.stat().st_gid == os.getgid()
+    assert attachment_path.stat().st_uid == os.getuid()
+    assert attachment_path.stat().st_gid == os.getgid()
     assert "/.moonmind/attachments/" in (
         existing / ".git" / "info" / "exclude"
     ).read_text()
     assert SandboxWorkspaceRecordStore(tmp_path).is_materialized(workspace_id)
+
+
+def test_runtime_input_ownership_handoff_targets_selected_identity(
+    tmp_path, monkeypatch
+):
+    target = tmp_path / "restore-input"
+    target.write_bytes(b"restore state")
+    selected_uid = os.getuid() + 1
+    selected_gid = os.getgid() + 1
+    chown_calls: list[tuple[object, int, int, bool]] = []
+
+    def record_chown(path, uid, gid, *, follow_symlinks):
+        chown_calls.append((path, uid, gid, follow_symlinks))
+
+    monkeypatch.setattr(os, "chown", record_chown)
+
+    WorkspaceArtifactProjector._make_runtime_readable(
+        target,
+        runtime_uid=selected_uid,
+        runtime_gid=selected_gid,
+        noun="restore inputs",
+    )
+
+    assert chown_calls == [(target, selected_uid, selected_gid, False)]
+    assert stat.S_IMODE(target.stat().st_mode) == 0o400
 
 
 @pytest.mark.asyncio
