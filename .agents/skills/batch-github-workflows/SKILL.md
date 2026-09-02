@@ -34,6 +34,8 @@ execute the same portable fan-out engine from the resolved active Skill snapshot
   `preset:github-issue-orchestrate`.
 - `repository` (string, optional): GitHub `owner/repository`; default to workflow
   repository context.
+- `repository_connection_ref` (string, optional): canonical repository connection
+  authority; default to workflow context or `MOONMIND_REPOSITORY_CONNECTION_REF`.
 - `max_workflows` (number, optional): hard cap on queued children; default `25`.
 - `constraints` (string, optional): shared child guidance.
 - `run_verify` (boolean, optional): verification toggle for child presets;
@@ -52,6 +54,7 @@ execute the same portable fan-out engine from the resolved active Skill snapshot
    python3 "$MOONMIND_ACTIVE_SKILLS_DIR/batch-github-workflows/bin/batch_workflows.py" \
      --github-issue-range <START-END> \
      --github-repository <owner/repository> \
+     --repository-connection-ref <repository connection ref> \
      --run-ref <curated GitHub run ref> \
      --publish-mode <none|branch|pr|pr_with_merge_automation> \
      --constraints-file <optional constraints path> \
@@ -60,10 +63,17 @@ execute the same portable fan-out engine from the resolved active Skill snapshot
    ```
 
    The portable engine uses trusted GitHub GraphQL `issue(number:)` lookups and
-   writes `artifacts/batch-workflows-targets.json` before queueing. It includes
-   only explicit open Issue objects; closed issues, pull requests, absent
-   numbers, and ambiguous states are omitted normally. Numeric spans wider than
-   1,000 are rejected before querying.
+   resolves the repository's current default branch in the same query before it
+   writes `artifacts/batch-workflows-targets.json` and queues children. Every
+   child receives the canonical Git repository target, including the caller's
+   exact connection authority and resolved branch. The connection is read from
+   the explicit argument, parent task context, or
+   `MOONMIND_REPOSITORY_CONNECTION_REF`; discovery fails before queueing when it
+   is unavailable. A missing, unreadable, changing, or Git-invalid default
+   branch also fails discovery before queueing. The engine includes only
+   explicit open Issue objects; closed issues, pull requests, absent numbers,
+   and ambiguous states are omitted normally. Numeric spans wider than 1,000 are
+   rejected before querying.
 
    The engine binds GitHub issue data into the selected child, stamps
    `runtimeInheritance="caller"` plus the parent's effective runtime fallback,

@@ -193,6 +193,8 @@ steps:
     run_verify: '{{ inputs.run_verify }}'
 - title: Finalize GitHub issue status
   type: tool
+  annotations:
+    issueImplementRole: code-review-handoff
   instructions: 'Read artifacts/github-issue-implement-assessment.json (or the recorded
     verdict from the assess step) before changing GitHub.
 
