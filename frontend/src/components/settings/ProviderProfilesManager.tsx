@@ -1419,10 +1419,9 @@ export function ProviderProfilesManager({
     setFormBaseline(nextForm);
     const normalized = normalizeProviderProfileTiers(profile.model_tiers, profile.default_model_tier);
     if (normalized.isRepair) {
-      const repairTier = runtimeDefaultTierDraft();
-      setTierDrafts([repairTier]);
-      setDefaultTierClientId(repairTier.clientId);
-      setIsTierRepair(false);
+      setTierDrafts([]);
+      setDefaultTierClientId(null);
+      setIsTierRepair(true);
       setInvalidSavedDefaultIndex(normalized.invalidSavedDefaultIndex);
       setTierBaseline(null);
       setTierBaselineDefaultId(null);
@@ -1958,6 +1957,14 @@ export function ProviderProfilesManager({
 
   const saveMutation = useMutation({
     mutationFn: async (formState: ProviderProfileFormState) => {
+      const tierJsonErrors = Object.entries(tierFieldErrors).filter(([key, msg]) => key.includes('.parameters') || key.includes('.annotations') || msg);
+      if (tierJsonErrors.length > 0) {
+        const first = tierJsonErrors[0]!;
+        throw new Error(first[1] || 'Fix tier field errors before saving.');
+      }
+      if (Object.keys(tierFieldErrors).length > 0) {
+        throw new Error('Fix tier field errors before saving.');
+      }
       if (tierDrafts.length === 0) {
         throw new Error('At least one tier is required.');
       }
@@ -1987,7 +1994,23 @@ export function ProviderProfilesManager({
       });
       if (!response.ok) {
         const errorPayload = await response.json().catch(() => ({}));
-        const detail = extractErrorMessage(
+        const rawDetail = (errorPayload as Record<string, unknown>)?.detail;
+        let detail: string;
+        if (Array.isArray(rawDetail)) {
+          const first = rawDetail[0] as Record<string, unknown> | undefined;
+          const loc = Array.isArray(first?.loc) ? (first?.loc as unknown[]).join('.') : '';
+          const msg = typeof first?.msg === 'string' ? first.msg : typeof first?.message === 'string' ? first.message : JSON.stringify(rawDetail);
+          detail = loc ? `${loc}: ${msg}` : msg;
+          // Preserve full structured payload for field mapping
+          const structured = rawDetail.map((entry) => {
+            const e = entry as Record<string, unknown>;
+            const l = Array.isArray(e.loc) ? (e.loc as unknown[]).join('.') : String(e.loc ?? '');
+            const m = typeof e.msg === 'string' ? e.msg : typeof e.message === 'string' ? e.message : JSON.stringify(e);
+            return l ? `${l}: ${m}` : m;
+          }).join('; ');
+          throw new ProviderProfileRequestError(structured || detail, extractErrorCode(errorPayload));
+        }
+        detail = extractErrorMessage(
           errorPayload,
           `Failed to ${isEditing ? 'update' : 'create'} provider profile.`,
         );
@@ -2008,21 +2031,13 @@ export function ProviderProfilesManager({
       setForm(nextForm);
       setFormBaseline(nextForm);
       {
-        const normalized = normalizeProviderProfileTiers(savedProfile.model_tiers, savedProfile.default_model_tier);
-        if (normalized.isRepair) {
-          const repair = runtimeDefaultTierDraft();
-          setTierDrafts([repair]);
-          setDefaultTierClientId(repair.clientId);
-          setIsTierRepair(false);
-          setInvalidSavedDefaultIndex(null);
-        } else {
-          setTierDrafts(normalized.tiers);
-          setDefaultTierClientId(normalized.defaultTierClientId);
-          setIsTierRepair(false);
-          setInvalidSavedDefaultIndex(normalized.invalidSavedDefaultIndex);
-        }
-        setTierBaseline(null);
-        setTierBaselineDefaultId(null);
+        const fresh = runtimeDefaultTierDraft();
+        setTierDrafts([fresh]);
+        setDefaultTierClientId(fresh.clientId);
+        setIsTierRepair(false);
+        setInvalidSavedDefaultIndex(null);
+        setTierBaseline(cloneTierDrafts([fresh]));
+        setTierBaselineDefaultId(fresh.clientId);
         setTierFieldErrors({});
         setTierUndo(null);
         setTierRemoveDialog(null);
@@ -2100,17 +2115,33 @@ export function ProviderProfilesManager({
         return;
       }
       const message = error.message ?? '';
-      const tierMatch = message.match(/model_tiers\.(\d+)\.(model|effort|label|parameters|annotations)/);
-      if (tierMatch) {
-        const tierIndex = parseInt(tierMatch[1]!, 10);
-        const field = tierMatch[2]!;
-        const tier = tierDrafts[tierIndex];
-        if (tier) {
-          setTierFieldErrors((prev) => ({ ...prev, [`${tier.clientId}.${field}`]: message }));
+      const tierMatches = [...message.matchAll(/model_tiers\.(\d+)\.(model|effort|label|parameters|annotations)/g)];
+      if (tierMatches.length > 0) {
+        const updates: Record<string, string> = {};
+        for (const m of tierMatches) {
+          const tierIndex = parseInt(m[1]!, 10);
+          const field = m[2]!;
+          const tier = tierDrafts[tierIndex];
+          if (tier) updates[`${tier.clientId}.${field}`] = message;
+        }
+        if (Object.keys(updates).length > 0) {
+          setTierFieldErrors((prev) => ({ ...prev, ...updates }));
           tierSectionRef.current?.scrollIntoView({ behavior: 'smooth' });
         }
       } else if (message.includes('default_model_tier')) {
         setTierFieldErrors((prev) => ({ ...prev, default_model_tier: message }));
+      }
+      // Also map any embedded structured array messages that were joined
+      const detailParts = message.split(';');
+      for (const part of detailParts) {
+        const trimmed = part.trim();
+        const pm = trimmed.match(/model_tiers\.(\d+)\.(model|effort|label|parameters|annotations)/);
+        if (pm) {
+          const idx = parseInt(pm[1]!, 10);
+          const fld = pm[2]!;
+          const t = tierDrafts[idx];
+          if (t) setTierFieldErrors((prev) => ({ ...prev, [`${t.clientId}.${fld}`]: trimmed }));
+        }
       }
       onNotice({ level: 'error', text: error.message });
     },
@@ -3577,7 +3608,7 @@ export function ProviderProfilesManager({
             {canWriteProviderProfiles ? (
               <div className="flex flex-wrap items-center gap-3 text-sm">
                 <span className="font-medium text-slate-700 dark:text-slate-300">{tierDrafts.length} tiers{defaultTierClientId ? ` · Default: Tier ${tierDrafts.findIndex((t) => t.clientId === defaultTierClientId) + 1}` : ''}</span>
-                <button type="button" className="inline-flex items-center justify-center rounded-lg bg-slate-900 dark:bg-slate-100 px-4 py-2 text-sm font-semibold text-white dark:text-slate-900" onClick={handleAddTier} disabled={!canWriteProviderProfiles}>Add tier</button>
+                <button type="button" className="inline-flex items-center justify-center rounded-lg bg-slate-900 dark:bg-slate-100 px-4 py-2 text-sm font-semibold text-white dark:text-slate-900" onClick={handleAddTier}>Add tier</button>
                 {invalidSavedDefaultIndex !== null ? <span className="rounded bg-amber-100 dark:bg-amber-900/30 px-2 py-1 text-xs font-semibold text-amber-700 dark:text-amber-300">Invalid saved default: Tier {invalidSavedDefaultIndex}</span> : null}
               </div>
             ) : (
@@ -3634,6 +3665,7 @@ export function ProviderProfilesManager({
                                 <option value="__runtime_default__">Runtime default</option>
                                 {tier.model && tier.model !== '__runtime_default__' ? <option value={tier.model}>{tier.model} (existing)</option> : null}
                               </select>
+                              <span className="text-xs text-slate-500 dark:text-slate-400">Choices reflect profile capabilities when available; custom values allowed per backend policy.</span>
                               {tierFieldErrors[`${tier.clientId}.model`] ? <span className="text-xs text-rose-600">{tierFieldErrors[`${tier.clientId}.model`]}</span> : null}
                             </label>
                             <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
@@ -3680,10 +3712,10 @@ export function ProviderProfilesManager({
                 );
               })}
             </ol>
-            {canWriteProviderProfiles && !isTierRepair ? <button type="button" className="w-full rounded-xl border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-300" onClick={handleAddTier}>Add tier</button> : null}
+            {!isTierRepair ? <button type="button" className="w-full rounded-xl border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-300" onClick={handleAddTier}>Add tier</button> : null}
             <p className="text-xs text-slate-500 dark:text-slate-400">Future launches use the saved policy. Historical runs keep their record.</p>
             {tierRemoveDialog ? (
-              <div role="dialog" aria-modal="true" aria-labelledby="tier-remove-title" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) setTierRemoveDialog(null); }}>
+              <div role="dialog" aria-modal="true" aria-labelledby="tier-remove-title" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) setTierRemoveDialog(null); }} onKeyDown={(e) => { if (e.key === 'Escape') setTierRemoveDialog(null); }} tabIndex={-1} ref={(el) => el?.focus()}>
                 <div className="w-full max-w-lg rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-2xl">
                   <h4 id="tier-remove-title" className="text-sm font-semibold text-slate-900 dark:text-white">Remove Tier {tierRemoveDialog.index + 1}?</h4>
                   {tierRemoveDialog.isMiddle ? (
@@ -4069,6 +4101,23 @@ export function ProviderProfilesManager({
             </div>
           ) : null}
 
+          {tierDraftsChanged && tierBaseline ? (
+            <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 p-4 text-sm">
+              <h4 className="font-semibold text-slate-900 dark:text-white">Pending tier policy changes</h4>
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Review structural changes before saving. Historical runs keep their tier numbers.</p>
+              <ul className="mt-2 list-disc pl-5 text-slate-700 dark:text-slate-300">
+                {tierDrafts.length !== tierBaseline.length ? <li>Tier count: {tierBaseline.length} → {tierDrafts.length}</li> : null}
+                {tierBaselineDefaultId !== defaultTierClientId ? <li>Default tier changed: Tier {tierBaseline.findIndex(t => t.clientId === tierBaselineDefaultId)+1} → Tier {tierDrafts.findIndex(t => t.clientId === defaultTierClientId)+1}</li> : null}
+                {tierDrafts.map((t, idx) => {
+                  const baseline = tierBaseline[idx];
+                  if (!baseline) return <li key={t.clientId}>Added Tier {idx+1}: {t.label || 'unlabeled'} (model: {t.model || 'runtime default'}, effort: {t.effort || 'runtime default'})</li>;
+                  if (baseline.label !== t.label || baseline.model !== t.model || baseline.effort !== t.effort) return <li key={t.clientId}>Tier {idx+1} updated</li>;
+                  return null;
+                })}
+                {tierBaseline.length > tierDrafts.length ? <li>{tierBaseline.length - tierDrafts.length} tier(s) removed — remaining tiers renumbered</li> : null}
+              </ul>
+            </div>
+          ) : null}
           <div className="flex flex-wrap gap-3">
             <button
               type="submit"
@@ -4091,7 +4140,30 @@ export function ProviderProfilesManager({
           </div>
         </form>
       </div>
-      ) : null}
+      ) : (
+        <div className="mt-8 border-t border-slate-200 dark:border-slate-700 pt-8">
+          <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Model & effort tiers (read-only)</h3>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Full tier policy is visible here even without write access. Historical runs keep their record.</p>
+          <ol className="mt-4 space-y-4" aria-label="Model and effort tiers read-only">
+            {tierDrafts.map((tier, index) => {
+              const tierNumber = index + 1;
+              const isDefault = tier.clientId === defaultTierClientId;
+              return (
+                <li key={tier.clientId} className={`rounded-2xl border p-4 ${isDefault ? 'border-violet-300 dark:border-violet-700 bg-violet-50/40 dark:bg-violet-950/20' : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800'}`}>
+                  <div className="text-sm font-semibold text-slate-900 dark:text-white">Tier {tierNumber}{tier.label ? ` · ${tier.label}` : ''}{isDefault ? <span className="ml-2 inline-flex rounded bg-violet-100 dark:bg-violet-900/30 px-2 py-0.5 text-xs font-semibold text-violet-700 dark:text-violet-300">Default</span> : null}</div>
+                  <div className="mt-2 space-y-1 text-sm text-slate-700 dark:text-slate-300">
+                    <div>Model: <span className="font-mono">{tier.model || 'Runtime default'}</span></div>
+                    <div>Effort: <span className="font-mono">{tier.effort || 'Runtime default'}</span></div>
+                    {Object.keys(tier.parameters).length > 0 ? <div>Parameters: <span className="font-mono text-xs">{JSON.stringify(tier.parameters)}</span></div> : null}
+                    {Object.keys(tier.annotations).length > 0 ? <div>Annotations: <span className="font-mono text-xs">{JSON.stringify(tier.annotations)}</span></div> : null}
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+          {isTierRepair ? <div className="mt-4 rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-4 text-sm text-amber-800 dark:text-amber-300">This profile has no model tiers and cannot be saved in this state.</div> : null}
+        </div>
+      )}
     </section>
   );
 }
