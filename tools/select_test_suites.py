@@ -220,6 +220,26 @@ OMNIGENT_CONTRACT_GLOBS = (
     "tools/build_omnigent_*",
 )
 
+# Inputs of the deterministic conformance runner that live outside the owned
+# inventory above: the pytest layers and frontend test it executes, its profile,
+# and its report builder. A change to any of them must republish the evidence
+# bundle, but it does not by itself elevate the complete contract gate; the
+# shard that owns the file still runs it. tests/unit/tools cross-checks this set
+# against ``tools/run_omnigent_conformance.py``.
+OMNIGENT_CONFORMANCE_INPUT_EXACT = {
+    "frontend/src/entrypoints/workflow-detail.test.tsx",
+    "tests/fixtures/omnigent/conformance-v4.json",
+    "tests/integration/reliability/test_checkpoint_cold_resume.py",
+    "tests/integration/reliability_journey/"
+    "test_omnigent_cumulative_remediation_journey.py",
+    "tests/unit/tools/test_run_omnigent_live_conformance.py",
+    "tests/unit/workflows/adapters/test_external_adapter_registry.py",
+    "tests/unit/workflows/temporal/test_remediation_workspace_head.py",
+    "tests/unit/workflows/temporal/test_temporal_workers.py",
+    "tests/unit/workflows/temporal/workflows/test_run_bounded_story_loop.py",
+    "tests/unit/workflows/temporal/workflows/test_run_integration.py",
+}
+
 # The subset of owned paths whose change can affect the compiled native UI or
 # facade behavior, which must additionally exercise the compiled production
 # browser suite (issue #3710 required PR gate item 7).
@@ -371,6 +391,7 @@ def _is_non_backend_path(path: str) -> bool:
 def _is_backend_path(path: str) -> bool:
     return (
         path in FORCE_FULL_EXACT
+        or path in OMNIGENT_CONFORMANCE_INPUT_EXACT
         or path in API_COMPONENT_EXACT
         or path in TEMPORAL_BOUNDARY_EXACT
         or path in INTEGRATION_CI_EXACT
@@ -405,6 +426,11 @@ def is_exact_artifact_owned(path: str) -> bool:
         prefixes=EXACT_ARTIFACT_PREFIXES,
         globs=EXACT_ARTIFACT_GLOBS,
     )
+
+
+def is_omnigent_conformance_input(path: str) -> bool:
+    """Return whether a changed path feeds the deterministic conformance runner."""
+    return is_omnigent_contract_owned(path) or path in OMNIGENT_CONFORMANCE_INPUT_EXACT
 
 
 def _is_omnigent_facade_path(path: str) -> bool:
@@ -548,6 +574,7 @@ def select_suites(
         # and frontend Dockerfiles are non-backend but still change the
         # deployable image runtime surface.
         exact_artifact=any(is_exact_artifact_owned(path) for path in paths),
+        omnigent_conformance=any(is_omnigent_conformance_input(path) for path in paths),
         frontend_static=static or chromium,
         frontend_browser_chromium=chromium,
         frontend_browser_firefox=firefox,

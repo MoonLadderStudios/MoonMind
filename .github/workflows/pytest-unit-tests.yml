@@ -810,6 +810,7 @@ jobs:
       - integration-ci
       - reliability-journey-checkpoint-resume
       - omnigent-exact-artifact
+      - omnigent-deterministic-conformance
       - verify-test-shard-ownership
     if: always()
     runs-on: ubuntu-latest
@@ -882,6 +883,9 @@ jobs:
           require_selected "omnigent-exact-artifact" \
             "${{ needs.select-test-suites.outputs.exact_artifact }}" \
             "${{ needs.omnigent-exact-artifact.result }}"
+          require_selected "omnigent-deterministic-conformance" \
+            "${{ needs.select-test-suites.outputs.omnigent_conformance }}" \
+            "${{ needs.omnigent-deterministic-conformance.result }}"
           require_selected "verify-test-shard-ownership" \
             "${{ needs.select-test-suites.outputs.full_backend }}" \
             "${{ needs.verify-test-shard-ownership.result }}"

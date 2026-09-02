@@ -415,6 +415,8 @@ def test_ci_required_is_pure_result_aggregator() -> None:
         "temporal-boundary",
         "integration-ci",
         "reliability-journey-checkpoint-resume",
+        "omnigent-exact-artifact",
+        "omnigent-deterministic-conformance",
         "verify-test-shard-ownership",
     ):
         assert dependency in job["needs"]
@@ -443,6 +445,8 @@ def test_ci_required_reports_all_failures_before_exiting() -> None:
         "temporal-boundary",
         "integration-ci",
         "reliability-journey-checkpoint-resume",
+        "omnigent-exact-artifact",
+        "omnigent-deterministic-conformance",
         "verify-test-shard-ownership",
     ):
         assert name in script
