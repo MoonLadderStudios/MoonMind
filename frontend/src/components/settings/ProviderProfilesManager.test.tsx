@@ -1015,19 +1015,23 @@ describe('ProviderProfilesManager form controls', () => {
     });
   });
 
-  it('sends default effort changes when updating an edited profile', async () => {
+  it('sends tier effort changes when updating an edited profile (MoonLadderStudios/MoonMind#3348)', async () => {
     const fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue({
       ok: true,
-      json: async () => ({ ...profile, default_effort: 'high' }),
+      json: async () => ({
+        ...profile,
+        model_tiers: [{ label: null, model: null, effort: 'high', parameters: {}, annotations: {} }],
+        default_model_tier: 1,
+      }),
     } as Response);
 
     renderProviderProfilesManager([profile]);
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
-    const defaultEffort = screen.getByLabelText(/Default effort/) as HTMLInputElement;
-    expect(defaultEffort.value).toBe('');
+    const effortSelect = screen.getByLabelText('Tier 1 effort') as HTMLSelectElement;
+    expect(effortSelect.value).toBe('__runtime_default__');
 
-    fireEvent.change(defaultEffort, { target: { value: 'high' } });
+    fireEvent.change(effortSelect, { target: { value: 'high' } });
     fireEvent.click(screen.getByRole('button', { name: 'Update provider profile' }));
 
     await waitFor(() => {
@@ -1041,7 +1045,10 @@ describe('ProviderProfilesManager form controls', () => {
 
     const [, requestInit] = fetchSpy.mock.calls[0] ?? [];
     const payload = JSON.parse(String((requestInit as RequestInit).body));
-    expect(payload.default_effort).toBe('high');
+    expect(payload.model_tiers).toEqual([{ label: null, model: null, effort: 'high', parameters: {}, annotations: {} }]);
+    expect(payload.default_model_tier).toBe(1);
+    expect(payload).not.toHaveProperty('default_model');
+    expect(payload).not.toHaveProperty('default_effort');
   });
 
   it('requires a backend-supported authentication method before creation', async () => {
@@ -2279,5 +2286,124 @@ describe('MoonLadderStudios/MoonMind#3820 guided provider-profile creation', () 
       '/api/v1/provider-profiles/credential-volume/validate',
       expect.objectContaining({ method: 'POST' }),
     );
+  });
+});
+
+describe('MoonLadderStudios/MoonMind#3348 tier editor', () => {
+  const tierProfile: ProviderProfile = {
+    profile_id: 'tier-profile',
+    runtime_id: 'codex_cli',
+    provider_id: 'openai',
+    credential_source: 'secret_ref',
+    runtime_materialization_mode: 'api_key_env',
+    secret_refs: {},
+    max_parallel_runs: 1,
+    cooldown_after_429_seconds: 300,
+    rate_limit_policy: 'backoff',
+    enabled: true,
+    model_tiers: [
+      { label: 'Plan', model: 'gpt-5.5', effort: 'medium', parameters: {}, annotations: {} },
+      { label: 'Impl', model: 'gpt-5.5', effort: 'xhigh', parameters: {}, annotations: {} },
+      { label: 'Docs', model: 'gpt-5.3', effort: 'xhigh', parameters: {}, annotations: {} },
+    ],
+    default_model_tier: 2,
+  };
+
+  it('shows tier count and default tier in collection and +N more when needed', () => {
+    renderProviderProfilesManager([tierProfile]);
+    expect(screen.getByText('3 tiers · Default: Tier 2')).toBeTruthy();
+    expect(screen.getByText('+1 more')).toBeTruthy();
+    expect(screen.getByLabelText('tier-profile model tier mapping')).toBeTruthy();
+  });
+
+  it('displays Runtime default for null model/effort and repair when empty', () => {
+    const emptyProfile: ProviderProfile = { ...tierProfile, profile_id: 'empty-profile', model_tiers: [], default_model_tier: 1 };
+    renderProviderProfilesManager([emptyProfile]);
+    expect(screen.getByText('Tier policy unavailable · needs repair')).toBeTruthy();
+  });
+
+  it('renders tier editor section with ordered cards and default state', () => {
+    renderProviderProfilesManager([tierProfile]);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    expect(screen.getByText('Model & effort tiers')).toBeTruthy();
+    expect(screen.getAllByText(/Tier 1/)[0]).toBeTruthy();
+    expect(screen.getByLabelText('Tier 2 label')).toBeTruthy();
+    expect(screen.getByLabelText('Use Tier 1 as default')).toBeTruthy();
+    expect(screen.getByLabelText('Default tier')).toBeTruthy();
+  });
+
+  it('can append and duplicate tiers without renumbering existing tiers', async () => {
+    renderProviderProfilesManager([tierProfile]);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    const addButtons = screen.getAllByRole('button', { name: 'Add tier' });
+    fireEvent.click(addButtons[0]!);
+    expect(screen.getByLabelText('Tier 4 label')).toBeTruthy();
+    expect(screen.getByText('4 tiers · Default: Tier 2')).toBeTruthy();
+    fireEvent.click(screen.getByLabelText('Duplicate Tier 1 as new last tier'));
+    expect(screen.getByLabelText('Tier 5 label')).toBeTruthy();
+    const tier5 = screen.getByLabelText('Tier 5 label') as HTMLInputElement;
+    expect(tier5.value).toBe('Plan copy');
+  });
+
+  it('prevents removal of only remaining tier', () => {
+    const singleTier: ProviderProfile = {
+      ...tierProfile,
+      model_tiers: [{ label: 'Only', model: null, effort: null, parameters: {}, annotations: {} }],
+      default_model_tier: 1,
+    };
+    renderProviderProfilesManager([singleTier]);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    const removeBtn = screen.getByLabelText('Remove Tier 1') as HTMLButtonElement;
+    expect(removeBtn.disabled).toBe(true);
+  });
+
+  it('middle-tier removal previews ordinal changes', async () => {
+    renderProviderProfilesManager([tierProfile]);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(screen.getByLabelText('Remove Tier 2'));
+    expect(await screen.findByText('Remove Tier 2?')).toBeTruthy();
+    expect(screen.getByText('Tier 3: Docs → becomes Tier 2')).toBeTruthy();
+    expect(screen.getByText('Existing historical runs do not change.')).toBeTruthy();
+  });
+
+  it('removing default requires reviewed replacement default', async () => {
+    renderProviderProfilesManager([tierProfile]);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(screen.getByLabelText('Remove Tier 2'));
+    expect(await screen.findByText('Choose a replacement default tier:')).toBeTruthy();
+    const replacement = screen.getAllByLabelText(/Tier \d/ as unknown as string);
+    expect(replacement.length).toBeGreaterThan(0);
+  });
+
+  it('saves only canonical ordered tier policy not legacy fields (MoonLadderStudios/MoonMind#3348)', async () => {
+    const fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ ...tierProfile, model_tiers: tierProfile.model_tiers, default_model_tier: 2 }),
+    } as Response);
+    renderProviderProfilesManager([tierProfile]);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByLabelText('Tier 1 label'), { target: { value: 'Plan updated' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Update provider profile' }));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    const payload = JSON.parse(String(fetchSpy.mock.calls[0]?.[1]?.body));
+    expect(payload.model_tiers[0].label).toBe('Plan updated');
+    expect(payload.default_model_tier).toBe(2);
+    expect(payload).not.toHaveProperty('default_model');
+    expect(payload).not.toHaveProperty('default_effort');
+  });
+
+  it('read-only users see complete ordered policy as values', () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ProviderProfilesManager profiles={[tierProfile]} secretSlugs={[]} onNotice={vi.fn()} queryClient={queryClient} canWriteProviderProfiles={false} />
+      </QueryClientProvider>,
+    );
+    expect(screen.queryByRole('button', { name: 'Edit tiers tier-profile' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
+    expect(screen.getByText('3 tiers · Default: Tier 2')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Add tier' })).toBeNull();
+    // collection summary expansion is accessible without edit mode
+    expect(screen.getByText('Show tier mapping')).toBeTruthy();
   });
 });

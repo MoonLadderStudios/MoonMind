@@ -328,11 +328,27 @@ def _preserve_builtin_opencode_model(
     return preserved
 
 
+async def _default_builtin_opencode_launch_policy_refs(
+    session: AsyncSession,
+) -> list[str]:
+    """Resolve the exact active defaults bound into a new profile version."""
+
+    from api_service.services.omnigent_policies import OmnigentPolicyService
+
+    service = OmnigentPolicyService(session)
+    refs: list[str] = []
+    for policy_id in ("omnigent-on-demand", "opencode-on-demand"):
+        snapshot = await service.resolve_default_runtime_snapshot(policy_id)
+        refs.append(str(snapshot["policyRef"]))
+    return refs
+
+
 async def ensure_builtin_opencode_agent_profile(
     *, session: AsyncSession, catalog: Any
 ) -> dict[str, Any] | None:
     """Seed or advance the default OpenCode profile from live authority."""
 
+    from api_service.services.omnigent_policies import PolicyConflict, PolicyNotFound
     from moonmind.omnigent.harness_platform.agent_profile import OmnigentAgentProfileV2
     from moonmind.omnigent.harness_platform.catalog import TrustState
     from moonmind.omnigent.harness_platform.host_classes import (
@@ -389,6 +405,14 @@ async def ensure_builtin_opencode_agent_profile(
         )
     except Exception:
         host_ready = False
+    try:
+        allowed_launch_policy_refs = (
+            await _default_builtin_opencode_launch_policy_refs(session)
+        )
+    except (PolicyConflict, PolicyNotFound):
+        # The built-in profile must never advertise stale or synthetic policy
+        # authority while startup reconciliation is still materializing it.
+        return None
     document = OmnigentAgentProfileV2.model_validate(
         {
             "endpointRef": "default",
@@ -417,10 +441,7 @@ async def ensure_builtin_opencode_agent_profile(
             "capture": {"stream": True, "evidence": True},
             "continuations": {"checkpoint": True, "branch": True},
             "publish": {"mode": "none"},
-            "allowedLaunchPolicyRefs": [
-                "omnigent-on-demand@1",
-                "opencode-on-demand@1",
-            ],
+            "allowedLaunchPolicyRefs": allowed_launch_policy_refs,
         }
     ).model_dump(by_alias=True, mode="json")
     profile_id = "omnigent-opencode-default"
