@@ -92,6 +92,8 @@ class GenericOmnigentHostRealizer:
         artifact_gateway: Any | None = None,
         turn_command_service: Any | None = None,
         cleanup_authority: Any | None = None,
+        execution_state_notifier: Callable[[str, str, str], Awaitable[None]]
+        | None = None,
         heartbeat_interval_seconds: float = 60.0,
         heartbeat_ttl_seconds: int = 900,
     ) -> None:
@@ -128,6 +130,11 @@ class GenericOmnigentHostRealizer:
         # (#3707 §4). ``None`` keeps unit harnesses that do not wire the control
         # plane runnable, exactly like ``turn_command_service``.
         self._cleanup_authority = cleanup_authority
+        # Provider Profile capacity is acquired inside this Activity-owned
+        # lifecycle, outside the AgentRun workflow's managed-runtime slot loop.
+        # The notifier projects that authoritative wait into the owning user
+        # workflow without moving or duplicating lease semantics.
+        self._execution_state_notifier = execution_state_notifier
         if heartbeat_interval_seconds <= 0 or heartbeat_ttl_seconds <= 0:
             raise ValueError("generic host heartbeat interval and TTL must be positive")
         self._heartbeat_interval = heartbeat_interval_seconds
@@ -198,11 +205,21 @@ class GenericOmnigentHostRealizer:
 
         host_class, launch_policy = await self._resolve_host(plan)
         try:
+            await self._notify_execution_state(
+                workflow_id,
+                "awaiting_slot",
+                "Waiting for Provider Profile capacity.",
+            )
             acquired = await self._provider_leases.acquire_all(
                 plan=plan,
                 workflow_id=workflow_id,
                 step_execution_id=step_execution_id,
                 idempotency_key=request.idempotency_key,
+            )
+            await self._notify_execution_state(
+                workflow_id,
+                "launching",
+                "Provider Profile capacity acquired.",
             )
             materializers = {
                 slot: value.materializerRef
@@ -836,6 +853,12 @@ class GenericOmnigentHostRealizer:
     ) -> AgentRunResult:
         """Keep both durable ownership leases fresh while a turn is active."""
 
+        workflow_id, _step_execution_id = _execution_identity(request)
+        await self._notify_execution_state(
+            workflow_id,
+            "running",
+            "Agent is running.",
+        )
         stop = asyncio.Event()
 
         async def heartbeat_loop() -> None:
@@ -882,6 +905,28 @@ class GenericOmnigentHostRealizer:
                     task.cancel()
                     with suppress(asyncio.CancelledError):
                         await task
+
+    async def _notify_execution_state(
+        self,
+        workflow_id: str,
+        state: str,
+        reason: str,
+    ) -> None:
+        """Best-effort projection of Activity-owned lifecycle state."""
+
+        if self._execution_state_notifier is None:
+            return
+        try:
+            await self._execution_state_notifier(workflow_id, state, reason)
+        except Exception:
+            # Capacity, host, session, and cleanup authority remain primary.
+            # A projection failure must not create or erase provider capacity.
+            logger.warning(
+                "Could not project generic Omnigent execution state %s for %s",
+                state,
+                workflow_id,
+                exc_info=True,
+            )
 
     def _bind_exact_host(
         self,
