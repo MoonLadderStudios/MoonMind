@@ -1057,6 +1057,7 @@ class BootstrapController:
             )
             from api_service.services.provider_profile_service import (
                 normalize_runtime_default_profile,
+                sync_provider_profile_manager,
             )
 
             async with asm() as session:
@@ -1111,6 +1112,10 @@ class BootstrapController:
                     preferred_profile_id=profile_id,
                 )
                 await session.commit()
+                await sync_provider_profile_manager(
+                    session=session,
+                    runtime_id=prof.runtime_id,
+                )
                 return profile_id
         finally:
             if guard is not None:

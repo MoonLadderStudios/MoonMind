@@ -251,16 +251,18 @@ async def _enroll_opencode_go_with_pinned_runtime(
     monkeypatch: pytest.MonkeyPatch,
     *,
     validation_error: Exception | None = None,
-) -> None:
+) -> list[tuple[str, dict]]:
     """Exercise the real bootstrap profile transaction with hermetic edges."""
 
     from moonmind.omnigent.bootstrap.controller import BootstrapController
     from moonmind.omnigent.harness_platform import host_classes
     from moonmind.omnigent import opencode_runtime_validation, production
     from moonmind.provider_profiles import maintenance
+    from moonmind.workflows.temporal import client as temporal_client
 
     image_ref = "ghcr.io/example/opencode@sha256:" + "a" * 64
     qualified_model = "opencode-go/muse-spark-1.2-contributor"
+    manager_sync_signals: list[tuple[str, dict]] = []
 
     class Guard:
         lease = SimpleNamespace(lease_id="lease-opencode-go-default")
@@ -287,6 +289,21 @@ async def _enroll_opencode_go_with_pinned_runtime(
                 "models": [{"qualifiedId": qualified_model}],
             }
 
+    class TemporalHandle:
+        async def signal(self, signal_name: str, payload: dict) -> None:
+            manager_sync_signals.append((signal_name, payload))
+
+    class TemporalClient:
+        async def start_workflow(self, *_args, **_kwargs) -> None:
+            return None
+
+        def get_workflow_handle(self, _workflow_id: str) -> TemporalHandle:
+            return TemporalHandle()
+
+    class TemporalAdapter:
+        async def get_client(self) -> TemporalClient:
+            return TemporalClient()
+
     monkeypatch.setattr(
         maintenance, "acquire_credential_maintenance_guard", acquire_guard
     )
@@ -297,6 +314,7 @@ async def _enroll_opencode_go_with_pinned_runtime(
         RuntimeValidation,
     )
     monkeypatch.setattr(production, "build_omnigent_secret_resolver", object)
+    monkeypatch.setattr(temporal_client, "TemporalClientAdapter", TemporalAdapter)
 
     await BootstrapController(
         session_factory=db_base.async_session_maker
@@ -306,6 +324,7 @@ async def _enroll_opencode_go_with_pinned_runtime(
         effort="xhigh",
         resolved=SimpleNamespace(opencode_host_image_ref=image_ref),
     )
+    return manager_sync_signals
 
 
 @pytest.mark.asyncio
@@ -317,7 +336,7 @@ async def test_opencode_go_enrollment_atomically_replaces_seeded_zen_default(
     from api_service.main import _auto_seed_provider_profiles
 
     await _auto_seed_provider_profiles()
-    await _enroll_opencode_go_with_pinned_runtime(monkeypatch)
+    manager_sync_signals = await _enroll_opencode_go_with_pinned_runtime(monkeypatch)
 
     async with db_base.async_session_maker() as session:
         result = await session.execute(
@@ -333,6 +352,17 @@ async def test_opencode_go_enrollment_atomically_replaces_seeded_zen_default(
     assert profiles["opencode-go-default"].enabled is True
     assert profiles["opencode-go-default"].is_default is True
     assert sum(profile.is_default for profile in profiles.values()) == 1
+
+    assert len(manager_sync_signals) == 1
+    signal_name, signal_payload = manager_sync_signals[0]
+    assert signal_name == "sync_profiles"
+    manager_profiles = signal_payload["profiles"]
+    assert [profile["profile_id"] for profile in manager_profiles] == [
+        "opencode-go-default",
+        "opencode-zen-free",
+    ]
+    assert manager_profiles[0]["is_default"] is True
+    assert manager_profiles[0]["launch_ready"] is True
 
 
 @pytest.mark.asyncio
