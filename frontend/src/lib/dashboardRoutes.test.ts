@@ -9,6 +9,7 @@ import {
   matchesDashboardDestinationRegistry,
   payloadForDashboardRoute,
   resolveDashboardRoute,
+  resolveLegacyDashboardRedirect,
   visiblePrimaryDestinations,
   visibleSystemDestinations,
 } from './dashboardRoutes';
@@ -232,5 +233,15 @@ describe('dashboard route resolution', () => {
         uiEndpoints: { remediations: '/api/executions/remediations' },
       },
     });
+  });
+
+  it('redirects legacy /secrets and /workers without losing approved filters (MoonLadderStudios/MoonMind#3815)', () => {
+    expect(resolveLegacyDashboardRedirect('/secrets')).toBe('/settings/providers-secrets');
+    expect(resolveLegacyDashboardRedirect('/secrets', '?runtime=codex')).toBe('/settings/providers-secrets?runtime=codex');
+    expect(resolveLegacyDashboardRedirect('/secrets', '?runtime=codex&foo=bar')).toBe('/settings/providers-secrets?runtime=codex');
+    expect(resolveLegacyDashboardRedirect('/workers')).toBe('/settings/operations');
+    expect(resolveLegacyDashboardRedirect('/workers', '?status=paused')).toBe('/settings/operations?status=paused');
+    expect(resolveLegacyDashboardRedirect('/workers', '?status=paused&extra=1')).toBe('/settings/operations?status=paused');
+    expect(resolveLegacyDashboardRedirect('/unknown')).toBeNull();
   });
 });

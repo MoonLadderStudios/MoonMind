@@ -154,6 +154,11 @@ export function destinationGroupForDestination(
   return DASHBOARD_DESTINATION_GROUPS.find(({ key }) => key === destination.menuGroupKey) ?? null;
 }
 
+export const LEGACY_REDIRECTS: Readonly<Record<string, string>> = {
+  '/secrets': '/settings/providers-secrets',
+  '/workers': '/settings/operations',
+} as const;
+
 export const DASHBOARD_REACT_ROUTE_PATHS = Array.from(
   new Set([
     ...DASHBOARD_DESTINATIONS.flatMap((destination) => destination.pathPatterns),
@@ -304,6 +309,27 @@ export function resolveDashboardRoute(pathname: string): DashboardRoute | null {
   return null;
 }
 
+export function resolveLegacyDashboardRedirect(pathname: string, search?: string): string | null {
+  const path = withoutTrailingSlash(pathname || '/');
+  const target = LEGACY_REDIRECTS[path];
+  if (!target) return null;
+  if (!search) return target;
+  // Preserve only approved page-local query parameters (docs/UI/SettingsPage.md 5.4-5.5).
+  // /secrets -> /settings/providers-secrets preserves runtime
+  // /workers -> /settings/operations preserves status
+  const params = new URLSearchParams(search);
+  const allowedKeys = path === '/secrets' ? ['runtime'] : path === '/workers' ? ['status'] : [];
+  const preserved = new URLSearchParams();
+  for (const key of allowedKeys) {
+    const value = params.get(key);
+    if (value && value.trim()) {
+      preserved.set(key, value.trim());
+    }
+  }
+  const suffix = preserved.toString();
+  return suffix ? `${target}?${suffix}` : target;
+}
+
 export function destinationForPath(pathname: string): DashboardDestination | null {
   const route = resolveDashboardRoute(pathname);
   if (!route) return null;
@@ -320,7 +346,7 @@ export function destinationForPath(pathname: string): DashboardDestination | nul
 }
 
 export function isDashboardInternalUrl(url: URL): boolean {
-  return url.origin === window.location.origin && resolveDashboardRoute(url.pathname) !== null;
+  return url.origin === window.location.origin && (resolveDashboardRoute(url.pathname) !== null || resolveLegacyDashboardRedirect(url.pathname) !== null);
 }
 
 function baseInitialData(payload: BootPayload): Record<string, unknown> {
