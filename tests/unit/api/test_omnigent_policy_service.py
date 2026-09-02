@@ -28,6 +28,10 @@ from api_service.services.omnigent_policies import (
     resolve_live_server_image_ref,
     seed_bootstrap_policies,
 )
+from moonmind.omnigent.execution_profiles import (
+    PROFILES,
+    default_execution_profile_ref_for_runtime,
+)
 from moonmind.omnigent.policies import PolicyDocument, PolicyState, document_digest
 from moonmind.security.egress import OMNIGENT_EGRESS_PROFILE
 from tests.unit.omnigent.test_policy_authority import policy_document
@@ -544,10 +548,15 @@ async def test_bootstrap_policies_activate_with_resolved_latest_images(
     monkeypatch.setenv("MOONMIND_CONTAINER_JOBS_ENABLED", "true")
     server_digest = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "1" * 64
     host_digest = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "2" * 64
+    opencode_host_digest = (
+        "ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:" + "3" * 64
+    )
     resolution_calls: list[str] = []
 
     async def resolver(image_ref: str) -> str:
         resolution_calls.append(image_ref)
+        if "host-opencode" in image_ref:
+            return opencode_host_digest
         return host_digest if "host" in image_ref else server_digest
 
     async with policy_db(tmp_path) as sessions, sessions() as session:
@@ -564,6 +573,8 @@ async def test_bootstrap_policies_activate_with_resolved_latest_images(
             "omnigent-codex",
             "codex-static",
             "codex-on-demand",
+            "omnigent-on-demand",
+            "opencode-on-demand",
         }
         versions = list(
             (
@@ -576,23 +587,103 @@ async def test_bootstrap_policies_activate_with_resolved_latest_images(
             .scalars()
             .all()
         )
-        assert len(versions) == 3
+        assert len(versions) == 5
         assert all(version.state == "active" for version in versions)
         assert all(version.validation_json["valid"] is True for version in versions)
         assert all(
             version.document_json["host"]["serverImageRef"] == server_digest
             for version in versions
         )
-        assert all(
-            version.document_json["execution"]["agentIdentities"]
-            == ["codex-native-ui"]
-            for version in versions
-        )
+        by_policy = {version.policy_id: version for version in versions}
+        for policy_id in {
+            "omnigent-codex",
+            "codex-static",
+            "codex-on-demand",
+        }:
+            assert by_policy[policy_id].document_json["execution"] == {
+                "profileRef": "omnigent-codex@1",
+                "harness": "codex-native",
+                "agentIdentities": ["codex-native-ui"],
+            }
+            assert by_policy[policy_id].document_json["host"]["hostImageRef"] == host_digest
+        for policy_id in {"omnigent-on-demand", "opencode-on-demand"}:
+            assert by_policy[policy_id].document_json["execution"] == {
+                "profileRef": "omnigent-opencode@1",
+                "harness": "opencode-native",
+                "agentIdentities": ["opencode"],
+            }
+            assert by_policy[policy_id].document_json["providerProfile"]["compatibleProviders"] == ["opencode-go", "opencode"]
+            assert by_policy[policy_id].document_json["host"]["hostImageRef"] == opencode_host_digest
+            snapshot = await OmnigentPolicyService(session).resolve_runtime_snapshot(f"{policy_id}@1")
+            assert snapshot["policyRef"] == f"{policy_id}@1"
         assert await bootstrap_policies_ready(session) is True
         assert await seed_bootstrap_policies(
             session, env={}, image_resolver=resolver
         ) == []
-        assert len(resolution_calls) == 4
+        assert len(resolution_calls) == 6
+
+
+@pytest.mark.asyncio
+async def test_dynamic_opencode_child_resolves_bootstrapped_policy(
+    tmp_path, monkeypatch
+):
+    """Cover the review-loop child path that has no precompiled plan binding."""
+
+    monkeypatch.setenv("MOONMIND_CONTAINER_JOBS_ENABLED", "true")
+    server_digest = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "1" * 64
+    codex_host_digest = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "2" * 64
+    opencode_host_digest = (
+        "ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:" + "3" * 64
+    )
+
+    async def resolver(image_ref: str) -> str:
+        if "host-opencode" in image_ref:
+            return opencode_host_digest
+        return codex_host_digest if "host" in image_ref else server_digest
+
+    async with policy_db(tmp_path) as sessions, sessions() as session:
+        await seed_bootstrap_policies(session, image_resolver=resolver)
+
+        profile_ref = default_execution_profile_ref_for_runtime("opencode")
+        policy_ref = PROFILES[profile_ref].default_policy_ref
+        snapshot = await OmnigentPolicyService(session).resolve_runtime_snapshot(
+            policy_ref
+        )
+
+        assert profile_ref == "omnigent-opencode@1"
+        assert policy_ref == "opencode-on-demand@1"
+        assert snapshot["boundaries"]["execution"]["harness"] == "opencode-native"
+        assert snapshot["boundaries"]["host"]["hostImageRef"] == opencode_host_digest
+
+
+@pytest.mark.asyncio
+async def test_opencode_kill_switch_does_not_add_policy_or_image_dependencies(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("MOONMIND_CONTAINER_JOBS_ENABLED", "true")
+    monkeypatch.setenv("MOONMIND_OMNIGENT_OPENCODE_ENABLED", "false")
+    server_digest = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "1" * 64
+    host_digest = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "2" * 64
+    resolution_calls: list[str] = []
+
+    async def resolver(image_ref: str) -> str:
+        resolution_calls.append(image_ref)
+        return host_digest if "host" in image_ref else server_digest
+
+    async with policy_db(tmp_path) as sessions, sessions() as session:
+        seeded = await seed_bootstrap_policies(
+            session,
+            env={"MOONMIND_OMNIGENT_OPENCODE_ENABLED": "false"},
+            image_resolver=resolver,
+        )
+
+        assert set(seeded) == {
+            "omnigent-codex",
+            "codex-static",
+            "codex-on-demand",
+        }
+        assert len(resolution_calls) == 2
+        assert await bootstrap_policies_ready(session) is True
 
 
 @pytest.mark.asyncio
@@ -655,6 +746,8 @@ async def test_bootstrap_advances_image_authority_when_mutable_inputs_move(
             "omnigent-codex",
             "codex-static",
             "codex-on-demand",
+            "omnigent-on-demand",
+            "opencode-on-demand",
         }
         policies = list((await session.execute(select(OmnigentPolicy))).scalars())
         assert all(policy.default_version == 2 for policy in policies)
@@ -669,7 +762,7 @@ async def test_bootstrap_advances_image_authority_when_mutable_inputs_move(
             .scalars()
             .all()
         )
-        assert len(defaults) == 3
+        assert len(defaults) == 5
         assert all(
             row.document_json["host"]["serverImageRef"] == next_server
             for row in defaults
@@ -996,6 +1089,12 @@ async def test_bootstrap_seed_cuts_over_legacy_stock_agent_identity(tmp_path, mo
             (await session.execute(select(OmnigentPolicyVersion))).scalars().all()
         )
         for version in versions:
+            if version.policy_id not in {
+                "omnigent-codex",
+                "codex-static",
+                "codex-on-demand",
+            }:
+                continue
             legacy = deepcopy(version.document_json)
             legacy["execution"]["agentIdentities"] = ["codex"]
             version.document_json = legacy
@@ -1074,7 +1173,14 @@ async def test_bootstrap_seed_cuts_over_legacy_stock_agent_identity(tmp_path, mo
         }
         assert seeded_after_drain == ["codex-on-demand"]
         policies = list((await session.execute(select(OmnigentPolicy))).scalars())
-        assert all(policy.default_version == 2 for policy in policies)
+        assert all(
+            policy.default_version == (
+                2 if policy.policy_id in {
+                    "omnigent-codex", "codex-static", "codex-on-demand"
+                } else 1
+            )
+            for policy in policies
+        )
         migrated_versions = list(
             (
                 await session.execute(
@@ -1087,11 +1193,18 @@ async def test_bootstrap_seed_cuts_over_legacy_stock_agent_identity(tmp_path, mo
             .scalars()
             .all()
         )
-        assert len(migrated_versions) == 6
+        assert len(migrated_versions) == 8
         for version in migrated_versions:
-            expected_identity = (
-                ["codex"] if version.version == 1 else ["codex-native-ui"]
-            )
+            if version.policy_id in {
+                "omnigent-codex",
+                "codex-static",
+                "codex-on-demand",
+            }:
+                expected_identity = (
+                    ["codex"] if version.version == 1 else ["codex-native-ui"]
+                )
+            else:
+                expected_identity = ["opencode"]
             assert version.state == PolicyState.ACTIVE.value
             assert version.document_json["execution"]["agentIdentities"] == (
                 expected_identity
