@@ -4,8 +4,10 @@ import {
   DASHBOARD_DESTINATION_GROUPS,
   DASHBOARD_DESTINATIONS,
   DASHBOARD_REACT_ROUTE_PATHS,
+  buildSettingsEntryRedirectTarget,
   destinationState,
   destinationForPath,
+  isDashboardInternalUrl,
   matchesDashboardDestinationRegistry,
   payloadForDashboardRoute,
   resolveDashboardRoute,
@@ -103,6 +105,109 @@ describe('dashboard route resolution', () => {
   it('keeps extensionless unknown Settings aliases outside the route-owned page registry', () => {
     expect(DASHBOARD_REACT_ROUTE_PATHS).toContain('/settings/*');
     expect(resolveDashboardRoute('/settings/provider-profiles')).toBeNull();
+  });
+  it.each([
+    ['/settings/', 'settings-entry', '/settings'],
+    ['/settings/providers-secrets/', 'settings-providers-secrets', '/settings/providers-secrets'],
+    ['/settings/user-workspace/', 'settings-user-workspace', '/settings/user-workspace'],
+    ['/settings/operations/', 'settings-operations', '/settings/operations'],
+  ])(
+    'MoonLadderStudios/MoonMind#3816 resolves trailing-slash %s to %s',
+    (path, page, normalized) => {
+      expect(resolveDashboardRoute(path)).toEqual({
+        page,
+        dataWidePanel: true,
+        currentPath: normalized,
+      });
+      if (page === 'settings-entry') {
+        expect(destinationForPath(path)).toBeNull();
+      } else {
+        expect(destinationForPath(path)?.key).toBe(page);
+      }
+    },
+  );
+  it.each([
+    '/settings/provider-profiles',
+    '/settings/legacy-alias',
+    '/settings/providers-secrets/extra',
+  ])(
+    'MoonLadderStudios/MoonMind#3816 fails unknown Settings subpath %s without a route-owned page',
+    (path) => {
+      // Documented rule: unknown Settings aliases fail at the client
+      // (UnknownPage) instead of redirecting; see docs/UI/SettingsPage.md 5.4.
+      expect(resolveDashboardRoute(path)).toBeNull();
+      expect(destinationForPath(path)).toBeNull();
+    },
+  );
+  it('MoonLadderStudios/MoonMind#3816 classifies canonical routes as internal and legacy aliases as external', () => {
+    const origin = window.location.origin;
+    for (const path of [
+      '/settings/providers-secrets',
+      '/settings/providers-secrets/',
+      '/settings/user-workspace',
+      '/settings/operations',
+      '/settings',
+    ]) {
+      expect(isDashboardInternalUrl(new URL(path, origin))).toBe(true);
+    }
+    for (const path of [
+      '/secrets',
+      '/workers',
+      '/settings/provider-profiles',
+      '/settings/app.js',
+    ]) {
+      expect(isDashboardInternalUrl(new URL(path, origin))).toBe(false);
+    }
+    expect(isDashboardInternalUrl(new URL('https://example.com/settings/operations'))).toBe(false);
+  });
+  it.each([
+    [
+      '/settings/providers-secrets',
+      'settings-providers-secrets',
+      '?runtime=codex&section=operations&token=secret',
+      '/settings/providers-secrets?runtime=codex',
+    ],
+    [
+      '/settings/user-workspace',
+      'settings-user-workspace',
+      '?scope=workspace&q=workflow&section=user-workspace&password=x',
+      '/settings/user-workspace?scope=workspace&q=workflow',
+    ],
+    [
+      '/settings/operations',
+      'settings-operations',
+      '?status=paused&section=operations&secret=abc',
+      '/settings/operations?status=paused',
+    ],
+    [
+      '/settings/providers-secrets',
+      'settings-providers-secrets',
+      '?section=providers-secrets',
+      '/settings/providers-secrets',
+    ],
+    [
+      '/settings/user-workspace',
+      'settings-user-workspace',
+      '',
+      '/settings/user-workspace',
+    ],
+  ])(
+    'MoonLadderStudios/MoonMind#3816 preserves safe query params and drops section/sensitive for %s',
+    (_path, key, search, expected) => {
+      expect(buildSettingsEntryRedirectTarget(_path, key, search)).toBe(expected);
+    },
+  );
+  it('MoonLadderStudios/MoonMind#3816 ignores ?section= for page identity', () => {
+    // resolveDashboardRoute takes only the pathname; query never selects a page.
+    expect(resolveDashboardRoute('/settings')?.page).toBe('settings-entry');
+    expect(resolveDashboardRoute('/settings/providers-secrets')?.page).toBe(
+      'settings-providers-secrets',
+    );
+    // No internal caller builds a ?section= Settings link: the only
+    // `section=` usage is the backend catalog classifier, not client routing.
+    expect(buildSettingsEntryRedirectTarget('/settings/operations', 'settings-operations', '?section=user-workspace')).toBe(
+      '/settings/operations',
+    );
   });
   it.each(['/omnigent/agents', '/omnigent/policies'])(
     'resolves the %s inventory route independently',

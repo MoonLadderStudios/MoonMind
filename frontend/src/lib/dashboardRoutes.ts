@@ -185,6 +185,36 @@ export function matchesDashboardDestinationRegistry(
   });
 }
 
+// MoonLadderStudios/MoonMind#3816: page-local query allowlist per
+// docs/UI/SettingsPage.md section 5.5. Only these keys survive the bare
+// `/settings` entry redirect. `section` carries no page identity per section
+// 5.3 and is never forwarded; credential-bearing keys are absent by
+// construction so they can never leak into redirect targets or history.
+export const SETTINGS_SAFE_QUERY_PARAMS: Record<string, readonly string[]> = {
+  'settings-providers-secrets': ['runtime'],
+  'settings-user-workspace': ['scope', 'q'],
+  'settings-operations': ['status'],
+};
+
+export function buildSettingsEntryRedirectTarget(
+  canonicalPath: string,
+  destinationKey: string,
+  currentSearch: string,
+): string {
+  const allowed = SETTINGS_SAFE_QUERY_PARAMS[destinationKey] ?? [];
+  if (allowed.length === 0) return canonicalPath;
+  const current = new URLSearchParams(currentSearch);
+  const next = new URLSearchParams();
+  for (const key of allowed) {
+    for (const value of current.getAll(key)) {
+      const trimmed = value.trim();
+      if (trimmed) next.append(key, trimmed);
+    }
+  }
+  const query = next.toString();
+  return query ? `${canonicalPath}?${query}` : canonicalPath;
+}
+
 const DETAIL_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const WORKFLOW_ID_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._:{}-]{0,254}$/;
 const WORKFLOW_DETAIL_TABS = new Set<string>(WORKFLOW_DETAIL_SUPPORTED_SUBROUTES);
