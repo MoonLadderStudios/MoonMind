@@ -8463,6 +8463,12 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           : profile.account_label || profile.profile_id,
       isDefault: Boolean(profile.is_default),
     }));
+  const providerProfileScopeLabel =
+    runtime === "omnigent" && selectedProfileIsGenericV2
+      ? selectedOmnigentAgentProfile?.displayName ||
+        omnigentExecutionReadinessQuery.data?.displayName ||
+        "Omnigent"
+      : formatRuntimeLabel(providerProfileRuntime);
   const selectedOmnigentReadiness = (omnigentCatalogQuery.data?.executionProfiles || []).find(
     (profile) => profile.ref === omnigentExecutionTargetRef,
   );
@@ -14121,7 +14127,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               ) : (
                 <p className="small" role="alert" id="queue-provider-profile-empty">
                   No launch-ready Provider Profiles are configured for{" "}
-                  {formatRuntimeLabel(providerProfileRuntime)}. Configure one in
+                  {providerProfileScopeLabel}. Configure one in
                   Settings before starting this workflow.
                 </p>
               )}

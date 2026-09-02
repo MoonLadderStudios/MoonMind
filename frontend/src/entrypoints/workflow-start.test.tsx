@@ -1138,6 +1138,83 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     });
   });
 
+  it("names the selected generic Omnigent agent when no provider profile is ready", async () => {
+    const digest = `sha256:${"e".repeat(64)}`;
+    const genericProfiles = [{
+      profileId: "omnigent-opencode-default",
+      displayName: "OpenCode via Omnigent",
+      state: "active",
+      activeVersion: 1,
+      defaultForRuntime: true,
+      versions: [{
+        version: 1,
+        digest,
+        // Production-authored v2 profiles do not carry the legacy execution
+        // profile metadata that previously made the empty-state label fall
+        // back to Codex CLI.
+        document: {
+          schemaVersion: "moonmind.omnigent-agent-profile.v2",
+          harness: { id: "opencode-native" },
+        },
+        validationResult: { ready: true },
+      }],
+    }];
+    const genericReadiness = {
+      schemaVersion: "moonmind.omnigent-execution-readiness.v3",
+      runtimeId: "omnigent",
+      displayName: "Omnigent",
+      executionTargets: [{
+        ref: "omnigent-opencode-default@1",
+        harnessId: "opencode-native",
+        agentProfileRef: {
+          profileId: "omnigent-opencode-default",
+          version: 1,
+          digest,
+        },
+        available: false,
+        supportTier: "experimental",
+        compatibleProviderProfiles: [],
+        compatibleHostClasses: [],
+        policies: ["omnigent-on-demand@1"],
+        models: [],
+        gateReasons: [{
+          code: "compatible_provider_profile_unavailable",
+          message: "Connect and validate a compatible Provider Profile.",
+        }],
+      }],
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/omnigent/codex-catalog-readiness") {
+        return Promise.resolve({ ok: true, json: async () => readyOmnigentCatalog } as Response);
+      }
+      if (url === "/api/omnigent/execution-readiness") {
+        return Promise.resolve({ ok: true, json: async () => genericReadiness } as Response);
+      }
+      if (url === "/api/omnigent/agent-profiles") {
+        return Promise.resolve({ ok: true, json: async () => genericProfiles } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [] } as Response);
+      }
+      if (url.startsWith("/api/github/branches")) {
+        return Promise.resolve(defaultBranchOptionsResponse());
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+    });
+
+    renderWorkflowStartPage(omnigentPayload());
+    fireEvent.change(await screen.findByLabelText("Runtime"), {
+      target: { value: "omnigent" },
+    });
+
+    expect(await screen.findByText(
+      "No launch-ready Provider Profiles are configured for OpenCode via Omnigent. Configure one in Settings before starting this workflow.",
+    )).toBeTruthy();
+    expect(screen.queryByText(/configured for Codex CLI/)).toBeNull();
+  });
+
   it("synchronizes the execution target when the Agent Profile changes", async () => {
     const payload = omnigentPayload();
     const initialData = payload.initialData as {
