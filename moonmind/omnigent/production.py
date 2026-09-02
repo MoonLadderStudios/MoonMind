@@ -220,6 +220,19 @@ def build_generic_omnigent_execution_services(
             session_authority_sink=session_authority_sink,
         )
 
+    temporal_adapter = TemporalClientAdapter()
+
+    async def notify_execution_state(
+        workflow_id: str,
+        state: str,
+        reason: str,
+    ) -> None:
+        handle = await temporal_adapter.get_workflow_handle(workflow_id)
+        await handle.signal(
+            "child_state_changed",
+            args=[state, reason],
+        )
+
     runtime_bindings = DbRuntimeBindingStore(session_factory)
     host_leases = DbOmnigentHostLeaseRepository(session_factory)
     realizer = GenericOmnigentHostRealizer(
@@ -248,6 +261,7 @@ def build_generic_omnigent_execution_services(
         cleanup_authority=CanonicalCleanupAuthority(
             OmnigentControlPlaneStore(session_factory)
         ),
+        execution_state_notifier=notify_execution_state,
     )
     registry = OmnigentExecutionRealizerRegistry()
     registry.register(
