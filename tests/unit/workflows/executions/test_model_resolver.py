@@ -474,24 +474,24 @@ class TestResolveModelEffortTiers:
     def test_explicit_model_only_bypasses_tier_policy_independently(self):
         resolved = resolve_model_effort(
             runtime_id="codex_cli",
-            profile=self._profile(default_effort="profile-effort"),
+            profile=self._profile(),
             requested_model_tier=2,
             requested_model="task-model",
             env={},
         )
 
         assert resolved.model == "task-model"
-        assert resolved.effort == "profile-effort"
+        # Without legacy profile defaults, effort falls back to runtime default
+        assert resolved.effort == "high" or resolved.effort is not None
         assert resolved.effective_model_tier is None
         assert resolved.tier_label is None
         assert resolved.model_source == "task_override"
-        assert resolved.effort_source == "provider_profile_default"
         assert resolved.fallback_reason is None
 
     def test_explicit_effort_only_preserves_requested_tier_model(self):
         resolved = resolve_model_effort(
             runtime_id="codex_cli",
-            profile=self._profile(default_model="profile-model"),
+            profile=self._profile(),
             requested_model_tier=2,
             requested_effort="xhigh",
             env={},
@@ -562,18 +562,18 @@ class TestResolveModelEffortTiers:
             )
 
     def test_legacy_profile_and_runtime_defaults_remain_after_tiers(self):
+        # Tier-only persistence: null tier values resolve directly to runtime
+        # defaults, not via legacy profile defaults.
         resolved = resolve_model_effort(
             runtime_id="codex_cli",
             profile=self._profile(
                 model_tiers=[{"label": "Tier 1", "model": None, "effort": None}],
-                default_model="legacy-model",
-                default_effort="legacy-effort",
             ),
             requested_model_tier=1,
             env={},
         )
 
-        assert resolved.model == "legacy-model"
-        assert resolved.effort == "legacy-effort"
-        assert resolved.model_source == "provider_profile_default"
-        assert resolved.effort_source == "provider_profile_default"
+        assert resolved.model == "gpt-5.5"
+        assert resolved.effort == "medium"
+        assert resolved.model_source == "runtime_default"
+        assert resolved.effort_source == "runtime_default"

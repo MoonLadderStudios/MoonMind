@@ -573,8 +573,8 @@ describe('toFormState', () => {
   const fullProfile: ProviderProfile = {
     ...minimalProfile,
     provider_label: 'OpenAI Prod',
-    default_model: 'gpt-4o',
-    default_effort: 'high',
+    model_tiers: [{ label: 'Plan', model: 'gpt-4o', effort: 'high', parameters: {}, annotations: {} }],
+    default_model_tier: 1,
     volume_ref: 'openai-config',
     volume_mount_path: '/root/.openai',
     secret_refs: { OPENAI_API_KEY: 'db://OPENAI_API_KEY' },
@@ -876,7 +876,8 @@ describe('ProviderProfilesManager form controls', () => {
     ...profile,
     profile_id: 'codex-diagnostic',
     provider_label: 'OpenAI Team',
-    default_model: 'gpt-5.4',
+    model_tiers: [{ label: 'Plan', model: 'gpt-5.4', effort: 'medium', parameters: {}, annotations: {} }],
+    default_model_tier: 1,
     secret_refs: {
       provider_api_key: 'db://openai-team-key',
     },
