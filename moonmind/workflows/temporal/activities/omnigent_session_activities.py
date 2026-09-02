@@ -2790,6 +2790,21 @@ async def _omnigent_client_context():
     return http_client, client
 
 
+async def _resolve_legacy_launch_policy_snapshot(
+    *, policy_service: Any, launch_policy_ref: str, resolve_default: bool
+) -> tuple[str, dict[str, Any]]:
+    """Resolve exact replay authority, following defaults only when unbound."""
+
+    if not resolve_default:
+        snapshot = await policy_service.resolve_runtime_snapshot(launch_policy_ref)
+        return launch_policy_ref, snapshot
+    policy_id, separator, _version = launch_policy_ref.rpartition("@")
+    if not separator:
+        raise ValueError("default launch policy reference is invalid")
+    snapshot = await policy_service.resolve_default_runtime_snapshot(policy_id)
+    return str(snapshot["policyRef"]), snapshot
+
+
 async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Materialize and bind one exact host without returning mutable paths."""
 
@@ -2863,6 +2878,7 @@ async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str,
     requested_target, requested_policy = selection_from_request(
         agent_request.parameters
     )
+    resolve_policy_default = False
     if execution_plan is not None:
         planned_registration = find_harness_registration(
             execution_plan.payload.harnessId
@@ -2890,6 +2906,7 @@ async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str,
             or requested_policy
             or PROFILES[execution_profile_ref].default_policy_ref
         )
+        resolve_policy_default = not binding.launch_policy_ref and not requested_policy
         if requested_target and requested_target != execution_profile_ref:
             raise ValueError("authored host selection conflicts with durable binding")
     else:
@@ -2899,6 +2916,7 @@ async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str,
         launch_policy_ref = (
             requested_policy or PROFILES[execution_profile_ref].default_policy_ref
         )
+        resolve_policy_default = not requested_policy
 
     parameters = dict(agent_request.parameters or {})
     if (
@@ -2922,9 +2940,14 @@ async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str,
         # stored with the plan. New product submissions never consult current
         # policy state here.
         async with async_session_maker() as db_session:
-            policy_snapshot = await OmnigentPolicyService(
-                db_session
-            ).resolve_runtime_snapshot(launch_policy_ref)
+            policy_service = OmnigentPolicyService(db_session)
+            launch_policy_ref, policy_snapshot = (
+                await _resolve_legacy_launch_policy_snapshot(
+                    policy_service=policy_service,
+                    launch_policy_ref=launch_policy_ref,
+                    resolve_default=resolve_policy_default,
+                )
+            )
         authored_follow_up = (
             parameters.get("followUpRetrieval")
             if isinstance(parameters.get("followUpRetrieval"), Mapping)
