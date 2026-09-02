@@ -3,7 +3,9 @@
   "reconciledPolicyIds": [
     "codex-on-demand",
     "codex-static",
-    "omnigent-codex"
+    "omnigent-codex",
+    "omnigent-on-demand",
+    "opencode-on-demand"
   ],
   "defaultPolicyVersion": 2,
   "serverImageRefObserved": "ghcr.io/omnigent-ai/omnigent-server@sha256:3333333333333333333333333333333333333333333333333333333333333333",

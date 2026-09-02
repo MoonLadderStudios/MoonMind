@@ -303,12 +303,24 @@ async def _sync_omnigent_bootstrap_policies(
         from moonmind.omnigent.bootstrap.image_resolution import (
             operator_image_configuration,
         )
+        from moonmind.omnigent.bootstrap.store import load_resolved_state
 
         # This is the only leg allowed to acquire images from the registry, and
         # it keys on the configured refs. Reading the live environment would
         # hand it a digest the image leg published, which is indistinguishable
         # from an operator pin and would silently disable tag refresh.
         configuration = operator_image_configuration()
+        resolved_state = load_resolved_state()
+        if resolved_state is not None and resolved_state.opencode_host_image_ref:
+            # The image leg already compatibility-qualified this exact pair.
+            # Re-resolving the mutable OpenCode tag here could pin a different
+            # digest than the Host Class and deployment evidence authorize.
+            configuration = {
+                **configuration,
+                "OMNIGENT_OPENCODE_HOST_IMAGE_REF": (
+                    resolved_state.opencode_host_image_ref
+                ),
+            }
         async with get_async_session_context() as session:
             if refresh_images:
                 await seed_bootstrap_policies(session, env=configuration)

@@ -35,6 +35,10 @@ from moonmind.omnigent.harness_platform.execution_plan import (
     OmnigentExecutionPlanEnvelope,
     create_execution_plan_envelope,
 )
+from moonmind.omnigent.harness_platform.failures import (
+    HarnessPlatformError,
+    HarnessPlatformFailure,
+)
 from moonmind.omnigent.harness_platform.host_classes import (
     HostClass,
     OmnigentHostClassSelector,
@@ -217,10 +221,9 @@ async def _resolve_runtime_policy_snapshot(
 ) -> dict[str, Any]:
     """Read one active, validated policy before plan persistence."""
 
-    import os
-
     from api_service.services.omnigent_policies import (
         OmnigentPolicyService,
+        PolicyConflict,
         PolicyNotFound,
     )
 
@@ -237,105 +240,12 @@ async def _resolve_runtime_policy_snapshot(
             return await OmnigentPolicyService(session).resolve_runtime_snapshot(
                 policy_ref
             )
-    except PolicyNotFound:
-        # Fallback for generic opencode harness when deployment policy is not seeded
-        if policy_ref.startswith("opencode-") or policy_ref.startswith(
-            "omnigent-on-demand"
-        ):
-            # Synthesize from a known codex policy
-            try:
-                if db_session is not None:
-                    base = await OmnigentPolicyService(
-                        db_session
-                    ).resolve_runtime_snapshot("codex-on-demand@1")
-                else:
-                    async with session_factory() as session2:
-                        base = await OmnigentPolicyService(
-                            session2
-                        ).resolve_runtime_snapshot("codex-on-demand@1")
-                # Clone and adapt for opencode – replace every Codex identity
-                import copy
-
-                synthetic = copy.deepcopy(base)
-                boundaries = synthetic.get("boundaries", {})
-                execution = boundaries.get("execution", {})
-                execution["harness"] = "opencode-native"
-                execution["profileRef"] = "omnigent-opencode@1"
-                execution["agentIdentities"] = ["opencode"]
-                boundaries["execution"] = execution
-                # Replace every remaining Codex provider identity.
-                if "providerProfile" in boundaries and isinstance(
-                    boundaries["providerProfile"], dict
-                ):
-                    boundaries["providerProfile"]["compatibleProviders"] = [
-                        "opencode-go",
-                        "opencode",
-                    ]
-                else:
-                    boundaries["providerProfile"] = {
-                        "compatibleProviders": ["opencode-go", "opencode"]
-                    }
-
-                # Deep sweep: replace any lingering Codex strings that survived the shallow copy
-                def _deep_replace_codex(obj: Any) -> Any:
-                    if isinstance(obj, dict):
-                        return {k: _deep_replace_codex(v) for k, v in obj.items()}
-                    if isinstance(obj, list):
-                        return [_deep_replace_codex(v) for v in obj]
-                    if isinstance(obj, str):
-                        if obj == "codex":
-                            return "opencode-go"
-                        if obj == "codex-native":
-                            return "opencode-native"
-                        if obj == "codex-on-demand@1":
-                            return "opencode-on-demand@1"
-                        if obj == "omnigent-codex@1":
-                            return "omnigent-opencode@1"
-                        if "codex" in obj.lower():
-                            return obj.replace("codex", "opencode").replace(
-                                "Codex", "Opencode"
-                            )
-                        return obj
-                    return obj
-
-                boundaries = _deep_replace_codex(boundaries)
-                # Re-assert critical Opencode identities after deep sweep.
-                # Note: ExecutionPolicy forbids compatibleProviders on the
-                # execution section; provider compatibility belongs to the
-                # providerProfile boundary only.
-                boundaries["execution"]["harness"] = "opencode-native"
-                boundaries["execution"]["profileRef"] = "omnigent-opencode@1"
-                boundaries["execution"]["agentIdentities"] = ["opencode"]
-                boundaries.get("execution", {}).pop("compatibleProviders", None)
-                boundaries["providerProfile"]["compatibleProviders"] = [
-                    "opencode-go",
-                    "opencode",
-                ]
-                host = boundaries.get("host", {})
-                # Use resolved opencode image if available
-                opencode_ref = os.getenv("OMNIGENT_OPENCODE_HOST_IMAGE_REF", "").strip()
-                if opencode_ref and "@sha256:" in opencode_ref:
-                    host["hostImageRef"] = opencode_ref
-                # Also ensure server image is set
-                server_ref = os.getenv("OMNIGENT_IMAGE_REF", "").strip()
-                if server_ref and "@sha256:" in server_ref:
-                    host["serverImageRef"] = server_ref
-                boundaries["host"] = host
-                # Compile through the canonical policy snapshot boundary so the
-                # durable authority fields (policyRef/policyDigest/snapshotRef)
-                # match what workers re-verify at launch time.
-                from moonmind.omnigent.policies import compile_policy_snapshot
-
-                policy_id, _, version_text = policy_ref.rpartition("@")
-                return compile_policy_snapshot(
-                    policy_id=policy_id or "opencode-on-demand",
-                    version=int(version_text or "1"),
-                    document=boundaries,
-                    validation=synthetic.get("validation") or {"valid": True},
-                )
-            except Exception:
-                raise PolicyNotFound(f"{policy_ref} (synthetic fallback failed)")
-        raise
+    except (PolicyConflict, PolicyNotFound) as exc:
+        raise HarnessPlatformError(
+            "Omnigent launch policy authority is not ready; wait for startup "
+            "reconciliation and retry",
+            code=HarnessPlatformFailure.OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE,
+        ) from exc
 
 
 async def persist_json_artifact(
