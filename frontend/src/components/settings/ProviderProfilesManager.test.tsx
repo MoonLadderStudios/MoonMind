@@ -2721,13 +2721,13 @@ describe('MoonLadderStudios/MoonMind#3815 cross-boundary verification (#3822 cov
   });
 
   it('existing custom advanced values remain discoverable and round-trippable during edit', () => {
-    const customProfile: ProviderProfile = {
+    const customProfile = {
       ...baseProfile, profile_id: 'custom-advanced', provider_label: 'Custom', secret_refs: { unknown_role: 'db://custom-secret' },
       creation_capabilities: {
         version: 'v1', runtime_id: 'codex_cli', provider_id: 'openai', supported: true,
         authentication_methods: [{ id: 'api_key', label: 'API key', setup_action: 'api_key', launch_ready_after_setup: true, fields: {}, secret_roles: [], imported_volume: { supported: false, mount_path: null, source: 'test', lock_reason: 'no' } }], diagnostics: [],
-      } as unknown as ProviderProfile['creation_capabilities'],
-    };
+      },
+    } as ProviderProfile;
     renderProviderProfilesManager([customProfile]);
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
     expect((screen.getByLabelText('Show advanced options') as HTMLInputElement).checked).toBe(true);
