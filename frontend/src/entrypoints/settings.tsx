@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Navigate, useSearchParams } from 'react-router-dom';
+import { Navigate, useLocation, useSearchParams } from 'react-router-dom';
 
 import type { BootPayload } from '../boot/parseBootPayload';
+import { buildSettingsEntryRedirectTarget } from '../lib/dashboardRoutes';
 import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
 import { SecretManager } from '../components/secrets/SecretManager';
 import { ConfigurationHealthSummary } from '../components/settings/ConfigurationHealthSummary';
@@ -483,18 +484,46 @@ export function OperationsSettingsPage({ payload }: { payload: BootPayload }) {
 
 export function SettingsEntryPage({ payload }: { payload: BootPayload }) {
   const permissions = settingsPermissions(payload);
+  const location = useLocation();
   if (
     permissions.has('provider_profiles.read') ||
     permissions.has('secrets.metadata.read') ||
     permissions.has('settings.effective.read')
   ) {
-    return <Navigate to="/settings/providers-secrets" replace />;
+    return (
+      <Navigate
+        to={buildSettingsEntryRedirectTarget(
+          '/settings/providers-secrets',
+          'settings-providers-secrets',
+          location.search,
+        )}
+        replace
+      />
+    );
   }
   if (permissions.has('settings.catalog.read')) {
-    return <Navigate to="/settings/user-workspace" replace />;
+    return (
+      <Navigate
+        to={buildSettingsEntryRedirectTarget(
+          '/settings/user-workspace',
+          'settings-user-workspace',
+          location.search,
+        )}
+        replace
+      />
+    );
   }
   if (permissions.has('operations.read')) {
-    return <Navigate to="/settings/operations" replace />;
+    return (
+      <Navigate
+        to={buildSettingsEntryRedirectTarget(
+          '/settings/operations',
+          'settings-operations',
+          location.search,
+        )}
+        replace
+      />
+    );
   }
   return (
     <SettingsPageFrame

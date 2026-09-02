@@ -727,6 +727,72 @@ def test_legacy_settings_subroutes_fall_back_to_bare_entry_without_permissions()
     assert secrets.headers["location"] == "/settings"
 
 
+def test_legacy_settings_redirects_preserve_safe_query_and_drop_section_and_secrets() -> None:
+    """MoonLadderStudios/MoonMind#3816: safe page-local params survive, section/sensitive do not."""
+    with _client_with_mock_service(
+        user_settings_permissions={"provider_profiles.read", "operations.read"}
+    ) as (client, _mock_service):
+        secrets = client.get(
+            "/secrets?runtime=codex&section=operations&token=secret-value",
+            follow_redirects=False,
+        )
+        workers = client.get(
+            "/workers?status=paused&section=user-workspace&password=secret-value",
+            follow_redirects=False,
+        )
+
+    assert secrets.status_code == 307
+    assert secrets.headers["location"] == "/settings/providers-secrets?runtime=codex"
+    assert workers.status_code == 307
+    assert workers.headers["location"] == "/settings/operations?status=paused"
+
+
+def test_legacy_settings_redirects_filter_query_per_resolved_destination() -> None:
+    """MoonLadderStudios/MoonMind#3816: fallback destinations keep only their own safe params."""
+    with _client_with_mock_service(
+        user_settings_permissions={"settings.catalog.read"}
+    ) as (client, _mock_service):
+        secrets = client.get(
+            "/secrets?runtime=codex&scope=workspace&q=workflow",
+            follow_redirects=False,
+        )
+
+    assert secrets.status_code == 307
+    assert (
+        secrets.headers["location"]
+        == "/settings/user-workspace?scope=workspace&q=workflow"
+    )
+
+
+def test_settings_entry_ignores_section_query_and_serves_shell(client: TestClient) -> None:
+    """MoonLadderStudios/MoonMind#3816 + docs/UI/SettingsPage.md 5.3: ?section= selects nothing."""
+    for path in ("/settings?section=operations", "/settings?section=user-workspace"):
+        response = client.get(path)
+        assert response.status_code == 200
+        assert "moonmind-ui-boot" in response.text
+
+
+def test_canonical_settings_routes_support_trailing_slash_shell(client: TestClient) -> None:
+    """MoonLadderStudios/MoonMind#3816: trailing slashes serve the SPA shell for client normalization."""
+    for path in (
+        "/settings/providers-secrets/",
+        "/settings/user-workspace/",
+        "/settings/operations/",
+    ):
+        response = client.get(path)
+        assert response.status_code == 200
+        assert "moonmind-ui-boot" in response.text
+
+
+def test_unknown_settings_alias_serves_shell_for_client_side_failure(
+    client: TestClient,
+) -> None:
+    """MoonLadderStudios/MoonMind#3816: unknown aliases fail at the client (UnknownPage), not via server redirect."""
+    response = client.get("/settings/provider-profiles", follow_redirects=False)
+    assert response.status_code == 200
+    assert "moonmind-ui-boot" in response.text
+
+
 def test_react_tasks_list_and_detail_boot_exclude_route_specific_config(
     client: TestClient,
 ) -> None:

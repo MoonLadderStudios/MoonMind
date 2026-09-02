@@ -639,6 +639,48 @@ _SETTINGS_DESTINATION_PERMISSIONS: dict[
 }
 
 
+# MoonLadderStudios/MoonMind#3816: page-local query allowlist per
+# docs/UI/SettingsPage.md section 5.5. Only these keys survive a legacy
+# Settings redirect. `section` carries no page identity per section 5.3 and is
+# never forwarded; credential-bearing keys are absent by construction so they
+# can never leak into redirect targets or browser history.
+_SETTINGS_SAFE_QUERY_PARAMS: dict[str, frozenset[str]] = {
+    "settings-providers-secrets": frozenset({"runtime"}),
+    "settings-user-workspace": frozenset({"scope", "q"}),
+    "settings-operations": frozenset({"status"}),
+}
+
+
+def _filtered_settings_query(
+    destination_key: str,
+    query_params: Any | None,
+) -> str:
+    """Return an encoded query string with only safe target-page params."""
+    if query_params is None:
+        return ""
+    allowed = _SETTINGS_SAFE_QUERY_PARAMS.get(destination_key, frozenset())
+    if not allowed:
+        return ""
+    pairs: list[tuple[str, str]] = []
+    getlist = getattr(query_params, "getlist", None)
+    for key in allowed:
+        values = getlist(key) if callable(getlist) else None
+        if values is None:
+            raw = query_params.get(key) if hasattr(query_params, "get") else None
+            values = [raw] if raw is not None else []
+        for value in values:
+            if value is None:
+                continue
+            text = str(value).strip()
+            if text:
+                pairs.append((key, text))
+    if not pairs:
+        return ""
+    from urllib.parse import urlencode
+
+    return urlencode(pairs, doseq=True)
+
+
 def _settings_destination_features(permissions: set[str]) -> dict[str, bool]:
     features: dict[str, bool] = {}
     for (
@@ -653,7 +695,11 @@ def _settings_destination_features(permissions: set[str]) -> dict[str, bool]:
     return features
 
 
-def _settings_redirect_path(user: User, preferred_destination_key: str) -> str:
+def _settings_redirect_path(
+    user: User,
+    preferred_destination_key: str,
+    query_params: Any | None = None,
+) -> str:
     permissions = settings_permissions_for_user(user)
     ordered_destination_keys = (
         preferred_destination_key,
@@ -666,7 +712,9 @@ def _settings_redirect_path(user: User, preferred_destination_key: str) -> str:
     for destination_key in ordered_destination_keys:
         _, read_permissions, _ = _SETTINGS_DESTINATION_PERMISSIONS[destination_key]
         if permissions & read_permissions:
-            return _dashboard_destination(destination_key).canonical_path
+            canonical_path = _dashboard_destination(destination_key).canonical_path
+            filtered = _filtered_settings_query(destination_key, query_params)
+            return f"{canonical_path}?{filtered}" if filtered else canonical_path
     return "/settings"
 
 
@@ -1300,7 +1348,9 @@ async def secrets_route(
 ) -> RedirectResponse:
     """Redirect the legacy secrets page to its canonical Settings route."""
     return RedirectResponse(
-        url=_settings_redirect_path(_user, "settings-providers-secrets"),
+        url=_settings_redirect_path(
+            _user, "settings-providers-secrets", request.query_params
+        ),
         status_code=307,
     )
 
@@ -1472,7 +1522,9 @@ async def task_workers_route(
 ) -> RedirectResponse:
     """Redirect the legacy workers page to its canonical Settings route."""
     return RedirectResponse(
-        url=_settings_redirect_path(_user, "settings-operations"),
+        url=_settings_redirect_path(
+            _user, "settings-operations", request.query_params
+        ),
         status_code=307,
     )
 

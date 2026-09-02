@@ -298,4 +298,48 @@ describe('MoonLadderStudios/MoonMind#3818 route-owned Settings pages', () => {
 
     await waitFor(() => expect(window.location.pathname).toBe('/settings/operations'));
   });
+
+  it('MoonLadderStudios/MoonMind#3816 preserves safe entry query params and drops section/sensitive with replacement history', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      '/settings?runtime=codex&section=operations&token=secret-value',
+    );
+    renderWithClient(
+      <BrowserRouter>
+        <SettingsEntryPage
+          payload={{
+            page: 'settings-entry',
+            apiBase: '/api',
+            initialData: {
+              settingsPermissions: ['provider_profiles.read'],
+            },
+          } as BootPayload}
+        />
+      </BrowserRouter>,
+    );
+
+    await waitFor(() => expect(window.location.pathname).toBe('/settings/providers-secrets'));
+    expect(window.location.search).toBe('?runtime=codex');
+  });
+
+  it('MoonLadderStudios/MoonMind#3816 ignores ?section= when resolving the settings entry destination', async () => {
+    // Per docs/UI/SettingsPage.md 5.3, ?section= carries no page identity:
+    // /settings?section=operations still resolves by permissions, not section.
+    window.history.replaceState({}, '', '/settings?section=operations');
+    renderWithClient(
+      <BrowserRouter>
+        <SettingsEntryPage
+          payload={{
+            page: 'settings-entry',
+            apiBase: '/api',
+            initialData: { settingsPermissions: ['provider_profiles.read'] },
+          } as BootPayload}
+        />
+      </BrowserRouter>,
+    );
+
+    await waitFor(() => expect(window.location.pathname).toBe('/settings/providers-secrets'));
+    expect(window.location.search).toBe('');
+  });
 });
