@@ -6,7 +6,7 @@ import hashlib
 import os
 import re
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Protocol
 
 from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
@@ -25,7 +25,15 @@ _SAFE_VOLUME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$")
 _SAFE_CLONE_REF = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9._/@+-]{0,253}(?<!\.lock)$"
 )
-DaemonCommandRunner = Callable[[list[str]], Awaitable[tuple[int, str, str]]]
+
+
+class DaemonCommandRunner(Protocol):
+    def __call__(
+        self,
+        argv: list[str],
+        input_bytes: bytes | None = None,
+    ) -> Awaitable[tuple[int, str, str]]:
+        pass
 
 
 async def resolve_daemon_workspace_root(
@@ -288,22 +296,19 @@ class OmnigentWorkspaceMaterializer:
                 "sandbox workspace clone requires GitHub credentials",
                 code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
             )
-        # Embed the token in the clone URL — the most reliable method inside
-        # a one-shot alpine/git container (no credential helper needed).
-        # The token is part of the remote URL stored in .git/config; the
-        # workspace is ephemeral per-run so this does not persist.
-        authed_source = source.replace(
-            "https://", f"https://x-access-token:{token}@", 1
-        )
         image = os.getenv("MOONMIND_WORKSPACE_GIT_IMAGE", "alpine/git:v2.43.0")
         argv = build_daemon_git_clone_argv(
             volume=self._workspace_volume,
             target_in_volume=rel.as_posix(),
-            source=authed_source,
+            source=source,
             branch=branch,
             image=image,
         )
-        code, _stdout, stderr = await self._runner(argv)
+        # The one-shot container reads the token on stdin and exposes it to Git
+        # through an ephemeral credential helper. The clean source URL is the
+        # only remote persisted in the authoritative workspace; credentials do
+        # not enter Docker argv, container environment, or ``.git/config``.
+        code, _stdout, stderr = await self._runner(argv, token.encode("utf-8"))
         if code != 0:
             detail = (stderr or "").strip()[-300:]
             raise HarnessPlatformError(
@@ -336,16 +341,46 @@ def build_daemon_git_clone_argv(
     branch: str,
     image: str,
 ) -> list[str]:
-    """Build the docker argv for an in-volume git clone."""
+    """Build a stdin-authenticated Docker argv for an in-volume git clone."""
 
     if not _SAFE_VOLUME.fullmatch(volume):
         raise HarnessPlatformError(
             "agent workspace volume name is unavailable or unsafe",
             code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
         )
-    argv: list[str] = ["docker", "run", "--rm", "-v", f"{volume}:/work"]
-    argv.extend([image, "clone", "--branch", branch, "--single-branch", "--", source, "/work/" + target_in_volume.lstrip("/")])
-    return argv
+    if normalize_github_clone_source(source) != source:
+        raise HarnessPlatformError(
+            "sandbox workspace clone source is unavailable or unsafe",
+            code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+        )
+    script = (
+        "set -eu; umask 077; token_file=$(mktemp); "
+        "trap 'rm -f \"$token_file\"' EXIT HUP INT TERM; "
+        "cat > \"$token_file\"; "
+        "credential_helper='!f() { test \"$1\" = get || exit 0; "
+        "printf \"username=x-access-token\\npassword=\"; "
+        "cat \"$MM_GIT_TOKEN_FILE\"; printf \"\\n\"; }; f'; "
+        "MM_GIT_TOKEN_FILE=\"$token_file\" git "
+        "-c \"credential.helper=$credential_helper\" clone "
+        "--branch \"$1\" --single-branch -- \"$2\" \"$3\""
+    )
+    return [
+        "docker",
+        "run",
+        "--rm",
+        "-i",
+        "-v",
+        f"{volume}:/work",
+        "--entrypoint",
+        "/bin/sh",
+        image,
+        "-ceu",
+        script,
+        "--",
+        branch,
+        source,
+        "/work/" + target_in_volume.lstrip("/"),
+    ]
 
 
 def build_daemon_workspace_chown_argv(

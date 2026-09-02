@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -25,11 +26,15 @@ from moonmind.omnigent.bridge_store import (
 from moonmind.omnigent.execute import (
     OmnigentContractError,
     OmnigentSessionStillRunningError,
+    OmnigentTurnNotStartedError,
+    _ACTIVITY_HEARTBEAT_STATE,
+    _MarkedTurnStartWatchdog,
     _agent_items,
     _await_marked_turn_terminal,
     _build_omnigent_first_message,
     _first_message_text,
     _enqueue_stream_events,
+    _reconcile_inactive_marked_turn,
     _resolve_agent_id,
     _resolve_initial_context_message,
     _restore_active_journals,
@@ -679,6 +684,682 @@ async def test_snapshot_polling_waits_for_quiet_after_stale_idle_tool_output() -
     assert status == "completed"
     assert snapshot["items"][-1]["id"] == "output-2"
     assert client.calls >= 6
+
+
+def _marked_user_item(marker: str) -> dict[str, Any]:
+    return {
+        "id": "item-user",
+        "type": "message",
+        "status": "completed",
+        "data": {
+            "role": "user",
+            "content": [{"type": "input_text", "text": marker}],
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_snapshot_polling_fails_fast_when_accepted_turn_never_starts() -> None:
+    """Replay mm:00166f20: idle session, marker visible, zero provider work.
+
+    The stock native runner emitted ``response.completed`` for the message
+    injection itself while the harness never began the turn. Waiting the full
+    no-progress budget cannot produce work that does not exist.
+    """
+
+    marker = "MoonMind-Omnigent-Run: never-started"
+    idle_without_work = {
+        "status": "idle",
+        "active_response_id": None,
+        "items": [
+            {"id": "terminal-created", "type": "resource_event", "data": {}},
+            _marked_user_item(marker),
+            {"id": "terminal-deleted", "type": "resource_event", "data": {}},
+        ],
+    }
+
+    class Client:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def get_session(self, _session_id: str) -> dict[str, Any]:
+            self.calls += 1
+            return idle_without_work
+
+    client = Client()
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    with pytest.raises(OmnigentTurnNotStartedError) as excinfo:
+        await _await_marked_turn_terminal(
+            client=client,
+            session_id="session-1",
+            marker=marker,
+            event_count=10,
+            terminal_status="completed",
+            timeout_seconds=30.0,
+            interval_seconds=0.001,
+            turn_start_timeout_seconds=0.02,
+        )
+
+    assert loop.time() - started < 5.0
+    assert client.calls >= 2
+    assert excinfo.value.code == "OMNIGENT_CURRENT_TURN_NOT_STARTED"
+    assert isinstance(excinfo.value, OmnigentSessionStillRunningError)
+    assert "never started" in str(excinfo.value)
+    assert "no provider work exists" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_snapshot_polling_rearms_after_transient_active_response() -> None:
+    """A completed injection response cannot permanently prove agent work started."""
+
+    marker = "MoonMind-Omnigent-Run: transient-active-never-started"
+    transient_active = {
+        "status": "running",
+        "active_response_id": "injection-response",
+        "items": [_marked_user_item(marker)],
+    }
+    running_without_work = {
+        "status": "running",
+        "active_response_id": None,
+        "items": [_marked_user_item(marker)],
+    }
+
+    class Client:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def get_session(self, _session_id: str) -> dict[str, Any]:
+            self.calls += 1
+            if self.calls == 1:
+                return transient_active
+            return running_without_work
+
+    client = Client()
+    with pytest.raises(OmnigentTurnNotStartedError) as excinfo:
+        await _await_marked_turn_terminal(
+            client=client,
+            session_id="session-1",
+            marker=marker,
+            event_count=3,
+            terminal_status="completed",
+            timeout_seconds=1.0,
+            interval_seconds=0.001,
+            turn_start_timeout_seconds=0.02,
+        )
+
+    assert client.calls >= 2
+    assert excinfo.value.code == "OMNIGENT_CURRENT_TURN_NOT_STARTED"
+    assert excinfo.value.snapshot == running_without_work
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "active_without_items",
+    [
+        {"status": "running", "active_response_id": "resp-1"},
+        # Stale idle status with a live response id: the response id wins.
+        {"status": "idle", "active_response_id": "resp-1"},
+    ],
+    ids=["running-status", "idle-status-with-active-response"],
+)
+async def test_snapshot_polling_start_watchdog_defers_to_active_projection(
+    active_without_items: dict[str, Any],
+) -> None:
+    """An active projection without items is slow work, not a dropped turn."""
+
+    marker = "MoonMind-Omnigent-Run: slow-start"
+    running_without_items = {
+        **active_without_items,
+        "items": [_marked_user_item(marker)],
+    }
+
+    class Client:
+        async def get_session(self, _session_id: str) -> dict[str, Any]:
+            return running_without_items
+
+    with pytest.raises(OmnigentSessionStillRunningError) as excinfo:
+        await _await_marked_turn_terminal(
+            client=Client(),
+            session_id="session-1",
+            marker=marker,
+            event_count=4,
+            terminal_status="completed",
+            timeout_seconds=1.0,
+            interval_seconds=0.001,
+            turn_start_timeout_seconds=0.01,
+        )
+
+    assert not isinstance(excinfo.value, OmnigentTurnNotStartedError)
+    assert excinfo.value.code == "OMNIGENT_CURRENT_TURN_TERMINAL_AMBIGUOUS"
+
+
+@pytest.mark.asyncio
+async def test_snapshot_polling_start_watchdog_requires_fresh_post_deadline_read() -> (
+    None
+):
+    """A read that began before the deadline cannot prove the turn never started."""
+
+    marker = "MoonMind-Omnigent-Run: slow-read-at-deadline"
+    idle_without_work = {
+        "status": "idle",
+        "active_response_id": None,
+        "items": [_marked_user_item(marker)],
+    }
+    completed = {
+        "status": "idle",
+        "active_response_id": None,
+        "items": [
+            _marked_user_item(marker),
+            {
+                "id": "assistant-final",
+                "type": "message",
+                "status": "completed",
+                "data": {
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Done"}],
+                },
+            },
+        ],
+    }
+
+    class Client:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def get_session(self, _session_id: str) -> dict[str, Any]:
+            self.calls += 1
+            if self.calls == 1:
+                # Started before the 0.02s deadline, completes after it while
+                # the provider begins work behind the blocked read.
+                await asyncio.sleep(0.05)
+                return idle_without_work
+            return completed
+
+    status, snapshot = await _await_marked_turn_terminal(
+        client=Client(),
+        session_id="session-1",
+        marker=marker,
+        event_count=4,
+        terminal_status="completed",
+        interval_seconds=0.001,
+        quiet_period_seconds=0.002,
+        turn_start_timeout_seconds=0.02,
+    )
+
+    assert status == "completed"
+    assert snapshot is completed
+
+
+class _RecordingBridgeStore:
+    """Permissive bridge-store double that records terminal finalization only."""
+
+    def __init__(self) -> None:
+        self.terminal_calls: list[dict[str, Any]] = []
+        self.row = SimpleNamespace(
+            bridge_session_id="bridge-never-started",
+            omnigent_session_id=None,
+            status="created",
+            first_message_state="created",
+            first_message_posted_at=None,
+            first_message_pending_id=None,
+            first_message_item_id=None,
+            omnigent_endpoint_ref=None,
+            terminal_refs={},
+            metadata_={},
+        )
+
+    async def get_binding(self, *_args: object, **_kwargs: object) -> None:
+        return None
+
+    async def list_events(self, *_args: object, **_kwargs: object) -> list[dict]:
+        return []
+
+    async def mark_terminal(
+        self,
+        idempotency_key: str,
+        *,
+        status: str,
+        terminal_refs: dict[str, Any] | None = None,
+        events: list[dict[str, Any]] | None = None,
+    ) -> SimpleNamespace:
+        self.terminal_calls.append(
+            {
+                "idempotencyKey": idempotency_key,
+                "status": status,
+                "terminalRefs": dict(terminal_refs or {}),
+                "eventCount": len(events or []),
+            }
+        )
+        return self.row
+
+    def __getattr__(self, name: str):
+        if name.startswith("_"):
+            raise AttributeError(name)
+
+        async def _record(*_args: object, **_kwargs: object) -> SimpleNamespace:
+            return self.row
+
+        return _record
+
+
+def _never_started_snapshot(marker: str) -> dict[str, Any]:
+    return {
+        "status": "idle",
+        "active_response_id": None,
+        "items": [
+            {"id": "prior-item", "type": "message"},
+            {
+                "id": "marked-user",
+                "type": "message",
+                "status": "completed",
+                "data": {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": marker}],
+                },
+            },
+        ],
+    }
+
+
+def _never_started_client(
+    marker: str,
+    *,
+    stream_shape: str,
+    streamed: dict[str, int],
+    transient_active_before_close: bool = False,
+) -> type:
+    """Provider double that accepts the marked message and never starts the turn.
+
+    ``stream_shape`` selects the SSE behaviour after acceptance: ``heartbeats``
+    emits only liveness frames, ``silent`` keeps the stream open without ever
+    emitting, and ``closes`` ends the stream cleanly after one heartbeat.
+    """
+
+    idle_without_work = _never_started_snapshot(marker)
+    transient_active = {
+        **idle_without_work,
+        "status": "running",
+        "active_response_id": "injection-response",
+    }
+
+    class FakeClient:
+        def __init__(self, **_: object) -> None:
+            self.posted = asyncio.Event()
+            self.post_dispatch_snapshot_count = 0
+
+        async def list_agents(self) -> dict[str, object]:
+            return {"items": [{"id": "agent-1", "name": "opencode-native-ui"}]}
+
+        async def create_session(self, payload: dict[str, object]) -> dict[str, object]:
+            return {"id": "session-1"}
+
+        async def post_event(
+            self,
+            session_id: str,
+            payload: dict[str, object],
+        ) -> dict[str, object]:
+            self.posted.set()
+            return {"pending_id": "pending-1"}
+
+        async def stream_events(self, session_id: str):
+            await self.posted.wait()
+            if stream_shape == "silent":
+                await asyncio.Event().wait()
+            elif stream_shape == "closes":
+                streamed["value"] += 1
+                yield {"type": "session.heartbeat", "status": "running"}
+            else:
+                while True:
+                    streamed["value"] += 1
+                    yield {"type": "session.heartbeat", "status": "running"}
+                    await asyncio.sleep(0.005)
+
+        async def get_session(self, session_id: str) -> dict[str, object]:
+            if not self.posted.is_set():
+                return {
+                    "status": "idle",
+                    "active_response_id": None,
+                    "items": [{"id": "prior-item", "type": "message"}],
+                }
+            self.post_dispatch_snapshot_count += 1
+            if (
+                transient_active_before_close
+                and self.post_dispatch_snapshot_count == 1
+            ):
+                return transient_active
+            return idle_without_work
+
+    return FakeClient
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("scenario", "stream_shape", "expected_source", "transient_active"),
+    [
+        ("heartbeats", "heartbeats", "session_heartbeat_snapshot", False),
+        ("silent", "silent", "stream_idle_snapshot", False),
+        ("closes", "closes", None, False),
+        ("closes-after-transient-active", "closes", None, True),
+    ],
+)
+async def test_run_omnigent_execution_finalizes_never_started_turn(
+    monkeypatch,
+    tmp_path,
+    scenario: str,
+    stream_shape: str,
+    expected_source: str | None,
+    transient_active: bool,
+) -> None:
+    """Replay mm:00166f20 through the production boundary for every stream shape.
+
+    The start budget is owned by the post-dispatch path, so it must fire whether
+    the stream carries only heartbeats, stays open in silence, or closes before
+    any terminal frame. The failure is finalized here rather than raised: the
+    decisive idle snapshot is captured as evidence, the bridge row is marked
+    terminal, and the typed result is returned so every execution shape
+    releases its authorities through normal cleanup.
+    """
+
+    correlation_id = f"corr-never-started-{scenario}"
+    idempotency_key = f"idem-never-started-{scenario}"
+    marker = (
+        "MoonMind-Omnigent-Run:\n"
+        f"  correlationId: {correlation_id}\n"
+        f"  idempotencyKey: {idempotency_key}"
+    )
+    streamed = {"value": 0}
+    store = _RecordingBridgeStore()
+    heartbeat_state: dict[str, Any] = {}
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute.OmnigentHttpClient",
+        _never_started_client(
+            marker,
+            stream_shape=stream_shape,
+            streamed=streamed,
+            transient_active_before_close=transient_active,
+        ),
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute._TERMINAL_RECONCILIATION_INTERVAL_SECONDS", 0.0
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute._MARKED_TURN_START_TIMEOUT_SECONDS", 0.05
+    )
+
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    token = _ACTIVITY_HEARTBEAT_STATE.set(heartbeat_state)
+    try:
+        result = await run_omnigent_execution(
+            AgentExecutionRequest(
+                agentKind="external",
+                agentId="omnigent",
+                correlationId=correlation_id,
+                idempotencyKey=idempotency_key,
+                parameters={
+                    "omnigent": {
+                        "agent": {"agentName": "opencode-native-ui"},
+                        "session": {"allowEmptyWorkspace": True},
+                        "prompt": {"text": "do the work"},
+                    },
+                },
+            ),
+            artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+            run_store=store,
+        )
+    finally:
+        _ACTIVITY_HEARTBEAT_STATE.reset(token)
+
+    assert loop.time() - started < 10.0, (
+        "the never-started turn must fail inside the turn-start budget, not the "
+        "no-progress or Activity budget"
+    )
+    if stream_shape == "heartbeats":
+        assert streamed["value"] >= 1
+    # Typed terminal result, returned rather than raised.
+    assert result.failure_class == "integration_error"
+    assert result.provider_error_code == "OMNIGENT_CURRENT_TURN_NOT_STARTED"
+    assert result.retry_recommendation == "retry_step_execution"
+    assert "never started" in result.summary
+    assert result.metadata["normalizedStatus"] == "failed"
+    assert result.metadata["omnigentSessionId"] == "session-1"
+    # Evidence: the decisive idle snapshot is in the bundle and the bridge row
+    # is finalized with terminal refs.
+    assert result.diagnostics_ref
+    assert result.output_refs
+    persisted = [
+        path.read_text(encoding="utf-8", errors="ignore")
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    ]
+    assert any("marked-user" in text for text in persisted), (
+        "the decisive idle snapshot must be captured as terminal evidence"
+    )
+    assert any("OMNIGENT_CURRENT_TURN_NOT_STARTED" in text for text in persisted)
+    assert [call["status"] for call in store.terminal_calls] == ["failed"]
+    assert store.terminal_calls[0]["idempotencyKey"] == idempotency_key
+    assert store.terminal_calls[0]["terminalRefs"]
+    # Operator contract: the watchdog fields are heartbeated while waiting.
+    assert heartbeat_state["turnEverActive"] is transient_active
+    assert heartbeat_state["turnStartTimeoutSeconds"] == 0.05
+    assert heartbeat_state["turnStartWaitSeconds"] is not None
+    if expected_source is not None:
+        assert heartbeat_state["markedTurnObservationSource"] == expected_source
+
+
+@pytest.mark.asyncio
+async def test_start_watchdog_keeps_budget_visible_while_activity_defers_it() -> None:
+    """Transient activity defers enforcement without hiding the start budget."""
+
+    loop = asyncio.get_running_loop()
+    watchdog = _MarkedTurnStartWatchdog(loop=loop, timeout_seconds=300.0)
+    watchdog.observe(
+        {"status": "running", "active_response_id": "injection-response"},
+        {"boundarySource": "marker", "progress": False},
+        observation_started_at=loop.time(),
+    )
+
+    active_fields = watchdog.heartbeat_fields()
+    assert watchdog.armed is False
+    assert active_fields["turnCurrentlyActive"] is True
+    assert active_fields["turnStartWaitSeconds"] is not None
+    assert active_fields["turnStartTimeoutSeconds"] == 300.0
+
+    watchdog.observe(
+        {"status": "running", "active_response_id": None},
+        {"boundarySource": "marker", "progress": True},
+        observation_started_at=loop.time(),
+    )
+    progressed_fields = watchdog.heartbeat_fields()
+    assert progressed_fields["turnStartWaitSeconds"] is None
+    assert progressed_fields["turnStartTimeoutSeconds"] is None
+
+
+@pytest.mark.asyncio
+async def test_start_watchdog_budget_is_anchored_at_dispatch_acceptance() -> None:
+    """The budget runs from when the provider accepted the message, not from construction."""
+
+    loop = asyncio.get_running_loop()
+    accepted_at = loop.time() - 10.0
+    watchdog = _MarkedTurnStartWatchdog(
+        loop=loop, timeout_seconds=300.0, started_at=accepted_at
+    )
+
+    assert watchdog.started_at == accepted_at
+    assert watchdog.deadline == pytest.approx(accepted_at + 300.0)
+    assert watchdog.heartbeat_fields()["turnStartWaitSeconds"] >= 10.0
+
+    unanchored = _MarkedTurnStartWatchdog(loop=loop, timeout_seconds=300.0)
+    assert unanchored.started_at >= accepted_at + 10.0
+
+
+@pytest.mark.asyncio
+async def test_reconcile_inactive_marked_turn_observes_supplied_snapshot_first() -> (
+    None
+):
+    """A reattach snapshot projecting live work disarms the budget before any early return."""
+
+    marker = "MoonMind-Omnigent-Run: reattach-active"
+    running_without_items = {
+        "status": "running",
+        "active_response_id": "resp-1",
+        "items": [_marked_user_item(marker)],
+    }
+
+    class Client:
+        async def get_session(self, _session_id: str) -> dict[str, Any]:
+            raise AssertionError("the supplied snapshot must be observed, not re-read")
+
+    loop = asyncio.get_running_loop()
+    watchdog = _MarkedTurnStartWatchdog(loop=loop, timeout_seconds=0.0)
+
+    reconciled = await _reconcile_inactive_marked_turn(
+        client=Client(),
+        session_id="session-1",
+        marker=marker,
+        baseline_item_ids=None,
+        event_count=3,
+        snapshot=running_without_items,
+        snapshot_observed_at=loop.time() - 1.0,
+        start_watchdog=watchdog,
+    )
+
+    assert reconciled is None, "an active turn with no items is not terminal"
+    assert watchdog.ever_active is True
+    assert watchdog.armed is False
+
+
+@pytest.mark.asyncio
+async def test_reconcile_inactive_marked_turn_fires_only_on_fresh_read() -> None:
+    """An idle no-work snapshot read before the deadline cannot fire the budget."""
+
+    marker = "MoonMind-Omnigent-Run: reattach-idle"
+    idle_without_work = {
+        "status": "idle",
+        "active_response_id": None,
+        "items": [_marked_user_item(marker)],
+    }
+
+    class Client:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def get_session(self, _session_id: str) -> dict[str, Any]:
+            self.calls += 1
+            return idle_without_work
+
+    loop = asyncio.get_running_loop()
+    watchdog = _MarkedTurnStartWatchdog(loop=loop, timeout_seconds=0.0)
+    client = Client()
+
+    stale = await _reconcile_inactive_marked_turn(
+        client=client,
+        session_id="session-1",
+        marker=marker,
+        baseline_item_ids=None,
+        event_count=3,
+        snapshot=idle_without_work,
+        snapshot_observed_at=watchdog.deadline - 1.0,
+        start_watchdog=watchdog,
+    )
+    assert stale is None
+    assert watchdog.armed is True
+    assert client.calls == 0
+
+    with pytest.raises(OmnigentTurnNotStartedError) as excinfo:
+        await _reconcile_inactive_marked_turn(
+            client=client,
+            session_id="session-1",
+            marker=marker,
+            baseline_item_ids=None,
+            event_count=3,
+            start_watchdog=watchdog,
+        )
+    assert client.calls == 1
+    assert excinfo.value.snapshot == idle_without_work
+
+@pytest.mark.asyncio
+async def test_snapshot_polling_start_watchdog_requires_visible_boundary() -> None:
+    """Without a marker or item frontier the turn boundary cannot be proven."""
+
+    marker = "MoonMind-Omnigent-Run: evicted"
+    idle_unmarked = {
+        "status": "idle",
+        "active_response_id": None,
+        "items": [{"id": "prior-1", "type": "function_call_output", "data": {}}],
+    }
+
+    class Client:
+        async def get_session(self, _session_id: str) -> dict[str, Any]:
+            return idle_unmarked
+
+    with pytest.raises(OmnigentSessionStillRunningError) as excinfo:
+        await _await_marked_turn_terminal(
+            client=Client(),
+            session_id="session-1",
+            marker=marker,
+            event_count=4,
+            terminal_status="completed",
+            timeout_seconds=1.0,
+            interval_seconds=0.001,
+            turn_start_timeout_seconds=0.01,
+        )
+
+    assert not isinstance(excinfo.value, OmnigentTurnNotStartedError)
+
+
+@pytest.mark.asyncio
+async def test_snapshot_polling_start_watchdog_accepts_late_first_item() -> None:
+    """Work that appears inside the start budget completes normally."""
+
+    marker = "MoonMind-Omnigent-Run: late-start"
+    idle_without_work = {
+        "status": "idle",
+        "active_response_id": None,
+        "items": [_marked_user_item(marker)],
+    }
+    completed = {
+        "status": "idle",
+        "active_response_id": None,
+        "items": [
+            _marked_user_item(marker),
+            {
+                "id": "assistant-final",
+                "type": "message",
+                "status": "completed",
+                "data": {
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Done"}],
+                },
+            },
+        ],
+    }
+
+    class Client:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def get_session(self, _session_id: str) -> dict[str, Any]:
+            self.calls += 1
+            return idle_without_work if self.calls <= 3 else completed
+
+    status, snapshot = await _await_marked_turn_terminal(
+        client=Client(),
+        session_id="session-1",
+        marker=marker,
+        event_count=4,
+        terminal_status="completed",
+        interval_seconds=0.001,
+        quiet_period_seconds=0.002,
+        turn_start_timeout_seconds=5.0,
+    )
+
+    assert status == "completed"
+    assert snapshot is completed
 
 
 @pytest.mark.asyncio

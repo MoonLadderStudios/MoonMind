@@ -1,0 +1,96 @@
+{
+  "schemaVersion": "moonmind.reliability-replay.v1",
+  "replayId": "omnigent-transient-active-never-started",
+  "incidentWorkflowId": "mm:21d74b07-3104-43c3-a63e-00eebb191174",
+  "failedChildWorkflowId": "mm:21d74b07-3104-43c3-a63e-00eebb191174:agent:tpl:github-issue-implement:02:a389b541",
+  "activityType": "integration.omnigent.profile_bound_execute",
+  "executionRealizerRef": "generic-omnigent-host@1",
+  "harness": "opencode-native",
+  "failureShape": "the stock native runner acknowledged the marked message and briefly projected the injection response as active before clearing it; the session then stayed running with no active response, zero items after the marked user item, and zero token usage. The transient response permanently disarmed MoonMind's turn-start watchdog, so MoonMind waited the full 1800s no-progress budget and failed as OMNIGENT_GENERIC_DISPATCH_FAILED instead of the typed retryable never-started result",
+  "sessionId": "synthetic-transient-active-never-started-session",
+  "currentTurnMarker": "MoonMind-Omnigent-Run: synthetic-transient-active-never-started",
+  "observedProviderEvents": [
+    {
+      "type": "session.status",
+      "status": "running"
+    },
+    {
+      "type": "response.in_progress",
+      "responseId": "synthetic-injection-response"
+    },
+    {
+      "type": "response.completed",
+      "responseId": "synthetic-injection-response"
+    }
+  ],
+  "observedWatchdogSequence": [
+    {
+      "secondsAfterAcceptance": 0.6,
+      "normalizedStatus": "completed",
+      "activeResponseId": null,
+      "currentTurnProgress": false,
+      "turnEverActive": false
+    },
+    {
+      "secondsAfterAcceptance": 6.6,
+      "normalizedStatus": "running",
+      "activeResponseId": "synthetic-injection-response",
+      "currentTurnProgress": false,
+      "turnEverActive": true
+    },
+    {
+      "secondsAfterAcceptance": 10.7,
+      "normalizedStatus": "running",
+      "activeResponseId": null,
+      "currentTurnProgress": false,
+      "turnEverActive": true
+    }
+  ],
+  "observedTerminalPollingSeconds": 1800,
+  "observedFailureSummary": "Admitted Omnigent execution-plan dispatch failed: Omnigent current marked turn did not reach terminal state before timeout",
+  "runningSnapshot": {
+    "status": "running",
+    "active_response_id": null,
+    "usage_by_model": {
+      "opencode/synthetic-model": {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0
+      }
+    },
+    "items": [
+      {
+        "id": "resource-created",
+        "type": "resource_event",
+        "status": "completed",
+        "data": {
+          "event_type": "session.resource.created",
+          "resource_type": "terminal"
+        }
+      },
+      {
+        "id": "marked-user",
+        "type": "message",
+        "status": "completed",
+        "data": {
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "MoonMind-Omnigent-Run: synthetic-transient-active-never-started"
+            }
+          ]
+        }
+      },
+      {
+        "id": "resource-deleted",
+        "type": "resource_event",
+        "status": "completed",
+        "data": {
+          "event_type": "session.resource.deleted",
+          "resource_type": "terminal"
+        }
+      }
+    ]
+  }
+}

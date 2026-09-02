@@ -95,6 +95,157 @@ async def test_generic_dispatch_loads_persisted_plan_and_invokes_selected_realiz
 
 
 @pytest.mark.asyncio
+async def test_generic_dispatch_projects_typed_turn_not_started_code() -> None:
+    """A typed realizer cause must reach the operator, not a generic code."""
+
+    from moonmind.omnigent.execute import OmnigentTurnNotStartedError
+    from tests.unit.omnigent.test_generic_platform_production_services import _plan
+
+    plan = _plan("opencode-go/model")
+
+    class PlanStore:
+        async def load(self, plan_ref):
+            assert plan_ref == plan.planRef
+            return plan
+
+    class Realizer:
+        async def execute(self, request, admitted):
+            raise OmnigentTurnNotStartedError(
+                "Omnigent accepted the marked turn but the provider never started it"
+            )
+
+    class Registry:
+        def require(self, ref):
+            return Realizer()
+
+    result = await _try_generic_realizer_dispatch(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="workflow-not-started",
+            idempotencyKey="step-not-started",
+            resolvedSkillsetRef="artifact:skills",
+            parameters={"executionPlanRef": plan.planRef},
+        ),
+        plan_store=PlanStore(),
+        realizer_registry=Registry(),
+    )
+
+    assert result is not None
+    assert result.failure_class == "integration_error"
+    assert result.provider_error_code == "OMNIGENT_CURRENT_TURN_NOT_STARTED"
+    assert result.retry_recommendation == "retry_step_execution"
+    # Provider-boundary exception text stays out of workflow history; the
+    # typed code is the operator-facing cause.
+    assert "OMNIGENT_CURRENT_TURN_NOT_STARTED" in result.summary
+    assert "never started" not in result.summary
+
+
+@pytest.mark.asyncio
+@patch("moonmind.omnigent.execute.run_omnigent_execution")
+async def test_unprofiled_activity_passes_through_typed_turn_not_started_result(
+    mock_run, monkeypatch: pytest.MonkeyPatch, isolated_control_plane
+) -> None:
+    """The direct (non-plan) path consumes the typed terminal result unchanged.
+
+    ``run_omnigent_execution`` finalizes a never-started turn itself (evidence
+    captured, bridge row terminal) and returns the typed failure; the canonical
+    turn wrapper on this path must settle it and keep its classification.
+    """
+
+    typed = AgentRunResult(
+        summary="Omnigent accepted the marked turn but the provider never started it",
+        failureClass="integration_error",
+        providerErrorCode="OMNIGENT_CURRENT_TURN_NOT_STARTED",
+        retryRecommendation="retry_step_execution",
+        diagnosticsRef="artifact://diagnostics-never-started",
+        outputRefs=["artifact://output-never-started"],
+        metadata={"normalizedStatus": "failed", "omnigentSessionId": "session-1"},
+    )
+
+    async def never_started(*_args, **_kwargs):
+        return typed
+
+    mock_run.side_effect = never_started
+    req = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="corr-unprofiled-never-started",
+        idempotencyKey="idem-unprofiled-never-started",
+    )
+
+    result = await ActivityEnvironment().run(omnigent_execute_activity, req)
+
+    assert result.failure_class == "integration_error"
+    assert result.provider_error_code == "OMNIGENT_CURRENT_TURN_NOT_STARTED"
+    assert result.retry_recommendation == "retry_step_execution"
+    assert result.diagnostics_ref == "artifact://diagnostics-never-started"
+    assert result.output_refs == ["artifact://output-never-started"]
+    assert result.metadata["omnigentSessionId"] == "session-1"
+    mock_run.assert_called_once()
+
+
+@pytest.mark.asyncio
+@patch("moonmind.omnigent.execute.run_omnigent_execution")
+async def test_unprofiled_activity_keeps_raising_ambiguous_terminal(
+    mock_run, monkeypatch: pytest.MonkeyPatch, isolated_control_plane
+) -> None:
+    """Ambiguous still-running turns keep failing the Activity so a retry reattaches."""
+
+    from moonmind.omnigent.execute import OmnigentSessionStillRunningError
+
+    async def still_running(*_args, **_kwargs):
+        raise OmnigentSessionStillRunningError("current marked turn is ambiguous")
+
+    mock_run.side_effect = still_running
+    req = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="corr-unprofiled-ambiguous",
+        idempotencyKey="idem-unprofiled-ambiguous",
+    )
+
+    with pytest.raises(OmnigentSessionStillRunningError):
+        await ActivityEnvironment().run(omnigent_execute_activity, req)
+
+
+@pytest.mark.asyncio
+async def test_generic_dispatch_keeps_generic_code_for_untyped_cause() -> None:
+    from tests.unit.omnigent.test_generic_platform_production_services import _plan
+
+    plan = _plan("opencode-go/model")
+
+    class PlanStore:
+        async def load(self, plan_ref):
+            return plan
+
+    class Realizer:
+        async def execute(self, request, admitted):
+            raise RuntimeError("boom")
+
+    class Registry:
+        def require(self, ref):
+            return Realizer()
+
+    result = await _try_generic_realizer_dispatch(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="workflow-untyped",
+            idempotencyKey="step-untyped",
+            resolvedSkillsetRef="artifact:skills",
+            parameters={"executionPlanRef": plan.planRef},
+        ),
+        plan_store=PlanStore(),
+        realizer_registry=Registry(),
+    )
+
+    assert result is not None
+    assert result.provider_error_code == "OMNIGENT_GENERIC_DISPATCH_FAILED"
+    assert result.retry_recommendation == "contact_administrator"
+
+
+@pytest.mark.asyncio
 async def test_generic_profile_selection_fails_typed_when_host_plane_is_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

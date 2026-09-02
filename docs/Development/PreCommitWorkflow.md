@@ -124,11 +124,11 @@ python -m pytest tests/unit \
 
 python -m pytest tests/unit/api tests/unit/api_service tests/component/api \
   -m "component and not temporal_boundary and not slow and not provider_verification and not requires_credentials" \
-  -q -n auto --dist loadfile --durations=25
+  -q -n auto --dist load --durations=25
 
 python -m pytest tests/unit/workflows/temporal \
   -m "temporal_boundary and not slow and not provider_verification and not requires_credentials" \
-  -q --durations=25
+  -q -n auto --dist loadfile --durations=25
 
 python -m pytest tests/unit \
   -m "slow and not provider_verification and not requires_credentials and not integration" \

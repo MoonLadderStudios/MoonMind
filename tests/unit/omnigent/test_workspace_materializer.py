@@ -52,18 +52,33 @@ def test_daemon_git_clone_argv_pins_target():
     argv = build_daemon_git_clone_argv(
         volume="agent_workspaces",
         target_in_volume="ws-1/repo",
-        source="https://x-access-token:tok@github.com/org/repo.git",
+        source="https://github.com/org/repo.git",
         branch="feature/branch",
         image="alpine/git:v2.43.0",
     )
-    assert argv[:4] == ["docker", "run", "--rm", "-v"]
+    assert argv[:4] == ["docker", "run", "--rm", "-i"]
     assert "agent_workspaces:/work" in argv
-    assert argv[-2:] == [
-        "https://x-access-token:tok@github.com/org/repo.git",
+    assert argv[-3:] == [
+        "feature/branch",
+        "https://github.com/org/repo.git",
         "/work/ws-1/repo",
     ]
     assert "alpine/git:v2.43.0" in argv
-    assert "clone" in argv and "--single-branch" in argv
+    joined = " ".join(argv)
+    assert " clone " in joined and "--single-branch" in joined
+    assert "--entrypoint" in argv
+    assert all("x-access-token:tok" not in part for part in argv)
+
+
+def test_daemon_git_clone_argv_rejects_credentialed_source():
+    with pytest.raises(HarnessPlatformError, match="clone source"):
+        build_daemon_git_clone_argv(
+            volume="agent_workspaces",
+            target_in_volume="ws-1/repo",
+            source="https://x-access-token:fixture@github.com/org/repo.git",
+            branch="feature/branch",
+            image="alpine/git:v2.43.0",
+        )
 
 
 def test_daemon_workspace_chown_argv_pins_target_and_runtime_owner():
@@ -97,11 +112,11 @@ async def test_materializer_clones_missing_sandbox_workspace_via_daemon(
 ):
     """A fresh sandbox locator materializes by cloning the requested branch."""
 
-    captured: list[list[str]] = []
+    captured: list[tuple[list[str], bytes | None]] = []
 
-    async def runner(argv):
-        captured.append(argv)
-        if "clone" not in argv:
+    async def runner(argv, input_bytes=None):
+        captured.append((argv, input_bytes))
+        if input_bytes is None:
             return 0, "", ""
         # Simulate git creating the checkout inside the volume.
         target = argv[-1]
@@ -142,20 +157,20 @@ async def test_materializer_clones_missing_sandbox_workspace_via_daemon(
 
     assert workspace["kind"] == "bind"
     assert len(captured) == 2
-    argv = captured[0]
+    argv, clone_input = captured[0]
     assert argv[0] == "docker"
     assert f"{materializer._workspace_volume}:/work" in argv
     assert "/work/temporal_sandbox/" + workspace_id + "/repo" in argv
     joined = " ".join(argv)
-    # The clone runs in a one-shot container with no credential helper, so the
-    # remote carries launch-time GitHub auth. Assert the authenticated form.
-    assert "https://x-access-token:" in joined
-    assert "@github.com/MoonLadderStudios/MoonMind.git" in joined
+    assert "https://x-access-token:" not in joined
+    assert "https://github.com/MoonLadderStudios/MoonMind.git" in joined
+    assert clone_input == b"tokeeeeeeeeee"
     assert "dependabot/npm_and_yarn/multi-2181bdc769" in joined
-    assert captured[1][-2:] == [
+    assert captured[1][0][-2:] == [
         "1000:1000",
         "/work/temporal_sandbox/" + workspace_id + "/repo",
     ]
+    assert captured[1][1] is None
     record = SandboxWorkspaceRecordStore(tmp_path).load(workspace_id)
     assert record == SandboxWorkspaceRecord(
         workspace_id=workspace_id,
@@ -242,8 +257,9 @@ async def test_materializer_rejects_missing_authored_path_and_failed_clone(
 
     calls: list[list[str]] = []
 
-    async def failing_runner(argv):
+    async def failing_runner(argv, input_bytes=None):
         calls.append(argv)
+        assert input_bytes == b"toktoktoktoktok"
         return 128, "", "fatal: repository not found"
 
     object.__setattr__(materializer, "_runner", failing_runner)

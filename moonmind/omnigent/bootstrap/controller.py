@@ -889,7 +889,13 @@ class BootstrapController:
                     rate_limit_policy=ManagedAgentRateLimitPolicy.QUEUE,
                     default_model=qualified_model,
                     default_effort=effort,
-                    is_default=True,
+                    # Default authority belongs only to a launch-ready profile.
+                    # The credentialless Zen seed may already be the runtime
+                    # default, and the database enforces that invariant with a
+                    # partial unique index. Keep this candidate non-default
+                    # until exact-host validation and credential persistence
+                    # both succeed, then switch defaults atomically below.
+                    is_default=False,
                     owner_user_id=owner_id,
                 )
                 session.add(profile)
@@ -959,7 +965,9 @@ class BootstrapController:
                         cand = str(_persisted.opencode_host_image_ref).strip()
                         if "@sha256:" in cand:
                             image_ref = cand
-                except Exception:  # best-effort fallback to passed resolved if persisted state unavailable
+                except (
+                    Exception
+                ):  # best-effort fallback to passed resolved if persisted state unavailable
                     pass
 
             def _is_substrate_unavailable(exc: Exception) -> bool:
@@ -1047,6 +1055,10 @@ class BootstrapController:
                 _provider_api_key_secret_slug,
                 _upsert_managed_secret,
             )
+            from api_service.services.provider_profile_service import (
+                normalize_runtime_default_profile,
+                sync_provider_profile_manager,
+            )
 
             async with asm() as session:
                 prof = await session.get(ManagedAgentProviderProfile, profile_id)
@@ -1089,7 +1101,21 @@ class BootstrapController:
                 # that would turn an unverified selection into readiness
                 # evidence and defer the rejection until exact-host launch.
                 prof.model_catalog_evidence_json = validation_evidence
+                # Clear the previous runtime default before promoting the
+                # validated profile. The helper flushes those changes in the
+                # order required by ux_provider_profiles_runtime_default, so a
+                # seeded Zen default and a newly enrolled Go profile never
+                # overlap as defaults, even transiently.
+                await normalize_runtime_default_profile(
+                    session=session,
+                    runtime_id=prof.runtime_id,
+                    preferred_profile_id=profile_id,
+                )
                 await session.commit()
+                await sync_provider_profile_manager(
+                    session=session,
+                    runtime_id=prof.runtime_id,
+                )
                 return profile_id
         finally:
             if guard is not None:
