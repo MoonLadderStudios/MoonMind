@@ -38,6 +38,7 @@ import {
   isDashboardInternalUrl,
   payloadForDashboardRoute,
   resolveDashboardRoute,
+  resolveLegacyDashboardRedirect,
   DASHBOARD_REACT_ROUTE_PATHS,
   DASHBOARD_DESTINATIONS,
   matchesDashboardDestinationRegistry,
@@ -1036,6 +1037,15 @@ function AppShell({
   );
 }
 
+function LegacyRedirect({ pathname }: { pathname: string }) {
+  const location = useLocation();
+  const target = resolveLegacyDashboardRedirect(pathname, location.search);
+  if (!target) {
+    return <Navigate to="/settings" replace />;
+  }
+  return <Navigate to={target} replace />;
+}
+
 function RoutedDashboardPage({
   payload,
   uiInfo,
@@ -1569,6 +1579,9 @@ function DashboardRouter({ payload }: { payload: BootPayload }) {
   return (
     <Routes>
       <Route path="/" element={<Navigate to="/workflows" replace />} />
+      {/* Legacy redirects per docs/UI/SettingsPage.md#5.4 — MoonLadderStudios/MoonMind#3815 */}
+      <Route path="/secrets" element={<LegacyRedirect pathname="/secrets" />} />
+      <Route path="/workers" element={<LegacyRedirect pathname="/workers" />} />
       {DASHBOARD_REACT_ROUTE_PATHS.map((path) => (
         <Route key={path} path={path} element={routedDashboardPage} />
       ))}

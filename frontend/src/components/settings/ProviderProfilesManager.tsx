@@ -93,6 +93,34 @@ interface ProviderProfileCreationCapabilities {
   diagnostics: string[];
 }
 
+interface ProviderProfileTierCapabilities {
+  version: string;
+  profile_id: string | null;
+  runtime_id: string;
+  provider_id: string;
+  evidence: {
+    source: string;
+    credential_generation: number | null;
+    image_ref: string | null;
+    observed_at: string | null;
+    stale: boolean;
+  };
+  tier_constraints: { min_count: number; max_count: number | null };
+  model: {
+    runtime_default: string | null;
+    allow_custom: boolean;
+    options: Array<{ value: string; label: string; description: string | null; status: string; recommended?: boolean }>;
+  };
+  effort: {
+    supported: boolean;
+    runtime_default: string | null;
+    allow_custom: boolean;
+    application: string;
+    options: Array<{ value: string; label: string; description: string | null; status: string; compatible_models: string[] | null }>;
+  };
+  diagnostics: Array<{ code: string; level: string; message: string }>;
+}
+
 export interface ProviderModelEffortTier {
   label?: string | null;
   model?: string | null;
@@ -1080,6 +1108,10 @@ export function ProviderProfilesManager({
   const [tierUndo, setTierUndo] = useState<{ tier: ProviderProfileTierDraft; index: number; wasDefault: boolean } | null>(null);
   const [tierRemoveDialog, setTierRemoveDialog] = useState<{ index: number; tier: ProviderProfileTierDraft; isDefault: boolean; isMiddle: boolean } | null>(null);
   const [tierRemoveReplacementId, setTierRemoveReplacementId] = useState<string | null>(null);
+  const [tierCapabilities, setTierCapabilities] = useState<ProviderProfileTierCapabilities | null>(null);
+  const [tierCapabilitiesError, setTierCapabilitiesError] = useState<string | null>(null);
+  const [tierCapabilitiesLoading, setTierCapabilitiesLoading] = useState(false);
+  const [showResetPreview, setShowResetPreview] = useState(false);
   const tierSectionRef = useRef<HTMLElement | null>(null);
   const tierLiveRef = useRef<HTMLDivElement | null>(null);
   const focusedTierClientIdRef = useRef<string | null>(null);
@@ -1207,6 +1239,78 @@ export function ProviderProfilesManager({
       });
     return () => controller.abort();
   }, [editingProfile, editingProfileId, form.providerId, form.runtimeId]);
+
+  // Tier capabilities: profile-scoped for edit, draft-scoped for create — MoonLadderStudios/MoonMind#3815
+  useEffect(() => {
+    if (isEditing && editingProfileId) {
+      setTierCapabilitiesLoading(true);
+      setTierCapabilitiesError(null);
+      const controller = new AbortController();
+      void fetch(`/api/v1/provider-profiles/${encodeURIComponent(editingProfileId)}/capabilities`, {
+        headers: { Accept: 'application/json' },
+        signal: controller.signal,
+      })
+        .then(async (response) => {
+          if (!response.ok) {
+            const payload = await response.json().catch(() => ({}));
+            throw new Error(extractErrorMessage(payload));
+          }
+          return response.json() as Promise<ProviderProfileTierCapabilities>;
+        })
+        .then((caps) => {
+          setTierCapabilities(caps);
+          if (caps.evidence?.stale) {
+            setTierCapabilitiesError('Model choices could not be refreshed. Existing values are preserved. Server validation remains authoritative.');
+          }
+        })
+        .catch((error: unknown) => {
+          if (controller.signal.aborted) return;
+          setTierCapabilities(null);
+          setTierCapabilitiesError(
+            error instanceof Error ? error.message : 'Model choices could not be refreshed. Existing values are preserved. Server validation remains authoritative.',
+          );
+        })
+        .finally(() => setTierCapabilitiesLoading(false));
+      return () => controller.abort();
+    }
+    const runtimeId = form.runtimeId.trim();
+    const providerId = form.providerId.trim();
+    if (!runtimeId || !providerId) {
+      setTierCapabilities(null);
+      setTierCapabilitiesError(null);
+      return;
+    }
+    if (isEditing) return;
+    setTierCapabilitiesLoading(true);
+    setTierCapabilitiesError(null);
+    const controller = new AbortController();
+    void fetch(
+      `/api/v1/provider-profiles/capabilities?runtime_id=${encodeURIComponent(runtimeId)}&provider_id=${encodeURIComponent(providerId)}`,
+      { headers: { Accept: 'application/json' }, signal: controller.signal },
+    )
+      .then(async (response) => {
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(extractErrorMessage(payload));
+        }
+        return response.json() as Promise<ProviderProfileTierCapabilities>;
+      })
+      .then((caps) => {
+        setTierCapabilities(caps);
+        if (caps.evidence?.stale) {
+          setTierCapabilitiesError('Model choices could not be refreshed. Existing values are preserved. Server validation remains authoritative.');
+        }
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        setTierCapabilities(null);
+        setTierCapabilitiesError(
+          error instanceof Error ? error.message : 'Model choices could not be refreshed. Existing values are preserved. Server validation remains authoritative.',
+        );
+      })
+      .finally(() => setTierCapabilitiesLoading(false));
+    return () => controller.abort();
+  }, [isEditing, editingProfileId, form.runtimeId, form.providerId]);
 
   useEffect(() => {
     if (editingProfileId !== null) {
@@ -3595,6 +3699,26 @@ export function ProviderProfilesManager({
                 <button type="button" className="underline" onClick={handleUndoLastRemove}>Undo</button>
               </div>
             ) : null}
+            {tierCapabilitiesLoading ? (
+              <p className="text-xs text-slate-500 dark:text-slate-400">Loading model choices from backend capabilities…</p>
+            ) : null}
+            {tierCapabilitiesError ? (
+              <div className="rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-3 text-sm text-amber-800 dark:text-amber-300">
+                {tierCapabilitiesError}
+              </div>
+            ) : null}
+            {tierCapabilities?.evidence?.stale ? (
+              <div className="rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-3 text-xs text-amber-800 dark:text-amber-300">
+                Model catalog evidence is stale; new values are not accepted until the profile is revalidated. Existing tier values remain preserved.
+              </div>
+            ) : null}
+            {tierCapabilities?.diagnostics?.length ? (
+              <ul className="space-y-1 text-xs text-amber-700 dark:text-amber-300">
+                {tierCapabilities.diagnostics.map((d, idx) => (
+                  <li key={`${d.code}-${idx}`}>{d.message}</li>
+                ))}
+              </ul>
+            ) : null}
             <div className="sr-only" aria-live="polite" ref={tierLiveRef}>{tierLiveMessage}</div>
             <ol className="space-y-4" aria-label="Model and effort tiers">
               {tierDrafts.map((tier, index) => {
@@ -3631,20 +3755,47 @@ export function ProviderProfilesManager({
                             <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                               <span>Model</span>
                               <select className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm" value={tier.model ?? '__runtime_default__'} onChange={(e) => handleTierModelChange(tier.clientId, e.target.value === '__runtime_default__' ? null : e.target.value)} aria-label={`Tier ${tierNumber} model`}>
-                                <option value="__runtime_default__">Runtime default</option>
-                                {tier.model && tier.model !== '__runtime_default__' ? <option value={tier.model}>{tier.model} (existing)</option> : null}
+                                <option value="__runtime_default__">Runtime default{tierCapabilities?.model?.runtime_default ? ` — ${tierCapabilities.model.runtime_default}` : ''}</option>
+                                {(tierCapabilities?.model?.options ?? []).map((opt) => (
+                                  <option key={opt.value} value={opt.value}>
+                                    {opt.label}
+                                    {opt.status === 'deprecated' ? ' (Deprecated)' : ''}
+                                    {opt.recommended ? ' · Recommended' : ''}
+                                  </option>
+                                ))}
+                                {tierCapabilities === null ? (
+                                  <>
+                                    <option value="gpt-5.5">GPT-5.5</option>
+                                    <option value="gpt-4o">GPT-4o</option>
+                                  </>
+                                ) : null}
+                                {tier.model && !tierCapabilities?.model?.options.some((o) => o.value === tier.model) && tier.model !== '__runtime_default__' ? (
+                                  <option value={tier.model}>{tier.model} (existing — custom or unavailable)</option>
+                                ) : null}
                               </select>
                               {tierFieldErrors[`${tier.clientId}.model`] ? <span className="text-xs text-rose-600">{tierFieldErrors[`${tier.clientId}.model`]}</span> : null}
                             </label>
                             <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                               <span>Effort level</span>
                               <select className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm" value={tier.effort ?? '__runtime_default__'} onChange={(e) => handleTierEffortChange(tier.clientId, e.target.value === '__runtime_default__' ? null : e.target.value)} aria-label={`Tier ${tierNumber} effort`}>
-                                <option value="__runtime_default__">Runtime default</option>
-                                {tier.effort && tier.effort !== '__runtime_default__' ? <option value={tier.effort}>{tier.effort} (existing)</option> : null}
-                                <option value="low">low</option>
-                                <option value="medium">medium</option>
-                                <option value="high">high</option>
-                                <option value="xhigh">xhigh</option>
+                                <option value="__runtime_default__">Runtime default{tierCapabilities?.effort?.runtime_default ? ` — ${tierCapabilities.effort.runtime_default}` : ''}</option>
+                                {(tierCapabilities?.effort?.options ?? []).map((opt) => (
+                                  <option key={opt.value} value={opt.value}>
+                                    {opt.label}
+                                    {opt.status !== 'available' ? ` (${opt.status})` : ''}
+                                  </option>
+                                ))}
+                                {tierCapabilities === null ? (
+                                  <>
+                                    <option value="low">low</option>
+                                    <option value="medium">medium</option>
+                                    <option value="high">high</option>
+                                    <option value="xhigh">xhigh</option>
+                                  </>
+                                ) : null}
+                                {tier.effort && !tierCapabilities?.effort?.options.some((o) => o.value === tier.effort) && tier.effort !== '__runtime_default__' ? (
+                                  <option value={tier.effort}>{tier.effort} (existing — custom or unavailable)</option>
+                                ) : null}
                               </select>
                               {tierFieldErrors[`${tier.clientId}.effort`] ? <span className="text-xs text-rose-600">{tierFieldErrors[`${tier.clientId}.effort`]}</span> : null}
                             </label>
@@ -4066,6 +4217,81 @@ export function ProviderProfilesManager({
                   </div>
                 )}
               </fieldset>
+              <div className="flex flex-col gap-2">
+                <button
+                  type="button"
+                  className="self-start rounded-lg border border-amber-300 dark:border-amber-700 px-4 py-2 text-sm font-semibold text-amber-800 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-900/20"
+                  onClick={() => setShowResetPreview(true)}
+                >
+                  Reset advanced options to recommended
+                </button>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Preview every change before applying. Generated security fields will be recalculated, explicit overrides become inherited or omitted, and routing/launch shaping returns to backend defaults.
+                </p>
+              </div>
+              {showResetPreview ? (
+                <div role="dialog" aria-modal="true" aria-labelledby="reset-preview-title" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) setShowResetPreview(false); }}>
+                  <div className="w-full max-w-lg rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-2xl">
+                    <h4 id="reset-preview-title" className="text-sm font-semibold text-slate-900 dark:text-white">Reset advanced options to recommended</h4>
+                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">This preview distinguishes concrete values, omitted inheritance, and security recalculation. Changes affect future launches.</p>
+                    <ul className="mt-3 max-h-64 space-y-1 overflow-y-auto text-xs text-slate-700 dark:text-slate-300">
+                      {(() => {
+                        const preset = selectedAuthenticationCapability;
+                        const changes: string[] = [];
+                        const recommendedCooldown = String(preset?.fields.cooldown_after_429_seconds?.value ?? 300);
+                        if (form.cooldownAfter429Seconds !== recommendedCooldown) changes.push(`Cooldown after 429: ${form.cooldownAfter429Seconds || '(empty)'} → ${recommendedCooldown} (provider default)`);
+                        const recommendedRate = String(preset?.fields.rate_limit_policy?.value ?? 'backoff');
+                        if (form.rateLimitPolicy !== recommendedRate) changes.push(`Rate-limit policy: ${form.rateLimitPolicy} → ${recommendedRate} (provider default)`);
+                        const recommendedPriority = String(preset?.fields.priority?.value ?? 100);
+                        if (form.priority !== recommendedPriority) changes.push(`Priority: ${form.priority || '(empty)'} → ${recommendedPriority} (system default)`);
+                        if (form.providerLabel) changes.push(`Provider label override: "${form.providerLabel}" → inherited catalog label (omitted)`);
+                        if (form.tagsText && form.tagsText.trim()) changes.push(`Routing tags: "${form.tagsText}" → no custom tags (omitted)`);
+                        if (form.commandBehavior && form.commandBehavior.trim()) changes.push(`Command behavior: custom → omitted (backend strategy)`);
+                        if (manualCreationAllowed && form.clearEnvKeysText && form.clearEnvKeysText.trim()) {
+                          changes.push(`Clear environment keys: custom → backend launch-safety policy (recalculated)`);
+                        } else if (!manualCreationAllowed) {
+                          changes.push(`Clear environment keys: will be recalculated from backend strategy`);
+                        }
+                        const secretRoles = preset?.secret_roles ?? [];
+                        if (secretRoles.length > 0) {
+                          changes.push(`SecretRef bindings: kept for required roles, optional roles omitted where empty`);
+                        }
+                        if (form.volumeRef || form.volumeMountPath) {
+                          changes.push(`Volume bindings: generated or imported values preserved only if required by strategy`);
+                        }
+                        if (changes.length === 0) changes.push('No advanced overrides differ from recommended — save would be no-op.');
+                        return changes.map((c, i) => <li key={i} className="list-disc list-inside">{c}</li>);
+                      })()}
+                    </ul>
+                    <div className="mt-5 flex justify-end gap-3">
+                      <button type="button" className="rounded-lg border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm" onClick={() => setShowResetPreview(false)}>Cancel</button>
+                      <button
+                        type="button"
+                        className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white"
+                        onClick={() => {
+                          const preset = selectedAuthenticationCapability;
+                          setForm((current) => ({
+                            ...current,
+                            providerLabel: '',
+                            cooldownAfter429Seconds: String(preset?.fields.cooldown_after_429_seconds?.value ?? 300),
+                            rateLimitPolicy: String(preset?.fields.rate_limit_policy?.value ?? 'backoff'),
+                            priority: String(preset?.fields.priority?.value ?? 100),
+                            tagsText: '',
+                            commandBehavior: '',
+                            clearEnvKeysText: manualCreationAllowed ? '' : current.clearEnvKeysText,
+                          }));
+                          if (preset?.fields.clear_env_keys?.editable === false) {
+                            // keep read-only display; no textarea to clear
+                          }
+                          setShowResetPreview(false);
+                        }}
+                      >
+                        Apply recommended
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
             </div>
           ) : null}
 
