@@ -6941,6 +6941,132 @@ def _no_commit_publication_realizer(
     )
 
 
+async def test_generic_omnigent_publication_materializes_resolved_github_auth(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay mm:3fb5be58 across credential resolution and git publication."""
+
+    replay_id = "omnigent-generic-publication-github-auth"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    workflow_id = manifest["incidentWorkflowId"]
+    step_execution_id = manifest["failedStepExecutionId"]
+    workspace_root = tmp_path / "agent_jobs"
+    workspace_id = hashlib.sha256(
+        f"{workflow_id}:{step_execution_id}".encode("utf-8")
+    ).hexdigest()[:24]
+    workspace = (
+        workspace_root
+        / "temporal_sandbox"
+        / workspace_id
+        / manifest["workspaceRelativePath"]
+    )
+    workspace.mkdir(parents=True)
+    SandboxWorkspaceRecordStore(workspace_root).ensure(
+        SandboxWorkspaceRecord(
+            workspace_id=workspace_id,
+            workflow_id=workflow_id,
+            step_execution_id=step_execution_id,
+            relative_path=manifest["workspaceRelativePath"],
+        )
+    )
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId=workflow_id,
+        idempotencyKey=manifest["publicationIdentity"],
+        workspaceSpec={
+            "repository": manifest["repository"],
+            "startingBranch": manifest["startingBranch"],
+            "targetBranch": manifest["targetBranch"],
+            "workspaceLocator": {
+                "kind": "sandbox",
+                "workspaceId": workspace_id,
+                "relativePath": manifest["workspaceRelativePath"],
+            },
+        },
+        parameters={
+            "publishMode": manifest["publishMode"],
+            "repository": manifest["repository"],
+            "repositoryOperation": "write",
+        },
+    )
+
+    credential_token = manifest["credentialFixture"]
+    credential_repositories: list[str | None] = []
+
+    async def resolve_github_credential(
+        _explicit_token: str | None = None,
+        *,
+        repo: str | None = None,
+    ) -> SimpleNamespace:
+        credential_repositories.append(repo)
+        return SimpleNamespace(token=credential_token, safe_summary="fixture")
+
+    monkeypatch.setattr(
+        "moonmind.omnigent.workspace_publication.resolve_github_credential",
+        resolve_github_credential,
+    )
+    monkeypatch.setattr(
+        "moonmind.publish.service.resolve_high_security_mode", lambda: False
+    )
+
+    remote_head = expected["pushHeadSha"]
+    ls_remote_calls = 0
+    push_environments: list[dict[str, str]] = []
+
+    async def run_command(
+        *args: str,
+        env: dict[str, str] | None = None,
+        check: bool = True,
+    ) -> tuple[int, str, str]:
+        nonlocal ls_remote_calls
+        del check
+        command = list(args)
+        if "status" in command:
+            return 0, " M feature.py\n", ""
+        if "rev-list" in command:
+            return 0, f"{expected['pushCommitCount']}\n", ""
+        if "ls-remote" in command:
+            ls_remote_calls += 1
+            if ls_remote_calls == 1:
+                return 0, "", ""
+            return 0, f"{remote_head}\trefs/heads/{expected['pushBranch']}\n", ""
+        if "rev-parse" in command:
+            return 0, f"{remote_head}\n", ""
+        if "push" in command:
+            push_environments.append(dict(env or {}))
+        return 0, "", ""
+
+    publisher = OmnigentWorkspacePublicationService(workspace_root=workspace_root)
+    monkeypatch.setattr(publisher, "_run", run_command)
+
+    result = await publisher.publish_request_workspace(
+        request=request,
+        current_workflow_id=workflow_id,
+        current_step_execution_id=step_execution_id,
+    )
+
+    assert result["push_status"] == expected["pushStatus"]
+    assert result["push_branch"] == expected["pushBranch"]
+    assert result["push_head_sha"] == remote_head
+    assert result["push_commit_count"] == expected["pushCommitCount"]
+    assert result["remote_verified"] is expected["remoteVerified"]
+    assert credential_repositories == [manifest["repository"]]
+    assert len(push_environments) == 1
+    push_environment = push_environments[0]
+    assert push_environment["GITHUB_TOKEN"] == credential_token
+    assert push_environment["GIT_TERMINAL_PROMPT"] == "0"
+    assert push_environment["GIT_CONFIG_COUNT"] == "2"
+    assert "credential.https://github.com.helper" in {
+        push_environment["GIT_CONFIG_KEY_0"],
+        push_environment["GIT_CONFIG_KEY_1"],
+    }
+    assert '$GITHUB_TOKEN' in push_environment["GIT_CONFIG_VALUE_1"]
+    assert credential_token not in push_environment["GIT_CONFIG_VALUE_1"]
+
+
 async def test_verified_no_commit_publication_reaches_the_workflow_publish_handoff(
     tmp_path: Path,
 ) -> None:
