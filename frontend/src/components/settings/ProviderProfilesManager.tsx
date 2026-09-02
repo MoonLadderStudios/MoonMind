@@ -3577,7 +3577,7 @@ export function ProviderProfilesManager({
             {canWriteProviderProfiles ? (
               <div className="flex flex-wrap items-center gap-3 text-sm">
                 <span className="font-medium text-slate-700 dark:text-slate-300">{tierDrafts.length} tiers{defaultTierClientId ? ` · Default: Tier ${tierDrafts.findIndex((t) => t.clientId === defaultTierClientId) + 1}` : ''}</span>
-                <button type="button" className="inline-flex items-center justify-center rounded-lg bg-slate-900 dark:bg-slate-100 px-4 py-2 text-sm font-semibold text-white dark:text-slate-900" onClick={handleAddTier} disabled={!canWriteProviderProfiles}>Add tier</button>
+                <button type="button" className="inline-flex items-center justify-center rounded-lg bg-slate-900 dark:bg-slate-100 px-4 py-2 text-sm font-semibold text-white dark:text-slate-900" onClick={handleAddTier}>Add tier</button>
                 {invalidSavedDefaultIndex !== null ? <span className="rounded bg-amber-100 dark:bg-amber-900/30 px-2 py-1 text-xs font-semibold text-amber-700 dark:text-amber-300">Invalid saved default: Tier {invalidSavedDefaultIndex}</span> : null}
               </div>
             ) : (
@@ -3680,7 +3680,7 @@ export function ProviderProfilesManager({
                 );
               })}
             </ol>
-            {canWriteProviderProfiles && !isTierRepair ? <button type="button" className="w-full rounded-xl border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-300" onClick={handleAddTier}>Add tier</button> : null}
+            {!isTierRepair ? <button type="button" className="w-full rounded-xl border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-300" onClick={handleAddTier}>Add tier</button> : null}
             <p className="text-xs text-slate-500 dark:text-slate-400">Future launches use the saved policy. Historical runs keep their record.</p>
             {tierRemoveDialog ? (
               <div role="dialog" aria-modal="true" aria-labelledby="tier-remove-title" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) setTierRemoveDialog(null); }}>
