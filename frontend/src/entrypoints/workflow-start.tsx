@@ -5471,6 +5471,64 @@ function InfoIcon() {
   );
 }
 
+function InfoTooltip({
+  label,
+  panelId,
+  title,
+  className,
+  children,
+}: {
+  label: string;
+  panelId: string;
+  title: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  const [isHovered, setIsHovered] = useState(false);
+  const [isFocused, setIsFocused] = useState(false);
+  const [isDismissed, setIsDismissed] = useState(false);
+  const isVisible = (isHovered || isFocused) && !isDismissed;
+  const visibilityClass = isVisible
+    ? " queue-info-tooltip--visible"
+    : isDismissed
+      ? " queue-info-tooltip--dismissed"
+      : "";
+  return (
+    <span
+      className={`queue-info-tooltip${className ? ` ${className}` : ""}${visibilityClass}`}
+      onMouseEnter={() => {
+        setIsHovered(true);
+        setIsDismissed(false);
+      }}
+      onMouseLeave={() => setIsHovered(false)}
+    >
+      <button
+        type="button"
+        className="queue-step-icon-button queue-info-toggle"
+        aria-label={label}
+        aria-describedby={panelId}
+        title={title}
+        onFocus={() => {
+          setIsFocused(true);
+          setIsDismissed(false);
+        }}
+        onBlur={() => setIsFocused(false)}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.preventDefault();
+            setIsDismissed(true);
+          }
+        }}
+      >
+        <InfoIcon />
+      </button>
+      <span id={panelId} role="tooltip" className="queue-info-tooltip-panel">
+        {children}
+      </span>
+    </span>
+  );
+}
+
 export const LIQUID_GL_OPTIONS = {
   target: ".queue-floating-bar--liquid-glass",
   snapshot: "body",
@@ -6217,11 +6275,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     "save" | "delete" | null
   >(null);
   const [presetDialogName, setPresetDialogName] = useState("");
-  const [dependencyInfoOpen, setDependencyInfoOpen] = useState(false);
-  const [advancedInfoOpen, setAdvancedInfoOpen] = useState(false);
-  const [skillInfoOpenByStep, setSkillInfoOpenByStep] = useState<
-    Record<string, boolean>
-  >({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submitExpansionInFlightRef = useRef(false);
   const submitExpansionRequestIdRef = useRef(0);
@@ -13400,22 +13453,30 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                           <label htmlFor={`queue-step-${step.localId}-skill-id`}>
                             Skill
                           </label>
-                          <button
-                            type="button"
-                            className="queue-step-icon-button queue-info-toggle queue-skill-info-toggle"
-                            aria-label={`Skill info for Step ${index + 1}`}
-                            aria-expanded={!!skillInfoOpenByStep[step.localId]}
-                            aria-controls={`queue-skill-info-panel-${step.localId}`}
+                          <InfoTooltip
+                            label={`Skill info for Step ${index + 1}`}
+                            panelId={`queue-skill-info-panel-${step.localId}`}
                             title="About skill"
-                            onClick={() =>
-                              setSkillInfoOpenByStep((current) => ({
-                                ...current,
-                                [step.localId]: !current[step.localId],
-                              }))
-                            }
+                            className="queue-skill-info-toggle"
                           >
-                            <InfoIcon />
-                          </button>
+                            <div className="notice queue-skill-info-panel">
+                              <p className="small">
+                                Skill is optional. Leave blank to run this step
+                                without a selected Skill.
+                              </p>
+                              {selectedSkillHasInputFields &&
+                              !showAdvancedStepOptions &&
+                              hiddenOptionalSkillInputCount > 0 ? (
+                                <p
+                                  className="small"
+                                  data-testid={`skill-optional-inputs-notice-${index}`}
+                                >
+                                  Optional Skill inputs are hidden. Advanced mode shows
+                                  customization fields.
+                                </p>
+                              ) : null}
+                            </div>
+                          </InfoTooltip>
                         </div>
                         <SkillCombobox
                           inputId={`queue-step-${step.localId}-skill-id`}
@@ -13439,29 +13500,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                           }
                         />
                       </div>
-                      {skillInfoOpenByStep[step.localId] ? (
-                        <div
-                          id={`queue-skill-info-panel-${step.localId}`}
-                          className="notice queue-skill-info-panel"
-                          role="note"
-                        >
-                          <p className="small">
-                            Skill is optional. Leave blank to run this step
-                            without a selected Skill.
-                          </p>
-                          {selectedSkillHasInputFields &&
-                          !showAdvancedStepOptions &&
-                          hiddenOptionalSkillInputCount > 0 ? (
-                            <p
-                              className="small"
-                              data-testid={`skill-optional-inputs-notice-${index}`}
-                            >
-                              Optional Skill inputs are hidden. Advanced mode shows
-                              customization fields.
-                            </p>
-                          ) : null}
-                        </div>
-                      ) : null}
                       {selectedSkillDetail && !selectedSkillHasInputFields ? (
                         <div
                           className="notice small"
@@ -14368,32 +14406,22 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             />
             Advanced mode
           </label>
-          <button
-            type="button"
-            className="queue-step-icon-button queue-info-toggle queue-advanced-info-toggle"
-            aria-label="Advanced mode info"
-            aria-expanded={advancedInfoOpen}
-            aria-controls="queue-advanced-info-panel"
+          <InfoTooltip
+            label="Advanced mode info"
+            panelId="queue-advanced-info-panel"
             title="About advanced mode"
-            onClick={() => setAdvancedInfoOpen((open) => !open)}
+            className="queue-advanced-info-toggle"
           >
-            <InfoIcon />
-          </button>
+            <div className="notice queue-advanced-info-panel">
+              <p className="small">
+                Shows optional Skill inputs, skill args, required capabilities,
+                worker routing overrides, and context retrieval (RAG). Runtime,
+                publish mode, skills, and presets already add common capabilities
+                automatically.
+              </p>
+            </div>
+          </InfoTooltip>
         </div>
-        {advancedInfoOpen ? (
-          <div
-            id="queue-advanced-info-panel"
-            className="notice queue-advanced-info-panel"
-            role="note"
-          >
-            <p className="small">
-              Shows optional Skill inputs, skill args, required capabilities,
-              worker routing overrides, and context retrieval (RAG). Runtime,
-              publish mode, skills, and presets already add common capabilities
-              automatically.
-            </p>
-          </div>
-        ) : null}
         {/*
           Context retrieval (RAG) authoring is an advanced control: the guided
           path relies on deployment retrieval policy, so the disclosure only
@@ -14527,45 +14555,35 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         >
           <div className="queue-dependencies-heading">
             <strong>Dependencies</strong>
-            <button
-              type="button"
-              className="queue-step-icon-button queue-info-toggle queue-dependencies-info-toggle"
-              aria-label="Dependencies info"
-              aria-expanded={dependencyInfoOpen}
-              aria-controls="queue-dependencies-info-panel"
+            <InfoTooltip
+              label="Dependencies info"
+              panelId="queue-dependencies-info-panel"
               title="About dependencies"
-              onClick={() => setDependencyInfoOpen((open) => !open)}
+              className="queue-dependencies-info-toggle"
             >
-              <InfoIcon />
-            </button>
+              <div className="notice queue-dependencies-info-panel">
+                <p className="small">
+                  Add up to {DEPENDENCY_LIMIT} existing <code>MoonMind.UserWorkflow</code>{" "}
+                  prerequisites. The new run stays blocked until each
+                  prerequisite finishes in <code>completed</code> state.
+                </p>
+                <p className="small">
+                  Direct dependencies only. The new run stays blocked while a
+                  prerequisite is running, failed, canceled, terminated, timed
+                  out, or unresolvable, and unblocks once the prerequisite
+                  completes successfully. Cancel this run or bypass the
+                  dependency to proceed without that prerequisite.
+                </p>
+                <p className="small">
+                  {dependencyOptionsQuery.isLoading
+                    ? "Loading recent runs..."
+                    : dependencyOptionsQuery.isError
+                      ? "Failed to load recent runs. You can still start the workflow without dependencies, or try refreshing."
+                      : `${availableDependencyOptions.length} recent runs available.`}
+                </p>
+              </div>
+            </InfoTooltip>
           </div>
-          {dependencyInfoOpen ? (
-            <div
-              id="queue-dependencies-info-panel"
-              className="notice queue-dependencies-info-panel"
-              role="note"
-            >
-              <p className="small">
-                Add up to {DEPENDENCY_LIMIT} existing <code>MoonMind.UserWorkflow</code>{" "}
-                prerequisites. The new run stays blocked until each
-                prerequisite finishes in <code>completed</code> state.
-              </p>
-              <p className="small">
-                Direct dependencies only. The new run stays blocked while a
-                prerequisite is running, failed, canceled, terminated, timed
-                out, or unresolvable, and unblocks once the prerequisite
-                completes successfully. Cancel this run or bypass the
-                dependency to proceed without that prerequisite.
-              </p>
-              <p className="small">
-                {dependencyOptionsQuery.isLoading
-                  ? "Loading recent runs..."
-                  : dependencyOptionsQuery.isError
-                    ? "Failed to load recent runs. You can still start the workflow without dependencies, or try refreshing."
-                    : `${availableDependencyOptions.length} recent runs available.`}
-              </p>
-            </div>
-          ) : null}
           <label htmlFor="queue-dependency-picker">
             Prerequisite
             <select
