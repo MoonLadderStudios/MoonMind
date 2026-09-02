@@ -9,6 +9,7 @@ import os
 import platform
 import re
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -37,6 +38,7 @@ from moonmind.omnigent.policies import (
     document_digest,
     normalize_document,
 )
+from moonmind.omnigent.settings import opencode_support_enabled
 from moonmind.omnigent.stock_agents import CODEX_STOCK_AGENT_NAME
 from moonmind.security.egress import OMNIGENT_EGRESS_PROFILE
 from moonmind.workflows.temporal.container_image_acquisition import (
@@ -50,29 +52,67 @@ logger = logging.getLogger(__name__)
 _DIGEST_IMAGE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
 _SERVER_IMAGE_REPOSITORY = "ghcr.io/omnigent-ai/omnigent-server"
 _HOST_IMAGE_REPOSITORY = "ghcr.io/omnigent-ai/omnigent-host"
+_OPENCODE_HOST_IMAGE_REPOSITORY = "ghcr.io/moonladderstudios/omnigent-host-opencode"
 _IMAGE_INSPECT_FORMAT = '{{.Id}}\t{{join .RepoDigests ","}}'
 ImageResolver = Callable[[str], Awaitable[str | None]]
 LiveServerImageResolver = Callable[[str], Awaitable[str | None]]
+
+@dataclass(frozen=True)
+class _BootstrapPolicyDefinition:
+    policy_id: str
+    name: str
+    host_mode: str
+    profile_ref: str
+    harness: str
+    agent_identities: tuple[str, ...]
+    compatible_providers: tuple[str, ...]
+    host_image_kind: str
+    requires_opencode: bool = False
+
+
 _BOOTSTRAP_POLICY_DEFINITIONS = (
-    (
-        "omnigent-codex",
-        "Omnigent Codex execution",
-        "static_compose",
-        "omnigent-codex@1",
+    _BootstrapPolicyDefinition(
+        policy_id="omnigent-codex", name="Omnigent Codex execution",
+        host_mode="static_compose", profile_ref="omnigent-codex@1",
+        harness="codex-native", agent_identities=(CODEX_STOCK_AGENT_NAME,),
+        compatible_providers=("codex",), host_image_kind="codex",
     ),
-    (
-        "codex-static",
-        "Codex static host",
-        "static_compose",
-        "omnigent-codex@1",
+    _BootstrapPolicyDefinition(
+        policy_id="codex-static", name="Codex static host",
+        host_mode="static_compose", profile_ref="omnigent-codex@1",
+        harness="codex-native", agent_identities=(CODEX_STOCK_AGENT_NAME,),
+        compatible_providers=("codex",), host_image_kind="codex",
     ),
-    (
-        "codex-on-demand",
-        "Codex on-demand host",
-        "on_demand_docker",
-        "omnigent-codex@1",
+    _BootstrapPolicyDefinition(
+        policy_id="codex-on-demand", name="Codex on-demand host",
+        host_mode="on_demand_docker", profile_ref="omnigent-codex@1",
+        harness="codex-native", agent_identities=(CODEX_STOCK_AGENT_NAME,),
+        compatible_providers=("codex",), host_image_kind="codex",
+    ),
+    _BootstrapPolicyDefinition(
+        policy_id="omnigent-on-demand", name="Generic Omnigent on-demand host",
+        host_mode="on_demand_docker", profile_ref="omnigent-opencode@1",
+        harness="opencode-native", agent_identities=("opencode",),
+        compatible_providers=("opencode-go", "opencode"),
+        host_image_kind="opencode", requires_opencode=True,
+    ),
+    _BootstrapPolicyDefinition(
+        policy_id="opencode-on-demand", name="OpenCode on-demand host",
+        host_mode="on_demand_docker", profile_ref="omnigent-opencode@1",
+        harness="opencode-native", agent_identities=("opencode",),
+        compatible_providers=("opencode-go", "opencode"),
+        host_image_kind="opencode", requires_opencode=True,
     ),
 )
+
+
+def _bootstrap_policy_definitions(
+    env: Mapping[str, Any] | None = None,
+) -> tuple[_BootstrapPolicyDefinition, ...]:
+    return tuple(
+        definition for definition in _BOOTSTRAP_POLICY_DEFINITIONS
+        if not definition.requires_opencode or opencode_support_enabled(env=env)
+    )
 
 
 class PolicyConflict(ValueError):
@@ -148,7 +188,9 @@ def validate_policy(
         "hostModes": {"static_compose"} | ({"on_demand_docker"} if container_backend_enabled else set()),
         "backends": {"compose"} | ({"container-backend"} if container_backend_enabled else set()),
         "architectures": {architecture},
-        "providers": {"codex"},
+        "providers": {"codex"} | (
+            {"opencode-go", "opencode"} if opencode_support_enabled() else set()
+        ),
         "workspaceClasses": {"workflow"},
     }
     declared = capabilities or deployment_capabilities
@@ -589,6 +631,21 @@ def configured_bootstrap_image_refs(
     )
 
 
+def configured_opencode_bootstrap_image_ref(
+    env: Mapping[str, str] | None = None,
+) -> str:
+    """Return the operator-facing OpenCode host image input."""
+
+    source = os.environ if env is None else env
+    return _configured_image_ref(
+        env=source,
+        ref_variable="OMNIGENT_OPENCODE_HOST_IMAGE_REF",
+        repository_variable="OMNIGENT_OPENCODE_HOST_IMAGE",
+        tag_variable="OMNIGENT_OPENCODE_HOST_IMAGE_TAG",
+        default_repository=_OPENCODE_HOST_IMAGE_REPOSITORY,
+    )
+
+
 def _repository_digest(image_ref: str, inspect_output: bytes) -> str | None:
     """Select the exact repository digest that matches ``image_ref``."""
 
@@ -747,13 +804,17 @@ async def resolve_bootstrap_image_refs(
     *,
     env: Mapping[str, str] | None = None,
     image_resolver: ImageResolver = resolve_bootstrap_image_ref,
-) -> tuple[str | None, str | None]:
+) -> tuple[str | None, str | None, str | None]:
     server_input, host_input = configured_bootstrap_image_refs(env)
-    server_image, host_image = await asyncio.gather(
+    opencode_host_input = configured_opencode_bootstrap_image_ref(env)
+    server_image, host_image, opencode_host_image = await asyncio.gather(
         image_resolver(server_input),
         image_resolver(host_input),
+        image_resolver(opencode_host_input)
+        if opencode_support_enabled(env=env)
+        else asyncio.sleep(0, result=None),
     )
-    return server_image, host_image
+    return server_image, host_image, opencode_host_image
 
 
 # Every production remediation adapter registered by
@@ -811,6 +872,9 @@ def bootstrap_document(
     execution_profile_ref: str,
     server_image_ref: str | None = None,
     host_image_ref: str | None = None,
+    harness: str = "codex-native",
+    agent_identities: tuple[str, ...] = (CODEX_STOCK_AGENT_NAME,),
+    compatible_providers: tuple[str, ...] = ("codex",),
 ) -> PolicyDocument:
     """Project legacy built-ins into an explicit, reviewable bootstrap policy."""
 
@@ -822,8 +886,8 @@ def bootstrap_document(
         "endpoint": {"ref": "default", "bridgeModes": ["embedded", "proxy"]},
         "execution": {
             "profileRef": execution_profile_ref,
-            "harness": "codex-native",
-            "agentIdentities": [CODEX_STOCK_AGENT_NAME],
+            "harness": harness,
+            "agentIdentities": list(agent_identities),
         },
         "host": {"mode": host_mode, "backendRef": "compose" if host_mode == "static_compose" else "container-backend",
                  "architectures": [architecture],
@@ -838,7 +902,7 @@ def bootstrap_document(
         "workspace": {"allowedClasses": ["workflow"], "repositoryMutation": True,
                       "mountClasses": ["workspace", "oauth_home", "omnigent_state", "skills_tools", "artifacts", "cache"],
                       "runtimeUid": 1000, "runtimeGid": 1000},
-        "providerProfile": {"compatibleProviders": ["codex"], "queueWhenBusy": True},
+        "providerProfile": {"compatibleProviders": list(compatible_providers), "queueWhenBusy": True},
         "session": {"create": True, "firstMessage": "required", "continuation": True, "interruption": True,
                     "cancellation": True, "cleanup": "drain" if host_mode == "static_compose" else "remove"},
         "capture": {"required": True, "artifactClasses": ["events", "snapshots", "workspace"], "maxLogBytes": 10000000, "redaction": "required"},
@@ -857,7 +921,8 @@ def _legacy_bootstrap_agent_identity(row: OmnigentPolicyVersion) -> bool:
     """Match only MoonMind's pre-release built-in ``codex`` identity."""
 
     if row.policy_id not in {
-        definition[0] for definition in _BOOTSTRAP_POLICY_DEFINITIONS
+        definition.policy_id for definition in _BOOTSTRAP_POLICY_DEFINITIONS
+        if not definition.requires_opencode
     } or row.version != 1:
         return False
     document = row.document_json
@@ -940,20 +1005,22 @@ async def _reconcile_bootstrap_image_authority(
     *,
     service: OmnigentPolicyService,
     server_image: str | None,
-    host_image: str | None,
+    host_images: Mapping[str, str | None],
+    definitions: tuple[_BootstrapPolicyDefinition, ...],
     live_server_image_resolver: LiveServerImageResolver,
 ) -> list[str]:
     """Advance bootstrap-owned defaults when their resolved images change."""
 
-    resolved_images_valid = bool(
-        _DIGEST_IMAGE.fullmatch(server_image or "")
-        and _DIGEST_IMAGE.fullmatch(host_image or "")
-    )
-
     reconciled: list[str] = []
     live_server_checked = False
     live_server_image: str | None = None
-    for policy_id, *_ in _BOOTSTRAP_POLICY_DEFINITIONS:
+    for definition in definitions:
+        policy_id = definition.policy_id
+        host_image = host_images.get(definition.host_image_kind)
+        resolved_images_valid = bool(
+            _DIGEST_IMAGE.fullmatch(server_image or "")
+            and _DIGEST_IMAGE.fullmatch(host_image or "")
+        )
         policy = await session.get(OmnigentPolicy, policy_id)
         if policy is None or policy.default_version is None:
             continue
@@ -1144,8 +1211,10 @@ async def seed_bootstrap_policies(
     """Idempotently persist and refresh the built-in image authorities."""
 
     service = OmnigentPolicyService(session)
+    definitions = _bootstrap_policy_definitions(env)
     reconciliation_required = False
-    for policy_id, *_ in _BOOTSTRAP_POLICY_DEFINITIONS:
+    for definition in definitions:
+        policy_id = definition.policy_id
         policy = await session.get(OmnigentPolicy, policy_id)
         if policy is None:
             reconciliation_required = True
@@ -1196,12 +1265,14 @@ async def seed_bootstrap_policies(
             reconciliation_required = True
             break
     seeded: list[str] = []
-    server_image, host_image = await resolve_bootstrap_image_refs(
+    server_image, host_image, opencode_host_image = await resolve_bootstrap_image_refs(
         env=env, image_resolver=image_resolver
     )
-    if not (
-        _DIGEST_IMAGE.fullmatch(server_image or "")
-        and _DIGEST_IMAGE.fullmatch(host_image or "")
+    host_images = {"codex": host_image, "opencode": opencode_host_image}
+    if not _DIGEST_IMAGE.fullmatch(server_image or "") or any(
+        not _DIGEST_IMAGE.fullmatch(
+            host_images.get(definition.host_image_kind) or ""
+        ) for definition in definitions
     ):
         # Readiness-local inspection may find no cached images on a first boot.
         # Do not persist placeholder drafts; the background acquisition pass
@@ -1211,7 +1282,8 @@ async def seed_bootstrap_policies(
             session,
             service=service,
             server_image=server_image,
-            host_image=host_image,
+            host_images=host_images,
+            definitions=definitions,
             live_server_image_resolver=live_server_image_resolver,
         )
     if not reconciliation_required:
@@ -1219,19 +1291,24 @@ async def seed_bootstrap_policies(
             session,
             service=service,
             server_image=server_image,
-            host_image=host_image,
+            host_images=host_images,
+            definitions=definitions,
             live_server_image_resolver=live_server_image_resolver,
         )
-    for policy_id, name, host_mode, profile_ref in _BOOTSTRAP_POLICY_DEFINITIONS:
+    for definition in definitions:
+        policy_id = definition.policy_id
         document = bootstrap_document(
-            host_mode=host_mode,
-            execution_profile_ref=profile_ref,
+            host_mode=definition.host_mode,
+            execution_profile_ref=definition.profile_ref,
             server_image_ref=server_image,
-            host_image_ref=host_image,
+            host_image_ref=host_images[definition.host_image_kind],
+            harness=definition.harness,
+            agent_identities=definition.agent_identities,
+            compatible_providers=definition.compatible_providers,
         )
         policy = await session.get(OmnigentPolicy, policy_id)
         if policy is None:
-            row = await service.create(policy_id=policy_id, name=name, owner_user_id=None, visibility="deployment",
+            row = await service.create(policy_id=policy_id, name=definition.name, owner_user_id=None, visibility="deployment",
                                        document=document, actor="bootstrap")
         else:
             row = await service.get_version(policy_id, 1)
@@ -1370,7 +1447,8 @@ async def seed_bootstrap_policies(
         session,
         service=service,
         server_image=server_image,
-        host_image=host_image,
+        host_images=host_images,
+        definitions=definitions,
         live_server_image_resolver=live_server_image_resolver,
     )
     seeded.extend(item for item in image_reconciled if item not in seeded)
@@ -1381,7 +1459,8 @@ async def bootstrap_policies_ready(session: AsyncSession) -> bool:
     """Return whether every built-in policy has immutable active authority."""
 
     service = OmnigentPolicyService(session)
-    for policy_id, *_ in _BOOTSTRAP_POLICY_DEFINITIONS:
+    for definition in _bootstrap_policy_definitions():
+        policy_id = definition.policy_id
         policy = await session.get(OmnigentPolicy, policy_id)
         if policy is None or policy.default_version is None:
             return False
