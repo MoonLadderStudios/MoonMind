@@ -1295,6 +1295,62 @@ async def update_profile(
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+    # #3821: clear_env_keys is system-managed launch-safety policy for guided presets.
+    # Non-manual edits must not silently mutate it; restrict to explicit manual
+    # profiles or superuser with audit.  The backend preset authority owns the
+    # value for all supported combinations.
+    if "clear_env_keys" in update_data and not bool(getattr(current_user, "is_superuser", False)):
+        inferred_method = infer_authentication_method(
+            credential_source=profile.credential_source,
+            runtime_materialization_mode=profile.runtime_materialization_mode,
+            authentication_methods=capabilities["authentication_methods"],
+            auth_state=profile.auth_state,
+            last_auth_method=profile.last_auth_method,
+        )
+        if inferred_method is not None:
+            try:
+                from api_service.services.provider_profile_creation_presets import (
+                    ProviderProfileAuthenticationMethod as _PresetMethod,
+                )
+
+                preset_for_profile = get_provider_profile_creation_preset(
+                    runtime_id=profile.runtime_id,
+                    provider_id=profile.provider_id,
+                    authentication_method=_PresetMethod(inferred_method),
+                )
+                preset_clear_field = preset_for_profile.fields.get("clear_env_keys")
+                if (
+                    preset_for_profile.supported
+                    and preset_clear_field is not None
+                    and not preset_clear_field.editable
+                ):
+                    requested = update_data.get("clear_env_keys")
+                    existing = list(profile.clear_env_keys or [])
+                    # Normalize both to sorted lists for comparison; None treated as []
+                    req_norm = sorted(requested or [])
+                    exist_norm = sorted(existing)
+                    if req_norm != exist_norm:
+                        raise HTTPException(
+                            status_code=422,
+                            detail={
+                                "code": "provider_profile_clear_env_keys_locked",
+                                "message": (
+                                    "clear_env_keys is backend-owned launch-security metadata "
+                                    "and cannot be edited directly for this runtime/provider. "
+                                    "Use the guided creation preset or an authorized manual profile path."
+                                ),
+                                "field": "clear_env_keys",
+                                "lock_reason": preset_clear_field.lock_reason,
+                                "source": preset_clear_field.source,
+                            },
+                        )
+            except Exception as exc:
+                # Re-raise our own HTTPException; otherwise fall through and allow the
+                # update (unknown/unsupported profile retains round-trip).
+                if isinstance(exc, HTTPException):
+                    raise
+                pass
+
     if import_existing_credential_volume:
         _require_privileged_credential_volume_import(current_user)
         requested_volume_ref = update_data.get("volume_ref")
