@@ -1349,7 +1349,6 @@ async def update_profile(
                 # update (unknown/unsupported profile retains round-trip).
                 if isinstance(exc, HTTPException):
                     raise
-                pass
 
     if import_existing_credential_volume:
         _require_privileged_credential_volume_import(current_user)
