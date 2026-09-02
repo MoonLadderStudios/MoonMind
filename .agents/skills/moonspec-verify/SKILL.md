@@ -29,7 +29,7 @@ When `artifacts/moonspec/source-acceptance.json` or `artifacts/moonspec/acceptan
 
 ## Inputs
 
-- Treat explicitly identified original implementation instructions as a valid verification baseline, not merely optional focus.
+- Treat the user's instructions as a valid verification baseline, not merely optional focus.
 - Treat a referenced declarative document as a valid verification baseline. Read it directly and verify its in-scope desired-state claims without requiring a derived MoonSpec feature packet.
 - Do not treat ad hoc verifier guidance, such as "focus on API tests", workflow meta-instructions, or review-process instructions, as the verification baseline when an issue brief, `spec.md`, feature directory, original implementation request, or declarative source is available. Use that guidance only to prioritize evidence gathering within the real baseline.
 - In issue-brief verification mode, use the provided issue brief artifact, issue reference, acceptance criteria, and assessment artifact as the verification baseline without requiring a MoonSpec feature directory, `spec.md`, `plan.md`, or `tasks.md`.
@@ -304,19 +304,15 @@ Run commands when available and safe:
 Record exact command results as `PASS`, `FAIL`, or `NOT RUN`.
 
 Follow the repository's managed-agent test boundary when `AGENTS.md` defines
-one. At the start of command discovery, treat a non-empty
-`MOONMIND_STEP_EXECUTION_ID` as proof that the workspace is MoonMind-managed
-and check `command -v moonmind` before attempting any Python test. When the
-boundary requires `moonmind container python-tests ...`, route every Python
-test through that command. In a managed workspace, do not run `pytest`,
-`python -m pytest`, `python3 -m pytest`, the Python portion of
-`./tools/test_unit.sh`, or any command that installs pytest into the agent
-host. Host-local Python results are invalid verification evidence at this
-boundary. The absence of `pytest` in the agent host does not make the
-repository test unavailable while the documented `moonmind container`
-capability exists. If that capability is missing or rejects the job, preserve
-its explicit container-job evidence and classify the environment according to
-`AGENTS.md`.
+one. Before running tests, inspect that guidance for the documented managed-run
+signal and required delegated test command. When the current workspace meets
+that signal, confirm the required command is available and route every covered
+test through it. Do not run an equivalent host-local test command or install a
+test runner into the agent host; results from a path the repository forbids are
+invalid verification evidence. A missing host-local runner does not make a
+test unavailable while the documented delegated capability exists. If that
+capability is missing or rejects the job, preserve its explicit evidence and
+classify the environment according to `AGENTS.md`.
 
 Use `NOT RUN` with an exact reason when a command requires unavailable credentials, missing services, unsafe side effects, unsupported local tools, or excessive environment setup.
 Use the controlling/advisory split when interpreting results. Missing map assets, game/editor content assets, external services, credentials, or other non-hermetic integration/e2e prerequisites are advisory limitations unless the command output exposes a concrete in-scope implementation defect.
