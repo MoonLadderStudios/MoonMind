@@ -10,6 +10,7 @@ import {
   legacySettingsRedirect,
   matchesDashboardDestinationRegistry,
   payloadForDashboardRoute,
+  resolveAuthorizedLegacySettingsTarget,
   resolveDashboardRoute,
   visiblePrimaryDestinations,
   visibleSystemDestinations,
@@ -267,5 +268,91 @@ describe('dashboard route resolution', () => {
       expect(dest.menuGroupKey).toBe('configuration');
       expect(dest.navigationGroup).toBe('system');
     }
+  });
+
+  describe('resolveAuthorizedLegacySettingsTarget', () => {
+    const allAuthorized = {
+      features: {
+        settingsProvidersSecrets: true,
+        settingsUserWorkspace: true,
+        settingsOperations: true,
+      },
+    };
+
+    it('returns none for non-legacy paths', () => {
+      expect(resolveAuthorizedLegacySettingsTarget('/workflows', '', allAuthorized, false)).toEqual({
+        status: 'none',
+      });
+    });
+
+    it('redirects to the raw target when the preferred destination is authorized', () => {
+      expect(
+        resolveAuthorizedLegacySettingsTarget('/secrets', '?runtime=codex', allAuthorized, false),
+      ).toEqual({
+        status: 'redirect',
+        target: '/settings/providers-secrets?runtime=codex',
+      });
+    });
+
+    it('re-filters the original query for the fallback target', () => {
+      // /workers?runtime=codex prefers operations (allows only status), but the
+      // raw target already dropped runtime. Falling back to providers-secrets
+      // must recover runtime from the original search.
+      const uiInfo = {
+        features: {
+          settingsProvidersSecrets: true,
+          settingsUserWorkspace: false,
+          settingsOperations: false,
+        },
+      };
+      expect(
+        resolveAuthorizedLegacySettingsTarget('/workers', '?runtime=codex', uiInfo, false),
+      ).toEqual({
+        status: 'redirect',
+        target: '/settings/providers-secrets?runtime=codex',
+      });
+    });
+
+    it('drops parameters that are invalid for the fallback target', () => {
+      const uiInfo = {
+        features: {
+          settingsProvidersSecrets: false,
+          settingsUserWorkspace: true,
+          settingsOperations: false,
+        },
+      };
+      expect(
+        resolveAuthorizedLegacySettingsTarget('/secrets', '?runtime=codex', uiInfo, false),
+      ).toEqual({
+        status: 'redirect',
+        target: '/settings/user-workspace',
+      });
+    });
+
+    it('falls back to the settings entry when no destination is authorized', () => {
+      const uiInfo = {
+        features: {
+          settingsProvidersSecrets: false,
+          settingsUserWorkspace: false,
+          settingsOperations: false,
+        },
+      };
+      expect(
+        resolveAuthorizedLegacySettingsTarget('/secrets', '?runtime=codex', uiInfo, false),
+      ).toEqual({ status: 'redirect', target: '/settings' });
+    });
+
+    it('returns pending while capability data is loading', () => {
+      expect(resolveAuthorizedLegacySettingsTarget('/secrets', '', allAuthorized, true)).toEqual({
+        status: 'pending',
+      });
+    });
+
+    it('redirects to the raw target when capabilities are unknown and not loading', () => {
+      expect(resolveAuthorizedLegacySettingsTarget('/secrets', '', null, false)).toEqual({
+        status: 'redirect',
+        target: '/settings/providers-secrets',
+      });
+    });
   });
 });

@@ -1065,6 +1065,44 @@ export function ProviderProfilesManager({
   const [importedVolumeRef, setImportedVolumeRef] = useState('');
   const [importedVolumeValidated, setImportedVolumeValidated] = useState(false);
   const startOAuthFromCreationRef = useRef<(profile: ProviderProfile) => void>(() => undefined);
+  // Create-time "use as runtime default" intent cannot be honored at creation:
+  // guided creation stores the profile disabled with is_default=false until
+  // credential validation, so the intent is persisted here and applied once
+  // the readiness-completing operation (OAuth finalize or API-key enrollment)
+  // succeeds for that profile.
+  const pendingDefaultIntentRef = useRef<Set<string>>(new Set());
+  const applyPendingDefaultIntent = async (profileId: string) => {
+    if (!pendingDefaultIntentRef.current.has(profileId)) return;
+    pendingDefaultIntentRef.current.delete(profileId);
+    try {
+      const response = await fetch(
+        `/api/v1/provider-profiles/${encodeURIComponent(profileId)}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({ is_default: true }),
+        },
+      );
+      if (!response.ok) {
+        const errorPayload = await response.json().catch(() => ({}));
+        throw new Error(
+          extractErrorMessage(
+            errorPayload,
+            `Failed to set "${profileId}" as the runtime default.`,
+          ),
+        );
+      }
+      queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
+      onNotice({ level: 'ok', text: `Provider profile "${profileId}" is now the runtime default.` });
+    } catch (error) {
+      onNotice({
+        level: 'error',
+        text: error instanceof Error
+          ? error.message
+          : `Failed to set "${profileId}" as the runtime default.`,
+      });
+    }
+  };
   const [tierDrafts, setTierDrafts] = useState<ProviderProfileTierDraft[]>(() => [runtimeDefaultTierDraft()]);
   const [defaultTierClientId, setDefaultTierClientId] = useState<string | null>(() => tierDrafts[0]?.clientId ?? null);
   const [tierBaseline, setTierBaseline] = useState<ProviderProfileTierDraft[] | null>(
@@ -1210,13 +1248,7 @@ export function ProviderProfilesManager({
   }, [editingProfile, editingProfileId, form.providerId, form.runtimeId]);
 
   useEffect(() => {
-    if (editingProfileId !== null) {
-      setCreationPreset(null);
-      setCreationPresetLoading(false);
-      setCreationPresetError(null);
-      return;
-    }
-
+    const isEditingProfile = editingProfileId !== null;
     const runtimeId = form.runtimeId.trim();
     const providerId = form.providerId.trim();
     const authenticationMethod = form.authenticationMethod;
@@ -1254,7 +1286,20 @@ export function ProviderProfilesManager({
         return payload as ProviderProfileCreationPreset;
       })
       .then((preset) => {
+        if (
+          !preset ||
+          typeof preset.version !== 'string' ||
+          !preset.fields ||
+          typeof preset.fields !== 'object'
+        ) {
+          throw new Error('Failed to load the Provider Profile creation preset.');
+        }
         setCreationPreset(preset);
+        if (isEditingProfile) {
+          // Editing never auto-applies the preset to the draft; it is only
+          // the source for an explicit "reset to recommended" action.
+          return;
+        }
         if (preset.supported) {
           setForm((current) =>
             current.runtimeId.trim() === preset.runtime_id &&
@@ -1288,9 +1333,18 @@ export function ProviderProfilesManager({
     creationPresetRefreshKey,
   ]);
   // #1205: OAuth may populate account_label from validated provider identity.
+  // Only populate the draft that still represents the completed profile:
+  // after a successful creation the form resets, so an unrelated later
+  // success (for example profile A completing while draft B is open) must
+  // not copy A's identity label into B's draft.
   useEffect(() => {
-    const succeeded = Object.values(oauthSessions).find((s) => s.status === 'succeeded');
-    if (!succeeded || isEditing) return;
+    if (isEditing) return;
+    const draftProfileId = form.profileId.trim();
+    if (!draftProfileId) return;
+    const succeeded = Object.values(oauthSessions).find(
+      (s) => s.status === 'succeeded' && s.profileId === draftProfileId,
+    );
+    if (!succeeded) return;
     const profileId = succeeded.profileId;
     if (!profileId) return;
     const linked = profiles.find((p) => p.profile_id === profileId);
@@ -1713,6 +1767,7 @@ export function ProviderProfilesManager({
         level: 'ok',
         text: `Anthropic API key enrollment completed for "${profileId}".`,
       });
+      void applyPendingDefaultIntent(profileId);
     },
     onError: (error, { profileId, submittedToken }) => {
       if (claudeEnrollmentProfileIdRef.current !== profileId) {
@@ -1875,6 +1930,7 @@ export function ProviderProfilesManager({
         level: 'ok',
         text: `${copy.credentialLabel} enrollment completed for "${profileId}".`,
       });
+      void applyPendingDefaultIntent(profileId);
     },
     onError: (error, { profileId, submittedToken, profile }) => {
       const copy = apiKeyEnrollmentCopy(profile);
@@ -2010,6 +2066,11 @@ export function ProviderProfilesManager({
     },
     onSuccess: (savedProfile, submittedForm) => {
       const createdProfile = !isEditing;
+      if (createdProfile && submittedForm.isDefault && !savedProfile.is_default) {
+        // Creation stores the profile non-default until credential validation;
+        // carry the checked intent forward to the readiness-completing step.
+        pendingDefaultIntentRef.current.add(savedProfile.profile_id);
+      }
       onNotice({
         level: 'ok',
         text: isEditing
@@ -2304,6 +2365,7 @@ export function ProviderProfilesManager({
       );
       queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
       onNotice({ level: 'ok', text: `OAuth session for "${profileId}" finalized.` });
+      void applyPendingDefaultIntent(profileId);
     },
     onError: (error: Error) => {
       onNotice({ level: 'error', text: error.message });
@@ -3818,14 +3880,17 @@ export function ProviderProfilesManager({
             {(() => {
               const readiness = editingProfile?.readiness ?? null;
               const launchReady = isEditing ? Boolean(readiness?.launch_ready) : Boolean(selectedAuthenticationCapability?.launch_ready_after_setup || selectedAuthenticationCapability?.fields.may_become_runtime_default?.value);
-              const disabled = isEditing ? !launchReady : false;
+              // The readiness gate prevents assigning an unready profile as
+              // default, but an already-default profile may still be demoted.
+              const assignBlocked = isEditing && !launchReady && !form.isDefault;
+              const demoteAllowed = isEditing && !launchReady && form.isDefault;
               return (
                 <>
-                  <label className={`flex items-center gap-3 rounded-2xl border px-4 py-3 text-sm font-medium ${disabled ? 'border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300' : 'border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-800 dark:bg-slate-800 dark:text-slate-300'}`}>
+                  <label className={`flex items-center gap-3 rounded-2xl border px-4 py-3 text-sm font-medium ${assignBlocked ? 'border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300' : 'border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-800 dark:bg-slate-800 dark:text-slate-300'}`}>
                     <input
                       type="checkbox"
                       checked={form.isDefault}
-                      disabled={disabled}
+                      disabled={assignBlocked}
                       aria-label="Runtime default"
                       onChange={(event) =>
                         setForm((current) => ({ ...current, isDefault: event.target.checked }))
@@ -3833,9 +3898,13 @@ export function ProviderProfilesManager({
                     />
                     Use as runtime default
                   </label>
-                  {disabled ? (
+                  {assignBlocked ? (
                     <p className="text-xs text-amber-700 dark:text-amber-300">
                       Default assignment is disabled until launch readiness succeeds. Complete credential setup and resolve readiness blockers first.
+                    </p>
+                  ) : demoteAllowed ? (
+                    <p className="text-xs text-amber-700 dark:text-amber-300">
+                      This profile is currently the runtime default but is not launch-ready. You may clear this checkbox to demote it; re-assigning default requires launch readiness.
                     </p>
                   ) : (
                     <p className="text-xs text-slate-500 dark:text-slate-400">
@@ -4092,7 +4161,7 @@ export function ProviderProfilesManager({
                 </div>
                 {manualCreationAllowed ? (
                   <label className="flex flex-col gap-1.5 text-sm font-medium text-amber-800 dark:text-amber-300">
-                    <span>Clear env keys — manual expert path (requires audit)</span>
+                    <span>Clear env keys — manual expert path (no audit trail recorded)</span>
                     <textarea
                       rows={3}
                       className="w-full rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 font-mono text-sm"
@@ -4104,7 +4173,7 @@ export function ProviderProfilesManager({
                         }))
                       }
                     />
-                    <p className="text-xs text-amber-700 dark:text-amber-300">Warning: freeform clear_env_keys is only allowed for unsupported combinations via the manual creation path. The value will be audited and must satisfy launch-safety validation.</p>
+                    <p className="text-xs text-amber-700 dark:text-amber-300">Warning: freeform clear_env_keys is only allowed for unsupported combinations via the manual creation path. No audit event is recorded for this change; the value must satisfy launch-safety validation and bypasses backend-recommended isolation policy, so review it carefully.</p>
                   </label>
                 ) : (
                   <div className="rounded-xl bg-slate-50 dark:bg-slate-900 p-3 text-xs text-slate-500 dark:text-slate-400">
@@ -4119,6 +4188,31 @@ export function ProviderProfilesManager({
                 <legend className="px-2 text-sm font-semibold text-slate-700 dark:text-slate-300">Reset advanced options</legend>
                 {!creationPreset && !isEditing ? (
                   <p className="text-sm text-slate-500 dark:text-slate-400">Load a backend preset to preview recommended values.</p>
+                ) : isEditing && !creationPreset ? (
+                  creationPresetLoading ? (
+                    <p className="text-sm text-slate-500 dark:text-slate-400">Loading backend-recommended values…</p>
+                  ) : (
+                    <>
+                      <p className="text-sm text-slate-500 dark:text-slate-400">
+                        No backend preset is available for this profile type
+                        {creationPresetError ? ` (${creationPresetError})` : ''}, so
+                        recommended values cannot be previewed. Discarding unsaved
+                        advanced edits restores the last saved values instead.
+                      </p>
+                      <button
+                        type="button"
+                        className="rounded-lg border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-300"
+                        onClick={() => {
+                          setForm(formBaseline);
+                          setTierDrafts(tierBaseline ? cloneTierDrafts(tierBaseline) : [runtimeDefaultTierDraft()]);
+                          if (tierBaselineDefaultId) setDefaultTierClientId(tierBaselineDefaultId);
+                          onNotice({ level: 'ok', text: 'Unsaved advanced edits discarded; restored last saved values.' });
+                        }}
+                      >
+                        Discard unsaved advanced edits
+                      </button>
+                    </>
+                  )
                 ) : (
                   <>
                     {!showResetPreview ? (
@@ -4146,9 +4240,7 @@ export function ProviderProfilesManager({
                                 items.push('credential_source / runtime_materialization_mode — omitted to inherit backend-derived values');
                                 items.push('secret_refs / volume refs — omitted unless explicitly bound');
                               } else if (isEditing && editingProfile) {
-                                items.push('Advanced overrides will be cleared to backend-recommended defaults for this profile type');
-                                items.push('clear_env_keys — recalculated from runtime_provider_isolation_policy');
-                                items.push('Launch impact: future launches will use the recalculated policy; historical runs keep their record.');
+                                items.push('Backend preset unavailable — preview unavailable; use “Discard unsaved advanced edits” to restore last saved values');
                               } else {
                                 items.push('No preset available — preview unavailable');
                               }
@@ -4163,7 +4255,15 @@ export function ProviderProfilesManager({
                             className="rounded-lg bg-slate-900 dark:bg-slate-100 px-4 py-2 text-sm font-semibold text-white dark:text-slate-900"
                             onClick={() => {
                               if (creationPreset) {
-                                setForm((cur) => applyCreationPresetToForm(cur, creationPreset));
+                                setForm((cur) => {
+                                  const next = applyCreationPresetToForm(cur, creationPreset);
+                                  // isDefault/enabled are identity toggles outside
+                                  // advanced options; an advanced reset while
+                                  // editing must not flip them as a side effect.
+                                  return isEditing
+                                    ? { ...next, isDefault: cur.isDefault, enabled: cur.enabled }
+                                    : next;
+                                });
                               } else if (isEditing && editingProfile) {
                                 setForm(formBaseline);
                                 setTierDrafts(tierBaseline ? cloneTierDrafts(tierBaseline) : [runtimeDefaultTierDraft()]);
