@@ -1,0 +1,55 @@
+{
+  "schemaVersion": "moonmind.reliability-replay.v1",
+  "replayId": "omnigent-active-tool-execution-budget",
+  "incidentWorkflowId": "mm:8d94711e-bdee-446f-b924-9bf2e753ae76",
+  "failedChildWorkflowId": "mm:8d94711e-bdee-446f-b924-9bf2e753ae76:agent:node-1",
+  "activityType": "integration.omnigent.profile_bound_execute",
+  "executionRealizerRef": "generic-omnigent-host@1",
+  "harness": "opencode-native",
+  "failureShape": "the request and Temporal activity authorized 9000 seconds, but the marked-turn waiter stopped after its independent 1800-second default while an agent-owned bash tool was still running; the generic realizer dispatcher then converted the retryable ambiguous-session exception into terminal OMNIGENT_GENERIC_DISPATCH_FAILED",
+  "requestTimeoutPolicy": {
+    "timeout_seconds": 9000,
+    "max_timeout_seconds": 54000,
+    "progress_stall_seconds": 900,
+    "execution_budget_mode": "progress_aware"
+  },
+  "legacyMarkedTurnTimeoutSeconds": 1800,
+  "observedFailureSummary": "Admitted Omnigent execution-plan dispatch failed: Omnigent current marked turn did not reach terminal state before timeout",
+  "sessionId": "synthetic-active-tool-session",
+  "observedProviderEventCount": 9,
+  "bridgeProjection": {
+    "status": "completed",
+    "firstMessagePosted": true,
+    "terminalRefs": {}
+  },
+  "terminalSnapshot": {
+    "status": "running",
+    "active_response_id": null,
+    "last_task_error": null,
+    "items": [
+      {
+        "id": "marked-user",
+        "type": "message",
+        "status": "completed",
+        "data": {
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "MoonMind-Omnigent-Run: synthetic-active-tool"
+            }
+          ]
+        }
+      },
+      {
+        "id": "active-wait-call",
+        "type": "function_call",
+        "status": "completed",
+        "data": {
+          "call_id": "active-wait-call",
+          "name": "bash"
+        }
+      }
+    ]
+  }
+}

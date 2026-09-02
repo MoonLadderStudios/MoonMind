@@ -246,6 +246,49 @@ async def test_generic_dispatch_keeps_generic_code_for_untyped_cause() -> None:
 
 
 @pytest.mark.asyncio
+async def test_generic_dispatch_keeps_raising_ambiguous_terminal_for_retry() -> None:
+    from moonmind.omnigent.execute import OmnigentSessionStillRunningError
+    from tests.unit.omnigent.test_generic_platform_production_services import _plan
+
+    plan = _plan("opencode-go/model")
+
+    class PlanStore:
+        async def load(self, plan_ref):
+            return plan
+
+    class Realizer:
+        async def execute(self, request, admitted):
+            raise OmnigentSessionStillRunningError(
+                "current marked turn is still executing a tool"
+            )
+
+    class Registry:
+        def require(self, ref):
+            return Realizer()
+
+    with pytest.raises(OmnigentSessionStillRunningError):
+        await _try_generic_realizer_dispatch(
+            AgentExecutionRequest(
+                agentKind="external",
+                agentId="omnigent",
+                correlationId="workflow-ambiguous",
+                idempotencyKey="step-ambiguous",
+                resolvedSkillsetRef="artifact:skills",
+                omnigentExecutionPlan=OmnigentExecutionPlanBinding(
+                    planRef=plan.planRef,
+                    planDigest="sha256:" + plan.planRef.rsplit(":", 1)[-1],
+                    planArtifactRef="artifact:plan-ambiguous",
+                    taskInputSnapshotRef="artifact:input-ambiguous",
+                    taskInputSnapshotDigest="sha256:" + "a" * 64,
+                ),
+                parameters={"executionPlanRef": plan.planRef},
+            ),
+            plan_store=PlanStore(),
+            realizer_registry=Registry(),
+        )
+
+
+@pytest.mark.asyncio
 async def test_generic_profile_selection_fails_typed_when_host_plane_is_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
