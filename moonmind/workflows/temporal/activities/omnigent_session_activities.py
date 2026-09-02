@@ -462,6 +462,10 @@ async def _load_intent_request(
             execution_input_refs_digest=(
                 str(payload.get("executionInputRefsDigest") or "").strip() or None
             ),
+            workspace_checkpoint_restore_ref=(
+                str(payload.get("workspaceCheckpointRestoreRef") or "").strip()
+                or None
+            ),
         )
     binding = parsed.omnigent_execution_plan or agent_request.omnigent_execution_plan
     if binding is not None:
@@ -484,6 +488,7 @@ async def _reconstruct_plan_bound_request(
     execution_instruction_digest: str | None = None,
     execution_input_refs: list[str] | None = None,
     execution_input_refs_digest: str | None = None,
+    workspace_checkpoint_restore_ref: str | None = None,
 ) -> AgentExecutionRequest:
     """Reload authored input and project it through immutable plan authority."""
 
@@ -686,6 +691,10 @@ async def _reconstruct_plan_bound_request(
             "workspaceId": workspace_id,
             "relativePath": "repo",
         }
+    if workspace_checkpoint_restore_ref:
+        workspace_spec["workspaceCheckpointRestoreRef"] = (
+            workspace_checkpoint_restore_ref
+        )
     return AgentExecutionRequest(
         agentKind="external",
         agentId="omnigent",
@@ -1456,6 +1465,15 @@ def _omnigent_intent_snapshot_payload(
                 if resolved.execution_input_refs
                 else {}
             ),
+            **(
+                {
+                    "workspaceCheckpointRestoreRef": (
+                        resolved.workspace_checkpoint_restore_ref
+                    )
+                }
+                if resolved.workspace_checkpoint_restore_ref
+                else {}
+            ),
             "omnigentExecutionPlan": plan_binding.model_dump(
                 mode="json", by_alias=True
             ),
@@ -1503,6 +1521,9 @@ async def omnigent_resolve_intent_activity(
             execution_instruction_digest=resolved.execution_instruction_digest,
             execution_input_refs=resolved.execution_input_refs,
             execution_input_refs_digest=resolved.execution_input_refs_digest,
+            workspace_checkpoint_restore_ref=(
+                resolved.workspace_checkpoint_restore_ref
+            ),
         )
     if (
         request.agent_kind != "external"
@@ -3042,7 +3063,11 @@ async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str,
         workspace_locator = workspace_intent.workspace_locator_payload()
         repository_source = workspace_intent.repository or ""
         restore_input_refs = tuple(workspace_intent.restore_input_refs)
-        attachment_refs = tuple(workspace_intent.attachment_refs)
+        attachment_refs = (
+            OmnigentProfileBoundExecutionCoordinator._attachment_refs(
+                agent_request
+            )
+        )
     github_token = await OmnigentProfileBoundExecutionCoordinator._github_token(
         agent_request
     )
