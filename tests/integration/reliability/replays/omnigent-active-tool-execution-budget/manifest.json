@@ -20,7 +20,11 @@
   "bridgeProjection": {
     "status": "completed",
     "firstMessagePosted": true,
-    "terminalRefs": {}
+    "terminalRefs": {
+      "captureManifestRef": "artifact:capture-only",
+      "resourceProjectionRef": "artifact:resources-only",
+      "evidenceCompleteness": "partial"
+    }
   },
   "terminalSnapshot": {
     "status": "running",

@@ -108,6 +108,7 @@ _MARKED_TOOL_ONLY_QUIET_PERIOD_SECONDS = 300.0
 # waiting the full no-progress budget only delays an already-known failure.
 _MARKED_TURN_START_TIMEOUT_SECONDS = 300.0
 _TERMINAL_RECONCILIATION_INTERVAL_SECONDS = 30.0
+_MARKED_TURN_ACTIVITY_RETRY_RESERVE_SECONDS = 600.0
 _ACTIVITY_HEARTBEAT_STATE: ContextVar[dict[str, Any] | None] = ContextVar(
     "omnigent_activity_heartbeat_state",
     default=None,
@@ -124,11 +125,24 @@ def _durable_terminal_status_with_evidence(durable_row: Any) -> str | None:
 
     status = str(getattr(durable_row, "status", "") or "").strip().lower()
     terminal_refs = getattr(durable_row, "terminal_refs", None)
+    terminal_bundle_keys = {
+        "outputRefs",
+        "diagnosticsRef",
+        "metadataRefs",
+        "resourceProjection",
+        "failureClass",
+        "failureCode",
+        "summary",
+    }
     if (
         status not in _TERMINAL_STATUSES
         or getattr(durable_row, "first_message_posted_at", None) is None
         or not isinstance(terminal_refs, Mapping)
-        or not terminal_refs
+        or not terminal_bundle_keys <= set(terminal_refs)
+        or not isinstance(terminal_refs.get("outputRefs"), list)
+        or not isinstance(terminal_refs.get("metadataRefs"), Mapping)
+        or not isinstance(terminal_refs.get("resourceProjection"), Mapping)
+        or not str(terminal_refs.get("summary") or "").strip()
     ):
         return None
     return status
@@ -861,6 +875,7 @@ def _marked_turn_item_state(
             "progress": False,
             "terminalAssistantAfterWork": False,
             "unfinishedToolCall": False,
+            "unfinishedToolName": None,
             "signature": None,
         }
 
@@ -902,6 +917,7 @@ def _marked_turn_item_state(
             "progress": False,
             "terminalAssistantAfterWork": False,
             "unfinishedToolCall": False,
+            "unfinishedToolName": None,
             "signature": None,
         }
 
@@ -909,8 +925,10 @@ def _marked_turn_item_state(
     last_text_assistant_index = -1
     progress = False
     pending_call_ids: set[str] = set()
+    pending_call_names: dict[str, str] = {}
     instrumentation_call_ids: set[str] = set()
     anonymous_pending_calls = 0
+    anonymous_pending_call_names: list[str] = []
     for index, raw_item in enumerate(
         raw_items[progress_start_index:],
         start=progress_start_index,
@@ -932,10 +950,13 @@ def _marked_turn_item_state(
                 continue
             last_tool_index = index
             call_id = str(item_data.get("call_id") or "").strip()
+            tool_name = str(item_data.get("name") or "").strip()
             if call_id:
                 pending_call_ids.add(call_id)
+                pending_call_names[call_id] = tool_name
             else:
                 anonymous_pending_calls += 1
+                anonymous_pending_call_names.append(tool_name)
         elif item_type == "function_call_output":
             progress = True
             call_id = str(item_data.get("call_id") or "").strip()
@@ -944,8 +965,10 @@ def _marked_turn_item_state(
             last_tool_index = index
             if call_id:
                 pending_call_ids.discard(call_id)
+                pending_call_names.pop(call_id, None)
             elif anonymous_pending_calls:
                 anonymous_pending_calls -= 1
+                anonymous_pending_call_names.pop(0)
         elif item_type == "message":
             role = str(item_data.get("role") or "").strip().lower()
             if role != "assistant":
@@ -962,7 +985,9 @@ def _marked_turn_item_state(
                 # an output item); calls that genuinely remain active are
                 # ordered after that message and are added on later iterations.
                 pending_call_ids.clear()
+                pending_call_names.clear()
                 anonymous_pending_calls = 0
+                anonymous_pending_call_names.clear()
 
     last_item = next(
         (item for item in reversed(raw_items) if isinstance(item, Mapping)),
@@ -978,6 +1003,10 @@ def _marked_turn_item_state(
         str(last_item_data.get("role") or ""),
         str(last_item_data.get("call_id") or ""),
     )
+    unfinished_tool_name = next(
+        (name for name in pending_call_names.values() if name),
+        next((name for name in anonymous_pending_call_names if name), None),
+    )
     return {
         "markerIndex": marked_message_index,
         "boundarySource": boundary_source,
@@ -986,6 +1015,7 @@ def _marked_turn_item_state(
             last_text_assistant_index > max(progress_start_index - 1, last_tool_index)
         ),
         "unfinishedToolCall": bool(pending_call_ids or anonymous_pending_calls),
+        "unfinishedToolName": unfinished_tool_name,
         "signature": signature,
     }
 
@@ -1050,11 +1080,12 @@ def _marked_turn_timeout_diagnostics(
     )
     raw_data = last_item.get("data")
     last_item_data = raw_data if isinstance(raw_data, Mapping) else {}
-    last_tool_name = (
+    last_item_tool_name = (
         str(last_item_data.get("name") or "").strip()
         if str(last_item.get("type") or "").strip() == "function_call"
         else ""
     )
+    unresolved_tool_name = str(state.get("unfinishedToolName") or "").strip()
     try:
         normalized_status = (
             normalize_omnigent_observation(latest_snapshot)
@@ -1073,7 +1104,7 @@ def _marked_turn_timeout_diagnostics(
         "unfinishedToolCall": bool(state.get("unfinishedToolCall")),
         "lastItemType": str(last_item.get("type") or "").strip() or None,
         "lastItemStatus": str(last_item.get("status") or "").strip() or None,
-        "lastToolName": last_tool_name or None,
+        "lastToolName": unresolved_tool_name or last_item_tool_name or None,
         "providerRateLimitEvidence": _snapshot_provider_rate_limit_evidence(
             latest_snapshot
         ),
@@ -1891,20 +1922,28 @@ async def _restore_active_journals(
 
 
 def _resolved_marked_turn_timeout_seconds(request: AgentExecutionRequest) -> float:
-    """Use the AgentRun-published base budget for the blocking turn boundary.
+    """Reserve part of the published Activity budget for one safe retry.
 
-    The parent workflow sizes this activity's ScheduleToClose from the same
-    published budget.  A separate 1,800-second local default used to terminate
-    otherwise healthy long-running Omnigent turns even when the request and
-    Temporal activity both authorized a much larger window.
+    The parent workflow sizes both StartToClose and ScheduleToClose from the
+    published base budget. The local poll must therefore finish early enough
+    for its retryable exception, Temporal backoff, session reattachment, and a
+    terminal quiet-period check to occur before ScheduleToClose expires. The
+    reserve is capped so a large request no longer inherits the old hidden
+    1,800-second deadline, and at half the budget so short explicit budgets
+    still spend most of their available window on the initial attempt.
     """
 
-    return float(
+    base_seconds = float(
         resolve_execution_budget(
             agent_kind=request.agent_kind,
             timeout_policy=request.timeout_policy,
         ).base_seconds
     )
+    retry_reserve_seconds = min(
+        _MARKED_TURN_ACTIVITY_RETRY_RESERVE_SECONDS,
+        base_seconds / 2.0,
+    )
+    return max(1.0, base_seconds - retry_reserve_seconds)
 
 
 async def run_omnigent_execution(
@@ -3487,6 +3526,8 @@ async def run_omnigent_execution(
             metadata=result_metadata,
         )
     except OmnigentSessionStillRunningError:
+        await _cancel_task(heartbeat_task)
+        await _cancel_task(stream_task)
         raise
     except (OmnigentClientError, httpx.HTTPError) as exc:
         # §17 transport rows: upstream unreachable / host register-connect /

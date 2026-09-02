@@ -34,6 +34,7 @@ from moonmind.omnigent.execute import (
     _durable_terminal_status_with_evidence,
     _enqueue_stream_events,
     _first_message_text,
+    _marked_turn_item_state,
     _marked_turn_timeout_diagnostics,
     _marked_turn_timeout_message,
     _MarkedTurnStartWatchdog,
@@ -122,16 +123,70 @@ def test_coarse_bridge_completion_without_terminal_refs_is_not_authoritative() -
     coarse_projection = SimpleNamespace(
         status="completed",
         first_message_posted_at=object(),
-        terminal_refs={},
+        terminal_refs={
+            "captureManifestRef": "artifact:capture-only",
+            "resourceProjectionRef": "artifact:resources-only",
+            "evidenceCompleteness": "partial",
+        },
     )
     published_terminal = SimpleNamespace(
         status="completed",
         first_message_posted_at=object(),
-        terminal_refs={"summary": "published terminal evidence"},
+        terminal_refs={
+            "outputRefs": [],
+            "diagnosticsRef": "artifact:diagnostics",
+            "metadataRefs": {"finalSnapshotRef": "artifact:final"},
+            "resourceProjection": {},
+            "failureClass": None,
+            "failureCode": None,
+            "summary": "published terminal evidence",
+        },
     )
 
     assert _durable_terminal_status_with_evidence(coarse_projection) is None
     assert _durable_terminal_status_with_evidence(published_terminal) == "completed"
+
+
+def test_timeout_diagnostics_report_earlier_unresolved_tool_name() -> None:
+    marker = "MoonMind-Omnigent-Run: unresolved-tool"
+    snapshot = {
+        "status": "running",
+        "last_task_error": None,
+        "items": [
+            {
+                "type": "message",
+                "data": {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": marker}],
+                },
+            },
+            {
+                "type": "function_call",
+                "data": {"call_id": "pending", "name": "bash"},
+            },
+            {
+                "type": "function_call",
+                "data": {"call_id": "finished", "name": "git"},
+            },
+            {
+                "type": "function_call_output",
+                "data": {"call_id": "finished", "output": "done"},
+            },
+        ],
+    }
+    turn_state = _marked_turn_item_state(snapshot, marker=marker)
+
+    assert turn_state["unfinishedToolCall"] is True
+    assert turn_state["unfinishedToolName"] == "bash"
+    diagnostics = _marked_turn_timeout_diagnostics(
+        session_id="session-unresolved-tool",
+        snapshot=snapshot,
+        timeout_seconds=8400.0,
+        event_count=4,
+        turn_state=turn_state,
+    )
+    assert diagnostics["lastItemType"] == "function_call_output"
+    assert diagnostics["lastToolName"] == "bash"
 
 
 @pytest.mark.parametrize(
@@ -2901,6 +2956,7 @@ async def test_local_omnigent_artifact_gateway_wraps_os_errors(
 @pytest.mark.asyncio
 async def test_run_omnigent_execution_raises_when_stream_ends_still_running(
     monkeypatch,
+    tmp_path,
 ) -> None:
     class FakeClient:
         def __init__(self, **_: object) -> None:
@@ -2917,7 +2973,7 @@ async def test_run_omnigent_execution_raises_when_stream_ends_still_running(
             session_id: str,
             payload: dict[str, object],
         ) -> dict[str, object]:
-            return {}
+            return {"item_id": "marked-item"}
 
         async def stream_events(self, session_id: str):
             assert session_id == "session-1"
@@ -2946,13 +3002,15 @@ async def test_run_omnigent_execution_raises_when_stream_ends_still_running(
                         "prompt": {"text": "Do the task"},
                     },
                 },
-            )
+            ),
+            artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
         )
 
 
 @pytest.mark.asyncio
 async def test_stream_end_polls_unfinished_current_turn_before_completion(
     monkeypatch,
+    tmp_path,
 ) -> None:
     snapshots = [
         {
@@ -2989,7 +3047,7 @@ async def test_stream_end_polls_unfinished_current_turn_before_completion(
             session_id: str,
             payload: dict[str, object],
         ) -> dict[str, object]:
-            return {}
+            return {"item_id": "marked-item"}
 
         async def stream_events(self, session_id: str):
             if False:
@@ -3019,6 +3077,12 @@ async def test_stream_end_polls_unfinished_current_turn_before_completion(
                 agentId="omnigent",
                 correlationId="corr-1",
                 idempotencyKey="idem-unfinished-current-turn",
+                timeoutPolicy={
+                    "timeout_seconds": 9000,
+                    "max_timeout_seconds": 54000,
+                    "progress_stall_seconds": 900,
+                    "execution_budget_mode": "progress_aware",
+                },
                 parameters={
                     "omnigent": {
                         "agent": {"agentName": "codex-native-ui"},
@@ -3026,11 +3090,13 @@ async def test_stream_end_polls_unfinished_current_turn_before_completion(
                         "prompt": {"text": "Do the task"},
                     },
                 },
-            )
+            ),
+            artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
         )
 
     assert awaited["baseline_item_ids"] == frozenset({"prior-item"})
     assert awaited["terminal_status"] == "completed"
+    assert awaited["timeout_seconds"] == 8400.0
 
 
 @pytest.mark.asyncio
@@ -3363,8 +3429,13 @@ async def test_run_omnigent_execution_preserves_durable_failed_terminal_on_retry
         first_message_pending_id = "pending-1"
         first_message_item_id = "item-1"
         terminal_refs = {
-            "summary": "durable provider failure",
+            "outputRefs": [],
+            "diagnosticsRef": "artifact:diagnostics",
+            "metadataRefs": {"finalSnapshotRef": "artifact:final"},
+            "resourceProjection": {},
             "failureClass": "execution_error",
+            "failureCode": "provider_failure",
+            "summary": "durable provider failure",
         }
         metadata_: dict[str, object] = {}
 
