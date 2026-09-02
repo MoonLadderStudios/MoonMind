@@ -15184,6 +15184,71 @@ def test_direct_rerun_rejects_stale_plan_before_execution_creation(
     service.create_execution.assert_not_awaited()
 
 
+def test_direct_rerun_commits_snapshot_lineage_before_serialization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for mm:f724a9b2's rerun returning 500 after creation."""
+    app = FastAPI()
+    app.include_router(router)
+    service = AsyncMock()
+    source_record = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    source_record.owner_type = SimpleNamespace(value="user")
+    source_record.input_ref = None
+    source_record.parameters = {
+        "targetRuntime": "omnigent",
+        "workflow": {"instructions": "Retry the original task."},
+        "omnigentExecutionPlan": {
+            "planRef": "omnigent-execution-plan:sha256:" + "a" * 64,
+            "planDigest": "sha256:" + "a" * 64,
+            "planArtifactRef": "art_original_plan",
+            "taskInputSnapshotRef": "art_original_input",
+            "taskInputSnapshotDigest": "sha256:" + "b" * 64,
+        },
+    }
+    rerun_record = _build_execution_record(state=MoonMindWorkflowState.INITIALIZING)
+    rerun_record.workflow_id = "mm:created-rerun"
+    rerun_record.run_id = "run-created-rerun"
+    service.describe_execution.return_value = source_record
+    service._full_rerun_parameters = Mock(
+        side_effect=TemporalExecutionService._full_rerun_parameters
+    )
+    service.create_execution.return_value = rerun_record
+    app.dependency_overrides[_get_service] = lambda: service
+    _override_temporal_client(app)
+    user = _override_user_dependencies(app, is_superuser=True)
+    session = AsyncMock()
+    session.get.return_value = source_record
+    app.dependency_overrides[get_async_session] = lambda: session
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    reuse_snapshot = AsyncMock(return_value="art_snapshot_1")
+    monkeypatch.setattr(
+        executions_module,
+        "_reuse_original_task_input_snapshot_from_source",
+        reuse_snapshot,
+    )
+    serialized = _serialize_execution(rerun_record, user=user)
+
+    def serialize_after_snapshot_commit(record: Any, **_kwargs: Any):
+        session.commit.assert_awaited_once()
+        session.refresh.assert_awaited_once_with(record)
+        return serialized
+
+    monkeypatch.setattr(
+        executions_module,
+        "_serialize_execution",
+        serialize_after_snapshot_commit,
+    )
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            f"/api/executions/{source_record.workflow_id}/rerun"
+        )
+
+    assert response.status_code == 201
+    assert response.json()["workflowId"] == "mm:created-rerun"
+    reuse_snapshot.assert_awaited_once()
+
+
 def test_task_input_snapshot_artifact_id_strips_input_prefix_without_scheme() -> None:
     assert _artifact_id_from_ref("input/art-full-input") == "art-full-input"
     assert _artifact_id_from_ref("artifact://input/art-full-input") == "art-full-input"

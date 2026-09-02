@@ -2250,6 +2250,55 @@ async def test_invalid_batch_range_records_terminal_failure_without_retry(
     assert expected["parentState"] == "failed"
 
 
+async def test_batch_github_fanout_preserves_checkout_authority_replay() -> None:
+    """Replay mm:f724a9b2 at GitHub discovery and child authoring boundaries."""
+    replay_id = "batch-github-fanout-repository-authority"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    skill = runpy.run_path(
+        str(
+            REPO_ROOT
+            / ".agents"
+            / "skills"
+            / "batch-github-workflows"
+            / "bin"
+            / "batch_workflows.py"
+        )
+    )
+
+    def fake_github_query(command: list[str], **_kwargs: object):
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps(manifest["githubResponse"]),
+            stderr="",
+        )
+
+    targets = skill["resolve_github_issue_range"](
+        manifest["repository"],
+        manifest["issueRange"],
+        run_command=fake_github_query,
+    )
+    request = skill["build_child_request"](
+        targets[0],
+        config=skill["TargetConfig"](
+            target_kind="preset",
+            target_slug="github-issue-implement",
+            publish_mode="none",
+        ),
+        runtime=skill["RuntimeSelection"](mode="omnigent"),
+        batch_scope="replay:mm:f724a9b2",
+        inherit_runtime_from_caller=True,
+    )
+
+    assert manifest["failedWorkspaceSpec"]["repository"] == expected[
+        "discardedRepository"
+    ]
+    assert "branch" not in manifest["failedWorkspaceSpec"]
+    assert request is not None
+    assert request["payload"]["repository"] == expected["repositoryTarget"]
+
+
 async def test_standalone_omnigent_resolver_rejects_unowned_continuation_without_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

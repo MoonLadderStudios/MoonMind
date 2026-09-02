@@ -18460,9 +18460,10 @@ async def rerun_execution(
             canonical_identifier=canonical_workflow_id,
         )
 
-    execution = _serialize_execution(record, user=user)
     if snapshot_ref:
         await session.commit()
+        await session.refresh(record)
+    execution = _serialize_execution(record, user=user)
     return execution
 
 

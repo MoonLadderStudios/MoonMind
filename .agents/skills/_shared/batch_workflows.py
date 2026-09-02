@@ -59,8 +59,12 @@ SUPPORTED_RUN_REFS = frozenset(
     }
 )
 _GITHUB_RANGE_PATTERN = re.compile(r"^(?P<start>\d+)-(?P<end>\d+)$")
+_SAFE_GIT_BRANCH = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._/@+-]{0,253}(?<!\.lock)$"
+)
 _GITHUB_GRAPHQL_CHUNK_SIZE = 50
 _GITHUB_MAX_SEARCH_WIDTH = 1000
+_DEFAULT_GIT_CONNECTION_REF = "repository-connection:git-default"
 
 
 class BatchInputError(ValueError):
@@ -170,6 +174,7 @@ def _github_issue_range_query(numbers: list[int]) -> str:
     return (
         "query($owner: String!, $name: String!) {\n"
         "  repository(owner: $owner, name: $name) {\n"
+        "    defaultBranchRef { name }\n"
         f"{selections}\n"
         "  }\n"
         "}"
@@ -200,6 +205,7 @@ def resolve_github_issue_range(
             f"{_GITHUB_MAX_SEARCH_WIDTH} numbers"
         )
     targets: list[dict[str, Any]] = []
+    resolved_default_branch: str | None = None
 
     for chunk_start in range(start, end + 1, _GITHUB_GRAPHQL_CHUNK_SIZE):
         numbers = list(
@@ -266,6 +272,32 @@ def resolve_github_issue_range(
             raise RuntimeError(
                 f"GitHub repository was not found or is not readable: {normalized_repository}"
             )
+        default_branch_ref = repository_data.get("defaultBranchRef")
+        default_branch = (
+            _text(default_branch_ref.get("name"))
+            if isinstance(default_branch_ref, dict)
+            else None
+        )
+        if default_branch is None or _SAFE_GIT_BRANCH.fullmatch(default_branch) is None:
+            raise RuntimeError(
+                "GitHub repository default branch is unavailable or unsafe: "
+                f"{normalized_repository}"
+            )
+        if (
+            resolved_default_branch is not None
+            and resolved_default_branch != default_branch
+        ):
+            raise RuntimeError(
+                "GitHub repository default branch changed during issue discovery: "
+                f"{normalized_repository}"
+            )
+        resolved_default_branch = default_branch
+        repository_target = {
+            "provider": "git",
+            "connectionRef": _DEFAULT_GIT_CONNECTION_REF,
+            "repository": {"name": normalized_repository},
+            "branch": {"name": default_branch},
+        }
 
         for number in numbers:
             issue = repository_data.get(f"issue{number}")
@@ -297,6 +329,7 @@ def resolve_github_issue_range(
                         "labels": labels,
                     },
                     "repository": normalized_repository,
+                    "repositoryTarget": repository_target,
                 }
             )
 
@@ -533,6 +566,39 @@ def build_child_request(
         or _normalize_repo(target.get("batch_repository"))
         or _normalize_repo(default_repository)
     )
+    repository_target = target.get("repositoryTarget")
+    if repository_target is not None:
+        if not isinstance(repository_target, dict):
+            raise BatchInputError("resolved repository target must be an object")
+        provider_name = (_text(repository_target.get("provider")) or "").lower()
+        connection_ref = _text(repository_target.get("connectionRef"))
+        repository_node = repository_target.get("repository")
+        branch_node = repository_target.get("branch")
+        target_repository = (
+            _normalize_repo(repository_node.get("name"))
+            if isinstance(repository_node, dict)
+            else None
+        )
+        target_branch = (
+            _text(branch_node.get("name")) if isinstance(branch_node, dict) else None
+        )
+        if (
+            provider_name != "git"
+            or connection_ref is None
+            or target_repository is None
+            or target_branch is None
+            or _SAFE_GIT_BRANCH.fullmatch(target_branch) is None
+        ):
+            raise BatchInputError(
+                "resolved Git repository target requires provider, connection, "
+                "repository, and a safe branch"
+            )
+        repository_target = {
+            "provider": "git",
+            "connectionRef": connection_ref,
+            "repository": {"name": target_repository},
+            "branch": {"name": target_branch},
+        }
     if not ref:
         return None
 
@@ -582,7 +648,9 @@ def build_child_request(
         "requiredCapabilities": required_capabilities,
         "task": task_payload,
     }
-    if repository:
+    if repository_target is not None:
+        payload_dict["repository"] = repository_target
+    elif repository:
         payload_dict["repository"] = repository
 
     # Server-side inheritance contract: when running inside a workflow with a

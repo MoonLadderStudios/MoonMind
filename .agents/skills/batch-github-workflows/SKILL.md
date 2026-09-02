@@ -60,10 +60,14 @@ execute the same portable fan-out engine from the resolved active Skill snapshot
    ```
 
    The portable engine uses trusted GitHub GraphQL `issue(number:)` lookups and
-   writes `artifacts/batch-workflows-targets.json` before queueing. It includes
-   only explicit open Issue objects; closed issues, pull requests, absent
-   numbers, and ambiguous states are omitted normally. Numeric spans wider than
-   1,000 are rejected before querying.
+   resolves the repository's current default branch in the same query before it
+   writes `artifacts/batch-workflows-targets.json` and queues children. Every
+   child receives the canonical Git repository target, including the default
+   connection and resolved branch. A missing, unreadable, changing, or unsafe
+   default branch fails discovery before queueing. The engine includes only
+   explicit open Issue objects; closed issues, pull requests, absent numbers,
+   and ambiguous states are omitted normally. Numeric spans wider than 1,000 are
+   rejected before querying.
 
    The engine binds GitHub issue data into the selected child, stamps
    `runtimeInheritance="caller"` plus the parent's effective runtime fallback,
