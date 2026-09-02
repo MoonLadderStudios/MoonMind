@@ -1,0 +1,9 @@
+{
+  "discardedRepository": "MoonLadderStudios/MoonMind",
+  "repositoryTarget": {
+    "provider": "git",
+    "connectionRef": "repository-connection:git-default",
+    "repository": {"name": "MoonLadderStudios/MoonMind"},
+    "branch": {"name": "main"}
+  }
+}

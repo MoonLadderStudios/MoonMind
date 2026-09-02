@@ -188,6 +188,7 @@ def build_generic_omnigent_execution_services(
             command_runner=daemon_command,
             workspace_root=workspace_root,
             workspace_volume=workspace_volume,
+            artifact_service=artifacts,
         ),
         skill_service=OmnigentSkillDeliveryService(
             workspace_root=workspace_root,

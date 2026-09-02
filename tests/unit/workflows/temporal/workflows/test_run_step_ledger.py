@@ -3471,6 +3471,7 @@ async def test_run_records_pre_execution_checkpoint_from_node_workspace_inputs(
                 "checkpointManifestRef": (
                     "artifact://patch-manifest/before_execution"
                 ),
+                "workspaceArchiveRef": "",
             }
         }
     }
@@ -4514,12 +4515,13 @@ async def test_run_uses_external_omnigent_identity_for_checkpoint_capture(
     assert "archiveRef" in captured[1]["payload"]["workspace"]
     assert workflow._step_checkpoint_workspace_evidence_by_boundary == {
         "implement": {
-                "before_execution": {
-                    "checkpointRef": "artifact://checkpoint/before_execution",
-                    "workspaceKind": "worktree_archive",
-                    "workspaceDigest": "sha256:" + ("d" * 64),
-                    "workspaceIdentityDigest": "sha256:" + ("c" * 64),
-                    "checkpointManifestRef": "artifact://managed/manifest",
+            "before_execution": {
+                "checkpointRef": "artifact://checkpoint/before_execution",
+                "workspaceKind": "worktree_archive",
+                "workspaceDigest": "sha256:" + ("d" * 64),
+                "workspaceIdentityDigest": "sha256:" + ("c" * 64),
+                "checkpointManifestRef": "artifact://managed/manifest",
+                "workspaceArchiveRef": "artifact://managed/archive",
             }
         }
     }
