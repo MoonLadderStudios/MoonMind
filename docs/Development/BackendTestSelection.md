@@ -143,8 +143,10 @@ overrides the default worker count.
 ### Omnigent Conformance Selection
 
 The selector enables `omnigent_conformance=true` for Omnigent-owned paths (the
-same inventory that elevates the complete Omnigent contract gate) and for every
-full-verification event. The deterministic conformance runner republishes the
+same inventory that elevates the complete Omnigent contract gate), for the
+runner's own evidence inputs listed in `OMNIGENT_CONFORMANCE_INPUT_EXACT` (its
+pytest layers, frontend test, profile fixture, and report builder), and for every
+full-verification event. `ci-required` aggregates the selected job's result. The deterministic conformance runner republishes the
 Omnigent evidence bundle from layers the exclusive shards already execute, so an
 unrelated change does not pay for it.
 
@@ -181,7 +183,7 @@ Conditional GitHub Actions jobs are not suitable as individual branch-protection
 - `select-test-suites` computes backend suite outputs from a shallow, submodule-free checkout.
 - `preflight-policy` runs the static repository policy checks in parallel with test selection.
 - `moonspec-projection` verifies the vendored MoonSpec projection.
-- `unit-fast`, `unit-slow`, `api-component`, `temporal-boundary`, `integration-ci`, and `reliability-journey-checkpoint-resume` run only when selected.
+- `unit-fast`, `unit-slow`, `api-component`, `temporal-boundary`, `integration-ci`, `reliability-journey-checkpoint-resume`, `omnigent-exact-artifact`, and `omnigent-deterministic-conformance` run only when selected.
 - `ci-required` always runs and fails if any always-required or selected backend job did not complete successfully.
 
 `ci-required` is a pure result aggregator: it performs no repository operations (no checkout, no submodules, no Python/Node setup, no repository command) and has a short timeout. It evaluates every dependency and emits one annotation per failed, cancelled, timed-out, or unexpectedly skipped selected job before exiting, rather than stopping at the first failure. This keeps repository, submodule, and policy work off the serial tail of required CI.

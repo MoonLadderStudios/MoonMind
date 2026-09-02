@@ -50,21 +50,31 @@ def install_settings_backed_artifact_store_guard(monkeypatch) -> None:
     )
 
 
+def _is_loopback_target(host) -> bool:
+    if host in _LOOPBACK_HOSTS:
+        return True
+    try:
+        return ipaddress.ip_address(str(host)).is_loopback
+    except ValueError:
+        return False
+
+
 def install_dns_guard(monkeypatch) -> None:
-    """Fail DNS resolution for any non-loopback hostname immediately."""
+    """Fail address resolution for any non-loopback target immediately.
+
+    Hostnames and numeric addresses alike are refused unless they are loopback,
+    so a unit test cannot reach the network through either path.
+    """
 
     real_getaddrinfo = socket.getaddrinfo
 
     def _guarded_getaddrinfo(host, *args, **kwargs):
-        if host not in _LOOPBACK_HOSTS:
-            try:
-                ipaddress.ip_address(str(host))
-            except ValueError:
-                raise socket.gaierror(
-                    socket.EAI_NONAME,
-                    f"Refusing DNS lookup for {host!r} inside unit tests; "
-                    "override the dependency that opens this connection.",
-                ) from None
+        if not _is_loopback_target(host):
+            raise socket.gaierror(
+                socket.EAI_NONAME,
+                f"Refusing address resolution for {host!r} inside unit tests; "
+                "override the dependency that opens this connection.",
+            )
         return real_getaddrinfo(host, *args, **kwargs)
 
     monkeypatch.setattr(socket, "getaddrinfo", _guarded_getaddrinfo)

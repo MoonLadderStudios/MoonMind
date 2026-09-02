@@ -6,8 +6,10 @@ import pytest
 
 from tools import select_test_suites
 from tools.select_test_suites import (
+    OMNIGENT_CONFORMANCE_INPUT_EXACT,
     OMNIGENT_CONTRACT_GATE_KEYS,
     is_exact_artifact_owned,
+    is_omnigent_conformance_input,
     is_omnigent_contract_owned,
     select_suites,
 )
@@ -498,3 +500,38 @@ def test_full_verification_events_select_deterministic_conformance() -> None:
 
     assert outputs["omnigent_conformance"] == "true"
     assert "omnigent_conformance" in OMNIGENT_CONTRACT_GATE_KEYS
+
+
+def test_conformance_runner_inputs_select_deterministic_conformance_only() -> None:
+    for path in sorted(OMNIGENT_CONFORMANCE_INPUT_EXACT):
+        outputs = _outputs([path])
+        assert outputs["omnigent_conformance"] == "true", path
+        assert outputs["full_backend"] == "false", path
+        # An evidence input outside the owned inventory does not elevate the
+        # complete Omnigent contract gate; its owning shard still runs it.
+        if not is_omnigent_contract_owned(path):
+            assert outputs["exact_artifact"] == "false", path
+
+
+def test_conformance_input_inventory_matches_the_runner() -> None:
+    from tools import run_omnigent_conformance as runner
+
+    executed = {
+        argument
+        for command in runner.COMMANDS
+        for argument in command
+        if isinstance(argument, str)
+        and argument.startswith(("tests/", "frontend/"))
+        and not argument.startswith("--")
+    }
+    evidence = {path for paths in runner.EVIDENCE_GROUPS.values() for path in paths}
+    profile = str(runner.PROFILE.relative_to(REPO_ROOT)).replace("\\", "/")
+    report_builder = "tools/build_omnigent_conformance_report.py"
+
+    for path in executed | evidence | {profile, report_builder}:
+        # Directory arguments select through their prefix rule; probe a file
+        # inside them so the check matches the way changed paths arrive.
+        candidate = f"{path}/probe.py" if (REPO_ROOT / path).is_dir() else path
+        assert is_omnigent_conformance_input(candidate), path
+    for path in OMNIGENT_CONFORMANCE_INPUT_EXACT:
+        assert (REPO_ROOT / path).exists(), path
