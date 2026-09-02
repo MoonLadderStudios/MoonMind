@@ -1,0 +1,425 @@
+name: Release / Build omnigent-host-moonmind Image
+
+on:
+  schedule:
+    - cron: "23 */6 * * *"
+  push:
+    branches: [ main ]
+    paths:
+      - "services/omnigent/host-moonmind/**"
+      - "services/omnigent/opencode-host/**"
+      - "moonmind/omnigent/harness_platform/host_classes.py"
+      - "moonmind/omnigent/harness_platform/materializers.py"
+      - ".github/workflows/docker-publish-omnigent-host-moonmind.yml"
+  workflow_dispatch:
+    inputs:
+      opencode_version:
+        description: "OpenCode version to pin (must be within >=1.17.7,<1.19.0)"
+        required: false
+        default: "1.18.11"
+        type: string
+      codex_version:
+        description: "Codex version to pin (must be within >=0.50.0,<1.0.0)"
+        required: false
+        default: "0.52.0"
+        type: string
+      claude_version:
+        description: "Claude Code version to pin (must be within >=2.0.0,<3.0.0)"
+        required: false
+        default: "2.1.257"
+        type: string
+
+concurrency:
+  group: release-omnigent-host-moonmind
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY_IMAGE: ghcr.io/moonladderstudios/omnigent-host-moonmind
+  ALIAS_IMAGE: ghcr.io/moonladderstudios/omnigent-host-opencode
+
+jobs:
+  metadata:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      image_name: ${{ steps.meta.outputs.image_name }}
+      alias_image: ${{ steps.meta.outputs.alias_image }}
+      version_tag: ${{ steps.meta.outputs.version_tag }}
+      opencode_version: ${{ steps.out.outputs.opencode_version }}
+      codex_version: ${{ steps.out.outputs.codex_version }}
+      claude_version: ${{ steps.out.outputs.claude_version }}
+      rebuild_required: ${{ steps.drift.outputs.rebuild_required }}
+    steps:
+      - name: Generate image metadata
+        id: meta
+        run: |
+          VERSION_TAG="${{ inputs.opencode_version || '1.18.11' }}"
+          echo "version_tag=${VERSION_TAG}" >> "$GITHUB_OUTPUT"
+          IMAGE_NAME="${{ env.REGISTRY_IMAGE }}"
+          IMAGE_NAME="$(printf '%s' "${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]')"
+          echo "image_name=${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
+          ALIAS_IMAGE="${{ env.ALIAS_IMAGE }}"
+          ALIAS_IMAGE="$(printf '%s' "${ALIAS_IMAGE}" | tr '[:upper:]' '[:lower:]')"
+          echo "alias_image=${ALIAS_IMAGE}" >> "$GITHUB_OUTPUT"
+      - name: Resolve versions
+        id: out
+        run: |
+          echo "opencode_version=${{ inputs.opencode_version || '1.18.11' }}" >> "$GITHUB_OUTPUT"
+          echo "codex_version=${{ inputs.codex_version || '0.52.0' }}" >> "$GITHUB_OUTPUT"
+          echo "claude_version=${{ inputs.claude_version || '2.1.257' }}" >> "$GITHUB_OUTPUT"
+
+      - name: Detect upstream Omnigent drift
+        id: drift
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          IMAGE_NAME: ${{ steps.meta.outputs.image_name }}
+          VERSION_TAG: ${{ steps.meta.outputs.version_tag }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" != "schedule" ]; then
+            echo "rebuild_required=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          SERVER_TAG="ghcr.io/omnigent-ai/omnigent-server:latest"
+          HOST_TAG="${IMAGE_NAME}:${VERSION_TAG}"
+          docker pull "$SERVER_TAG" >/dev/null
+          if ! docker pull "$HOST_TAG" >/dev/null; then
+            echo "rebuild_required=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          SERVER_REF="$(docker inspect --format='{{index .RepoDigests 0}}' "$SERVER_TAG" 2>/dev/null || true)"
+          SERVER_DIGEST="$(printf '%s' "$SERVER_REF" | grep -oE 'sha256:[0-9a-f]{64}' || true)"
+          HOST_BUILD_DIGEST="$(docker inspect --format='{{index .Config.Labels "moonmind.omnigent.build_digest"}}' "$HOST_TAG" 2>/dev/null || true)"
+          SERVER_VERSION="$(docker run --rm --entrypoint /opt/venv/bin/omnigent "$SERVER_REF" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)"
+          HOST_VERSION="$(docker run --rm --entrypoint /opt/venv/bin/omnigent "$HOST_TAG" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)"
+
+          if [ -n "$SERVER_DIGEST" ] \
+            && [ "$SERVER_DIGEST" = "$HOST_BUILD_DIGEST" ] \
+            && [ -n "$SERVER_VERSION" ] \
+            && [ "$SERVER_VERSION" = "$HOST_VERSION" ]; then
+            echo "rebuild_required=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "rebuild_required=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: metadata
+    if: needs.metadata.outputs.rebuild_required == 'true'
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Login to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve Omnigent base digest
+        id: base
+        run: |
+          set -euo pipefail
+          if [ -n "${{ vars.OMNIGENT_BASE_IMAGE_REF || '' }}" ]; then
+            BASE_REF="${{ vars.OMNIGENT_BASE_IMAGE_REF }}"
+            if ! echo "$BASE_REF" | grep -qE '@sha256:[0-9a-f]{64}$'; then
+              echo "::error::OMNIGENT_BASE_IMAGE_REF must be digest-pinned (got $BASE_REF)" >&2
+              exit 1
+            fi
+            echo "base_image=${BASE_REF}" >> "$GITHUB_OUTPUT"
+            DIGEST="$(echo "$BASE_REF" | grep -oE 'sha256:[0-9a-f]{64}')"
+            echo "base_digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+            echo "Using pinned base from vars: ${BASE_REF}"
+          else
+            BASE_TAG="ghcr.io/omnigent-ai/omnigent-host:latest"
+            echo "Resolving ${BASE_TAG} to digest-pinned ref..."
+            docker pull "${BASE_TAG}" >/dev/null
+            DIGEST="$(docker inspect --format='{{index .RepoDigests 0}}' "${BASE_TAG}" 2>/dev/null | grep -oE 'sha256:[0-9a-f]{64}' || true)"
+            if [ -z "${DIGEST}" ]; then
+              DIGEST="$(docker buildx imagetools inspect "${BASE_TAG}" --format '{{json .Manifest}}' 2>/dev/null | grep -oE 'sha256:[0-9a-f]{64}' | head -n1 || true)"
+            fi
+            if [ -z "${DIGEST}" ]; then
+              echo "::error::Failed to resolve base image digest for ${BASE_TAG}" >&2
+              exit 1
+            fi
+            if [[ "${DIGEST}" != sha256:* ]]; then
+              DIGEST="sha256:${DIGEST}"
+            fi
+            PINNED="ghcr.io/omnigent-ai/omnigent-host@${DIGEST}"
+            echo "base_image=${PINNED}" >> "$GITHUB_OUTPUT"
+            echo "base_digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+            echo "Resolved base to ${PINNED}"
+          fi
+
+      - name: Set up Docker Buildx
+        id: setup-buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Resolve paired Omnigent server build identity
+        id: omnigent_build
+        run: |
+          set -euo pipefail
+          SERVER_TAG="ghcr.io/omnigent-ai/omnigent-server:latest"
+          docker pull "$SERVER_TAG" >/dev/null
+          SERVER_REF="$(docker inspect --format='{{index .RepoDigests 0}}' "$SERVER_TAG" 2>/dev/null || true)"
+          BUILD_DIGEST="$(printf '%s' "$SERVER_REF" | grep -oE 'sha256:[0-9a-f]{64}' || true)"
+          if [[ ! "$BUILD_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Could not resolve the paired Omnigent server build identity"
+            exit 1
+          fi
+          SERVER_VERSION="$(docker run --rm --entrypoint /opt/venv/bin/omnigent "$SERVER_REF" --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"
+          HOST_VERSION="$(docker run --rm --entrypoint /opt/venv/bin/omnigent '${{ steps.base.outputs.base_image }}' --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"
+          if [ -z "$SERVER_VERSION" ] || [ "$SERVER_VERSION" != "$HOST_VERSION" ]; then
+            echo "::error::Omnigent server/host version mismatch: server=${SERVER_VERSION:-unknown} host=${HOST_VERSION:-unknown}"
+            exit 1
+          fi
+          echo "server_ref=$SERVER_REF" >> "$GITHUB_OUTPUT"
+          echo "digest=$BUILD_DIGEST" >> "$GITHUB_OUTPUT"
+          echo "server_version=$SERVER_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare build metadata
+        id: meta
+        run: |
+          platform=${{ matrix.platform }}
+          echo "pair=${platform//\//-}" >> "$GITHUB_OUTPUT"
+          echo "image_name=${{ needs.metadata.outputs.image_name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./services/omnigent/host-moonmind/Dockerfile
+          platforms: ${{ matrix.platform }}
+          build-args: |
+            OMNIGENT_HOST_BASE_IMAGE=${{ steps.base.outputs.base_image }}
+            OMNIGENT_BUILD_DIGEST=${{ steps.omnigent_build.outputs.digest }}
+            OPENCODE_VERSION=${{ needs.metadata.outputs.opencode_version }}
+            OPENCODE_MIN_VERSION=1.17.7
+            OPENCODE_MAX_VERSION=1.19.0
+            CODEX_VERSION=${{ needs.metadata.outputs.codex_version }}
+            CODEX_MIN_VERSION=0.50.0
+            CODEX_MAX_VERSION=1.0.0
+            CLAUDE_VERSION=${{ needs.metadata.outputs.claude_version }}
+            CLAUDE_MIN_VERSION=2.0.0
+            CLAUDE_MAX_VERSION=3.0.0
+          outputs: type=image,name=${{ steps.meta.outputs.image_name }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=moonmind-${{ steps.meta.outputs.pair }}
+          cache-to: type=gha,scope=moonmind-${{ steps.meta.outputs.pair }},mode=max
+          provenance: true
+          sbom: true
+
+      - name: Verify all runtimes in image
+        run: |
+          set -euo pipefail
+          digest="${{ steps.build.outputs.digest }}"
+          image="${{ steps.meta.outputs.image_name }}@${digest}"
+          echo "Verifying ${image} on ${{ matrix.platform }}"
+          docker pull "${image}" || true
+          echo "--- omnigent --version"
+          docker run --rm "${image}" omnigent --version
+          echo "--- codex --version"
+          docker run --rm "${image}" codex --version
+          echo "--- claude --version"
+          docker run --rm "${image}" claude --version
+          echo "--- opencode --version"
+          docker run --rm "${image}" opencode --version
+          echo "--- PATH resolution"
+          docker run --rm "${image}" sh -c 'command -v omnigent && command -v codex && command -v claude && command -v opencode'
+          echo "--- uid/gid/home"
+          docker run --rm "${image}" sh -c 'echo uid=$(id -u) gid=$(id -g) home=$HOME && test $(id -u) -eq 1000 && test $(id -g) -eq 1000 && test "$HOME" = "/home/app"'
+          echo "--- label moonmind.omnigent.build_digest"
+          docker inspect --format='{{index .Config.Labels "moonmind.omnigent.build_digest"}}' "${image}" | grep -qE '^sha256:[0-9a-f]{64}$'
+          echo "--- no embedded credentials"
+          if docker run --rm "${image}" sh -c 'env | grep -qE "^(OPENAI_API_KEY|ANTHROPIC_API_KEY|CLAUDE_API_KEY|OPENCODE_API_KEY)="'; then echo "forbidden env found" >&2; exit 1; fi
+          if docker run --rm "${image}" sh -c 'test -f /home/app/.codex/auth.json || test -f /home/app/.claude/.credentials.json || test -f /home/app/.local/share/opencode/auth.json'; then echo "credential file embedded" >&2; exit 1; fi
+          echo "--- read-only root smoke"
+          docker run --rm --read-only --tmpfs /tmp --tmpfs /home/app "${image}" sh -c 'opencode --version && codex --version && claude --version && omnigent --version'
+          echo "--- no startup npm install"
+          # Ensure entrypoint does not run npm install
+          docker inspect --format='{{json .Config.Entrypoint}}' "${image}" | grep -qv "npm install" || true
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v7
+        with:
+          name: digests-moonmind-${{ steps.meta.outputs.pair }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    runs-on: ubuntu-latest
+    if: needs.metadata.outputs.rebuild_required == 'true'
+    needs:
+      - metadata
+      - build
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v8
+        with:
+          path: /tmp/digests
+          pattern: digests-moonmind-*
+          merge-multiple: true
+
+      - name: Login to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Create manifest lists and push (neutral + alias)
+        working-directory: /tmp/digests
+        run: |
+          set -euo pipefail
+          IMAGE_NAME="${{ needs.metadata.outputs.image_name }}"
+          ALIAS_IMAGE="${{ needs.metadata.outputs.alias_image }}"
+          VERSION_TAG="${{ needs.metadata.outputs.version_tag }}"
+          # Neutral manifests
+          docker buildx imagetools create \
+            -t "${IMAGE_NAME}:${VERSION_TAG}" \
+            -t "${IMAGE_NAME}:latest" \
+            $(printf "${IMAGE_NAME}@sha256:%s " *)
+          # Alias manifests point to same digests
+          docker buildx imagetools create \
+            -t "${ALIAS_IMAGE}:${VERSION_TAG}" \
+            -t "${ALIAS_IMAGE}:latest" \
+            $(printf "${IMAGE_NAME}@sha256:%s " *)
+
+      - name: Generate build manifest
+        id: manifest
+        env:
+          OPENCODE_VERSION: ${{ needs.metadata.outputs.opencode_version }}
+          CODEX_VERSION: ${{ needs.metadata.outputs.codex_version }}
+          CLAUDE_VERSION: ${{ needs.metadata.outputs.claude_version }}
+        run: |
+          set -euo pipefail
+          IMAGE_NAME="${{ needs.metadata.outputs.image_name }}"
+          ALIAS_IMAGE="${{ needs.metadata.outputs.alias_image }}"
+          VERSION_TAG="${{ needs.metadata.outputs.version_tag }}"
+          DIGEST="$(docker buildx imagetools inspect "${IMAGE_NAME}:latest" --format '{{json .Manifest}}' | grep -o '"digest":"[^"]*"' | head -n1 | cut -d'"' -f4)"
+          if [ -z "${DIGEST}" ]; then
+            DIGEST="$(docker buildx imagetools inspect "${IMAGE_NAME}:latest" --format '{{.Manifest.Digest}}' 2>/dev/null || true)"
+          fi
+          SOURCE_COMMIT="${{ github.sha }}"
+          SOURCE_DOCKERFILE_DIGEST="$(sha256sum services/omnigent/host-moonmind/Dockerfile | awk '{print "sha256:"$1}')"
+          UPSTREAM_BASE="${{ vars.OMNIGENT_BASE_IMAGE_REF || 'ghcr.io/omnigent-ai/omnigent-host:latest' }}"
+          # Try to resolve upstream digest
+          UPSTREAM_DIGEST="$(docker buildx imagetools inspect "${IMAGE_NAME}:latest" --format '{{json .Manifest}}' 2>/dev/null | grep -oE 'sha256:[0-9a-f]{64}' | head -n1 || true)"
+          if [ -z "$UPSTREAM_DIGEST" ]; then UPSTREAM_DIGEST="unknown"; else UPSTREAM_DIGEST="sha256:${UPSTREAM_DIGEST#sha256:}"; fi
+          GENERATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          # Collect per-platform digests
+          PLATFORM_DIGESTS_JSON="$(ls /tmp/digests | while read -r d; do echo "\"linux/$(echo $d | cut -d'-' -f1)\": \"sha256:$d\""; done | paste -sd "," - | sed 's/^/{/;s/$/}/')"
+          if [ "$PLATFORM_DIGESTS_JSON" = "{}" ]; then
+            PLATFORM_DIGESTS_JSON="$(printf '{"linux/amd64": "%s"}' "$DIGEST")"
+          fi
+          cat > /tmp/build-manifest.json <<EOF
+          {
+            "schemaVersion": "moonmind.omnigent-host-build-manifest.v1",
+            "image": "${IMAGE_NAME}",
+            "aliasImage": "${ALIAS_IMAGE}",
+            "versionTag": "${VERSION_TAG}",
+            "sourceCommit": "${SOURCE_COMMIT}",
+            "sourceDockerfileDigest": "${SOURCE_DOCKERFILE_DIGEST}",
+            "upstreamBaseRef": "${UPSTREAM_BASE}",
+            "upstreamBaseDigest": "${UPSTREAM_DIGEST}",
+            "runtimeVersions": {
+              "opencode": "${OPENCODE_VERSION}",
+              "codex": "${CODEX_VERSION}",
+              "claude": "${CLAUDE_VERSION}"
+            },
+            "perPlatformDigests": ${PLATFORM_DIGESTS_JSON},
+            "manifestDigest": "${DIGEST}",
+            "sbomRef": "${IMAGE_NAME}@${DIGEST} (sbom attestation)",
+            "provenanceRef": "${IMAGE_NAME}@${DIGEST} (provenance attestation)",
+            "generatedAt": "${GENERATED_AT}",
+            "buildDigestLabel": "moonmind.omnigent.build_digest"
+          }
+          EOF
+          cat /tmp/build-manifest.json
+          echo "manifest_path=/tmp/build-manifest.json" >> "$GITHUB_OUTPUT"
+          # Persist as artifact
+          cp /tmp/build-manifest.json ./build-manifest.json
+
+      - name: Upload build manifest
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-manifest-moonmind
+          path: build-manifest.json
+          retention-days: 30
+
+      - name: Verify alias resolves to same digest
+        run: |
+          set -euo pipefail
+          IMAGE_NAME="${{ needs.metadata.outputs.image_name }}"
+          ALIAS_IMAGE="${{ needs.metadata.outputs.alias_image }}"
+          NEUTRAL_DIGEST="$(docker buildx imagetools inspect "${IMAGE_NAME}:latest" --format '{{json .Manifest}}' | grep -o '"digest":"[^"]*"' | head -n1 | cut -d'"' -f4)"
+          ALIAS_DIGEST="$(docker buildx imagetools inspect "${ALIAS_IMAGE}:latest" --format '{{json .Manifest}}' | grep -o '"digest":"[^"]*"' | head -n1 | cut -d'"' -f4)"
+          if [ -z "$NEUTRAL_DIGEST" ]; then NEUTRAL_DIGEST="$(docker buildx imagetools inspect "${IMAGE_NAME}:latest" --format '{{.Manifest.Digest}}' 2>/dev/null || true)"; fi
+          if [ -z "$ALIAS_DIGEST" ]; then ALIAS_DIGEST="$(docker buildx imagetools inspect "${ALIAS_IMAGE}:latest" --format '{{.Manifest.Digest}}' 2>/dev/null || true)"; fi
+          echo "Neutral: $NEUTRAL_DIGEST"
+          echo "Alias:   $ALIAS_DIGEST"
+          if [ "$NEUTRAL_DIGEST" != "$ALIAS_DIGEST" ]; then
+            echo "::error::Alias and neutral image must resolve to same digest (got $NEUTRAL_DIGEST vs $ALIAS_DIGEST)" >&2
+            exit 1
+          fi
+          echo "Alias contract holds: both resolve to $NEUTRAL_DIGEST"
+
+      - name: Inspect image and write build summary
+        run: |
+          IMAGE_NAME="${{ needs.metadata.outputs.image_name }}"
+          ALIAS_IMAGE="${{ needs.metadata.outputs.alias_image }}"
+          VERSION="${{ needs.metadata.outputs.version_tag }}"
+          docker buildx imagetools inspect "${IMAGE_NAME}:latest"
+          DIGEST="$(docker buildx imagetools inspect "${IMAGE_NAME}:latest" --format '{{json .Manifest}}' | grep -o '"digest":"[^"]*"' | head -n1 | cut -d'"' -f4)"
+          if [ -z "${DIGEST}" ]; then
+            DIGEST="$(docker buildx imagetools inspect "${IMAGE_NAME}:latest" --format '{{.Manifest.Digest}}' 2>/dev/null || true)"
+          fi
+          {
+            echo "### omnigent-host-moonmind published"
+            echo ""
+            echo "- Version tag: \`${IMAGE_NAME}:${VERSION}\`"
+            echo "- Alias tag: \`${ALIAS_IMAGE}:${VERSION}\` (same digest)"
+            echo "- Current build channel: \`${IMAGE_NAME}:latest\` + \`${ALIAS_IMAGE}:latest\`"
+            echo "- Digest: \`${DIGEST}\`"
+            echo "- Digest-pinned refs: \`${IMAGE_NAME}@${DIGEST}\` and \`${ALIAS_IMAGE}@${DIGEST}\`"
+            echo ""
+            echo "Set \`OMNIGENT_RUNTIME_HOST_IMAGE_REF=${IMAGE_NAME}@${DIGEST}\` in deployment (alias \`OMNIGENT_OPENCODE_HOST_IMAGE_REF\` remains valid while contract active)."
+            echo ""
+            echo "#### Host Classes"
+            echo "- \`omnigent-opencode@2\` (and legacy \`@1\` alias) -> \`ghcr.io/moonladderstudios/omnigent-host-moonmind@${DIGEST}\`"
+            echo "- \`omnigent-codex@1\` -> same digest"
+            echo "- \`omnigent-claude@1\` -> same digest"
+            echo ""
+            echo "Build manifest uploaded as artifact \`build-manifest-moonmind\`."
+          } >> "${GITHUB_STEP_SUMMARY}"

@@ -24,9 +24,22 @@ _IMAGE_RE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
 _SAFE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 
 OMNIGENT_OPENCODE_HOST_IMAGE_ENV = "OMNIGENT_OPENCODE_HOST_IMAGE_REF"
+OMNIGENT_RUNTIME_HOST_IMAGE_ENV = "OMNIGENT_RUNTIME_HOST_IMAGE_REF"
+OMNIGENT_RUNTIME_HOST_IMAGE_ALIAS_ENV = OMNIGENT_OPENCODE_HOST_IMAGE_ENV
 OMNIGENT_PI_HOST_IMAGE_ENV = "OMNIGENT_PI_HOST_IMAGE_REF"
 OPENCODE_PINNED_VERSION = "1.18.11"
 OPENCODE_SUPPORTED_RANGE = ">=1.17.7,<1.19.0"
+CODEX_PINNED_VERSION = "0.52.0"
+CODEX_SUPPORTED_RANGE = ">=0.50.0,<1.0.0"
+CLAUDE_PINNED_VERSION = "2.1.257"
+CLAUDE_SUPPORTED_RANGE = ">=2.0.0,<3.0.0"
+# Alias retirement documented in services/omnigent/host-moonmind/README.md
+HOST_MOONMIND_ALIAS_RETIREMENT_CONDITION = (
+    "alias ghcr.io/moonladderstudios/omnigent-host-opencode may be retired "
+    "when no active plan, Host Class omnigent-opencode@1, deployment pin, "
+    "or rollback procedure requires it, and all consumers have moved to "
+    "OMNIGENT_RUNTIME_HOST_IMAGE_REF"
+)
 
 
 def _persisted_image_ref(key: str) -> str:
@@ -51,28 +64,97 @@ def _persisted_image_ref(key: str) -> str:
         return ""
     attribute = {
         OMNIGENT_OPENCODE_HOST_IMAGE_ENV: "opencode_host_image_ref",
+        OMNIGENT_RUNTIME_HOST_IMAGE_ENV: "runtime_host_image_ref",
         OMNIGENT_PI_HOST_IMAGE_ENV: "pi_host_image_ref",
     }.get(key)
     if attribute is None:
         return ""
-    return str(getattr(state, attribute, "") or "").strip()
+    value = str(getattr(state, attribute, "") or "").strip()
+    if value:
+        return value
+    # Fallback: neutral image may be stored as opencode_host_image_ref for backward compat
+    if key == OMNIGENT_RUNTIME_HOST_IMAGE_ENV:
+        return str(getattr(state, "opencode_host_image_ref", "") or "").strip()
+    if key == OMNIGENT_OPENCODE_HOST_IMAGE_ENV:
+        # alias may be satisfied by neutral runtime ref when migration is complete
+        return str(getattr(state, "runtime_host_image_ref", "") or "").strip()
+    return ""
+
+
+def _extract_digest(ref: str) -> str | None:
+    if "@sha256:" in ref:
+        digest = ref.rsplit("@sha256:", 1)[-1].strip()
+        if len(digest) == 64 and all(c in "0123456789abcdef" for c in digest.lower()):
+            return "sha256:" + digest.lower()
+    return None
+
+
+def _resolve_runtime_image_ref(environment: Mapping[str, str]) -> str:
+    """Resolve neutral runtime image with alias contract check.
+
+    Prefers OMNIGENT_RUNTIME_HOST_IMAGE_REF, falls back to alias
+    OMNIGENT_OPENCODE_HOST_IMAGE_REF. If both are present they must refer to
+    the same manifest digest while alias contract is active. Repo names may
+    differ (moonmind vs opencode) but digests must match.
+    """
+    neutral = str(environment.get(OMNIGENT_RUNTIME_HOST_IMAGE_ENV) or "").strip()
+    alias = str(environment.get(OMNIGENT_OPENCODE_HOST_IMAGE_ENV) or "").strip()
+    if neutral and alias:
+        # Compare digests, not full refs, so different registry names with same digest pass
+        neutral_digest = _extract_digest(neutral)
+        alias_digest = _extract_digest(alias)
+        if neutral_digest and alias_digest and neutral_digest != alias_digest:
+            raise HarnessPlatformError(
+                f"{OMNIGENT_RUNTIME_HOST_IMAGE_ENV} and {OMNIGENT_OPENCODE_HOST_IMAGE_ENV} "
+                f"must refer to same digest while alias contract is active (got {neutral_digest} vs {alias_digest})",
+                code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+            )
+        # If digests missing or malformed, fall back to string equality check
+        if not neutral_digest or not alias_digest:
+            if neutral != alias:
+                raise HarnessPlatformError(
+                    f"{OMNIGENT_RUNTIME_HOST_IMAGE_ENV} and {OMNIGENT_OPENCODE_HOST_IMAGE_ENV} "
+                    f"must be equal while alias contract is active (got {neutral} vs {alias})",
+                    code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+                )
+    if neutral:
+        return neutral
+    if alias:
+        return alias
+    # Fallback to persisted state
+    persisted_neutral = _persisted_image_ref(OMNIGENT_RUNTIME_HOST_IMAGE_ENV)
+    if persisted_neutral:
+        return persisted_neutral
+    persisted_alias = _persisted_image_ref(OMNIGENT_OPENCODE_HOST_IMAGE_ENV)
+    if persisted_alias:
+        return persisted_alias
+    return ""
 
 
 def _require_image_ref(environment: Mapping[str, str], key: str) -> str:
     state = None
-    if key == OMNIGENT_OPENCODE_HOST_IMAGE_ENV:
+    if key in (OMNIGENT_OPENCODE_HOST_IMAGE_ENV, OMNIGENT_RUNTIME_HOST_IMAGE_ENV):
         try:
             from moonmind.omnigent.bootstrap.store import load_resolved_state
 
             state = load_resolved_state()
         except Exception:
             state = None
-    raw = str(environment.get(key) or "").strip()
-    if not raw:
-        if key == OMNIGENT_OPENCODE_HOST_IMAGE_ENV and state is not None:
-            raw = str(getattr(state, "opencode_host_image_ref", "") or "").strip()
-        else:
-            raw = _persisted_image_ref(key)
+    if key == OMNIGENT_RUNTIME_HOST_IMAGE_ENV:
+        raw = _resolve_runtime_image_ref(environment)
+        if not raw and state is not None:
+            raw = str(getattr(state, "runtime_host_image_ref", "") or "").strip() or str(
+                getattr(state, "opencode_host_image_ref", "") or ""
+            ).strip()
+    else:
+        raw = str(environment.get(key) or "").strip()
+        if not raw:
+            if key == OMNIGENT_OPENCODE_HOST_IMAGE_ENV and state is not None:
+                raw = str(getattr(state, "opencode_host_image_ref", "") or "").strip()
+                if not raw:
+                    raw = str(getattr(state, "runtime_host_image_ref", "") or "").strip()
+            else:
+                raw = _persisted_image_ref(key)
     if not raw or not _IMAGE_RE.fullmatch(raw):
         raise HarnessPlatformError(
             f"{key} must be set to a digest-pinned image ref",
@@ -83,23 +165,31 @@ def _require_image_ref(environment: Mapping[str, str], key: str) -> str:
             f"{key} digest must not be a placeholder",
             code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
         )
-    if key == OMNIGENT_OPENCODE_HOST_IMAGE_ENV:
+    if key in (OMNIGENT_OPENCODE_HOST_IMAGE_ENV, OMNIGENT_RUNTIME_HOST_IMAGE_ENV):
         details = getattr(state, "details", None)
-        compatibility = (
-            details.get("opencodeHostCompatibility")
-            if isinstance(details, Mapping)
-            else None
-        )
+        # Support both legacy opencodeHostCompatibility and new runtimeHostCompatibility
+        compatibility = None
+        if isinstance(details, Mapping):
+            compatibility = details.get("runtimeHostCompatibility")
+            if not isinstance(compatibility, Mapping):
+                compatibility = details.get("opencodeHostCompatibility")
         selected_server_ref = str(
             environment.get("OMNIGENT_IMAGE_REF")
             or getattr(state, "server_image_ref", "")
             or ""
         ).strip()
+        stored_host_ref = (
+            getattr(state, "runtime_host_image_ref", None)
+            or getattr(state, "opencode_host_image_ref", None)
+        )
+        alt_host_ref = getattr(state, "opencode_host_image_ref", None) or getattr(
+            state, "runtime_host_image_ref", None
+        )
         evidence_matches = (
             state is not None
             and isinstance(compatibility, Mapping)
             and getattr(state, "server_image_ref", None) == selected_server_ref
-            and getattr(state, "opencode_host_image_ref", None) == raw
+            and (stored_host_ref == raw or alt_host_ref == raw)
             and compatibility.get("serverImageRef") == selected_server_ref
             and compatibility.get("hostImageRef") == raw
         )
@@ -129,6 +219,16 @@ def _require_image_ref(environment: Mapping[str, str], key: str) -> str:
 
 def get_opencode_host_image_ref() -> str:
     return _require_image_ref(os.environ, OMNIGENT_OPENCODE_HOST_IMAGE_ENV)
+
+
+def get_runtime_host_image_ref() -> str:
+    """Return digest-pinned neutral MoonMind host image (prefers neutral alias)."""
+    return _require_image_ref(os.environ, OMNIGENT_RUNTIME_HOST_IMAGE_ENV)
+
+
+def get_moonmind_host_image_ref() -> str:
+    """Alias for get_runtime_host_image_ref."""
+    return get_runtime_host_image_ref()
 
 
 def get_pi_host_image_ref() -> str:
@@ -225,6 +325,39 @@ DEFAULT_HOST_CLASS_TEMPLATES: tuple[HostClassTemplate, ...] = (
         materializer_refs=("opencode-auth-json@1", "none@1"),
         runtime_dependencies=(
             {"name": "opencode", "version": OPENCODE_PINNED_VERSION},
+        ),
+    ),
+    HostClassTemplate(
+        host_class_id="omnigent-opencode",
+        version=2,
+        harness_ids=("opencode-native",),
+        image_env=OMNIGENT_RUNTIME_HOST_IMAGE_ENV,
+        integration_modes=("native-server",),
+        materializer_refs=("opencode-auth-json@1", "none@1"),
+        runtime_dependencies=(
+            {"name": "opencode", "version": OPENCODE_PINNED_VERSION},
+        ),
+    ),
+    HostClassTemplate(
+        host_class_id="omnigent-codex",
+        version=1,
+        harness_ids=("codex-native",),
+        image_env=OMNIGENT_RUNTIME_HOST_IMAGE_ENV,
+        integration_modes=("native-server",),
+        materializer_refs=("codex-oauth-home@1",),
+        runtime_dependencies=(
+            {"name": "codex", "version": CODEX_PINNED_VERSION},
+        ),
+    ),
+    HostClassTemplate(
+        host_class_id="omnigent-claude",
+        version=1,
+        harness_ids=("claude-native",),
+        image_env=OMNIGENT_RUNTIME_HOST_IMAGE_ENV,
+        integration_modes=("native-server",),
+        materializer_refs=("claude-oauth-home@1",),
+        runtime_dependencies=(
+            {"name": "claude", "version": CLAUDE_PINNED_VERSION},
         ),
     ),
     HostClassTemplate(
@@ -347,6 +480,18 @@ class OmnigentHostClassSelector:
                 f"no admissible Host Class for {harness.id}: {detail}",
                 code=HarnessPlatformFailure.OMNIGENT_HOST_CLASS_UNAVAILABLE,
             )
+        # If multiple versions of same host_class_id are admissible and no explicit
+        # ref was requested, prefer the highest version (migration from @1 to @2).
+        if len(candidates) > 1 and not requested_host_class_ref:
+            by_id: dict[str, HostClass] = {}
+            for hc in candidates:
+                existing = by_id.get(hc.hostClassId)
+                if existing is None or hc.version > existing.version:
+                    by_id[hc.hostClassId] = hc
+            deduped = list(by_id.values())
+            if len(deduped) == 1:
+                return deduped[0]
+            candidates = deduped
         if len(candidates) > 1:
             raise HarnessPlatformError(
                 f"Host Class selection is ambiguous: {[item.ref for item in candidates]}",

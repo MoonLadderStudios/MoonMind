@@ -51,6 +51,9 @@ class ResolvedOmnigentDeploymentState(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
     server_image_ref: str | None = Field(default=None, alias="serverImageRef")
     opencode_host_image_ref: str | None = Field(default=None, alias="opencodeHostImageRef")
+    runtime_host_image_ref: str | None = Field(
+        default=None, alias="runtimeHostImageRef"
+    )
     pi_host_image_ref: str | None = Field(default=None, alias="piHostImageRef")
     omnigent_build_digest: str | None = Field(default=None, alias="omnigentBuildDigest")
     architecture: str = Field(default="linux/amd64")
