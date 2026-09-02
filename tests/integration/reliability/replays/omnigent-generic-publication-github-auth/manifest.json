@@ -1,0 +1,19 @@
+{
+  "incidentWorkflowId": "mm:3fb5be58-29e4-4f1c-9903-97b3974eecb7",
+  "failureShapeId": "omnigent-generic-publication-github-auth",
+  "boundary": "generic Omnigent host repository publication credential handoff",
+  "escapedFailure": {
+    "message": "repository publication command failed: fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+    "providerErrorCode": "OMNIGENT_GENERIC_DISPATCH_FAILED",
+    "retryRecommendation": "contact_administrator",
+    "cause": "the publication service resolved the configured GitHub token, but the generic Omnigent command adapter rebuilt git authentication from an empty original argument and omitted the in-memory credential helper"
+  },
+  "failedStepExecutionId": "mm:3fb5be58-29e4-4f1c-9903-97b3974eecb7:agent:tpl:github-issue-implement:05:a389b541",
+  "repository": "MoonLadderStudios/MoonMind",
+  "startingBranch": "main",
+  "targetBranch": "fetch-github-issue-moonladderstudios-moo-3d525704",
+  "publishMode": "branch",
+  "publicationIdentity": "replay:omnigent-generic-publication-github-auth",
+  "workspaceRelativePath": "repo",
+  "credentialFixture": "fixture-github-token"
+}

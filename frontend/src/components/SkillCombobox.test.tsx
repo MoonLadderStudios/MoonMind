@@ -93,27 +93,35 @@ describe("SkillCombobox", () => {
     expect(screen.getByRole("listbox")).toBeTruthy();
   });
 
-  it("keeps linked skill descriptions hidden until the info button is toggled", async () => {
+  it("keeps linked skill descriptions hidden until the info button is hovered", async () => {
     render(<HarnessWithLinkedDescription />);
 
     const description = screen.getByTestId("skill-schema-fallback-0") as HTMLElement;
     await waitFor(() => expect(description.hidden).toBe(true));
 
-    const showToggle = screen.getByRole("button", { name: "Show skill description" });
-    expect(showToggle.getAttribute("aria-expanded")).toBe("false");
+    const toggle = screen.getByRole("button", { name: "Skill description" });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
 
-    fireEvent.click(showToggle);
+    fireEvent.mouseEnter(toggle);
 
     expect(description.hidden).toBe(false);
-    const hideToggle = screen.getByRole("button", { name: "Hide skill description" });
-    expect(hideToggle.getAttribute("aria-expanded")).toBe("true");
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
 
-    fireEvent.keyDown(hideToggle, { key: "Escape" });
+    fireEvent.mouseLeave(toggle);
+
+    expect(description.hidden).toBe(true);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+
+    fireEvent.focus(toggle);
+
+    expect(description.hidden).toBe(false);
+
+    fireEvent.keyDown(toggle, { key: "Escape" });
 
     expect(description.hidden).toBe(true);
   });
 
-  it("does not recreate the linked description observer while toggling or typing", async () => {
+  it("does not recreate the linked description observer while hovering or typing", async () => {
     const OriginalMutationObserver = globalThis.MutationObserver;
     const observe = vi.fn();
     const disconnect = vi.fn();
@@ -128,16 +136,16 @@ describe("SkillCombobox", () => {
       const description = screen.getByTestId("skill-schema-fallback-0") as HTMLElement;
       await waitFor(() => expect(description.hidden).toBe(true));
 
-      const showToggle = screen.getByRole("button", { name: "Show skill description" });
+      const toggle = screen.getByRole("button", { name: "Skill description" });
       expect(
-        showToggle.parentElement?.classList.contains(
+        toggle.parentElement?.classList.contains(
           "skill-combobox-input-row--with-description",
         ),
       ).toBe(true);
       const observerCountAfterRender = mutationObserver.mock.calls.length;
       const disconnectCountAfterRender = disconnect.mock.calls.length;
 
-      fireEvent.click(showToggle);
+      fireEvent.mouseEnter(toggle);
       fireEvent.change(screen.getByRole("combobox", { name: "Step 1 skill" }), {
         target: { value: "moon" },
       });

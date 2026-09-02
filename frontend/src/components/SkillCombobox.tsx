@@ -60,7 +60,9 @@ export function SkillCombobox({
 }: SkillComboboxProps): ReactElement {
   const [isOpen, setIsOpen] = useState<boolean>(false);
   const [highlightedIndex, setHighlightedIndex] = useState<number>(-1);
-  const [isDescriptionOpen, setIsDescriptionOpen] = useState<boolean>(false);
+  const [isDescriptionHovered, setIsDescriptionHovered] = useState<boolean>(false);
+  const [isDescriptionFocused, setIsDescriptionFocused] = useState<boolean>(false);
+  const isDescriptionOpen = isDescriptionHovered || isDescriptionFocused;
   const [hasLinkedDescription, setHasLinkedDescription] = useState<boolean>(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -76,7 +78,8 @@ export function SkillCombobox({
   );
 
   useEffect(() => {
-    setIsDescriptionOpen(false);
+    setIsDescriptionHovered(false);
+    setIsDescriptionFocused(false);
   }, [value]);
 
   const restoreLinkedDescription = useCallback(
@@ -229,8 +232,20 @@ export function SkillCombobox({
     [],
   );
 
-  const handleDescriptionToggle = useCallback(() => {
-    setIsDescriptionOpen((prev) => !prev);
+  const handleDescriptionHoverEnter = useCallback(() => {
+    setIsDescriptionHovered(true);
+  }, []);
+
+  const handleDescriptionHoverLeave = useCallback(() => {
+    setIsDescriptionHovered(false);
+  }, []);
+
+  const handleDescriptionFocus = useCallback(() => {
+    setIsDescriptionFocused(true);
+  }, []);
+
+  const handleDescriptionBlur = useCallback(() => {
+    setIsDescriptionFocused(false);
   }, []);
 
   const handleOptionPick = useCallback(
@@ -372,19 +387,19 @@ export function SkillCombobox({
           <button
             type="button"
             className="queue-info-toggle skill-combobox-description-toggle"
-            aria-label={
-              isDescriptionOpen ? "Hide skill description" : "Show skill description"
-            }
+            aria-label="Skill description"
             aria-expanded={isDescriptionOpen}
             aria-controls={linkedDescriptionId}
-            title={
-              isDescriptionOpen ? "Hide skill description" : "Show skill description"
-            }
-            onClick={handleDescriptionToggle}
+            title="Skill description"
+            onMouseEnter={handleDescriptionHoverEnter}
+            onMouseLeave={handleDescriptionHoverLeave}
+            onFocus={handleDescriptionFocus}
+            onBlur={handleDescriptionBlur}
             onKeyDown={(event) => {
               if (event.key === "Escape" && isDescriptionOpen) {
                 event.preventDefault();
-                setIsDescriptionOpen(false);
+                setIsDescriptionHovered(false);
+                setIsDescriptionFocused(false);
               }
             }}
           >
