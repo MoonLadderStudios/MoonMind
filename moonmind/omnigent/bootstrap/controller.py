@@ -1340,20 +1340,28 @@ class BootstrapController:
         # Feed resolved host image into selection via explicit environment dict.
         # Ensure publish_resolved_omnigent_images() ran upstream; if the passed
         # resolved state is empty, try the persisted resolved state before failing.
-        if not resolved or not getattr(resolved, "opencode_host_image_ref", None):
+        if not resolved or not (
+            getattr(resolved, "opencode_host_image_ref", None)
+            or getattr(resolved, "runtime_host_image_ref", None)
+        ):
             try:
                 from moonmind.omnigent.bootstrap.store import (
                     load_resolved_state as _load_resolved,
                 )
 
                 _persisted = _load_resolved()
-                if _persisted and getattr(_persisted, "opencode_host_image_ref", None):
+                if _persisted and (
+                    getattr(_persisted, "opencode_host_image_ref", None)
+                    or getattr(_persisted, "runtime_host_image_ref", None)
+                ):
                     resolved = _persisted
             except Exception:
                 # Best-effort: if persisted state cannot be loaded, fall back to passed resolved
                 pass
         resolved_image = (
-            getattr(resolved, "opencode_host_image_ref", None)
+            getattr(resolved, "runtime_host_image_ref", None)
+            or getattr(resolved, "runtimeHostImageRef", None)
+            or getattr(resolved, "opencode_host_image_ref", None)
             or getattr(resolved, "opencodeHostImageRef", None)
             or ""
         )
@@ -1384,6 +1392,9 @@ class BootstrapController:
             merged_env["OMNIGENT_OPENCODE_HOST_IMAGE_REF"] = resolved_image
         # Publish to process environment for direct readers (get_opencode_host_image_ref, etc.)
         _os.environ["OMNIGENT_OPENCODE_HOST_IMAGE_REF"] = resolved_image
+        # Also publish neutral alias so codex/claude selectors can resolve same digest
+        _os.environ["OMNIGENT_RUNTIME_HOST_IMAGE_REF"] = resolved_image
+        merged_env["OMNIGENT_RUNTIME_HOST_IMAGE_REF"] = resolved_image
         if selector_env["OMNIGENT_IMAGE_REF"]:
             _os.environ["OMNIGENT_IMAGE_REF"] = selector_env["OMNIGENT_IMAGE_REF"]
         selector = OmnigentHostClassSelector(environment=merged_env)

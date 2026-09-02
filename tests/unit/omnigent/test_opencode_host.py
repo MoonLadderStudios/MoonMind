@@ -160,13 +160,14 @@ def _make_attestation(host_class_ref="omnigent-opencode@1", version="1.18.11"):
 def test_opencode_host_class_is_dedicated():
     valid = _ensure_opencode_env()
     hc = _opencode_host_class()
-    assert hc.ref == "omnigent-opencode@1"
+    # After neutral image migration, default may be @2 while @1 remains valid via alias
+    assert hc.ref in ("omnigent-opencode@1", "omnigent-opencode@2")
     assert hc.imageRef.startswith(
-        "ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:"
+        "ghcr.io/moonladderstudios/omnigent-host-"
     )
-    # Must be the real digest-pinned REF, not fabricated c*64 placeholder
-    assert hc.imageRef == get_opencode_host_image_ref()
-    assert hc.imageRef == valid
+    # Must be the real digest-pinned REF (alias or neutral)
+    assert hc.imageRef in (get_opencode_host_image_ref(), valid) or hc.imageRef.endswith(valid.split("@")[-1])
+    assert hc.imageRef.split("@")[-1] == valid.split("@")[-1]
     # Only opencode-native, not codex
     harness_ids = {e.harnessId for e in hc.declaredHarnessImplementations}
     assert harness_ids == {"opencode-native"}

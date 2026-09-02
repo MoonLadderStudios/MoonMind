@@ -300,13 +300,38 @@ async def resolve_omnigent_images(
             "OMNIGENT_IMAGE", "OMNIGENT_IMAGE_TAG", "OMNIGENT_IMAGE_REF", source
         )
 
-    # OpenCode host image
+    # Runtime host image (neutral) - prefer OMNIGENT_RUNTIME_HOST_IMAGE_REF, fallback alias
+    runtime_ref, _ = await _resolve_image(
+        "OMNIGENT_RUNTIME_HOST_IMAGE",
+        "OMNIGENT_RUNTIME_HOST_IMAGE_TAG",
+        "OMNIGENT_RUNTIME_HOST_IMAGE_REF",
+        source,
+    )
+    # OpenCode host image (legacy alias)
     opencode_ref, _ = await _resolve_image(
         "OMNIGENT_OPENCODE_HOST_IMAGE",
         "OMNIGENT_OPENCODE_HOST_IMAGE_TAG",
         "OMNIGENT_OPENCODE_HOST_IMAGE_REF",
         source,
     )
+    # Alias contract: if both neutral and alias are resolved they must refer to same digest
+    if runtime_ref and opencode_ref:
+        rd = _extract_digest(runtime_ref)
+        od = _extract_digest(opencode_ref)
+        if rd and od and rd != od:
+            raise ValueError(
+                "OMNIGENT_RUNTIME_HOST_IMAGE_REF and OMNIGENT_OPENCODE_HOST_IMAGE_REF "
+                f"must refer to same digest while alias contract is active (got {rd} vs {od})"
+            )
+        if (not rd or not od) and runtime_ref != opencode_ref:
+            raise ValueError(
+                "OMNIGENT_RUNTIME_HOST_IMAGE_REF and OMNIGENT_OPENCODE_HOST_IMAGE_REF "
+                f"must be equal while alias contract is active (got {runtime_ref} vs {opencode_ref})"
+            )
+    # Prefer neutral, fallback alias
+    effective_runtime_ref = runtime_ref or opencode_ref
+    # Legacy alias should point same digest when neutral is active
+    effective_opencode_ref = opencode_ref or runtime_ref
 
     # Pi host (optional)
     pi_ref, _ = await _resolve_image(
@@ -324,8 +349,20 @@ async def resolve_omnigent_images(
     ):
         server_ref = previous.server_image_ref
         server_image_digest = _extract_digest(server_ref)
-    if not opencode_ref and previous and previous.opencode_host_image_ref:
-        opencode_ref = previous.opencode_host_image_ref
+    if not effective_runtime_ref and previous:
+        # fallback to any previously stored host ref
+        prev_runtime = getattr(previous, "runtime_host_image_ref", None) or getattr(
+            previous, "opencode_host_image_ref", None
+        )
+        if prev_runtime:
+            effective_runtime_ref = prev_runtime
+            effective_opencode_ref = prev_runtime
+    if not effective_opencode_ref and previous and previous.opencode_host_image_ref:
+        effective_opencode_ref = previous.opencode_host_image_ref
+    if not effective_runtime_ref and effective_opencode_ref:
+        effective_runtime_ref = effective_opencode_ref
+    if not effective_opencode_ref and effective_runtime_ref:
+        effective_opencode_ref = effective_runtime_ref
     if not pi_ref and previous and previous.pi_host_image_ref:
         pi_ref = previous.pi_host_image_ref
 
@@ -338,17 +375,19 @@ async def resolve_omnigent_images(
     configured_build_digest = str(source.get("OMNIGENT_BUILD_DIGEST") or "").strip()
     if configured_build_digest and not _SHA256_RE.fullmatch(configured_build_digest):
         raise ValueError("OMNIGENT_BUILD_DIGEST must be an exact sha256 identity")
+    # Probe the effective runtime host (neutral) for build identity
+    host_probe_ref = effective_runtime_ref or effective_opencode_ref
     host_build_digest = (
-        await _image_build_identity(opencode_ref) if opencode_ref else None
+        await _image_build_identity(host_probe_ref) if host_probe_ref else None
     )
     server_version = (
         await _image_omnigent_version(server_ref)
-        if server_ref and opencode_ref
+        if server_ref and host_probe_ref
         else None
     )
-    host_version = await _image_omnigent_version(opencode_ref) if opencode_ref else None
+    host_version = await _image_omnigent_version(host_probe_ref) if host_probe_ref else None
     compatibility_failure: str | None = None
-    if opencode_ref:
+    if host_probe_ref:
         if not server_ref or not server_image_digest:
             compatibility_failure = "omnigent_server_build_unavailable"
         elif not host_build_digest:
@@ -390,7 +429,7 @@ async def resolve_omnigent_images(
     # Architecture detection
     arch = "linux/amd64"
     # Try docker inspect for architecture
-    target = opencode_ref or server_ref
+    target = effective_runtime_ref or server_ref
     if target:
         code, out, _ = await _run(
             ["docker", "image", "inspect", target, "--format", "{{.Architecture}}"]
@@ -402,9 +441,21 @@ async def resolve_omnigent_images(
             elif "/" in reported:
                 arch = reported
 
+    # Shared compatibility block, replicated under both keys for backward compat
+    compatibility_block = {
+        "status": "blocked" if compatibility_failure else "ready",
+        "failureCode": compatibility_failure,
+        "serverImageRef": server_ref,
+        "hostImageRef": effective_runtime_ref or effective_opencode_ref,
+        "serverBuildDigest": server_image_digest,
+        "hostBuildDigest": host_build_digest,
+        "serverVersion": server_version,
+        "hostVersion": host_version,
+    }
     state = ResolvedOmnigentDeploymentState(
         serverImageRef=server_ref,
-        opencodeHostImageRef=opencode_ref,
+        opencodeHostImageRef=effective_opencode_ref,
+        runtimeHostImageRef=effective_runtime_ref,
         piHostImageRef=pi_ref,
         omnigentBuildDigest=omnigent_build_digest,
         architecture=arch,
@@ -413,16 +464,8 @@ async def resolve_omnigent_images(
         details={
             "serverImageDigest": server_image_digest,
             "buildIdentitySource": build_identity_source,
-            "opencodeHostCompatibility": {
-                "status": "blocked" if compatibility_failure else "ready",
-                "failureCode": compatibility_failure,
-                "serverImageRef": server_ref,
-                "hostImageRef": opencode_ref,
-                "serverBuildDigest": server_image_digest,
-                "hostBuildDigest": host_build_digest,
-                "serverVersion": server_version,
-                "hostVersion": host_version,
-            },
+            "opencodeHostCompatibility": compatibility_block,
+            "runtimeHostCompatibility": compatibility_block,
         },
     )
     return state
@@ -438,6 +481,7 @@ _PUBLISHED_IMAGE_KEYS = (
     "OMNIGENT_IMAGE_REF",
     "OMNIGENT_BUILD_DIGEST",
     "OMNIGENT_OPENCODE_HOST_IMAGE_REF",
+    "OMNIGENT_RUNTIME_HOST_IMAGE_REF",
     "OMNIGENT_PI_HOST_IMAGE_REF",
 )
 _operator_image_baseline: dict[str, str] | None = None
@@ -500,6 +544,7 @@ async def publish_resolved_omnigent_images() -> ResolvedOmnigentDeploymentState:
         "OMNIGENT_IMAGE_REF": state.server_image_ref,
         "OMNIGENT_BUILD_DIGEST": state.omnigent_build_digest,
         "OMNIGENT_OPENCODE_HOST_IMAGE_REF": state.opencode_host_image_ref,
+        "OMNIGENT_RUNTIME_HOST_IMAGE_REF": state.runtime_host_image_ref or state.opencode_host_image_ref,
         "OMNIGENT_PI_HOST_IMAGE_REF": state.pi_host_image_ref,
     }
     for key, value in exported.items():
@@ -518,6 +563,23 @@ def resolved_server_image_ref(state: ResolvedOmnigentDeploymentState | None) -> 
 def resolved_opencode_image_ref(state: ResolvedOmnigentDeploymentState | None) -> str:
     if state and state.opencode_host_image_ref:
         return state.opencode_host_image_ref
+    # Fallback to neutral when alias not set
+    if state and state.runtime_host_image_ref:
+        return state.runtime_host_image_ref
+    neutral = os.getenv("OMNIGENT_RUNTIME_HOST_IMAGE_REF", "").strip()
+    if neutral:
+        return neutral
+    return os.getenv("OMNIGENT_OPENCODE_HOST_IMAGE_REF", "").strip()
+
+
+def resolved_runtime_image_ref(state: ResolvedOmnigentDeploymentState | None) -> str:
+    if state and state.runtime_host_image_ref:
+        return state.runtime_host_image_ref
+    if state and state.opencode_host_image_ref:
+        return state.opencode_host_image_ref
+    neutral = os.getenv("OMNIGENT_RUNTIME_HOST_IMAGE_REF", "").strip()
+    if neutral:
+        return neutral
     return os.getenv("OMNIGENT_OPENCODE_HOST_IMAGE_REF", "").strip()
 
 
