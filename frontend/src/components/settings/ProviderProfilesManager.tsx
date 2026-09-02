@@ -1419,9 +1419,10 @@ export function ProviderProfilesManager({
     setFormBaseline(nextForm);
     const normalized = normalizeProviderProfileTiers(profile.model_tiers, profile.default_model_tier);
     if (normalized.isRepair) {
-      setTierDrafts([]);
-      setDefaultTierClientId(null);
-      setIsTierRepair(true);
+      const repairTier = runtimeDefaultTierDraft();
+      setTierDrafts([repairTier]);
+      setDefaultTierClientId(repairTier.clientId);
+      setIsTierRepair(false);
       setInvalidSavedDefaultIndex(normalized.invalidSavedDefaultIndex);
       setTierBaseline(null);
       setTierBaselineDefaultId(null);
@@ -1957,13 +1958,9 @@ export function ProviderProfilesManager({
 
   const saveMutation = useMutation({
     mutationFn: async (formState: ProviderProfileFormState) => {
-      const tierJsonErrors = Object.entries(tierFieldErrors).filter(([key, msg]) => key.includes('.parameters') || key.includes('.annotations') || msg);
-      if (tierJsonErrors.length > 0) {
-        const first = tierJsonErrors[0]!;
-        throw new Error(first[1] || 'Fix tier field errors before saving.');
-      }
       if (Object.keys(tierFieldErrors).length > 0) {
-        throw new Error('Fix tier field errors before saving.');
+        const firstError = Object.values(tierFieldErrors)[0];
+        throw new Error(firstError || 'Fix tier field errors before saving.');
       }
       if (tierDrafts.length === 0) {
         throw new Error('At least one tier is required.');
@@ -2031,13 +2028,21 @@ export function ProviderProfilesManager({
       setForm(nextForm);
       setFormBaseline(nextForm);
       {
-        const fresh = runtimeDefaultTierDraft();
-        setTierDrafts([fresh]);
-        setDefaultTierClientId(fresh.clientId);
-        setIsTierRepair(false);
-        setInvalidSavedDefaultIndex(null);
-        setTierBaseline(cloneTierDrafts([fresh]));
-        setTierBaselineDefaultId(fresh.clientId);
+        const normalized = normalizeProviderProfileTiers(savedProfile.model_tiers, savedProfile.default_model_tier);
+        if (normalized.isRepair) {
+          const repair = runtimeDefaultTierDraft();
+          setTierDrafts([repair]);
+          setDefaultTierClientId(repair.clientId);
+          setIsTierRepair(false);
+          setInvalidSavedDefaultIndex(null);
+        } else {
+          setTierDrafts(normalized.tiers);
+          setDefaultTierClientId(normalized.defaultTierClientId);
+          setIsTierRepair(false);
+          setInvalidSavedDefaultIndex(normalized.invalidSavedDefaultIndex);
+        }
+        setTierBaseline(null);
+        setTierBaselineDefaultId(null);
         setTierFieldErrors({});
         setTierUndo(null);
         setTierRemoveDialog(null);
