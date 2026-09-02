@@ -36,6 +36,7 @@ import { DashboardRouteErrorBoundary } from '../components/DashboardRouteErrorBo
 import { DashboardSystemMenu } from '../components/DashboardSystemMenu';
 import {
   isDashboardInternalUrl,
+  legacySettingsRedirect,
   payloadForDashboardRoute,
   resolveDashboardRoute,
   DASHBOARD_REACT_ROUTE_PATHS,
@@ -1067,6 +1068,92 @@ function RoutedDashboardPage({
     () => readDashboardPreferences().lastSelectedSkillId.trim() || null,
   );
   const [resolutionStatus, setResolutionStatus] = useState<string | null>(null);
+  // Legacy path redirects per SettingsPage.md 5.4: /secrets -> providers-secrets, /workers -> operations, preserving safe filters with replacement history.
+  const rawLegacyTarget = legacySettingsRedirect(location.pathname, location.search);
+  if (rawLegacyTarget) {
+    // Permission-aware fallback: never land on unauthorized destination.
+    // Mimic backend _settings_redirect_path ordering (providers-secrets, user-workspace, operations).
+    let legacyTarget = rawLegacyTarget;
+    if (uiInfo && !isUiInfoPending) {
+      const canonicalPath = rawLegacyTarget.split('?')[0] ?? rawLegacyTarget;
+      const capabilityByPath: Record<string, string> = {
+        '/settings/providers-secrets': 'settingsProvidersSecrets',
+        '/settings/user-workspace': 'settingsUserWorkspace',
+        '/settings/operations': 'settingsOperations',
+      };
+      const preferredCapability = capabilityByPath[canonicalPath];
+      const isShown = (key: string) => uiInfo.features?.[key] === true;
+      if (preferredCapability && !isShown(preferredCapability)) {
+        const orderedPaths = [
+          '/settings/providers-secrets',
+          '/settings/user-workspace',
+          '/settings/operations',
+        ];
+        // Preferred first, then canonical order fallback.
+        const preferredIndex = orderedPaths.indexOf(canonicalPath);
+        const orderedFallback = preferredIndex >= 0
+          ? [canonicalPath, ...orderedPaths.filter((p) => p !== canonicalPath)]
+          : orderedPaths;
+        let found: string | null = null;
+        for (const path of orderedFallback) {
+          const cap = capabilityByPath[path];
+          if (cap && isShown(cap)) {
+            found = path;
+            break;
+          }
+        }
+        if (found) {
+          // Preserve only safe query for the resolved target.
+          const rawQuery = rawLegacyTarget.includes('?') ? rawLegacyTarget.split('?')[1] ?? '' : '';
+          const params = new URLSearchParams(rawQuery);
+          // Already filtered to page-relevant, but re-filter for fallback target.
+          const allowedByTarget: Record<string, Set<string>> = {
+            '/settings/providers-secrets': new Set(['runtime']),
+            '/settings/operations': new Set(['status']),
+            '/settings/user-workspace': new Set(['scope', 'q']),
+          };
+          const allowed = allowedByTarget[found];
+          if (allowed) {
+            for (const key of Array.from(params.keys())) {
+              if (!allowed.has(key)) params.delete(key);
+            }
+          } else {
+            for (const key of Array.from(params.keys())) params.delete(key);
+          }
+          const query = params.toString();
+          legacyTarget = query ? `${found}?${query}` : found;
+        } else {
+          legacyTarget = '/settings';
+        }
+      }
+    } else if (isUiInfoPending) {
+      // Wait for capability data before deciding fallback; show loading to avoid flash of unauthorized redirect.
+      return (
+        <AppShell
+          dataWidePanel={true}
+          uiInfo={uiInfo}
+          listDisplayAccessibleName={undefined}
+          listDisplayMode={null}
+          listDisplayStatus={null}
+          onListDisplayModeSelect={() => undefined}
+        >
+          <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6 lg:px-8">
+            <div className="rounded-3xl border border-mm-border/80 bg-transparent p-6 text-sm text-slate-500 shadow-sm dark:text-slate-400">
+              Loading MoonMind...
+            </div>
+          </div>
+        </AppShell>
+      );
+    }
+    const targetHash = location.hash || '';
+    return <Navigate to={`${legacyTarget}${targetHash}`} replace />;
+  }
+  // Unknown Settings alias fallback per 5.4: any /settings/* not matched resolves to the default entry point with replacement.
+  // No query preservation for unknown alias: /settings entry resolves via permission-aware fallback without carrying stale filters.
+  if (location.pathname.startsWith('/settings/') && !resolveDashboardRoute(location.pathname)) {
+    const hash = location.hash || '';
+    return <Navigate to={`/settings${hash}`} replace />;
+  }
   const route = resolveDashboardRoute(location.pathname);
   const apiBase = typeof uiInfo?.apiBase === 'string' ? uiInfo.apiBase : '/api';
   const resolvedDisplay = resolveWorkflowListDisplay({
@@ -1572,6 +1659,8 @@ function DashboardRouter({ payload }: { payload: BootPayload }) {
       {DASHBOARD_REACT_ROUTE_PATHS.map((path) => (
         <Route key={path} path={path} element={routedDashboardPage} />
       ))}
+      <Route path="/secrets" element={routedDashboardPage} />
+      <Route path="/workers" element={routedDashboardPage} />
       <Route path="/oauth-terminal" element={routedDashboardPage} />
       <Route path="/index-health" element={routedDashboardPage} />
       <Route
