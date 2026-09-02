@@ -31,6 +31,7 @@ from tests.unit.workflows.temporal.test_remediation_context import (
     _admin_permissions,
     _admin_profile,
     _create_target_and_remediation,
+    _fast_verification_phase,
     _read_artifact_json,
     mock_client_adapter,
     temporal_db,
@@ -87,6 +88,7 @@ async def test_remediation_action_contract_publishes_request_result_and_verifica
             session=session,
             artifact_service=artifact_service,
             action_executor=RecordingActionExecutor(),
+            verification_phase=_fast_verification_phase(session),
         )
 
         result = await tools.execute_action(
@@ -247,6 +249,7 @@ async def test_remediation_lifecycle_repair_prevention_summary_artifacts(
             session=session,
             artifact_service=artifact_service,
             action_executor=RecordingActionExecutor(),
+            verification_phase=_fast_verification_phase(session),
         )
 
         result = await tools.execute_action(

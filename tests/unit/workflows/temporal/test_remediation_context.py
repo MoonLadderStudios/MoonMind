@@ -148,6 +148,7 @@ from moonmind.workflows.temporal.remediation_tools import (
     RemediationLogReadResult,
 )
 from moonmind.workflows.temporal.remediation_verification import (
+    CanonicalRecordEvidenceReader,
     RemediationVerificationPhase,
     TargetEvidenceSnapshot,
 )
@@ -2401,6 +2402,7 @@ async def test_remediation_execute_action_delegates_and_publishes_lifecycle_arti
             session=session,
             artifact_service=artifact_service,
             action_executor=executor,
+            verification_phase=_fast_verification_phase(session),
         )
 
         result = await tools.execute_action(
@@ -2513,6 +2515,7 @@ async def test_execute_action_preserves_approval_lifecycle_artifact_refs(
             session=session,
             artifact_service=artifact_service,
             action_executor=RecordingActionExecutor(),
+            verification_phase=_fast_verification_phase(session),
         )
         with patch.object(
             tools,
@@ -2639,6 +2642,7 @@ async def test_remediation_execute_action_reuses_retry_artifacts(
             session=session,
             artifact_service=artifact_service,
             action_executor=RecordingActionExecutor(),
+            verification_phase=_fast_verification_phase(session),
         )
 
         first = await tools.execute_action(
@@ -2734,6 +2738,7 @@ async def test_remediation_execute_action_publishes_v1_request_and_result_artifa
             session=session,
             artifact_service=artifact_service,
             action_executor=SensitiveHintActionExecutor(),
+            verification_phase=_fast_verification_phase(session),
         )
 
         result = await tools.execute_action(
@@ -3995,6 +4000,18 @@ class _ScriptedVerificationReader:
 async def _noop_verification_sleep(_seconds):
     return None
 
+
+def _fast_verification_phase(session) -> RemediationVerificationPhase:
+    """Production verification against the canonical record, minus the real sleeps.
+
+    The execution.* verification contracts stabilize for 30 seconds in 5-second
+    polls; the phase already accepts an injected sleep so tests never wait.
+    """
+
+    return RemediationVerificationPhase(
+        reader=CanonicalRecordEvidenceReader(session),
+        sleep=_noop_verification_sleep,
+    )
 
 def _verification_snapshot(stage, *, state, close_status=None, run_id="target-run", paused=None):
     return TargetEvidenceSnapshot(
