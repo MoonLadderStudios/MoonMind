@@ -36,6 +36,7 @@ def test_docs_only_change_does_not_select_heavy_backend_suites(
         "integration_ci": "false",
         "reliability_journey": "false",
         "exact_artifact": "false",
+        "omnigent_conformance": "false",
         "full_backend": "false",
         "frontend_static": "false",
         "frontend_browser_chromium": "false",
@@ -467,3 +468,33 @@ def test_non_deployable_backend_change_does_not_select_exact_artifact() -> None:
 def test_docs_only_change_does_not_select_exact_artifact() -> None:
     assert _outputs(["docs/Omnigent/Overview.md"])["exact_artifact"] == "false"
     assert not is_exact_artifact_owned("docs/Omnigent/Overview.md")
+
+
+def test_omnigent_owned_change_selects_deterministic_conformance() -> None:
+    outputs = _outputs(["moonmind/omnigent/native_ui.py"])
+
+    assert outputs["omnigent_conformance"] == "true"
+
+
+@pytest.mark.parametrize(
+    "changed_path",
+    [
+        "api_service/api/routers/executions.py",
+        "moonmind/workflows/temporal/workflows/run.py",
+        "tests/integration/temporal/test_compose_foundation.py",
+        "docs/Omnigent/Overview.md",
+    ],
+)
+def test_non_omnigent_change_skips_deterministic_conformance(changed_path: str) -> None:
+    assert _outputs([changed_path])["omnigent_conformance"] == "false", changed_path
+
+
+def test_full_verification_events_select_deterministic_conformance() -> None:
+    outputs = select_suites(
+        ["docs/Development/PreCommitWorkflow.md"],
+        event_name="push",
+        ref_name="main",
+    ).as_outputs()
+
+    assert outputs["omnigent_conformance"] == "true"
+    assert "omnigent_conformance" in OMNIGENT_CONTRACT_GATE_KEYS

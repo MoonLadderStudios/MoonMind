@@ -41,6 +41,8 @@ api_component=true|false
 temporal_boundary=true|false
 integration_ci=true|false
 reliability_journey=true|false
+exact_artifact=true|false
+omnigent_conformance=true|false
 full_backend=true|false
 frontend_static=true|false
 frontend_browser_chromium=true|false
@@ -131,6 +133,21 @@ This suite validates compose-backed local infrastructure seams and must remain f
 Tests under `tests/integration/reliability/` are explicitly excluded because
 the reliability journey shard owns them.
 
+`tools/test_integration.sh` builds the compose `pytest` image unless
+`MOONMIND_PYTHON_TEST_IMAGE` names a caller-supplied image, in which case the
+image must already be loadable locally. CI prebuilds that image with a GitHub
+Actions layer cache so dependency layers are not rebuilt on every run. The suite
+runs under xdist with per-file distribution; `MOONMIND_INTEGRATION_WORKERS`
+overrides the default worker count.
+
+### Omnigent Conformance Selection
+
+The selector enables `omnigent_conformance=true` for Omnigent-owned paths (the
+same inventory that elevates the complete Omnigent contract gate) and for every
+full-verification event. The deterministic conformance runner republishes the
+Omnigent evidence bundle from layers the exclusive shards already execute, so an
+unrelated change does not pay for it.
+
 ## Full Backend Path
 
 The selector enables `full_backend=true` and selects all backend suites when any of the following is true:
@@ -213,15 +230,21 @@ Run component coverage:
 ```bash
 pytest tests/unit/api tests/unit/api_service tests/component/api \
   -m "component and not temporal_boundary and not slow and not provider_verification and not requires_credentials" \
-  -q -n auto --dist loadfile --durations=25
+  -q -n auto --dist load --durations=25
 ```
+
+Component tests distribute per test rather than per file because a few router
+modules hold several hundred tests each. `tests/unit/api/conftest.py` fails
+Compose-only hostname lookups immediately (the settings-backed S3 artifact store
+and the API Postgres engine) so un-overridden request dependencies do not spend
+seconds per request in DNS and client retry backoff.
 
 Run Temporal boundary coverage:
 
 ```bash
 pytest tests/unit/workflows/temporal \
   -m "temporal_boundary and not slow and not provider_verification and not requires_credentials" \
-  -q --durations=25
+  -q -n auto --dist loadfile --durations=25
 ```
 
 Run slow unit coverage without xdist:

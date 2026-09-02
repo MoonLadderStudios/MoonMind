@@ -22,6 +22,7 @@ OUTPUT_KEYS = (
     "integration_ci",
     "reliability_journey",
     "exact_artifact",
+    "omnigent_conformance",
     "full_backend",
     "frontend_static",
     "frontend_browser_chromium",
@@ -181,6 +182,10 @@ OMNIGENT_CONTRACT_GATE_KEYS = (
     # An Omnigent-owned change ships in the deployable API/worker/UI images, so
     # it must also exercise the Tier-1 exact deployable-artifact gate.
     "exact_artifact",
+    # The deterministic conformance runner republishes the Omnigent evidence
+    # bundle from the same layers; it is part of the owned contract gate rather
+    # than an unconditional job, so unrelated changes do not pay for it.
+    "omnigent_conformance",
 )
 
 OMNIGENT_CONTRACT_EXACT = {
@@ -318,6 +323,7 @@ class SuiteSelection:
     integration_ci: bool = False
     reliability_journey: bool = False
     exact_artifact: bool = False
+    omnigent_conformance: bool = False
     full_backend: bool = False
     frontend_static: bool = False
     frontend_browser_chromium: bool = False
@@ -434,6 +440,7 @@ def _full_backend_selection() -> SuiteSelection:
         integration_ci=True,
         reliability_journey=True,
         exact_artifact=True,
+        omnigent_conformance=True,
         full_backend=True,
     )
 

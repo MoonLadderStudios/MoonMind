@@ -30,6 +30,7 @@ jobs:
       integration_ci: ${{ steps.select.outputs.integration_ci }}
       reliability_journey: ${{ steps.select.outputs.reliability_journey }}
       exact_artifact: ${{ steps.select.outputs.exact_artifact }}
+      omnigent_conformance: ${{ steps.select.outputs.omnigent_conformance }}
       full_backend: ${{ steps.select.outputs.full_backend }}
       frontend_static: ${{ steps.select.outputs.frontend_static }}
       frontend_browser_chromium: ${{ steps.select.outputs.frontend_browser_chromium }}
@@ -156,6 +157,11 @@ jobs:
           if-no-files-found: ignore
 
   omnigent-deterministic-conformance:
+    # Republishes the deterministic Omnigent evidence bundle from layers that
+    # the exclusive shards already execute, so it runs only for Omnigent-owned
+    # changes and full-verification events instead of on every pull request.
+    needs: select-test-suites
+    if: needs.select-test-suites.outputs.omnigent_conformance == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -243,7 +249,7 @@ jobs:
             --ignore=tests/unit/api \
             --ignore=tests/unit/api_service \
             -m "unit_fast and not provider_verification and not requires_credentials" \
-            -q -n auto --dist loadfile --durations=25 \
+            -q -n auto --dist loadfile --durations=25 --timeout 600 \
             --junitxml=artifacts/pytest-unit-fast.xml
       - name: Upload generated fault-lab diagnostics
         if: failure()
@@ -340,7 +346,7 @@ jobs:
           set -euo pipefail
           python -m pytest tests/unit/api tests/unit/api_service tests/component/api \
             -m "component and not temporal_boundary and not slow and not provider_verification and not requires_credentials" \
-            -q -n auto --dist loadfile --durations=25 \
+            -q -n auto --dist load --durations=25 --timeout 600 \
             --junitxml=artifacts/pytest-api-component.xml
 
   temporal-boundary:
@@ -368,7 +374,7 @@ jobs:
           set -euo pipefail
           python -m pytest tests/unit/workflows/temporal \
             -m "temporal_boundary and not slow and not provider_verification and not requires_credentials" \
-            -q --durations=25 \
+            -q -n auto --dist loadfile --durations=25 --timeout 600 \
             --junitxml=artifacts/pytest-temporal-boundary.xml
 
   integration-ci:
@@ -385,9 +391,28 @@ jobs:
           fetch-depth: 1
       - name: Initialize pinned Omnigent verifier source
         run: git submodule update --init --depth 1 -- omnigent
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build the pytest image with a shared layer cache
+        # The compose ``pytest`` service otherwise rebuilds the dependency
+        # layers from scratch on every run. The GitHub Actions cache keeps
+        # them across runs; only the layers behind changed inputs rebuild.
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: api_service/Dockerfile
+          target: test-runtime
+          build-args: |
+            INSTALL_CODEX_CLI=false
+            INSTALL_TEST_DEPS=true
+          load: true
+          tags: moonmind-python-tests:ci
+          cache-from: type=gha,scope=integration-ci-test-runtime
+          cache-to: type=gha,scope=integration-ci-test-runtime,mode=max
       - name: Run hermetic integration CI suite
         env:
           MOONMIND_FORCE_LOCAL_TESTS: "1"
+          MOONMIND_PYTHON_TEST_IMAGE: moonmind-python-tests:ci
         run: |
           set -euo pipefail
           ./tools/test_integration.sh
@@ -561,7 +586,10 @@ jobs:
           load: true
           tags: moonmind-exact-artifact:candidate
           # A local single-arch image so its digest is the immutable artifact
-          # under test.
+          # under test. The layer cache only skips rebuilding unchanged layers;
+          # the resulting image digest is still computed from this checkout.
+          cache-from: type=gha,scope=exact-artifact-api-runtime
+          cache-to: type=gha,scope=exact-artifact-api-runtime,mode=max
       - name: Resolve the immutable image identity
         id: digest
         shell: bash
