@@ -99,6 +99,8 @@ async def test_api_startup_bootstrap_uses_only_local_image_evidence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from api_service.services import omnigent_policies
+    from moonmind.omnigent.bootstrap import store
+    from moonmind.omnigent.bootstrap.models import ResolvedOmnigentDeploymentState
 
     observed_resolver = None
     observed_env = None
@@ -118,12 +120,28 @@ async def test_api_startup_bootstrap_uses_only_local_image_evidence(
     monkeypatch.setattr(api_main, "get_async_session_context", session_context)
     monkeypatch.setattr(omnigent_policies, "seed_bootstrap_policies", seed)
     monkeypatch.setattr(omnigent_policies, "bootstrap_policies_ready", ready)
+    qualified_opencode_ref = "ghcr.io/example/opencode@sha256:" + "2" * 64
+    monkeypatch.setattr(
+        store,
+        "load_resolved_state",
+        lambda: ResolvedOmnigentDeploymentState.model_validate(
+            {
+                "serverImageRef": "ghcr.io/example/server@sha256:" + "1" * 64,
+                "opencodeHostImageRef": qualified_opencode_ref,
+                "omnigentBuildDigest": "sha256:" + "1" * 64,
+                "architecture": "linux/amd64",
+                "resolvedAt": datetime(2026, 9, 2, tzinfo=UTC),
+                "details": {},
+            }
+        ),
+    )
 
     assert await api_main._sync_omnigent_bootstrap_policies(refresh_images=False)
     assert observed_resolver is omnigent_policies.resolve_local_bootstrap_image_ref
-    # The registry-acquiring leg keys on the configured refs, so it must read the
-    # operator's own configuration rather than a digest publication exported.
+    # Mutable server/Codex inputs remain operator-owned, while OpenCode policy
+    # seeding reuses the exact digest already compatibility-qualified upstream.
     assert observed_env is not None
+    assert observed_env["OMNIGENT_OPENCODE_HOST_IMAGE_REF"] == qualified_opencode_ref
 
 
 @pytest.mark.asyncio

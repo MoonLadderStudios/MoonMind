@@ -1269,15 +1269,17 @@ async def seed_bootstrap_policies(
         env=env, image_resolver=image_resolver
     )
     host_images = {"codex": host_image, "opencode": opencode_host_image}
-    if not _DIGEST_IMAGE.fullmatch(server_image or "") or any(
-        not _DIGEST_IMAGE.fullmatch(
+    resolvable_definitions = tuple(
+        definition for definition in definitions
+        if _DIGEST_IMAGE.fullmatch(server_image or "")
+        and _DIGEST_IMAGE.fullmatch(
             host_images.get(definition.host_image_kind) or ""
-        ) for definition in definitions
-    ):
-        # Readiness-local inspection may find no cached images on a first boot.
-        # Do not persist placeholder drafts; the background acquisition pass
-        # will seed once both immutable authorities exist. Existing active
-        # policies can still finish deferred binding cutovers meanwhile.
+        )
+    )
+    # Image families fail independently. An unavailable optional harness image
+    # keeps that family unready without withholding valid Codex authority (and
+    # vice versa). Placeholder drafts are never persisted.
+    if not resolvable_definitions:
         return await _reconcile_bootstrap_image_authority(
             session,
             service=service,
@@ -1295,7 +1297,7 @@ async def seed_bootstrap_policies(
             definitions=definitions,
             live_server_image_resolver=live_server_image_resolver,
         )
-    for definition in definitions:
+    for definition in resolvable_definitions:
         policy_id = definition.policy_id
         document = bootstrap_document(
             host_mode=definition.host_mode,
