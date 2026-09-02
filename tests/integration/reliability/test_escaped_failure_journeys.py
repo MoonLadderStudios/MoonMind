@@ -48,7 +48,9 @@ from moonmind.omnigent.bridge_store import (
     OmnigentBridgeSessionStore,
 )
 from moonmind.omnigent.execute import (
+    OmnigentSameSessionContinuationRequired,
     OmnigentSessionStillRunningError,
+    OmnigentTurnNotStartedError,
     _await_marked_turn_terminal,
     _build_omnigent_first_message,
     _first_message_text,
@@ -1014,6 +1016,52 @@ async def test_evicted_turn_marker_preserves_terminal_and_retry_authority() -> N
     assert "host_remove" not in owner_calls
     assert "provider_released" not in actions
     assert expected["retryAuthority"] == "same_host_profile_and_bridge"
+
+
+async def test_running_session_requests_continuation_after_quiet_tool_output() -> None:
+    """Replay mm:44e4f122 without treating an active session as terminal."""
+
+    replay_id = "omnigent-running-tool-output-terminal"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    terminal_snapshot = manifest["terminalSnapshot"]
+    baseline_item_ids = frozenset(manifest["preDispatchItemIds"])
+
+    state = _marked_turn_item_state(
+        terminal_snapshot,
+        marker=manifest["currentTurnMarker"],
+        baseline_item_ids=baseline_item_ids,
+    )
+    assert state["boundarySource"] == expected["terminalBoundarySource"]
+    assert (
+        state["terminalAssistantAfterWork"]
+        is expected["terminalAssistantAfterWork"]
+    )
+    assert state["unfinishedToolCall"] is expected["unfinishedToolCall"]
+
+    class StableRunningSnapshotClient:
+        async def get_session(self, _session_id: str) -> dict[str, object]:
+            return terminal_snapshot
+
+    with pytest.raises(OmnigentSameSessionContinuationRequired) as excinfo:
+        await _await_marked_turn_terminal(
+            client=StableRunningSnapshotClient(),
+            session_id=manifest["sessionId"],
+            marker=manifest["currentTurnMarker"],
+            baseline_item_ids=baseline_item_ids,
+            event_count=1,
+            terminal_status=manifest["terminalEventStatus"],
+            timeout_seconds=0.01,
+            interval_seconds=0.001,
+            quiet_period_seconds=0.002,
+            tool_only_quiet_period_seconds=0.002,
+        )
+
+    assert expected["acceptTerminalEventAfterToolOnlyQuietPeriod"] is False
+    assert expected["requestSameSessionContinuationAfterToolOnlyQuietPeriod"] is True
+    assert excinfo.value.code == expected["recoveryCode"]
+    assert excinfo.value.session_id == manifest["sessionId"]
+    assert excinfo.value.snapshot == terminal_snapshot
 
 
 async def test_pr_resolver_child_compiles_bindable_stock_agent_identity(
@@ -3839,6 +3887,256 @@ async def test_replayed_terminal_event_waits_for_current_marked_turn() -> None:
     assert expected["assistantPreambleRequiresStableQuietPeriod"] is True
     assert expected["unfinishedToolCallBlocksCompletion"] is True
     assert expected["toolOnlyQuietPeriodSeconds"] == 300
+
+
+async def test_accepted_turn_that_never_starts_fails_within_start_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """Replay mm:00166f20 at the terminal-authority and dispatch boundaries."""
+
+    from moonmind.omnigent import execute as execute_module
+    from moonmind.workflows.temporal.activities.omnigent_activities import (
+        _try_generic_realizer_dispatch,
+    )
+    from tests.unit.omnigent.test_generic_platform_production_services import _plan
+
+    replay_id = "omnigent-accepted-turn-never-started"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    idle_snapshot = manifest["idleSnapshot"]
+    marker = manifest["currentTurnMarker"]
+
+    assert (
+        execute_module._MARKED_TURN_START_TIMEOUT_SECONDS
+        == expected["turnStartTimeoutSeconds"]
+    )
+    assert expected["turnStartTimeoutSeconds"] < expected["noProgressTimeoutSeconds"]
+    assert (
+        manifest["observedTerminalPollingSeconds"]
+        > expected["noProgressTimeoutSeconds"]
+    )
+    assert manifest["observedProviderEvents"][-1]["type"] == "response.completed"
+
+    state = _marked_turn_item_state(idle_snapshot, marker=marker)
+    assert state["boundarySource"] == expected["terminalBoundarySource"]
+    assert state["progress"] is expected["acceptCurrentTurnProgress"]
+    assert _snapshot_contains_current_turn_progress(
+        idle_snapshot, marker=marker
+    ) is expected["acceptCurrentTurnProgress"]
+    assert _snapshot_confirms_current_turn_terminal(
+        idle_snapshot, marker=marker
+    ) is expected["acceptCurrentTurnTerminal"]
+
+    class IdleForeverClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def get_session(self, _session_id: str) -> dict[str, object]:
+            self.calls += 1
+            return idle_snapshot
+
+    client = IdleForeverClient()
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    with pytest.raises(OmnigentTurnNotStartedError) as excinfo:
+        await _await_marked_turn_terminal(
+            client=client,
+            session_id=manifest["sessionId"],
+            marker=marker,
+            event_count=len(manifest["observedProviderEvents"]),
+            terminal_status="completed",
+            timeout_seconds=60.0,
+            interval_seconds=0.001,
+            turn_start_timeout_seconds=0.05,
+        )
+    assert expected["boundedByTurnStartBudget"] is True
+    assert loop.time() - started < 10.0, (
+        "the never-started turn must fail inside the turn-start budget, not the "
+        "no-progress budget"
+    )
+    assert client.calls >= 2
+    assert excinfo.value.code == expected["failureCode"]
+
+    # Production journey: ``run_omnigent_execution`` against a provider that
+    # accepts the marked message, replays the observed frames (ending in the
+    # ``response.completed`` emitted for the injection itself), then carries
+    # only heartbeats while the ordered snapshot stays idle with no work.
+
+    correlation_id = manifest["incidentWorkflowId"]
+    idempotency_key = "step-never-started"
+    run_marker = (
+        "MoonMind-Omnigent-Run:\n"
+        f"  correlationId: {correlation_id}\n"
+        f"  idempotencyKey: {idempotency_key}"
+    )
+    live_snapshot = json.loads(json.dumps(idle_snapshot))
+    for item in live_snapshot["items"]:
+        for content in (item.get("data") or {}).get("content") or []:
+            if content.get("text") == marker:
+                content["text"] = run_marker
+    observed_events = [dict(event) for event in manifest["observedProviderEvents"]]
+
+    class NeverStartedClient:
+        def __init__(self, **_: object) -> None:
+            self.posted = asyncio.Event()
+
+        async def list_agents(self) -> dict[str, object]:
+            return {"items": [{"id": "agent-1", "name": "opencode-native-ui"}]}
+
+        async def create_session(self, payload: dict[str, object]) -> dict[str, object]:
+            return {"id": manifest["sessionId"]}
+
+        async def post_event(
+            self, session_id: str, payload: dict[str, object]
+        ) -> dict[str, object]:
+            self.posted.set()
+            return {"pending_id": "pending-1"}
+
+        async def stream_events(self, session_id: str):
+            await self.posted.wait()
+            for event in observed_events:
+                yield dict(event)
+            while True:
+                yield {"type": "session.heartbeat"}
+                await asyncio.sleep(0.005)
+
+        async def get_session(self, session_id: str) -> dict[str, object]:
+            if not self.posted.is_set():
+                return {
+                    "status": "idle",
+                    "active_response_id": None,
+                    "items": [live_snapshot["items"][0]],
+                }
+            return live_snapshot
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr(execute_module, "OmnigentHttpClient", NeverStartedClient)
+    monkeypatch.setattr(
+        execute_module, "_TERMINAL_RECONCILIATION_INTERVAL_SECONDS", 0.0
+    )
+    monkeypatch.setattr(execute_module, "_MARKED_TURN_START_TIMEOUT_SECONDS", 0.05)
+
+    started = loop.time()
+    result = await execute_module.run_omnigent_execution(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId=correlation_id,
+            idempotencyKey=idempotency_key,
+            parameters={
+                "omnigent": {
+                    "agent": {"agentName": "opencode-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
+                    "prompt": {"text": "implement the issue"},
+                },
+            },
+        ),
+        artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+    )
+    assert loop.time() - started < 30.0
+    assert result.failure_class == expected["failureClass"]
+    assert result.provider_error_code == expected["failureCode"]
+    assert result.retry_recommendation == expected["retryRecommendation"]
+    assert result.diagnostics_ref, (
+        "the decisive idle snapshot must be captured as terminal evidence"
+    )
+    assert result.summary != manifest["observedFailureSummary"], (
+        "the terminal result must name the never-started cause"
+    )
+    assert "never started" in result.summary
+
+    # The realizer dispatch boundary passes the typed terminal result through.
+    plan = _plan("opencode-go/model")
+
+    class PlanStore:
+        async def load(self, plan_ref):
+            assert plan_ref == plan.planRef
+            return plan
+
+    class Realizer:
+        async def execute(self, request, admitted):
+            return result
+
+    class Registry:
+        def require(self, ref):
+            assert ref == manifest["executionRealizerRef"]
+            return Realizer()
+
+    dispatched = await _try_generic_realizer_dispatch(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId=correlation_id,
+            idempotencyKey=idempotency_key,
+            resolvedSkillsetRef="artifact:skills",
+            parameters={"executionPlanRef": plan.planRef},
+        ),
+        plan_store=PlanStore(),
+        realizer_registry=Registry(),
+    )
+    assert dispatched is not None
+    assert dispatched.failure_class == expected["failureClass"]
+    assert dispatched.provider_error_code == expected["failureCode"]
+    assert dispatched.retry_recommendation == expected["retryRecommendation"]
+    assert dispatched.diagnostics_ref == result.diagnostics_ref
+
+
+async def test_transient_injection_response_does_not_hide_never_started_turn() -> None:
+    """Replay mm:21d74b07 at the marked-turn start-authority boundary."""
+
+    replay_id = "omnigent-transient-active-never-started"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    running_snapshot = manifest["runningSnapshot"]
+    marker = manifest["currentTurnMarker"]
+
+    state = _marked_turn_item_state(running_snapshot, marker=marker)
+    assert state["boundarySource"] == expected["terminalBoundarySource"]
+    assert state["progress"] is expected["acceptCurrentTurnProgress"]
+    assert expected["statusOnlyRunningCountsAsTurnStart"] is False
+    assert expected["activeResponseDefersOnlyWhilePresent"] is True
+    assert expected["transientActiveResponsePermanentlyDisarms"] is False
+    assert manifest["observedTerminalPollingSeconds"] >= expected[
+        "noProgressTimeoutSeconds"
+    ]
+
+    active_snapshot = json.loads(json.dumps(running_snapshot))
+    active_snapshot["active_response_id"] = manifest["observedWatchdogSequence"][1][
+        "activeResponseId"
+    ]
+
+    class TransientActiveClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def get_session(self, _session_id: str) -> dict[str, object]:
+            self.calls += 1
+            if self.calls == 1:
+                return active_snapshot
+            return running_snapshot
+
+    client = TransientActiveClient()
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    with pytest.raises(OmnigentTurnNotStartedError) as excinfo:
+        await _await_marked_turn_terminal(
+            client=client,
+            session_id=manifest["sessionId"],
+            marker=marker,
+            event_count=len(manifest["observedProviderEvents"]),
+            terminal_status="completed",
+            timeout_seconds=1.0,
+            interval_seconds=0.001,
+            turn_start_timeout_seconds=0.05,
+        )
+
+    assert expected["boundedByTurnStartBudget"] is True
+    assert loop.time() - started < 10.0
+    assert client.calls >= 2
+    assert excinfo.value.code == expected["failureCode"]
+    assert excinfo.value.snapshot == running_snapshot
 
 
 async def test_omnigent_server_is_reachable_from_isolated_host_network() -> None:

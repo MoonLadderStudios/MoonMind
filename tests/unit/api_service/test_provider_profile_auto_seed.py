@@ -1,7 +1,9 @@
 """Unit tests for _auto_seed_provider_profiles startup function."""
 
 import asyncio
+from datetime import UTC, datetime
 from enum import Enum
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select, text
@@ -243,6 +245,153 @@ async def test_auto_seed_never_attaches_the_deployment_key_to_zen(
     assert readiness["connected"] is True
     assert readiness["backing_secret_exists"] is False
     assert readiness["launch_ready"] is True
+
+
+async def _enroll_opencode_go_with_pinned_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    validation_error: Exception | None = None,
+) -> list[tuple[str, dict]]:
+    """Exercise the real bootstrap profile transaction with hermetic edges."""
+
+    from moonmind.omnigent.bootstrap.controller import BootstrapController
+    from moonmind.omnigent.harness_platform import host_classes
+    from moonmind.omnigent import opencode_runtime_validation, production
+    from moonmind.provider_profiles import maintenance
+    from moonmind.workflows.temporal import client as temporal_client
+
+    image_ref = "ghcr.io/example/opencode@sha256:" + "a" * 64
+    qualified_model = "opencode-go/muse-spark-1.2-contributor"
+    manager_sync_signals: list[tuple[str, dict]] = []
+
+    class Guard:
+        lease = SimpleNamespace(lease_id="lease-opencode-go-default")
+
+        async def release(self) -> None:
+            return None
+
+    async def acquire_guard(**_kwargs):
+        return Guard()
+
+    class RuntimeValidation:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        async def validate(self, **_kwargs):
+            if validation_error is not None:
+                raise validation_error
+            return {
+                "credentialGeneration": 1,
+                "imageRef": image_ref,
+                "materializerRef": "opencode-auth-json@1",
+                "runtimeVersions": {"opencode": "1.18.11"},
+                "validatedAt": datetime.now(UTC).isoformat(),
+                "models": [{"qualifiedId": qualified_model}],
+            }
+
+    class TemporalHandle:
+        async def signal(self, signal_name: str, payload: dict) -> None:
+            manager_sync_signals.append((signal_name, payload))
+
+    class TemporalClient:
+        async def start_workflow(self, *_args, **_kwargs) -> None:
+            return None
+
+        def get_workflow_handle(self, _workflow_id: str) -> TemporalHandle:
+            return TemporalHandle()
+
+    class TemporalAdapter:
+        async def get_client(self) -> TemporalClient:
+            return TemporalClient()
+
+    monkeypatch.setattr(
+        maintenance, "acquire_credential_maintenance_guard", acquire_guard
+    )
+    monkeypatch.setattr(host_classes, "get_opencode_host_image_ref", lambda: image_ref)
+    monkeypatch.setattr(
+        opencode_runtime_validation,
+        "OpenCodeProviderRuntimeValidationService",
+        RuntimeValidation,
+    )
+    monkeypatch.setattr(production, "build_omnigent_secret_resolver", object)
+    monkeypatch.setattr(temporal_client, "TemporalClientAdapter", TemporalAdapter)
+
+    await BootstrapController(
+        session_factory=db_base.async_session_maker
+    )._ensure_provider_profile(
+        api_key="sk-opencode-test-key",
+        qualified_model=qualified_model,
+        effort="xhigh",
+        resolved=SimpleNamespace(opencode_host_image_ref=image_ref),
+    )
+    return manager_sync_signals
+
+
+@pytest.mark.asyncio
+async def test_opencode_go_enrollment_atomically_replaces_seeded_zen_default(
+    _module_db, monkeypatch
+):
+    """A configured key must coexist with the launch-ready Zen seed."""
+
+    from api_service.main import _auto_seed_provider_profiles
+
+    await _auto_seed_provider_profiles()
+    manager_sync_signals = await _enroll_opencode_go_with_pinned_runtime(monkeypatch)
+
+    async with db_base.async_session_maker() as session:
+        result = await session.execute(
+            select(ManagedAgentProviderProfile).where(
+                ManagedAgentProviderProfile.runtime_id == "opencode"
+            )
+        )
+        profiles = {profile.profile_id: profile for profile in result.scalars()}
+
+    assert set(profiles) == {"opencode-zen-free", "opencode-go-default"}
+    assert profiles["opencode-zen-free"].enabled is True
+    assert profiles["opencode-zen-free"].is_default is False
+    assert profiles["opencode-go-default"].enabled is True
+    assert profiles["opencode-go-default"].is_default is True
+    assert sum(profile.is_default for profile in profiles.values()) == 1
+
+    assert len(manager_sync_signals) == 1
+    signal_name, signal_payload = manager_sync_signals[0]
+    assert signal_name == "sync_profiles"
+    manager_profiles = signal_payload["profiles"]
+    assert [profile["profile_id"] for profile in manager_profiles] == [
+        "opencode-go-default",
+        "opencode-zen-free",
+    ]
+    assert manager_profiles[0]["is_default"] is True
+    assert manager_profiles[0]["launch_ready"] is True
+
+
+@pytest.mark.asyncio
+async def test_failed_opencode_go_validation_preserves_seeded_zen_default(
+    _module_db, monkeypatch
+):
+    """A rejected candidate never receives runtime-default authority."""
+
+    from api_service.main import _auto_seed_provider_profiles
+
+    await _auto_seed_provider_profiles()
+    with pytest.raises(ValueError, match="credential rejected"):
+        await _enroll_opencode_go_with_pinned_runtime(
+            monkeypatch,
+            validation_error=ValueError("credential rejected"),
+        )
+
+    async with db_base.async_session_maker() as session:
+        result = await session.execute(
+            select(ManagedAgentProviderProfile).where(
+                ManagedAgentProviderProfile.runtime_id == "opencode"
+            )
+        )
+        profiles = {profile.profile_id: profile for profile in result.scalars()}
+
+    assert profiles["opencode-zen-free"].enabled is True
+    assert profiles["opencode-zen-free"].is_default is True
+    assert profiles["opencode-go-default"].enabled is False
+    assert profiles["opencode-go-default"].is_default is False
 
 
 @pytest.mark.asyncio

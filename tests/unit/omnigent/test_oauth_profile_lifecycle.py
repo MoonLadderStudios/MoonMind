@@ -37,7 +37,10 @@ from moonmind.omnigent.checkpoints import (
     validate_cold_restore_target,
     validate_restore_material,
 )
-from moonmind.omnigent.execute import OmnigentSessionStillRunningError
+from moonmind.omnigent.execute import (
+    OmnigentSameSessionContinuationRequired,
+    OmnigentSessionStillRunningError,
+)
 from moonmind.omnigent.effective_capabilities import (
     CAPABILITY_NAMES,
     adapt_provider_capabilities,
@@ -368,6 +371,11 @@ def test_runtime_scripts_are_snapshotted_under_daemon_mapping(
         ("server_endpoint_invalid", "integration_error", "repair_server_endpoint"),
         ("session_create_failed", "integration_error", "retry_transient_upstream"),
         ("first_message_reconcile_failed", "integration_error", "retry_transient_upstream"),
+        (
+            "OMNIGENT_CURRENT_TURN_NOT_STARTED",
+            "integration_error",
+            "retry_step_execution",
+        ),
     ],
 )
 def test_failure_evidence_classifies_operator_action(
@@ -3979,8 +3987,8 @@ async def _drive_authority_chain_coordinator(
             if "authorityChain" in metadata:
                 authority_metadata.append(metadata["authorityChain"])
 
-        async def mark_terminal(self, *_args, **_kwargs):
-            return None
+        async def mark_terminal(self, idempotency_key, **_kwargs):
+            ordered.append(f"bridge_terminal:{idempotency_key}")
 
     coordinator = OmnigentProfileBoundExecutionCoordinator(
         session_factory=lambda: None,
@@ -4315,6 +4323,68 @@ async def test_coordinator_continues_same_session_until_terminal_answer() -> Non
     assert checkpoint["idempotencyKey"].endswith(
         ":repository-continuation:1"
     )
+
+
+@pytest.mark.asyncio
+async def test_coordinator_recovers_running_tool_output_without_terminalizing_it(
+) -> None:
+    """A quiet active projection triggers a fenced continuation, not success."""
+
+    runner_calls: list[tuple[str, dict]] = []
+
+    async def execute(request, **kwargs):
+        runner_calls.append((request.idempotency_key, dict(kwargs)))
+        if len(runner_calls) == 1:
+            raise OmnigentSameSessionContinuationRequired(
+                "response completed while session remained active",
+                session_id="session-1",
+                snapshot={"status": "running", "items": []},
+            )
+        return AgentRunResult(
+            summary="continuation reached inactive terminal",
+            metadata={
+                "omnigentSessionId": "session-1",
+                "deferredBridgeTerminal": {
+                    "idempotencyKey": request.idempotency_key,
+                    "status": "completed",
+                    "terminalRefs": {"summary": "continuation completed"},
+                },
+            },
+        )
+
+    ordered, _authority, metadata, result = (
+        await _drive_authority_chain_coordinator(
+            execute,
+            completion_evidence=[
+                {
+                    "sessionStatus": "running",
+                    "itemCount": 5,
+                    "assistantMessageCount": 2,
+                    "toolResultCount": 1,
+                    # Even a newly projected assistant does not let the
+                    # coordinator publish before the claimed recovery turn.
+                    "terminalAssistantAfterWork": True,
+                },
+                {
+                    "sessionStatus": "idle",
+                    "itemCount": 7,
+                    "assistantMessageCount": 3,
+                    "toolResultCount": 1,
+                    "terminalAssistantAfterWork": True,
+                },
+            ],
+        )
+    )
+
+    assert result.failure_class is None
+    assert metadata["push_status"] == "pushed"
+    assert metadata["repositoryContinuationCount"] == 1
+    assert len(runner_calls) == 2
+    assert runner_calls[1][0].endswith(":repository-continuation:1")
+    assert runner_calls[1][1]["resume_session_id"] == "session-1"
+    assert "repository_continuation_1" in ordered
+    assert "bridge_terminal:idem-1" in ordered
+    assert "bridge_terminal:idem-1:repository-continuation:1" in ordered
 
 
 @pytest.mark.asyncio
@@ -4899,6 +4969,7 @@ async def _run_coordinator_failure_case(
     release_failures: int = 0,
     request: AgentExecutionRequest | None = None,
     injected_error: BaseException | None = None,
+    injected_result: AgentRunResult | None = None,
 ):
     events: list[tuple[str, dict]] = []
     actions: list[str] = []
@@ -5133,6 +5204,9 @@ async def _run_coordinator_failure_case(
             "resource_harvest",
         ):
             await owners.fail(owner)
+        if injected_result is not None:
+            # The runner returned a terminal failed result instead of raising.
+            return injected_result
         return AgentRunResult(summary="done")
 
     artifact_directory = tempfile.TemporaryDirectory(
@@ -5323,6 +5397,73 @@ async def test_ambiguous_terminal_attempt_preserves_exact_host_for_temporal_retr
         and payload["status"] == "waiting"
         for event_type, payload in events
     )
+
+
+@pytest.mark.asyncio
+async def test_never_started_turn_result_releases_host_and_profile_authority() -> None:
+    """A never-started turn is terminal, not ambiguous: nothing live is retained.
+
+    ``run_omnigent_execution`` returns the typed ``OMNIGENT_CURRENT_TURN_NOT_STARTED``
+    result instead of raising the ambiguous still-running exception, so the
+    coordinator must not take the ``ambiguous_terminal_state`` deferral that
+    keeps the exact host, mounted credentials, and provider lease for a retry.
+    The advertised ``retry_step_execution`` is a new attempt that would otherwise
+    be blocked by capacity retained for work that never existed.
+    """
+
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="codex",
+        correlationId="workflow-1",
+        idempotencyKey="idem-never-started",
+        workspaceSpec={
+            "workspaceLocator": {
+                "kind": "sandbox",
+                "workspaceId": hashlib.sha256(
+                    b"workflow-1:idem-never-started"
+                ).hexdigest()[:24],
+            }
+        },
+        parameters={
+            "omnigent": {
+                "launchPolicyRef": "codex-on-demand@1",
+                "session": {"workspace": "https://example.com/repo.git"},
+            }
+        },
+    )
+    events, actions, owner_calls = await _run_coordinator_failure_case(
+        fail_at="none",
+        code="OMNIGENT_CURRENT_TURN_NOT_STARTED",
+        request=request,
+        injected_result=AgentRunResult(
+            summary=(
+                "Omnigent accepted the marked turn but the provider never started it"
+            ),
+            failureClass="integration_error",
+            providerErrorCode="OMNIGENT_CURRENT_TURN_NOT_STARTED",
+            retryRecommendation="retry_step_execution",
+            metadata={"normalizedStatus": "failed"},
+        ),
+    )
+
+    assert "host_remove" in owner_calls
+    assert "provider_released" in actions
+    assert not any(
+        event_type == "host_cleanup" and payload["status"] == "waiting"
+        for event_type, payload in events
+    )
+    assert not any(
+        event_type == "profile_lease_release" and payload["status"] == "waiting"
+        for event_type, payload in events
+    )
+    harvest = next(
+        payload
+        for event_type, payload in events
+        if event_type == "resource_harvest" and payload["status"] == "failed"
+    )
+    assert harvest["code"] == "OMNIGENT_CURRENT_TURN_NOT_STARTED"
+    assert harvest["failure_class"] == "integration_error"
 
 
 @pytest.mark.asyncio

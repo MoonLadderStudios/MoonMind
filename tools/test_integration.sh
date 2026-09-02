@@ -77,18 +77,35 @@ fi
 
 export MOONMIND_ALLOW_LIVE_TEMPORAL_IN_TESTS=1
 
-# Build pytest service
-"${COMPOSE_CMD[@]}" --project-name "$TEST_COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" --project-directory "$COMPOSE_PROJECT_DIR" build pytest
+# Build the pytest service image unless the caller supplied one.
+#
+# MOONMIND_PYTHON_TEST_IMAGE names the image the compose ``pytest`` service
+# runs. When it is set, the caller owns that image (CI prebuilds it with a
+# registry-backed layer cache), so it must already be loadable locally; a
+# missing image is an actionable setup error rather than a silent rebuild.
+if [[ -n "${MOONMIND_PYTHON_TEST_IMAGE:-}" ]]; then
+  if ! docker image inspect "$MOONMIND_PYTHON_TEST_IMAGE" >/dev/null 2>&1; then
+    echo "Error: MOONMIND_PYTHON_TEST_IMAGE=$MOONMIND_PYTHON_TEST_IMAGE is set but the image is not available locally; build or pull it first, or unset it to build here." >&2
+    exit 1
+  fi
+  echo "Using prebuilt pytest image $MOONMIND_PYTHON_TEST_IMAGE"
+else
+  "${COMPOSE_CMD[@]}" --project-name "$TEST_COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" --project-directory "$COMPOSE_PROJECT_DIR" build pytest
+fi
 
 # Run integration tests (always cleaned up via trap)
 # --timeout 120: kill any single test that runs longer than 120 seconds
 # --timeout-method=thread: use thread-based timeout (works with async tests)
 # --durations=10: print the 10 slowest tests at the end
+# -n / --dist loadfile: the hermetic suite provisions its own Temporal test
+#   servers, Postgres clusters, and sockets on ephemeral ports, so test files
+#   run on separate workers; MOONMIND_INTEGRATION_WORKERS overrides the count.
+INTEGRATION_WORKERS="${MOONMIND_INTEGRATION_WORKERS:-2}"
 run_tests() {
   "${COMPOSE_CMD[@]}" --project-name "$TEST_COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" --project-directory "$COMPOSE_PROJECT_DIR" run --rm \
     -e MOONMIND_ALLOW_LIVE_TEMPORAL_IN_TESTS=1 \
     pytest \
-    bash -lc "pytest tests/integration -m 'integration_ci' --tb=short --timeout 120 --timeout-method=thread --durations=10"
+    bash -lc "pytest tests/integration -m 'integration_ci' --tb=short --timeout 120 --timeout-method=thread --durations=10 -n $INTEGRATION_WORKERS --dist loadfile"
 }
 
 run_tests

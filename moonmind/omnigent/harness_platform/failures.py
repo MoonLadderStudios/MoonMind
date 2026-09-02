@@ -55,6 +55,7 @@ class HarnessPlatformFailure(StrEnum):
     OMNIGENT_CLEANUP_DEFERRED = "OMNIGENT_CLEANUP_DEFERRED"
     OMNIGENT_GENERIC_REALIZER_NOT_READY = "OMNIGENT_GENERIC_REALIZER_NOT_READY"
     OMNIGENT_GENERIC_DISPATCH_FAILED = "OMNIGENT_GENERIC_DISPATCH_FAILED"
+    OMNIGENT_CURRENT_TURN_NOT_STARTED = "OMNIGENT_CURRENT_TURN_NOT_STARTED"
 
 
 class HarnessPlatformError(RuntimeError):
@@ -102,6 +103,7 @@ _FAILURE_REMEDIATION: dict[str, str] = {
     HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT: "reconcile_runtime_binding",
     HarnessPlatformFailure.OMNIGENT_CLEANUP_DEFERRED: "delegate_to_janitor",
     HarnessPlatformFailure.OMNIGENT_GENERIC_REALIZER_NOT_READY: "enable_generic_omnigent_after_setup",
+    HarnessPlatformFailure.OMNIGENT_CURRENT_TURN_NOT_STARTED: "retry_step_execution",
 }
 
 

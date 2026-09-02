@@ -1,0 +1,93 @@
+{
+  "schemaVersion": "moonmind.reliability-replay.v1",
+  "replayId": "omnigent-accepted-turn-never-started",
+  "incidentWorkflowId": "mm:00166f20-0afe-4643-884f-d4790632dc3d",
+  "failedChildWorkflowId": "mm:00166f20-0afe-4643-884f-d4790632dc3d:agent:tpl:github-issue-implement:06:a389b541",
+  "activityType": "integration.omnigent.profile_bound_execute",
+  "executionRealizerRef": "generic-omnigent-host@1",
+  "harness": "opencode-native",
+  "failureShape": "the stock native runner accepted the marked message (202 Turn started) and emitted session.status running, response.in_progress, and response.completed for the message injection within one second; the harness never started the turn, so the session stayed idle with zero items after the marked user item and zero token usage. MoonMind waited the full 1800s no-progress budget and failed as OMNIGENT_GENERIC_DISPATCH_FAILED with contact_administrator after 31 minutes",
+  "sessionId": "synthetic-never-started-session",
+  "currentTurnMarker": "MoonMind-Omnigent-Run: synthetic-never-started",
+  "observedProviderEvents": [
+    {
+      "type": "session.heartbeat"
+    },
+    {
+      "type": "session.changed_files.invalidated"
+    },
+    {
+      "type": "session.presence"
+    },
+    {
+      "type": "session.terminal_pending"
+    },
+    {
+      "type": "session.terminal_pending"
+    },
+    {
+      "type": "session.resource.created"
+    },
+    {
+      "type": "session.terminal_pending"
+    },
+    {
+      "type": "session.status",
+      "status": "running"
+    },
+    {
+      "type": "response.in_progress"
+    },
+    {
+      "type": "response.completed"
+    }
+  ],
+  "observedTerminalPollingSeconds": 1810,
+  "observedFailureSummary": "Admitted Omnigent execution-plan dispatch failed: Omnigent current marked turn did not reach terminal state before timeout",
+  "idleSnapshot": {
+    "status": "idle",
+    "active_response_id": null,
+    "terminal_pending": false,
+    "usage_by_model": {
+      "opencode/synthetic-model": {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0
+      }
+    },
+    "items": [
+      {
+        "id": "resource-created",
+        "type": "resource_event",
+        "status": "completed",
+        "data": {
+          "event_type": "session.resource.created",
+          "resource_type": "terminal"
+        }
+      },
+      {
+        "id": "marked-user",
+        "type": "message",
+        "status": "completed",
+        "data": {
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "MoonMind-Omnigent-Run: synthetic-never-started"
+            }
+          ]
+        }
+      },
+      {
+        "id": "resource-deleted",
+        "type": "resource_event",
+        "status": "completed",
+        "data": {
+          "event_type": "session.resource.deleted",
+          "resource_type": "terminal"
+        }
+      }
+    ]
+  }
+}
