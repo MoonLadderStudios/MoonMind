@@ -275,6 +275,61 @@ def test_unit_workflow_keeps_api_and_temporal_ownership() -> None:
     assert "--junitxml=artifacts/pytest-temporal-boundary.xml" in temporal_command
 
 
+def test_parallel_shards_bound_hung_tests_and_spread_large_modules() -> None:
+    unit_fast = _run_command("unit-fast", "Run selected unit suite")
+    api_command = _run_command("api-component", "Run API/component suite")
+    temporal_command = _run_command("temporal-boundary", "Run Temporal boundary suite")
+
+    for command in (unit_fast, api_command, temporal_command):
+        assert "-n auto" in command
+        # A hung test must fail its own shard instead of running to the job
+        # timeout; faulthandler alone only dumps stacks.
+        assert "--timeout 600" in command
+    # The API shard's 400-test router modules dominate a per-file distribution,
+    # so component tests are distributed per test.
+    assert "--dist load " in api_command or api_command.rstrip().endswith("--dist load")
+    assert "--dist loadfile" not in api_command
+    assert "--dist loadfile" in temporal_command
+
+
+def test_deterministic_conformance_is_selection_gated() -> None:
+    workflow = _load_workflow()
+    job = workflow["jobs"]["omnigent-deterministic-conformance"]
+
+    assert job["needs"] == "select-test-suites"
+    assert (
+        job["if"]
+        == "needs.select-test-suites.outputs.omnigent_conformance == 'true'"
+    )
+    assert "omnigent_conformance" in workflow["jobs"]["select-test-suites"]["outputs"]
+
+
+def test_image_building_jobs_share_a_layer_cache() -> None:
+    workflow = _load_workflow()
+    integration_steps = workflow["jobs"]["integration-ci"]["steps"]
+    build = next(
+        step
+        for step in integration_steps
+        if (step.get("uses") or "").startswith("docker/build-push-action@")
+    )
+    assert build["with"]["target"] == "test-runtime"
+    assert build["with"]["load"] is True
+    assert build["with"]["cache-from"].startswith("type=gha,")
+    assert build["with"]["cache-to"].startswith("type=gha,")
+    run_step = next(
+        step for step in integration_steps if step.get("name") == "Run hermetic integration CI suite"
+    )
+    assert run_step["env"]["MOONMIND_PYTHON_TEST_IMAGE"] == build["with"]["tags"]
+
+    exact_build = next(
+        step
+        for step in workflow["jobs"]["omnigent-exact-artifact"]["steps"]
+        if (step.get("uses") or "").startswith("docker/build-push-action@")
+    )
+    assert exact_build["with"]["cache-from"].startswith("type=gha,")
+    assert exact_build["with"]["cache-to"].startswith("type=gha,")
+
+
 def test_unit_slow_has_separate_non_parallel_job_and_required_contract() -> None:
     workflow = _load_workflow()
     job = workflow["jobs"]["unit-slow"]
@@ -360,6 +415,8 @@ def test_ci_required_is_pure_result_aggregator() -> None:
         "temporal-boundary",
         "integration-ci",
         "reliability-journey-checkpoint-resume",
+        "omnigent-exact-artifact",
+        "omnigent-deterministic-conformance",
         "verify-test-shard-ownership",
     ):
         assert dependency in job["needs"]
@@ -388,6 +445,8 @@ def test_ci_required_reports_all_failures_before_exiting() -> None:
         "temporal-boundary",
         "integration-ci",
         "reliability-journey-checkpoint-resume",
+        "omnigent-exact-artifact",
+        "omnigent-deterministic-conformance",
         "verify-test-shard-ownership",
     ):
         assert name in script
