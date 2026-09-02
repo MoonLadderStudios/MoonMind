@@ -319,8 +319,41 @@ export function destinationForPath(pathname: string): DashboardDestination | nul
   )) ?? null;
 }
 
+const LEGACY_SETTINGS_REDIRECTS: Record<string, string> = {
+  '/secrets': '/settings/providers-secrets',
+  '/workers': '/settings/operations',
+};
+
+export function legacySettingsRedirect(pathname: string, search: string): string | null {
+  const normalized = withoutTrailingSlash(pathname);
+  const canonical = LEGACY_SETTINGS_REDIRECTS[normalized];
+  if (!canonical) return null;
+  if (!search) return canonical;
+  const params = new URLSearchParams(search);
+  params.delete('section');
+  // Only preserve page-relevant filters per target.
+  const allowedByTarget: Record<string, Set<string>> = {
+    '/settings/providers-secrets': new Set(['runtime']),
+    '/settings/operations': new Set(['status']),
+    '/settings/user-workspace': new Set(['scope', 'q']),
+  };
+  const allowed = allowedByTarget[canonical];
+  if (allowed) {
+    for (const key of Array.from(params.keys())) {
+      if (!allowed.has(key)) params.delete(key);
+    }
+  } else {
+    // Fallback: drop all except section already removed -> empty.
+    for (const key of Array.from(params.keys())) params.delete(key);
+  }
+  const query = params.toString();
+  return query ? `${canonical}?${query}` : canonical;
+}
+
 export function isDashboardInternalUrl(url: URL): boolean {
-  return url.origin === window.location.origin && resolveDashboardRoute(url.pathname) !== null;
+  if (url.origin !== window.location.origin) return false;
+  if (resolveDashboardRoute(url.pathname) !== null) return true;
+  return legacySettingsRedirect(url.pathname, url.search) !== null;
 }
 
 function baseInitialData(payload: BootPayload): Record<string, unknown> {

@@ -670,6 +670,39 @@ def _settings_redirect_path(user: User, preferred_destination_key: str) -> str:
     return "/settings"
 
 
+def _settings_redirect_url(request: Request, user: User, preferred_destination_key: str) -> str:
+    """Build redirect URL preserving safe page-local query params.
+
+    Per SettingsPage.md 5.4, redirects use replacement history, preserve approved
+    page-relevant query parameters, and drop parameters that no longer have meaning
+    on the target page. At minimum, drop retired `section` page identity.
+    Unknown legacy aliases fall back to the first authorized destination.
+    """
+    canonical = _settings_redirect_path(user, preferred_destination_key)
+    # Preserve safe filters (runtime, scope, q, status, etc.) but drop `section`
+    # which is retired as page identity (SettingsPage.md 5.3).
+    if not request.query_params:
+        return canonical
+    preserved = [(k, v) for k, v in request.query_params.multi_items() if k != "section"]
+    # Filter to page-relevant keys per target to avoid leaking irrelevant filters.
+    # Providers & Secrets owns `runtime`; User/Workspace owns `scope`+`q`; Operations owns `status`.
+    if preserved:
+        allow_by_target = {
+            "/settings/providers-secrets": {"runtime"},
+            "/settings/user-workspace": {"scope", "q"},
+            "/settings/operations": {"status"},
+            "/settings": set(),
+        }
+        allowed = allow_by_target.get(canonical)
+        if allowed is not None:
+            preserved = [(k, v) for k, v in preserved if k in allowed]
+        # If target is unknown, keep only generic safe keys (none) to avoid confusion.
+        query = "&".join(f"{quote(k, safe='')}={quote(v, safe='')}" for k, v in preserved)
+        if query:
+            return f"{canonical}?{query}"
+    return canonical
+
+
 def _is_extensionless_collection_route(request: Request, destination_keys: set[str]) -> bool:
     path = request.url.path
     if not path.startswith("/"):
@@ -1300,7 +1333,7 @@ async def secrets_route(
 ) -> RedirectResponse:
     """Redirect the legacy secrets page to its canonical Settings route."""
     return RedirectResponse(
-        url=_settings_redirect_path(_user, "settings-providers-secrets"),
+        url=_settings_redirect_url(request, _user, "settings-providers-secrets"),
         status_code=307,
     )
 
@@ -1472,7 +1505,7 @@ async def task_workers_route(
 ) -> RedirectResponse:
     """Redirect the legacy workers page to its canonical Settings route."""
     return RedirectResponse(
-        url=_settings_redirect_path(_user, "settings-operations"),
+        url=_settings_redirect_url(request, _user, "settings-operations"),
         status_code=307,
     )
 
