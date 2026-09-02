@@ -416,6 +416,10 @@ async def _try_generic_realizer_dispatch(
 ) -> AgentRunResult | None:
     """Load or plan immutable generic authority, then dispatch its realizer."""
 
+    from moonmind.omnigent.execute import (
+        OmnigentSessionStillRunningError,
+        OmnigentTurnNotStartedError,
+    )
     from moonmind.omnigent.harness_platform.failures import (
         HarnessPlatformError,
         HarnessPlatformFailure,
@@ -448,6 +452,16 @@ async def _try_generic_realizer_dispatch(
                 persisted.payload.executionRealizerRef
             )
             return await realizer.execute(request, persisted)
+        except OmnigentSessionStillRunningError as exc:
+            # The session and its authoritative host/workspace are deliberately
+            # retained by the realizer for Temporal retry. Collapsing this into
+            # a terminal generic dispatch result defeats that recovery path and
+            # strands healthy turns that are still executing a tool.
+            if isinstance(exc, OmnigentTurnNotStartedError):
+                typed = _typed_platform_failure_result(exc)
+                if typed is not None:
+                    return typed
+            raise
         except Exception as exc:
             # The dispatch failure projection must carry the underlying cause;
             # a bare integration_error string makes operator triage impossible.
@@ -573,6 +587,14 @@ async def _try_generic_realizer_dispatch(
             realizer_registry = get_default_registry()
         realizer = realizer_registry.require(plan.payload.executionRealizerRef)
         return await realizer.execute(request, plan)
+    except OmnigentSessionStillRunningError as exc:
+        # Planned requests that reach this path have the same retry contract as
+        # requests carrying an explicit OmnigentExecutionPlan binding above.
+        if isinstance(exc, OmnigentTurnNotStartedError):
+            typed = _typed_platform_failure_result(exc)
+            if typed is not None:
+                return typed
+        raise
     except HarnessPlatformError as exc:
         code = str(exc.code)
         configuration_codes = {

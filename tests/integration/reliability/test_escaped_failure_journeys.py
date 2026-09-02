@@ -55,9 +55,12 @@ from moonmind.omnigent.execute import (
     OmnigentTurnNotStartedError,
     _await_marked_turn_terminal,
     _build_omnigent_first_message,
+    _durable_terminal_status_with_evidence,
     _first_message_text,
     _marked_turn_item_state,
+    _marked_turn_timeout_diagnostics,
     _persisted_pre_dispatch_item_ids,
+    _resolved_marked_turn_timeout_seconds,
     _safe_heartbeat,
     _snapshot_confirms_current_turn_terminal,
     _snapshot_contains_current_turn_progress,
@@ -4407,6 +4410,100 @@ async def test_accepted_turn_that_never_starts_fails_within_start_budget(
     assert dispatched.provider_error_code == expected["failureCode"]
     assert dispatched.retry_recommendation == expected["retryRecommendation"]
     assert dispatched.diagnostics_ref == result.diagnostics_ref
+
+
+@pytest.mark.integration_ci
+async def test_active_tool_turn_uses_published_budget_and_preserves_retry() -> None:
+    """Replay mm:8d94711e at the budget and generic-dispatch boundaries."""
+
+    from moonmind.workflows.temporal.activities.omnigent_activities import (
+        _try_generic_realizer_dispatch,
+    )
+    from tests.unit.omnigent.test_generic_platform_production_services import _plan
+
+    replay_id = "omnigent-active-tool-execution-budget"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    snapshot = manifest["terminalSnapshot"]
+    marker = snapshot["items"][0]["data"]["content"][0]["text"]
+    turn_state = _marked_turn_item_state(snapshot, marker=marker)
+    diagnostics = _marked_turn_timeout_diagnostics(
+        session_id=manifest["sessionId"],
+        snapshot=snapshot,
+        timeout_seconds=manifest["legacyMarkedTurnTimeoutSeconds"],
+        event_count=manifest["observedProviderEventCount"],
+        turn_state=turn_state,
+    )
+
+    assert turn_state["progress"] is expected["currentTurnProgress"]
+    assert turn_state["unfinishedToolCall"] is expected["unfinishedToolCall"]
+    assert diagnostics["lastItemType"] == expected["lastItemType"]
+    assert diagnostics["lastToolName"] == expected["lastToolName"]
+    assert (
+        diagnostics["providerRateLimitEvidence"]
+        == expected["providerRateLimitEvidence"]
+    )
+
+    plan = _plan("opencode-go/model")
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId=manifest["incidentWorkflowId"],
+        idempotencyKey="step-active-tool-budget",
+        resolvedSkillsetRef="artifact:skills",
+        omnigentExecutionPlan=OmnigentExecutionPlanBinding(
+            planRef=plan.planRef,
+            planDigest="sha256:" + plan.planRef.rsplit(":", 1)[-1],
+            planArtifactRef="artifact:replay-plan",
+            taskInputSnapshotRef="artifact:replay-task-input",
+            taskInputSnapshotDigest="sha256:" + "a" * 64,
+        ),
+        timeoutPolicy=manifest["requestTimeoutPolicy"],
+        parameters={"executionPlanRef": plan.planRef},
+    )
+    assert (
+        _resolved_marked_turn_timeout_seconds(request)
+        == expected["markedTurnTimeoutSeconds"]
+    )
+    coarse_bridge_projection = SimpleNamespace(
+        status=manifest["bridgeProjection"]["status"],
+        first_message_posted_at=(
+            object() if manifest["bridgeProjection"]["firstMessagePosted"] else None
+        ),
+        terminal_refs=manifest["bridgeProjection"]["terminalRefs"],
+    )
+    assert (
+        _durable_terminal_status_with_evidence(coarse_bridge_projection) is not None
+    ) is expected["coarseBridgeStatusAuthoritative"]
+
+    class PlanStore:
+        async def load(self, plan_ref):
+            assert plan_ref == plan.planRef
+            return plan
+
+    class Realizer:
+        async def execute(self, runtime_request, admitted):
+            raise OmnigentSessionStillRunningError(
+                "current marked turn is still executing a tool",
+                session_id=manifest["sessionId"],
+                snapshot=snapshot,
+                timeout_seconds=manifest["legacyMarkedTurnTimeoutSeconds"],
+                event_count=manifest["observedProviderEventCount"],
+                turn_state=turn_state,
+            )
+
+    class Registry:
+        def require(self, ref):
+            assert ref == manifest["executionRealizerRef"]
+            return Realizer()
+
+    with pytest.raises(OmnigentSessionStillRunningError):
+        await _try_generic_realizer_dispatch(
+            request,
+            plan_store=PlanStore(),
+            realizer_registry=Registry(),
+        )
+    assert expected["ambiguousTerminalRemainsRetryable"] is True
 
 
 async def test_transient_injection_response_does_not_hide_never_started_turn() -> None:

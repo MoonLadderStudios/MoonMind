@@ -24,16 +24,19 @@ from moonmind.omnigent.bridge_store import (
     OmnigentDigestMismatchError,
 )
 from moonmind.omnigent.execute import (
+    _ACTIVITY_HEARTBEAT_STATE,
     OmnigentContractError,
     OmnigentSessionStillRunningError,
     OmnigentTurnNotStartedError,
-    _ACTIVITY_HEARTBEAT_STATE,
-    _MarkedTurnStartWatchdog,
     _agent_items,
     _await_marked_turn_terminal,
     _build_omnigent_first_message,
-    _first_message_text,
+    _durable_terminal_status_with_evidence,
     _enqueue_stream_events,
+    _first_message_text,
+    _marked_turn_timeout_diagnostics,
+    _marked_turn_timeout_message,
+    _MarkedTurnStartWatchdog,
     _reconcile_inactive_marked_turn,
     _resolve_agent_id,
     _resolve_initial_context_message,
@@ -56,6 +59,79 @@ def _request() -> AgentExecutionRequest:
         correlationId="corr-1",
         idempotencyKey="idem-1",
     )
+
+
+def test_marked_turn_timeout_diagnostics_explain_active_tool_and_quota_evidence() -> (
+    None
+):
+    snapshot = {
+        "status": "running",
+        "active_response_id": None,
+        "last_task_error": None,
+        "items": [
+            {
+                "id": "call-wait",
+                "type": "function_call",
+                "status": "completed",
+                "data": {"call_id": "call-wait", "name": "bash"},
+            }
+        ],
+    }
+    diagnostics = _marked_turn_timeout_diagnostics(
+        session_id="session-1",
+        snapshot=snapshot,
+        timeout_seconds=1800.0,
+        event_count=9,
+        turn_state={"progress": True, "unfinishedToolCall": True},
+    )
+
+    assert diagnostics == {
+        "omnigentSessionId": "session-1",
+        "markedTurnTimeoutSeconds": 1800.0,
+        "eventsCaptured": 9,
+        "sessionStatus": "running",
+        "currentTurnProgress": True,
+        "unfinishedToolCall": True,
+        "lastItemType": "function_call",
+        "lastItemStatus": "completed",
+        "lastToolName": "bash",
+        "providerRateLimitEvidence": "not_observed",
+    }
+    message = _marked_turn_timeout_message(diagnostics)
+    assert "unfinishedToolCall=true" in message
+    assert "lastToolName=bash" in message
+    assert "providerRateLimitEvidence=not_observed" in message
+
+    rate_limited = _marked_turn_timeout_diagnostics(
+        session_id="session-2",
+        snapshot={
+            "status": "failed",
+            "last_task_error": {
+                "code": "429",
+                "message": "provider request was rate limited",
+            },
+        },
+        timeout_seconds=1800.0,
+        event_count=3,
+        turn_state=None,
+    )
+    assert rate_limited["providerRateLimitEvidence"] == "observed"
+
+
+def test_coarse_bridge_completion_without_terminal_refs_is_not_authoritative() -> None:
+    coarse_projection = SimpleNamespace(
+        status="completed",
+        first_message_posted_at=object(),
+        terminal_refs={},
+    )
+    published_terminal = SimpleNamespace(
+        status="completed",
+        first_message_posted_at=object(),
+        terminal_refs={"summary": "published terminal evidence"},
+    )
+
+    assert _durable_terminal_status_with_evidence(coarse_projection) is None
+    assert _durable_terminal_status_with_evidence(published_terminal) == "completed"
 
 
 @pytest.mark.parametrize(
