@@ -90,7 +90,7 @@ def test_moonspec_verify_skill_treats_publication_as_downstream_candidate_work()
     assert "Do not require downstream commit" in text
 
 
-def test_moonspec_verify_skill_uses_managed_python_test_boundary() -> None:
+def test_moonspec_verify_skill_uses_repository_managed_test_boundary() -> None:
     skill_path = (
         Path(__file__).resolve().parents[3]
         / ".agents"
@@ -100,17 +100,16 @@ def test_moonspec_verify_skill_uses_managed_python_test_boundary() -> None:
     )
 
     text = skill_path.read_text(encoding="utf-8")
+    normalized = " ".join(text.split())
 
-    assert "`MOONMIND_STEP_EXECUTION_ID`" in text
-    assert "check `command -v moonmind`" in text
-    assert "moonmind container python-tests ..." in text
-    assert "route every Python" in text
-    assert "test through that command" in text
-    assert "do not run `pytest`" in text
-    assert "any command that installs pytest" in text
-    assert "Host-local Python results are invalid verification evidence" in text
-    assert "absence of `pytest`" in text
-    assert "documented `moonmind container`" in text
+    assert "repository's managed-agent test boundary" in normalized
+    assert "documented managed-run signal" in normalized
+    assert "required delegated test command" in normalized
+    assert "route every covered test through it" in normalized
+    assert "Do not run an equivalent host-local test command" in normalized
+    assert "install a test runner into the agent host" in normalized
+    assert "results from a path the repository forbids" in normalized
+    assert "documented delegated capability exists" in normalized
 
 
 def test_moonspec_verify_skill_rebuilds_post_remediation_classifications() -> None:
@@ -147,7 +146,7 @@ def test_moonspec_verify_skill_defines_target_modes() -> None:
 
     text = skill_path.read_text(encoding="utf-8")
 
-    assert "Treat explicitly identified original implementation instructions" in text
+    assert "Treat the user's instructions as a valid verification baseline" in text
     assert "referenced declarative document as a valid verification baseline" in text
     assert "Do not treat ad hoc verifier guidance" in text
     assert "focus on API tests" in text
