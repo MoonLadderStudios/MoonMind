@@ -204,12 +204,10 @@ def resolve_model_effort(
         )
         model, model_source = _first_value(
             (clean_requested_model, _MODEL_SOURCE_TASK_OVERRIDE),
-            (_legacy_profile_value(profile, "default_model"), _MODEL_SOURCE_PROFILE_DEFAULT),
             (runtime_model, _MODEL_SOURCE_RUNTIME_DEFAULT),
         )
         effort, effort_source = _first_value(
             (clean_requested_effort, _MODEL_SOURCE_TASK_OVERRIDE),
-            (_legacy_profile_value(profile, "default_effort"), _MODEL_SOURCE_PROFILE_DEFAULT),
             (runtime_effort, _MODEL_SOURCE_RUNTIME_DEFAULT),
         )
         return _with_preview_mismatch(
@@ -248,13 +246,11 @@ def resolve_model_effort(
         )
         model, model_source = _first_value(
             (tier_model, tier_source),
-            (_legacy_profile_value(profile, "default_model"), _MODEL_SOURCE_PROFILE_DEFAULT),
             (runtime_model, _MODEL_SOURCE_RUNTIME_DEFAULT),
         )
         effort, effort_source = _first_value(
             (clean_requested_effort, _MODEL_SOURCE_TASK_OVERRIDE),
             (tier_effort, tier_source),
-            (_legacy_profile_value(profile, "default_effort"), _MODEL_SOURCE_PROFILE_DEFAULT),
             (runtime_effort, _MODEL_SOURCE_RUNTIME_DEFAULT),
         )
         tier_parameters = tier.get("parameters") or {}
@@ -286,12 +282,10 @@ def resolve_model_effort(
         env=env,
     )
     model, model_source = _first_value(
-        (_legacy_profile_value(profile, "default_model"), _MODEL_SOURCE_PROFILE_DEFAULT),
         (runtime_model, _MODEL_SOURCE_RUNTIME_DEFAULT),
     )
     effort, effort_source = _first_value(
         (clean_requested_effort, _MODEL_SOURCE_TASK_OVERRIDE),
-        (_legacy_profile_value(profile, "default_effort"), _MODEL_SOURCE_PROFILE_DEFAULT),
         (runtime_effort, _MODEL_SOURCE_RUNTIME_DEFAULT),
     )
     return _with_preview_mismatch(

@@ -154,6 +154,11 @@ export function destinationGroupForDestination(
   return DASHBOARD_DESTINATION_GROUPS.find(({ key }) => key === destination.menuGroupKey) ?? null;
 }
 
+export const LEGACY_ROUTE_REDIRECTS: Record<string, string> = {
+  '/secrets': '/settings/providers-secrets',
+  '/workers': '/settings/operations',
+};
+
 export const DASHBOARD_REACT_ROUTE_PATHS = Array.from(
   new Set([
     ...DASHBOARD_DESTINATIONS.flatMap((destination) => destination.pathPatterns),
@@ -251,9 +256,17 @@ function isDetailPath(path: string, prefix: 'manifests' | 'schedules'): boolean 
   return Boolean(detailId && DETAIL_SEGMENT.test(detailId));
 }
 
+export function legacyRedirectForPath(pathname: string): string | null {
+  const path = withoutTrailingSlash(pathname || '/');
+  return LEGACY_ROUTE_REDIRECTS[path] ?? null;
+}
+
 export function resolveDashboardRoute(pathname: string): DashboardRoute | null {
   const path = withoutTrailingSlash(pathname || '/');
   if (hasExtension(path)) {
+    return null;
+  }
+  if (LEGACY_ROUTE_REDIRECTS[path]) {
     return null;
   }
   if (path === '/workflows') {
@@ -320,7 +333,7 @@ export function destinationForPath(pathname: string): DashboardDestination | nul
 }
 
 export function isDashboardInternalUrl(url: URL): boolean {
-  return url.origin === window.location.origin && resolveDashboardRoute(url.pathname) !== null;
+  return url.origin === window.location.origin && (resolveDashboardRoute(url.pathname) !== null || legacyRedirectForPath(url.pathname) !== null);
 }
 
 function baseInitialData(payload: BootPayload): Record<string, unknown> {

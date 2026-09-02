@@ -36,6 +36,7 @@ import { DashboardRouteErrorBoundary } from '../components/DashboardRouteErrorBo
 import { DashboardSystemMenu } from '../components/DashboardSystemMenu';
 import {
   isDashboardInternalUrl,
+  legacyRedirectForPath,
   payloadForDashboardRoute,
   resolveDashboardRoute,
   DASHBOARD_REACT_ROUTE_PATHS,
@@ -1036,6 +1037,22 @@ function AppShell({
   );
 }
 
+function LegacyRedirect({ target }: { target: string }) {
+  const location = useLocation();
+  const search = location.search;
+  // Preserve approved page-relevant query params, drop others.
+  // For providers-secrets, preserve `runtime`; for operations, no filter is preserved yet.
+  let preservedSearch = '';
+  if (target === '/settings/providers-secrets' && search) {
+    const params = new URLSearchParams(search);
+    const runtime = params.get('runtime');
+    if (runtime) {
+      preservedSearch = `?runtime=${encodeURIComponent(runtime)}`;
+    }
+  }
+  return <Navigate to={`${target}${preservedSearch}`} replace />;
+}
+
 function RoutedDashboardPage({
   payload,
   uiInfo,
@@ -1569,6 +1586,8 @@ function DashboardRouter({ payload }: { payload: BootPayload }) {
   return (
     <Routes>
       <Route path="/" element={<Navigate to="/workflows" replace />} />
+      <Route path="/secrets" element={<LegacyRedirect target="/settings/providers-secrets" />} />
+      <Route path="/workers" element={<LegacyRedirect target="/settings/operations" />} />
       {DASHBOARD_REACT_ROUTE_PATHS.map((path) => (
         <Route key={path} path={path} element={routedDashboardPage} />
       ))}

@@ -238,15 +238,11 @@ function providerProfileModelTiers(profile: ProviderProfile): ProviderModelEffor
   if (Array.isArray(profile.model_tiers) && profile.model_tiers.length > 0) {
     return profile.model_tiers;
   }
-  return [
-    {
-      label: 'Default',
-      model: profile.default_model ?? null,
-      effort: profile.default_effort ?? null,
-      parameters: {},
-      annotations: {},
-    },
-  ];
+  return [];
+}
+
+function isTierPolicyMissing(profile: ProviderProfile): boolean {
+  return !Array.isArray(profile.model_tiers) || profile.model_tiers.length === 0;
 }
 
 function generateTierClientId(): string {
@@ -269,7 +265,12 @@ export function createTierDraft(
 function normalizeProfileTiersForForm(
   profile: ProviderProfile,
 ): { tiers: ProviderProfileTierDraft[]; defaultTierClientId: string } {
-  const tiers = providerProfileModelTiers(profile).map((tier) => createTierDraft(tier));
+  const raw = providerProfileModelTiers(profile);
+  if (raw.length === 0) {
+    const fallback = createTierDraft({ label: 'Runtime default', model: null, effort: null });
+    return { tiers: [fallback], defaultTierClientId: fallback.clientId };
+  }
+  const tiers = raw.map((tier) => createTierDraft(tier));
   const defaultIndex = Math.max(0, Math.min(tiers.length - 1, (profile.default_model_tier ?? 1) - 1));
   return { tiers, defaultTierClientId: tiers[defaultIndex]?.clientId ?? tiers[0].clientId };
 }
@@ -2423,27 +2424,11 @@ export function ProviderProfilesManager({
                         Runtime default
                       </div>
                     ) : null}
-                    {profile.default_model ? (
-                      <div className="text-xs text-slate-500 dark:text-slate-400">
-                        Model: {profile.default_model}
+                    {isTierPolicyMissing(profile) ? (
+                      <div className="text-xs font-medium text-amber-700 dark:text-amber-300">
+                        Tier policy unavailable · needs repair
                       </div>
                     ) : (
-                      <div className="text-xs text-slate-400 dark:text-slate-500 italic">
-                        {defaultTaskModelByRuntime[profile.runtime_id]
-                          ? `Inherits: ${defaultTaskModelByRuntime[profile.runtime_id]}`
-                          : 'No model (runtime default)'}
-                      </div>
-                    )}
-                    {profile.default_effort ? (
-                      <div className="text-xs text-slate-500 dark:text-slate-400">
-                        Effort: {profile.default_effort}
-                      </div>
-                    ) : null}
-                    {profile.model_overrides && Object.keys(profile.model_overrides).length > 0 ? (
-                      <div className="text-xs text-slate-500 dark:text-slate-400">
-                        Overrides: {Object.keys(profile.model_overrides).join(', ')}
-                      </div>
-                    ) : null}
                     <div className="mt-2 space-y-1" aria-label={`${profile.profile_id} model tier mapping`}>
                       {modelTiers.map((tier, tierIndex) => {
                         const tierNumber = tierIndex + 1;
@@ -2466,6 +2451,7 @@ export function ProviderProfilesManager({
                         );
                       })}
                     </div>
+                    )}
                   </td>
                   <td
                     className="px-3 py-4 text-slate-700 dark:text-slate-300"
