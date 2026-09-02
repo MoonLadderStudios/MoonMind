@@ -105,11 +105,21 @@ def _fake_docker(
     recorded: list[list[str]],
     *,
     run_process: Any = None,
+    stop_ends_run: bool = False,
 ) -> Any:
+    workloads: list[_Process] = []
+
     async def _create(*args: str, **_kwargs: Any) -> _Process:
         recorded.append(list(args))
         if len(args) > 1 and args[1] == "run":
-            return run_process() if callable(run_process) else _Process(returncode=0)
+            process = run_process() if callable(run_process) else _Process(returncode=0)
+            workloads.append(process)
+            return process
+        if stop_ends_run and len(args) > 1 and args[1] in {"stop", "kill"}:
+            # A stopped container ends its ``docker run`` process, so the
+            # launcher does not have to wait out the kill grace period.
+            for process in workloads:
+                process.container_exited()
         return _Process(returncode=0)
 
     return _create
@@ -120,10 +130,11 @@ def _install_fake_docker(
     recorded: list[list[str]],
     *,
     run_process: Any = None,
+    stop_ends_run: bool = False,
 ) -> None:
     monkeypatch.setattr(
         "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
-        _fake_docker(recorded, run_process=run_process),
+        _fake_docker(recorded, run_process=run_process, stop_ends_run=stop_ends_run),
     )
 
 
@@ -432,6 +443,7 @@ async def test_gpu_container_timeout_targets_only_the_run_owned_container(
         monkeypatch,
         recorded,
         run_process=lambda: _Process(never_complete=True),
+        stop_ends_run=True,
     )
 
     result = await DockerWorkloadLauncher().run(
@@ -462,6 +474,7 @@ async def test_gpu_container_timeout_preserves_partial_declared_outputs(
         monkeypatch,
         recorded,
         run_process=lambda: _Process(never_complete=True),
+        stop_ends_run=True,
     )
 
     result = await DockerWorkloadLauncher().run(

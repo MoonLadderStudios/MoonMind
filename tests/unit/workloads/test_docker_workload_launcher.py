@@ -230,6 +230,11 @@ class _Process:
         self.returncode = -9
         self._closed.set()
 
+    def container_exited(self, returncode: int = 137) -> None:
+        """Model ``docker run`` returning once its container was stopped or killed."""
+        self.returncode = returncode
+        self._closed.set()
+
 class _Pipe:
     def __init__(self, process: _Process, data: bytes) -> None:
         self._process = process
@@ -361,10 +366,17 @@ async def test_unrestricted_launcher_timeout_stops_and_kills_without_remove_on_e
 ) -> None:
     created: list[list[str]] = []
 
+    workload: list[_Process] = []
+
     async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
         created.append(list(args))
         if args[1] == "ps":
-            return _Process(never_complete=True)
+            workload.append(_Process(never_complete=True))
+            return workload[-1]
+        if args[1] in {"stop", "kill"}:
+            # The real ``docker run`` exits once its container is stopped.
+            for process in workload:
+                process.container_exited()
         return _Process(returncode=0)
 
     monkeypatch.setattr(

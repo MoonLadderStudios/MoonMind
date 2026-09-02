@@ -101,6 +101,10 @@ EVIDENCE_GROUPS = {
     ),
 }
 PENDING_EVIDENCE_GROUPS = {"cumulativeJourney"}
+# The deterministic layers are ordinary hermetic pytest modules that already run
+# under xdist in the unit shards; spreading them across the runner's cores keeps
+# the evidence bundle identical while the job finishes in a fraction of the time.
+_PYTEST_PARALLEL_ARGS = ("-n", "auto", "--dist", "loadfile")
 COMMANDS = (
     (
         sys.executable,
@@ -115,6 +119,7 @@ COMMANDS = (
         "--ignore=tests/integration/omnigent/test_host_auth_lifecycle.py",
         "-q",
         "--tb=short",
+        *_PYTEST_PARALLEL_ARGS,
     ),
     (
         sys.executable,
@@ -131,6 +136,7 @@ COMMANDS = (
         "tests/unit/workflows/temporal/workflows/test_run_bounded_story_loop.py",
         "-q",
         "--tb=short",
+        *_PYTEST_PARALLEL_ARGS,
     ),
     (
         "npm",
