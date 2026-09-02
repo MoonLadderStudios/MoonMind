@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
+from moonmind.auth.github_credentials import resolve_github_credential
 from moonmind.config.settings import settings
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from moonmind.omnigent.workspace_intent import (
@@ -286,6 +287,8 @@ class OmnigentWorkspacePublicationService:
                 "generic Omnigent repository publication requires workspace authority",
                 code="OMNIGENT_REPOSITORY_PUBLICATION_FAILED",
             )
+        repository = authored_repository_source(request)
+        github_credential = await resolve_github_credential(repo=repository or None)
         return await self.publish_workspace(
             workspace_locator=workspace_locator,
             current_workflow_id=current_workflow_id,
@@ -293,8 +296,8 @@ class OmnigentWorkspacePublicationService:
             publication_identity=request.idempotency_key,
             publish_mode=str(parameters.get("publishMode") or "none"),
             base_branch=authored_starting_branch(request),
-            repository=authored_repository_source(request),
-            github_token=None,
+            repository=repository,
+            github_token=str(github_credential.token or "").strip() or None,
         )
 
 
