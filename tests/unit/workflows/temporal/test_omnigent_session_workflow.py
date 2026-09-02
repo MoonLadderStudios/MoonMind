@@ -470,6 +470,53 @@ def test_admission_contract_is_frozen_compact_and_fail_closed() -> None:
 
 
 @pytest.mark.asyncio
+async def test_unbound_legacy_host_launch_follows_durable_policy_default() -> None:
+    service = SimpleNamespace(
+        resolve_default_runtime_snapshot=AsyncMock(
+            return_value={"policyRef": "opencode-on-demand@4"}
+        ),
+        resolve_runtime_snapshot=AsyncMock(),
+    )
+
+    policy_ref, snapshot = await (
+        omnigent_session_activities._resolve_legacy_launch_policy_snapshot(
+            policy_service=service,
+            launch_policy_ref="opencode-on-demand@1",
+            resolve_default=True,
+        )
+    )
+
+    assert policy_ref == "opencode-on-demand@4"
+    assert snapshot["policyRef"] == policy_ref
+    service.resolve_default_runtime_snapshot.assert_awaited_once_with(
+        "opencode-on-demand"
+    )
+    service.resolve_runtime_snapshot.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_bound_legacy_host_launch_preserves_exact_policy_version() -> None:
+    service = SimpleNamespace(
+        resolve_default_runtime_snapshot=AsyncMock(),
+        resolve_runtime_snapshot=AsyncMock(
+            return_value={"policyRef": "opencode-on-demand@1"}
+        ),
+    )
+
+    policy_ref, _snapshot = await (
+        omnigent_session_activities._resolve_legacy_launch_policy_snapshot(
+            policy_service=service,
+            launch_policy_ref="opencode-on-demand@1",
+            resolve_default=False,
+        )
+    )
+
+    assert policy_ref == "opencode-on-demand@1"
+    service.resolve_runtime_snapshot.assert_awaited_once_with(policy_ref)
+    service.resolve_default_runtime_snapshot.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_plan_bound_admission_uses_persisted_host_authority(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
