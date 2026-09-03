@@ -959,6 +959,8 @@ class _TrackedProfile:
                 if _derived is not None:
                     self.clear_env_keys = list(_derived.keys)
             except Exception:
+                # Best-effort fixture default only; derivation failures keep
+                # the legacy no-policy behavior for unknown strategies.
                 self.clear_env_keys = None
         self._is_default = is_default
         self._events = events

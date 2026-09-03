@@ -267,6 +267,8 @@ def _complete_fake_profile(profile: dict[str, Any]) -> dict[str, Any]:
             if _derived is not None:
                 defaults["clear_env_keys"] = list(_derived.keys)
         except Exception:
+            # Best-effort fixture enrichment only; a derivation failure leaves
+            # the profile without keys, preserving the pre-existing behavior.
             pass
     return defaults
 
