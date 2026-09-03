@@ -844,6 +844,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/provider-profiles/capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Tier Capabilities For Draft
+         * @description Tier editor capabilities for a not-yet-persisted profile — MoonLadderStudios/MoonMind#3815.
+         */
+        get: operations["get_tier_capabilities_for_draft_api_v1_provider_profiles_capabilities_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/provider-profiles/creation-capabilities": {
         parameters: {
             query?: never;
@@ -853,6 +873,26 @@ export interface paths {
         };
         /** Get Creation Capabilities */
         get: operations["get_creation_capabilities_api_v1_provider_profiles_creation_capabilities_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/provider-profiles/{profile_id}/capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Tier Capabilities For Profile
+         * @description Tier editor capabilities scoped to profile evidence — MoonLadderStudios/MoonMind#3815.
+         */
+        get: operations["get_tier_capabilities_for_profile_api_v1_provider_profiles__profile_id__capabilities_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -16297,6 +16337,38 @@ export interface operations {
             };
         };
     };
+    get_tier_capabilities_for_draft_api_v1_provider_profiles_capabilities_get: {
+        parameters: {
+            query: {
+                runtime_id: string;
+                provider_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_creation_capabilities_api_v1_provider_profiles_creation_capabilities_get: {
         parameters: {
             query: {
@@ -16316,6 +16388,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProviderProfileCreationCapabilitiesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_tier_capabilities_for_profile_api_v1_provider_profiles__profile_id__capabilities_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
                 };
             };
             /** @description Validation Error */
