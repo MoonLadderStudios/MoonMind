@@ -1021,22 +1021,24 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     expect(JSON.stringify(request)).not.toMatch(/hostId|volume|credential|registrationToken|image|network|mount/i);
   });
 
-  it("submits the exact generic v2 profile digest selected from readiness", async () => {
+  it("follows current generic v2 readiness and submits its latest refresh", async () => {
     vi.mocked(navigateTo).mockClear();
-    const digest = `sha256:${"d".repeat(64)}`;
+    const staleDigest = `sha256:${"c".repeat(64)}`;
+    const currentDigest = `sha256:${"d".repeat(64)}`;
+    const submitDigest = `sha256:${"e".repeat(64)}`;
     const genericProfiles = [{
       profileId: "omnigent-opencode-default",
       displayName: "OpenCode via Omnigent",
       state: "active",
-      activeVersion: 1,
+      activeVersion: 197,
       defaultForRuntime: true,
       versions: [{
-        version: 1,
-        digest,
+        version: 197,
+        digest: staleDigest,
         document: {
           schemaVersion: "moonmind.omnigent-agent-profile.v2",
           execution: {
-            defaultExecutionProfileRef: "omnigent-opencode-default@1",
+            defaultExecutionProfileRef: "omnigent-opencode-default@197",
           },
         },
         validationResult: { ready: true },
@@ -1047,12 +1049,12 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
       runtimeId: "omnigent",
       displayName: "Omnigent",
       executionTargets: [{
-        ref: "omnigent-opencode-default@1",
+        ref: "omnigent-opencode-default@201",
         harnessId: "opencode-native",
         agentProfileRef: {
           profileId: "omnigent-opencode-default",
-          version: 1,
-          digest,
+          version: 201,
+          digest: currentDigest,
         },
         available: true,
         supportTier: "experimental",
@@ -1068,6 +1070,19 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
         gateReasons: [],
       }],
     };
+    const submitReadiness = {
+      ...genericReadiness,
+      executionTargets: [{
+        ...genericReadiness.executionTargets[0],
+        ref: "omnigent-opencode-default@202",
+        agentProfileRef: {
+          profileId: "omnigent-opencode-default",
+          version: 202,
+          digest: submitDigest,
+        },
+      }],
+    };
+    let genericReadinessRequests = 0;
 
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -1075,7 +1090,13 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
         return Promise.resolve({ ok: true, json: async () => readyOmnigentCatalog } as Response);
       }
       if (url === "/api/omnigent/execution-readiness") {
-        return Promise.resolve({ ok: true, json: async () => genericReadiness } as Response);
+        genericReadinessRequests += 1;
+        return Promise.resolve({
+          ok: true,
+          json: async () => genericReadinessRequests > 1
+            ? submitReadiness
+            : genericReadiness,
+        } as Response);
       }
       if (url === "/api/omnigent/agent-profiles") {
         return Promise.resolve({ ok: true, json: async () => genericProfiles } as Response);
@@ -1111,7 +1132,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     });
     await waitFor(() => expect(
       (screen.getByLabelText("Execution target") as HTMLSelectElement).value,
-    ).toBe("omnigent-opencode-default@1"));
+    ).toBe("omnigent-opencode-default@201"));
     const startButton = screen.getByRole("button", { name: "Start Workflow" });
     await waitFor(() => expect((startButton as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(startButton);
@@ -1126,14 +1147,14 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     const request = JSON.parse(String((createCall?.[1] as RequestInit | undefined)?.body));
     expect(request.payload.agentProfile).toEqual({
       profileId: "omnigent-opencode-default",
-      version: 1,
-      digest,
+      version: 202,
+      digest: submitDigest,
       providerProfileRef: "opencode-1",
       launchPolicyRef: "omnigent-on-demand@1",
     });
     expect(request.payload.task.runtime.agentProfile).toEqual(request.payload.agentProfile);
     expect(request.payload.omnigent).toEqual({
-      executionTargetRef: "omnigent-opencode-default@1",
+      executionTargetRef: "omnigent-opencode-default@202",
       launchPolicyRef: "omnigent-on-demand@1",
     });
   });

@@ -26,7 +26,7 @@ class BootstrapState(StrEnum):
 class BootstrapDesired(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
     provider: str = Field(default="opencode-go")
-    model_display_name: str = Field(alias="modelDisplayName", default="Muse Spark 1.2 Contributor")
+    model_display_name: str = Field(alias="modelDisplayName", default="Muse Spark 1.3 Contributor")
     model_id: str | None = Field(default=None, alias="modelId")
     effort: str = Field(default="xhigh")
     accept_contributor_data_use: bool = Field(default=False, alias="acceptContributorDataUse")

@@ -3844,7 +3844,7 @@ export function ProviderProfilesManager({
             ) : null}
             {tierCapabilities?.evidence?.stale ? (
               <div className="rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-3 text-xs text-amber-800 dark:text-amber-300">
-                Model catalog evidence is stale; catalog choices are disabled until the profile is revalidated. Existing tier values and Runtime default remain available.
+                Model catalog evidence is stale; observed catalog choices are disabled until the profile is revalidated. Runtime default and custom model entry remain available.
               </div>
             ) : null}
             {tierCapabilities?.diagnostics?.length ? (
@@ -3901,13 +3901,11 @@ export function ProviderProfilesManager({
                                 const currentValue = tier.model ?? '__runtime_default__';
                                 const isCustomValue = tier.model != null && tier.model !== '' && !knownValues.has(tier.model);
                                 const isCustomDraft = customModelEntryTiers.has(tier.clientId);
-                                // While catalog evidence is stale, a custom draft falls back to
-                                // Runtime default rather than offering new selection. A preserved
-                                // custom value stays visible but uneditable.
-                                const selectValue = isCustomValue && staleCatalog
-                                  ? tier.model as string
-                                  : (!staleCatalog && (isCustomValue || isCustomDraft) ? '__custom__' : currentValue);
-                                const showCustomInput = allowCustomModel && (isCustomValue || (!staleCatalog && isCustomDraft));
+                                // Catalog freshness controls observed options. The backend's
+                                // explicit allow_custom policy independently authorizes manual
+                                // entry, which the write/launch boundaries still validate.
+                                const selectValue = isCustomValue || isCustomDraft ? '__custom__' : currentValue;
+                                const showCustomInput = allowCustomModel && (isCustomValue || isCustomDraft);
                                 return (
                                   <>
                                     <select className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm" value={selectValue} onChange={(e) => {
@@ -3941,7 +3939,7 @@ export function ProviderProfilesManager({
                                       {tier.model && !knownValues.has(tier.model) && tier.model !== '' ? (
                                         <option value={tier.model}>{tier.model} (existing — custom or unavailable)</option>
                                       ) : null}
-                                      {allowCustomModel && !staleCatalog ? (
+                                      {allowCustomModel ? (
                                         <option value="__custom__">Custom value…</option>
                                       ) : null}
                                     </select>
@@ -3949,7 +3947,6 @@ export function ProviderProfilesManager({
                                       <input
                                         className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm font-normal"
                                         value={tier.model ?? ''}
-                                        disabled={staleCatalog}
                                         onChange={(e) => {
                                           const text = e.target.value.trim();
                                           handleTierModelChange(tier.clientId, text === '' ? null : text);

@@ -243,12 +243,11 @@ def _has_configured_runtime_authority(profile: Any) -> bool:
     """Report whether this profile can authorize an OpenCode runtime probe.
 
     Deliberately independent of ``enabled``. Enrollment applies API-key setup
-    with ``enabled=True``, so treating a disabled-but-connected profile as
-    absent would let deployment configuration silently undo an operator's
-    decision to disable it. The credential identity is what enrollment owns;
-    ``enabled`` belongs to the operator. The one pending state accepted here is
-    the startup seed's exact deployment SecretRef: it is already materializable
-    and must be promoted only by the pinned-runtime evidence path below.
+    with ``enabled=True``, but only an explicit user or policy disable prevents
+    deployment configuration from repairing a disabled profile. The one
+    pending state accepted here is the startup seed's exact deployment
+    SecretRef: it is already materializable and must be promoted only by the
+    pinned-runtime evidence path below.
     """
 
     from api_service.db.models import ProviderProfileAuthState
@@ -270,6 +269,17 @@ def _has_configured_runtime_authority(profile: Any) -> bool:
         state == ProviderProfileAuthState.API_KEY_PENDING.value
         and secret_ref == OPENCODE_DEPLOYMENT_SECRET_REF
     )
+
+
+def _has_authoritative_disable(profile: Any) -> bool:
+    """Report whether startup configuration must preserve the disabled state."""
+
+    reason = getattr(
+        getattr(profile, "disabled_reason", None),
+        "value",
+        getattr(profile, "disabled_reason", None),
+    )
+    return str(reason or "") in {"user_disabled", "policy_disabled"}
 
 
 def _pinned_image_ref() -> str | None:
@@ -353,10 +363,26 @@ async def reconcile_opencode_provider_readiness(
         str(getattr(profile, "provider_id", "") or "") == OPENCODE_PROVIDER_ID
         for profile in enrolled
     )
+    recoverable_deployment_profile = next(
+        (
+            profile
+            for profile in enrolled
+            if profile.profile_id == "opencode-go-default"
+            and str(getattr(profile, "provider_id", "") or "")
+            == OPENCODE_PROVIDER_ID
+            and not profile.enabled
+            and not _has_authoritative_disable(profile)
+        ),
+        None,
+    )
     # OpenCode Zen and OpenCode Go are distinct provider routes. A launchable
     # credential-free Zen profile must not consume an explicitly configured Go
     # credential or prevent its separate enrollment.
-    if api_key and not key_backed_enrolled and profile_ids is None:
+    if (
+        api_key
+        and profile_ids is None
+        and (not key_backed_enrolled or recoverable_deployment_profile is not None)
+    ):
         if not allow_enrollment:
             return ProviderReconcileOutcome(
                 ready=False,
@@ -371,9 +397,9 @@ async def reconcile_opencode_provider_readiness(
             checked=len(profiles),
             controller=controller,
         )
-    # A disabled profile cannot launch, and re-validating it would neither help
-    # nor honor the operator. Its credential still counts as enrolled above, so
-    # deployment configuration never re-enables it.
+    # Explicit user and policy disables remain authoritative. Any other
+    # inconsistent disabled state on the stable deployment-owned Go profile was
+    # repaired through canonical bootstrap above when OPENCODE_API_KEY exists.
     launchable = [profile for profile in enrolled if profile.enabled]
 
     if not enrolled:

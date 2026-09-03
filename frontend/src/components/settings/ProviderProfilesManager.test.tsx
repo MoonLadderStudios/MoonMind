@@ -1090,7 +1090,7 @@ describe('ProviderProfilesManager form controls', () => {
     expect(payload).not.toHaveProperty('default_effort');
   });
 
-  it('disables catalog model choices while evidence is stale but preserves existing values', async () => {
+  it('disables stale catalog choices while preserving backend-authorized custom entry', async () => {
     const staleCapabilities = { version: 'tier-cap-v1-stale', profile_id: profile.profile_id, runtime_id: profile.runtime_id, provider_id: profile.provider_id, evidence: { source: 'profile_catalog_evidence', credential_generation: 1, image_ref: null, observed_at: null, stale: true }, tier_constraints: { min_count: 1, max_count: null }, model: { runtime_default: 'gpt-5.5', allow_custom: true, options: [{ value: 'gpt-5.5', label: 'GPT-5.5', description: null, status: 'available' }, { value: 'gpt-4o', label: 'GPT-4o', description: null, status: 'available', compatible_models: null }] }, effort: { supported: true, runtime_default: 'medium', allow_custom: false, application: 'native', options: [{ value: 'medium', label: 'Medium', description: null, status: 'available', compatible_models: null }] }, diagnostics: [] };
     vi.spyOn(window, 'fetch').mockImplementation(async (input) => {
       const url = String(input);
@@ -1108,7 +1108,7 @@ describe('ProviderProfilesManager form controls', () => {
     renderProviderProfilesManager([staleProfile]);
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
 
-    await screen.findByText(/catalog choices are disabled/);
+    await screen.findByText(/observed catalog choices are disabled/);
     const modelSelect = screen.getByLabelText('Tier 1 model') as HTMLSelectElement;
     expect(modelSelect.value).toBe('gpt-4o');
     const options = within(modelSelect).getAllByRole('option') as HTMLOptionElement[];
@@ -1116,8 +1116,12 @@ describe('ProviderProfilesManager form controls', () => {
     expect(byValue.get('__runtime_default__')?.disabled).toBe(false);
     expect(byValue.get('gpt-5.5')?.disabled).toBe(true);
     expect(byValue.get('gpt-4o')?.disabled).toBe(false);
-    expect(within(modelSelect).queryByRole('option', { name: 'Custom value…' })).toBeNull();
-    expect(screen.queryByLabelText('Tier 1 custom model')).toBeNull();
+    expect(within(modelSelect).getByRole('option', { name: 'Custom value…' })).toBeTruthy();
+    fireEvent.change(modelSelect, { target: { value: '__custom__' } });
+    const customInput = screen.getByLabelText('Tier 1 custom model') as HTMLInputElement;
+    expect(customInput.disabled).toBe(false);
+    fireEvent.change(customInput, { target: { value: 'opencode-go/manual-model' } });
+    expect(customInput.value).toBe('opencode-go/manual-model');
   });
 
   it('offers a custom model entry when the backend allows custom models', async () => {
@@ -2881,4 +2885,3 @@ describe('MoonLadderStudios/MoonMind#3815 cross-boundary verification (#3822 cov
     expect(screen.getByDisplayValue('db://custom-secret')).toBeTruthy();
   });
 });
-
