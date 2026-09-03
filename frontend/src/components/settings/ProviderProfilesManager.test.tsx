@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import type { ProviderProfile } from './ProviderProfilesManager';
 import {
@@ -1088,6 +1088,66 @@ describe('ProviderProfilesManager form controls', () => {
     expect(payload.default_model_tier).toBe(1);
     expect(payload).not.toHaveProperty('default_model');
     expect(payload).not.toHaveProperty('default_effort');
+  });
+
+  it('disables catalog model choices while evidence is stale but preserves existing values', async () => {
+    const staleCapabilities = { version: 'tier-cap-v1-stale', profile_id: profile.profile_id, runtime_id: profile.runtime_id, provider_id: profile.provider_id, evidence: { source: 'profile_catalog_evidence', credential_generation: 1, image_ref: null, observed_at: null, stale: true }, tier_constraints: { min_count: 1, max_count: null }, model: { runtime_default: 'gpt-5.5', allow_custom: true, options: [{ value: 'gpt-5.5', label: 'GPT-5.5', description: null, status: 'available' }, { value: 'gpt-4o', label: 'GPT-4o', description: null, status: 'available', compatible_models: null }] }, effort: { supported: true, runtime_default: 'medium', allow_custom: false, application: 'native', options: [{ value: 'medium', label: 'Medium', description: null, status: 'available', compatible_models: null }] }, diagnostics: [] };
+    vi.spyOn(window, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/capabilities')) {
+        return { ok: true, json: async () => staleCapabilities } as Response;
+      }
+      return { ok: true, json: async () => ({ ...profile }) } as Response;
+    });
+    const staleProfile: ProviderProfile = {
+      ...profile,
+      model_tiers: [{ label: null, model: 'gpt-4o', effort: null, parameters: {}, annotations: {} }],
+      default_model_tier: 1,
+    };
+
+    renderProviderProfilesManager([staleProfile]);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+
+    await screen.findByText(/catalog choices are disabled/);
+    const modelSelect = screen.getByLabelText('Tier 1 model') as HTMLSelectElement;
+    expect(modelSelect.value).toBe('gpt-4o');
+    const options = within(modelSelect).getAllByRole('option') as HTMLOptionElement[];
+    const byValue = new Map(options.map((o) => [o.value, o]));
+    expect(byValue.get('__runtime_default__')?.disabled).toBe(false);
+    expect(byValue.get('gpt-5.5')?.disabled).toBe(true);
+    expect(byValue.get('gpt-4o')?.disabled).toBe(false);
+    expect(within(modelSelect).queryByRole('option', { name: 'Custom value…' })).toBeNull();
+    expect(screen.queryByLabelText('Tier 1 custom model')).toBeNull();
+  });
+
+  it('offers a custom model entry when the backend allows custom models', async () => {
+    const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/capabilities')) {
+        return { ok: true, json: async () => ({ version: 'tier-cap-v1-test', profile_id: profile.profile_id, runtime_id: profile.runtime_id, provider_id: profile.provider_id, evidence: { source: 'profile_catalog_evidence', credential_generation: 1, image_ref: null, observed_at: null, stale: false }, tier_constraints: { min_count: 1, max_count: null }, model: { runtime_default: 'gpt-5.5', allow_custom: true, options: [{ value: 'gpt-5.5', label: 'GPT-5.5', description: null, status: 'available' }] }, effort: { supported: true, runtime_default: 'medium', allow_custom: false, application: 'native', options: [{ value: 'medium', label: 'Medium', description: null, status: 'available', compatible_models: null }] }, diagnostics: [] }) } as Response;
+      }
+      return { ok: true, json: async () => ({ ...profile, model_tiers: [{ label: null, model: null, effort: null, parameters: {}, annotations: {} }], default_model_tier: 1 }) } as Response;
+    });
+
+    renderProviderProfilesManager([profile]);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+
+    const modelSelect = await screen.findByLabelText('Tier 1 model') as HTMLSelectElement;
+    fireEvent.change(modelSelect, { target: { value: '__custom__' } });
+    const customInput = screen.getByLabelText('Tier 1 custom model') as HTMLInputElement;
+    fireEvent.change(customInput, { target: { value: 'my-custom-model' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Update provider profile' }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/v1/provider-profiles/codex-default',
+        expect.objectContaining({ method: 'PATCH' }),
+      );
+    });
+    const patchCall = fetchSpy.mock.calls.find((call) => { const init = call[1] as RequestInit | undefined; return String(call[0]).includes('/api/v1/provider-profiles/codex-default') && (init?.method === 'PATCH'); });
+    const [, requestInit] = patchCall ?? [];
+    const payload = JSON.parse(String((requestInit as RequestInit)?.body ?? '{}'));
+    expect(payload.model_tiers).toEqual([{ label: null, model: 'my-custom-model', effort: null, parameters: {}, annotations: {} }]);
   });
 
   it('requires a backend-supported authentication method before creation', async () => {

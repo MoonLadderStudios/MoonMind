@@ -1149,6 +1149,7 @@ export function ProviderProfilesManager({
   const [tierCapabilities, setTierCapabilities] = useState<ProviderProfileTierCapabilities | null>(null);
   const [tierCapabilitiesError, setTierCapabilitiesError] = useState<string | null>(null);
   const [tierCapabilitiesLoading, setTierCapabilitiesLoading] = useState(false);
+  const [customModelEntryTiers, setCustomModelEntryTiers] = useState<Set<string>>(new Set());
   const tierSectionRef = useRef<HTMLElement | null>(null);
   const tierLiveRef = useRef<HTMLDivElement | null>(null);
   const focusedTierClientIdRef = useRef<string | null>(null);
@@ -3828,7 +3829,7 @@ export function ProviderProfilesManager({
             ) : null}
             {tierCapabilities?.evidence?.stale ? (
               <div className="rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-3 text-xs text-amber-800 dark:text-amber-300">
-                Model catalog evidence is stale; new values are not accepted until the profile is revalidated. Existing tier values remain preserved.
+                Model catalog evidence is stale; catalog choices are disabled until the profile is revalidated. Existing tier values and Runtime default remain available.
               </div>
             ) : null}
             {tierCapabilities?.diagnostics?.length ? (
@@ -3873,25 +3874,78 @@ export function ProviderProfilesManager({
                           <div className="grid gap-4 md:grid-cols-2">
                             <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                               <span>Model</span>
-                              <select className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm" value={tier.model ?? '__runtime_default__'} onChange={(e) => handleTierModelChange(tier.clientId, e.target.value === '__runtime_default__' ? null : e.target.value)} aria-label={`Tier ${tierNumber} model`}>
-                                <option value="__runtime_default__">Runtime default{tierCapabilities?.model?.runtime_default ? ` — ${tierCapabilities.model.runtime_default}` : ''}</option>
-                                {(tierCapabilities?.model?.options ?? []).map((opt) => (
-                                  <option key={opt.value} value={opt.value}>
-                                    {opt.label}
-                                    {opt.status === 'deprecated' ? ' (Deprecated)' : ''}
-                                    {opt.recommended ? ' · Recommended' : ''}
-                                  </option>
-                                ))}
-                                {tierCapabilities === null ? (
+                              {(() => {
+                                const catalogOptions = tierCapabilities?.model?.options ?? [];
+                                const staleCatalog = tierCapabilities?.evidence?.stale === true;
+                                const allowCustomModel = tierCapabilities?.model?.allow_custom === true;
+                                const knownValues = new Set([
+                                  '__runtime_default__',
+                                  ...catalogOptions.map((o) => o.value),
+                                  ...(tierCapabilities === null ? ['gpt-5.5', 'gpt-4o'] : []),
+                                ]);
+                                const currentValue = tier.model ?? '__runtime_default__';
+                                const isCustomValue = tier.model != null && tier.model !== '' && !knownValues.has(tier.model);
+                                const isCustomDraft = customModelEntryTiers.has(tier.clientId);
+                                // While catalog evidence is stale, a custom draft falls back to
+                                // Runtime default rather than offering new selection. A preserved
+                                // custom value stays visible but uneditable.
+                                const selectValue = isCustomValue && staleCatalog
+                                  ? tier.model as string
+                                  : (!staleCatalog && (isCustomValue || isCustomDraft) ? '__custom__' : currentValue);
+                                const showCustomInput = allowCustomModel && (isCustomValue || (!staleCatalog && isCustomDraft));
+                                return (
                                   <>
-                                    <option value="gpt-5.5">GPT-5.5</option>
-                                    <option value="gpt-4o">GPT-4o</option>
+                                    <select className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm" value={selectValue} onChange={(e) => {
+                                      const next = e.target.value;
+                                      if (next === '__custom__') {
+                                        setCustomModelEntryTiers((prev) => new Set(prev).add(tier.clientId));
+                                        return;
+                                      }
+                                      setCustomModelEntryTiers((prev) => {
+                                        if (!prev.has(tier.clientId)) return prev;
+                                        const nextSet = new Set(prev);
+                                        nextSet.delete(tier.clientId);
+                                        return nextSet;
+                                      });
+                                      handleTierModelChange(tier.clientId, next === '__runtime_default__' ? null : next);
+                                    }} aria-label={`Tier ${tierNumber} model`}>
+                                      <option value="__runtime_default__">Runtime default{tierCapabilities?.model?.runtime_default ? ` — ${tierCapabilities.model.runtime_default}` : ''}</option>
+                                      {catalogOptions.map((opt) => (
+                                        <option key={opt.value} value={opt.value} disabled={staleCatalog && opt.value !== tier.model}>
+                                          {opt.label}
+                                          {opt.status === 'deprecated' ? ' (Deprecated)' : ''}
+                                          {opt.recommended ? ' · Recommended' : ''}
+                                        </option>
+                                      ))}
+                                      {tierCapabilities === null ? (
+                                        <>
+                                          <option value="gpt-5.5">GPT-5.5</option>
+                                          <option value="gpt-4o">GPT-4o</option>
+                                        </>
+                                      ) : null}
+                                      {tier.model && !knownValues.has(tier.model) && tier.model !== '' ? (
+                                        <option value={tier.model}>{tier.model} (existing — custom or unavailable)</option>
+                                      ) : null}
+                                      {allowCustomModel && !staleCatalog ? (
+                                        <option value="__custom__">Custom value…</option>
+                                      ) : null}
+                                    </select>
+                                    {allowCustomModel && showCustomInput ? (
+                                      <input
+                                        className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm font-normal"
+                                        value={tier.model ?? ''}
+                                        disabled={staleCatalog}
+                                        onChange={(e) => {
+                                          const text = e.target.value.trim();
+                                          handleTierModelChange(tier.clientId, text === '' ? null : text);
+                                        }}
+                                        placeholder="Custom model id"
+                                        aria-label={`Tier ${tierNumber} custom model`}
+                                      />
+                                    ) : null}
                                   </>
-                                ) : null}
-                                {tier.model && !tierCapabilities?.model?.options.some((o) => o.value === tier.model) && tier.model !== '__runtime_default__' ? (
-                                  <option value={tier.model}>{tier.model} (existing — custom or unavailable)</option>
-                                ) : null}
-                              </select>
+                                );
+                              })()}
                               {tierFieldErrors[`${tier.clientId}.model`] ? <span className="text-xs text-rose-600">{tierFieldErrors[`${tier.clientId}.model`]}</span> : null}
                             </label>
                             <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
