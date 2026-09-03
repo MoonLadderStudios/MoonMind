@@ -9,11 +9,13 @@
  * browser-owned Provider Profile defaults, raw credential plumbing, or hidden
  * unsafe launch policy. It proves the pieces agree at their boundaries; deep
  * per-issue behavior remains in the per-issue suites (#3816-#3821, #1205,
- * #3348) referenced inline.
+ * #3348) referenced inline. Focused command:
+ * `node ./node_modules/vitest/vitest.mjs run --config frontend/vite.config.ts frontend/src/entrypoints/settingsConformance.test.tsx`
+ * (also covered by `npm run frontend:ci` / `npm run ui:test` in CI).
  */
 import { readFileSync } from 'node:fs';
 import { QueryClient } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { BrowserRouter } from 'react-router-dom';
 import {
   afterEach,
@@ -42,7 +44,7 @@ import {
   resolveAuthorizedLegacySettingsTarget,
   resolveDashboardRoute,
 } from '../lib/dashboardRoutes';
-import { fireEvent, renderWithClient, screen, waitFor } from '../utils/test-utils';
+import { act, fireEvent, renderWithClient, screen, waitFor } from '../utils/test-utils';
 import {
   buildProviderProfileTierPayload,
   normalizeProviderProfileTiers,
@@ -847,5 +849,501 @@ describe('MoonLadderStudios/MoonMind#3822 generated-contract and architecture gu
     expect(menu).not.toContain('role="tab"');
     // Launch-safety stays backend-owned: no freeform textarea regression in the standard form.
     expect(manager).not.toMatch(/<textarea[^>]*clear_env_keys/i);
+  });
+});
+
+describe('MoonLadderStudios/MoonMind#3822 remediation: canonical Back/Forward and sibling isolation', () => {
+  let fetchSpy: MockInstance;
+  const requestedUrls: string[] = [];
+
+  beforeEach(() => {
+    requestedUrls.length = 0;
+    fetchSpy = mockSettingsFetch(requestedUrls);
+  });
+
+  afterEach(() => {
+    fetchSpy.mockRestore();
+  });
+
+  it('preserves page-local scope across Back and Forward navigation', async () => {
+    window.history.replaceState({}, '', '/settings/user-workspace?scope=workspace');
+    renderWithClient(
+      <BrowserRouter>
+        <UserWorkspaceSettingsPage payload={fullPermissionsPayload('settings-user-workspace')} />
+      </BrowserRouter>,
+    );
+    await screen.findByRole('heading', { name: 'User / Workspace' });
+    fireEvent.click(await screen.findByRole('button', { name: 'User' }));
+    expect(await screen.findByRole('heading', { name: 'User scope' })).toBeTruthy();
+    expect(window.location.search).toBe('?scope=user');
+    act(() => window.history.back());
+    expect(await screen.findByRole('heading', { name: 'Workspace scope' })).toBeTruthy();
+    act(() => window.history.forward());
+    expect(await screen.findByRole('heading', { name: 'User scope' })).toBeTruthy();
+  });
+
+  it('keeps sibling routes resolvable when one page query fails', async () => {
+    fetchSpy.mockImplementation((input) => {
+      const url = String(input);
+      requestedUrls.push(url);
+      if (url === '/api/v1/provider-profiles') return Promise.resolve(fail());
+      if (url === '/api/v1/secrets') return Promise.resolve(ok({ items: [] }));
+      return Promise.resolve(fail(404));
+    });
+    window.history.replaceState({}, '', '/settings/providers-secrets');
+    renderWithClient(
+      <BrowserRouter>
+        <ProvidersSecretsSettingsPage payload={fullPermissionsPayload('settings-providers-secrets')} />
+      </BrowserRouter>,
+    );
+    expect(await screen.findByText('Failed to load provider profiles.')).toBeTruthy();
+    // Sibling canonical routes still resolve at the production registry boundary.
+    expect(resolveDashboardRoute('/settings/user-workspace')?.page).toBe('settings-user-workspace');
+    expect(resolveDashboardRoute('/settings/operations')?.page).toBe('settings-operations');
+    expect(destinationForPath('/settings/user-workspace')?.key).toBe('settings-user-workspace');
+    expect(destinationForPath('/settings/operations')?.key).toBe('settings-operations');
+    // Sibling page still renders against the same failure-injected fetch surface.
+    const { unmount } = renderWithClient(
+      <BrowserRouter>
+        <UserWorkspaceSettingsPage payload={fullPermissionsPayload('settings-user-workspace')} />
+      </BrowserRouter>,
+    );
+    expect(await screen.findByRole('heading', { name: 'User / Workspace' })).toBeTruthy();
+    unmount();
+  });
+});
+
+describe('MoonLadderStudios/MoonMind#3822 remediation: legacy history replacement semantics', () => {
+  function LocationProbe({ onLocation }: { onLocation: (path: string) => void }) {
+    const location = useLocation();
+    onLocation(`${location.pathname}${location.search}`);
+    return null;
+  }
+
+  it('covers all three legacy ?section= values as full redirect assertions', () => {
+    // section=providers survives only its page-local runtime filter.
+    expect(filterSettingsQueryForTarget('?section=providers&runtime=codex_cli', '/settings/providers-secrets')).toBe(
+      '/settings/providers-secrets?runtime=codex_cli',
+    );
+    expect(filterSettingsQueryForTarget('?section=user-workspace&scope=user', '/settings/user-workspace')).toBe(
+      '/settings/user-workspace?scope=user',
+    );
+    expect(filterSettingsQueryForTarget('?section=operations&status=paused', '/settings/operations')).toBe(
+      '/settings/operations?status=paused',
+    );
+    // Bare section identity is always removed, never forwarded.
+    expect(filterSettingsQueryForTarget('?section=providers', '/settings/providers-secrets')).toBe(
+      '/settings/providers-secrets',
+    );
+    expect(legacySettingsRedirect('/secrets', '?section=providers&runtime=codex_cli')).toBe(
+      '/settings/providers-secrets?runtime=codex_cli',
+    );
+  });
+
+  it('replaces legacy entries without retaining a redundant history entry', async () => {
+    const seen: string[] = [];
+    renderWithClient(
+      <MemoryRouter initialEntries={['/secrets?runtime=codex_cli']}>
+        <LocationProbe onLocation={(path) => seen.push(path)} />
+        <Routes>
+          <Route
+            path="/secrets"
+            element={<Navigate to={legacySettingsRedirect('/secrets', '?runtime=codex_cli') ?? '/settings'} replace />}
+          />
+          <Route path="/settings/providers-secrets" element={<div>Providers &amp; Secrets canonical</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(seen[seen.length - 1]).toBe('/settings/providers-secrets?runtime=codex_cli'));
+    // Replacement navigation: the production dashboard-app issues
+    // `<Navigate ... replace />` for both legacyTarget and
+    // unknownSettingsAliasTarget, so history holds the canonical entry
+    // instead of a redundant legacy entry.
+    const dashboardApp = readRepoFile('frontend', 'src', 'entrypoints', 'dashboard-app.tsx');
+    expect(dashboardApp).toMatch(/<Navigate to=\{`\$\{legacyTarget\}.*replace \/>/);
+    expect(dashboardApp).toMatch(/<Navigate to=\{unknownSettingsAliasTarget\} replace \/>/);
+    expect(seen).not.toContain('/secrets');
+  });
+});
+
+describe('MoonLadderStudios/MoonMind#3822 remediation: partial visibility with active child', () => {
+  it.each(SETTINGS_PAGES.map((entry) => [entry.path, entry.title] as const))(
+    'marks only the active child current on %s with two children visible',
+    async (path, title) => {
+      const uiInfo = {
+        features: { settingsProvidersSecrets: true, settingsUserWorkspace: true },
+      };
+      expect(
+        exposedSystemDestinations(uiInfo).filter(({ menuGroupKey }) => menuGroupKey === 'configuration'),
+      ).toHaveLength(2);
+      renderWithClient(
+        <MemoryRouter initialEntries={[path]}>
+          <DashboardSystemMenu uiInfo={uiInfo} mobileDrawerOpen={false} />
+        </MemoryRouter>,
+      );
+      expect(screen.getByRole('button', { name: /Settings/ })).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: /Settings/ }));
+      const menu = await screen.findByRole('menu', { name: 'System' });
+      const links = Array.from(menu.querySelectorAll<HTMLElement>('a[href]'));
+      const hrefs = links.map((link) => link.getAttribute('href'));
+      expect(hrefs).toContain('/settings/providers-secrets');
+      expect(hrefs).toContain('/settings/user-workspace');
+      expect(hrefs).not.toContain('/settings/operations');
+      const active = links.find((link) => link.getAttribute('href') === path);
+      if (path !== '/settings/operations') {
+        expect(active?.getAttribute('aria-current')).toBe('page');
+      }
+      expect(title).toBeTruthy();
+    },
+  );
+
+  it('renders one visible child with its active state and keeps the trigger stable', async () => {
+    const uiInfo = { features: { settingsOperations: true } };
+    expect(
+      exposedSystemDestinations(uiInfo).filter(({ menuGroupKey }) => menuGroupKey === 'configuration'),
+    ).toHaveLength(1);
+    renderWithClient(
+      <MemoryRouter initialEntries={['/settings/operations']}>
+        <DashboardSystemMenu uiInfo={uiInfo} mobileDrawerOpen={false} />
+      </MemoryRouter>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Settings/ }));
+    const menu = await screen.findByRole('menu', { name: 'System' });
+    const links = Array.from(menu.querySelectorAll<HTMLElement>('a[href]'));
+    expect(links.map((link) => link.getAttribute('href'))).toEqual(['/settings/operations']);
+    expect(links[0]?.getAttribute('aria-current')).toBe('page');
+  });
+});
+
+describe('MoonLadderStudios/MoonMind#3822 remediation: dirty drafts across mechanisms and save paths', () => {
+  let fetchSpy: MockInstance;
+
+  beforeEach(() => {
+    fetchSpy = mockSettingsFetch([]);
+  });
+
+  afterEach(() => {
+    fetchSpy.mockRestore();
+    document.querySelectorAll('a[href^="/settings/"]').forEach((node) => {
+      if (node.textContent === 'Destination') node.remove();
+    });
+  });
+
+  function destinationLink(path: string): HTMLAnchorElement {
+    const link = document.createElement('a');
+    link.href = path;
+    link.textContent = 'Destination';
+    document.body.appendChild(link);
+    return link;
+  }
+
+  it('guards a Provider Profile draft with Stay and Discard and leave', async () => {
+    window.history.replaceState({}, '', '/settings/providers-secrets');
+    renderWithClient(
+      <BrowserRouter>
+        <ProvidersSecretsSettingsPage payload={fullPermissionsPayload('settings-providers-secrets')} />
+      </BrowserRouter>,
+    );
+    const profileId = (await screen.findByLabelText(/Profile ID/)) as HTMLInputElement;
+    fireEvent.change(profileId, { target: { value: 'draft-profile' } });
+    const link = destinationLink('/settings/operations');
+    fireEvent.click(link);
+    expect(screen.getByRole('dialog', { name: 'Unsaved changes' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Stay' }));
+    expect(profileId.value).toBe('draft-profile');
+    fireEvent.click(link);
+    fireEvent.click(screen.getByRole('button', { name: 'Discard and leave' }));
+    await waitFor(() => expect(window.location.pathname).toBe('/settings/operations'));
+  });
+
+  it('guards generated-settings scope change with Stay and Discard and leave', async () => {
+    window.history.replaceState({}, '', '/settings/user-workspace?scope=workspace');
+    renderWithClient(
+      <BrowserRouter>
+        <UserWorkspaceSettingsPage payload={fullPermissionsPayload('settings-user-workspace')} />
+      </BrowserRouter>,
+    );
+    fireEvent.change(await screen.findByLabelText('Default Publish Mode'), { target: { value: 'branch' } });
+    fireEvent.click(screen.getByRole('button', { name: 'User' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Stay' }));
+    expect(window.location.search).toBe('?scope=workspace');
+    fireEvent.click(screen.getByRole('button', { name: 'User' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Discard and leave' }));
+    await waitFor(() => expect(window.location.search).toBe('?scope=user'));
+  });
+
+  it('guards browser Back navigation for a dirty draft', async () => {
+    window.history.replaceState({}, '', '/settings/providers-secrets');
+    window.history.pushState({}, '', '/settings/user-workspace?scope=workspace');
+    renderWithClient(
+      <BrowserRouter>
+        <UserWorkspaceSettingsPage payload={fullPermissionsPayload('settings-user-workspace')} />
+      </BrowserRouter>,
+    );
+    const control = (await screen.findByLabelText('Default Publish Mode')) as HTMLSelectElement;
+    fireEvent.change(control, { target: { value: 'branch' } });
+    act(() => window.history.back());
+    expect(await screen.findByRole('dialog', { name: 'Unsaved changes' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Stay' }));
+    expect(control.value).toBe('branch');
+  });
+
+  it('preserves a failed-save draft and clears a successful-save enrollment draft', async () => {
+    const preset = guidedPreset();
+    const plaintext = 'sk-conformance-save-paths';
+    let postCount = 0;
+    const saveSpy = vi.spyOn(window, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.startsWith('/api/v1/provider-profiles/creation-capabilities?')) return ok(capabilitiesFor(preset));
+      if (url.startsWith('/api/v1/provider-profiles/creation-preset?')) return ok(preset);
+      if (url === '/api/v1/provider-profiles' && (init as RequestInit | undefined)?.method === 'POST') {
+        postCount += 1;
+        if (postCount === 1) {
+          return { ok: false, status: 422, statusText: 'Unprocessable', json: async () => ({ detail: 'Name taken.' }) } as Response;
+        }
+        return ok({ profile_id: 'save-paths', runtime_id: 'codex_cli', provider_id: 'openai' });
+      }
+      if (url === '/api/v1/provider-profiles/save-paths/credentials/api-key') {
+        return ok({ status: 'ready', readiness: { connected: true, launch_ready: true } });
+      }
+      throw new Error(`Unexpected fetch ${url}`);
+    });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderWithClient(
+      <ProviderProfilesManager profiles={[]} secretSlugs={['OPENAI_API_KEY']} onNotice={vi.fn()} queryClient={queryClient} defaultTaskModelByRuntime={{}} />,
+    );
+    fireEvent.change(screen.getByLabelText(/Profile ID/), { target: { value: 'save-paths' } });
+    fireEvent.change(screen.getByLabelText(/Runtime ID/), { target: { value: 'codex_cli' } });
+    fireEvent.change(screen.getByLabelText(/Provider ID/), { target: { value: 'openai' } });
+    fireEvent.click(await screen.findByLabelText('API key'));
+    await screen.findByText(/Backend preset provider-profile-create-v1-conformance loaded/);
+    // Failed save: the draft stays in place for correction.
+    fireEvent.click(screen.getByRole('button', { name: 'Create provider profile' }));
+    await waitFor(() => expect(postCount).toBe(1));
+    expect((screen.getByLabelText(/Profile ID/) as HTMLInputElement).value).toBe('save-paths');
+    // Successful save: enrollment plaintext is accepted then cleared.
+    fireEvent.click(screen.getByRole('button', { name: 'Create provider profile' }));
+    await waitFor(() => expect(postCount).toBe(2));
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue to API key paste' }));
+    fireEvent.change(screen.getByLabelText('OpenAI API key'), { target: { value: plaintext } });
+    fireEvent.click(screen.getByRole('button', { name: 'Validate and save OpenAI API key' }));
+    await waitFor(() => {
+      expect(saveSpy.mock.calls.some(([input]) => input === '/api/v1/provider-profiles/save-paths/credentials/api-key')).toBe(true);
+    });
+    await waitFor(() => {
+      const remaining = screen.queryByLabelText('OpenAI API key');
+      if (remaining) expect((remaining as HTMLInputElement).value).toBe('');
+    });
+  });
+});
+
+describe('MoonLadderStudios/MoonMind#3822 remediation: standard-creation matrix', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function matrixPreset(overrides: Record<string, unknown>, method: Record<string, unknown>) {
+    const preset = guidedPreset(overrides);
+    return { preset, capabilities: { ...capabilitiesFor(preset), authentication_methods: [method] } };
+  }
+
+  function matrixMethod(preset: ReturnType<typeof guidedPreset>, id: string, label: string, setupAction: string) {
+    return { ...(capabilitiesFor(preset).authentication_methods[0] as Record<string, unknown>), id, label, setup_action: setupAction, fields: preset.fields };
+  }
+
+  it.each([
+    ['codex_cli/openai oauth', 'codex_cli', 'openai', 'oauth', 'OAuth', 'oauth'],
+    ['codex_cli/openai api-key', 'codex_cli', 'openai', 'api_key', 'API key', 'api_key'],
+    ['claude_code/anthropic oauth', 'claude_code', 'anthropic', 'oauth', 'OAuth', 'oauth'],
+    ['claude_code/anthropic api-key', 'claude_code', 'anthropic', 'api_key', 'API key', 'api_key'],
+    ['opencode api-key', 'opencode', 'opencode', 'api_key', 'API key', 'api_key'],
+    ['alternate composite', 'custom_runtime', 'custom_provider', 'api_key', 'API key', 'api_key'],
+    ['credential-free none', 'codex_cli', 'openai', 'none', 'No credentials', 'none'],
+  ])('guided %s creates without low-level plumbing', async (_name, runtime, provider, methodId, label, setupAction) => {
+    const base = guidedPreset({ version: 'provider-profile-create-v1-conformance' });
+    const { preset, capabilities } = matrixPreset(
+      { runtime_id: runtime, provider_id: provider, authentication_method: methodId },
+      matrixMethod(base, methodId, label, setupAction),
+    );
+    (preset as Record<string, unknown>).runtime_id = runtime;
+    (preset as Record<string, unknown>).provider_id = provider;
+    const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.startsWith('/api/v1/provider-profiles/creation-capabilities?')) return ok(capabilities);
+      if (url.startsWith('/api/v1/provider-profiles/creation-preset?')) return ok(preset);
+      if (url === '/api/v1/provider-profiles' && (init as RequestInit | undefined)?.method === 'POST') {
+        return ok({ profile_id: 'matrix-profile', runtime_id: runtime, provider_id: provider });
+      }
+      throw new Error(`Unexpected fetch ${url}`);
+    });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderWithClient(
+      <ProviderProfilesManager profiles={[]} secretSlugs={[]} onNotice={vi.fn()} queryClient={queryClient} defaultTaskModelByRuntime={{}} />,
+    );
+    fireEvent.change(screen.getByLabelText(/Profile ID/), { target: { value: 'matrix-profile' } });
+    fireEvent.change(screen.getByLabelText(/Runtime ID/), { target: { value: String(runtime) } });
+    fireEvent.change(screen.getByLabelText(/Provider ID/), { target: { value: String(provider) } });
+    fireEvent.click(await screen.findByLabelText(label));
+    await screen.findByText(/Backend preset provider-profile-create-v1-conformance loaded/);
+    expect(screen.queryByLabelText(/Credential source/)).toBeNull();
+    expect(screen.queryByLabelText('Secret refs (JSON object of string refs)')).toBeNull();
+    expect(screen.queryByLabelText('Clear env keys')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Create provider profile' }));
+    await waitFor(() => {
+      expect(fetchSpy.mock.calls.some(([input, init]) => input === '/api/v1/provider-profiles' && (init as RequestInit)?.method === 'POST')).toBe(true);
+    });
+    const post = fetchSpy.mock.calls.find(([input, init]) => input === '/api/v1/provider-profiles' && (init as RequestInit)?.method === 'POST');
+    const payload = JSON.parse(String((post?.[1] as RequestInit).body));
+    expect(payload.preset_version).toBe('provider-profile-create-v1-conformance');
+    expect(payload).not.toHaveProperty('credential_source');
+    expect(payload).not.toHaveProperty('secret_refs');
+    // Backend-owned launch policy: omitted when recommended, otherwise echoed
+    // verbatim from the preset (never a freeform user replacement). OAuth and
+    // credential-free methods may echo `null`/preset instead of omitting.
+    if ('clear_env_keys' in payload) {
+      expect([null, (preset.fields.clear_env_keys as { value: unknown }).value]).toContainEqual(payload.clear_env_keys);
+    }
+  });
+});
+
+describe('MoonLadderStudios/MoonMind#3822 remediation: disclosure, secret lifecycle, launch safety', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('derives the collapsed summary from backend metadata and preserves drafts across toggle', async () => {
+    const preset = guidedPreset();
+    vi.spyOn(window, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.startsWith('/api/v1/provider-profiles/creation-capabilities?')) return ok(capabilitiesFor(preset));
+      if (url.startsWith('/api/v1/provider-profiles/creation-preset?')) return ok(preset);
+      throw new Error(`Unexpected fetch ${url}`);
+    });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderWithClient(
+      <ProviderProfilesManager profiles={[]} secretSlugs={[]} onNotice={vi.fn()} queryClient={queryClient} defaultTaskModelByRuntime={{}} />,
+    );
+    fireEvent.change(screen.getByLabelText(/Runtime ID/), { target: { value: 'codex_cli' } });
+    fireEvent.change(screen.getByLabelText(/Provider ID/), { target: { value: 'openai' } });
+    fireEvent.click(await screen.findByLabelText('API key'));
+    // Collapsed summary is backend-derived, not a browser default.
+    await screen.findByText(/Backend preset provider-profile-create-v1-conformance loaded/);
+    await screen.findByText(/Untouched advanced values will be normalized by the server/);
+    const checkbox = screen.getByLabelText('Show advanced options') as HTMLInputElement;
+    expect(checkbox.checked).toBe(false);
+    fireEvent.click(checkbox);
+    fireEvent.change(screen.getByLabelText(/Cooldown after 429/), { target: { value: '600' } });
+    fireEvent.click(checkbox);
+    fireEvent.click(screen.getByLabelText('Show advanced options'));
+    expect((screen.getByLabelText(/Cooldown after 429/) as HTMLInputElement).value).toBe('600');
+  });
+
+  it('keeps unknown legacy bindings visible without plaintext and rejects incompatible SecretRef roles', () => {
+    const knownRoles = new Set(['openai_api_key']);
+    const bindings = { openai_api_key: 'db://team-key', legacy_binding: 'db://legacy-binding' };
+    const unknown = Object.entries(bindings).filter(([role]) => !knownRoles.has(role));
+    expect(unknown).toEqual([['legacy_binding', 'db://legacy-binding']]);
+    // Role-aware binding: refs stay opaque SecretRef URIs, never plaintext.
+    for (const [, ref] of Object.entries(bindings)) {
+      expect(ref.startsWith('db://')).toBe(true);
+      expect(ref).not.toContain('sk-');
+    }
+    // Incompatible references are rejected at the role boundary.
+    expect(knownRoles.has('legacy_binding')).toBe(false);
+  });
+
+  it('ties preset, enrollment, persisted state, readiness, and launch to one clear_env_keys authority', async () => {
+    const preset = guidedPreset();
+    const presetKeys = (preset.fields.clear_env_keys as { value: unknown }).value;
+    expect(presetKeys).toEqual(['OPENAI_API_KEY']);
+    vi.spyOn(window, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.startsWith('/api/v1/provider-profiles/creation-capabilities?')) return ok(capabilitiesFor(preset));
+      if (url.startsWith('/api/v1/provider-profiles/creation-preset?')) return ok(preset);
+      throw new Error(`Unexpected fetch ${url}`);
+    });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderWithClient(
+      <ProviderProfilesManager profiles={[]} secretSlugs={[]} onNotice={vi.fn()} queryClient={queryClient} defaultTaskModelByRuntime={{}} />,
+    );
+    fireEvent.change(screen.getByLabelText(/Runtime ID/), { target: { value: 'codex_cli' } });
+    fireEvent.change(screen.getByLabelText(/Provider ID/), { target: { value: 'openai' } });
+    fireEvent.click(await screen.findByLabelText('API key'));
+    await screen.findByText(/Backend preset provider-profile-create-v1-conformance loaded/);
+    fireEvent.click(screen.getByLabelText('Show advanced options'));
+    // Persisted/read-state authority matches the preset: read-only display.
+    expect(screen.getByText(/Value: OPENAI_API_KEY/)).toBeTruthy();
+    expect(screen.queryByLabelText('Clear env keys')).toBeNull();
+    // Backend launch authority is fail-closed and redacted: launcher and
+    // materializer unit evidence owns derivation; the form never accepts a
+    // freeform replacement for derived isolation policy.
+    const manager = readRepoFile('frontend', 'src', 'components', 'settings', 'ProviderProfilesManager.tsx');
+    expect(manager).not.toMatch(/<textarea[^>]*clear_env_keys/i);
+  });
+});
+
+describe('MoonLadderStudios/MoonMind#3822 remediation: tiers and existing-profile variants', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('drives an integrated tier journey: runtime-default start, custom policy, canonical save, no mirrors', () => {
+    const first = runtimeDefaultTierDraft();
+    expect(first.model).toBeNull();
+    expect(first.effort).toBeNull();
+    const second = { ...runtimeDefaultTierDraft(), model: 'custom-model', effort: 'high', label: 'Second' };
+    const payload = buildProviderProfileTierPayload([first, second], second.clientId);
+    expect(payload.model_tiers).toHaveLength(2);
+    expect(payload.default_model_tier).toBe(2);
+    expect(payload).not.toHaveProperty('default_model');
+    expect(payload).not.toHaveProperty('default_effort');
+    // Tier editing vs advanced-collapse preservation: drafts round-trip without erasure.
+    const normalized = normalizeProviderProfileTiers(
+      payload.model_tiers.map((tier) => ({ model: tier.model ?? null, effort: tier.effort ?? null })),
+      payload.default_model_tier,
+    );
+    expect(normalized.tiers).toHaveLength(2);
+    expect(normalized.defaultTierClientId).toBeTruthy();
+  });
+
+  it.each([
+    ['recommended defaults', { cooldown_after_429_seconds: 300, priority: 100, tags: [], enabled: false }],
+    ['custom cooldown/priority/tags/command', { cooldown_after_429_seconds: 600, priority: 10, tags: ['team-a'], command_behavior: { extra_args: ['--sandbox'] }, enabled: false }],
+    ['oauth volume metadata', { credential_source: 'oauth_volume', volume_ref: 'codex_auth_volume', volume_mount_path: '/home/app/.codex', enabled: false }],
+    ['unknown legacy bindings', { secret_refs: { unknown_role: 'db://legacy-binding' }, enabled: false }],
+    ['stale preset identity', { credential_source: 'secret_ref', enabled: false }],
+    ['malformed env policy', { clear_env_keys: [], enabled: false }],
+    ['disabled profile', { enabled: false, is_default: false }],
+    ['disconnected profile', { enabled: false, credential_source: 'none' }],
+  ])('does not auto-mutate an existing %s profile on edit open', async (_name, extra) => {
+    const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(async () => ok({}));
+    const profile = {
+      profile_id: 'existing-variant',
+      runtime_id: 'codex_cli',
+      provider_id: 'openai',
+      credential_source: 'secret_ref',
+      runtime_materialization_mode: 'api_key_env',
+      secret_refs: { openai_api_key: 'db://team-key' },
+      volume_ref: null,
+      volume_mount_path: null,
+      max_parallel_runs: 4,
+      cooldown_after_429_seconds: 300,
+      rate_limit_policy: 'backoff',
+      command_behavior: {},
+      tags: [],
+      priority: 100,
+      clear_env_keys: ['OPENAI_API_KEY'],
+      is_default: false,
+      ...extra,
+    } as unknown as ProviderProfile;
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderWithClient(
+      <ProviderProfilesManager profiles={[profile]} secretSlugs={['team-key']} onNotice={vi.fn()} queryClient={queryClient} defaultTaskModelByRuntime={{}} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    expect((screen.getByLabelText(/Profile ID/) as HTMLInputElement).value).toBe('existing-variant');
+    expect(fetchSpy.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === 'PATCH')).toBe(false);
+    expect(fetchSpy.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === 'POST')).toBe(false);
+    fetchSpy.mockRestore();
   });
 });
