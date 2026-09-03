@@ -1521,8 +1521,15 @@ async def _auto_seed_provider_profiles() -> list[str]:
         generic_host_enabled,
         opencode_support_enabled,
     )
+    from moonmind.omnigent.bootstrap.opencode import (
+        DEFAULT_OPENCODE_MODEL_DISPLAY,
+        DEFAULT_OPENCODE_QUALIFIED,
+        ZEN_FREE_MODEL_DISPLAY,
+        ZEN_FREE_QUALIFIED,
+    )
 
-    if opencode_support_enabled() and generic_host_enabled():
+    opencode_defaults_enabled = opencode_support_enabled() and generic_host_enabled()
+    if opencode_defaults_enabled:
         _DEFAULT_PROFILES.append(
             {
                 "profile_id": "opencode-zen-free",
@@ -1530,12 +1537,12 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 "is_default": False,
                 "provider_id": "opencode",
                 "provider_label": "OpenCode Zen",
-                "default_model": "opencode/muse-spark-1.2-contributor-free",
+                "default_model": ZEN_FREE_QUALIFIED,
                 "default_effort": "xhigh",
                 "model_tiers": [
                     {
-                        "label": "Muse Spark 1.2 Contributor Free",
-                        "model": "opencode/muse-spark-1.2-contributor-free",
+                        "label": ZEN_FREE_MODEL_DISPLAY,
+                        "model": ZEN_FREE_QUALIFIED,
                         "effort": "xhigh",
                         "parameters": {},
                         "annotations": {},
@@ -1855,6 +1862,56 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     )
                     existing_by_id[zen_profile_id].update(zen_updates)
                     touched_runtime_ids.add(str(zen_current["runtime_id"]))
+                    needs_commit = True
+
+            # Upgrade only the bootstrap-owned OpenCode Go default policy. A
+            # custom or multi-tier policy is operator-authored and remains
+            # untouched. This also repairs profiles created before bootstrap
+            # explicitly populated the tier contract, whose sole tier was
+            # persisted as Runtime default.
+            go_profile_id = "opencode-go-default"
+            go_current = existing_by_id.get(go_profile_id)
+            legacy_go_model = "opencode-go/muse-spark-1.2-contributor"
+            if (
+                opencode_defaults_enabled
+                and go_current is not None
+                and str(go_current.get("default_model") or "").strip()
+                == legacy_go_model
+            ):
+                go_tiers = list(go_current.get("model_tiers") or [])
+                bootstrap_owned_tiers = (
+                    not go_tiers
+                    or (
+                        len(go_tiers) == 1
+                        and str(go_tiers[0].get("model") or "").strip()
+                        in {"", legacy_go_model}
+                    )
+                )
+                if bootstrap_owned_tiers:
+                    go_updates = {
+                        "default_model": DEFAULT_OPENCODE_QUALIFIED,
+                        "model_tiers": [
+                            {
+                                "label": DEFAULT_OPENCODE_MODEL_DISPLAY,
+                                "model": DEFAULT_OPENCODE_QUALIFIED,
+                                "effort": str(
+                                    go_current.get("default_effort") or "xhigh"
+                                ),
+                                "parameters": {},
+                                "annotations": {},
+                            }
+                        ],
+                        "default_model_tier": 1,
+                    }
+                    await session.execute(
+                        update(ManagedAgentProviderProfile)
+                        .where(
+                            ManagedAgentProviderProfile.profile_id == go_profile_id
+                        )
+                        .values(**go_updates)
+                    )
+                    existing_by_id[go_profile_id].update(go_updates)
+                    touched_runtime_ids.add(str(go_current["runtime_id"]))
                     needs_commit = True
 
             to_insert = [
