@@ -1494,6 +1494,15 @@ async def test_provider_profile_list_returns_enabled_profiles(tmp_path: Path):
                     volume_ref="oauth-volume://claude",
                     volume_mount_path="/home/app/.claude",
                     account_label="primary",
+                    # #3821: backend-derived isolation policy for
+                    # claude_code/anthropic/oauth.
+                    clear_env_keys=[
+                        "ANTHROPIC_API_KEY",
+                        "ANTHROPIC_AUTH_TOKEN",
+                        "ANTHROPIC_BASE_URL",
+                        "CLAUDE_API_KEY",
+                        "OPENAI_API_KEY",
+                    ],
                     max_parallel_runs=1,
                     cooldown_after_429_seconds=300,
                     rate_limit_policy=ManagedAgentRateLimitPolicy.BACKOFF,
@@ -1591,6 +1600,23 @@ async def test_provider_profile_list_filters_by_runtime_id(tmp_path: Path):
                         credential_source=ProviderCredentialSource.SECRET_REF,
                         runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
                         secret_refs={secret_role: f"env://{env_key}"},
+                        # #3821: backend-derived isolation policy for the
+                        # row's runtime/provider/api_key contract.
+                        clear_env_keys=(
+                            [
+                                "OPENAI_BASE_URL",
+                                "OPENAI_ORG_ID",
+                                "OPENAI_PROJECT",
+                                "MINIMAX_API_KEY",
+                            ]
+                            if runtime == "codex_cli"
+                            else [
+                                "ANTHROPIC_AUTH_TOKEN",
+                                "ANTHROPIC_BASE_URL",
+                                "CLAUDE_API_KEY",
+                                "OPENAI_API_KEY",
+                            ]
+                        ),
                         max_parallel_runs=1,
                         cooldown_after_429_seconds=300,
                         rate_limit_policy=ManagedAgentRateLimitPolicy.QUEUE,
@@ -1635,6 +1661,14 @@ async def test_provider_profile_list_filters_to_launch_ready_profiles(
                         credential_source=ProviderCredentialSource.SECRET_REF,
                         runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
                         secret_refs={"openai_api_key": "env://OPENAI_API_KEY"},
+                        # #3821: backend-derived isolation policy for
+                        # codex_cli/openai/api_key.
+                        clear_env_keys=[
+                            "OPENAI_BASE_URL",
+                            "OPENAI_ORG_ID",
+                            "OPENAI_PROJECT",
+                            "MINIMAX_API_KEY",
+                        ],
                         max_parallel_runs=1,
                         cooldown_after_429_seconds=300,
                         rate_limit_policy=ManagedAgentRateLimitPolicy.BACKOFF,
