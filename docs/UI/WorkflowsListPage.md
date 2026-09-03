@@ -455,7 +455,6 @@ waiting_on_dependencies
 planning
 awaiting_slot
 executing
-proposals
 awaiting_external
 intervention_requested
 finalizing

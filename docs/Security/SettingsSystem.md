@@ -1191,7 +1191,6 @@ Examples:
 - skill policy mode,
 - allowed skill list,
 - canary percentages,
-- workflow proposal defaults,
 - live session defaults,
 - workspace Git defaults,
 - integration defaults, and

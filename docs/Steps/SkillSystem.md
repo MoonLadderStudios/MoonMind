@@ -698,8 +698,7 @@ Resolution may happen:
 
 1. at workflow submission,
 2. during step preparation,
-3. in a dedicated resolution activity,
-4. during proposal promotion where exact execution intent is being frozen.
+3. in a dedicated resolution activity.
 
 Workflow code must not resolve large Skill bodies inline.
 
@@ -1339,20 +1338,9 @@ Advanced views may expose:
 
 ---
 
-## 20. Proposal, Schedule, Rerun, and Replay Semantics
+## 20. Schedule, Rerun, and Replay Semantics
 
-### 20.1 Proposals
-
-A proposal that depends on Skills must preserve execution intent.
-
-Preferred behavior:
-
-1. store executable Tool and Skill steps;
-2. store explicit Skill selectors where they materially affect execution;
-3. preserve preset provenance as metadata only;
-4. avoid live preset lookup during promotion.
-
-### 20.2 Scheduled Work
+### 20.1 Scheduled Work
 
 Scheduled work should store Skill intent at schedule creation.
 
@@ -1360,7 +1348,7 @@ When a scheduled run starts, MoonMind resolves the actual `ResolvedSkillSet` unl
 
 Snapshot reuse at schedule creation is an explicit mode, not the silent default.
 
-### 20.3 Reruns
+### 20.2 Reruns
 
 Default rerun behavior:
 
@@ -1368,7 +1356,7 @@ Default rerun behavior:
 2. do not silently re-resolve "latest" Skills;
 3. require explicit operator intent for re-resolution.
 
-### 20.4 Retries and Continue-as-New
+### 20.3 Retries and Continue-as-New
 
 Retries and continue-as-new preserve the same resolved snapshot unless a new resolution action is explicitly requested.
 

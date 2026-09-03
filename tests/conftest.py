@@ -46,7 +46,6 @@ def global_test_settings():
     from moonmind.config.settings import settings
 
     settings.workflow.test_mode = True
-    settings.workflow.enable_proposals = False
 
 
 def _relative_test_path(path: Path) -> Path:

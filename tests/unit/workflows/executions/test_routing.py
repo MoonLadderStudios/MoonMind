@@ -45,14 +45,7 @@ def test_routing_ignores_task_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     assert (
         get_routing_target_for_workflow(
             is_run=True,
-            task_payload={"task": {"proposeTasks": True}},
-        )
-        == "temporal"
-    )
-    assert (
-        get_routing_target_for_workflow(
-            is_run=True,
-            task_payload={"task": {"proposeTasks": False}},
+            task_payload={"task": {"priority": 3}},
         )
         == "temporal"
     )
@@ -104,4 +97,3 @@ def test_routing_raises_for_default_when_submit_disabled(
     )
     with pytest.raises(TemporalSubmitDisabledError, match="legacy queue.*no longer supported"):
         get_routing_target_for_workflow()
-

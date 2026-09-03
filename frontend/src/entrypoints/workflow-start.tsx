@@ -121,7 +121,6 @@ const HIDDEN_PRESET_INPUT_KEYS: Record<string, Set<string>> = {
   ]),
   [MOONSPEC_ORCHESTRATE_PRESET_SLUG]: new Set(["orchestrationmode"]),
 };
-const PROPOSE_TASKS_PREFERENCE_KEY = "moonmind.workflow-start.propose-tasks";
 const LAST_REPOSITORY_OPTION_PREFERENCE_KEY =
   "moonmind.workflow-start.last-repository-option";
 const JIRA_LAST_PROJECT_SESSION_KEY =
@@ -211,35 +210,6 @@ function randomWorkflowStartHeading(except?: string): string {
     candidates.length > 0 ? candidates : WORKFLOW_START_HEADING_QUOTES;
   const index = Math.floor(Math.random() * choices.length);
   return choices[index] ?? "Start Workflow";
-}
-
-function readProposeTasksPreference(defaultValue: boolean): boolean {
-  try {
-    const raw = window.localStorage.getItem(PROPOSE_TASKS_PREFERENCE_KEY);
-    if (raw === null) {
-      return defaultValue;
-    }
-    if (raw === "true" || raw === "1") {
-      return true;
-    }
-    if (raw === "false" || raw === "0") {
-      return false;
-    }
-  } catch {
-    // Preserve default behavior when localStorage is unavailable.
-  }
-  return defaultValue;
-}
-
-function writeProposeTasksPreference(value: boolean): void {
-  try {
-    window.localStorage.setItem(
-      PROPOSE_TASKS_PREFERENCE_KEY,
-      value ? "true" : "false",
-    );
-  } catch {
-    // Ignore localStorage write failures to keep task submission behavior unaffected.
-  }
 }
 
 function readLocalPreference(key: string): string {
@@ -372,7 +342,6 @@ interface DashboardConfig {
     defaultEffort?: string;
     defaultTaskEffort?: string;
     defaultPublishMode?: string;
-    defaultProposeTasks?: boolean;
     defaultModelByRuntime?: Record<string, string>;
     defaultTaskModelByRuntime?: Record<string, string>;
     defaultEffortByRuntime?: Record<string, string>;
@@ -1739,12 +1708,6 @@ export function buildEditParametersPatch({
   );
   const editWorkflow = { ...submittedWorkflow };
 
-  // This field is not reconstructed into the edit form yet. Preserve the
-  // existing value instead of letting the create-form default overwrite it.
-  if ("proposeTasks" in editWorkflow) {
-    delete editWorkflow.proposeTasks;
-  }
-
   const mergedWorkflow: Record<string, unknown> = {
     ...baseWorkflow,
     ...editWorkflow,
@@ -1758,6 +1721,13 @@ export function buildEditParametersPatch({
       recordValue(editWorkflow.publish),
     ),
   };
+  // Historical executions remain readable, but removed follow-up fields must
+  // never be reconstructed into a new edit or rerun submission. Strip after
+  // merging so a canonical inputParameters.workflow snapshot cannot restore
+  // values that the submitted draft correctly omitted.
+  for (const field of ["proposeTasks", "propose_tasks", "proposalPolicy", "proposal_policy"]) {
+    delete mergedWorkflow[field];
+  }
   const mergedGit = recordValue(mergedWorkflow.git);
   delete mergedGit.startingBranch;
   delete mergedGit.targetBranch;
@@ -6091,9 +6061,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const defaultPublishMode = String(
     dashboardConfig.system?.defaultPublishMode || "pr",
   );
-  const defaultProposeTasks = Boolean(
-    dashboardConfig.system?.defaultProposeTasks,
-  );
   const defaultTaskModelByRuntime =
     dashboardConfig.system?.defaultModelByRuntime ||
     dashboardConfig.system?.defaultTaskModelByRuntime ||
@@ -6162,10 +6129,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const [produceReport, setProduceReport] = useState(false);
   const [priority, setPriority] = useState(DEFAULT_PRIORITY);
   const [maxAttempts, setMaxAttempts] = useState(DEFAULT_MAX_ATTEMPTS);
-  const [proposeTasks, setProposeTasks] = useState(() =>
-    readProposeTasksPreference(defaultProposeTasks),
-  );
-  const isInitialMount = useRef(true);
   const [scheduleMode, setScheduleMode] = useState<ScheduleMode>(() => {
     if (typeof window === "undefined") {
       return "immediate";
@@ -6920,14 +6883,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     providerProfile,
     runtime,
   ]);
-
-  useEffect(() => {
-    if (isInitialMount.current) {
-      isInitialMount.current = false;
-      return;
-    }
-    writeProposeTasksPreference(proposeTasks);
-  }, [proposeTasks]);
 
   useEffect(() => {
     if (pageMode.mode === "create" || !temporalDraftQuery.data) {
@@ -11604,7 +11559,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       ...(taskSkillSelectors ? { skills: taskSkillSelectors } : {}),
       ...(Object.keys(primarySkillArgs).length > 0 ? { inputs: primarySkillArgs } : {}),
       ...(explicitTitle ? { title: explicitTitle } : {}),
-      proposeTasks,
       runtime: {
         mode: normalizedRuntime,
         authored: runtimeAuthored,
@@ -14383,15 +14337,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           </div>
         ) : null}
 
-        <label className="checkbox">
-          <input
-            type="checkbox"
-            name="proposeTasks"
-            checked={proposeTasks}
-            onChange={(event) => setProposeTasks(event.target.checked)}
-          />
-          Propose follow-up work
-        </label>
         <label className="checkbox">
           <input
             type="checkbox"

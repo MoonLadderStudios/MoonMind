@@ -118,7 +118,7 @@ We want enough history to support:
 
 * troubleshooting,
 * evals,
-* improvement proposal generation,
+* execution-quality analysis,
 * "what happened?" investigations.
 
 We will **not** keep sensitive/large payloads in Temporal history as a strategy; those go in MoonMind's Artifact Store (separate doc). Retention is primarily about workflow execution history and visibility records.
