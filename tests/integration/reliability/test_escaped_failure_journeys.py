@@ -4902,7 +4902,7 @@ async def test_omnigent_codex_tool_shell_receives_moonmind_execution_environment
 
 
 async def test_generic_omnigent_fanout_crosses_runner_and_opencode_shell() -> None:
-    """Replay mm:eb37130f after the original mm:171981b9 admission fix."""
+    """Replay generic fan-out environment omissions at the tool-shell boundary."""
 
     replay_id = "omnigent-generic-fanout-env-handoff"
     manifest = load_replay(replay_id, "manifest.json")
@@ -4913,6 +4913,9 @@ async def test_generic_omnigent_fanout_crosses_runner_and_opencode_shell() -> No
         "MOONMIND_TASK_WORKFLOW_ID": manifest["incidentWorkflowId"],
         "MOONMIND_STEP_ID": manifest["stepExecutionId"],
         "MOONMIND_RUNTIME_ID": "opencode-native",
+        "MOONMIND_REPOSITORY_CONNECTION_REF": manifest[
+            "repositoryConnectionRef"
+        ],
         "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE": expected[
             "capabilityFile"
         ],
@@ -4928,6 +4931,9 @@ async def test_generic_omnigent_fanout_crosses_runner_and_opencode_shell() -> No
     )
 
     assert manifest["sourceWorkflowId"] == "mm:171981b9-8988-40e5-ab5c-e3b66d6dee61"
+    assert "mm:afa5425e-812d-44a9-a43b-ebba6f83ae8f" in manifest[
+        "relatedIncidentWorkflowIds"
+    ]
     assert manifest["matchedPrs"] == 7
     assert manifest["queuedWorkflows"] == 0
     passthrough = set(environment["OMNIGENT_RUNNER_ENV_PASSTHROUGH"].split(","))

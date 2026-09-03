@@ -4854,6 +4854,12 @@ async def test_coordinator_compiles_durable_workspace_intent_before_host_mutatio
                 "relativePath": "repo",
             },
             "repository": "https://github.com/owner/repo.git",
+            "repositoryTarget": {
+                "provider": "git",
+                "connectionRef": "repository-connection:git-default",
+                "repository": {"name": "owner/repo"},
+                "branch": {"name": "main"},
+            },
             "startingBranch": "main",
             "targetBranch": "feature/x",
             # A checkpoint restore that mixes an artifact input with a provider
@@ -4910,6 +4916,9 @@ async def test_coordinator_compiles_durable_workspace_intent_before_host_mutatio
         "relativePath": "repo",
     }
     assert prepare_kwargs["repository_source"] == "https://github.com/owner/repo.git"
+    assert prepare_kwargs["repository_connection_ref"] == (
+        "repository-connection:git-default"
+    )
     assert prepare_kwargs["starting_branch"] == "main"
     assert prepare_kwargs["target_branch"] == "feature/x"
 

@@ -3113,9 +3113,11 @@ async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str,
             repository_provider=str(
                 (agent_request.workspace_spec or {}).get("provider") or ""
             ).strip(),
-            repository_connection_ref=str(
-                (agent_request.workspace_spec or {}).get("connectionRef") or ""
-            ).strip(),
+            repository_connection_ref=(
+                ""
+                if agent_request.remediation_workspace is not None
+                else str(workspace_intent.connection_ref or "").strip()
+            ),
             repository_client_evidence=dict(
                 (agent_request.workspace_spec or {}).get("clientEvidence") or {}
             ),

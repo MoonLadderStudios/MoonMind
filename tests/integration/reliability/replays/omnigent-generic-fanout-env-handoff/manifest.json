@@ -1,11 +1,15 @@
 {
   "incidentWorkflowId": "mm:eb37130f-2bf0-480d-bb01-1569581cd944",
+  "relatedIncidentWorkflowIds": [
+    "mm:afa5425e-812d-44a9-a43b-ebba6f83ae8f"
+  ],
   "sourceWorkflowId": "mm:171981b9-8988-40e5-ab5c-e3b66d6dee61",
   "stepExecutionId": "mm:eb37130f-2bf0-480d-bb01-1569581cd944:01a0599e-16c5-7b0f-aeca-abb203facc47:node-1:execution:1",
   "moonmindUrl": "http://api:8000",
+  "repositoryConnectionRef": "repository-connection:git-default",
   "requiredCapabilities": ["gh", "execution.fanout"],
   "terminalFailureCode": "CHILD_WORKFLOW_QUEUE_FAILED",
   "matchedPrs": 7,
   "queuedWorkflows": 0,
-  "failureShape": "the generic Omnigent host received GitHub credentials and completed its provider turn, but it omitted MOONMIND_URL and the execution-scoped fan-out capability file from the runner and OpenCode tool-shell environment"
+  "failureShape": "the generic Omnigent host received GitHub credentials and completed its provider turn, but omitted required MoonMind execution or repository connection authority from the runner and OpenCode tool-shell environment"
 }
