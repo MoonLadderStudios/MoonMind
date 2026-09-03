@@ -77,12 +77,13 @@ async def test_materializer_launches_claude_anthropic_from_secret_ref_alias():
         profile_id="claude_anthropic",
         runtime_id="claude_code",
         provider_id="anthropic",
+        auth_mode="api_key",
         credential_source="secret_ref",
         runtime_materialization_mode="api_key_env",
         clear_env_keys=[
-            "ANTHROPIC_API_KEY",
             "ANTHROPIC_AUTH_TOKEN",
             "ANTHROPIC_BASE_URL",
+            "CLAUDE_API_KEY",
             "OPENAI_API_KEY",
         ],
         secret_refs={"anthropic_api_key": "db://claude_anthropic_token"},
@@ -110,6 +111,14 @@ async def test_materializer_excludes_file_template_secret_alias_from_base_env(tm
         profile_id="file_template_secret_alias",
         runtime_id="codex_cli",
         provider_id="openrouter",
+        auth_mode="api_key",
+        credential_source="secret_ref",
+        runtime_materialization_mode="api_key_env",
+        clear_env_keys=[
+            "OPENAI_API_KEY",
+            "OPENAI_BASE_URL",
+            "OPENROUTER_API_KEY",
+        ],
         secret_refs={"provider_api_key": "env://provider-key"},
         file_templates=[
             {
@@ -144,6 +153,15 @@ async def test_materializer_excludes_home_path_template_secret_alias_from_base_e
         profile_id="home_path_secret_alias",
         runtime_id="claude_code",
         provider_id="anthropic",
+        auth_mode="api_key",
+        credential_source="secret_ref",
+        runtime_materialization_mode="api_key_env",
+        clear_env_keys=[
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_BASE_URL",
+            "CLAUDE_API_KEY",
+            "OPENAI_API_KEY",
+        ],
         secret_refs={"home_root": "env://home-root"},
         home_path_overrides={
             "CLAUDE_CONFIG_DIR": "{{runtime_support_dir}}/{{home_root}}"
@@ -166,8 +184,15 @@ async def test_materializer_missing_claude_secret_ref_alias_fails_secret_free():
         profile_id="claude_anthropic",
         runtime_id="claude_code",
         provider_id="anthropic",
+        auth_mode="api_key",
         credential_source="secret_ref",
         runtime_materialization_mode="api_key_env",
+        clear_env_keys=[
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_BASE_URL",
+            "CLAUDE_API_KEY",
+            "OPENAI_API_KEY",
+        ],
         secret_refs={"anthropic_api_key": "db://missing-claude-token"},
         env_template={"ANTHROPIC_API_KEY": {"from_secret_ref": "anthropic_api_key"}},
         command_template=["claude", "-p", "hello"],
@@ -195,6 +220,14 @@ async def test_materializer_path_aware_file_templates_written_and_cleanup(tmp_pa
         profile_id="test_file_templates",
         runtime_id="codex_cli",
         provider_id="openrouter",
+        auth_mode="api_key",
+        credential_source="secret_ref",
+        runtime_materialization_mode="api_key_env",
+        clear_env_keys=[
+            "OPENAI_API_KEY",
+            "OPENAI_BASE_URL",
+            "OPENROUTER_API_KEY",
+        ],
         secret_refs={"provider_api_key": "ref_to_secret"},
         env_template={
             "OPENROUTER_API_KEY": {"from_secret_ref": "provider_api_key"},
@@ -278,8 +311,14 @@ async def test_materializer_deep_merges_toml_file_templates_without_artifact_lin
         profile_id="codex_minimax_m27",
         runtime_id="codex_cli",
         provider_id="minimax",
+        auth_mode="api_key",
         credential_source="secret_ref",
         runtime_materialization_mode="composite",
+        clear_env_keys=[
+            "MINIMAX_API_KEY",
+            "OPENAI_API_KEY",
+            "OPENAI_BASE_URL",
+        ],
         secret_refs={"provider_api_key": "env://minimax"},
         env_template={"MINIMAX_API_KEY": {"from_secret_ref": "provider_api_key"}},
         file_templates=[
@@ -340,6 +379,10 @@ async def test_materializer_appends_text_file_templates(tmp_path):
     profile = ManagedRuntimeProfile(
         profile_id="append_profile",
         runtime_id="claude_code",
+        provider_id="anthropic",
+        auth_mode="none",
+        credential_source="none",
+        runtime_materialization_mode="composite",
         file_templates=[
             {
                 "path": "runtime.env",
@@ -365,6 +408,14 @@ async def test_materializer_cleanup_removes_generated_support_dir_tree():
         profile_id="test_temp_support_dir",
         runtime_id="codex_cli",
         provider_id="openrouter",
+        auth_mode="api_key",
+        credential_source="secret_ref",
+        runtime_materialization_mode="api_key_env",
+        clear_env_keys=[
+            "OPENAI_API_KEY",
+            "OPENAI_BASE_URL",
+            "OPENROUTER_API_KEY",
+        ],
         file_templates=[
             {
                 "path": "{{runtime_support_dir}}/codex-home/config.toml",
@@ -403,6 +454,10 @@ async def test_materializer_rejects_unknown_template_variables(tmp_path):
     profile = ManagedRuntimeProfile(
         profile_id="test_unknown_template_variable",
         runtime_id="codex_cli",
+        provider_id="openrouter",
+        auth_mode="none",
+        credential_source="none",
+        runtime_materialization_mode="composite",
         file_templates=[
             {
                 "path": "{{missing_var}}/config.toml",
@@ -428,6 +483,10 @@ async def test_materializer_rejects_paths_outside_runtime_support_dir(tmp_path):
     profile = ManagedRuntimeProfile(
         profile_id="test_path_escape",
         runtime_id="codex_cli",
+        provider_id="openrouter",
+        auth_mode="none",
+        credential_source="none",
+        runtime_materialization_mode="composite",
         file_templates=[
             {
                 "path": "../../escape.toml",
@@ -446,3 +505,46 @@ async def test_materializer_rejects_paths_outside_runtime_support_dir(tmp_path):
             profile,
             runtime_support_dir=str(tmp_path / ".moonmind"),
         )
+
+@pytest.mark.asyncio
+async def test_materializer_fails_closed_on_stale_persisted_policy():
+    """#3821: stale persisted policy blocks launch with an actionable error."""
+    materializer = ProviderProfileMaterializer(
+        base_env={},
+        secret_resolver=MockSecretResolver(),
+    )
+    profile = ManagedRuntimeProfile(
+        profile_id="stale_isolation_profile",
+        runtime_id="codex_cli",
+        provider_id="openai",
+        auth_mode="oauth",
+        credential_source="oauth_volume",
+        runtime_materialization_mode="oauth_home",
+        # Incomplete: missing OPENAI_BASE_URL/ORG_ID/PROJECT + MINIMAX_API_KEY.
+        clear_env_keys=["OPENAI_API_KEY"],
+        command_template=["codex", "exec"],
+    )
+
+    with pytest.raises(ValueError, match="Launch blocked"):
+        await materializer.materialize(profile)
+
+@pytest.mark.asyncio
+async def test_materializer_fails_closed_on_missing_policy_for_unknown_strategy():
+    """#3821: unknown strategy with empty policy blocks launch."""
+    materializer = ProviderProfileMaterializer(
+        base_env={},
+        secret_resolver=MockSecretResolver(),
+    )
+    profile = ManagedRuntimeProfile(
+        profile_id="unknown_strategy_profile",
+        runtime_id="custom_runtime",
+        provider_id="custom_provider",
+        auth_mode="api_key",
+        credential_source="secret_ref",
+        runtime_materialization_mode="api_key_env",
+        clear_env_keys=[],
+        command_template=["custom", "exec"],
+    )
+
+    with pytest.raises(ValueError, match="Launch blocked"):
+        await materializer.materialize(profile)
