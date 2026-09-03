@@ -1872,6 +1872,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
             go_profile_id = "opencode-go-default"
             go_current = existing_by_id.get(go_profile_id)
             legacy_go_model = "opencode-go/muse-spark-1.2-contributor"
+            legacy_go_display = "Muse Spark 1.2 Contributor"
             if (
                 opencode_defaults_enabled
                 and go_current is not None
@@ -1879,30 +1880,69 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 == legacy_go_model
             ):
                 go_tiers = list(go_current.get("model_tiers") or [])
+                expected_go_effort = str(
+                    go_current.get("default_effort") or "xhigh"
+                )
+                # Bootstrap-owned labels only: an operator who kept the legacy
+                # model but customized label/effort/parameters/annotations must
+                # not have the tier silently replaced.
+                bootstrap_owned_labels = {
+                    "",
+                    "Runtime default",
+                    legacy_go_display,
+                    DEFAULT_OPENCODE_MODEL_DISPLAY,
+                }
+
+                def _is_bootstrap_owned_go_tier(tier: Any) -> bool:
+                    if not isinstance(tier, dict):
+                        return False
+                    if (
+                        str(tier.get("model") or "").strip()
+                        not in {"", legacy_go_model}
+                    ):
+                        return False
+                    if str(tier.get("label") or "").strip() not in (
+                        bootstrap_owned_labels
+                    ):
+                        return False
+                    tier_effort = str(tier.get("effort") or "").strip()
+                    if tier_effort and tier_effort != expected_go_effort:
+                        return False
+                    if tier.get("parameters") not in (None, {}):
+                        return False
+                    if tier.get("annotations") not in (None, {}):
+                        return False
+                    return True
+
                 bootstrap_owned_tiers = (
                     not go_tiers
                     or (
                         len(go_tiers) == 1
-                        and str(go_tiers[0].get("model") or "").strip()
-                        in {"", legacy_go_model}
+                        and _is_bootstrap_owned_go_tier(go_tiers[0])
                     )
                 )
                 if bootstrap_owned_tiers:
-                    go_updates = {
+                    # Migrating the model changes the launchable identity. The
+                    # revalidation fingerprint does not include the model, so a
+                    # previously exhausted failure record would otherwise skip
+                    # every probe for the newly selected model.
+                    go_behavior = dict(go_current.get("command_behavior") or {})
+                    go_behavior.pop("runtime_revalidation_failure", None)
+                    go_updates: dict[str, Any] = {
                         "default_model": DEFAULT_OPENCODE_QUALIFIED,
                         "model_tiers": [
                             {
                                 "label": DEFAULT_OPENCODE_MODEL_DISPLAY,
                                 "model": DEFAULT_OPENCODE_QUALIFIED,
-                                "effort": str(
-                                    go_current.get("default_effort") or "xhigh"
-                                ),
+                                "effort": expected_go_effort,
                                 "parameters": {},
                                 "annotations": {},
                             }
                         ],
                         "default_model_tier": 1,
                     }
+                    if go_behavior != (go_current.get("command_behavior") or {}):
+                        go_updates["command_behavior"] = go_behavior
                     await session.execute(
                         update(ManagedAgentProviderProfile)
                         .where(

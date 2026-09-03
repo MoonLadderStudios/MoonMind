@@ -366,7 +366,7 @@ async def reconcile_opencode_provider_readiness(
     recoverable_deployment_profile = next(
         (
             profile
-            for profile in enrolled
+            for profile in profiles
             if profile.profile_id == "opencode-go-default"
             and str(getattr(profile, "provider_id", "") or "")
             == OPENCODE_PROVIDER_ID
@@ -375,6 +375,16 @@ async def reconcile_opencode_provider_readiness(
         ),
         None,
     )
+    # An authoritative disable on the deployment-owned default remains
+    # authoritative even when the profile lacks runtime authority (for example
+    # policy_disabled with auth_state=not_configured is excluded from enrolled).
+    # Detect it from all matching profiles before deciding enrollment is absent.
+    has_authoritative_disable_on_default = any(
+        profile.profile_id == "opencode-go-default"
+        and str(getattr(profile, "provider_id", "") or "") == OPENCODE_PROVIDER_ID
+        and _has_authoritative_disable(profile)
+        for profile in profiles
+    )
     # OpenCode Zen and OpenCode Go are distinct provider routes. A launchable
     # credential-free Zen profile must not consume an explicitly configured Go
     # credential or prevent its separate enrollment.
@@ -382,6 +392,7 @@ async def reconcile_opencode_provider_readiness(
         api_key
         and profile_ids is None
         and (not key_backed_enrolled or recoverable_deployment_profile is not None)
+        and not has_authoritative_disable_on_default
     ):
         if not allow_enrollment:
             return ProviderReconcileOutcome(
@@ -403,6 +414,14 @@ async def reconcile_opencode_provider_readiness(
     launchable = [profile for profile in enrolled if profile.enabled]
 
     if not enrolled:
+        if has_authoritative_disable_on_default:
+            # The deployment-owned default is explicitly disabled. Preserve
+            # that authority instead of re-enrolling from configuration.
+            return ProviderReconcileOutcome(
+                ready=True,
+                checked=len(profiles),
+                reason="every enrolled OpenCode Provider Profile is disabled",
+            )
         if not api_key:
             # Nothing configured: the console enrollment path stays available and
             # readiness correctly reports that no compatible profile exists.
