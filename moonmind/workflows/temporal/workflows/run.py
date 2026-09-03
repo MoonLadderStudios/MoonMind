@@ -539,6 +539,9 @@ MERGE_AUTOMATION_TERMINAL_STATUSES = (
     | MERGE_AUTOMATION_FAILURE_STATUSES
     | frozenset({MERGE_AUTOMATION_CANCELED_STATUS})
 )
+RUN_MERGE_AUTOMATION_OMNIGENT_RESOLVER_PLAN_PATCH = (
+    "run-merge-automation-omnigent-resolver-plan-v1"
+)
 OWNER_ID_SEARCH_ATTRIBUTE = "mm_owner_id"
 OWNER_TYPE_SEARCH_ATTRIBUTE = "mm_owner_type"
 _GITHUB_PR_URL_PATTERN = re.compile(
@@ -18848,19 +18851,35 @@ class MoonMindRunWorkflow:
             if isinstance(task_payload, Mapping)
             else {}
         ) or {}
+        target_runtime = (
+            self._coerce_text(
+                parameters.get("targetRuntime")
+                or task_runtime_payload.get("mode")
+                or task_runtime_payload.get("targetRuntime"),
+                max_chars=80,
+            )
+            or "codex"
+        ).lower()
         resolver_template: dict[str, Any] = {
             "repository": repo,
-            "targetRuntime": (
-                self._coerce_text(
-                    parameters.get("targetRuntime")
-                    or task_runtime_payload.get("mode")
-                    or task_runtime_payload.get("targetRuntime"),
-                    max_chars=80,
-                )
-                or "codex"
-            ),
+            "targetRuntime": target_runtime,
             "requiredCapabilities": ["git", "gh"],
         }
+        if (
+            target_runtime == "omnigent"
+            and self._workflow_patch_enabled(
+                RUN_MERGE_AUTOMATION_OMNIGENT_RESOLVER_PLAN_PATCH
+            )
+        ):
+            parent_execution_plan = parameters.get("omnigentExecutionPlan")
+            if not isinstance(parent_execution_plan, WorkflowMapping):
+                raise ValueError(
+                    "Omnigent merge automation requires persisted parent "
+                    "execution-plan authority."
+                )
+            resolver_template["parentOmnigentExecutionPlan"] = dict(
+                parent_execution_plan
+            )
         profile_id = self._inherited_execution_profile_ref(parameters)
         if profile_id:
             resolver_template["executionProfileRef"] = profile_id
