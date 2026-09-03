@@ -632,6 +632,11 @@ RUN_PUBLISH_MODE_REPOSITORY_OPERATION_PATCH = "run-publish-mode-repository-opera
 # their original verdict-only decisions.
 RUN_HANDOFF_ACCEPTED_DISPOSITION_GATE_PATCH = "run-handoff-accepted-disposition-gate-v1"
 RUN_WORKFLOW_PUBLISH_OUTCOME_PATCH = "run-workflow-publish-outcome-v1"
+# This marker was recorded by every pre-removal workflow that reached the
+# retired follow-up stage, including executions where generation was disabled.
+# Keep its deprecation at the former stage boundary until Temporal retention
+# has eliminated those histories.
+RUN_WORKFLOW_NESTED_PROPOSE_TASKS_PATCH = "run-workflow-nested-propose-tasks"
 RUN_CANONICAL_NO_COMMIT_OUTCOME_PATCH = "run-canonical-no-commit-outcome-v1"
 RUN_UNGATED_CONTINUATION_DISPOSITION_PATCH = "run-ungated-continuation-disposition-v1"
 RUN_GATED_STEP_CONTINUATION_PATCH = "run-gated-step-continuation-v1"
@@ -10927,6 +10932,7 @@ class MoonMindRunWorkflow:
             )
             return {"status": "canceled"}
 
+        workflow.deprecate_patch(RUN_WORKFLOW_NESTED_PROPOSE_TASKS_PATCH)
         self._set_state(STATE_FINALIZING, summary="Finalizing execution.")
 
         output_status = "success"
