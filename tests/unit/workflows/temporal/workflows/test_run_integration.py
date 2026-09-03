@@ -24,6 +24,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_HEADLESS_REMEDIATION_VERIFIED_WORKSPACE_PATCH,
     RUN_HEADLESS_REMEDIATION_EXECUTION_PATCH,
     RUN_ISSUE_IMPLEMENT_PR_HANDOFF_AUTHORITY_PATCH,
+    RUN_LATE_REMEDIATION_HEAD_ATTEMPT_ORDINAL_PATCH,
     RUN_MANAGED_SESSION_CHECKPOINT_LOCATOR_PATCH,
     RUN_MOONSPEC_GATE_PREVIOUS_OUTPUTS_HANDOFF_PATCH,
     RUN_MOONSPEC_VERIFY_REMAINING_WORK_EVIDENCE_PATCH,
@@ -3797,6 +3798,7 @@ async def test_dynamic_verifier_promotes_canonical_checkpoint_to_remediation_hea
             RUN_REMEDIATION_MANAGED_SESSION_SOURCE_IDENTITY_PATCH,
             RUN_OMNIGENT_REMEDIATION_CHECKPOINT_RESTORE_PATCH,
             RUN_OMNIGENT_INITIAL_VERIFICATION_CHECKPOINT_RESTORE_PATCH,
+            RUN_LATE_REMEDIATION_HEAD_ATTEMPT_ORDINAL_PATCH,
         },
     )
     ordered_nodes: list[dict[str, Any]] = []
@@ -3818,6 +3820,7 @@ async def test_dynamic_verifier_promotes_canonical_checkpoint_to_remediation_hea
     assert head.head_checkpoint_ref == "artifact://art_implementation_archive"
     assert head.head_workspace_digest == "sha256:implementation-candidate"
     assert head.head_workspace_identity_digest == "sha256:" + ("b" * 64)
+    assert head.head_attempt_ordinal == 0
     assert head.latest_verification_ref == "artifact://verification/V0"
     assert head.latest_verification_verdict == "ADDITIONAL_WORK_NEEDED"
     assert state.workspace_head_ref == "artifact://art_implementation_archive"
@@ -4112,6 +4115,91 @@ async def test_dynamic_attempt_captures_head_verifies_and_admits_next_pair(
     assert projection["attemptOrdinal"] == 2
     assert projection["workspaceHeadRef"] == "artifact://workspace/C1"
     assert len(projection["materializedAttempts"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_late_checkpoint_head_adoption_preserves_completed_attempt_ordinal(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for workflow mm:ea55d1c9-b296-4db0-8e1a-50f428dd2db2."""
+
+    from moonmind.workflows.temporal.remediation_loop import (
+        ConsumedRemediationBudgets,
+        RemediationLoopPhase,
+        RemediationLoopState,
+    )
+
+    mock_run_workflow._initialize_remediation_loop_controller(
+        ordered_nodes=[_loop_controller_node(_dynamic_loop_spec_payload())]
+    )
+    mock_run_workflow._remediation_loop_runtime = {
+        **_LOOP_RUNTIME,
+        "mode": "omnigent",
+    }
+    mock_run_workflow._remediation_loop_state = RemediationLoopState(
+        loopId="issue-implementation-remediation",
+        attemptOrdinal=1,
+        phase=RemediationLoopPhase.VERIFICATION_PENDING,
+        consumedBudgets=ConsumedRemediationBudgets(attempts=1),
+    )
+    mock_run_workflow._step_ledger_rows = [
+        {
+            "logicalStepId": "remediation-1",
+            "status": "completed",
+            "annotations": {"issueImplementRole": "moonspec-remediation"},
+        },
+        {
+            "logicalStepId": "verification-1",
+            "status": "completed",
+            "annotations": {"issueImplementRole": "moonspec-verification-gate"},
+        },
+    ]
+    mock_run_workflow._step_checkpoint_workspace_evidence_by_boundary = {
+        "remediation-1": {
+            "before_publication": {
+                "checkpointRef": "artifact://workspace/C1",
+                "workspaceKind": "worktree_archive",
+                "workspaceDigest": "sha256:c1",
+                "workspaceIdentityDigest": "sha256:" + ("c" * 64),
+                "checkpointManifestRef": "artifact://manifest/C1",
+            }
+        }
+    }
+    mock_run_workflow._write_json_artifact = AsyncMock(
+        return_value="artifact://decision/D1"
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
+            RUN_OMNIGENT_INITIAL_VERIFICATION_CHECKPOINT_RESTORE_PATCH,
+            RUN_LATE_REMEDIATION_HEAD_ATTEMPT_ORDINAL_PATCH,
+        },
+    )
+    ordered_nodes: list[dict[str, Any]] = []
+
+    admitted = await mock_run_workflow._evaluate_dynamic_remediation_verification(
+        ordered_nodes=ordered_nodes,
+        verdict="ADDITIONAL_WORK_NEEDED",
+        gate_result_ref="artifact://verification/V1",
+        remaining_work_ref="artifact://remaining/R1",
+        logical_step_id="verification-1",
+    )
+
+    assert admitted is True
+    head = mock_run_workflow._remediation_workspace_head
+    assert head is not None
+    assert head.head_checkpoint_ref == "artifact://workspace/C1"
+    assert head.head_attempt_ordinal == 1
+    remediation_inputs = dict(ordered_nodes[0]["inputs"])
+    mock_run_workflow._inject_remediation_workspace_baseline(
+        node=ordered_nodes[0],
+        node_inputs=remediation_inputs,
+    )
+    assert remediation_inputs["remediationAttemptInput"]["attemptOrdinal"] == 2
 
 
 def _dynamic_loop_spec_payload() -> dict[str, Any]:
