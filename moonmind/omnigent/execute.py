@@ -94,18 +94,21 @@ _NON_TERMINAL_STATUSES = {
     "idle",
 }
 _TERMINAL_STATUSES = {"completed", "failed", "canceled", "timed_out"}
+_TERMINAL_RESPONSE_EVENT_TYPES = {"response.completed"}
 _logger = logging.getLogger(__name__)
 
 _ACTIVITY_HEARTBEAT_INTERVAL_SECONDS = 30.0
 _MARKED_TURN_QUIET_PERIOD_SECONDS = 60.0
 _MARKED_TOOL_ONLY_QUIET_PERIOD_SECONDS = 300.0
 # A native harness that accepted the marked message projects its first ordered
-# item within seconds. A current active response temporarily defers this budget,
+# item within seconds. A live active response temporarily defers this budget,
 # but only ordered progress permanently proves the marked turn started: the
 # injection response itself can briefly appear active and a session-level
-# ``running`` status is not correlated turn evidence. Once no response remains,
-# a visible marker with no later item proves the provider dropped the turn;
-# waiting the full no-progress budget only delays an already-known failure.
+# ``running`` status is not correlated turn evidence. A response id whose exact
+# response already emitted a terminal event is a stale projection, not live
+# work. Once no live response remains, a visible marker with no later item proves
+# the provider dropped the turn; waiting the full no-progress budget only delays
+# an already-known failure.
 _MARKED_TURN_START_TIMEOUT_SECONDS = 300.0
 _TERMINAL_RECONCILIATION_INTERVAL_SECONDS = 30.0
 _MARKED_TURN_ACTIVITY_RETRY_RESERVE_SECONDS = 600.0
@@ -240,10 +243,11 @@ class _MarkedTurnStartWatchdog:
     stream-closed snapshot, and the terminal poll, so the budget is measured
     from the moment the provider accepted the marked message rather than from
     whichever SSE frame arrived or whenever durable bookkeeping finished. It is
-    armed while no current active response exists and no ordered item follows
-    the visible boundary. A current active response defers it only until that
-    response clears; this is necessary because stock runners briefly project
-    the message-injection response as active before the harness starts. Only
+    armed while no live active response exists and no ordered item follows the
+    visible boundary. A current active response defers it only until that
+    response clears or the stream reports that exact response terminal; this is
+    necessary because stock runners can leave the message-injection response id
+    projected after the response completed without starting the harness. Only
     ordered progress permanently disarms the watchdog. A session-level
     ``running`` status alone is not correlated evidence for the marked turn.
     Only an observation *initiated* after the deadline can fire it, so a slow
@@ -263,11 +267,33 @@ class _MarkedTurnStartWatchdog:
         self.deadline = self.started_at + self.timeout_seconds
         self.ever_active = False
         self.currently_active = False
+        self.active_response_known_terminal = False
         self.progress = False
+        self._terminal_response_ids: set[str] = set()
 
     @property
     def armed(self) -> bool:
         return not (self.currently_active or self.progress)
+
+    def observe_terminal_response_event(self, event: Mapping[str, Any]) -> None:
+        """Remember exact provider responses that have reached a terminal edge."""
+
+        event_type = str(event.get("type") or event.get("eventType") or "").strip()
+        if event_type not in _TERMINAL_RESPONSE_EVENT_TYPES:
+            return
+        response_id = _provider_response_id(event)
+        if response_id:
+            self._terminal_response_ids.add(response_id)
+
+    def restore_terminal_response_ids(self, response_ids: Any) -> None:
+        """Restore bounded terminal-response evidence from an Activity heartbeat."""
+
+        if not isinstance(response_ids, list):
+            return
+        for value in response_ids[-8:]:
+            response_id = str(value or "").strip()
+            if response_id:
+                self._terminal_response_ids.add(response_id)
 
     def observe(
         self,
@@ -276,7 +302,13 @@ class _MarkedTurnStartWatchdog:
         *,
         observation_started_at: float,
     ) -> None:
-        self.currently_active = _snapshot_projects_active_response(snapshot)
+        active_response_id = _snapshot_active_response_id(snapshot)
+        self.active_response_known_terminal = bool(
+            active_response_id and active_response_id in self._terminal_response_ids
+        )
+        self.currently_active = bool(
+            active_response_id and not self.active_response_known_terminal
+        )
         if self.currently_active:
             self.ever_active = True
         if bool(turn_state.get("progress")):
@@ -286,9 +318,14 @@ class _MarkedTurnStartWatchdog:
         if observation_started_at < self.deadline:
             return
         waited_seconds = round(self._loop.time() - self.started_at, 3)
+        active_projection = (
+            "projected only a response already known terminal"
+            if self.active_response_known_terminal
+            else "has no active response"
+        )
         raise OmnigentTurnNotStartedError(
             "Omnigent accepted the marked turn but the provider never "
-            "started it: the session has no active response and projected no "
+            f"started it: the session {active_projection} and projected no "
             f"item after the marked message for {waited_seconds}s "
             f"(turn-start budget {self.timeout_seconds:g}s); no provider work "
             "exists, retry as a new step execution",
@@ -300,6 +337,8 @@ class _MarkedTurnStartWatchdog:
         return {
             "turnEverActive": self.ever_active,
             "turnCurrentlyActive": self.currently_active,
+            "turnActiveResponseKnownTerminal": self.active_response_known_terminal,
+            "turnTerminalResponseIds": sorted(self._terminal_response_ids)[-8:],
             "turnStartWaitSeconds": (
                 round(self._loop.time() - self.started_at, 3)
                 if not self.progress
@@ -1143,6 +1182,36 @@ def _marked_turn_timeout_message(diagnostics: Mapping[str, Any]) -> str:
     )
 
 
+def _provider_response_id(payload: Mapping[str, Any]) -> str | None:
+    """Extract a response identity without confusing a provider event id for it."""
+
+    for key in ("response_id", "responseId", "turn_id", "turnId"):
+        value = payload.get(key)
+        response_id = str(value or "").strip()
+        if response_id:
+            return response_id
+    for container_key in ("response", "data"):
+        container = payload.get(container_key)
+        if not isinstance(container, Mapping):
+            continue
+        nested = container.get("response") if container_key == "data" else container
+        if not isinstance(nested, Mapping):
+            continue
+        for key in ("id", "response_id", "responseId", "turn_id", "turnId"):
+            value = nested.get(key)
+            response_id = str(value or "").strip()
+            if response_id:
+                return response_id
+    return None
+
+
+def _snapshot_active_response_id(snapshot: Mapping[str, Any]) -> str | None:
+    response_id = str(
+        snapshot.get("active_response_id") or snapshot.get("activeResponseId") or ""
+    ).strip()
+    return response_id or None
+
+
 def _snapshot_projects_active_response(snapshot: Mapping[str, Any]) -> bool:
     """Return whether the stock server still tracks an in-flight response.
 
@@ -1150,11 +1219,7 @@ def _snapshot_projects_active_response(snapshot: Mapping[str, Any]) -> bool:
     response id is the stronger signal that provider work is active.
     """
 
-    return bool(
-        str(
-            snapshot.get("active_response_id") or snapshot.get("activeResponseId") or ""
-        ).strip()
-    )
+    return _snapshot_active_response_id(snapshot) is not None
 
 
 def _snapshot_projects_inactive_turn(snapshot: Mapping[str, Any]) -> bool:
@@ -2663,6 +2728,9 @@ async def run_omnigent_execution(
                 timeout_seconds=_MARKED_TURN_START_TIMEOUT_SECONDS,
                 started_at=turn_dispatched_at,
             )
+            start_watchdog.restore_terminal_response_ids(
+                retry_state.get("turnTerminalResponseIds")
+            )
             if (
                 terminal_status is None
                 and first_message_posted
@@ -2842,6 +2910,8 @@ async def run_omnigent_execution(
                             bridge_session_id, [normalized_bridge_event.event]
                         )
                     normalized = normalized_bridge_event.event["normalizedStatus"]
+                    if arrived_after_message_post:
+                        start_watchdog.observe_terminal_response_event(event)
                     _safe_heartbeat(
                         {
                             "omnigentSessionId": session_id,
@@ -2849,6 +2919,7 @@ async def run_omnigent_execution(
                             "eventsCaptured": event_count["value"],
                             "firstMessagePosted": True,
                             "eventType": normalized_bridge_event.event["type"],
+                            **start_watchdog.heartbeat_fields(),
                         }
                     )
                     if normalized in {"awaiting_approval", "intervention_requested"}:

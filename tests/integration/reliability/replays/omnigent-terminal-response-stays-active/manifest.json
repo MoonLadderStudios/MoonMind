@@ -1,0 +1,56 @@
+{
+  "schemaVersion": "moonmind.reliability-replay.v1",
+  "replayId": "omnigent-terminal-response-stays-active",
+  "incidentWorkflowId": "mm:d24809bd-577e-4b2f-b41e-e357eb748913",
+  "failedChildWorkflowId": "mm:d24809bd-577e-4b2f-b41e-e357eb748913:agent:tpl:github-issue-implement:02:e2eff3fa",
+  "activityType": "integration.omnigent.profile_bound_execute",
+  "harness": "opencode-native",
+  "failureShape": "the provider accepted the marked message and emitted response.completed for resp_5f58f2d495f440fc91919c12 one second later, but retained that exact id in active_response_id for about 3611 seconds while projecting no item after the marker and zero token usage; the stale active projection deferred the 300-second turn-start watchdog, and the parent then ignored retry_step_execution because the typed failure category was integration_error",
+  "sessionId": "914c1e5969dc44a9aaaa90dc42c9b081",
+  "currentTurnMarker": "MoonMind-Omnigent-Run: synthetic-d24809bd",
+  "terminalResponseId": "resp_5f58f2d495f440fc91919c12",
+  "observedProviderEvents": [
+    {
+      "type": "response.in_progress",
+      "response": {
+        "id": "resp_5f58f2d495f440fc91919c12",
+        "status": "in_progress"
+      }
+    },
+    {
+      "type": "response.completed",
+      "response": {
+        "id": "resp_5f58f2d495f440fc91919c12",
+        "status": "completed"
+      }
+    }
+  ],
+  "observedTerminalPollingSeconds": 3611.42,
+  "staleActiveSnapshot": {
+    "status": "running",
+    "active_response_id": "resp_5f58f2d495f440fc91919c12",
+    "usage_by_model": {
+      "opencode/muse-spark-1.3-contributor-free": {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0
+      }
+    },
+    "items": [
+      {
+        "id": "marked-user",
+        "type": "message",
+        "status": "completed",
+        "data": {
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "MoonMind-Omnigent-Run: synthetic-d24809bd"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}
