@@ -38,7 +38,7 @@ from moonmind.workflows.temporal.runtime.lore_repository_adapter import (
 
 def _make_profile(**overrides) -> ManagedRuntimeProfile:
     defaults = dict(
-        runtime_id="codex_cli",
+        runtime_id="codex-cli",
         provider_id="openai",
         auth_mode="none",
         credential_source="none",
