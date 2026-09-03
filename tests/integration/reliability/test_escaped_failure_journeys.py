@@ -186,6 +186,9 @@ from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
 from moonmind.workflows.temporal.workflows import (
     checkpoint_branch_turn as checkpoint_branch_turn_module,
 )
+from moonmind.workflows.temporal.workflows import (
+    merge_automation as merge_automation_module,
+)
 
 
 def _egress_attestation() -> EgressAttestation:
@@ -220,6 +223,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_AGENT_REQUIRED_CAPABILITIES_PROPAGATION_PATCH,
     RUN_HEADLESS_REMEDIATION_VERIFIED_WORKSPACE_PATCH,
     RUN_ISSUE_IMPLEMENT_PR_HANDOFF_AUTHORITY_PATCH,
+    RUN_MERGE_AUTOMATION_OMNIGENT_RESOLVER_PLAN_PATCH,
     RUN_OMNIGENT_PUBLICATION_CHECKPOINT_RESTORE_PATCH,
     RUN_OMNIGENT_REMEDIATION_CHECKPOINT_RESTORE_PATCH,
     RUN_WORKFLOW_HEADLESS_REMEDIATION_PATCH,
@@ -231,6 +235,9 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_REMEDIATION_EXPLICIT_EVIDENCE_INPUTS_PATCH,
     RUN_TERMINAL_GATE_PUBLISHED_HEAD_FEASIBILITY_PATCH,
     MoonMindRunWorkflow,
+)
+from moonmind.workflows.temporal.workflows.merge_automation import (
+    MoonMindMergeAutomationWorkflow,
 )
 from moonmind.workflows.terminal_evidence import evaluate_terminal_evidence
 from tests.integration.reliability.helpers import (
@@ -2610,6 +2617,123 @@ async def test_standalone_omnigent_resolver_rejects_unowned_continuation_without
     assert retryable is expected["retryable"]
     assert expected["genericRetryCount"] == 0
     assert expected["parentState"] == "failed"
+
+
+async def test_omnigent_merge_resolver_recompiles_child_plan_before_launch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay resolver:pr:813 at both workflow authority handoffs."""
+
+    replay_id = "omnigent-merge-resolver-child-plan"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    parent = MoonMindRunWorkflow()
+    parent._repo = manifest["repository"]
+    parent._publish_context.update(
+        {
+            "branch": manifest["pullRequest"]["headBranch"],
+            "baseRef": manifest["pullRequest"]["baseBranch"],
+        }
+    )
+    monkeypatch.setattr(
+        parent,
+        "_workflow_patch_enabled",
+        lambda patch_id: patch_id
+        == RUN_MERGE_AUTOMATION_OMNIGENT_RESOLVER_PLAN_PATCH,
+    )
+
+    merge_input = parent._build_merge_gate_start_payload(
+        parameters=manifest["parentParameters"],
+        pull_request_url=manifest["pullRequest"]["url"],
+        head_sha=manifest["pullRequest"]["headSha"],
+        parent_workflow_id=manifest["parentWorkflowId"],
+        parent_run_id=manifest["parentRunId"],
+    )
+
+    assert merge_input is not None
+    parent_plan = manifest["parentParameters"]["omnigentExecutionPlan"]
+    assert merge_input["resolverTemplate"]["parentOmnigentExecutionPlan"] == (
+        parent_plan
+    )
+    resolver = MoonMindMergeAutomationWorkflow()
+    resolver._input = merge_automation_module.MergeAutomationStartInput.model_validate(
+        merge_input
+    )
+    resolver_request = merge_automation_module.build_resolver_run_request(
+        parent_workflow_id=manifest["parentWorkflowId"],
+        pull_request=resolver._input.pull_request,
+        jira_issue_key=resolver._input.jira_issue_key,
+        merge_method=resolver._input.config.resolver.merge_method,
+        resolver_template=resolver._input.resolver_template,
+    )
+    child_plan = {
+        "planRef": "omnigent-execution-plan:sha256:" + "c" * 64,
+        "planDigest": "sha256:" + "c" * 64,
+        "planArtifactRef": expected["childPlanArtifactRef"],
+        "taskInputSnapshotRef": "art-child-task",
+        "taskInputSnapshotDigest": "sha256:" + "d" * 64,
+    }
+    calls: list[dict[str, object]] = []
+
+    async def prepare_child_plan(
+        activity_type: str,
+        activity_payload: dict[str, object],
+        **kwargs: object,
+    ) -> dict[str, object]:
+        calls.append(
+            {
+                "activityType": activity_type,
+                "payload": activity_payload,
+                "taskQueue": kwargs.get("task_queue"),
+            }
+        )
+        prepared = json.loads(json.dumps(activity_payload["childWorkflowRequest"]))
+        prepared["initial_parameters"]["omnigentExecutionPlan"] = child_plan
+        prepared["initial_parameters"]["resolvedSkillsetRef"] = expected[
+            "resolvedSkillsetRef"
+        ]
+        return prepared
+
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "execute_activity",
+        prepare_child_plan,
+    )
+    prepared = await resolver._prepare_omnigent_resolver_request(
+        resolver_request,
+        resolver_workflow_id=expected["childWorkflowId"],
+    )
+
+    assert calls[0]["activityType"] == expected["preparationActivity"]
+    assert calls[0]["taskQueue"] == expected["activityTaskQueue"]
+    assert calls[0]["payload"]["parentExecutionPlan"] == parent_plan
+    assert prepared["initial_parameters"]["omnigentExecutionPlan"] == child_plan
+    assert prepared["initial_parameters"]["resolvedSkillsetRef"] == expected[
+        "resolvedSkillsetRef"
+    ]
+    assert prepared["initial_parameters"]["task"]["tool"]["name"] == expected[
+        "resolvedSkill"
+    ]
+    workspace_spec = prepared["initial_parameters"]["workspaceSpec"]
+    assert workspace_spec["startingBranch"] == expected["startingBranch"]
+    assert workspace_spec["targetBranch"] == expected["targetBranch"]
+
+    # Inputs created before the parent-plan field existed recover the same
+    # immutable authority from the canonical parent execution in the Activity.
+    legacy_merge_input = json.loads(json.dumps(merge_input))
+    legacy_merge_input["resolverTemplate"].pop("parentOmnigentExecutionPlan")
+    legacy_resolver = MoonMindMergeAutomationWorkflow()
+    legacy_resolver._input = (
+        merge_automation_module.MergeAutomationStartInput.model_validate(
+            legacy_merge_input
+        )
+    )
+    await legacy_resolver._prepare_omnigent_resolver_request(
+        resolver_request,
+        resolver_workflow_id=expected["childWorkflowId"],
+    )
+    assert calls[1]["payload"]["parentWorkflowId"] == manifest["parentWorkflowId"]
+    assert "parentExecutionPlan" not in calls[1]["payload"]
 
 
 async def test_completed_batch_no_op_replays_through_production_activity_route(
