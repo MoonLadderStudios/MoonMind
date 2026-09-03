@@ -727,6 +727,89 @@ def test_legacy_settings_subroutes_fall_back_to_bare_entry_without_permissions()
     assert secrets.headers["location"] == "/settings"
 
 
+def test_canonical_settings_routes_tolerate_a_trailing_slash(
+    client: TestClient,
+) -> None:
+    """MoonLadderStudios/MoonMind#3816: trailing-slash canonical Settings routes
+    serve the same SPA shell as their canonical form."""
+    for path in (
+        "/settings/",
+        "/settings/providers-secrets/",
+        "/settings/user-workspace/",
+        "/settings/operations/",
+    ):
+        response = client.get(path, follow_redirects=False)
+        assert response.status_code == 200, path
+        assert "moonmind-ui-boot" in response.text
+        assert _extract_boot_payload(response.text)["page"] == "dashboard"
+
+    # Only the single trailing slash is the bare entry point; malformed and
+    # asset-looking Settings sub-paths still fail closed.
+    for path in ("/settings//", "/settings/providers-secrets/app.js"):
+        response = client.get(path, follow_redirects=False)
+        assert response.status_code == 404, path
+        assert "moonmind-ui-boot" not in response.text
+
+
+def test_settings_entry_serves_the_spa_shell_without_honoring_section(
+    client: TestClient,
+) -> None:
+    """MoonLadderStudios/MoonMind#3816 + SettingsPage.md 5.3: the server never
+    resolves `?section=` to a page; `/settings` stays the SPA entry point."""
+    for section in ("providers-secrets", "user-workspace", "operations", "unknown"):
+        response = client.get(f"/settings?section={section}", follow_redirects=False)
+        assert response.status_code == 200, section
+        boot_payload = _extract_boot_payload(response.text)
+        assert boot_payload["page"] == "dashboard"
+        assert section not in json.dumps(boot_payload)
+
+
+def test_legacy_settings_redirects_drop_section_without_mapping_it() -> None:
+    """MoonLadderStudios/MoonMind#3816 + SettingsPage.md 5.3: `section` is retired
+    page identity. It is stripped from redirect targets and never selects a
+    sibling Configuration page; approved page-local filters still survive."""
+    with _client_with_mock_service(
+        user_settings_permissions={
+            "provider_profiles.read",
+            "settings.catalog.read",
+            "operations.read",
+        }
+    ) as (client, _mock_service):
+        for section in ("providers-secrets", "user-workspace", "operations", "legacy"):
+            secrets = client.get(
+                f"/secrets?section={section}&runtime=codex", follow_redirects=False
+            )
+            workers = client.get(
+                f"/workers?section={section}&status=paused", follow_redirects=False
+            )
+
+            assert secrets.status_code == 307
+            assert (
+                secrets.headers["location"]
+                == "/settings/providers-secrets?runtime=codex"
+            )
+            assert workers.status_code == 307
+            assert workers.headers["location"] == "/settings/operations?status=paused"
+
+
+def test_legacy_settings_redirects_drop_filters_the_target_page_does_not_own() -> None:
+    with _client_with_mock_service(
+        user_settings_permissions={"provider_profiles.read", "operations.read"}
+    ) as (client, _mock_service):
+        secrets = client.get(
+            "/secrets?status=paused&scope=user&section=operations",
+            follow_redirects=False,
+        )
+        workers = client.get(
+            "/workers?runtime=codex&section=providers-secrets", follow_redirects=False
+        )
+
+    assert secrets.status_code == 307
+    assert secrets.headers["location"] == "/settings/providers-secrets"
+    assert workers.status_code == 307
+    assert workers.headers["location"] == "/settings/operations"
+
+
 def test_react_tasks_list_and_detail_boot_exclude_route_specific_config(
     client: TestClient,
 ) -> None:
