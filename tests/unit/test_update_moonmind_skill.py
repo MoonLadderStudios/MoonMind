@@ -60,6 +60,7 @@ def _run_update_scenario(
     checkout_already_current: bool = False,
     agent_runtime_revision_state: str | None = None,
     include_all_commands: bool = False,
+    initial_env_contents: str | None = None,
     no_compose_pull: bool = False,
     remove_agent_runtime_after_update: bool = False,
 ) -> list[str]:
@@ -74,10 +75,11 @@ def _run_update_scenario(
     _run_git("init", "-b", "main", cwd=seed)
     _run_git("config", "user.name", "MoonMind Test", cwd=seed)
     _run_git("config", "user.email", "moonmind-test@example.invalid", cwd=seed)
+    (seed / ".gitignore").write_text(".env\n", encoding="utf-8")
     source_file = seed / changed_file
     source_file.parent.mkdir(parents=True)
     source_file.write_text("VERSION = 1\n", encoding="utf-8")
-    _run_git("add", changed_file, cwd=seed)
+    _run_git("add", ".gitignore", changed_file, cwd=seed)
     _run_git("commit", "-m", "initial", cwd=seed)
 
     _run_git("init", "--bare", str(remote), cwd=tmp_path)
@@ -86,6 +88,8 @@ def _run_update_scenario(
     _run_git("symbolic-ref", "HEAD", "refs/heads/main", cwd=remote)
     _run_git("clone", str(remote), str(checkout), cwd=tmp_path)
     initial_head = _run_git("rev-parse", "HEAD", cwd=checkout).stdout.strip()
+    if initial_env_contents is not None:
+        (checkout / ".env").write_text(initial_env_contents, encoding="utf-8")
 
     source_file.write_text("VERSION = 2\n", encoding="utf-8")
     _run_git("add", changed_file, cwd=seed)
@@ -297,6 +301,31 @@ def test_current_runtime_source_revision_is_not_recreated_without_changes(
     )
 
     assert all("--force-recreate" not in command for command in up_commands)
+
+
+def test_update_persists_revision_without_clobbering_operator_env(
+    tmp_path: Path,
+) -> None:
+    _run_update_scenario(
+        tmp_path,
+        changed_file="moonmind/example.py",
+        checkout_already_current=True,
+        initial_env_contents=(
+            "KEEP_ME=yes\n"
+            "export MOONMIND_RUNTIME_SOURCE_REVISION=old\n"
+            "MOONMIND_RUNTIME_SOURCE_REVISION=duplicate\n"
+            "AFTER=preserved\n"
+        ),
+        no_compose_pull=True,
+    )
+
+    checkout = tmp_path / "checkout"
+    expected_revision = _run_git("rev-parse", "HEAD", cwd=checkout).stdout.strip()
+    assert (checkout / ".env").read_text(encoding="utf-8").splitlines() == [
+        "KEEP_ME=yes",
+        f"MOONMIND_RUNTIME_SOURCE_REVISION={expected_revision}",
+        "AFTER=preserved",
+    ]
 
 
 def test_skill_source_update_quiesces_resolver_before_checkout_mutation(

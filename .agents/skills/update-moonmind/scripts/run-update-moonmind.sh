@@ -132,6 +132,51 @@ is_compose_pull_policy_blocked() {
     [[ "$normalized" == *"request forbidden by administrative rules"* ]]
 }
 
+persist_runtime_source_revision() {
+  local revision="$1"
+  local env_path=".env"
+  local temp_path
+
+  if [[ "$DRY_RUN" == "true" ]]; then
+    say "Would persist the selected runtime source revision in $env_path."
+    return
+  fi
+
+  temp_path="$(mktemp "${env_path}.runtime-source.XXXXXX")" || \
+    die "Could not create a temporary file for $env_path."
+
+  if [[ -f "$env_path" ]]; then
+    if ! awk -v revision="$revision" '
+      BEGIN { written = 0 }
+      /^[[:space:]]*(export[[:space:]]+)?MOONMIND_RUNTIME_SOURCE_REVISION[[:space:]]*=/ {
+        if (written == 0) {
+          print "MOONMIND_RUNTIME_SOURCE_REVISION=" revision
+          written = 1
+        }
+        next
+      }
+      { print }
+      END {
+        if (written == 0) {
+          print "MOONMIND_RUNTIME_SOURCE_REVISION=" revision
+        }
+      }
+    ' "$env_path" > "$temp_path"; then
+      rm -f -- "$temp_path"
+      die "Could not update $env_path with the selected runtime source revision."
+    fi
+    chmod --reference="$env_path" "$temp_path" 2>/dev/null || true
+  else
+    printf 'MOONMIND_RUNTIME_SOURCE_REVISION=%s\n' "$revision" > "$temp_path"
+  fi
+
+  if ! mv -f -- "$temp_path" "$env_path"; then
+    rm -f -- "$temp_path"
+    die "Could not persist the selected runtime source revision in $env_path."
+  fi
+  say "Persisted the selected runtime source revision for ordinary Compose reconciliation."
+}
+
 load_compose_service_images() {
   if ! command -v jq >/dev/null 2>&1; then
     say "jq unavailable; skipping compose image drift checks."
@@ -507,6 +552,7 @@ fi
 # revision selected before each long-lived application process is created, so a
 # later update can detect a stale process even when git was updated separately.
 export MOONMIND_RUNTIME_SOURCE_REVISION="$POST_PULL_COMMIT"
+persist_runtime_source_revision "$POST_PULL_COMMIT"
 
 if [[ "$SKIP_COMPOSE_PULL" != "true" ]]; then
   say "Pulling updated compose images"
