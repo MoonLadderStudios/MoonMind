@@ -5677,7 +5677,7 @@ export interface components {
             apiKey: string;
             /**
              * Modeldisplayname
-             * @default Muse Spark 1.2 Contributor
+             * @default Muse Spark 1.3 Contributor
              */
             modelDisplayName: string;
             /**

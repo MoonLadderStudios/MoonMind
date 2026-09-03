@@ -1517,8 +1517,15 @@ async def _auto_seed_provider_profiles() -> list[str]:
         generic_host_enabled,
         opencode_support_enabled,
     )
+    from moonmind.omnigent.bootstrap.opencode import (
+        DEFAULT_OPENCODE_MODEL_DISPLAY,
+        DEFAULT_OPENCODE_QUALIFIED,
+        ZEN_FREE_MODEL_DISPLAY,
+        ZEN_FREE_QUALIFIED,
+    )
 
-    if opencode_support_enabled() and generic_host_enabled():
+    opencode_defaults_enabled = opencode_support_enabled() and generic_host_enabled()
+    if opencode_defaults_enabled:
         _DEFAULT_PROFILES.append(
             {
                 "profile_id": "opencode-zen-free",
@@ -1526,12 +1533,12 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 "is_default": False,
                 "provider_id": "opencode",
                 "provider_label": "OpenCode Zen",
-                "default_model": "opencode/muse-spark-1.2-contributor-free",
+                "default_model": ZEN_FREE_QUALIFIED,
                 "default_effort": "xhigh",
                 "model_tiers": [
                     {
-                        "label": "Muse Spark 1.2 Contributor Free",
-                        "model": "opencode/muse-spark-1.2-contributor-free",
+                        "label": ZEN_FREE_MODEL_DISPLAY,
+                        "model": ZEN_FREE_QUALIFIED,
                         "effort": "xhigh",
                         "parameters": {},
                         "annotations": {},
@@ -1851,6 +1858,96 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     )
                     existing_by_id[zen_profile_id].update(zen_updates)
                     touched_runtime_ids.add(str(zen_current["runtime_id"]))
+                    needs_commit = True
+
+            # Upgrade only the bootstrap-owned OpenCode Go default policy. A
+            # custom or multi-tier policy is operator-authored and remains
+            # untouched. This also repairs profiles created before bootstrap
+            # explicitly populated the tier contract, whose sole tier was
+            # persisted as Runtime default.
+            go_profile_id = "opencode-go-default"
+            go_current = existing_by_id.get(go_profile_id)
+            legacy_go_model = "opencode-go/muse-spark-1.2-contributor"
+            legacy_go_display = "Muse Spark 1.2 Contributor"
+            if (
+                opencode_defaults_enabled
+                and go_current is not None
+                and str(go_current.get("default_model") or "").strip()
+                == legacy_go_model
+            ):
+                go_tiers = list(go_current.get("model_tiers") or [])
+                expected_go_effort = str(
+                    go_current.get("default_effort") or "xhigh"
+                )
+                # Bootstrap-owned labels only: an operator who kept the legacy
+                # model but customized label/effort/parameters/annotations must
+                # not have the tier silently replaced.
+                bootstrap_owned_labels = {
+                    "",
+                    "Runtime default",
+                    legacy_go_display,
+                    DEFAULT_OPENCODE_MODEL_DISPLAY,
+                }
+
+                def _is_bootstrap_owned_go_tier(tier: Any) -> bool:
+                    if not isinstance(tier, dict):
+                        return False
+                    if (
+                        str(tier.get("model") or "").strip()
+                        not in {"", legacy_go_model}
+                    ):
+                        return False
+                    if str(tier.get("label") or "").strip() not in (
+                        bootstrap_owned_labels
+                    ):
+                        return False
+                    tier_effort = str(tier.get("effort") or "").strip()
+                    if tier_effort and tier_effort != expected_go_effort:
+                        return False
+                    if tier.get("parameters") not in (None, {}):
+                        return False
+                    if tier.get("annotations") not in (None, {}):
+                        return False
+                    return True
+
+                bootstrap_owned_tiers = (
+                    not go_tiers
+                    or (
+                        len(go_tiers) == 1
+                        and _is_bootstrap_owned_go_tier(go_tiers[0])
+                    )
+                )
+                if bootstrap_owned_tiers:
+                    # Migrating the model changes the launchable identity. The
+                    # revalidation fingerprint does not include the model, so a
+                    # previously exhausted failure record would otherwise skip
+                    # every probe for the newly selected model.
+                    go_behavior = dict(go_current.get("command_behavior") or {})
+                    go_behavior.pop("runtime_revalidation_failure", None)
+                    go_updates: dict[str, Any] = {
+                        "default_model": DEFAULT_OPENCODE_QUALIFIED,
+                        "model_tiers": [
+                            {
+                                "label": DEFAULT_OPENCODE_MODEL_DISPLAY,
+                                "model": DEFAULT_OPENCODE_QUALIFIED,
+                                "effort": expected_go_effort,
+                                "parameters": {},
+                                "annotations": {},
+                            }
+                        ],
+                        "default_model_tier": 1,
+                    }
+                    if go_behavior != (go_current.get("command_behavior") or {}):
+                        go_updates["command_behavior"] = go_behavior
+                    await session.execute(
+                        update(ManagedAgentProviderProfile)
+                        .where(
+                            ManagedAgentProviderProfile.profile_id == go_profile_id
+                        )
+                        .values(**go_updates)
+                    )
+                    existing_by_id[go_profile_id].update(go_updates)
+                    touched_runtime_ids.add(str(go_current["runtime_id"]))
                     needs_commit = True
 
             to_insert = [

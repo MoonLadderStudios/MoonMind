@@ -18,6 +18,22 @@ from moonmind.omnigent.bootstrap.models import (
     BootstrapResolved,
     BootstrapState,
 )
+from moonmind.omnigent.bootstrap.opencode import (
+    DEFAULT_OPENCODE_MODEL_DISPLAY,
+    DEFAULT_OPENCODE_QUALIFIED,
+    ZEN_FREE_QUALIFIED,
+)
+
+
+def test_opencode_bootstrap_defaults_use_muse_spark_1_3() -> None:
+    request = bootstrap_router.BootstrapOpencodeRequest(apiKey="configured-key")
+
+    assert request.model_display_name == "Muse Spark 1.3 Contributor"
+    assert BootstrapDesired().model_display_name == DEFAULT_OPENCODE_MODEL_DISPLAY
+    assert DEFAULT_OPENCODE_QUALIFIED == (
+        "opencode-go/muse-spark-1.3-contributor"
+    )
+    assert ZEN_FREE_QUALIFIED == "opencode/muse-spark-1.3-contributor-free"
 
 
 def _record(state: BootstrapState = BootstrapState.ready) -> BootstrapRecord:

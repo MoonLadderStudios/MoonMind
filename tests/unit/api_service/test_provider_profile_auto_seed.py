@@ -196,12 +196,12 @@ async def test_auto_seed_creates_default_profiles(_module_db, monkeypatch):
     assert claude_profile.clear_env_keys is None
 
     zen_profile = next(p for p in profiles if p.profile_id == "opencode-zen-free")
-    assert zen_profile.default_model == "opencode/muse-spark-1.2-contributor-free"
+    assert zen_profile.default_model == "opencode/muse-spark-1.3-contributor-free"
     assert zen_profile.default_effort == "xhigh"
     assert zen_profile.model_tiers == [
         {
-            "label": "Muse Spark 1.2 Contributor Free",
-            "model": "opencode/muse-spark-1.2-contributor-free",
+            "label": "Muse Spark 1.3 Contributor Free",
+            "model": "opencode/muse-spark-1.3-contributor-free",
             "effort": "xhigh",
             "parameters": {},
             "annotations": {},
@@ -261,7 +261,7 @@ async def _enroll_opencode_go_with_pinned_runtime(
     from moonmind.workflows.temporal import client as temporal_client
 
     image_ref = "ghcr.io/example/opencode@sha256:" + "a" * 64
-    qualified_model = "opencode-go/muse-spark-1.2-contributor"
+    qualified_model = "opencode-go/muse-spark-1.3-contributor"
     manager_sync_signals: list[tuple[str, dict]] = []
 
     class Guard:
@@ -351,6 +351,18 @@ async def test_opencode_go_enrollment_atomically_replaces_seeded_zen_default(
     assert profiles["opencode-zen-free"].is_default is False
     assert profiles["opencode-go-default"].enabled is True
     assert profiles["opencode-go-default"].is_default is True
+    assert profiles["opencode-go-default"].default_model == (
+        "opencode-go/muse-spark-1.3-contributor"
+    )
+    assert profiles["opencode-go-default"].model_tiers == [
+        {
+            "label": "Muse Spark 1.3 Contributor",
+            "model": "opencode-go/muse-spark-1.3-contributor",
+            "effort": "xhigh",
+            "parameters": {},
+            "annotations": {},
+        }
+    ]
     assert sum(profile.is_default for profile in profiles.values()) == 1
 
     assert len(manager_sync_signals) == 1
@@ -363,6 +375,89 @@ async def test_opencode_go_enrollment_atomically_replaces_seeded_zen_default(
     ]
     assert manager_profiles[0]["is_default"] is True
     assert manager_profiles[0]["launch_ready"] is True
+
+
+@pytest.mark.asyncio
+async def test_auto_seed_upgrades_bootstrap_owned_opencode_go_model_tier(
+    _module_db, monkeypatch
+):
+    from api_service.main import _auto_seed_provider_profiles
+
+    await _auto_seed_provider_profiles()
+    await _enroll_opencode_go_with_pinned_runtime(monkeypatch)
+
+    async with db_base.async_session_maker() as session:
+        profile = await session.get(
+            ManagedAgentProviderProfile, "opencode-go-default"
+        )
+        assert profile is not None
+        profile.default_model = "opencode-go/muse-spark-1.2-contributor"
+        profile.model_tiers = [
+            {
+                "label": "Runtime default",
+                "model": None,
+                "effort": "xhigh",
+                "parameters": {},
+                "annotations": {},
+            }
+        ]
+        await session.commit()
+
+    assert await _auto_seed_provider_profiles() == []
+
+    async with db_base.async_session_maker() as session:
+        migrated = await session.get(
+            ManagedAgentProviderProfile, "opencode-go-default"
+        )
+    assert migrated is not None
+    assert migrated.default_model == "opencode-go/muse-spark-1.3-contributor"
+    assert migrated.model_tiers == [
+        {
+            "label": "Muse Spark 1.3 Contributor",
+            "model": "opencode-go/muse-spark-1.3-contributor",
+            "effort": "xhigh",
+            "parameters": {},
+            "annotations": {},
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_auto_seed_preserves_operator_authored_opencode_go_tiers(
+    _module_db, monkeypatch
+):
+    from api_service.main import _auto_seed_provider_profiles
+
+    await _auto_seed_provider_profiles()
+    await _enroll_opencode_go_with_pinned_runtime(monkeypatch)
+    custom_tiers = [
+        {
+            "label": "Custom",
+            "model": "opencode-go/operator-model",
+            "effort": "high",
+            "parameters": {},
+            "annotations": {},
+        }
+    ]
+
+    async with db_base.async_session_maker() as session:
+        profile = await session.get(
+            ManagedAgentProviderProfile, "opencode-go-default"
+        )
+        assert profile is not None
+        profile.default_model = "opencode-go/muse-spark-1.2-contributor"
+        profile.model_tiers = custom_tiers
+        await session.commit()
+
+    assert await _auto_seed_provider_profiles() == []
+
+    async with db_base.async_session_maker() as session:
+        preserved = await session.get(
+            ManagedAgentProviderProfile, "opencode-go-default"
+        )
+    assert preserved is not None
+    assert preserved.default_model == "opencode-go/muse-spark-1.2-contributor"
+    assert preserved.model_tiers == custom_tiers
 
 
 @pytest.mark.asyncio
@@ -471,9 +566,9 @@ async def test_auto_seed_migrates_the_zen_profile_to_the_exact_runtime_model(
     assert migrated.is_default is True
     assert migrated.auth_state == ProviderProfileAuthState.CONNECTED
     assert migrated.disabled_reason is None
-    assert migrated.default_model == "opencode/muse-spark-1.2-contributor-free"
+    assert migrated.default_model == "opencode/muse-spark-1.3-contributor-free"
     assert migrated.model_tiers[0]["model"] == (
-        "opencode/muse-spark-1.2-contributor-free"
+        "opencode/muse-spark-1.3-contributor-free"
     )
 
 
