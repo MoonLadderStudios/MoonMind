@@ -163,6 +163,15 @@ async def test_runtime_replays_stale_final_answer_with_exact_model_and_effort(
                     "credential_source": "oauth_volume",
                     "runtime_materialization_mode": "oauth_home",
                     "max_parallel_runs": 1,
+                    # #3821: backend-derived isolation policy for
+                    # codex_cli/openai/oauth.
+                    "clear_env_keys": [
+                        "OPENAI_API_KEY",
+                        "OPENAI_BASE_URL",
+                        "OPENAI_ORG_ID",
+                        "OPENAI_PROJECT",
+                        "MINIMAX_API_KEY",
+                    ],
                 }
             ]
         }
