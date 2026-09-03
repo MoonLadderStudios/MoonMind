@@ -38,7 +38,6 @@ def _run_script(*paths: str, stdin: str | None = None) -> subprocess.CompletedPr
         "moonmind/schemas/managed_session_models.py",
         "moonmind/schemas/__init__.py",
         "moonmind/schemas/workflow_models.py",
-        "moonmind/schemas/workflow_proposal_models.py",
         "tools/export_openapi.py",
         "tools/generate_openapi_types.py",
         "tools/run_repo_python.sh",

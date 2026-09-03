@@ -82,7 +82,7 @@ Representative pieces:
 - HTML shell: `api_service/templates/react_dashboard.html`
 - navigation partials: `api_service/templates/_navigation.html`
 - shared entrypoint: `frontend/src/entrypoints/dashboard.tsx`
-- lazy-loaded page modules: `frontend/src/entrypoints/*.tsx` (for example `workflow-list.tsx`, `workflow-start.tsx`, `workflow-detail.tsx`, `proposals.tsx`, `schedules.tsx`, `manifests.tsx`, `skills.tsx`, `settings.tsx`, `oauth-terminal.tsx`, `index-health.tsx`)
+- lazy-loaded page modules: `frontend/src/entrypoints/*.tsx` (for example `workflow-list.tsx`, `workflow-start.tsx`, `workflow-detail.tsx`, `schedules.tsx`, `manifests.tsx`, `skills.tsx`, `settings.tsx`, `oauth-terminal.tsx`, `index-health.tsx`)
 - shared stylesheet source: `frontend/src/styles/dashboard.css`
 - generated JS/CSS bundles: `api_service/static/workflow_console/dist/`
 - React/Vite build output: `api_service/static/workflow_console/dist/`
@@ -144,8 +144,6 @@ If a React route renders structurally correct HTML but spacing, grids, or layout
 | `/workflows/{workflowId}/steps` | Workflow detail, Steps tab |
 | `/workflows/{workflowId}/artifacts` | Workflow detail, Artifacts tab |
 | `/workflows/{workflowId}/runs` | Workflow detail, Runs tab |
-| `/proposals` | Proposal queue list |
-| `/proposals/{proposalId}` | Proposal detail |
 | `/schedules` | Recurring schedule list |
 | `/schedules/{definitionId}` | Recurring schedule detail |
 | `/manifests`, `/manifests/{manifestName}` | Manifest pages |
@@ -201,7 +199,6 @@ Dashboard navigation may still span multiple product areas, but the main workflo
 
 Runtime config may still expose sources such as:
 
-- `proposals`
 - `schedules`
 - `temporal`
 - `manifests`
@@ -594,7 +591,7 @@ Temporal-backed detail should show a synthesized execution timeline based on:
 * waiting metadata
 * notable action results
 * artifact evidence
-* proposal/finalization transitions
+* finalization transitions
 * workflow-level outcome summaries
 
 Raw Temporal event history browsing is out of scope unless a dedicated backend contract exists.
@@ -742,7 +739,7 @@ Pagination rules:
 | Temporal state | Allowed actions |
 | --------------------------------------------------------------------------------------- | ---------------------------------------------- |
 | `scheduled` / `initializing` / `waiting_on_dependencies` / `awaiting_slot` / `planning` | cancel, set title |
-| `executing` / `proposals` | cancel, pause, set title |
+| `executing` | cancel, pause, set title |
 | `awaiting_external` | cancel, pause, resume, approve when applicable |
 | `finalizing` | cancel only if policy allows |
 | terminal (`completed`, `failed`, `canceled`) | new run / recovery per policy, view/download artifacts |

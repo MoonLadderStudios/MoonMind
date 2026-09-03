@@ -926,25 +926,6 @@ class TestWorkflowSettings:
 
         monkeypatch.delenv("MOONMIND_WORKFLOW_DOCKER_MODE", raising=False)
 
-    def test_app_settings_accepts_workflow_proposals_env(
-        self, app_settings_defaults, monkeypatch
-    ):
-        """Workflow proposal env flags should be parsed instead of treated as extra fields."""
-
-        monkeypatch.setenv("MOONMIND_ENABLE_PROPOSALS", "true")
-        monkeypatch.setenv("MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS", "2400")
-        settings = AppSettings(_env_file=None, **app_settings_defaults)
-        assert settings.workflow.enable_proposals is True
-        assert settings.workflow.stage_command_timeout_seconds == 2400
-
-        monkeypatch.delenv("MOONMIND_ENABLE_PROPOSALS", raising=False)
-        monkeypatch.delenv("MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS", raising=False)
-        monkeypatch.setenv("WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS", "1800")
-        settings = AppSettings(_env_file=None, **app_settings_defaults)
-        assert settings.workflow.stage_command_timeout_seconds == 1800
-
-        monkeypatch.delenv("WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS", raising=False)
-
     def test_app_settings_accepts_codex_worker_env(
         self, app_settings_defaults, monkeypatch
     ):
@@ -1051,41 +1032,6 @@ class TestWorkflowSettings:
 
         assert settings.workflow.default_queue == "moonmind.jobs"
         assert settings.workflow.codex_queue == "moonmind.jobs"
-
-def test_workflow_proposal_policy_settings_defaults(app_settings_defaults):
-    """Workflow proposal defaults should expose policy knobs on both settings."""
-
-    settings = AppSettings(_env_file=None, **app_settings_defaults)
-    assert settings.workflow_proposals.proposal_targets_default == "workflow_repo"
-    assert settings.workflow.proposal_targets_default == "workflow_repo"
-    assert settings.workflow_proposals.max_items_workflow_repo_default == 3
-    assert settings.workflow.proposal_max_items_workflow_repo == 3
-    assert settings.workflow_proposals.moonmind_severity_floor_default == "high"
-    assert settings.workflow.proposal_moonmind_severity_floor == "high"
-
-def test_workflow_proposal_policy_env_overrides(app_settings_defaults, monkeypatch) -> None:
-    """Environment variables should override policy defaults everywhere."""
-
-    monkeypatch.setenv("MOONMIND_PROPOSAL_TARGETS", "both")
-    monkeypatch.setenv("WORKFLOW_PROPOSALS_MAX_ITEMS_WORKFLOW_REPO", "5")
-    monkeypatch.setenv("WORKFLOW_PROPOSALS_MAX_ITEMS_MOONMIND", "4")
-    monkeypatch.setenv("MOONMIND_MIN_SEVERITY_FOR_MOONMIND", "medium")
-
-    settings = AppSettings(_env_file=None, **app_settings_defaults)
-
-    assert settings.workflow_proposals.proposal_targets_default == "both"
-    assert settings.workflow.proposal_targets_default == "both"
-    assert settings.workflow_proposals.max_items_workflow_repo_default == 5
-    assert settings.workflow.proposal_max_items_workflow_repo == 5
-    assert settings.workflow_proposals.max_items_moonmind_default == 4
-    assert settings.workflow.proposal_max_items_moonmind == 4
-    assert settings.workflow_proposals.moonmind_severity_floor_default == "medium"
-    assert settings.workflow.proposal_moonmind_severity_floor == "medium"
-
-    monkeypatch.delenv("MOONMIND_PROPOSAL_TARGETS", raising=False)
-    monkeypatch.delenv("WORKFLOW_PROPOSALS_MAX_ITEMS_WORKFLOW_REPO", raising=False)
-    monkeypatch.delenv("WORKFLOW_PROPOSALS_MAX_ITEMS_MOONMIND", raising=False)
-    monkeypatch.delenv("MOONMIND_MIN_SEVERITY_FOR_MOONMIND", raising=False)
 
 def test_workflow_settings_accept_queue_aliases(monkeypatch) -> None:
     """WORKFLOW_DEFAULT_* aliases should configure workflow queue defaults."""

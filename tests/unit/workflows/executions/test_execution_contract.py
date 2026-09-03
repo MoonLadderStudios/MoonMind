@@ -752,7 +752,7 @@ def test_canonical_task_payload_accepts_legacy_preset_version_keys() -> None:
         {
             "repository": "Moon/Repo",
             "task": {
-                "instructions": "Run stored proposal.",
+                "instructions": "Run stored draft.",
                 "authoredPresets": [
                     {
                         "presetId": "runtime-quality-followup",

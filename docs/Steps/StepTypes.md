@@ -651,7 +651,7 @@ The desired API shape is explicit and discriminated.
 type StepType = "tool" | "skill" | "preset";
 
 type StepProvenance = {
-  sourceType: "preset" | "proposal" | "manual";
+  sourceType: "preset" | "manual";
   presetSlug?: string;
   inputSnapshot?: Record<string, unknown>;
   parentPresetPath?: string[];
@@ -735,21 +735,23 @@ There should not be a separate Presets section for choosing and applying a prese
 
 ---
 
-## 15. Proposal and Promotion Semantics
+## 15. Draft and Reconstruction Semantics
 
-Workflow proposals must preserve executable intent.
+Preset-derived drafts preserve executable intent. A stored workflow execution
+payload is executable and flattened by default unless it is explicitly still
+in draft-authoring form.
 
-When a proposal is created from preset-derived work, it may carry preset provenance, but the stored promotable workflow execution payload should be executable and flattened by default unless the proposal is explicitly still in draft-authoring form.
-
-Promotion must not silently re-expand a live preset catalog entry. If the user wants to refresh a proposal or draft from the current preset definition, that must be an explicit action with validation.
+Submission and reconstruction must not silently re-expand a live preset
+catalog entry. Refreshing a draft from the current preset definition is an
+explicit action with validation.
 
 Rules:
 
-1. Stored executable proposals should contain Tool and Skill steps.
-2. Draft proposals may contain Preset steps only when they will go through the same submit-time expansion path.
+1. Stored executable workflows contain Tool and Skill steps.
+2. Drafts may contain Preset steps only when they go through the same submit-time expansion path.
 3. Preset provenance may be preserved as metadata.
-4. Promotion validates the reviewed payload.
-5. Promotion does not require live preset lookup for runtime correctness after expansion.
+4. Submission validates the reviewed payload.
+5. Runtime correctness after expansion does not require live preset lookup.
 6. Refreshing from a preset catalog is explicit, not automatic.
 
 ---
@@ -792,7 +794,7 @@ The implementation may migrate in phases.
 
 1. Compile executable steps into the canonical plan format.
 2. Pin tool and skill registry snapshots where required.
-3. Align proposal promotion, workflow editing, and execution reconstruction with the Step Type model.
+3. Align workflow editing and execution reconstruction with the Step Type model.
 
 ---
 

@@ -3,7 +3,7 @@
 Status: Active  
 Owners: MoonMind Engineering  
 Last Updated: 2026-06-28
-Related: `docs/Workflows/WorkflowArchitecture.md`, `docs/Workflows/WorkflowProposalSystem.md`,
+Related: `docs/Workflows/WorkflowArchitecture.md`, `docs/Workflows/FollowUpWorkSystem.md`,
 `docs/Temporal/ErrorTaxonomy.md`, `docs/Temporal/StepLedgerAndProgressModel.md`,
 `docs/Workflows/NoCommitStatus.md`
 
@@ -48,7 +48,7 @@ Legacy artifacts or compatibility adapters may still expose `NO_CHANGES`; new
 workflow histories and UI copy should treat that value as an alias for
 `NO_COMMIT` when the reason is that no repository commit was needed.
 
-It also logs a `finishOutcomeStage` indicating which stage of the workflow it reached (e.g., `prepare`, `llm_execution`, `publish`, `proposals`).
+It also logs a `finishOutcomeStage` indicating which stage of the workflow it reached (for example, `prepare`, `llm_execution`, `publish`, or `finalizing`).
 
 ### 2.2 JSON Artifact Shape
 
@@ -84,12 +84,7 @@ The finish summary data is small and stored as JSON. A `reports/run_summary.json
       "status": "completed",
       "summary": "Issue transitioned to Done."
     }
-  ],
-  "proposals": {
-    "generatedCount": 0,
-    "submittedCount": 0,
-    "errors": []
-  }
+  ]
 }
 ```
 
@@ -134,7 +129,7 @@ Failed runs SHOULD additionally include a structured `failure` object alongside
 Field semantics:
 
 * `stage`: the workflow stage that was active when the failure was captured
-  (`prepare`, `planning`, `executing`, `publish`, `proposals`, `finalizing`).
+  (`prepare`, `planning`, `executing`, `publish`, `finalizing`).
 * `category`: aligns with `ExecutionTerminalStateInput.error_category` and the
   policy categories in `docs/Temporal/ErrorTaxonomy.md`. Permitted values are
   `user_error`, `integration_error`, `execution_error`, and `system_error`.
@@ -285,18 +280,3 @@ Inside the Python Temporal workflow logic (`MoonMind.UserWorkflow`):
 4. The Workflow records the final typed terminal-state payload into the Postgres
    execution source and projection columns (`finish_outcome_code`,
    `finish_summary_json`) to make List queries faster in the UI.
-
-## 4. Proposals Integration
-
-The finish summary includes a first-class `proposals` block for the proposal
-phase that runs after execution and before finalization.
-
-When proposal generation is enabled for the run:
-
-1. the workflow enters the `proposals` stage
-2. candidate proposals are generated and submitted on a best-effort basis
-3. generated and submitted counts are recorded in the finish summary
-4. redacted proposal-stage errors are recorded alongside those counts
-
-This wiring already exists in the Temporal run workflow and is part of the
-canonical finish-summary surface presented in the dashboard.

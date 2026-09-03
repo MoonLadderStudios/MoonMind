@@ -116,7 +116,6 @@ planning
 awaiting_slot
 executing
 awaiting_external
-proposals
 finalizing
 no_commit
 completed

@@ -601,19 +601,6 @@ const MergeAutomationSchema = z
   })
   .passthrough();
 
-const ProposalSummarySchema = z
-  .object({
-    requested: z.boolean().optional(),
-    generatedCount: z.number().optional(),
-    submittedCount: z.number().optional(),
-    deliveredCount: z.number().optional(),
-    validationErrors: z.array(z.record(z.string(), z.unknown())).default([]),
-    deliveryFailures: z.array(z.record(z.string(), z.unknown())).default([]),
-    externalLinks: z.array(z.record(z.string(), z.unknown())).default([]),
-    dedupUpdates: z.array(z.record(z.string(), z.unknown())).default([]),
-  })
-  .passthrough();
-
 const TargetDiagnosticsSchema = z
   .object({
     targets: z
@@ -905,8 +892,6 @@ const ExecutionDetailSchema = z
     failedDependencyId: z.string().nullable().optional(),
     blockedOnDependencies: z.boolean().optional(),
     dependencyOutcomes: z.array(DependencyOutcomeSchema).default([]),
-    proposalSummary: ProposalSummarySchema.nullable().optional(),
-    proposalOutcomes: z.array(z.record(z.string(), z.unknown())).default([]),
     prerequisites: z.array(DependencySummarySchema).default([]),
     dependents: z.array(DependencySummarySchema).default([]),
     attentionRequired: z.boolean().optional(),
@@ -1996,7 +1981,6 @@ const RunSummaryArtifactSchema = z
       .passthrough()
       .optional(),
     mergeAutomation: MergeAutomationSchema.optional(),
-    proposals: ProposalSummarySchema.optional(),
   })
   .passthrough();
 
@@ -2066,110 +2050,6 @@ function formatWhen(iso: string | null | undefined): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
   return date.toLocaleString();
-}
-
-function proposalFieldText(row: Record<string, unknown>, ...keys: string[]): string {
-  for (const key of keys) {
-    const value = row[key];
-    if (typeof value === 'string' && value.trim()) return value.trim();
-    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-  }
-  return '';
-}
-
-function proposalNestedRecord(row: Record<string, unknown>, ...keys: string[]): Record<string, unknown> {
-  for (const key of keys) {
-    const value = row[key];
-    if (value && typeof value === 'object' && !Array.isArray(value)) {
-      return value as Record<string, unknown>;
-    }
-  }
-  return {};
-}
-
-function proposalStringList(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.map((item) => String(item || '').trim()).filter(Boolean);
-}
-
-function proposalErrorText(row: Record<string, unknown>): string {
-  const direct = proposalFieldText(row, 'message', 'sanitizedReason', 'reason');
-  if (direct) return direct;
-  const error = proposalNestedRecord(row, 'error');
-  return proposalFieldText(error, 'message', 'sanitizedReason', 'reason');
-}
-
-function ProposalDeliveryCard({ outcome, index }: { outcome: Record<string, unknown>; index: number }) {
-  const provider = proposalFieldText(outcome, 'provider') || 'tracker';
-  const externalKey = proposalFieldText(outcome, 'externalKey', 'external_key') || `Proposal ${index + 1}`;
-  const externalUrl = proposalFieldText(outcome, 'externalUrl', 'external_url');
-  const deliveryStatus = proposalFieldText(outcome, 'deliveryStatus', 'status') || 'available';
-  const deliveredAt = proposalFieldText(outcome, 'deliveredAt', 'delivered_at');
-  const lastSyncedAt = proposalFieldText(outcome, 'lastSyncedAt', 'last_synced_at');
-  const duplicateSource = proposalFieldText(outcome, 'duplicateSource', 'duplicate_source');
-  const created = outcome['created'];
-  const errorText = proposalErrorText(outcome);
-  const taskPreview = proposalNestedRecord(outcome, 'taskPreview', 'task_preview');
-  const promotionResult = proposalNestedRecord(outcome, 'promotionResult', 'promotion_result');
-  const taskSkills = proposalStringList(taskPreview['taskSkills'] ?? taskPreview['task_skills']);
-  const promotedExecutionId = proposalFieldText(promotionResult, 'promotedExecutionId', 'promoted_execution_id');
-  const promotedExecutionUrl = proposalFieldText(promotionResult, 'promotedExecutionUrl', 'promoted_execution_url');
-
-  return (
-    <div className="card">
-      <strong>
-        {externalUrl ? (
-          <a href={externalUrl} target="_blank" rel="noreferrer">
-            {provider}: {externalKey}
-          </a>
-        ) : (
-          `${provider}: ${externalKey}`
-        )}
-      </strong>
-      <div className="td-facts-grid" style={{ marginTop: '0.5rem' }}>
-        <Fact label="Delivery Status">{formatStatusLabel(deliveryStatus)}</Fact>
-        {deliveredAt ? <Fact label="Delivered">{formatWhen(deliveredAt)}</Fact> : null}
-        {lastSyncedAt ? <Fact label="Last Sync">{formatWhen(lastSyncedAt)}</Fact> : null}
-        {created === false ? <Fact label="Dedup">Updated existing issue</Fact> : null}
-        {created === true ? <Fact label="Dedup">Created new issue</Fact> : null}
-        {duplicateSource ? <Fact label="Dedup Source">{duplicateSource}</Fact> : null}
-        {proposalFieldText(taskPreview, 'repository') ? (
-          <Fact label="Repo">
-            <code className="text-xs break-all">{proposalFieldText(taskPreview, 'repository')}</code>
-          </Fact>
-        ) : null}
-        {proposalFieldText(taskPreview, 'runtimeMode', 'runtime_mode') ? (
-          <Fact label="Runtime">{formatRuntimeLabel(proposalFieldText(taskPreview, 'runtimeMode', 'runtime_mode'))}</Fact>
-        ) : null}
-        {proposalFieldText(taskPreview, 'publishMode', 'publish_mode') ? (
-          <Fact label="Publish Mode">{proposalFieldText(taskPreview, 'publishMode', 'publish_mode')}</Fact>
-        ) : null}
-        {proposalFieldText(taskPreview, 'priority') ? (
-          <Fact label="Priority">{proposalFieldText(taskPreview, 'priority')}</Fact>
-        ) : null}
-        {proposalFieldText(taskPreview, 'maxAttempts', 'max_attempts') ? (
-          <Fact label="Max Attempts">{proposalFieldText(taskPreview, 'maxAttempts', 'max_attempts')}</Fact>
-        ) : null}
-        {taskSkills.length > 0 ? <Fact label="Skills">{taskSkills.join(', ')}</Fact> : null}
-        {proposalFieldText(taskPreview, 'skillId', 'skill_id') ? (
-          <Fact label="Skill">{proposalFieldText(taskPreview, 'skillId', 'skill_id')}</Fact>
-        ) : null}
-        {proposalFieldText(taskPreview, 'presetProvenance', 'preset_provenance') ? (
-          <Fact label="Preset">{proposalFieldText(taskPreview, 'presetProvenance', 'preset_provenance')}</Fact>
-        ) : null}
-        {promotedExecutionId ? (
-          <Fact label="Promoted Run">
-            {promotedExecutionUrl ? (
-              <a href={promotedExecutionUrl}>{promotedExecutionId}</a>
-            ) : (
-              <code className="text-xs break-all">{promotedExecutionId}</code>
-            )}
-          </Fact>
-        ) : null}
-      </div>
-      {errorText ? <p className="small whitespace-pre-wrap">{errorText}</p> : null}
-    </div>
-  );
 }
 
 function Card({
@@ -9420,8 +9300,6 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
   const displayedMergeAutomation =
     execution?.mergeAutomation || runSummary?.mergeAutomation || null;
   const displayedSummary = runSummary?.operatorSummary || execution?.summary || '—';
-  const proposalSummary = runSummary?.proposals || execution?.proposalSummary || null;
-  const proposalOutcomes = execution?.proposalOutcomes || [];
   const prUrl =
     normalizeGitHubPullRequestUrl(execution?.prUrl) ||
     normalizeGitHubPullRequestUrl(runSummary?.publishContext?.pullRequestUrl);
@@ -10861,92 +10739,6 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                 </div>
               ) : null}
               {runSummary.nextAction ? <p className="small">{runSummary.nextAction}</p> : null}
-            </section>
-          ) : null}
-
-          {overviewTabActive && proposalSummary ? (
-            <section className="stack td-run-summary-region td-evidence-region">
-              <h3>Proposal Outcomes</h3>
-              <MetricStrip
-                items={[
-                  { label: 'Requested', value: proposalSummary.requested ? 'Yes' : 'No' },
-                  { label: 'Generated', value: String(proposalSummary.generatedCount ?? 0) },
-                  { label: 'Submitted', value: String(proposalSummary.submittedCount ?? 0) },
-                  { label: 'Delivered', value: String(proposalSummary.deliveredCount ?? 0) },
-                  { label: 'Updated', value: String(proposalSummary.dedupUpdates?.length ?? 0) },
-                  {
-                    label: 'Failed',
-                    value: String(
-                      (proposalSummary.validationErrors?.length ?? 0) +
-                        (proposalSummary.deliveryFailures?.length ?? 0),
-                    ),
-                  },
-                ]}
-              />
-              {proposalSummary.externalLinks.length > 0 ? (
-                <div className="stack">
-                  <strong>External Review Links</strong>
-                  {proposalSummary.externalLinks.map((item, index) => {
-                    const externalUrl = typeof item.externalUrl === 'string' ? item.externalUrl : '';
-                    const externalKey = typeof item.externalKey === 'string' ? item.externalKey : externalUrl || `Link ${index + 1}`;
-                    const provider = typeof item.provider === 'string' ? item.provider : 'tracker';
-                    return externalUrl ? (
-                      <a key={`${provider}-${externalKey}-${index}`} href={externalUrl}>
-                        {provider}: {externalKey}
-                      </a>
-                    ) : (
-                      <span key={`${provider}-${externalKey}-${index}`} className="small">
-                        {provider}: {externalKey}
-                  </span>
-                    );
-                  })}
-                </div>
-              ) : null}
-              {(proposalOutcomes?.length ?? 0) > 0 ? (
-                <div className="stack">
-                  <strong>Delivery Status</strong>
-                  {proposalOutcomes?.map((item, index) => (
-                    <ProposalDeliveryCard
-                      key={`${String(item['provider'] || 'tracker')}-${String(item['externalKey'] || item['externalUrl'] || index)}`}
-                      outcome={item}
-                      index={index}
-                    />
-                  ))}
-                </div>
-              ) : null}
-              {(proposalSummary.dedupUpdates?.length ?? 0) > 0 ? (
-                <p className="small">{proposalSummary.dedupUpdates?.length ?? 0} dedup update(s)</p>
-              ) : null}
-              {(proposalSummary.validationErrors?.length ?? 0) > 0 ? (
-                <div className="stack">
-                  <strong>Validation Errors</strong>
-                  {proposalSummary.validationErrors?.map((item, index) => {
-                    const message = proposalErrorText(item);
-                    return (
-                      <p key={`validation-error-${index}`} className="small whitespace-pre-wrap">
-                        {message || `${proposalSummary.validationErrors?.length ?? 0} validation error(s)`}
-                      </p>
-                    );
-                  })}
-                </div>
-              ) : null}
-              {(proposalSummary.deliveryFailures?.length ?? 0) > 0 ? (
-                <div className="stack">
-                  <strong>Delivery Failures</strong>
-                  {proposalSummary.deliveryFailures?.map((item, index) => {
-                    const provider = proposalFieldText(item, 'provider') || 'tracker';
-                    const message = proposalErrorText(item);
-                    return (
-                      <p key={`delivery-failure-${index}`} className="small whitespace-pre-wrap">
-                        {provider}: {message || 'delivery failed'}
-                      </p>
-                    );
-                  })}
-                </div>
-              ) : null}
-              {(proposalOutcomes?.length ?? 0) > 0 && !runSummary?.proposals ? (
-                <p className="small">{proposalOutcomes?.length ?? 0} proposal outcome(s) available from execution detail.</p>
-              ) : null}
             </section>
           ) : null}
 

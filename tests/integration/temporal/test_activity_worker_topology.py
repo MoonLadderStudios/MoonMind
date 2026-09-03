@@ -33,7 +33,6 @@ from moonmind.workflows.temporal import (
 )
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
-    TemporalProposalActivities,
     TemporalReviewActivities,
 )
 from moonmind.workflows.temporal.workers import build_worker_activity_bindings
@@ -143,9 +142,6 @@ async def test_activity_worker_topology_routes_one_activity_per_family(
                         artifact_service=service,
                         client_factory=_UnusedIntegrationClient,
                     ),
-                    proposal_activities=TemporalProposalActivities(
-                        artifact_service=service,
-                    ),
                     review_activities=TemporalReviewActivities(),
                 )
             }
@@ -177,9 +173,6 @@ async def test_activity_worker_topology_routes_one_activity_per_family(
                     integration_activities=TemporalIntegrationActivities(
                         artifact_service=service,
                         client_factory=_UnusedIntegrationClient,
-                    ),
-                    proposal_activities=TemporalProposalActivities(
-                        artifact_service=service,
                     ),
                     review_activities=TemporalReviewActivities(),
                 )
@@ -239,9 +232,6 @@ async def test_activity_worker_topology_routes_one_activity_per_family(
                         artifact_service=service,
                         client_factory=_UnusedIntegrationClient,
                     ),
-                    proposal_activities=TemporalProposalActivities(
-                        artifact_service=service,
-                    ),
                     review_activities=TemporalReviewActivities(),
                 )
             }
@@ -281,9 +271,6 @@ async def test_activity_worker_topology_routes_one_activity_per_family(
                     integration_activities=TemporalIntegrationActivities(
                         artifact_service=service,
                         client_factory=_UnusedIntegrationClient,
-                    ),
-                    proposal_activities=TemporalProposalActivities(
-                        artifact_service=service,
                     ),
                     review_activities=TemporalReviewActivities(),
                     agent_runtime_activities=TemporalAgentRuntimeActivities(),

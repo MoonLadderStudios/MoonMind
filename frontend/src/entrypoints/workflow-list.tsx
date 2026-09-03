@@ -58,7 +58,6 @@ const TEMPORAL_STATUSES = [
   'planning',
   'awaiting_slot',
   'executing',
-  'proposals',
   'awaiting_external',
   'intervention_requested',
   'finalizing',

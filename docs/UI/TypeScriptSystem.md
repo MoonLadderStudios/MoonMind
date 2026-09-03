@@ -40,7 +40,7 @@ This is intentionally **not** a move to a separately deployed SPA. It is a move 
 ### 2.2 Secondary Goals
 
 1. Reduce frontend regressions caused by implicit data shapes and untyped DOM interactions.
-2. Make it easier to split UI work across features such as workflows, proposals, schedules, settings, and provider profiles.
+2. Make it easier to split UI work across features such as workflows, schedules, settings, and provider profiles.
 3. Prepare the frontend for future growth without requiring a second deployment surface today.
 4. Preserve deep links, bookmarkable routes, and server-controlled access checks.
 
@@ -124,7 +124,7 @@ The TypeScript frontend owns:
 
 That means:
 
-- `/workflows`, `/workflows/new`, `/manifests`, `/schedules`, `/proposals`, `/settings`, and similar paths continue to be server-routed.
+- `/workflows`, `/workflows/new`, `/manifests`, `/schedules`, `/settings`, and similar paths continue to be server-routed.
 - Client code may update query-string state and in-page filters.
 - Client code may enhance navigation behavior where useful.
 - Client code does **not** become the canonical source of route resolution in Phase 1.
@@ -208,8 +208,6 @@ frontend/
  manifests-list.tsx
  schedules-list.tsx
  schedule-create.tsx
- proposals-list.tsx
- proposal-detail.tsx
  settings.tsx
  components/
  layout/
@@ -221,7 +219,6 @@ frontend/
  workflows/
  manifests/
  schedules/
- proposals/
  settings/
  authProfiles/
  workerPause/
@@ -565,7 +562,6 @@ Query keys should be explicit and stable, for example:
 ```text
 ["tasks", "list", filters]
 ["tasks", "detail", taskId]
-["proposals", "list", filters]
 ["schedules", "detail", scheduleId]
 ["workerPause", "snapshot"]
 ```
@@ -680,7 +676,7 @@ Prioritize tests for:
 - boot payload parsing
 - API client normalization
 - polling pause/resume logic
-- workflow/proposal/schedule mutation hooks
+- workflow and schedule mutation hooks
 - settings and provider profile forms
 - route param parsing
 

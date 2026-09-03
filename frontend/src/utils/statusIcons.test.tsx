@@ -13,7 +13,7 @@ describe('statusIcons', () => {
     expect(statusIconKey('ready', 'step')).toBe('awaiting_slot');
     expect(statusIconKey('executing', 'step')).toBe('executing');
     expect(statusIconKey('awaiting_external', 'step')).toBe('awaiting_external');
-    expect(statusIconKey('reviewing', 'step')).toBe('proposals');
+    expect(statusIconKey('reviewing', 'step')).toBe('finalizing');
     expect(statusIconKey('completed', 'step')).toBe('completed');
     expect(statusIconKey('failed', 'step')).toBe('failed');
     expect(statusIconKey('skipped', 'step')).toBe('canceled');

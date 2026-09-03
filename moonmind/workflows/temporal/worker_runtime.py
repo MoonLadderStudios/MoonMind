@@ -1,18 +1,5 @@
-import contextlib
 import re
 import uuid
-
-
-def _build_proposal_service_factory():
-    from api_service.db.base import get_async_session_context
-    from moonmind.workflows import get_workflow_proposal_service
-
-    @contextlib.asynccontextmanager
-    async def factory():
-        async with get_async_session_context() as db_session:
-            yield get_workflow_proposal_service(db_session)
-
-    return factory
 
 
 """Temporal worker runtime entrypoint."""
@@ -92,7 +79,6 @@ from moonmind.workflows.temporal.activity_runtime import (
     TemporalIntegrationActivities,
     TemporalManifestActivities,
     TemporalPlanActivities,
-    TemporalProposalActivities,
     TemporalReviewActivities,
     TemporalSandboxActivities,
     TemporalSkillActivities,
@@ -2989,10 +2975,6 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 artifact_service=artifact_service
             ),
             agent_runtime_activities=agent_runtime_activities,
-            proposal_activities=TemporalProposalActivities(
-                artifact_service=artifact_service,
-                proposal_service_factory=_build_proposal_service_factory(),
-            ),
             review_activities=TemporalReviewActivities(),
             agent_skills_activities=AgentSkillsActivities(
                 artifact_service=artifact_service,

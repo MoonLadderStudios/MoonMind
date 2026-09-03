@@ -156,7 +156,6 @@ Allowed values in v1:
 - `awaiting_slot`
 - `executing`
 - `awaiting_external`
-- `proposals`
 - `finalizing`
 - `completed`
 - `failed`
@@ -171,7 +170,6 @@ Rules:
 - `awaiting_slot` means the workflow is waiting on a bounded runtime resource such as a provider-profile slot
 - `executing` means active work is occurring
 - `awaiting_external` means the workflow is durably waiting on external provider/runtime progress
-- `proposals` means post-execution proposal generation/submission is active
 - `finalizing` means the workflow is producing its final outputs and terminal summary
 - terminal `mm_state` must align with Temporal close status:
  - Temporal Completed → `completed`
@@ -399,7 +397,7 @@ Some workflows are long-lived:
 - large manifests
 - managed-runtime cooldown loops
 - long execution graphs
-- repeated proposal cycles
+- repeated remediation or external-wait cycles
 
 Continue-As-New keeps replay performant and avoids history growth problems.
 
@@ -505,8 +503,7 @@ stateDiagram-v2
  awaiting_slot --> executing : slot assigned
  executing --> awaiting_external : external/provider wait
  awaiting_external --> executing : external work progressed or finished
- executing --> proposals : execution complete
- proposals --> finalizing : proposals done
+ executing --> finalizing : execution complete
  finalizing --> completed
  scheduled --> canceled
  initializing --> failed
@@ -514,14 +511,12 @@ stateDiagram-v2
  planning --> failed
  awaiting_slot --> failed
  executing --> failed
- proposals --> failed
  awaiting_external --> failed
  initializing --> canceled
  waiting_on_dependencies --> canceled
  planning --> canceled
  awaiting_slot --> canceled
  executing --> canceled
- proposals --> canceled
  awaiting_external --> canceled
 ```
 

@@ -217,7 +217,7 @@ Rules:
 - Clicking a run opens the normal workflow detail page.
 - Workflow detail pages may show a compact `Created by schedule` provenance link back to `/schedules/{definitionId}` when that metadata is available.
 
-This keeps the recurring schedule page focused on controlling the cadence and reviewing spawned runs, while preserving the normal workflow detail page as the place for execution-specific steps, artifacts, logs, proposals, and diagnostics.
+This keeps the recurring schedule page focused on controlling the cadence and reviewing spawned runs, while preserving the normal workflow detail page as the place for execution-specific steps, artifacts, logs, and diagnostics.
 
 ---
 
@@ -247,6 +247,6 @@ Authorization should match recurring schedule ownership rules:
 
 - Do not make schedule details a separate product surface with a unique design system.
 - Do not render the Recurring sidebar inside the detail frame or a centered/max-width wrapper with a large left margin.
-- Do not duplicate workflow execution steps, artifacts, logs, or proposals on the schedule page.
+- Do not duplicate workflow execution steps, artifacts, logs, or diagnostics on the schedule page.
 - Do not delete historical workflow executions when deleting a recurring schedule.
 - Do not require a user to create a new schedule just to change a cadence or policy value.

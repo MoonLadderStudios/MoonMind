@@ -1594,24 +1594,6 @@ def build_default_activity_catalog(
             )
         ),
         TemporalActivityDefinition(
-            activity_type="proposal.generate",
-            family="proposal",
-            capability_class="llm",
-            task_queue=cfg.activity_llm_task_queue,
-            fleet=LLM_FLEET,
-            timeouts=TemporalActivityTimeouts(300, 600),
-            retries=_activity_retries(max_attempts=3, max_interval_seconds=120),
-        ),
-        TemporalActivityDefinition(
-            activity_type="proposal.submit",
-            family="proposal",
-            capability_class="artifacts",
-            task_queue=cfg.activity_artifacts_task_queue,
-            fleet=ARTIFACTS_FLEET,
-            timeouts=TemporalActivityTimeouts(120, 300),
-            retries=_activity_retries(max_attempts=3, max_interval_seconds=60),
-        ),
-        TemporalActivityDefinition(
             activity_type="agent_skill.resolve",
             family="agent_skill",
             capability_class="agent_runtime",

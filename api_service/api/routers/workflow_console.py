@@ -85,7 +85,6 @@ _WORKFLOW_DETAIL_TABS = {"chat", "overview", "steps", "artifacts", "runs", "debu
 _RESERVED_WORKFLOW_ROUTE_SEGMENTS = {
     "manifests",
     "new",
-    "proposals",
     "queue",
     "schedules",
     "secrets",
