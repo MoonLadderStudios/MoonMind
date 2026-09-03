@@ -107,6 +107,7 @@ class DockerOmnigentHostLauncher:
             "MOONMIND_TASK_WORKFLOW_ID",
             "MOONMIND_STEP_ID",
             "MOONMIND_RUNTIME_ID",
+            "MOONMIND_REPOSITORY_CONNECTION_REF",
         }
         if set(supplied_runtime_environment) - allowed_runtime_environment:
             raise HarnessPlatformError(

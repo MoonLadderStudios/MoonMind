@@ -1017,6 +1017,9 @@ async def test_host_volume_initializers_use_setup_authority(
             "MOONMIND_TASK_WORKFLOW_ID": "workflow-1",
             "MOONMIND_STEP_ID": "step-1",
             "MOONMIND_RUNTIME_ID": "opencode-native",
+            "MOONMIND_REPOSITORY_CONNECTION_REF": (
+                "repository-connection:git-default"
+            ),
             "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN": "scoped-fanout-token",
         },
     )
@@ -1041,6 +1044,9 @@ async def test_host_volume_initializers_use_setup_authority(
         "MOONMIND_TASK_WORKFLOW_ID": "workflow-1",
         "MOONMIND_STEP_ID": "step-1",
         "MOONMIND_RUNTIME_ID": "opencode-native",
+        "MOONMIND_REPOSITORY_CONNECTION_REF": (
+            "repository-connection:git-default"
+        ),
         "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE": (
             "/run/moonmind-host-auth/execution-fanout"
         ),
@@ -1059,6 +1065,15 @@ def test_generic_host_mints_scoped_fanout_from_step_authority(
             "correlationId": "workflow-1",
             "idempotencyKey": "idem-1",
             "parameters": {"requiredCapabilities": ["gh", "execution.fanout"]},
+            "workspaceSpec": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "repositoryTarget": {
+                    "provider": "git",
+                    "connectionRef": "repository-connection:git-default",
+                    "repository": {"name": "MoonLadderStudios/MoonMind"},
+                    "branch": {"name": "main"},
+                },
+            },
             "stepExecution": {
                 "workflowId": "workflow-1",
                 "runId": "run-1",
@@ -1092,6 +1107,9 @@ def test_generic_host_mints_scoped_fanout_from_step_authority(
     )
 
     assert environment["MOONMIND_URL"] == "http://api:8000"
+    assert environment["MOONMIND_REPOSITORY_CONNECTION_REF"] == (
+        "repository-connection:git-default"
+    )
     assert capability.parent_workflow_id == "workflow-1"
     assert capability.agent_run_id == "workflow-1:run-1:node-1:execution:1"
     assert capability.session_id == "host-lease-1"
