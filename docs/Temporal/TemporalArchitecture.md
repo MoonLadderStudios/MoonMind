@@ -505,7 +505,6 @@ Current activity families include:
 - `repo.*`
 - `merge_automation.*`
 - `agent_runtime.*`
-- `proposal.*`
 - `step.review`
 - future/target `agent_skill.*`
 

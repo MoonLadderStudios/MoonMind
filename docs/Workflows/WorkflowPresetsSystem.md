@@ -8,7 +8,7 @@ This document defines MoonMind's Workflow preset system as a declarative, schema
 
 ## Purpose
 
-Workflow presets let a user start from a known workflow shape without manually authoring every step. A preset may represent a simple one-step action, a multi-step coding workflow, a Jira-driven orchestration flow, a proposal/remediation flow, or another composed Workflow pattern.
+Workflow presets let a user start from a known workflow shape without manually authoring every step. A preset may represent a simple one-step action, a multi-step coding workflow, a Jira-driven orchestration flow, a remediation flow, or another composed Workflow pattern.
 
 The preset system must make the Create page easier to use without making the Create page responsible for knowing the details of every preset. Presets describe their own inputs through a machine-readable schema. The Create page renders those inputs automatically from the schema, validates them, and passes the collected values to the shared preset expansion path.
 

@@ -323,7 +323,7 @@ Rules:
 10. Sorting/filtering should follow the Workflows table posture: deterministic URL state where server-authoritative behavior exists and explicit copy where sorting is current-page-only.
 11. The empty state should say `No recurring schedules yet.` and include a create action.
 12. The table must not fetch per-run workflow details to render the list.
-13. The table must not show spawned workflow steps, logs, artifacts, or proposals.
+13. The table must not show spawned workflow steps, logs, artifacts, or diagnostics.
 
 ---
 
@@ -461,7 +461,7 @@ Main sections or tabs:
 Rules:
 
 1. A recurring schedule is not itself a workflow execution.
-2. Do not show workflow steps, artifacts, logs, proposals, or execution diagnostics directly on the schedule definition page.
+2. Do not show workflow steps, artifacts, logs, or execution diagnostics directly on the schedule definition page.
 3. Runs link to `/workflows/{workflowId}?source=temporal` when workflow IDs are available.
 4. Workflow detail remains the source of truth for execution-specific state and artifacts.
 5. Editing stays on `/schedules/{definitionId}`.
@@ -573,7 +573,7 @@ Rules:
 1. One-off scheduled workflows remain in the Workflows table.
 2. Workflows may expose filters for scheduled time, queued/scheduled status, and future `scheduledFor` timestamps.
 3. A one-off scheduled workflow opens the normal Workflow detail page.
-4. Execution-specific steps, logs, artifacts, proposals, cost, live logs, and diagnostics stay in Workflow detail.
+4. Execution-specific steps, logs, artifacts, cost, live logs, and diagnostics stay in Workflow detail.
 5. The Recurring page must not include one-off scheduled executions unless the product intentionally changes from `Recurring` to a broader `Schedules` model with clear sub-navigation.
 
 If a future combined Schedules product is desired, it should use explicit sub-surfaces:

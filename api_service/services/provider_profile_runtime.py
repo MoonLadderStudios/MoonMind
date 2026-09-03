@@ -10,12 +10,11 @@ This module owns the single typed contract for that relationship so every
 launch-authoring boundary enforces the same rule before persisting or launching
 work. The primary placement is the shared authority handoff every launch
 converges on — :meth:`TemporalExecutionService.create_execution` — which covers
-direct submission, proposal promotion, rerun, continuation, manifest ingest, and
+direct submission, rerun, continuation, manifest ingest, and
 deployment operations from one call site. Boundaries that durably persist a
-launch target *before* reaching that handoff enforce it themselves as well:
-recurring-schedule authoring (the stored target is what a later schedule action
-launches) and proposal promotion (the proposal is marked promoted before the
-execution is created). Routers map
+launch target *before* reaching that handoff enforce it themselves as well.
+Recurring-schedule authoring validates the stored target before a later
+schedule action launches it. Routers map
 :class:`ProviderProfileRuntimeMismatchError` onto an HTTP 409 with
 :attr:`ProviderProfileRuntimeMismatchError.detail`; the payload is identical
 across authoring paths so an alternate client cannot find a boundary that

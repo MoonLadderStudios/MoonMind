@@ -89,9 +89,6 @@ from api_service.api.routers.omnigent_session_timeline import (
 from api_service.api.routers.omnigent_bootstrap import (
     router as omnigent_bootstrap_router,
 )
-from api_service.api.routers.workflow_proposals import (
-    router as workflow_proposals_router,
-)
 from api_service.api.routers.presets import (
     router as presets_router,
 )
@@ -838,7 +835,6 @@ app.include_router(executions_router)
 app.include_router(execution_integrations_router)
 app.include_router(automation_router)
 
-app.include_router(workflow_proposals_router)
 app.include_router(recurring_workflows_router)
 app.include_router(agent_runs_router, prefix="/api")
 app.include_router(sessions_router, prefix="/api")

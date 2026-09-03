@@ -201,6 +201,75 @@ DOC_RULES = (
 )
 
 
+REMOVED_FOLLOW_UP_IDENTIFIERS = tuple(
+    term
+    for term in (
+        "Workflow" + "Proposal",
+        "workflow_" + "proposal",
+        "workflow-" + "proposal",
+        "propose" + "Tasks",
+        "propose_" + "tasks",
+        "proposal" + "Policy",
+        "proposal_" + "policy",
+        "proposal." + "generate",
+        "proposal." + "submit",
+        "MOONMIND_ENABLE_" + "PROPOSALS",
+        "WORKFLOW_" + "PROPOSALS_",
+        "proposals_" + "write",
+        "enable_task_" + "proposals_gate",
+        "/api/" + "proposals",
+        "/" + "proposals",
+    )
+)
+
+REMOVED_FOLLOW_UP_PATTERN = re.compile(
+    "|".join(re.escape(term) for term in REMOVED_FOLLOW_UP_IDENTIFIERS)
+)
+
+REMOVED_FOLLOW_UP_SCAN_ROOTS = (
+    ".agents/skills",
+    "api_service",
+    "docs",
+    "frontend/src",
+    "moonmind",
+    "tools",
+)
+
+REMOVED_FOLLOW_UP_ALLOWED_PREFIXES = (
+    ".agents/skills/code-improvement-proposal/",
+    "api_service/migrations/versions/",
+    "docs/Archive/ProposalSystem/",
+    "docs/tmp/",
+)
+
+REMOVED_FOLLOW_UP_ALLOWED_FILES = {
+    "docs/Workflows/FollowUpWorkSystem.md",
+    "tools/verify_workflow_terminology.py",
+}
+
+REMOVED_FOLLOW_UP_REJECTION_FILES = {
+    "api_service/api/routers/executions.py",
+    "frontend/src/entrypoints/workflow-start.tsx",
+    "moonmind/workflows/executions/execution_contract.py",
+}
+
+REMOVED_FOLLOW_UP_SUFFIXES = {
+    ".css",
+    ".html",
+    ".js",
+    ".json",
+    ".md",
+    ".py",
+    ".sh",
+    ".sql",
+    ".toml",
+    ".ts",
+    ".tsx",
+    ".yaml",
+    ".yml",
+}
+
+
 @dataclass(frozen=True)
 class Finding:
     rule: str
@@ -215,7 +284,13 @@ def _iter_rule_files(rule: Rule, root: Path) -> Iterable[Path]:
         path = root / path_text
         if path.is_dir():
             for child in path.rglob("*"):
-                if child.is_file() and child.suffix in {".py", ".ts", ".tsx", ".yaml", ".yml"}:
+                if child.is_file() and child.suffix in {
+                    ".py",
+                    ".ts",
+                    ".tsx",
+                    ".yaml",
+                    ".yml",
+                }:
                     if _path_is_allowed_runtime_exception(child.relative_to(root)):
                         continue
                     yield child
@@ -284,7 +359,8 @@ def _literal_string_set(text: str, name: str) -> set[str] | None:
         if not isinstance(node, ast.Assign):
             continue
         if not any(
-            isinstance(target, ast.Name) and target.id == name for target in node.targets
+            isinstance(target, ast.Name) and target.id == name
+            for target in node.targets
         ):
             continue
         if not isinstance(node.value, (ast.Set, ast.List, ast.Tuple)):
@@ -355,11 +431,80 @@ def check_required_test_guard_sets(*, root: Path = REPO_ROOT) -> list[Finding]:
     return findings
 
 
+def _iter_removed_follow_up_files(root: Path) -> Iterable[Path]:
+    for path_text in REMOVED_FOLLOW_UP_SCAN_ROOTS:
+        path = root / path_text
+        if not path.exists():
+            continue
+        for child in path.rglob("*"):
+            if "node_modules" in child.parts:
+                continue
+            if child.is_relative_to(root / "api_service/static"):
+                continue
+            if ".test." in child.name or child.name.startswith("test_"):
+                continue
+            if child.is_file() and child.suffix in REMOVED_FOLLOW_UP_SUFFIXES:
+                yield child
+    env_template = root / ".env-template"
+    if env_template.exists():
+        yield env_template
+
+
+def _removed_follow_up_match_is_allowed(path: Path, line: str) -> bool:
+    normalized = path.as_posix()
+    if normalized in REMOVED_FOLLOW_UP_ALLOWED_FILES:
+        return True
+    if any(
+        normalized.startswith(prefix) for prefix in REMOVED_FOLLOW_UP_ALLOWED_PREFIXES
+    ):
+        return True
+    if normalized in REMOVED_FOLLOW_UP_REJECTION_FILES:
+        return any(
+            term in line
+            for term in (
+                "propose" + "Tasks",
+                "propose_" + "tasks",
+                "proposal" + "Policy",
+                "proposal_" + "policy",
+            )
+        )
+    return False
+
+
+def check_removed_follow_up_identifiers(*, root: Path = REPO_ROOT) -> list[Finding]:
+    """Reject active references to the retired automatic follow-up subsystem."""
+
+    findings: list[Finding] = []
+    for path in _iter_removed_follow_up_files(root):
+        relative_path = path.relative_to(root)
+        for line_number, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            if REMOVED_FOLLOW_UP_PATTERN.search(line) is None:
+                continue
+            if _removed_follow_up_match_is_allowed(relative_path, line):
+                continue
+            findings.append(
+                Finding(
+                    rule="removed-follow-up-subsystem",
+                    path=relative_path,
+                    line_number=line_number,
+                    line=line.strip(),
+                    message=(
+                        "The automatic follow-up proposal subsystem was retired; "
+                        "use explicit workflow or issue-authoring paths."
+                    ),
+                )
+            )
+    return findings
+
+
 def run(mode: str, *, root: Path = REPO_ROOT) -> list[Finding]:
     findings: list[Finding] = []
     if mode in {"runtime", "all"}:
         findings.extend(check_rules(RUNTIME_RULES, root=root))
         findings.extend(check_required_test_guard_sets(root=root))
+        findings.extend(check_removed_follow_up_identifiers(root=root))
     if mode in {"docs", "all"}:
         findings.extend(check_rules(DOC_RULES, root=root))
     return findings

@@ -517,7 +517,7 @@ Representative retrieval context:
 
 ```json
 {
-  "query": "Fix failing proposal-stage Temporal workflow integration evidence",
+  "query": "Fix failing finalization-stage Temporal workflow integration evidence",
   "indexVersion": "rag-index-2026-05-16T12:00:00Z",
   "retrievedRefs": ["art_previous_failure_summary", "repo_docs_ref"],
   "retrievalManifestRef": "art_retrieval_manifest_attempt_3"

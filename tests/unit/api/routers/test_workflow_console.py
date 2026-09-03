@@ -680,7 +680,7 @@ def test_top_level_detail_deep_links_render_react_shell(client: TestClient) -> N
         assert payload["page"] == "dashboard"
 
 
-def test_proposal_review_routes_are_not_dashboard_surfaces(client: TestClient) -> None:
+def test_retired_follow_up_routes_are_not_dashboard_surfaces(client: TestClient) -> None:
     for path in (
         "/proposals",
         "/proposals/123e4567-e89b-12d3-a456-426614174000",

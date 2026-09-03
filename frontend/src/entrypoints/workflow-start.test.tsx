@@ -3998,8 +3998,6 @@ describe.skip("Task Create Entrypoint", () => {
                   appliedTemplates: [],
                   dependencies: [],
                   attachments: [],
-                  proposeTasks: false,
-                  proposalPolicy: null,
                 },
               }),
           } as Response);
@@ -4883,12 +4881,10 @@ describe.skip("Task Create Entrypoint", () => {
               request: "Preserve target-only legacy branch as metadata.",
             },
           },
-          appliedTemplates: [],
-          dependencies: [],
-          attachments: [],
-          proposeTasks: false,
-          proposalPolicy: null,
-        },
+        appliedTemplates: [],
+        dependencies: [],
+        attachments: [],
+      },
       },
     );
 
@@ -5232,8 +5228,6 @@ describe.skip("Task Create Entrypoint", () => {
           appliedTemplates: [],
           dependencies: [],
           attachments: [],
-          proposeTasks: false,
-          proposalPolicy: null,
         },
       },
     );
@@ -6552,7 +6546,6 @@ describe.skip("Task Create Entrypoint", () => {
         profileId: "profile:claude-default",
         task: {
           instructions: "Save edited Temporal inputs.",
-          proposeTasks: true,
           tool: {
             type: "skill",
             name: "speckit-demo",
@@ -6587,6 +6580,7 @@ describe.skip("Task Create Entrypoint", () => {
         },
       },
     });
+    expect(request.parametersPatch.task).not.toHaveProperty("proposeTasks");
     expect(request.parametersPatch).not.toHaveProperty("startingBranch");
     expect(request.parametersPatch).not.toHaveProperty("targetBranch");
     expect(request.inputArtifactRef).toBeUndefined();
@@ -7163,7 +7157,6 @@ describe.skip("Task Create Entrypoint", () => {
           publish: {
             mode: "pr",
           },
-          proposeTasks: false,
         },
       },
     });
@@ -11093,11 +11086,8 @@ describe.skip("Task Create Entrypoint", () => {
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(
-      screen
-        .getByRole("checkbox", { name: "Propose follow-up work" })
-        .compareDocumentPosition(reportToggle) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
+      screen.queryByRole("checkbox", { name: "Propose follow-up work" }),
+    ).toBeNull();
     expect(
       addStepButton.compareDocumentPosition(createButton) &
         Node.DOCUMENT_POSITION_FOLLOWING,
@@ -16190,56 +16180,6 @@ describe("Task Create MM-641 authoring validation", () => {
     });
   });
 
-  it("remembers the Propose Tasks selection across Create page mounts", async () => {
-    const preferenceKey = "moonmind.workflow-start.propose-tasks";
-    const { unmount } = renderWithClient(
-      <WorkflowStartPage payload={mockPayload} />,
-    );
-
-    const checkbox = await screen.findByRole("checkbox", {
-      name: "Propose follow-up work",
-    });
-    expect((checkbox as HTMLInputElement).checked).toBe(false);
-
-    fireEvent.click(checkbox);
-    await waitFor(() => {
-      expect(window.localStorage.getItem(preferenceKey)).toBe("true");
-    });
-
-    unmount();
-    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
-
-    const proposeCheckbox = await screen.findByRole("checkbox", {
-      name: "Propose follow-up work",
-    });
-    expect(proposeCheckbox.getAttribute("name")).toBe("proposeTasks");
-    expect((proposeCheckbox as HTMLInputElement).checked).toBe(true);
-  });
-
-  it("does not overwrite the Propose Tasks server default on initial mount", async () => {
-    const preferenceKey = "moonmind.workflow-start.propose-tasks";
-    const payload = {
-      ...mockPayload,
-      initialData: {
-        ...(mockPayload.initialData as Record<string, unknown>),
-        dashboardConfig: {
-          ...mockDashboardConfig,
-          system: {
-            ...mockDashboardConfig.system,
-            defaultProposeTasks: true,
-          },
-        },
-      },
-    } as BootPayload;
-
-    renderWithClient(<WorkflowStartPage payload={payload} />);
-
-    const checkbox = await screen.findByRole("checkbox", {
-      name: "Propose follow-up work",
-    });
-    expect((checkbox as HTMLInputElement).checked).toBe(true);
-    expect(window.localStorage.getItem(preferenceKey)).toBeNull();
-  });
 });
 
 describe("Task Create submit arrow animation", () => {

@@ -8,6 +8,9 @@ are written into Temporal histories.
 
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
 from moonmind.workflows.executions.execution_contract import (
     CanonicalWorkflowExecutionPayload,
     build_canonical_workflow_view,
@@ -23,25 +26,20 @@ def test_canonical_job_type_value_is_unchanged_for_legacy_run_histories() -> Non
     assert CANONICAL_WORKFLOW_JOB_TYPE == "task"
     assert LEGACY_WORKFLOW_JOB_TYPES == frozenset({"codex_exec", "codex_skill"})
 
-def test_payload_serializes_the_canonical_workflow_envelope() -> None:
-    """Current payload shape: top-level "workflow" node with workflow keys."""
-
+@pytest.mark.parametrize("field", ["proposeTasks", "proposalPolicy"])
+def test_payload_rejects_removed_follow_up_fields(field: str) -> None:
     workflow_shaped = {
         "repository": "MoonLadderStudios/MoonMind",
         "targetRuntime": "codex",
         "workflow": {
             "instructions": "Implement MM-123",
-            "proposeTasks": False,
+            field: False if field == "proposeTasks" else {},
             "publish": {"mode": "pr"},
         },
     }
-    model = CanonicalWorkflowExecutionPayload.model_validate(workflow_shaped)
-    dumped = model.model_dump(by_alias=True, exclude_none=False)
 
-    assert "workflow" in dumped
-    assert "task" not in dumped
-    assert dumped["workflow"]["instructions"] == "Implement MM-123"
-    assert dumped["workflow"]["proposeTasks"] is False
+    with pytest.raises(ValidationError, match=rf"workflow\.{field} has been removed"):
+        CanonicalWorkflowExecutionPayload.model_validate(workflow_shaped)
 
 def test_canonical_view_emits_workflow_wire_keys() -> None:
     canonical = build_canonical_workflow_view(
