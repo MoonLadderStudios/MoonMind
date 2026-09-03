@@ -1609,6 +1609,7 @@ def test_ensure_host_materializes_canonical_execution_inputs_as_attachments() ->
         "OmnigentProfileBoundExecutionCoordinator._attachment_refs"
         in source
     )
+    assert "workspace_intent.connection_ref" in source
     assert "workspace_checkpoint_restore_ref" in source
 
 

@@ -111,7 +111,12 @@ def authored_checkout_commit(request: AgentExecutionRequest) -> str | None:
 
 
 def authored_connection_ref(request: AgentExecutionRequest) -> str | None:
-    repository = _spec(request).get("repository")
+    spec = _spec(request)
+    repository = spec.get("repositoryTarget")
+    if not isinstance(repository, Mapping):
+        # Already-recorded requests may carry the typed target directly under
+        # ``repository``. New Run workflow requests use ``repositoryTarget``.
+        repository = spec.get("repository")
     if not isinstance(repository, Mapping):
         return None
     value = str(repository.get("connectionRef") or "").strip()

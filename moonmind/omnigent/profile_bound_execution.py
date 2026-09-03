@@ -1281,9 +1281,11 @@ class OmnigentProfileBoundExecutionCoordinator:
                 repository_provider=str(
                     (request.workspace_spec or {}).get("provider") or ""
                 ).strip(),
-                repository_connection_ref=str(
-                    (request.workspace_spec or {}).get("connectionRef") or ""
-                ).strip(),
+                repository_connection_ref=(
+                    ""
+                    if remediation_resolution is not None
+                    else str(workspace_intent.connection_ref or "").strip()
+                ),
                 repository_client_evidence=dict(
                     (request.workspace_spec or {}).get("clientEvidence") or {}
                 ),

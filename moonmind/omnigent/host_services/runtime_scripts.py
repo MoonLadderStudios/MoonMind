@@ -51,6 +51,7 @@ _MOONMIND_RUNTIME_ENV_FILES = {
     "MOONMIND_TASK_WORKFLOW_ID": "task-workflow-id",
     "MOONMIND_STEP_ID": "step-id",
     "MOONMIND_RUNTIME_ID": "runtime-id",
+    "MOONMIND_REPOSITORY_CONNECTION_REF": "repository-connection-ref",
     "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE": "execution-fanout-file",
 }
 
