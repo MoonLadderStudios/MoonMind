@@ -539,6 +539,9 @@ MERGE_AUTOMATION_TERMINAL_STATUSES = (
     | MERGE_AUTOMATION_FAILURE_STATUSES
     | frozenset({MERGE_AUTOMATION_CANCELED_STATUS})
 )
+RUN_MERGE_AUTOMATION_OMNIGENT_RESOLVER_PLAN_PATCH = (
+    "run-merge-automation-omnigent-resolver-plan-v1"
+)
 OWNER_ID_SEARCH_ATTRIBUTE = "mm_owner_id"
 OWNER_TYPE_SEARCH_ATTRIBUTE = "mm_owner_type"
 _GITHUB_PR_URL_PATTERN = re.compile(
@@ -922,6 +925,13 @@ RUN_OMNIGENT_REMEDIATION_CHECKPOINT_RESTORE_PATCH = (
 # retain the previously recorded commands.
 RUN_OMNIGENT_INITIAL_VERIFICATION_CHECKPOINT_RESTORE_PATCH = (
     "run-omnigent-initial-verification-checkpoint-restore-v1"
+)
+# A checkpoint may first become available after a headless remediation attempt.
+# Adopt that archive at the attempt the controller just verified instead of
+# resetting the workspace head to attempt zero.  The head payload changes, so
+# histories that already adopted a late checkpoint retain their recorded value.
+RUN_LATE_REMEDIATION_HEAD_ATTEMPT_ORDINAL_PATCH = (
+    "run-late-remediation-head-attempt-ordinal-v1"
 )
 # A pull-request handoff is another fresh Omnigent sandbox and must publish the
 # exact candidate accepted by the controlling verifier. Restore the cumulative
@@ -7752,6 +7762,18 @@ class MoonMindRunWorkflow:
             return None
         identity = self._canonical_step_checkpoint_identity(checkpoint_step_id)
         normalized_verdict = str(verdict or "").strip().upper()
+        head_attempt_ordinal = 0
+        state = self._remediation_loop_state
+        if (
+            workflow.patched(RUN_LATE_REMEDIATION_HEAD_ATTEMPT_ORDINAL_PATCH)
+            and state is not None
+            and state.loop_id == spec.loop_id
+        ):
+            # Initial verification owns attempt zero.  When checkpoint capture
+            # first succeeds after a headless remediation, however, the archive
+            # already represents that completed attempt and must be admitted at
+            # the same ordinal as the loop controller.
+            head_attempt_ordinal = state.attempt_ordinal
         head = RemediationWorkspaceHead(
             loopId=spec.loop_id,
             branchRef=f"checkpoint-branch:{spec.loop_id}",
@@ -7764,6 +7786,7 @@ class MoonMindRunWorkflow:
             headStepExecutionId=(
                 build_step_execution_id(identity) if identity is not None else None
             ),
+            headAttemptOrdinal=head_attempt_ordinal,
             latestVerificationRef=gate_result_ref,
             latestVerificationVerdict=normalized_verdict,
             status=(
@@ -18828,19 +18851,35 @@ class MoonMindRunWorkflow:
             if isinstance(task_payload, Mapping)
             else {}
         ) or {}
+        target_runtime = (
+            self._coerce_text(
+                parameters.get("targetRuntime")
+                or task_runtime_payload.get("mode")
+                or task_runtime_payload.get("targetRuntime"),
+                max_chars=80,
+            )
+            or "codex"
+        ).lower()
         resolver_template: dict[str, Any] = {
             "repository": repo,
-            "targetRuntime": (
-                self._coerce_text(
-                    parameters.get("targetRuntime")
-                    or task_runtime_payload.get("mode")
-                    or task_runtime_payload.get("targetRuntime"),
-                    max_chars=80,
-                )
-                or "codex"
-            ),
+            "targetRuntime": target_runtime,
             "requiredCapabilities": ["git", "gh"],
         }
+        if (
+            target_runtime == "omnigent"
+            and self._workflow_patch_enabled(
+                RUN_MERGE_AUTOMATION_OMNIGENT_RESOLVER_PLAN_PATCH
+            )
+        ):
+            parent_execution_plan = parameters.get("omnigentExecutionPlan")
+            if not isinstance(parent_execution_plan, WorkflowMapping):
+                raise ValueError(
+                    "Omnigent merge automation requires persisted parent "
+                    "execution-plan authority."
+                )
+            resolver_template["parentOmnigentExecutionPlan"] = dict(
+                parent_execution_plan
+            )
         profile_id = self._inherited_execution_profile_ref(parameters)
         if profile_id:
             resolver_template["executionProfileRef"] = profile_id

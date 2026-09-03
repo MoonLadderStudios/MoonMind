@@ -16,6 +16,7 @@ from moonmind.workflows.temporal.remediation_loop import (
     ConsumedRemediationBudgets,
     RemediationContinuationDecision,
     RemediationLoopPhase,
+    RemediationLoopSpec,
     RemediationLoopState,
     apply_continuation_decision,
 )
@@ -25,10 +26,12 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_BOUNDED_STORY_LOOP_PROGRESS_BUDGET_PATCH,
     RUN_CANONICAL_GIT_REPOSITORY_PROJECTION_PATCH,
     RUN_CANONICAL_NO_COMMIT_OUTCOME_PATCH,
+    RUN_LATE_REMEDIATION_HEAD_ATTEMPT_ORDINAL_PATCH,
     RUN_MANAGED_SESSION_CHECKPOINT_LOCATOR_PATCH,
     RUN_MOONSPEC_TITLE_REMEDIATION_DETECTION_PATCH,
     RUN_OMNIGENT_AGENT_PROFILE_SNAPSHOT_COMPILER_PATCH,
     RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH,
+    RUN_OMNIGENT_INITIAL_VERIFICATION_CHECKPOINT_RESTORE_PATCH,
     RUN_PLAN_ROUTED_MOONSPEC_REMEDIATION_PATCH,
     RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH,
     RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH,
@@ -179,6 +182,77 @@ class _CurrentWorkflowOwnedRemediationHeadReplayFixture:
                 "headWorkspaceDigest": "sha256:c1",
             }
         return continuation
+
+
+def _late_remediation_head_fixture() -> MoonMindRunWorkflow:
+    workflow_instance = MoonMindRunWorkflow()
+    workflow_instance._remediation_loop_spec = RemediationLoopSpec.model_validate(
+        {
+            "kind": "remediation_loop",
+            "loopId": "loop",
+            "remediationTool": {
+                "type": "agent_runtime",
+                "name": "codex_cli",
+                "inputs": {"instructions": "Remediate."},
+            },
+            "verificationTool": {
+                "type": "agent_runtime",
+                "name": "codex_cli",
+                "inputs": {"instructions": "Verify."},
+            },
+            "workspacePolicy": "continue_from_loop_head",
+            "budgets": {"hardMaxAttempts": 2},
+            "terminalPolicy": {
+                "fullyImplemented": "advance",
+                "additionalWorkNeeded": "continue_when_allowed",
+                "blocked": "stop",
+                "noDetermination": "retry_evidence_or_stop",
+                "failedUnrecoverable": "stop",
+            },
+            "sideEffectPolicy": "workflow_owned",
+            "publicationPolicy": "evaluate_after_terminal",
+        }
+    )
+    workflow_instance._remediation_loop_state = RemediationLoopState(
+        loopId="loop",
+        attemptOrdinal=1,
+        phase=RemediationLoopPhase.VERIFICATION_PENDING,
+        consumedBudgets=ConsumedRemediationBudgets(attempts=1),
+    )
+    workflow_instance._step_checkpoint_workspace_evidence_by_boundary = {
+        "verification-1": {
+            "before_publication": {
+                "checkpointRef": "artifact://workspace/C1",
+                "workspaceKind": "worktree_archive",
+                "workspaceDigest": "sha256:c1",
+                "workspaceIdentityDigest": "sha256:" + ("c" * 64),
+                "checkpointManifestRef": "artifact://manifest/C1",
+            }
+        }
+    }
+    return workflow_instance
+
+
+@workflow.defn(name="MMLateRemediationHeadAttemptReplayFixture")
+class _LegacyLateRemediationHeadAttemptReplayFixture:
+    @workflow.run
+    async def run(self) -> int:
+        workflow.patched(RUN_OMNIGENT_INITIAL_VERIFICATION_CHECKPOINT_RESTORE_PATCH)
+        return 0
+
+
+@workflow.defn(name="MMLateRemediationHeadAttemptReplayFixture")
+class _CurrentLateRemediationHeadAttemptReplayFixture:
+    @workflow.run
+    async def run(self) -> int:
+        workflow_instance = _late_remediation_head_fixture()
+        head = workflow_instance._initialize_remediation_head_from_canonical_checkpoint(
+            logical_step_id="verification-1",
+            gate_result_ref="artifact://verification/V1",
+            verdict="ADDITIONAL_WORK_NEEDED",
+        )
+        assert head is not None
+        return head.head_attempt_ordinal
 
 
 @workflow.defn(name="MMHeadlessRemediationExecutionReplayFixture")
@@ -871,6 +945,47 @@ async def test_workflow_owned_remediation_head_histories_replay() -> None:
     )
     replayer = Replayer(
         workflows=[_CurrentWorkflowOwnedRemediationHeadReplayFixture],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    )
+    await replayer.replay_workflow(legacy_history)
+    await replayer.replay_workflow(current_history)
+
+
+@pytest.mark.asyncio
+async def test_late_remediation_head_attempt_ordinal_histories_replay() -> None:
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-late-remediation-head-legacy-replay",
+            workflows=[_LegacyLateRemediationHeadAttemptReplayFixture],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            legacy_handle = await env.client.start_workflow(
+                _LegacyLateRemediationHeadAttemptReplayFixture.run,
+                id="test-late-remediation-head-legacy",
+                task_queue="test-late-remediation-head-legacy-replay",
+            )
+            legacy_result = await legacy_handle.result()
+            legacy_history = await legacy_handle.fetch_history()
+
+        async with Worker(
+            env.client,
+            task_queue="test-late-remediation-head-current-replay",
+            workflows=[_CurrentLateRemediationHeadAttemptReplayFixture],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            current_handle = await env.client.start_workflow(
+                _CurrentLateRemediationHeadAttemptReplayFixture.run,
+                id="test-late-remediation-head-current",
+                task_queue="test-late-remediation-head-current-replay",
+            )
+            current_result = await current_handle.result()
+            current_history = await current_handle.fetch_history()
+
+    assert legacy_result == 0
+    assert current_result == 1
+    replayer = Replayer(
+        workflows=[_CurrentLateRemediationHeadAttemptReplayFixture],
         workflow_runner=UnsandboxedWorkflowRunner(),
     )
     await replayer.replay_workflow(legacy_history)

@@ -1099,6 +1099,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "agent_runtime",
         "omnigent_load_failure_authority",
     ),
+    "omnigent.prepare_child_execution_plan": (
+        "agent_runtime",
+        "omnigent_prepare_child_execution_plan",
+    ),
     "omnigent.ensure_provider_profile_lease": (
         "agent_runtime",
         "omnigent_ensure_provider_profile_lease",
@@ -7733,6 +7737,20 @@ class TemporalAgentRuntimeActivities:
             request,
             **kwargs,
         )
+
+    async def omnigent_prepare_child_execution_plan(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        from moonmind.workflows.temporal.activities.omnigent_activities import (
+            omnigent_prepare_child_execution_plan_activity,
+        )
+
+        payload = _coerce_activity_payload_input(
+            request,
+            activity_type="omnigent.prepare_child_execution_plan",
+            kwargs=kwargs,
+        )
+        return await omnigent_prepare_child_execution_plan_activity(payload)
 
     async def omnigent_ensure_host(
         self, request: Any = None, /, **kwargs: Any
