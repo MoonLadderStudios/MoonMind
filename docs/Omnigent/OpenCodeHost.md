@@ -3,7 +3,7 @@
 **Status:** OpenCode implementation is current; shared-image migration is desired state  
 **Document Class:** System / Operator Guide  
 **Owners:** MoonMind Platform  
-**Last updated:** 2026-08-31
+**Last updated:** 2026-09-03
 **Authority:** OpenCode runtime contract and transition from `omnigent-host-opencode` to the shared MoonMind Omnigent host image
 
 ## Related documents
@@ -253,7 +253,7 @@ runtimeMaterializationMode: composite
 secretRefs: {}
 enabled: true
 authState: connected
-defaultModel: opencode/muse-spark-1.2-contributor-free
+defaultModel: opencode/muse-spark-1.3-contributor-free
 defaultEffort: xhigh
 ```
 
@@ -283,10 +283,14 @@ maxParallelRuns: 1
 queueWhenBusy: true
 enabled: true
 authState: connected
-defaultModel: opencode-go/<model-id>
+defaultModel: opencode-go/muse-spark-1.3-contributor
 ```
 
-A user may enroll it through Settings with a write-only API-key field. A deployment may also bootstrap it from `OPENCODE_API_KEY`.
+A user may enroll it through Settings with a write-only API-key field. A
+deployment may also bootstrap it from `OPENCODE_API_KEY`. On restart, that
+deployment setting repairs a missing, partially enrolled, or automatically
+disabled `opencode-go-default` profile through the same pinned-runtime
+validation path. Explicit user and policy disables remain authoritative.
 
 The raw key is never returned after submission.
 

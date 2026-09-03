@@ -18,7 +18,7 @@ router = APIRouter(prefix="/api/omnigent/bootstrap", tags=["Omnigent Bootstrap"]
 class BootstrapOpencodeRequest(BaseModel):
     api_key: str = Field(alias="apiKey", min_length=1, max_length=8192)
     model_display_name: str = Field(
-        default="Muse Spark 1.2 Contributor",
+        default="Muse Spark 1.3 Contributor",
         alias="modelDisplayName",
         max_length=255,
     )

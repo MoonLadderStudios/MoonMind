@@ -18,6 +18,7 @@ from moonmind.omnigent.bootstrap.models import (
 )
 from moonmind.omnigent.bootstrap.opencode import (
     DEFAULT_OPENCODE_MODEL_DISPLAY,
+    DEFAULT_OPENCODE_QUALIFIED,
     resolve_model_by_display,
     validate_effort,
 )
@@ -85,7 +86,7 @@ class BootstrapController:
             and not accept_contributor_data_use
         ):
             raise ValueError(
-                "Contributor data-use acknowledgement is required for Muse Spark 1.2 Contributor"
+                "Contributor data-use acknowledgement is required for Muse Spark 1.3 Contributor"
             )
 
         # Validate effort
@@ -853,6 +854,11 @@ class BootstrapController:
         )
 
         profile_id = "opencode-go-default"
+        tier_label = (
+            DEFAULT_OPENCODE_MODEL_DISPLAY
+            if qualified_model == DEFAULT_OPENCODE_QUALIFIED
+            else qualified_model
+        )
         async with async_session_maker() as session:
             profile = await session.get(ManagedAgentProviderProfile, profile_id)
             needs_create = profile is None
@@ -889,6 +895,16 @@ class BootstrapController:
                     rate_limit_policy=ManagedAgentRateLimitPolicy.QUEUE,
                     default_model=qualified_model,
                     default_effort=effort,
+                    model_tiers=[
+                        {
+                            "label": tier_label,
+                            "model": qualified_model,
+                            "effort": effort,
+                            "parameters": {},
+                            "annotations": {},
+                        }
+                    ],
+                    default_model_tier=1,
                     # Default authority belongs only to a launch-ready profile.
                     # The credentialless Zen seed may already be the runtime
                     # default, and the database enforces that invariant with a
@@ -1096,6 +1112,29 @@ class BootstrapController:
                 prof.credential_generation = candidate_generation
                 prof.default_model = qualified_model
                 prof.default_effort = effort
+                existing_tiers = list(prof.model_tiers or [])
+                # Bootstrap owns the initial single-tier policy. Preserve an
+                # operator-authored multi-tier or custom single-tier policy
+                # when deployment configuration is only reconnecting the
+                # credential after a restart.
+                if (
+                    needs_create
+                    or not existing_tiers
+                    or (
+                        len(existing_tiers) == 1
+                        and not str(existing_tiers[0].get("model") or "").strip()
+                    )
+                ):
+                    prof.model_tiers = [
+                        {
+                            "label": tier_label,
+                            "model": qualified_model,
+                            "effort": effort,
+                            "parameters": {},
+                            "annotations": {},
+                        }
+                    ]
+                    prof.default_model_tier = 1
                 # Persist the exact credential-scoped catalog returned by the
                 # pinned runtime. Never replace it with the requested model;
                 # that would turn an unverified selection into readiness

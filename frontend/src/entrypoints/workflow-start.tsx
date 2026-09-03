@@ -6585,11 +6585,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const selectedProfileIsGenericV2 =
     selectedOmnigentAgentProfileVersion?.document?.schemaVersion ===
       "moonmind.omnigent-agent-profile.v2";
-  const submittedOmnigentAgentProfileVersion = selectedProfileIsGenericV2
-    ? selectedOmnigentAgentProfileVersion?.version
-    : authoredOmnigentAgentProfileVersion;
   useEffect(() => {
-    if (runtime !== "omnigent") return;
+    if (runtime !== "omnigent" || selectedProfileIsGenericV2) return;
     const profileExecutionTargetRef = String(
       selectedOmnigentAgentProfileVersion?.document?.execution
         ?.defaultExecutionProfileRef || "",
@@ -6604,6 +6601,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     omnigentExecutionTargetRef,
     runtime,
     selectedOmnigentAgentProfileVersion,
+    selectedProfileIsGenericV2,
   ]);
   useEffect(() => {
     if (runtime !== "omnigent" || agentProfile) return;
@@ -6648,10 +6646,20 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     refetchOnWindowFocus: true,
   });
   const selectedGenericOmnigentTarget = omnigentExecutionReadinessQuery.data?.executionTargets?.find(
-    (target) => target.agentProfileRef.profileId === agentProfile &&
-      target.agentProfileRef.version === selectedOmnigentAgentProfileVersion?.version &&
-      target.agentProfileRef.digest === selectedOmnigentAgentProfileVersion?.digest,
+    (target) =>
+      target.agentProfileRef.profileId === agentProfile &&
+      (authoredOmnigentAgentProfileVersion === undefined ||
+        (target.agentProfileRef.version === selectedOmnigentAgentProfileVersion?.version &&
+          target.agentProfileRef.digest === selectedOmnigentAgentProfileVersion?.digest)),
   );
+  const submittedOmnigentAgentProfileVersion = selectedProfileIsGenericV2
+    ? selectedGenericOmnigentTarget?.agentProfileRef.version ||
+      selectedOmnigentAgentProfileVersion?.version
+    : authoredOmnigentAgentProfileVersion;
+  const submittedOmnigentAgentProfileDigest = selectedProfileIsGenericV2
+    ? selectedGenericOmnigentTarget?.agentProfileRef.digest ||
+      selectedOmnigentAgentProfileVersion?.digest
+    : undefined;
   const activeProviderProfiles: ProviderProfile[] = runtime === "omnigent"
     ? selectedProfileIsGenericV2
       ? (selectedGenericOmnigentTarget?.compatibleProviderProfiles || []).map((profile) => {
@@ -10402,6 +10410,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
 
     const normalizedRuntime = runtime.trim().toLowerCase();
     let submittedOmnigentLaunchPolicyRef = omnigentLaunchPolicyRef;
+    let effectiveOmnigentAgentProfileVersion =
+      submittedOmnigentAgentProfileVersion;
+    let effectiveOmnigentAgentProfileDigest = submittedOmnigentAgentProfileDigest;
+    let effectiveOmnigentExecutionTargetRef = omnigentExecutionTargetRef;
     const supportedAgentRuntimeIds = runtimeOptions.map((item) =>
       item.trim().toLowerCase(),
     );
@@ -10418,8 +10430,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         const target = refreshed.data?.executionTargets?.find(
           (item) =>
             item.agentProfileRef.profileId === agentProfile &&
-            item.agentProfileRef.version === selectedOmnigentAgentProfileVersion?.version &&
-            item.agentProfileRef.digest === selectedOmnigentAgentProfileVersion?.digest,
+            (authoredOmnigentAgentProfileVersion === undefined ||
+              (item.agentProfileRef.version === selectedOmnigentAgentProfileVersion?.version &&
+                item.agentProfileRef.digest === selectedOmnigentAgentProfileVersion?.digest)),
         );
         if (refreshed.isError || !target?.available) {
           setSubmitMessage(
@@ -10428,6 +10441,12 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           );
           clearSubmitBusy();
           return;
+        }
+        effectiveOmnigentAgentProfileVersion = target.agentProfileRef.version;
+        effectiveOmnigentAgentProfileDigest = target.agentProfileRef.digest;
+        effectiveOmnigentExecutionTargetRef = target.ref;
+        if (target.ref !== omnigentExecutionTargetRef) {
+          setOmnigentExecutionTargetRef(target.ref);
         }
         if (!target.compatibleProviderProfiles.some(
           (profile) => profile.profileId === providerProfile,
@@ -11601,12 +11620,12 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           ? {
               agentProfile: {
                 profileId: agentProfile,
-                ...(submittedOmnigentAgentProfileVersion
-                  ? { version: submittedOmnigentAgentProfileVersion }
+                ...(effectiveOmnigentAgentProfileVersion
+                  ? { version: effectiveOmnigentAgentProfileVersion }
                   : {}),
                 ...(selectedProfileIsGenericV2 &&
-                selectedOmnigentAgentProfileVersion?.digest
-                  ? { digest: selectedOmnigentAgentProfileVersion.digest }
+                effectiveOmnigentAgentProfileDigest
+                  ? { digest: effectiveOmnigentAgentProfileDigest }
                   : {}),
                 providerProfileRef: providerProfile,
                 ...(submittedOmnigentLaunchPolicyRef
@@ -11677,12 +11696,12 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           ? {
               agentProfile: {
                 profileId: agentProfile,
-                ...(submittedOmnigentAgentProfileVersion
-                  ? { version: submittedOmnigentAgentProfileVersion }
+                ...(effectiveOmnigentAgentProfileVersion
+                  ? { version: effectiveOmnigentAgentProfileVersion }
                   : {}),
                 ...(selectedProfileIsGenericV2 &&
-                selectedOmnigentAgentProfileVersion?.digest
-                  ? { digest: selectedOmnigentAgentProfileVersion.digest }
+                effectiveOmnigentAgentProfileDigest
+                  ? { digest: effectiveOmnigentAgentProfileDigest }
                   : {}),
                 providerProfileRef: providerProfile,
                 ...(submittedOmnigentLaunchPolicyRef
@@ -11691,10 +11710,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               },
             }
           : {}),
-        ...(normalizedRuntime === "omnigent" && omnigentExecutionTargetRef
+        ...(normalizedRuntime === "omnigent" && effectiveOmnigentExecutionTargetRef
           ? {
               omnigent: {
-                executionTargetRef: omnigentExecutionTargetRef,
+                executionTargetRef: effectiveOmnigentExecutionTargetRef,
                 ...(submittedOmnigentLaunchPolicyRef
                   ? { launchPolicyRef: submittedOmnigentLaunchPolicyRef }
                   : {}),

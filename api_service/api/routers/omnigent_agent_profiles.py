@@ -60,6 +60,11 @@ from moonmind.omnigent.bridge_proxy import (
     OmnigentBridgeError,
     OmnigentBridgeSessionProxy,
 )
+from moonmind.omnigent.harness_platform import (
+    HarnessCatalogSnapshot,
+    HarnessPlatformError,
+    assert_catalog_refresh_attests,
+)
 from moonmind.workflows.temporal.artifacts import TemporalArtifactService
 
 router = APIRouter(
@@ -85,6 +90,34 @@ _SAFE_REFERENCE_KEYS = {
     "maxtokens",
 }
 _CONSUMER_TYPES = Literal["workflow", "schedule", "checkpoint", "remediation", "smoke"]
+
+
+def _catalog_refresh_preserves_builtin_binding(
+    *,
+    authority_payload: Any,
+    observation: HarnessCatalogSnapshot,
+    harness_id: str,
+    implementation_ref: str,
+) -> bool:
+    """Return whether a new observation still attests profile authority.
+
+    Host inventory is deliberately part of a catalog snapshot's source digest,
+    but it is not part of the immutable harness/build identity selected by an
+    Agent Profile. Requiring equal source digests would therefore mint a new
+    built-in profile version whenever an ephemeral host starts or stops.
+    """
+
+    try:
+        authority = HarnessCatalogSnapshot.model_validate(authority_payload)
+        assert_catalog_refresh_attests(
+            authority=authority,
+            observation=observation,
+            harness_id=harness_id,
+            implementation_ref=implementation_ref,
+        )
+    except (HarnessPlatformError, ValueError, TypeError):
+        return False
+    return True
 
 
 class AgentSource(BaseModel):
@@ -459,10 +492,10 @@ async def ensure_builtin_opencode_agent_profile(
             ).scalars()
         )
     )
-    # Re-observations of identical inventory produce timestamp-shifted
-    # catalogRefs because observation time is part of the catalog identity.
-    # The active immutable version already binds equivalent authority, so
-    # reuse its document verbatim instead of minting a new version per sync.
+    # Re-observations produce new catalogRefs because observation time and live
+    # host inventory are part of the catalog identity. The active immutable
+    # version can retain its binding when the canonical refresh contract proves
+    # that endpoint, Omnigent build, and harness implementation are unchanged.
     if profile is not None and profile.active_version is not None:
         active = next(
             (
@@ -482,9 +515,11 @@ async def ensure_builtin_opencode_agent_profile(
                 bound_row = await session.get(
                     OmnigentHarnessCatalogSnapshotRecord, bound_ref
                 )
-                if (
-                    bound_row is not None
-                    and bound_row.source_digest == catalog.snapshot.sourceDigest
+                if bound_row is not None and _catalog_refresh_preserves_builtin_binding(
+                    authority_payload=bound_row.snapshot_json,
+                    observation=catalog.snapshot,
+                    harness_id="opencode-native",
+                    implementation_ref=implementation_ref,
                 ):
                     # Pin only the volatile catalog binding to the active
                     # version's authority. Everything else keeps the freshly
