@@ -723,8 +723,8 @@ The example values are illustrative. The backend response, not this document, is
 8. The frontend must not infer effort support from provider name.
 9. The frontend must not infer model options from runtime name.
 10. Capabilities for a saved profile are requested by `profile_id`. A runtime-and-provider draft response must not be substituted for a saved profile.
-11. A response whose `profile_id`, `credential_generation`, or `image_ref` no longer matches the loaded profile is stale. The editor refetches, and until that succeeds it treats the option catalog as unavailable for new values rather than authoritative.
-12. `evidence.stale = true` means the profile's catalog evidence needs re-validation. Existing values stay visible and new values follow the degradation rules in §12.4.
+11. A response whose `profile_id`, `credential_generation`, or `image_ref` no longer matches the loaded profile is stale. The editor refetches, and until that succeeds it treats observed catalog options as unavailable for new selections rather than authoritative.
+12. `evidence.stale = true` means the profile's catalog evidence needs re-validation. Existing values stay visible, observed catalog choices are disabled, and an explicit `model.allow_custom = true` remains authoritative for manual entry.
 
 ### 12.4 Safe degradation
 
@@ -734,12 +734,17 @@ If capabilities fail to load:
 - `Runtime default` remains available,
 - no existing value is erased,
 - an inline warning states that model choices could not be refreshed,
-- custom entry follows the last successfully loaded capability policy when backed by a validated cache,
-- otherwise unknown new custom entry is disabled,
+- custom entry follows the loaded capability policy independently of catalog freshness,
+- `model.allow_custom = true` keeps manual entry available while observed catalog choices are stale,
+- unknown new custom entry is disabled when no authoritative capability response allows it,
 - saving unchanged tier values remains possible when server validation permits it, and
 - server validation errors are mapped back to the affected tier and field.
 
-The same rules apply when the profile's catalog evidence is missing or stale. The editor states that model choices reflect no current profile evidence, preserves existing values, and does not accept a new value that only unscoped runtime metadata would justify.
+The same rules apply when the profile's catalog evidence is missing or stale.
+The editor states that observed choices reflect no current profile evidence and
+preserves existing values. Manual entry is permitted only when the
+profile-scoped capability response explicitly sets `model.allow_custom = true`;
+the write and launch boundaries remain responsible for validation.
 
 A capability failure must not turn the whole Provider Profiles section into an empty state.
 

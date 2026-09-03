@@ -53,5 +53,5 @@ async def test_startup_profile_seeding(disabled_env_keys, tmp_path):
         assert zen.auth_state == ProviderProfileAuthState.CONNECTED
         assert zen.credential_source == ProviderCredentialSource.NONE
         assert zen.secret_refs == {}
-        assert zen.default_model == "opencode/muse-spark-1.2-contributor-free"
+        assert zen.default_model == "opencode/muse-spark-1.3-contributor-free"
         assert zen.default_effort == "xhigh"
