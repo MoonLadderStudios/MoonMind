@@ -1,0 +1,12 @@
+{
+  "markedTurnTimeoutSeconds": 8400,
+  "activityBudgetSeconds": 9000,
+  "retryReserveSeconds": 600,
+  "currentTurnProgress": true,
+  "unfinishedToolCall": true,
+  "lastItemType": "function_call",
+  "lastToolName": "bash",
+  "providerRateLimitEvidence": "not_observed",
+  "coarseBridgeStatusAuthoritative": false,
+  "ambiguousTerminalRemainsRetryable": true
+}

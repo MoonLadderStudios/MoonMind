@@ -23,9 +23,13 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_HANDOFF_ACCEPTED_DISPOSITION_GATE_PATCH,
     RUN_HEADLESS_REMEDIATION_VERIFIED_WORKSPACE_PATCH,
     RUN_HEADLESS_REMEDIATION_EXECUTION_PATCH,
+    RUN_ISSUE_IMPLEMENT_PR_HANDOFF_AUTHORITY_PATCH,
+    RUN_LATE_REMEDIATION_HEAD_ATTEMPT_ORDINAL_PATCH,
     RUN_MANAGED_SESSION_CHECKPOINT_LOCATOR_PATCH,
     RUN_MOONSPEC_GATE_PREVIOUS_OUTPUTS_HANDOFF_PATCH,
     RUN_MOONSPEC_VERIFY_REMAINING_WORK_EVIDENCE_PATCH,
+    RUN_OMNIGENT_INITIAL_VERIFICATION_CHECKPOINT_RESTORE_PATCH,
+    RUN_OMNIGENT_REMEDIATION_CHECKPOINT_RESTORE_PATCH,
     RUN_PAUSE_SAFE_BOUNDARIES_PATCH,
     RUN_PUBLISH_REPAIR_FEEDBACK_PATCH,
     RUN_PR_RESOLVER_PUBLISH_EVIDENCE_REF_PATCH,
@@ -3738,10 +3742,21 @@ async def test_dynamic_verifier_promotes_canonical_checkpoint_to_remediation_hea
         "sideEffectPolicy": "workflow_owned",
         "publicationPolicy": "evaluate_after_terminal",
     }
+    controller = _loop_controller_node(loop)
+    controller["tool"] = {"type": "agent_runtime", "name": "omnigent"}
+    controller["inputs"]["runtime"] = {
+        "mode": "omnigent",
+        "executionProfileRef": "opencode-zen-free",
+    }
     mock_run_workflow._initialize_remediation_loop_controller(
-        ordered_nodes=[_loop_controller_node(loop)]
+        ordered_nodes=[controller]
     )
     mock_run_workflow._step_ledger_rows = [
+        {
+            "logicalStepId": "implementation",
+            "status": "completed",
+            "attempt": 1,
+        },
         {
             "logicalStepId": "initial-verification",
             "status": "completed",
@@ -3750,9 +3765,20 @@ async def test_dynamic_verifier_promotes_canonical_checkpoint_to_remediation_hea
     ]
     mock_run_workflow._rebuild_step_ledger_index()
     mock_run_workflow._step_checkpoint_workspace_evidence_by_boundary = {
+        "implementation": {
+            "before_publication": {
+                "checkpointRef": "art_implementation_checkpoint",
+                "workspaceArchiveRef": "art_implementation_archive",
+                "workspaceKind": "worktree_archive",
+                "workspaceDigest": "sha256:implementation-candidate",
+                "workspaceIdentityDigest": "sha256:" + ("b" * 64),
+                "checkpointManifestRef": "art_implementation_manifest",
+            }
+        },
         "initial-verification": {
             "before_publication": {
                 "checkpointRef": "art_initial_checkpoint",
+                "workspaceArchiveRef": "art_initial_archive",
                 "workspaceKind": "worktree_archive",
                 "workspaceDigest": "sha256:initial-candidate",
                 "workspaceIdentityDigest": "sha256:" + ("c" * 64),
@@ -3770,6 +3796,9 @@ async def test_dynamic_verifier_promotes_canonical_checkpoint_to_remediation_hea
         in {
             RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
             RUN_REMEDIATION_MANAGED_SESSION_SOURCE_IDENTITY_PATCH,
+            RUN_OMNIGENT_REMEDIATION_CHECKPOINT_RESTORE_PATCH,
+            RUN_OMNIGENT_INITIAL_VERIFICATION_CHECKPOINT_RESTORE_PATCH,
+            RUN_LATE_REMEDIATION_HEAD_ATTEMPT_ORDINAL_PATCH,
         },
     )
     ordered_nodes: list[dict[str, Any]] = []
@@ -3787,15 +3816,16 @@ async def test_dynamic_verifier_promotes_canonical_checkpoint_to_remediation_hea
     state = mock_run_workflow._remediation_loop_state
     assert head is not None
     assert state is not None
-    assert head.root_checkpoint_ref == "artifact://art_initial_checkpoint"
-    assert head.head_checkpoint_ref == "artifact://art_initial_checkpoint"
-    assert head.head_workspace_digest == "sha256:initial-candidate"
-    assert head.head_workspace_identity_digest == "sha256:" + ("c" * 64)
+    assert head.root_checkpoint_ref == "artifact://art_implementation_archive"
+    assert head.head_checkpoint_ref == "artifact://art_implementation_archive"
+    assert head.head_workspace_digest == "sha256:implementation-candidate"
+    assert head.head_workspace_identity_digest == "sha256:" + ("b" * 64)
+    assert head.head_attempt_ordinal == 0
     assert head.latest_verification_ref == "artifact://verification/V0"
     assert head.latest_verification_verdict == "ADDITIONAL_WORK_NEEDED"
-    assert state.workspace_head_ref == "artifact://art_initial_checkpoint"
+    assert state.workspace_head_ref == "artifact://art_implementation_archive"
     assert ordered_nodes[0]["inputs"]["remediationWorkspaceHeadRef"] == (
-        "artifact://art_initial_checkpoint"
+        "artifact://art_implementation_archive"
     )
     assert ordered_nodes[0]["annotations"]["workspaceCaptureSourceIdentity"] == {
         "workflowId": "wf-1",
@@ -4085,6 +4115,91 @@ async def test_dynamic_attempt_captures_head_verifies_and_admits_next_pair(
     assert projection["attemptOrdinal"] == 2
     assert projection["workspaceHeadRef"] == "artifact://workspace/C1"
     assert len(projection["materializedAttempts"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_late_checkpoint_head_adoption_preserves_completed_attempt_ordinal(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for workflow mm:ea55d1c9-b296-4db0-8e1a-50f428dd2db2."""
+
+    from moonmind.workflows.temporal.remediation_loop import (
+        ConsumedRemediationBudgets,
+        RemediationLoopPhase,
+        RemediationLoopState,
+    )
+
+    mock_run_workflow._initialize_remediation_loop_controller(
+        ordered_nodes=[_loop_controller_node(_dynamic_loop_spec_payload())]
+    )
+    mock_run_workflow._remediation_loop_runtime = {
+        **_LOOP_RUNTIME,
+        "mode": "omnigent",
+    }
+    mock_run_workflow._remediation_loop_state = RemediationLoopState(
+        loopId="issue-implementation-remediation",
+        attemptOrdinal=1,
+        phase=RemediationLoopPhase.VERIFICATION_PENDING,
+        consumedBudgets=ConsumedRemediationBudgets(attempts=1),
+    )
+    mock_run_workflow._step_ledger_rows = [
+        {
+            "logicalStepId": "remediation-1",
+            "status": "completed",
+            "annotations": {"issueImplementRole": "moonspec-remediation"},
+        },
+        {
+            "logicalStepId": "verification-1",
+            "status": "completed",
+            "annotations": {"issueImplementRole": "moonspec-verification-gate"},
+        },
+    ]
+    mock_run_workflow._step_checkpoint_workspace_evidence_by_boundary = {
+        "remediation-1": {
+            "before_publication": {
+                "checkpointRef": "artifact://workspace/C1",
+                "workspaceKind": "worktree_archive",
+                "workspaceDigest": "sha256:c1",
+                "workspaceIdentityDigest": "sha256:" + ("c" * 64),
+                "checkpointManifestRef": "artifact://manifest/C1",
+            }
+        }
+    }
+    mock_run_workflow._write_json_artifact = AsyncMock(
+        return_value="artifact://decision/D1"
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
+            RUN_OMNIGENT_INITIAL_VERIFICATION_CHECKPOINT_RESTORE_PATCH,
+            RUN_LATE_REMEDIATION_HEAD_ATTEMPT_ORDINAL_PATCH,
+        },
+    )
+    ordered_nodes: list[dict[str, Any]] = []
+
+    admitted = await mock_run_workflow._evaluate_dynamic_remediation_verification(
+        ordered_nodes=ordered_nodes,
+        verdict="ADDITIONAL_WORK_NEEDED",
+        gate_result_ref="artifact://verification/V1",
+        remaining_work_ref="artifact://remaining/R1",
+        logical_step_id="verification-1",
+    )
+
+    assert admitted is True
+    head = mock_run_workflow._remediation_workspace_head
+    assert head is not None
+    assert head.head_checkpoint_ref == "artifact://workspace/C1"
+    assert head.head_attempt_ordinal == 1
+    remediation_inputs = dict(ordered_nodes[0]["inputs"])
+    mock_run_workflow._inject_remediation_workspace_baseline(
+        node=ordered_nodes[0],
+        node_inputs=remediation_inputs,
+    )
+    assert remediation_inputs["remediationAttemptInput"]["attemptOrdinal"] == 2
 
 
 def _dynamic_loop_spec_payload() -> dict[str, Any]:
@@ -6038,7 +6153,9 @@ def test_existing_managed_session_keeps_prior_checkpoint_shape_during_replay(
 
 def test_remediation_head_uses_archive_not_git_patch_checkpoint(
     mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    mock_run_workflow._remediation_loop_runtime = {"mode": "omnigent"}
     mock_run_workflow._step_checkpoint_workspace_evidence_by_boundary = {
         "initial-verification": {
             "after_execution": {
@@ -6050,6 +6167,7 @@ def test_remediation_head_uses_archive_not_git_patch_checkpoint(
             },
             "before_publication": {
                 "checkpointRef": "art_archive_checkpoint",
+                "workspaceArchiveRef": "art_workspace_archive",
                 "workspaceKind": "worktree_archive",
                 "workspaceDigest": "sha256:archive-candidate",
                 "workspaceIdentityDigest": "sha256:" + ("c" * 64),
@@ -6057,17 +6175,545 @@ def test_remediation_head_uses_archive_not_git_patch_checkpoint(
             },
         }
     }
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: (
+            patch_id == RUN_OMNIGENT_REMEDIATION_CHECKPOINT_RESTORE_PATCH
+        ),
+    )
 
     evidence = mock_run_workflow._canonical_remediation_checkpoint_evidence(
         "initial-verification"
     )
 
     assert evidence == {
-        "checkpointRef": "artifact://art_archive_checkpoint",
+        "checkpointRef": "artifact://art_workspace_archive",
         "workspaceDigest": "sha256:archive-candidate",
         "workspaceIdentityDigest": "sha256:" + ("c" * 64),
         "checkpointManifestRef": "artifact://art_archive_manifest",
     }
+
+
+def test_omnigent_remediation_restores_head_before_agent_launch(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    node = {
+        "id": "remediation-1",
+        "tool": {"type": "agent_runtime", "name": "omnigent"},
+        "annotations": {
+            "remediationLoopId": "issue-implementation-remediation",
+            "issueImplementRole": "moonspec-remediation",
+            "moonSpecRemediationAttempt": 1,
+        },
+        "inputs": {
+            "runtime": {
+                "mode": "omnigent",
+                "executionProfileRef": "opencode-zen-free",
+            },
+        },
+    }
+    mock_run_workflow._remediation_workspace_head = (
+        RemediationWorkspaceHead.model_validate(_remediation_head_payload())
+    )
+    mock_run_workflow._remediation_loop_runtime = {"mode": "omnigent"}
+    node_inputs = dict(node["inputs"])
+    mock_run_workflow._inject_remediation_workspace_baseline(
+        node=node,
+        node_inputs=node_inputs,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
+            RUN_OMNIGENT_REMEDIATION_CHECKPOINT_RESTORE_PATCH,
+        },
+    )
+
+    restore_ref = (
+        mock_run_workflow._trusted_omnigent_remediation_checkpoint_restore_ref(
+            node=node,
+            node_inputs=node_inputs,
+        )
+    )
+    request = mock_run_workflow._build_agent_execution_request(
+        node_inputs=node_inputs,
+        node_id="remediation-1",
+        tool_name="omnigent",
+        workflow_parameters={},
+        trusted_remediation_checkpoint_restore_ref=restore_ref,
+    )
+
+    assert restore_ref == "artifact://workspace/C0"
+    assert request.workspace_spec["workspaceCheckpointRestoreRef"] == restore_ref
+    assert not mock_run_workflow._remediation_workspace_materialization_required(
+        node
+    )
+
+
+def test_initial_omnigent_verifier_restores_latest_candidate_before_launch(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller = _loop_controller_node(_dynamic_loop_spec_payload())
+    controller["tool"] = {"type": "agent_runtime", "name": "omnigent"}
+    controller["inputs"]["runtime"] = {"mode": "omnigent"}
+    mock_run_workflow._initialize_remediation_loop_controller(
+        ordered_nodes=[controller]
+    )
+    mock_run_workflow._step_ledger_rows = [
+        {
+            "logicalStepId": "implementation",
+            "status": "completed",
+            "annotations": {"issueImplementRole": "issue-implementation"},
+        },
+        {
+            "logicalStepId": "initial-verification",
+            "status": "executing",
+            "annotations": {},
+        },
+    ]
+    mock_run_workflow._step_checkpoint_workspace_evidence_by_boundary = {
+        "implementation": {
+            "before_publication": {
+                "checkpointRef": "art_implementation_checkpoint",
+                "workspaceArchiveRef": "art_implementation_archive",
+                "workspaceKind": "worktree_archive",
+                "workspaceDigest": "sha256:implementation-candidate",
+                "workspaceIdentityDigest": "sha256:" + ("b" * 64),
+                "checkpointManifestRef": "art_implementation_manifest",
+            }
+        }
+    }
+    node = {
+        "id": "initial-verification",
+        "tool": {"type": "agent_runtime", "name": "omnigent"},
+        "inputs": {
+            "runtime": {"mode": "omnigent"},
+            "selectedSkill": "moonspec-verify",
+        },
+    }
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            RUN_OMNIGENT_REMEDIATION_CHECKPOINT_RESTORE_PATCH,
+            RUN_OMNIGENT_INITIAL_VERIFICATION_CHECKPOINT_RESTORE_PATCH,
+        },
+    )
+
+    restore_ref = (
+        mock_run_workflow._initial_omnigent_verification_checkpoint_restore_ref(
+            node=node
+        )
+    )
+    request = mock_run_workflow._build_agent_execution_request(
+        node_inputs=dict(node["inputs"]),
+        node_id=node["id"],
+        tool_name="omnigent",
+        workflow_parameters={},
+        trusted_remediation_checkpoint_restore_ref=restore_ref,
+    )
+
+    assert restore_ref == "artifact://art_implementation_archive"
+    assert request.workspace_spec["workspaceCheckpointRestoreRef"] == restore_ref
+
+
+def test_omnigent_publication_handoff_restores_verified_remediation_head(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    node = {
+        "id": "publish-pr",
+        "tool": {"type": "agent_runtime", "name": "omnigent"},
+        "annotations": {"issueImplementRole": "pull-request-handoff"},
+        "inputs": {"runtime": {"mode": "omnigent"}},
+    }
+    mock_run_workflow._remediation_workspace_head = (
+        RemediationWorkspaceHead.model_validate(
+            _remediation_head_payload(checkpoint="C1", version=2)
+        )
+    )
+    mock_run_workflow._remediation_loop_runtime = {"mode": "omnigent"}
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: (
+            patch_id == "run-omnigent-publication-checkpoint-restore-v1"
+        ),
+    )
+
+    restore_ref = (
+        mock_run_workflow._omnigent_publication_checkpoint_restore_ref(
+            node=node,
+            node_inputs=node["inputs"],
+        )
+    )
+    request = mock_run_workflow._build_agent_execution_request(
+        node_inputs=dict(node["inputs"]),
+        node_id=node["id"],
+        tool_name="omnigent",
+        workflow_parameters={},
+        trusted_remediation_checkpoint_restore_ref=restore_ref,
+    )
+
+    assert restore_ref == "artifact://workspace/C1"
+    assert request.workspace_spec["workspaceCheckpointRestoreRef"] == restore_ref
+
+
+def test_omnigent_publication_handoff_restores_implementation_without_remediation(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    node = {
+        "id": "publish-pr",
+        "tool": {"type": "agent_runtime", "name": "omnigent"},
+        "annotations": {"issueImplementRole": "pull-request-handoff"},
+        "inputs": {"runtime": {"mode": "omnigent"}},
+    }
+    mock_run_workflow._remediation_loop_runtime = {"mode": "omnigent"}
+    mock_run_workflow._step_ledger_rows = [
+        {
+            "logicalStepId": "implementation",
+            "status": "completed",
+            "annotations": {"issueImplementRole": "issue-implementation"},
+        },
+        {
+            "logicalStepId": "initial-verification",
+            "status": "completed",
+            "annotations": {"issueImplementRole": "moonspec-verification-gate"},
+        },
+        {
+            "logicalStepId": "publish-pr",
+            "status": "executing",
+            "annotations": {"issueImplementRole": "pull-request-handoff"},
+        },
+    ]
+    mock_run_workflow._step_checkpoint_workspace_evidence_by_boundary = {
+        "implementation": {
+            "before_publication": {
+                "checkpointRef": "art_implementation_checkpoint",
+                "workspaceArchiveRef": "art_implementation_archive",
+                "workspaceKind": "worktree_archive",
+                "workspaceDigest": "sha256:implementation-candidate",
+                "workspaceIdentityDigest": "sha256:" + ("b" * 64),
+                "checkpointManifestRef": "art_implementation_manifest",
+            }
+        }
+    }
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            "run-omnigent-publication-checkpoint-restore-v1",
+            RUN_OMNIGENT_REMEDIATION_CHECKPOINT_RESTORE_PATCH,
+        },
+    )
+
+    restore_ref = (
+        mock_run_workflow._omnigent_publication_checkpoint_restore_ref(
+            node=node,
+            node_inputs=node["inputs"],
+        )
+    )
+
+    assert restore_ref == "artifact://art_implementation_archive"
+
+
+@pytest.mark.asyncio
+async def test_issue_implement_status_handoff_creates_pr_from_accepted_remote_head(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_run_workflow._integration = None
+    mock_run_workflow._repo = "MoonLadderStudios/MoonMind"
+    mock_run_workflow._assessment_context = {
+        "assessmentVerdict": "PARTIALLY_IMPLEMENTED",
+        "assessmentArtifactRef": "art_assessment",
+    }
+    mock_run_workflow._record_accepted_published_head(
+        {
+            "acceptedRepositoryEvidence": {
+                "publicationAuthorized": True,
+                "candidateContaminated": False,
+                "pushStatus": "pushed",
+                "branch": "moonmind-job-50a4d228",
+                "headSha": "4e11c2fed" + ("0" * 30),
+                "baseBranch": "main",
+            }
+        }
+    )
+    execute_activity = AsyncMock(
+        return_value={
+            "url": "https://github.com/MoonLadderStudios/MoonMind/pull/3912",
+            "summary": "Created pull request.",
+        }
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        execute_activity,
+    )
+    parameters = {
+        "publishMode": "pr",
+        "workflow": {
+            "title": "Implement GitHub issue 3815",
+            "publish": {"prBaseBranch": "main"},
+            "inputs": {
+                "github_issue": {
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "number": 3815,
+                }
+            },
+        },
+    }
+
+    url = await mock_run_workflow._ensure_issue_implement_pr_before_status(
+        node={
+            "id": "finalize-status",
+            "annotations": {"issueImplementRole": "code-review-handoff"},
+        },
+        parameters=parameters,
+    )
+
+    assert url == "https://github.com/MoonLadderStudios/MoonMind/pull/3912"
+    execute_activity.assert_awaited_once()
+    activity_type, payload = execute_activity.await_args.args
+    assert activity_type == "repo.create_pr"
+    assert payload["repo"] == "MoonLadderStudios/MoonMind"
+    assert payload["head"] == "moonmind-job-50a4d228"
+    assert payload["base"] == "main"
+    assert "MoonLadderStudios/MoonMind#3815" in payload["title"]
+    assert payload["body"].splitlines()[-1] == (
+        "Closes MoonLadderStudios/MoonMind#3815"
+    )
+    assert mock_run_workflow._publish_status == "published"
+    assert mock_run_workflow._publish_context["pullRequestUrl"] == url
+    assert mock_run_workflow._accepted_published_base_branch() == "main"
+
+
+@pytest.mark.asyncio
+async def test_issue_implement_status_handoff_does_not_create_pr_for_fully_implemented_issue(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_run_workflow._assessment_context = {
+        "assessmentVerdict": "FULLY_IMPLEMENTED",
+        "assessmentArtifactRef": "art_assessment",
+    }
+    execute_activity = AsyncMock()
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        execute_activity,
+    )
+
+    url = await mock_run_workflow._ensure_issue_implement_pr_before_status(
+        node={
+            "annotations": {"issueImplementRole": "code-review-handoff"},
+        },
+        parameters={"publishMode": "pr"},
+    )
+
+    assert url is None
+    execute_activity.assert_not_awaited()
+
+
+def test_partial_issue_implementation_no_commits_cannot_satisfy_pr_handoff(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_run_workflow._canonical_no_commit_outcome_enabled = True
+    mock_run_workflow._assessment_context = {
+        "assessmentVerdict": "PARTIALLY_IMPLEMENTED",
+        "assessmentArtifactRef": "art_assessment",
+    }
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_ISSUE_IMPLEMENT_PR_HANDOFF_AUTHORITY_PATCH,
+    )
+    parameters = {
+        "publishMode": "pr",
+        "workflow": {
+            "appliedStepTemplates": [
+                {"slug": "github-issue-implement", "version": "1.0.0"},
+            ],
+        },
+    }
+
+    mock_run_workflow._record_publish_result(
+        parameters=parameters,
+        execution_result={"outputs": {"push_status": "no_commits"}},
+    )
+
+    assert mock_run_workflow._publish_status == "skipped"
+    status, message, publish_failure = mock_run_workflow._determine_publish_completion(
+        parameters=parameters
+    )
+    assert status == "failed"
+    assert "no publishable diff was produced" in message
+    assert publish_failure is True
+
+
+def test_omnigent_remediation_attempt_inherits_controller_workspace_source(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller = _loop_controller_node(_dynamic_loop_spec_payload())
+    controller["tool"] = {"type": "agent_runtime", "name": "omnigent"}
+    controller["inputs"] = {
+        "runtime": {
+            "mode": "omnigent",
+            "executionProfileRef": "opencode-zen-free",
+        },
+        "repository": "MoonLadderStudios/MoonMind",
+        "repositoryTarget": {
+            "provider": "git",
+            "connectionRef": "repository-connection:git-exact",
+            "repository": {"name": "MoonLadderStudios/MoonMind"},
+            "branch": {"name": "main"},
+        },
+        "startingBranch": "main",
+    }
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: (
+            patch_id == RUN_OMNIGENT_REMEDIATION_CHECKPOINT_RESTORE_PATCH
+        ),
+    )
+
+    mock_run_workflow._initialize_remediation_loop_controller(
+        ordered_nodes=[controller]
+    )
+    remediation, verification = mock_run_workflow._materialize_remediation_attempt(
+        ordinal=1
+    )
+
+    for attempt_node in (remediation, verification):
+        assert attempt_node["inputs"]["runtime"]["workspaceSpec"] == {
+            "repository": "MoonLadderStudios/MoonMind",
+            "repositoryTarget": {
+                "provider": "git",
+                "connectionRef": "repository-connection:git-exact",
+                "repository": {"name": "MoonLadderStudios/MoonMind"},
+                "branch": {"name": "main"},
+            },
+            "startingBranch": "main",
+        }
+
+
+def test_omnigent_dynamic_verifier_restores_advanced_workspace_head(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    node = {
+        "id": "verification-1",
+        "tool": {"type": "agent_runtime", "name": "omnigent"},
+        "annotations": {
+            "remediationLoopId": "loop-3473",
+            "issueImplementRole": "moonspec-verification-gate",
+            "moonSpecRemediationAttempt": 1,
+        },
+        "inputs": {
+            "runtime": {"mode": "omnigent"},
+            "remediationWorkspaceHeadRef": "artifact://workspace/C1",
+        },
+    }
+    mock_run_workflow._remediation_workspace_head = (
+        RemediationWorkspaceHead.model_validate(
+            _remediation_head_payload(checkpoint="C1", version=2)
+        )
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: (
+            patch_id == RUN_OMNIGENT_REMEDIATION_CHECKPOINT_RESTORE_PATCH
+        ),
+    )
+
+    restore_ref = (
+        mock_run_workflow._trusted_omnigent_remediation_checkpoint_restore_ref(
+            node=node,
+            node_inputs=node["inputs"],
+        )
+    )
+    request = mock_run_workflow._build_agent_execution_request(
+        node_inputs=dict(node["inputs"]),
+        node_id=node["id"],
+        tool_name="omnigent",
+        workflow_parameters={},
+        trusted_remediation_checkpoint_restore_ref=restore_ref,
+    )
+
+    assert restore_ref == "artifact://workspace/C1"
+    assert request.workspace_spec["workspaceCheckpointRestoreRef"] == restore_ref
+
+
+def test_omnigent_remediation_accepts_capture_from_restored_sandbox(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    node = {
+        "id": "remediation-1",
+        "tool": {"type": "agent_runtime", "name": "omnigent"},
+        "annotations": {
+            "remediationLoopId": "loop-3473",
+            "issueImplementRole": "moonspec-remediation",
+            "moonSpecRemediationAttempt": 1,
+        },
+        "inputs": {"runtime": {"mode": "omnigent"}},
+    }
+    mock_run_workflow._remediation_workspace_head = (
+        RemediationWorkspaceHead.model_validate(_remediation_head_payload())
+    )
+    mock_run_workflow._remediation_loop_runtime = {"mode": "omnigent"}
+    node_inputs = dict(node["inputs"])
+    mock_run_workflow._inject_remediation_workspace_baseline(
+        node=node,
+        node_inputs=node_inputs,
+    )
+    mock_run_workflow._step_checkpoint_workspace_evidence_by_boundary = {
+        "remediation-1": {
+            "before_publication": {
+                "checkpointRef": "art_checkpoint_envelope",
+                "workspaceArchiveRef": "art_restored_sandbox_archive",
+                "workspaceKind": "worktree_archive",
+                "workspaceDigest": "sha256:remediated-candidate",
+                "workspaceIdentityDigest": "sha256:" + ("d" * 64),
+                "checkpointManifestRef": "art_restored_sandbox_manifest",
+            }
+        }
+    }
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
+            RUN_OMNIGENT_REMEDIATION_CHECKPOINT_RESTORE_PATCH,
+        },
+    )
+
+    mock_run_workflow._advance_remediation_workspace_head(
+        node=node,
+        node_inputs=node_inputs,
+        execution_result={"outputs": {}},
+        step_execution_id="wf:run:remediation-1:execution:1",
+    )
+
+    head = mock_run_workflow._remediation_workspace_head
+    assert head is not None
+    assert head.head_checkpoint_ref == "artifact://art_restored_sandbox_archive"
+    assert head.head_workspace_digest == "sha256:remediated-candidate"
+    assert head.head_attempt_ordinal == 1
 
 
 def test_remediation_step_rejects_root_fallback_after_workflow_head_is_owned(

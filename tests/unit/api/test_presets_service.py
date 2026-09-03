@@ -3692,6 +3692,9 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
         "artifacts/github-issue-implement-verify.json"
     )
     assert expanded["steps"][8]["tool"]["inputs"]["requireVerification"] is True
+    assert expanded["steps"][8]["annotations"]["issueImplementRole"] == (
+        "code-review-handoff"
+    )
     no_verify_titles = [step["title"] for step in no_verify["steps"]]
     assert no_verify_titles == [
         "Load GitHub issue brief",

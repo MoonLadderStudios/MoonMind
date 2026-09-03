@@ -1,0 +1,7 @@
+{
+  "workspaceCheckpointRestoreRef": "artifact://art_01M1GK30EMCT08GVGT7S4PGD1R",
+  "publicationCheckpointRestoreRef": "artifact://art_01M1GK30EMCT08GVGT7S4PGD1R",
+  "compactIntentCheckpointRestoreRef": "artifact://art_01M1GK30EMCT08GVGT7S4PGD1R",
+  "restoredContent": "candidate restored before provider launch\n",
+  "retryPreservedContent": "agent progress survives host retry\n"
+}

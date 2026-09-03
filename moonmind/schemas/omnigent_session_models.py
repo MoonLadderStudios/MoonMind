@@ -205,6 +205,9 @@ class OmnigentResolveIntentRequest(_OmnigentSessionModel):
     execution_input_refs_digest: str | None = Field(
         None, alias="executionInputRefsDigest"
     )
+    workspace_checkpoint_restore_ref: str | None = Field(
+        None, alias="workspaceCheckpointRestoreRef"
+    )
     admitted_feature_generation: Literal[OMNIGENT_SESSION_FEATURE_GENERATION] = Field(
         OMNIGENT_SESSION_FEATURE_GENERATION,
         alias="admittedFeatureGeneration",
@@ -225,6 +228,7 @@ class OmnigentResolveIntentRequest(_OmnigentSessionModel):
                 self.execution_instruction_digest,
                 self.execution_input_refs,
                 self.execution_input_refs_digest,
+                self.workspace_checkpoint_restore_ref,
             )
         ):
             raise ValueError(
@@ -252,6 +256,11 @@ class OmnigentResolveIntentRequest(_OmnigentSessionModel):
             _require_compact_identifier(item, field_name="executionInputRefs[]")
             for item in self.execution_input_refs
         ]
+        if self.workspace_checkpoint_restore_ref is not None:
+            self.workspace_checkpoint_restore_ref = _require_artifact_ref(
+                self.workspace_checkpoint_restore_ref,
+                field_name="workspaceCheckpointRestoreRef",
+            )
         return self
 
 

@@ -72,6 +72,69 @@ def test_moonspec_verify_skill_supports_issue_brief_mode() -> None:
     assert "Recoverable In Current Runtime: true | false" in text
 
 
+def test_moonspec_verify_skill_treats_publication_as_downstream_candidate_work() -> None:
+    skill_path = (
+        Path(__file__).resolve().parents[3]
+        / ".agents"
+        / "skills"
+        / "moonspec-verify"
+        / "SKILL.md"
+    )
+
+    text = skill_path.read_text(encoding="utf-8")
+
+    assert "pre-publication verification step" in text
+    assert "open issue" in text
+    assert "unmerged candidate" in text
+    assert "expected inputs" in text
+    assert "Do not require downstream commit" in text
+
+
+def test_moonspec_verify_skill_uses_repository_managed_test_boundary() -> None:
+    skill_path = (
+        Path(__file__).resolve().parents[3]
+        / ".agents"
+        / "skills"
+        / "moonspec-verify"
+        / "SKILL.md"
+    )
+
+    text = skill_path.read_text(encoding="utf-8")
+    normalized = " ".join(text.split())
+
+    assert "repository's managed-agent test boundary" in normalized
+    assert "documented managed-run signal" in normalized
+    assert "required delegated test command" in normalized
+    assert "route every covered test through it" in normalized
+    assert "Do not run an equivalent host-local test command" in normalized
+    assert "install a test runner into the agent host" in normalized
+    assert "results from a path the repository forbids" in normalized
+    assert "documented delegated capability exists" in normalized
+
+
+def test_moonspec_verify_skill_rebuilds_post_remediation_classifications() -> None:
+    skill_path = (
+        Path(__file__).resolve().parents[3]
+        / ".agents"
+        / "skills"
+        / "moonspec-verify"
+        / "SKILL.md"
+    )
+
+    text = skill_path.read_text(encoding="utf-8")
+    normalized = " ".join(text.split())
+
+    assert "verification follows a remediation attempt" in normalized
+    assert (
+        "rebuild every controlling classification from the current repository head"
+        in normalized
+    )
+    assert "are hypotheses and process context only" in normalized
+    assert "replace the old status, evidence, line numbers, and notes" in normalized
+    assert "Never copy or incrementally edit a previous verifier JSON report" in normalized
+    assert "no gap may remain solely because the old artifact said it existed" in normalized
+
+
 def test_moonspec_verify_skill_defines_target_modes() -> None:
     skill_path = (
         Path(__file__).resolve().parents[3]
@@ -83,7 +146,7 @@ def test_moonspec_verify_skill_defines_target_modes() -> None:
 
     text = skill_path.read_text(encoding="utf-8")
 
-    assert "Treat explicitly identified original implementation instructions" in text
+    assert "Treat the user's instructions as a valid verification baseline" in text
     assert "referenced declarative document as a valid verification baseline" in text
     assert "Do not treat ad hoc verifier guidance" in text
     assert "focus on API tests" in text

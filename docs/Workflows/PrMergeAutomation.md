@@ -450,6 +450,11 @@ context, and resolver launch template:
 }
 ```
 
+When `targetRuntime` is `omnigent`, the resolver template also carries the
+parent run's compact `parentOmnigentExecutionPlan` binding. The binding is
+authority from which the gate prepares a new resolver plan; it is not itself
+the resolver child's execution plan.
+
 ### 10.4 Terminal status summary
 
 ```json
@@ -792,6 +797,24 @@ plus setup and artifact-publication time. The default resolver launch carries a
 level and inside the task payload that becomes plan node inputs. This is
 intentionally larger than the `pr-resolver` tool's 7200-second default
 `finalizeMaxElapsedSeconds`.
+
+For an Omnigent resolver, `MoonMind.MergeAutomation` MUST prepare immutable
+child-scoped execution authority before starting `MoonMind.UserWorkflow`. A
+bounded Activity on the agent-runtime queue validates the parent plan, preserves
+its exact Agent Profile and Provider Profile authority, canonicalizes the
+resolver task plus its exact head/base workspace binding, resolves a fresh Skill
+snapshot containing `pr-resolver`, and persists a new Omnigent execution plan
+owned by the deterministic resolver workflow ID. The child request carries that
+new `omnigentExecutionPlan` and `resolvedSkillsetRef`.
+
+The parent plan MUST NOT be reused as the child plan: its task snapshot,
+publication policy, workspace intent, and resolved Skills belong to the parent
+run. For an in-flight merge-automation input recorded before the compact parent
+binding was present, the preparation Activity resolves the same binding from
+the canonical `parentWorkflowId` execution record. Missing or ambiguous parent
+plan, profile, task, workspace, or Skill authority fails before host creation or
+credential acquisition; a flat Provider Profile identifier alone never selects
+the legacy OAuth host path for this resolver.
 
 ### 13.3 Resolver child result contract extension
 
