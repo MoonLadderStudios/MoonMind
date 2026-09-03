@@ -132,6 +132,51 @@ is_compose_pull_policy_blocked() {
     [[ "$normalized" == *"request forbidden by administrative rules"* ]]
 }
 
+persist_runtime_source_revision() {
+  local revision="$1"
+  local env_path=".env"
+  local temp_path
+
+  if [[ "$DRY_RUN" == "true" ]]; then
+    say "Would persist the selected runtime source revision in $env_path."
+    return
+  fi
+
+  temp_path="$(mktemp "${env_path}.runtime-source.XXXXXX")" || \
+    die "Could not create a temporary file for $env_path."
+
+  if [[ -f "$env_path" ]]; then
+    if ! awk -v revision="$revision" '
+      BEGIN { written = 0 }
+      /^[[:space:]]*(export[[:space:]]+)?MOONMIND_RUNTIME_SOURCE_REVISION[[:space:]]*=/ {
+        if (written == 0) {
+          print "MOONMIND_RUNTIME_SOURCE_REVISION=" revision
+          written = 1
+        }
+        next
+      }
+      { print }
+      END {
+        if (written == 0) {
+          print "MOONMIND_RUNTIME_SOURCE_REVISION=" revision
+        }
+      }
+    ' "$env_path" > "$temp_path"; then
+      rm -f -- "$temp_path"
+      die "Could not update $env_path with the selected runtime source revision."
+    fi
+    chmod --reference="$env_path" "$temp_path" 2>/dev/null || true
+  else
+    printf 'MOONMIND_RUNTIME_SOURCE_REVISION=%s\n' "$revision" > "$temp_path"
+  fi
+
+  if ! mv -f -- "$temp_path" "$env_path"; then
+    rm -f -- "$temp_path"
+    die "Could not persist the selected runtime source revision in $env_path."
+  fi
+  say "Persisted the selected runtime source revision for ordinary Compose reconciliation."
+}
+
 load_compose_service_images() {
   if ! command -v jq >/dev/null 2>&1; then
     say "jq unavailable; skipping compose image drift checks."
@@ -503,6 +548,12 @@ if [[ "$POST_PULL_COMMIT" != "$REMOTE_COMMIT" ]]; then
   die "Checked-out commit $POST_PULL_COMMIT does not match fetched commit $REMOTE_COMMIT."
 fi
 
+# Compose persists this value as container metadata. It records the checkout
+# revision selected before each long-lived application process is created, so a
+# later update can detect a stale process even when git was updated separately.
+export MOONMIND_RUNTIME_SOURCE_REVISION="$POST_PULL_COMMIT"
+persist_runtime_source_revision "$POST_PULL_COMMIT"
+
 if [[ "$SKIP_COMPOSE_PULL" != "true" ]]; then
   say "Pulling updated compose images"
   compose_pull_output=""
@@ -589,20 +640,63 @@ add_force_recreate_target() {
   fi
 }
 
+is_runtime_source_service() {
+  local service="$1"
+  case "$service" in
+    api | orchestrator | temporal-worker-*)
+      [[ "$service" != "temporal-worker-deployment-control" ]]
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 add_runtime_source_services_for_recreate() {
   local service
   for service in "${COMPOSE_SERVICES[@]}"; do
-    case "$service" in
-      api | orchestrator | temporal-worker-*)
-        add_force_recreate_target "$service"
-        ;;
-    esac
+    if is_runtime_source_service "$service"; then
+      add_force_recreate_target "$service"
+    fi
+  done
+}
+
+mark_stale_runtime_source_services_for_recreate() {
+  local service container_id loaded_revision loaded_revision_display
+  local -a container_ids=()
+
+  for service in "${COMPOSE_SERVICES[@]}"; do
+    is_runtime_source_service "$service" || continue
+    if [[ "$service" == "orchestrator" && "$RESTART_ORCHESTRATOR" != "true" ]]; then
+      continue
+    fi
+
+    mapfile -t container_ids < <("${COMPOSE_CMD[@]}" ps -a -q "$service" 2>/dev/null || true)
+    [[ ${#container_ids[@]} -gt 0 ]] || continue
+
+    for container_id in "${container_ids[@]}"; do
+      [[ -n "${container_id//[[:space:]]/}" ]] || continue
+      loaded_revision="$(
+        docker inspect "$container_id" \
+          --format '{{index .Config.Labels "moonmind.runtime_source_revision"}}' \
+          2>/dev/null || true
+      )"
+      if [[ "$loaded_revision" == "$POST_PULL_COMMIT" ]]; then
+        continue
+      fi
+
+      loaded_revision_display="${loaded_revision:-missing}"
+      say "Marking service '$service' for force recreation: loaded runtime source revision '$loaded_revision_display' does not match checked-out revision '$POST_PULL_COMMIT'."
+      add_force_recreate_target "$service"
+      break
+    done
   done
 }
 
 if load_compose_service_images; then
   mark_stale_services_for_restart
 fi
+mark_stale_runtime_source_services_for_recreate
 mark_not_running_services_for_restart
 
 for changed_file in "${CHANGED_FILES[@]}"; do

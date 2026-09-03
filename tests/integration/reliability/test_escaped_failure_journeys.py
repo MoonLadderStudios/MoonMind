@@ -4536,7 +4536,6 @@ async def test_accepted_turn_that_never_starts_fails_within_start_budget(
     assert dispatched.diagnostics_ref == result.diagnostics_ref
 
 
-@pytest.mark.integration_ci
 async def test_active_tool_turn_uses_published_budget_and_preserves_retry() -> None:
     """Replay mm:8d94711e at the budget and generic-dispatch boundaries."""
 
