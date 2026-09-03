@@ -51,6 +51,7 @@ def _profile(
     provider_id: str = "opencode-go",
     default_model: str = "opencode-go/muse-spark-1.2-contributor",
     credential_source: str = "secret_ref",
+    disabled_reason: str | None = None,
 ) -> SimpleNamespace:
     evidence = None
     if evidence_image is not None:
@@ -76,6 +77,7 @@ def _profile(
         provider_id=provider_id,
         enabled=enabled,
         auth_state=auth_state,
+        disabled_reason=disabled_reason,
         credential_source=credential_source,
         credential_generation=generation,
         capacity_scope_ref=None,
@@ -792,17 +794,19 @@ async def test_unenrolled_profile_rows_are_re_enrolled_from_configuration(
 
 
 @pytest.mark.asyncio
-async def test_operator_disabled_profile_is_never_re_enabled_by_configuration(
+@pytest.mark.parametrize("disabled_reason", ["user_disabled", "policy_disabled"])
+async def test_authoritatively_disabled_profile_is_never_re_enabled_by_configuration(
     monkeypatch: pytest.MonkeyPatch,
+    disabled_reason: str,
 ) -> None:
-    """Enrollment applies enabled=True, so a disabled profile must be left alone."""
+    """Enrollment must preserve explicit user and policy disable authority."""
 
     _install_stubs(monkeypatch)
     monkeypatch.setenv("OPENCODE_API_KEY", API_KEY)
     controller = _Controller()
     # Connected and enrolled, but the operator turned it off. Its evidence is
     # also stale, which must not become a reason to touch it either.
-    rows = [_profile(enabled=False)]
+    rows = [_profile(enabled=False, disabled_reason=disabled_reason)]
 
     outcome = await reconcile_opencode_provider_readiness(
         session_factory=_session_factory(rows), controller=controller
@@ -813,6 +817,26 @@ async def test_operator_disabled_profile_is_never_re_enabled_by_configuration(
     assert outcome.refreshed == ()
     assert outcome.ready is True
     assert rows[0].enabled is False
+
+
+@pytest.mark.asyncio
+async def test_deployment_configuration_repairs_non_authoritative_disabled_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A restart repairs partial enrollment without overriding user intent."""
+
+    _install_stubs(monkeypatch)
+    monkeypatch.setenv("OPENCODE_API_KEY", API_KEY)
+    controller = _Controller()
+    rows = [_profile(enabled=False, disabled_reason="auth_invalid")]
+
+    outcome = await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory(rows), controller=controller
+    )
+
+    assert len(controller.calls) == 1
+    assert outcome.enrolled is True
+    assert outcome.checked == 1
 
 
 @pytest.mark.asyncio
