@@ -3470,8 +3470,9 @@ async def test_claude_manual_auth_commit_stores_secret_ref_only(
         "CUSTOM_ENV": {"from_secret_ref": "custom_tool"},
         "ANTHROPIC_API_KEY": {"from_secret_ref": "anthropic_api_key"},
     }
-    assert "ANTHROPIC_API_KEY" in profile_payload["clear_env_keys"]
     assert "ANTHROPIC_AUTH_TOKEN" in profile_payload["clear_env_keys"]
+    assert "ANTHROPIC_BASE_URL" in profile_payload["clear_env_keys"]
+    assert "CLAUDE_API_KEY" in profile_payload["clear_env_keys"]
     assert "OPENAI_API_KEY" in profile_payload["clear_env_keys"]
     assert "CUSTOM_ENV" in profile_payload["clear_env_keys"]
     assert profile_payload["clear_env_keys"].count("OPENAI_API_KEY") == 1
