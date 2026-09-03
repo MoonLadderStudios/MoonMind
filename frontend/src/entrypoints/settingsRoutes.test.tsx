@@ -298,4 +298,70 @@ describe('MoonLadderStudios/MoonMind#3818 route-owned Settings pages', () => {
 
     await waitFor(() => expect(window.location.pathname).toBe('/settings/operations'));
   });
+
+  describe('MoonLadderStudios/MoonMind#3816 retired ?section= page identity', () => {
+    it.each([
+      ['?section=providers-secrets', ['settings.catalog.read'], '/settings/user-workspace'],
+      ['?section=user-workspace', ['provider_profiles.read'], '/settings/providers-secrets'],
+      ['?section=operations', ['provider_profiles.read'], '/settings/providers-secrets'],
+      ['?section=unknown-alias', ['operations.read'], '/settings/operations'],
+    ])(
+      'ignores the retired %s page identity when resolving the Settings entry',
+      async (search, settingsPermissions, expectedPath) => {
+        window.history.replaceState({}, '', `/settings${search}`);
+        renderWithClient(
+          <BrowserRouter>
+            <SettingsEntryPage
+              payload={{
+                page: 'settings-entry',
+                apiBase: '/api',
+                initialData: { settingsPermissions },
+              } as BootPayload}
+            />
+          </BrowserRouter>,
+        );
+
+        await waitFor(() => expect(window.location.pathname).toBe(expectedPath));
+        expect(window.location.search).toBe('');
+      },
+    );
+
+    it('keeps target page filters while dropping the retired section identity', async () => {
+      window.history.replaceState({}, '', '/settings?section=operations&runtime=codex&status=paused');
+      renderWithClient(
+        <BrowserRouter>
+          <SettingsEntryPage
+            payload={{
+              page: 'settings-entry',
+              apiBase: '/api',
+              initialData: { settingsPermissions: ['provider_profiles.read'] },
+            } as BootPayload}
+          />
+        </BrowserRouter>,
+      );
+
+      await waitFor(() => expect(window.location.pathname).toBe('/settings/providers-secrets'));
+      // Providers & Secrets owns `runtime`; `status` belongs to Operations and
+      // `section` is retired page identity, so both are dropped.
+      expect(window.location.search).toBe('?runtime=codex');
+    });
+
+    it('keeps User / Workspace scope filters through the Settings entry redirect', async () => {
+      window.history.replaceState({}, '', '/settings?section=providers-secrets&scope=user&q=workflow');
+      renderWithClient(
+        <BrowserRouter>
+          <SettingsEntryPage
+            payload={{
+              page: 'settings-entry',
+              apiBase: '/api',
+              initialData: { settingsPermissions: ['settings.catalog.read'] },
+            } as BootPayload}
+          />
+        </BrowserRouter>,
+      );
+
+      await waitFor(() => expect(window.location.pathname).toBe('/settings/user-workspace'));
+      expect(window.location.search).toBe('?scope=user&q=workflow');
+    });
+  });
 });
