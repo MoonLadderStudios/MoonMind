@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -56,6 +57,159 @@ class _OnDemandTemporalArtifactService:
 
     async def write_complete(self, *, artifact_id: str, **kwargs: Any) -> Any:
         return await self._invoke("write_complete", artifact_id=artifact_id, **kwargs)
+
+
+@activity.defn(name="omnigent.prepare_child_execution_plan")
+async def omnigent_prepare_child_execution_plan_activity(
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Compile immutable Omnigent authority for a Temporal-started child run."""
+
+    from api_service.db.base import async_session_maker
+    from api_service.db.models import (
+        ManagedAgentProviderProfile,
+        TemporalExecutionCanonicalRecord,
+    )
+    from api_service.services.omnigent_execution_plan_service import (
+        compile_and_persist_execution_plan,
+        persist_json_artifact,
+    )
+    from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
+    from moonmind.workflows.temporal.activities.omnigent_session_activities import (
+        _load_verified_execution_plan,
+        _read_json_artifact,
+    )
+
+    child_workflow_id = str(payload.get("childWorkflowId") or "").strip()
+    if not child_workflow_id:
+        raise ValueError("childWorkflowId is required")
+    child_request_value = payload.get("childWorkflowRequest")
+    if not isinstance(child_request_value, Mapping):
+        raise ValueError("childWorkflowRequest must be an object")
+    child_request = dict(child_request_value)
+    initial_parameters_value = child_request.get("initial_parameters")
+    if not isinstance(initial_parameters_value, Mapping):
+        raise ValueError("childWorkflowRequest.initial_parameters is required")
+    initial_parameters = dict(initial_parameters_value)
+    if str(initial_parameters.get("targetRuntime") or "").strip().lower() != "omnigent":
+        raise ValueError("child execution-plan preparation requires Omnigent")
+
+    parent_binding_value = payload.get("parentExecutionPlan")
+    if not isinstance(parent_binding_value, Mapping):
+        parent_workflow_id = str(payload.get("parentWorkflowId") or "").strip()
+        if not parent_workflow_id:
+            raise ValueError(
+                "parentWorkflowId is required when parentExecutionPlan is omitted"
+            )
+        async with async_session_maker() as db_session:
+            parent_record = await db_session.get(
+                TemporalExecutionCanonicalRecord,
+                parent_workflow_id,
+            )
+        if parent_record is None:
+            raise ValueError("parent workflow execution authority is unavailable")
+        parent_parameters = getattr(parent_record, "parameters", None)
+        if not isinstance(parent_parameters, Mapping):
+            raise ValueError("parent workflow execution parameters are unavailable")
+        parent_binding_value = parent_parameters.get("omnigentExecutionPlan")
+    parent_binding = OmnigentExecutionPlanBinding.model_validate(parent_binding_value)
+    parent_plan = await _load_verified_execution_plan(parent_binding)
+    profile_snapshot_ref = str(
+        parent_plan.payload.agentProfileSnapshotRef or ""
+    ).strip()
+    if not profile_snapshot_ref.startswith("artifact:"):
+        raise ValueError("parent execution plan lacks Agent Profile authority")
+    agent_profile_snapshot = await _read_json_artifact(
+        profile_snapshot_ref.removeprefix("artifact:")
+    )
+    provider_profile_refs = {
+        binding.providerProfileRef
+        for binding in parent_plan.payload.credentialBindings.values()
+    }
+    if len(provider_profile_refs) != 1:
+        raise ValueError("parent execution plan has ambiguous Provider Profile authority")
+    provider_profile_ref = next(iter(provider_profile_refs))
+
+    task_value = initial_parameters.get("workflow")
+    if not isinstance(task_value, Mapping):
+        task_value = initial_parameters.get("task")
+    if not isinstance(task_value, Mapping):
+        raise ValueError("child workflow request lacks canonical task authority")
+    canonical_snapshot_parameters = dict(initial_parameters)
+    canonical_snapshot_parameters.pop("task", None)
+    canonical_workflow = dict(task_value)
+    workspace_value = initial_parameters.get("workspaceSpec")
+    if isinstance(workspace_value, Mapping):
+        authored_workspace = canonical_workflow.get("workspace")
+        canonical_workspace = (
+            dict(authored_workspace)
+            if isinstance(authored_workspace, Mapping)
+            else {}
+        )
+        canonical_workspace.update(dict(workspace_value))
+        canonical_workflow["workspace"] = canonical_workspace
+        canonical_snapshot_parameters["workspace"] = canonical_workspace
+    canonical_snapshot_parameters["workflow"] = canonical_workflow
+    runtime_value = canonical_workflow.get("runtime")
+    authored_runtime = dict(runtime_value) if isinstance(runtime_value, Mapping) else {}
+    model_config = parent_plan.payload.modelConfig
+    for field_name, planned_value in (
+        ("model", str(model_config.qualifiedId or "").strip()),
+        ("effort", str(model_config.effort or "").strip()),
+    ):
+        authored_value = str(
+            canonical_snapshot_parameters.get(field_name)
+            or authored_runtime.get(field_name)
+            or ""
+        ).strip()
+        if authored_value and authored_value != planned_value:
+            raise ValueError(
+                f"resolver {field_name} conflicts with parent execution-plan authority"
+            )
+        if planned_value:
+            canonical_snapshot_parameters[field_name] = planned_value
+    task_snapshot = {
+        "snapshotVersion": 1,
+        "source": {"kind": "merge_automation_resolver_child"},
+        "target": {"initialParameters": canonical_snapshot_parameters},
+    }
+    principal = str(payload.get("principal") or "").strip() or (
+        "service:merge_automation"
+    )
+    artifact_service = _OnDemandTemporalArtifactService(async_session_maker)
+    input_snapshot_ref, input_snapshot_digest = await persist_json_artifact(
+        artifact_service=artifact_service,
+        principal=principal,
+        artifact_class="original_task_input_snapshot",
+        payload=task_snapshot,
+    )
+    async with async_session_maker() as db_session:
+        provider_profile = await db_session.get(
+            ManagedAgentProviderProfile,
+            provider_profile_ref,
+        )
+        if provider_profile is None:
+            raise ValueError("parent execution plan Provider Profile is unavailable")
+        child_plan = await compile_and_persist_execution_plan(
+            session_factory=async_session_maker,
+            artifact_service=artifact_service,
+            principal=principal,
+            workflow_id=child_workflow_id,
+            agent_profile_snapshot=agent_profile_snapshot,
+            provider_profile=provider_profile,
+            initial_parameters=canonical_snapshot_parameters,
+            authored_request_ref=input_snapshot_ref,
+            authored_request_digest=input_snapshot_digest,
+            task_input_snapshot_ref=input_snapshot_ref,
+            task_input_snapshot_digest=input_snapshot_digest,
+            db_session=db_session,
+        )
+    initial_parameters["omnigentExecutionPlan"] = child_plan.binding.model_dump(
+        mode="json", by_alias=True, exclude_none=True
+    )
+    initial_parameters["resolvedSkillsetRef"] = child_plan.resolved_skillset_ref
+    child_request["initial_parameters"] = initial_parameters
+    return child_request
 
 
 def _checkpoint_branch_capable(recovery: dict[str, Any]) -> bool:
@@ -1010,6 +1164,7 @@ __all__ = [
     "_checkpoint_recovery_from_request",
     "_resolve_live_recovery_authority",
     "omnigent_execute_activity",
+    "omnigent_prepare_child_execution_plan_activity",
     "omnigent_profile_bound_execute_activity",
     "omnigent_oauth_host_janitor_activity",
 ]
