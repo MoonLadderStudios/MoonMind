@@ -1566,13 +1566,19 @@ class OmnigentProfileBoundExecutionCoordinator:
                     ttl_seconds=int(effective_launch["limits"]["timeoutSeconds"]),
                 )
             except OmnigentSameSessionContinuationRequired as exc:
-                if publish_mode not in {"branch", "pr"}:
+                if (
+                    publish_mode not in {"branch", "pr"}
+                    and not self._repository_mutation_required(request)
+                ):
                     raise
                 # The provider response is complete enough to admit recovery,
                 # but the active session projection is explicitly non-terminal.
                 # Keep every lease and the original bridge authoritative until
                 # a separately claimed same-session continuation reaches a real
-                # terminal boundary.
+                # terminal boundary. Repository-mutating workflow stages may
+                # deliberately use ``publishMode=none`` because their parent
+                # owns the durable checkpoint and later publication; they need
+                # the same recovery without publishing this intermediate stage.
                 running_turn_recovery = exc
                 attempt_cleanup_deferred_code = (
                     "same_session_continuation_pending"
@@ -1630,7 +1636,10 @@ class OmnigentProfileBoundExecutionCoordinator:
                         ),
                     )
                     runtime_binding_ref = updated_binding.runtimeBindingRef
-            if result.failure_class is None and publish_mode in {"branch", "pr"}:
+            publication_requested = publish_mode in {"branch", "pr"}
+            if result.failure_class is None and (
+                publication_requested or running_turn_recovery is not None
+            ):
                 publication_stage = "repository_publication"
                 no_commit_policy = _trusted_no_commit_repository_policy(request)
                 for continuation_index in range(
@@ -1679,6 +1688,18 @@ class OmnigentProfileBoundExecutionCoordinator:
                         completion.get("terminalAssistantAfterWork") is True
                         and not recovering_running_turn
                     ):
+                        if not publication_requested:
+                            result = result.model_copy(
+                                update={
+                                    "metadata": {
+                                        **dict(result.metadata or {}),
+                                        "repositoryContinuationCount": (
+                                            continuation_index
+                                        ),
+                                    }
+                                }
+                            )
+                            break
                         await emit(
                             publication_stage,
                             "started",

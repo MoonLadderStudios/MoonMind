@@ -539,6 +539,9 @@ MERGE_AUTOMATION_TERMINAL_STATUSES = (
     | MERGE_AUTOMATION_FAILURE_STATUSES
     | frozenset({MERGE_AUTOMATION_CANCELED_STATUS})
 )
+RUN_MERGE_AUTOMATION_OMNIGENT_RESOLVER_PLAN_PATCH = (
+    "run-merge-automation-omnigent-resolver-plan-v1"
+)
 OWNER_ID_SEARCH_ATTRIBUTE = "mm_owner_id"
 OWNER_TYPE_SEARCH_ATTRIBUTE = "mm_owner_type"
 _GITHUB_PR_URL_PATTERN = re.compile(
@@ -906,6 +909,47 @@ RUN_HEADLESS_REMEDIATION_VERIFIED_WORKSPACE_PATCH = (
 # checkpoint; older histories that already failed the later materialization
 # guard must retain that failure when replayed.
 RUN_HEADLESS_REMEDIATION_EXECUTION_PATCH = "run-headless-remediation-execution-v1"
+# Omnigent owns fresh sandbox materialization inside AgentRun, so a dynamic
+# remediation cannot archive its destination before that child starts. New
+# histories pass the workflow-owned archive ref into the existing host restore
+# boundary and validate the captured result after execution. Older histories
+# retain the prior pre-execution checkpoint command sequence.
+RUN_OMNIGENT_REMEDIATION_CHECKPOINT_RESTORE_PATCH = (
+    "run-omnigent-remediation-checkpoint-restore-v1"
+)
+# An authored Omnigent verification Step runs in a fresh sandbox just like a
+# dynamic remediation Step. Restore the latest preceding candidate archive into
+# that sandbox, and seed the remediation loop from the same candidate rather
+# than from the verifier's read-only checkout. The child request and loop-head
+# identity change, so histories that already launched their initial verifier
+# retain the previously recorded commands.
+RUN_OMNIGENT_INITIAL_VERIFICATION_CHECKPOINT_RESTORE_PATCH = (
+    "run-omnigent-initial-verification-checkpoint-restore-v1"
+)
+# A checkpoint may first become available after a headless remediation attempt.
+# Adopt that archive at the attempt the controller just verified instead of
+# resetting the workspace head to attempt zero.  The head payload changes, so
+# histories that already adopted a late checkpoint retain their recorded value.
+RUN_LATE_REMEDIATION_HEAD_ATTEMPT_ORDINAL_PATCH = (
+    "run-late-remediation-head-attempt-ordinal-v1"
+)
+# A pull-request handoff is another fresh Omnigent sandbox and must publish the
+# exact candidate accepted by the controlling verifier. Restore the cumulative
+# remediation head (or the latest implementation archive when no remediation
+# ran) before the handoff agent can commit or push. Older histories retain the
+# previously recorded clean-checkout command.
+RUN_OMNIGENT_PUBLICATION_CHECKPOINT_RESTORE_PATCH = (
+    "run-omnigent-publication-checkpoint-restore-v1"
+)
+# An issue-implementation PR handoff may restore a candidate that was already
+# pushed by the implementation stage. ``no_commits`` at that later sandbox is
+# not authority to skip the PR: it only says the restored head needs no second
+# push. Before the issue-status handoff, create the PR through the trusted
+# integration boundary and inject its URL into the finalizer inputs. Older
+# histories retain their recorded agent-only handoff commands.
+RUN_ISSUE_IMPLEMENT_PR_HANDOFF_AUTHORITY_PATCH = (
+    "run-issue-implement-pr-handoff-authority-v1"
+)
 # External runtimes create a fresh sandbox only after their AgentRun starts, so
 # they cannot satisfy a pre-execution archive checkpoint. Continue from the
 # workflow-owned, remote-verified published branch instead. This changes both
@@ -4097,6 +4141,33 @@ class MoonMindRunWorkflow:
         self._remediation_loop_runtime = self._plan_node_runtime_block(
             controller_nodes[0]
         )
+        if (
+            workflow.patched(RUN_OMNIGENT_REMEDIATION_CHECKPOINT_RESTORE_PATCH)
+            and self._remediation_loop_uses_omnigent()
+        ):
+            controller_inputs = self._node_inputs_mapping(controller_nodes[0])
+            workspace_spec: dict[str, Any] = {}
+            controller_runtime = controller_inputs.get("runtime")
+            if isinstance(controller_runtime, Mapping):
+                runtime_workspace_spec = controller_runtime.get("workspaceSpec")
+                if isinstance(runtime_workspace_spec, Mapping):
+                    workspace_spec.update(dict(runtime_workspace_spec))
+            authored_workspace_spec = controller_inputs.get("workspaceSpec")
+            if isinstance(authored_workspace_spec, Mapping):
+                workspace_spec.update(dict(authored_workspace_spec))
+            for key in (
+                "repository",
+                "repositoryTarget",
+                "repo",
+                "startingBranch",
+                "targetBranch",
+                "baseBranch",
+                "branch",
+            ):
+                if controller_inputs.get(key) is not None:
+                    workspace_spec[key] = controller_inputs[key]
+            if workspace_spec:
+                self._remediation_loop_runtime["workspaceSpec"] = workspace_spec
         info = workflow.info()
         self._remediation_loop_spec = spec
         self._remediation_loop_state = RemediationLoopState(
@@ -4410,6 +4481,14 @@ class MoonMindRunWorkflow:
             return None
         return branch, head_sha
 
+    def _accepted_published_base_branch(self) -> str | None:
+        """Return the base recorded atomically with the accepted remote head."""
+
+        head = self._publish_context.get("acceptedPublishedHead")
+        if not isinstance(head, Mapping):
+            return None
+        return self._normalize_native_pr_base_branch(head.get("baseBranch"))
+
     def _record_accepted_published_head(self, outputs: Mapping[str, Any]) -> None:
         """Project one step's accepted repository evidence as the run's head.
 
@@ -4445,6 +4524,13 @@ class MoonMindRunWorkflow:
             "branch": branch,
             "headSha": head_sha,
         }
+        base_branch = self._normalize_native_pr_base_branch(
+            evidence.get("baseBranch") or evidence.get("base_branch")
+        )
+        if base_branch:
+            self._publish_context["acceptedPublishedHead"]["baseBranch"] = (
+                base_branch
+            )
 
     def _published_branch_remediation_workspace_spec(
         self,
@@ -5032,6 +5118,138 @@ class MoonMindRunWorkflow:
             "verification terminal disposition; no controlling verification gate "
             "has approved advancement."
         )
+
+    def _issue_implement_handoff_role(self, node: Mapping[str, Any]) -> str:
+        annotations = self._node_annotations_mapping(node)
+        return str(annotations.get("issueImplementRole") or "").strip().lower()
+
+    def _issue_implement_pr_required(self) -> bool:
+        verdict = str(
+            self._assessment_context.get("assessmentVerdict")
+            or self._assessment_context.get("assessment_verdict")
+            or ""
+        ).strip().upper()
+        return verdict in {"PARTIALLY_IMPLEMENTED", "NOT_IMPLEMENTED"}
+
+    def _github_issue_ref_from_parameters(
+        self,
+        parameters: Mapping[str, Any],
+    ) -> str | None:
+        task_payload = self._mapping_value(parameters, "workflow")
+        if not task_payload:
+            task_payload = self._mapping_value(parameters, "task")
+        inputs = self._mapping_value(task_payload, "inputs")
+        issue = self._mapping_value(inputs, "github_issue")
+        repository = str(issue.get("repository") or "").strip()
+        number = issue.get("number")
+        if not repository or isinstance(number, bool):
+            return None
+        try:
+            issue_number = int(number)
+        except (TypeError, ValueError):
+            return None
+        return f"{repository}#{issue_number}" if issue_number > 0 else None
+
+    async def _ensure_issue_implement_pr_before_status(
+        self,
+        *,
+        node: Mapping[str, Any],
+        parameters: Mapping[str, Any],
+    ) -> str | None:
+        """Create the required PR before the issue-status side effect runs."""
+
+        if (
+            self._issue_implement_handoff_role(node) != "code-review-handoff"
+            or self._publish_mode(parameters) != "pr"
+            or not self._issue_implement_pr_required()
+        ):
+            return None
+        existing = self._coerce_text(
+            self._pull_request_url or self._publish_context.get("pullRequestUrl"),
+            max_chars=500,
+        )
+        if existing:
+            return existing
+        accepted = self._accepted_published_head()
+        if accepted is None:
+            raise ValueError(
+                "issue implementation requires a remotely verified branch before "
+                "the Code Review status handoff"
+            )
+        head_branch, head_sha = accepted
+        publish_payload = self._resolve_publish_payload(parameters)
+        base_branch = (
+            self._resolve_publish_base_branch(publish_payload)
+            or self._accepted_published_base_branch()
+            or "main"
+        )
+        base_branch = self._normalize_native_pr_base_branch(base_branch) or "main"
+        if head_branch == base_branch:
+            raise ValueError(
+                "issue implementation PR head and base resolve to the same branch"
+            )
+        repository = str(self._repo or "").strip()
+        if not repository:
+            raise ValueError(
+                "issue implementation requires repository authority before PR creation"
+            )
+        task_payload = self._mapping_value(parameters, "workflow")
+        if not task_payload:
+            task_payload = self._mapping_value(parameters, "task")
+        title = self._resolve_native_pr_title(
+            publish_payload=publish_payload,
+            task_payload=task_payload,
+        )
+        body = self._resolve_native_pr_body(
+            publish_payload=publish_payload,
+            task_payload=task_payload,
+        )
+        issue_ref = self._github_issue_ref_from_parameters(parameters)
+        if issue_ref:
+            if issue_ref not in title:
+                title = f"{title.rstrip()} ({issue_ref})"
+            closing_line = f"Closes {issue_ref}"
+            if closing_line not in body.splitlines():
+                body = body.rstrip() + f"\n\n{closing_line}\n"
+        create_result = await workflow.execute_activity(
+            "repo.create_pr",
+            {
+                "repo": repository,
+                "head": head_branch,
+                "base": base_branch,
+                "title": title,
+                "body": body,
+            },
+            start_to_close_timeout=timedelta(minutes=2),
+            task_queue=INTEGRATIONS_TASK_QUEUE,
+            retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+        )
+        pull_request_url = self._coerce_text(
+            self._get_from_result(create_result, "url"),
+            max_chars=500,
+        )
+        if not pull_request_url:
+            summary = self._coerce_text(
+                self._get_from_result(create_result, "summary"),
+                max_chars=700,
+            )
+            raise ValueError(
+                "issue implementation PR creation returned no URL"
+                + (f": {summary}" if summary else "")
+            )
+        self._pull_request_url = pull_request_url
+        self._publish_status = "published"
+        self._publish_reason = "published pull request"
+        self._publish_context.update(
+            {
+                "pullRequestUrl": pull_request_url,
+                "branch": head_branch,
+                "baseRef": base_branch,
+                "headSha": head_sha,
+            }
+        )
+        return pull_request_url
 
     def _external_handoff_operation(self, node: Mapping[str, Any]) -> str:
         """Map a Jira Orchestrate handoff node to its external operation id."""
@@ -6767,6 +6985,7 @@ class MoonMindRunWorkflow:
                 workspace.get("workspaceIdentityDigest") or ""
             ).strip()
             checkpoint_manifest_ref = str(workspace.get("manifestRef") or "").strip()
+            workspace_archive_ref = str(workspace.get("archiveRef") or "").strip()
             evidence_by_boundary = (
                 self._step_checkpoint_workspace_evidence_by_boundary.setdefault(
                     logical_step_id,
@@ -6779,6 +6998,7 @@ class MoonMindRunWorkflow:
                 "workspaceDigest": workspace_digest,
                 "workspaceIdentityDigest": workspace_identity_digest,
                 "checkpointManifestRef": checkpoint_manifest_ref,
+                "workspaceArchiveRef": workspace_archive_ref,
             }
         return checkpoint_ref or None
 
@@ -7310,6 +7530,15 @@ class MoonMindRunWorkflow:
             checkpoint_ref = self._bounded_story_loop_artifact_ref(
                 evidence.get("checkpointRef")
             )
+            if (
+                workflow.patched(
+                    RUN_OMNIGENT_REMEDIATION_CHECKPOINT_RESTORE_PATCH
+                )
+                and self._remediation_loop_uses_omnigent()
+            ):
+                checkpoint_ref = self._bounded_story_loop_artifact_ref(
+                    evidence.get("workspaceArchiveRef")
+                )
             workspace_kind = str(evidence.get("workspaceKind") or "").strip()
             workspace_digest = str(evidence.get("workspaceDigest") or "").strip()
             workspace_identity_digest = str(
@@ -7333,6 +7562,175 @@ class MoonMindRunWorkflow:
                 }
         return None
 
+    def _latest_prior_remediation_candidate_checkpoint_evidence(
+        self,
+        logical_step_id: str,
+    ) -> tuple[str, dict[str, str]] | None:
+        """Return the nearest completed candidate checkpoint before a verifier.
+
+        Verification sandboxes are read-only consumers of a candidate. Their
+        post-execution archives contain verifier artifacts and, for external
+        runtimes, may otherwise be a fresh source checkout. They must therefore
+        never replace the implementation archive that the verifier was meant to
+        inspect and that a later remediation attempt must continue from.
+        """
+
+        latest: tuple[str, dict[str, str]] | None = None
+        found_current = False
+        for row in self._step_ledger_rows:
+            candidate_step_id = str(row.get("logicalStepId") or "").strip()
+            if candidate_step_id == logical_step_id:
+                found_current = True
+                break
+            if not candidate_step_id:
+                continue
+            annotations = row.get("annotations")
+            role = (
+                str(annotations.get("issueImplementRole") or "").strip()
+                if isinstance(annotations, Mapping)
+                else ""
+            )
+            if role == "moonspec-verification-gate":
+                continue
+            if str(row.get("status") or "").strip().lower() != "completed":
+                continue
+            evidence = self._canonical_remediation_checkpoint_evidence(
+                candidate_step_id
+            )
+            if evidence is not None:
+                latest = (candidate_step_id, evidence)
+        return latest if found_current else None
+
+    def _initial_omnigent_verification_checkpoint_restore_ref(
+        self,
+        *,
+        node: Mapping[str, Any],
+    ) -> str | None:
+        """Return the candidate archive consumed by the authored verifier."""
+
+        state = self._remediation_loop_state
+        node_inputs = self._node_inputs_mapping(node)
+        tool = self._plan_node_tool_mapping(node) or {}
+        if (
+            self._remediation_loop_spec is None
+            or state is None
+            or state.phase != RemediationLoopPhase.INITIAL_VERIFICATION_PENDING
+            or self._remediation_workspace_head is not None
+            or not self._remediation_loop_uses_omnigent()
+            or not self._is_moonspec_verify_step(
+                tool_name=str(tool.get("name") or tool.get("id") or ""),
+                node_inputs=node_inputs,
+            )
+            or self._node_annotations_mapping(node).get("remediationLoopId")
+        ):
+            return None
+        candidate = self._latest_prior_remediation_candidate_checkpoint_evidence(
+            str(node.get("id") or "")
+        )
+        return candidate[1]["checkpointRef"] if candidate is not None else None
+
+    def _omnigent_publication_checkpoint_restore_ref(
+        self,
+        *,
+        node: Mapping[str, Any],
+        node_inputs: Mapping[str, Any],
+    ) -> str | None:
+        """Return the verified candidate archive consumed by a PR handoff."""
+
+        if (
+            self._node_annotations_mapping(node).get("issueImplementRole")
+            != "pull-request-handoff"
+            or not self._remediation_loop_uses_omnigent()
+        ):
+            return None
+        tool = self._plan_node_tool_mapping(node) or {}
+        agent_id = self._agent_id_from_runtime_inputs(
+            node_inputs=node_inputs,
+            fallback_name=str(tool.get("name") or tool.get("id") or ""),
+        )
+        if _normalize_agent_runtime_id(agent_id) != "omnigent":
+            return None
+        head = self._remediation_workspace_head
+        if head is not None:
+            return head.head_checkpoint_ref
+        candidate = self._latest_prior_remediation_candidate_checkpoint_evidence(
+            str(node.get("id") or "")
+        )
+        return candidate[1]["checkpointRef"] if candidate is not None else None
+
+    def _remediation_loop_uses_omnigent(self) -> bool:
+        runtime = self._remediation_loop_runtime
+        if not isinstance(runtime, Mapping):
+            return False
+        runtime_id = str(
+            runtime.get("mode")
+            or runtime.get("agentId")
+            or runtime.get("agent_id")
+            or ""
+        ).strip()
+        return _normalize_agent_runtime_id(runtime_id) == "omnigent"
+
+    def _is_omnigent_remediation_workspace_step(
+        self,
+        *,
+        node: Mapping[str, Any],
+        node_inputs: Mapping[str, Any],
+    ) -> bool:
+        annotations = self._node_annotations_mapping(node)
+        if not annotations.get("remediationLoopId"):
+            return False
+        if self._moonspec_step_role(node) not in {
+            "moonspec-remediation",
+            "moonspec-verification-gate",
+        }:
+            return False
+        tool = self._plan_node_tool_mapping(node) or {}
+        agent_id = self._agent_id_from_runtime_inputs(
+            node_inputs=node_inputs,
+            fallback_name=str(tool.get("name") or tool.get("id") or ""),
+        )
+        return _normalize_agent_runtime_id(agent_id) == "omnigent"
+
+    def _trusted_omnigent_remediation_checkpoint_restore_ref(
+        self,
+        *,
+        node: Mapping[str, Any],
+        node_inputs: Mapping[str, Any],
+    ) -> str | None:
+        """Return the controller-owned archive restored before Omnigent launch."""
+
+        head = self._remediation_workspace_head
+        if head is None or not self._is_omnigent_remediation_workspace_step(
+            node=node,
+            node_inputs=node_inputs,
+        ):
+            return None
+        attempt, _ = self._moonspec_remediation_attempt_metadata(node)
+        if attempt != head.head_attempt_ordinal + 1 and self._moonspec_step_role(
+            node
+        ) == "moonspec-remediation":
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_MISMATCH,
+                "Omnigent remediation attempt does not follow the workspace head",
+            )
+        if (
+            self._moonspec_step_role(node) == "moonspec-verification-gate"
+            and attempt != head.head_attempt_ordinal
+        ):
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_MISMATCH,
+                "Omnigent verifier attempt does not match the workspace head",
+            )
+        supplied_ref = str(
+            node_inputs.get("remediationWorkspaceHeadRef") or ""
+        ).strip()
+        if supplied_ref and supplied_ref != head.head_checkpoint_ref:
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_MISMATCH,
+                "Omnigent remediation restore ref does not match the workspace head",
+            )
+        return head.head_checkpoint_ref
+
     def _initialize_remediation_head_from_canonical_checkpoint(
         self,
         *,
@@ -7345,11 +7743,37 @@ class MoonMindRunWorkflow:
         spec = self._remediation_loop_spec
         if spec is None:
             return None
-        evidence = self._canonical_remediation_checkpoint_evidence(logical_step_id)
+        checkpoint_step_id = logical_step_id
+        evidence: dict[str, str] | None = None
+        if (
+            workflow.patched(
+                RUN_OMNIGENT_INITIAL_VERIFICATION_CHECKPOINT_RESTORE_PATCH
+            )
+            and self._remediation_loop_uses_omnigent()
+        ):
+            candidate = self._latest_prior_remediation_candidate_checkpoint_evidence(
+                logical_step_id
+            )
+            if candidate is not None:
+                checkpoint_step_id, evidence = candidate
+        if evidence is None:
+            evidence = self._canonical_remediation_checkpoint_evidence(logical_step_id)
         if evidence is None:
             return None
-        identity = self._canonical_step_checkpoint_identity(logical_step_id)
+        identity = self._canonical_step_checkpoint_identity(checkpoint_step_id)
         normalized_verdict = str(verdict or "").strip().upper()
+        head_attempt_ordinal = 0
+        state = self._remediation_loop_state
+        if (
+            workflow.patched(RUN_LATE_REMEDIATION_HEAD_ATTEMPT_ORDINAL_PATCH)
+            and state is not None
+            and state.loop_id == spec.loop_id
+        ):
+            # Initial verification owns attempt zero.  When checkpoint capture
+            # first succeeds after a headless remediation, however, the archive
+            # already represents that completed attempt and must be admitted at
+            # the same ordinal as the loop controller.
+            head_attempt_ordinal = state.attempt_ordinal
         head = RemediationWorkspaceHead(
             loopId=spec.loop_id,
             branchRef=f"checkpoint-branch:{spec.loop_id}",
@@ -7362,6 +7786,7 @@ class MoonMindRunWorkflow:
             headStepExecutionId=(
                 build_step_execution_id(identity) if identity is not None else None
             ),
+            headAttemptOrdinal=head_attempt_ordinal,
             latestVerificationRef=gate_result_ref,
             latestVerificationVerdict=normalized_verdict,
             status=(
@@ -7433,6 +7858,17 @@ class MoonMindRunWorkflow:
         if (
             workflow.patched(RUN_EXTERNAL_PUBLISHED_BRANCH_REMEDIATION_PATCH)
             and node_inputs.get("remediationWorkspaceMode") == "remote_published_branch"
+        ):
+            return False
+        if (
+            workflow.patched(
+                RUN_OMNIGENT_REMEDIATION_CHECKPOINT_RESTORE_PATCH
+            )
+            and self._remediation_workspace_head is not None
+            and self._is_omnigent_remediation_workspace_step(
+                node=node,
+                node_inputs=node_inputs,
+            )
         ):
             return False
         return not (
@@ -7653,17 +8089,47 @@ class MoonMindRunWorkflow:
         )
         if workflow_owned_head_enabled:
             output_payload = None
-            materialized = self._validate_remediation_workspace_materialization(
-                str(node.get("id") or "")
-            )
+            if (
+                workflow.patched(
+                    RUN_OMNIGENT_REMEDIATION_CHECKPOINT_RESTORE_PATCH
+                )
+                and self._is_omnigent_remediation_workspace_step(
+                    node=node,
+                    node_inputs=node_inputs,
+                )
+            ):
+                materialized = {
+                    "checkpointRef": str(
+                        attempt_payload.get("baseCheckpointRef") or ""
+                    ),
+                    "workspaceDigest": str(
+                        attempt_payload.get("expectedBaseDigest") or ""
+                    ),
+                }
+            else:
+                materialized = self._validate_remediation_workspace_materialization(
+                    str(node.get("id") or "")
+                )
         else:
             materialized = None
         if captured is not None:
             captured_workspace_identity_digest = captured.get("workspaceIdentityDigest")
+            omnigent_checkpoint_restore = (
+                workflow.patched(
+                    RUN_OMNIGENT_REMEDIATION_CHECKPOINT_RESTORE_PATCH
+                )
+                and self._is_omnigent_remediation_workspace_step(
+                    node=node,
+                    node_inputs=node_inputs,
+                )
+            )
             if (
                 not captured_workspace_identity_digest
-                or captured_workspace_identity_digest
-                != self._remediation_workspace_head.head_workspace_identity_digest
+                or (
+                    not omnigent_checkpoint_restore
+                    and captured_workspace_identity_digest
+                    != self._remediation_workspace_head.head_workspace_identity_digest
+                )
             ):
                 raise RemediationHeadError(
                     REMEDIATION_HEAD_MISMATCH,
@@ -11658,6 +12124,20 @@ class MoonMindRunWorkflow:
                     self._refresh_step_readiness(updated_at=workflow.now())
                     self._update_memo()
                     continue
+            if workflow.patched(
+                RUN_ISSUE_IMPLEMENT_PR_HANDOFF_AUTHORITY_PATCH
+            ):
+                native_pr_url = await self._ensure_issue_implement_pr_before_status(
+                    node=node,
+                    parameters=parameters,
+                )
+                if native_pr_url:
+                    previous_step_outputs = {
+                        **dict(previous_step_outputs),
+                        "pullRequestUrl": native_pr_url,
+                        "pull_request_url": native_pr_url,
+                        "publishContext": dict(self._publish_context),
+                    }
             handoff_block_reason = self._jira_orchestrate_external_handoff_block_reason(
                 node
             )
@@ -11955,6 +12435,51 @@ class MoonMindRunWorkflow:
                                     ),
                                 )
                             )
+                            trusted_remediation_checkpoint_restore_ref = None
+                            if (
+                                workflow.patched(
+                                    RUN_OMNIGENT_REMEDIATION_CHECKPOINT_RESTORE_PATCH
+                                )
+                                and (
+                                    self._is_moonspec_remediation_step(node)
+                                    or (
+                                        self._moonspec_step_role(node)
+                                        == "moonspec-verification-gate"
+                                        and self._node_annotations_mapping(node).get(
+                                            "remediationLoopId"
+                                        )
+                                    )
+                                )
+                            ):
+                                trusted_remediation_checkpoint_restore_ref = (
+                                    self._trusted_omnigent_remediation_checkpoint_restore_ref(
+                                        node=node,
+                                        node_inputs=node_inputs,
+                                    )
+                                )
+                            if (
+                                workflow.patched(
+                                    RUN_OMNIGENT_INITIAL_VERIFICATION_CHECKPOINT_RESTORE_PATCH
+                                )
+                                and trusted_remediation_checkpoint_restore_ref is None
+                            ):
+                                trusted_remediation_checkpoint_restore_ref = (
+                                    self._initial_omnigent_verification_checkpoint_restore_ref(
+                                        node=node,
+                                    )
+                                )
+                            if (
+                                workflow.patched(
+                                    RUN_OMNIGENT_PUBLICATION_CHECKPOINT_RESTORE_PATCH
+                                )
+                                and trusted_remediation_checkpoint_restore_ref is None
+                            ):
+                                trusted_remediation_checkpoint_restore_ref = (
+                                    self._omnigent_publication_checkpoint_restore_ref(
+                                        node=node,
+                                        node_inputs=node_inputs,
+                                    )
+                                )
                             request = self._build_agent_execution_request(
                                 node_inputs=node_inputs,
                                 node_id=node_id,
@@ -11964,6 +12489,9 @@ class MoonMindRunWorkflow:
                                 step_execution=current_step_execution,
                                 queue_order=index,
                                 attempt_reason=attempt_reason,
+                                trusted_remediation_checkpoint_restore_ref=(
+                                    trusted_remediation_checkpoint_restore_ref
+                                ),
                             )
                             agent_request_for_context = request
                             if (
@@ -16092,11 +16620,20 @@ class MoonMindRunWorkflow:
         self._record_publish_metadata_context(outputs)
 
         if push_status == "no_commits":
+            canonical_no_commit = self._is_canonical_no_commit_task(parameters)
+            if (
+                self._patched_or_false_outside_workflow(
+                    RUN_ISSUE_IMPLEMENT_PR_HANDOFF_AUTHORITY_PATCH
+                )
+                and canonical_no_commit
+                and self._issue_implement_pr_required()
+            ):
+                canonical_no_commit = False
             if publish_mode == "pr" and (
                 self._pr_publish_optional_for_task(
                     parameters, include_applied_templates=True
                 )
-                or self._is_canonical_no_commit_task(parameters)
+                or canonical_no_commit
             ):
                 self._publish_status = "not_required"
                 self._publish_reason = self._compose_no_commit_publish_reason(
@@ -18314,19 +18851,35 @@ class MoonMindRunWorkflow:
             if isinstance(task_payload, Mapping)
             else {}
         ) or {}
+        target_runtime = (
+            self._coerce_text(
+                parameters.get("targetRuntime")
+                or task_runtime_payload.get("mode")
+                or task_runtime_payload.get("targetRuntime"),
+                max_chars=80,
+            )
+            or "codex"
+        ).lower()
         resolver_template: dict[str, Any] = {
             "repository": repo,
-            "targetRuntime": (
-                self._coerce_text(
-                    parameters.get("targetRuntime")
-                    or task_runtime_payload.get("mode")
-                    or task_runtime_payload.get("targetRuntime"),
-                    max_chars=80,
-                )
-                or "codex"
-            ),
+            "targetRuntime": target_runtime,
             "requiredCapabilities": ["git", "gh"],
         }
+        if (
+            target_runtime == "omnigent"
+            and self._workflow_patch_enabled(
+                RUN_MERGE_AUTOMATION_OMNIGENT_RESOLVER_PLAN_PATCH
+            )
+        ):
+            parent_execution_plan = parameters.get("omnigentExecutionPlan")
+            if not isinstance(parent_execution_plan, WorkflowMapping):
+                raise ValueError(
+                    "Omnigent merge automation requires persisted parent "
+                    "execution-plan authority."
+                )
+            resolver_template["parentOmnigentExecutionPlan"] = dict(
+                parent_execution_plan
+            )
         profile_id = self._inherited_execution_profile_ref(parameters)
         if profile_id:
             resolver_template["executionProfileRef"] = profile_id
@@ -19290,6 +19843,7 @@ class MoonMindRunWorkflow:
         queue_order: int | None = None,
         attempt_reason: str = "initial_execution",
         trusted_remediation_authority: Mapping[str, Any] | None = None,
+        trusted_remediation_checkpoint_restore_ref: str | None = None,
     ) -> "AgentExecutionRequest":
         """Build an ``AgentExecutionRequest`` from plan-node inputs and workflow context."""
         node_inputs = self._append_trusted_previous_outputs_to_agent_inputs(node_inputs)
@@ -19390,6 +19944,29 @@ class MoonMindRunWorkflow:
             ws_val = node_inputs.get(ws_key)
             if ws_val is not None:
                 workspace_spec[ws_key] = ws_val
+        if trusted_remediation_checkpoint_restore_ref is not None:
+            restore_ref = str(
+                trusted_remediation_checkpoint_restore_ref or ""
+            ).strip()
+            if not restore_ref.startswith("artifact://"):
+                raise ValueError(
+                    "trusted remediation checkpoint restore must be an artifact ref"
+                )
+            if not (
+                agent_kind == "external"
+                and _normalize_agent_runtime_id(agent_id) == "omnigent"
+            ):
+                raise ValueError(
+                    "trusted remediation checkpoint restore requires external/omnigent"
+                )
+            authored_restore_ref = str(
+                workspace_spec.get("workspaceCheckpointRestoreRef") or ""
+            ).strip()
+            if authored_restore_ref and authored_restore_ref != restore_ref:
+                raise ValueError(
+                    "authored workspace checkpoint conflicts with remediation authority"
+                )
+            workspace_spec["workspaceCheckpointRestoreRef"] = restore_ref
 
         repository_operation = (
             str(node_inputs.get("repositoryOperation") or "").strip().lower()

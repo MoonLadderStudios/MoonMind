@@ -2,6 +2,7 @@ import asyncio
 import inspect
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -26,7 +27,175 @@ from moonmind.workflows.temporal.activities.omnigent_activities import (
     _resolve_live_recovery_authority,
     _try_generic_realizer_dispatch,
     omnigent_execute_activity,
+    omnigent_prepare_child_execution_plan_activity,
 )
+
+
+@pytest.mark.asyncio
+async def test_prepare_child_execution_plan_recompiles_child_skill_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from api_service.services import omnigent_execution_plan_service
+    from moonmind.workflows.temporal.activities import omnigent_session_activities
+
+    parent_binding = {
+        "planRef": "omnigent-execution-plan:sha256:" + "a" * 64,
+        "planDigest": "sha256:" + "a" * 64,
+        "planArtifactRef": "art-parent-plan",
+        "taskInputSnapshotRef": "art-parent-task",
+        "taskInputSnapshotDigest": "sha256:" + "b" * 64,
+    }
+    child_binding = OmnigentExecutionPlanBinding(
+        planRef="omnigent-execution-plan:sha256:" + "c" * 64,
+        planDigest="sha256:" + "c" * 64,
+        planArtifactRef="art-child-plan",
+        taskInputSnapshotRef="art-child-task",
+        taskInputSnapshotDigest="sha256:" + "d" * 64,
+    )
+    parent_plan = SimpleNamespace(
+        payload=SimpleNamespace(
+            agentProfileSnapshotRef="artifact:art-agent-profile",
+            modelConfig=SimpleNamespace(
+                qualifiedId="opencode/muse-spark-1.3-contributor-free",
+                effort="xhigh",
+            ),
+            credentialBindings={
+                "primary-model": SimpleNamespace(
+                    providerProfileRef="opencode-zen-free"
+                )
+            },
+        )
+    )
+    provider_profile = SimpleNamespace(profile_id="opencode-zen-free")
+    observed: dict[str, Any] = {}
+
+    async def fake_load_verified(binding):
+        assert binding == OmnigentExecutionPlanBinding.model_validate(parent_binding)
+        return parent_plan
+
+    async def fake_read_json(ref):
+        assert ref == "art-agent-profile"
+        return {"document": {"harness": {"id": "opencode-native"}}}
+
+    async def fake_persist_json_artifact(**kwargs):
+        observed["taskSnapshot"] = kwargs["payload"]
+        return "art-child-task", "sha256:" + "d" * 64
+
+    async def fake_compile_and_persist_execution_plan(**kwargs):
+        observed["compile"] = kwargs
+        return SimpleNamespace(
+            binding=child_binding,
+            resolved_skillset_ref="art-child-skills",
+        )
+
+    class FakeDbSession:
+        async def get(self, model, record_id):
+            if model.__name__ == "TemporalExecutionCanonicalRecord":
+                assert record_id == "mm:parent"
+                return SimpleNamespace(
+                    parameters={"omnigentExecutionPlan": parent_binding}
+                )
+            assert model.__name__ == "ManagedAgentProviderProfile"
+            assert record_id == "opencode-zen-free"
+            return provider_profile
+
+    class FakeSessionContext:
+        async def __aenter__(self):
+            return FakeDbSession()
+
+        async def __aexit__(self, _exc_type, _exc, _tb):
+            return False
+
+    def fake_session_factory():
+        return FakeSessionContext()
+
+    monkeypatch.setattr(
+        omnigent_session_activities,
+        "_load_verified_execution_plan",
+        fake_load_verified,
+    )
+    monkeypatch.setattr(
+        omnigent_session_activities,
+        "_read_json_artifact",
+        fake_read_json,
+    )
+    monkeypatch.setattr(
+        omnigent_execution_plan_service,
+        "persist_json_artifact",
+        fake_persist_json_artifact,
+    )
+    monkeypatch.setattr(
+        omnigent_execution_plan_service,
+        "compile_and_persist_execution_plan",
+        fake_compile_and_persist_execution_plan,
+    )
+    import api_service.db.base as db_base
+
+    monkeypatch.setattr(db_base, "async_session_maker", fake_session_factory)
+
+    result = await omnigent_prepare_child_execution_plan_activity(
+        {
+            "principal": "user-1",
+            "parentWorkflowId": "mm:parent",
+            "childWorkflowId": "resolver:child:1",
+            "childWorkflowRequest": {
+                "workflow_type": "MoonMind.UserWorkflow",
+                "title": "Resolve PR #350",
+                "initial_parameters": {
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "targetRuntime": "omnigent",
+                    "requiredCapabilities": ["git", "gh"],
+                    "workspaceSpec": {
+                        "repository": "MoonLadderStudios/MoonMind",
+                        "startingBranch": "main",
+                        "targetBranch": "feature",
+                    },
+                    "task": {
+                        "instructions": "Resolve PR #350.",
+                        "tool": {"type": "skill", "name": "pr-resolver"},
+                        "skill": {"id": "pr-resolver", "args": {"pr": "350"}},
+                        "runtime": {
+                            "mode": "omnigent",
+                            "model": "opencode/muse-spark-1.3-contributor-free",
+                            "effort": "xhigh",
+                        },
+                        "publish": {"mode": "auto"},
+                    },
+                },
+            },
+        }
+    )
+
+    assert result["initial_parameters"]["omnigentExecutionPlan"] == (
+        child_binding.model_dump(mode="json", by_alias=True)
+    )
+    assert result["initial_parameters"]["resolvedSkillsetRef"] == (
+        "art-child-skills"
+    )
+    snapshot_parameters = observed["taskSnapshot"]["target"]["initialParameters"]
+    assert "task" not in snapshot_parameters
+    assert snapshot_parameters["workflow"]["tool"]["name"] == "pr-resolver"
+    assert snapshot_parameters["workflow"]["workspace"] == {
+        "repository": "MoonLadderStudios/MoonMind",
+        "startingBranch": "main",
+        "targetBranch": "feature",
+    }
+    assert observed["compile"]["workflow_id"] == "resolver:child:1"
+    assert observed["compile"]["provider_profile"] is provider_profile
+    compiled_parameters = observed["compile"]["initial_parameters"]
+    assert "task" not in compiled_parameters
+    assert compiled_parameters["workflow"]["skill"]["id"] == "pr-resolver"
+    assert compiled_parameters["workflow"]["workspace"]["targetBranch"] == (
+        "feature"
+    )
+    assert compiled_parameters["workspace"]["targetBranch"] == "feature"
+    assert compiled_parameters["model"] == (
+        "opencode/muse-spark-1.3-contributor-free"
+    )
+    assert compiled_parameters["effort"] == "xhigh"
+    assert omnigent_execution_plan_service.selected_skill_names(
+        compiled_parameters
+    ) == ["pr-resolver"]
 
 
 @pytest_asyncio.fixture()
@@ -243,6 +412,49 @@ async def test_generic_dispatch_keeps_generic_code_for_untyped_cause() -> None:
     assert result is not None
     assert result.provider_error_code == "OMNIGENT_GENERIC_DISPATCH_FAILED"
     assert result.retry_recommendation == "contact_administrator"
+
+
+@pytest.mark.asyncio
+async def test_generic_dispatch_keeps_raising_ambiguous_terminal_for_retry() -> None:
+    from moonmind.omnigent.execute import OmnigentSessionStillRunningError
+    from tests.unit.omnigent.test_generic_platform_production_services import _plan
+
+    plan = _plan("opencode-go/model")
+
+    class PlanStore:
+        async def load(self, plan_ref):
+            return plan
+
+    class Realizer:
+        async def execute(self, request, admitted):
+            raise OmnigentSessionStillRunningError(
+                "current marked turn is still executing a tool"
+            )
+
+    class Registry:
+        def require(self, ref):
+            return Realizer()
+
+    with pytest.raises(OmnigentSessionStillRunningError):
+        await _try_generic_realizer_dispatch(
+            AgentExecutionRequest(
+                agentKind="external",
+                agentId="omnigent",
+                correlationId="workflow-ambiguous",
+                idempotencyKey="step-ambiguous",
+                resolvedSkillsetRef="artifact:skills",
+                omnigentExecutionPlan=OmnigentExecutionPlanBinding(
+                    planRef=plan.planRef,
+                    planDigest="sha256:" + plan.planRef.rsplit(":", 1)[-1],
+                    planArtifactRef="artifact:plan-ambiguous",
+                    taskInputSnapshotRef="artifact:input-ambiguous",
+                    taskInputSnapshotDigest="sha256:" + "a" * 64,
+                ),
+                parameters={"executionPlanRef": plan.planRef},
+            ),
+            plan_store=PlanStore(),
+            realizer_registry=Registry(),
+        )
 
 
 @pytest.mark.asyncio

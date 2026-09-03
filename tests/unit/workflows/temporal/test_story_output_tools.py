@@ -546,6 +546,43 @@ async def test_update_github_issue_status_blocks_done_when_pushed_changes_have_n
 
 
 @pytest.mark.asyncio
+async def test_update_github_issue_status_blocks_partial_no_commit_without_pr() -> None:
+    artifact_service = _FakeAssessmentArtifactService(
+        {"art_partial_assessment": {"verdict": "PARTIALLY_IMPLEMENTED"}}
+    )
+    service = _FakeGitHubService()
+
+    result = await update_github_issue_status(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 3815,
+            "mode": "finalize_after_pr_or_done",
+            "previousOutputs": {
+                "assessmentArtifactRef": "art_partial_assessment",
+                "push_status": "no_commits",
+                "push_commit_count": 0,
+            },
+        },
+        {"temporal_artifact_service": artifact_service},
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "FAILED"
+    assert result.outputs == {
+        "issueRef": "MoonLadderStudios/MoonMind#3815",
+        "decision": "blocked",
+        "assessmentVerdict": "PARTIALLY_IMPLEMENTED",
+        "summary": (
+            "Skipped GitHub issue finalization because the initial assessment "
+            "was PARTIALLY_IMPLEMENTED and no authoritative pull request URL "
+            "was available."
+        ),
+    }
+    assert artifact_service.read_calls == ["art_partial_assessment"]
+    assert service.token_requests == []
+
+
+@pytest.mark.asyncio
 async def test_update_github_issue_status_uses_pr_url_from_publish_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

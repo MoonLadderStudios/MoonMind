@@ -6,10 +6,12 @@ import {
   DASHBOARD_REACT_ROUTE_PATHS,
   destinationState,
   destinationForPath,
+  isDashboardInternalUrl,
+  legacySettingsRedirect,
   matchesDashboardDestinationRegistry,
   payloadForDashboardRoute,
+  resolveAuthorizedLegacySettingsTarget,
   resolveDashboardRoute,
-  resolveLegacyDashboardRedirect,
   visiblePrimaryDestinations,
   visibleSystemDestinations,
 } from './dashboardRoutes';
@@ -235,13 +237,122 @@ describe('dashboard route resolution', () => {
     });
   });
 
-  it('redirects legacy /secrets and /workers without losing approved filters (MoonLadderStudios/MoonMind#3815)', () => {
-    expect(resolveLegacyDashboardRedirect('/secrets')).toBe('/settings/providers-secrets');
-    expect(resolveLegacyDashboardRedirect('/secrets', '?runtime=codex')).toBe('/settings/providers-secrets?runtime=codex');
-    expect(resolveLegacyDashboardRedirect('/secrets', '?runtime=codex&foo=bar')).toBe('/settings/providers-secrets?runtime=codex');
-    expect(resolveLegacyDashboardRedirect('/workers')).toBe('/settings/operations');
-    expect(resolveLegacyDashboardRedirect('/workers', '?status=paused')).toBe('/settings/operations?status=paused');
-    expect(resolveLegacyDashboardRedirect('/workers', '?status=paused&extra=1')).toBe('/settings/operations?status=paused');
-    expect(resolveLegacyDashboardRedirect('/unknown')).toBeNull();
+  it('redirects legacy /secrets and /workers preserving safe filters and dropping section', () => {
+    expect(legacySettingsRedirect('/secrets', '')).toBe('/settings/providers-secrets');
+    expect(legacySettingsRedirect('/workers', '')).toBe('/settings/operations');
+    expect(legacySettingsRedirect('/secrets', '?runtime=codex')).toBe('/settings/providers-secrets?runtime=codex');
+    expect(legacySettingsRedirect('/workers', '?status=paused')).toBe('/settings/operations?status=paused');
+    expect(legacySettingsRedirect('/secrets', '?section=providers&runtime=codex')).toBe('/settings/providers-secrets?runtime=codex');
+    expect(legacySettingsRedirect('/secrets', '?runtime=codex&q=search&section=x')).toBe('/settings/providers-secrets?runtime=codex');
+    expect(legacySettingsRedirect('/workers', '?q=search&status=paused&section=x')).toBe('/settings/operations?status=paused');
+    expect(legacySettingsRedirect('/secrets', '?unknown=1')).toBe('/settings/providers-secrets');
+  });
+
+  it('treats legacy redirects as internal URLs and preserves safe query strings', () => {
+    const origin = window.location.origin;
+    expect(isDashboardInternalUrl(new URL(`${origin}/secrets?runtime=codex`))).toBe(true);
+    expect(isDashboardInternalUrl(new URL(`${origin}/workers?status=paused`))).toBe(true);
+    expect(isDashboardInternalUrl(new URL(`${origin}/settings/providers-secrets`))).toBe(true);
+    expect(isDashboardInternalUrl(new URL(`${origin}/unknown`))).toBe(false);
+    expect(isDashboardInternalUrl(new URL('https://example.com/secrets'))).toBe(false);
+  });
+
+  it('exposes canonical Settings paths with correct destination metadata', () => {
+    const providers = DASHBOARD_DESTINATIONS.find(({ key }) => key === 'settings-providers-secrets')!;
+    const workspace = DASHBOARD_DESTINATIONS.find(({ key }) => key === 'settings-user-workspace')!;
+    const ops = DASHBOARD_DESTINATIONS.find(({ key }) => key === 'settings-operations')!;
+    expect(providers.canonicalPath).toBe('/settings/providers-secrets');
+    expect(workspace.canonicalPath).toBe('/settings/user-workspace');
+    expect(ops.canonicalPath).toBe('/settings/operations');
+    for (const dest of [providers, workspace, ops]) {
+      expect(dest.menuGroupKey).toBe('configuration');
+      expect(dest.navigationGroup).toBe('system');
+    }
+  });
+
+  describe('resolveAuthorizedLegacySettingsTarget', () => {
+    const allAuthorized = {
+      features: {
+        settingsProvidersSecrets: true,
+        settingsUserWorkspace: true,
+        settingsOperations: true,
+      },
+    };
+
+    it('returns none for non-legacy paths', () => {
+      expect(resolveAuthorizedLegacySettingsTarget('/workflows', '', allAuthorized, false)).toEqual({
+        status: 'none',
+      });
+    });
+
+    it('redirects to the raw target when the preferred destination is authorized', () => {
+      expect(
+        resolveAuthorizedLegacySettingsTarget('/secrets', '?runtime=codex', allAuthorized, false),
+      ).toEqual({
+        status: 'redirect',
+        target: '/settings/providers-secrets?runtime=codex',
+      });
+    });
+
+    it('re-filters the original query for the fallback target', () => {
+      // /workers?runtime=codex prefers operations (allows only status), but the
+      // raw target already dropped runtime. Falling back to providers-secrets
+      // must recover runtime from the original search.
+      const uiInfo = {
+        features: {
+          settingsProvidersSecrets: true,
+          settingsUserWorkspace: false,
+          settingsOperations: false,
+        },
+      };
+      expect(
+        resolveAuthorizedLegacySettingsTarget('/workers', '?runtime=codex', uiInfo, false),
+      ).toEqual({
+        status: 'redirect',
+        target: '/settings/providers-secrets?runtime=codex',
+      });
+    });
+
+    it('drops parameters that are invalid for the fallback target', () => {
+      const uiInfo = {
+        features: {
+          settingsProvidersSecrets: false,
+          settingsUserWorkspace: true,
+          settingsOperations: false,
+        },
+      };
+      expect(
+        resolveAuthorizedLegacySettingsTarget('/secrets', '?runtime=codex', uiInfo, false),
+      ).toEqual({
+        status: 'redirect',
+        target: '/settings/user-workspace',
+      });
+    });
+
+    it('falls back to the settings entry when no destination is authorized', () => {
+      const uiInfo = {
+        features: {
+          settingsProvidersSecrets: false,
+          settingsUserWorkspace: false,
+          settingsOperations: false,
+        },
+      };
+      expect(
+        resolveAuthorizedLegacySettingsTarget('/secrets', '?runtime=codex', uiInfo, false),
+      ).toEqual({ status: 'redirect', target: '/settings' });
+    });
+
+    it('returns pending while capability data is loading', () => {
+      expect(resolveAuthorizedLegacySettingsTarget('/secrets', '', allAuthorized, true)).toEqual({
+        status: 'pending',
+      });
+    });
+
+    it('redirects to the raw target when capabilities are unknown and not loading', () => {
+      expect(resolveAuthorizedLegacySettingsTarget('/secrets', '', null, false)).toEqual({
+        status: 'redirect',
+        target: '/settings/providers-secrets',
+      });
+    });
   });
 });

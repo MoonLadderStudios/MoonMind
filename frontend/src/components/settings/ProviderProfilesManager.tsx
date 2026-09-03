@@ -1093,6 +1093,44 @@ export function ProviderProfilesManager({
   const [importedVolumeRef, setImportedVolumeRef] = useState('');
   const [importedVolumeValidated, setImportedVolumeValidated] = useState(false);
   const startOAuthFromCreationRef = useRef<(profile: ProviderProfile) => void>(() => undefined);
+  // Create-time "use as runtime default" intent cannot be honored at creation:
+  // guided creation stores the profile disabled with is_default=false until
+  // credential validation, so the intent is persisted here and applied once
+  // the readiness-completing operation (OAuth finalize or API-key enrollment)
+  // succeeds for that profile.
+  const pendingDefaultIntentRef = useRef<Set<string>>(new Set());
+  const applyPendingDefaultIntent = async (profileId: string) => {
+    if (!pendingDefaultIntentRef.current.has(profileId)) return;
+    pendingDefaultIntentRef.current.delete(profileId);
+    try {
+      const response = await fetch(
+        `/api/v1/provider-profiles/${encodeURIComponent(profileId)}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({ is_default: true }),
+        },
+      );
+      if (!response.ok) {
+        const errorPayload = await response.json().catch(() => ({}));
+        throw new Error(
+          extractErrorMessage(
+            errorPayload,
+            `Failed to set "${profileId}" as the runtime default.`,
+          ),
+        );
+      }
+      queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
+      onNotice({ level: 'ok', text: `Provider profile "${profileId}" is now the runtime default.` });
+    } catch (error) {
+      onNotice({
+        level: 'error',
+        text: error instanceof Error
+          ? error.message
+          : `Failed to set "${profileId}" as the runtime default.`,
+      });
+    }
+  };
   const [tierDrafts, setTierDrafts] = useState<ProviderProfileTierDraft[]>(() => [runtimeDefaultTierDraft()]);
   const [defaultTierClientId, setDefaultTierClientId] = useState<string | null>(() => tierDrafts[0]?.clientId ?? null);
   const [tierBaseline, setTierBaseline] = useState<ProviderProfileTierDraft[] | null>(
@@ -1111,10 +1149,10 @@ export function ProviderProfilesManager({
   const [tierCapabilities, setTierCapabilities] = useState<ProviderProfileTierCapabilities | null>(null);
   const [tierCapabilitiesError, setTierCapabilitiesError] = useState<string | null>(null);
   const [tierCapabilitiesLoading, setTierCapabilitiesLoading] = useState(false);
-  const [showResetPreview, setShowResetPreview] = useState(false);
   const tierSectionRef = useRef<HTMLElement | null>(null);
   const tierLiveRef = useRef<HTMLDivElement | null>(null);
   const focusedTierClientIdRef = useRef<string | null>(null);
+  const [showResetPreview, setShowResetPreview] = useState(false);
 
   const activeRuntimeFilterValue = selectedRuntimeId ?? ALL_RUNTIMES_FILTER_VALUE;
   // Canonical runtime IDs are the option values; the shared runtime formatter
@@ -1313,13 +1351,7 @@ export function ProviderProfilesManager({
   }, [isEditing, editingProfileId, form.runtimeId, form.providerId]);
 
   useEffect(() => {
-    if (editingProfileId !== null) {
-      setCreationPreset(null);
-      setCreationPresetLoading(false);
-      setCreationPresetError(null);
-      return;
-    }
-
+    const isEditingProfile = editingProfileId !== null;
     const runtimeId = form.runtimeId.trim();
     const providerId = form.providerId.trim();
     const authenticationMethod = form.authenticationMethod;
@@ -1357,7 +1389,20 @@ export function ProviderProfilesManager({
         return payload as ProviderProfileCreationPreset;
       })
       .then((preset) => {
+        if (
+          !preset ||
+          typeof preset.version !== 'string' ||
+          !preset.fields ||
+          typeof preset.fields !== 'object'
+        ) {
+          throw new Error('Failed to load the Provider Profile creation preset.');
+        }
         setCreationPreset(preset);
+        if (isEditingProfile) {
+          // Editing never auto-applies the preset to the draft; it is only
+          // the source for an explicit "reset to recommended" action.
+          return;
+        }
         if (preset.supported) {
           setForm((current) =>
             current.runtimeId.trim() === preset.runtime_id &&
@@ -1390,6 +1435,27 @@ export function ProviderProfilesManager({
     form.authenticationMethod,
     creationPresetRefreshKey,
   ]);
+  // #1205: OAuth may populate account_label from validated provider identity.
+  // Only populate the draft that still represents the completed profile:
+  // after a successful creation the form resets, so an unrelated later
+  // success (for example profile A completing while draft B is open) must
+  // not copy A's identity label into B's draft.
+  useEffect(() => {
+    if (isEditing) return;
+    const draftProfileId = form.profileId.trim();
+    if (!draftProfileId) return;
+    const succeeded = Object.values(oauthSessions).find(
+      (s) => s.status === 'succeeded' && s.profileId === draftProfileId,
+    );
+    if (!succeeded) return;
+    const profileId = succeeded.profileId;
+    if (!profileId) return;
+    const linked = profiles.find((p) => p.profile_id === profileId);
+    const validatedLabel = linked?.account_label?.trim();
+    if (validatedLabel && !form.accountLabel.trim()) {
+      setForm((cur) => (cur.accountLabel.trim() ? cur : { ...cur, accountLabel: validatedLabel }));
+    }
+  }, [oauthSessions, profiles, isEditing, form.accountLabel, form.profileId]);
 
   const updateClaudeEnrollmentForProfile = (
     profileId: string,
@@ -1804,6 +1870,7 @@ export function ProviderProfilesManager({
         level: 'ok',
         text: `Anthropic API key enrollment completed for "${profileId}".`,
       });
+      void applyPendingDefaultIntent(profileId);
     },
     onError: (error, { profileId, submittedToken }) => {
       if (claudeEnrollmentProfileIdRef.current !== profileId) {
@@ -1966,6 +2033,7 @@ export function ProviderProfilesManager({
         level: 'ok',
         text: `${copy.credentialLabel} enrollment completed for "${profileId}".`,
       });
+      void applyPendingDefaultIntent(profileId);
     },
     onError: (error, { profileId, submittedToken, profile }) => {
       const copy = apiKeyEnrollmentCopy(profile);
@@ -2101,6 +2169,11 @@ export function ProviderProfilesManager({
     },
     onSuccess: (savedProfile, submittedForm) => {
       const createdProfile = !isEditing;
+      if (createdProfile && submittedForm.isDefault && !savedProfile.is_default) {
+        // Creation stores the profile non-default until credential validation;
+        // carry the checked intent forward to the readiness-completing step.
+        pendingDefaultIntentRef.current.add(savedProfile.profile_id);
+      }
       onNotice({
         level: 'ok',
         text: isEditing
@@ -2395,6 +2468,7 @@ export function ProviderProfilesManager({
       );
       queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
       onNotice({ level: 'ok', text: `OAuth session for "${profileId}" finalized.` });
+      void applyPendingDefaultIntent(profileId);
     },
     onError: (error: Error) => {
       onNotice({ level: 'error', text: error.message });
@@ -3580,12 +3654,12 @@ export function ProviderProfilesManager({
             saveMutation.mutate(form);
           }}
         >
-          {/* ── Required: Identity ── */}
+          {/* ── 1. Identity (Profile ID, Runtime, Provider, Account label) ── */}
           <fieldset className="rounded-2xl border border-amber-200/60 dark:border-amber-800/40 bg-amber-50/30 dark:bg-amber-900/10 p-5 space-y-4">
             <legend className="px-2 text-sm font-semibold text-amber-700 dark:text-amber-400">
               Identity <span className="font-normal text-slate-500 dark:text-slate-400">&mdash; required</span>
             </legend>
-            <div className="grid gap-4 md:grid-cols-3">
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
               <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                 <span>Profile ID <span className="text-amber-600 dark:text-amber-400">*</span></span>
                 <input
@@ -3623,14 +3697,6 @@ export function ProviderProfilesManager({
                   required
                 />
               </label>
-            </div>
-          </fieldset>
-
-          <fieldset className="rounded-2xl border border-slate-200 dark:border-slate-700 p-5 space-y-4">
-            <legend className="px-2 text-sm font-semibold text-slate-700 dark:text-slate-300">
-              Provider and account
-            </legend>
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
               <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                 <span>Account label</span>
                 <input
@@ -3641,38 +3707,91 @@ export function ProviderProfilesManager({
                   }
                   placeholder="Team account"
                 />
-                <p className="text-xs text-slate-400 dark:text-slate-500">Optional friendly account identity</p>
-              </label>
-              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
-                <span>Max parallel runs</span>
-                <input
-                  type="number"
-                  min="1"
-                  disabled={isCodexOAuthForm}
-                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-                  value={isCodexOAuthForm ? '1' : form.maxParallelRuns}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, maxParallelRuns: event.target.value }))
-                  }
-                />
-                <p className="text-xs text-slate-400 dark:text-slate-500">
-                  {isCodexOAuthForm
-                    ? 'Fixed at 1 because the Codex OAuth home is an exclusive mutable identity.'
-                    : `Default: ${defaultFormValues.maxParallelRuns}`}
-                </p>
-              </label>
-              <label className="flex items-center gap-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 px-4 py-3 text-sm font-medium text-slate-700 dark:text-slate-300">
-                <input
-                  type="checkbox"
-                  checked={form.isDefault}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, isDefault: event.target.checked }))
-                  }
-                />
-                Runtime default
+                <p className="text-xs text-slate-400 dark:text-slate-500">Optional friendly account identity — auto-populated from OAuth identity when available</p>
               </label>
             </div>
           </fieldset>
+
+          <fieldset className="rounded-2xl border border-emerald-200/70 dark:border-emerald-900/60 bg-emerald-50/30 dark:bg-emerald-950/20 p-5 space-y-4">
+            <legend className="px-2 text-sm font-semibold text-emerald-800 dark:text-emerald-300">
+              Authentication and readiness
+            </legend>
+            {creationCapabilities?.authentication_methods.length ? (
+              <div className="grid gap-3 sm:grid-cols-3">
+                {creationCapabilities.authentication_methods.map((method) => (
+                  <label
+                    key={method.id}
+                    className="flex items-center gap-3 rounded-xl border border-emerald-200 dark:border-emerald-900 bg-white dark:bg-slate-900 px-4 py-3 text-sm font-medium text-slate-800 dark:text-slate-200"
+                  >
+                    <input
+                      type="radio"
+                      name="provider-profile-authentication-method"
+                      value={method.id}
+                      checked={form.authenticationMethod === method.id}
+                      disabled={isEditing}
+                      onChange={() => {
+                        setForm((current) => ({ ...current, authenticationMethod: method.id }));
+                        setShowImportedVolume(false);
+                        setImportedVolumeValidated(false);
+                      }}
+                    />
+                    {method.label}
+                  </label>
+                ))}
+              </div>
+            ) : isEditing ? (
+              <div className="rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-3 text-sm text-amber-800 dark:text-amber-300">
+                Unknown existing method: {form.credentialSource} → {form.runtimeMaterializationMode}. The stored contract is preserved for inspection.
+              </div>
+            ) : (
+              <p className="text-sm text-slate-600 dark:text-slate-400">
+                Choose a runtime and provider to load supported authentication methods.
+              </p>
+            )}
+            {hasUnknownExistingAuthenticationMethod && creationCapabilities?.authentication_methods.length ? (
+              <div className="rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-3 text-sm text-amber-800 dark:text-amber-300">
+                Unknown existing method: {form.credentialSource} → {form.runtimeMaterializationMode}. The stored contract remains inspectable and is not replaced by a supported method automatically.
+              </div>
+            ) : null}
+            {creationCapabilitiesError ? (
+              <div className="rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-3 text-sm text-amber-800 dark:text-amber-300">
+                {creationCapabilitiesError}
+              </div>
+            ) : null}
+            {!isEditing ? (
+              <div
+                className={`rounded-xl border p-3 text-sm ${
+                  creationPresetError || creationPreset?.supported === false
+                    ? 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-300'
+                    : 'border-sky-200 bg-sky-50 text-sky-800 dark:border-sky-900/60 dark:bg-sky-950/30 dark:text-sky-300'
+                }`}
+                aria-live="polite"
+              >
+                {creationPresetLoading
+                  ? 'Loading backend creation recommendations…'
+                  : creationPresetError
+                    ? creationPresetError
+                    : creationPreset
+                      ? creationPreset.supported
+                        ? `Backend preset ${creationPreset.version} loaded. Untouched advanced values will be normalized by the server.`
+                        : creationPreset.diagnostics[0]?.message ??
+                          'This combination does not have a safe standard creation preset.'
+                      : 'Choose an authentication method to load backend creation recommendations.'}
+              </div>
+            ) : null}
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3 text-sm text-slate-700 dark:text-slate-300">
+                Connection: {currentConnectionLabel}
+              </div>
+              <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3 text-sm text-slate-700 dark:text-slate-300">
+                Launch readiness: {currentLaunchReadinessLabel}
+              </div>
+            </div>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              OAuth and API-key setup use dedicated backend flows. No credential plaintext, volume name, mount path, or SecretRef JSON is collected here.
+            </p>
+          </fieldset>
+
 
           {/* ── Model & effort tiers ── */}
           <fieldset ref={tierSectionRef as unknown as React.RefObject<HTMLFieldSetElement>} className="rounded-2xl border border-slate-200 dark:border-slate-700 p-5 space-y-4" aria-labelledby="tier-section-title">
@@ -3873,85 +3992,80 @@ export function ProviderProfilesManager({
             ) : null}
           </fieldset>
 
-          <fieldset className="rounded-2xl border border-emerald-200/70 dark:border-emerald-900/60 bg-emerald-50/30 dark:bg-emerald-950/20 p-5 space-y-4">
-            <legend className="px-2 text-sm font-semibold text-emerald-800 dark:text-emerald-300">
-              Authentication and readiness
-            </legend>
-            {creationCapabilities?.authentication_methods.length ? (
-              <div className="grid gap-3 sm:grid-cols-3">
-                {creationCapabilities.authentication_methods.map((method) => (
-                  <label
-                    key={method.id}
-                    className="flex items-center gap-3 rounded-xl border border-emerald-200 dark:border-emerald-900 bg-white dark:bg-slate-900 px-4 py-3 text-sm font-medium text-slate-800 dark:text-slate-200"
-                  >
-                    <input
-                      type="radio"
-                      name="provider-profile-authentication-method"
-                      value={method.id}
-                      checked={form.authenticationMethod === method.id}
-                      disabled={isEditing}
-                      onChange={() => {
-                        setForm((current) => ({ ...current, authenticationMethod: method.id }));
-                        setShowImportedVolume(false);
-                        setImportedVolumeValidated(false);
-                      }}
-                    />
-                    {method.label}
-                  </label>
-                ))}
-              </div>
-            ) : isEditing ? (
-              <div className="rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-3 text-sm text-amber-800 dark:text-amber-300">
-                Unknown existing method: {form.credentialSource} → {form.runtimeMaterializationMode}. The stored contract is preserved for inspection.
-              </div>
-            ) : (
-              <p className="text-sm text-slate-600 dark:text-slate-400">
-                Choose a runtime and provider to load supported authentication methods.
-              </p>
-            )}
-            {hasUnknownExistingAuthenticationMethod && creationCapabilities?.authentication_methods.length ? (
-              <div className="rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-3 text-sm text-amber-800 dark:text-amber-300">
-                Unknown existing method: {form.credentialSource} → {form.runtimeMaterializationMode}. The stored contract remains inspectable and is not replaced by a supported method automatically.
-              </div>
-            ) : null}
-            {creationCapabilitiesError ? (
-              <div className="rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-3 text-sm text-amber-800 dark:text-amber-300">
-                {creationCapabilitiesError}
-              </div>
-            ) : null}
-            {!isEditing ? (
-              <div
-                className={`rounded-xl border p-3 text-sm ${
-                  creationPresetError || creationPreset?.supported === false
-                    ? 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-300'
-                    : 'border-sky-200 bg-sky-50 text-sky-800 dark:border-sky-900/60 dark:bg-sky-950/30 dark:text-sky-300'
-                }`}
-                aria-live="polite"
-              >
-                {creationPresetLoading
-                  ? 'Loading backend creation recommendations…'
-                  : creationPresetError
-                    ? creationPresetError
-                    : creationPreset
-                      ? creationPreset.supported
-                        ? `Backend preset ${creationPreset.version} loaded. Untouched advanced values will be normalized by the server.`
-                        : creationPreset.diagnostics[0]?.message ??
-                          'This combination does not have a safe standard creation preset.'
-                      : 'Choose an authentication method to load backend creation recommendations.'}
-              </div>
-            ) : null}
-            <div className="grid gap-3 md:grid-cols-2">
-              <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3 text-sm text-slate-700 dark:text-slate-300">
-                Connection: {currentConnectionLabel}
-              </div>
-              <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3 text-sm text-slate-700 dark:text-slate-300">
-                Launch readiness: {currentLaunchReadinessLabel}
+
+
+          {/* ── 4. Capacity ── */}
+          <fieldset className="rounded-2xl border border-slate-200 dark:border-slate-700 p-5 space-y-4">
+            <legend className="px-2 text-sm font-semibold text-slate-700 dark:text-slate-300">Capacity</legend>
+            <div className="grid gap-4 md:grid-cols-2">
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                <span>Max parallel runs</span>
+                <input
+                  type="number"
+                  min="1"
+                  disabled={isCodexOAuthForm}
+                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
+                  value={isCodexOAuthForm ? '1' : form.maxParallelRuns}
+                  onChange={(event) =>
+                    setForm((current) => ({ ...current, maxParallelRuns: event.target.value }))
+                  }
+                />
+                <p className="text-xs text-slate-400 dark:text-slate-500">
+                  {isCodexOAuthForm
+                    ? 'Fixed at 1 because the Codex OAuth home is an exclusive mutable identity.'
+                    : `Default: ${defaultFormValues.maxParallelRuns}`}
+                </p>
+              </label>
+              <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 p-4 text-sm text-slate-600 dark:text-slate-400">
+                Capacity is the one Runtime Limits value most users can reason about directly. The backend creation preset owns the recommended value.
               </div>
             </div>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              OAuth and API-key setup use dedicated backend flows. No credential plaintext, volume name, mount path, or SecretRef JSON is collected here.
-            </p>
           </fieldset>
+
+
+
+          {/* ── 5. Use as runtime default (readiness-gated) ── */}
+          <fieldset className="rounded-2xl border border-slate-200 dark:border-slate-700 p-5 space-y-3">
+            <legend className="px-2 text-sm font-semibold text-slate-700 dark:text-slate-300">Use as runtime default</legend>
+            {(() => {
+              const readiness = editingProfile?.readiness ?? null;
+              const launchReady = isEditing ? Boolean(readiness?.launch_ready) : Boolean(selectedAuthenticationCapability?.launch_ready_after_setup || selectedAuthenticationCapability?.fields.may_become_runtime_default?.value);
+              // The readiness gate prevents assigning an unready profile as
+              // default, but an already-default profile may still be demoted.
+              const assignBlocked = isEditing && !launchReady && !form.isDefault;
+              const demoteAllowed = isEditing && !launchReady && form.isDefault;
+              return (
+                <>
+                  <label className={`flex items-center gap-3 rounded-2xl border px-4 py-3 text-sm font-medium ${assignBlocked ? 'border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300' : 'border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-800 dark:bg-slate-800 dark:text-slate-300'}`}>
+                    <input
+                      type="checkbox"
+                      checked={form.isDefault}
+                      disabled={assignBlocked}
+                      aria-label="Runtime default"
+                      onChange={(event) =>
+                        setForm((current) => ({ ...current, isDefault: event.target.checked }))
+                      }
+                    />
+                    Use as runtime default
+                  </label>
+                  {assignBlocked ? (
+                    <p className="text-xs text-amber-700 dark:text-amber-300">
+                      Default assignment is disabled until launch readiness succeeds. Complete credential setup and resolve readiness blockers first.
+                    </p>
+                  ) : demoteAllowed ? (
+                    <p className="text-xs text-amber-700 dark:text-amber-300">
+                      This profile is currently the runtime default but is not launch-ready. You may clear this checkbox to demote it; re-assigning default requires launch readiness.
+                    </p>
+                  ) : (
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      When enabled, this profile becomes the preferred launch target for its runtime after readiness succeeds.
+                    </p>
+                  )}
+                </>
+              );
+            })()}
+          </fieldset>
+
 
           <div className="rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 p-5 space-y-3">
             <label className="flex items-center gap-3 text-sm font-semibold text-slate-800 dark:text-slate-200">
@@ -4196,11 +4310,11 @@ export function ProviderProfilesManager({
                   </label>
                 </div>
                 {manualCreationAllowed ? (
-                  <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
-                    <span>Clear env keys</span>
+                  <label className="flex flex-col gap-1.5 text-sm font-medium text-amber-800 dark:text-amber-300">
+                    <span>Clear env keys — manual expert path (no audit trail recorded)</span>
                     <textarea
                       rows={3}
-                      className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 font-mono text-sm"
+                      className="w-full rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 font-mono text-sm"
                       value={form.clearEnvKeysText}
                       onChange={(event) =>
                         setForm((current) => ({
@@ -4209,89 +4323,122 @@ export function ProviderProfilesManager({
                         }))
                       }
                     />
+                    <p className="text-xs text-amber-700 dark:text-amber-300">Warning: freeform clear_env_keys is only allowed for unsupported combinations via the manual creation path. No audit event is recorded for this change; the value must satisfy launch-safety validation and bypasses backend-recommended isolation policy, so review it carefully.</p>
                   </label>
                 ) : (
                   <div className="rounded-xl bg-slate-50 dark:bg-slate-900 p-3 text-xs text-slate-500 dark:text-slate-400">
-                    Clear environment keys: {selectedAuthenticationCapability?.fields.clear_env_keys ? String((selectedAuthenticationCapability.fields.clear_env_keys.value as string[]).join(', ')) : form.clearEnvKeysText || 'Backend strategy'}
-                    <div>Source: {selectedAuthenticationCapability?.fields.clear_env_keys?.source ?? 'existing_profile'} · Locked by backend launch-safety policy</div>
+                    <div className="font-medium text-slate-700 dark:text-slate-300">Launch-security metadata — clear environment keys</div>
+                    <div>Value: {selectedAuthenticationCapability?.fields.clear_env_keys ? String((selectedAuthenticationCapability.fields.clear_env_keys.value as string[]).join(', ') || 'empty') : (form.clearEnvKeysText || (editingProfile?.clear_env_keys?.join(', ') || 'Backend strategy — runtime_provider_isolation_policy'))}</div>
+                    <div>Source: {selectedAuthenticationCapability?.fields.clear_env_keys?.source ?? 'runtime_provider_isolation_policy'} · Locked by backend launch-safety policy</div>
+                    <div>Lock reason: {selectedAuthenticationCapability?.fields.clear_env_keys?.lock_reason ?? 'Environment clearing is backend-owned launch security policy.'}</div>
                   </div>
                 )}
               </fieldset>
-              <div className="flex flex-col gap-2">
-                <button
-                  type="button"
-                  className="self-start rounded-lg border border-amber-300 dark:border-amber-700 px-4 py-2 text-sm font-semibold text-amber-800 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-900/20"
-                  onClick={() => setShowResetPreview(true)}
-                >
-                  Reset advanced options to recommended
-                </button>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Preview every change before applying. Generated security fields will be recalculated, explicit overrides become inherited or omitted, and routing/launch shaping returns to backend defaults.
-                </p>
-              </div>
-              {showResetPreview ? (
-                <div role="dialog" aria-modal="true" aria-labelledby="reset-preview-title" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) setShowResetPreview(false); }}>
-                  <div className="w-full max-w-lg rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-2xl">
-                    <h4 id="reset-preview-title" className="text-sm font-semibold text-slate-900 dark:text-white">Reset advanced options to recommended</h4>
-                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">This preview distinguishes concrete values, omitted inheritance, and security recalculation. Changes affect future launches.</p>
-                    <ul className="mt-3 max-h-64 space-y-1 overflow-y-auto text-xs text-slate-700 dark:text-slate-300">
-                      {(() => {
-                        const preset = selectedAuthenticationCapability;
-                        const changes: string[] = [];
-                        const recommendedCooldown = String(preset?.fields.cooldown_after_429_seconds?.value ?? 300);
-                        if (form.cooldownAfter429Seconds !== recommendedCooldown) changes.push(`Cooldown after 429: ${form.cooldownAfter429Seconds || '(empty)'} → ${recommendedCooldown} (provider default)`);
-                        const recommendedRate = String(preset?.fields.rate_limit_policy?.value ?? 'backoff');
-                        if (form.rateLimitPolicy !== recommendedRate) changes.push(`Rate-limit policy: ${form.rateLimitPolicy} → ${recommendedRate} (provider default)`);
-                        const recommendedPriority = String(preset?.fields.priority?.value ?? 100);
-                        if (form.priority !== recommendedPriority) changes.push(`Priority: ${form.priority || '(empty)'} → ${recommendedPriority} (system default)`);
-                        if (form.providerLabel) changes.push(`Provider label override: "${form.providerLabel}" → inherited catalog label (omitted)`);
-                        if (form.tagsText && form.tagsText.trim()) changes.push(`Routing tags: "${form.tagsText}" → no custom tags (omitted)`);
-                        if (form.commandBehavior && form.commandBehavior.trim()) changes.push(`Command behavior: custom → omitted (backend strategy)`);
-                        if (manualCreationAllowed && form.clearEnvKeysText && form.clearEnvKeysText.trim()) {
-                          changes.push(`Clear environment keys: custom → backend launch-safety policy (recalculated)`);
-                        } else if (!manualCreationAllowed) {
-                          changes.push(`Clear environment keys: will be recalculated from backend strategy`);
-                        }
-                        const secretRoles = preset?.secret_roles ?? [];
-                        if (secretRoles.length > 0) {
-                          changes.push(`SecretRef bindings: kept for required roles, optional roles omitted where empty`);
-                        }
-                        if (form.volumeRef || form.volumeMountPath) {
-                          changes.push(`Volume bindings: generated or imported values preserved only if required by strategy`);
-                        }
-                        if (changes.length === 0) changes.push('No advanced overrides differ from recommended — save would be no-op.');
-                        return changes.map((c, i) => <li key={i} className="list-disc list-inside">{c}</li>);
-                      })()}
-                    </ul>
-                    <div className="mt-5 flex justify-end gap-3">
-                      <button type="button" className="rounded-lg border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm" onClick={() => setShowResetPreview(false)}>Cancel</button>
+              <fieldset className="rounded-2xl border border-slate-200 dark:border-slate-700 p-5 space-y-4">
+                <legend className="px-2 text-sm font-semibold text-slate-700 dark:text-slate-300">Reset advanced options</legend>
+                {!creationPreset && !isEditing ? (
+                  <p className="text-sm text-slate-500 dark:text-slate-400">Load a backend preset to preview recommended values.</p>
+                ) : isEditing && !creationPreset ? (
+                  creationPresetLoading ? (
+                    <p className="text-sm text-slate-500 dark:text-slate-400">Loading backend-recommended values…</p>
+                  ) : (
+                    <>
+                      <p className="text-sm text-slate-500 dark:text-slate-400">
+                        No backend preset is available for this profile type
+                        {creationPresetError ? ` (${creationPresetError})` : ''}, so
+                        recommended values cannot be previewed. Discarding unsaved
+                        advanced edits restores the last saved values instead.
+                      </p>
                       <button
                         type="button"
-                        className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white"
+                        className="rounded-lg border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-300"
                         onClick={() => {
-                          const preset = selectedAuthenticationCapability;
-                          setForm((current) => ({
-                            ...current,
-                            providerLabel: '',
-                            cooldownAfter429Seconds: String(preset?.fields.cooldown_after_429_seconds?.value ?? 300),
-                            rateLimitPolicy: String(preset?.fields.rate_limit_policy?.value ?? 'backoff'),
-                            priority: String(preset?.fields.priority?.value ?? 100),
-                            tagsText: '',
-                            commandBehavior: '',
-                            clearEnvKeysText: manualCreationAllowed ? '' : current.clearEnvKeysText,
-                          }));
-                          if (preset?.fields.clear_env_keys?.editable === false) {
-                            // keep read-only display; no textarea to clear
-                          }
-                          setShowResetPreview(false);
+                          setForm(formBaseline);
+                          setTierDrafts(tierBaseline ? cloneTierDrafts(tierBaseline) : [runtimeDefaultTierDraft()]);
+                          if (tierBaselineDefaultId) setDefaultTierClientId(tierBaselineDefaultId);
+                          onNotice({ level: 'ok', text: 'Unsaved advanced edits discarded; restored last saved values.' });
                         }}
                       >
-                        Apply recommended
+                        Discard unsaved advanced edits
                       </button>
-                    </div>
-                  </div>
-                </div>
-              ) : null}
+                    </>
+                  )
+                ) : (
+                  <>
+                    {!showResetPreview ? (
+                      <button
+                        type="button"
+                        className="rounded-lg border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-300"
+                        onClick={() => setShowResetPreview(true)}
+                      >
+                        Reset advanced options to recommended
+                      </button>
+                    ) : (
+                      <div className="space-y-3">
+                        <div className="rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-3 text-sm text-amber-800 dark:text-amber-300">
+                          <p className="font-semibold">Preview — recommended values will replace draft overrides:</p>
+                          <ul className="mt-2 list-disc pl-5 text-xs">
+                            {(() => {
+                              const preset = creationPreset;
+                              const fields = preset?.fields ?? {};
+                              const items: string[] = [];
+                              if (creationPreset) {
+                                if (fields.cooldown_after_429_seconds) items.push(`cooldown_after_429_seconds: ${String(fields.cooldown_after_429_seconds.value)} (concrete recommended)`);
+                                if (fields.rate_limit_policy) items.push(`rate_limit_policy: ${String(fields.rate_limit_policy.value)} (concrete recommended)`);
+                                if (fields.priority) items.push(`priority: ${String(fields.priority.value)} (concrete recommended)`);
+                                if (fields.clear_env_keys) items.push(`clear_env_keys: ${(fields.clear_env_keys.value as string[]).join(', ') || 'empty'} — recalculated security fields (runtime_provider_isolation_policy)`);
+                                items.push('credential_source / runtime_materialization_mode — omitted to inherit backend-derived values');
+                                items.push('secret_refs / volume refs — omitted unless explicitly bound');
+                              } else if (isEditing && editingProfile) {
+                                items.push('Backend preset unavailable — preview unavailable; use “Discard unsaved advanced edits” to restore last saved values');
+                              } else {
+                                items.push('No preset available — preview unavailable');
+                              }
+                              return items.map((it) => <li key={it}>{it}</li>);
+                            })()}
+                          </ul>
+                          <p className="mt-2 text-xs">Fields changed from explicit override to inherited/omitted will be normalized by the server. Generated security fields will be recalculated.</p>
+                        </div>
+                        <div className="flex gap-3">
+                          <button
+                            type="button"
+                            className="rounded-lg bg-slate-900 dark:bg-slate-100 px-4 py-2 text-sm font-semibold text-white dark:text-slate-900"
+                            onClick={() => {
+                              if (creationPreset) {
+                                setForm((cur) => {
+                                  const next = applyCreationPresetToForm(cur, creationPreset);
+                                  // isDefault/enabled are identity toggles outside
+                                  // advanced options; an advanced reset while
+                                  // editing must not flip them as a side effect.
+                                  return isEditing
+                                    ? { ...next, isDefault: cur.isDefault, enabled: cur.enabled }
+                                    : next;
+                                });
+                              } else if (isEditing && editingProfile) {
+                                setForm(formBaseline);
+                                setTierDrafts(tierBaseline ? cloneTierDrafts(tierBaseline) : [runtimeDefaultTierDraft()]);
+                                if (tierBaselineDefaultId) setDefaultTierClientId(tierBaselineDefaultId);
+                              }
+                              setShowResetPreview(false);
+                              onNotice({ level: 'ok', text: 'Advanced options reset to recommended preview applied.' });
+                            }}
+                          >
+                            Apply reset
+                          </button>
+                          <button
+                            type="button"
+                            className="rounded-lg border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm"
+                            onClick={() => setShowResetPreview(false)}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    <p className="text-xs text-slate-500 dark:text-slate-400">Distinguishes concrete recommended values vs omit-to-inherit vs recalculated security fields and launch impact.</p>
+                  </>
+                )}
+              </fieldset>
             </div>
           ) : null}
 
