@@ -20,7 +20,7 @@ independently resolvable per-row observations.
 **Document Class:** System / Feature Design View
 **Owners:** MoonMind Platform + dashboard
 **Last Updated:** 2026-08-13
-**Related:** `docs/Workflows/WorkflowDependencies.md`, `docs/Workflows/CheckpointBranchSystem.md`, `docs/Api/ExecutionsApiContract.md`, `docs/Workflows/WorkflowRunsApi.md`, `docs/Workflows/WorkflowProposalSystem.md`, `docs/Observability/LiveLogs.md`, `docs/ManagedAgents/CodexCliManagedSessions.md`, `docs/ManagedAgents/SharedManagedAgentAbstractions.md`, `docs/Security/ProviderProfiles.md`, `docs/Security/SecretsSystem.md`, `docs/ManagedAgents/DockerOutOfDocker.md`, `docs/Artifacts/ArtifactPresentationContract.md`, `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Temporal/WorkflowRunHistoryAndNewRunSemantics.md`, `docs/Temporal/SourceOfTruthAndProjectionModel.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/Steps/StepExecutionsAndCheckpointing.md`, `docs/Steps/SkillSystem.md`, `docs/Omnigent/OmnigentAdapter.md`
+**Related:** `docs/Workflows/WorkflowDependencies.md`, `docs/Workflows/CheckpointBranchSystem.md`, `docs/Api/ExecutionsApiContract.md`, `docs/Workflows/WorkflowRunsApi.md`, `docs/Workflows/FollowUpWorkSystem.md`, `docs/Observability/LiveLogs.md`, `docs/ManagedAgents/CodexCliManagedSessions.md`, `docs/ManagedAgents/SharedManagedAgentAbstractions.md`, `docs/Security/ProviderProfiles.md`, `docs/Security/SecretsSystem.md`, `docs/ManagedAgents/DockerOutOfDocker.md`, `docs/Artifacts/ArtifactPresentationContract.md`, `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Temporal/WorkflowRunHistoryAndNewRunSemantics.md`, `docs/Temporal/SourceOfTruthAndProjectionModel.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/Steps/StepExecutionsAndCheckpointing.md`, `docs/Steps/SkillSystem.md`, `docs/Omnigent/OmnigentAdapter.md`
 
 ---
 
@@ -139,7 +139,7 @@ MoonMind may still support operator handoff or manual terminal workflows elsewhe
 
 A remediation Workflow Execution should still be represented as a normal top-level `MoonMind.UserWorkflow` execution with additional nested semantics under `task.remediation`.
 
-This keeps remediation aligned with the existing Workflow-shaped create path, dashboard Workflow views, proposal promotion, artifacts, step ledger, cancellation, rerun, and summary flows. A new top-level workflow type is not required in v1.
+This keeps remediation aligned with the existing Workflow-shaped create path, dashboard Workflow views, artifacts, step ledger, cancellation, rerun, and summary flows. A new top-level workflow type is not required in v1.
 
 ### 5.2 Remediation is a relationship, not a dependency
 
@@ -374,7 +374,7 @@ task:
   remediationPolicy:
     enabled: true
     triggers: ["failed", "attention_required", "stuck"]
-    createMode: "proposal"   # or immediate_task
+    createMode: "immediate_task"
     templateRef: "admin_healer_default"
     authorityMode: "approval_gated"
     maxActiveRemediations: 1
@@ -1647,14 +1647,12 @@ This v1 is powerful enough to heal common MoonMind operational failures while st
 After v1, MoonMind may add:
 
 - automatic remediation policies,
-- proposal-based remediation review,
 - richer action registry coverage,
 - finer-grained lock scopes,
 - policy-driven concurrent observe-only remediators,
 - historical per-run remediation analytics,
 - integration with stuck detection and finish-summary outcomes,
 - reusable remediation templates for common failure signatures,
-- remediation suggestions generated during the normal proposal phase.
 
 Future work should preserve the core rules of this document:
 artifact-first evidence, typed actions, explicit locks, strict audit, and no raw root shell.

@@ -1,9 +1,9 @@
 import os
 import re
-from typing import Annotated, Any, Literal, Optional, Self, Sequence
+from typing import Annotated, Any, Literal, Optional, Sequence
 from urllib.parse import urlsplit
 
-from pydantic import AliasChoices, Field, field_validator, model_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from moonmind.claude.runtime import (
@@ -22,8 +22,6 @@ from moonmind.jules.runtime import (
 )
 from moonmind.workflow_docker_mode import normalize_workflow_docker_mode
 
-_ALLOWED_TARGET_DEFAULTS = ("workflow_repo", "moonmind", "both")
-_ALLOWED_PROPOSAL_SEVERITIES = ("low", "medium", "high", "critical")
 _OWNER_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _JIRA_PROJECT_KEY_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9]+$")
 _JIRA_ALLOWED_ACTIONS = frozenset(
@@ -1007,44 +1005,6 @@ class WorkflowSettings(BaseSettings):
         validation_alias=AliasChoices("MOONMIND_LOG_STREAMING_ENABLED"),
         description="Enable artifact-backed live log streaming (Phase 0 boundary).",
     )
-    enable_proposals: bool = Field(
-        True,
-        validation_alias=AliasChoices("MOONMIND_ENABLE_PROPOSALS"),
-        description="Enable worker-side workflow proposal submission after successful runs.",
-    )
-    proposal_targets_default: str = Field(
-        "workflow_repo",
-        validation_alias=AliasChoices(
-            "MOONMIND_PROPOSAL_TARGETS"
-        ),
-        description="Default proposal targets when workflows omit proposalPolicy (workflow_repo|moonmind|both).",
-    )
-    proposal_max_items_workflow_repo: int = Field(
-        3,
-        validation_alias=AliasChoices("WORKFLOW_PROPOSALS_MAX_ITEMS_WORKFLOW_REPO"),
-        description="Default per-run workflow-repo proposal cap applied when workflow policy omits maxItems.workflowRepo.",
-        ge=1,
-    )
-    proposal_max_items_moonmind: int = Field(
-        2,
-        validation_alias=AliasChoices("WORKFLOW_PROPOSALS_MAX_ITEMS_MOONMIND"),
-        description="Default per-run MoonMind proposal cap applied when workflow policy omits maxItems.moonmind.",
-        ge=1,
-    )
-    proposal_moonmind_severity_floor: str = Field(
-        "high",
-        validation_alias=AliasChoices(
-            "MOONMIND_MIN_SEVERITY_FOR_MOONMIND",
-        ),
-        description="Lowest accepted severity for MoonMind CI proposals when policy omits a floor.",
-    )
-    moonmind_ci_repository: str = Field(
-        "MoonLadderStudios/MoonMind",
-        validation_alias=AliasChoices(
-            "MOONMIND_CI_REPOSITORY"
-        ),
-        description="Repository used for MoonMind CI/run-quality proposals.",
-    )
     stage_command_timeout_seconds: int = Field(
         3600,
         validation_alias=AliasChoices(
@@ -1108,44 +1068,10 @@ class WorkflowSettings(BaseSettings):
             )
         return backend
 
-    @field_validator("proposal_targets_default", mode="before")
-    @classmethod
-    def _normalize_proposal_targets_default(cls, value: object) -> str:
-        text = str(value or "").strip().lower()
-        if not text:
-            return "workflow_repo"
-        if text not in _ALLOWED_TARGET_DEFAULTS:
-            allowed = ", ".join(_ALLOWED_TARGET_DEFAULTS)
-            raise ValueError(
-                f"workflow.proposal_targets_default must be one of: {allowed}"
-            )
-        return text
-
-    @field_validator("proposal_moonmind_severity_floor", mode="before")
-    @classmethod
-    def _normalize_proposal_severity_floor(cls, value: object) -> str:
-        text = str(value or "").strip().lower()
-        if not text:
-            return "high"
-        if text not in _ALLOWED_PROPOSAL_SEVERITIES:
-            allowed = ", ".join(_ALLOWED_PROPOSAL_SEVERITIES)
-            raise ValueError(
-                f"workflow.proposal_moonmind_severity_floor must be one of: {allowed}"
-            )
-        return text
-
     @field_validator("workflow_docker_mode", mode="before")
     @classmethod
     def _normalize_workflow_docker_mode(cls, value: object) -> str:
         return normalize_workflow_docker_mode(value)
-
-    @field_validator("moonmind_ci_repository", mode="before")
-    @classmethod
-    def _normalize_moonmind_ci_repository(cls, value: object) -> str:
-        text = str(value or "").strip()
-        if not text:
-            return "MoonLadderStudios/MoonMind"
-        return text
 
     @field_validator(
         "metrics_host",
@@ -2258,165 +2184,6 @@ class FeatureFlagsSettings(BaseSettings):
         extra="ignore",
     )
 
-class WorkflowProposalSettings(BaseSettings):
-    """Workflow proposal queue runtime knobs."""
-
-    proposal_targets_default: str = Field(
-        "workflow_repo",
-        validation_alias=AliasChoices(
-            "MOONMIND_PROPOSAL_TARGETS"
-        ),
-        description="Default proposal targets when policy overrides are absent (workflow_repo|moonmind|both).",
-    )
-    moonmind_ci_repository: str = Field(
-        "MoonLadderStudios/MoonMind",
-        validation_alias=AliasChoices(
-            "MOONMIND_CI_REPOSITORY"
-        ),
-        description="MoonMind CI repository used whenever proposals target run-quality improvements.",
-    )
-    max_items_workflow_repo_default: int = Field(
-        3,
-        validation_alias=AliasChoices("WORKFLOW_PROPOSALS_MAX_ITEMS_WORKFLOW_REPO"),
-        description="Default per-run cap for workflow-repo proposals when unspecified.",
-        ge=1,
-    )
-    max_items_moonmind_default: int = Field(
-        2,
-        validation_alias=AliasChoices("WORKFLOW_PROPOSALS_MAX_ITEMS_MOONMIND"),
-        description="Default per-run cap for MoonMind-targeted proposals when unspecified.",
-        ge=1,
-    )
-    moonmind_severity_floor_default: str = Field(
-        "high",
-        validation_alias=AliasChoices(
-            "MOONMIND_MIN_SEVERITY_FOR_MOONMIND",
-        ),
-        description="Minimum severity that must be met before MoonMind CI proposals are emitted when policy omits a floor.",
-    )
-    proposal_delivery_provider_default: str = Field(
-        "github",
-        validation_alias=AliasChoices("WORKFLOW_PROPOSALS_DELIVERY_PROVIDER"),
-        description=(
-            "Default non-secret proposal delivery provider when policy omits "
-            "delivery.provider (github|jira)."
-        ),
-    )
-    github_webhook_secret: Optional[str] = Field(
-        None,
-        validation_alias=AliasChoices("WORKFLOW_PROPOSALS_GITHUB_WEBHOOK_SECRET"),
-        description=(
-            "Secret used to verify GitHub proposal reviewer-decision webhooks. "
-            "Trusted sync ingestion may omit this when called through MoonMind auth."
-        ),
-    )
-    severity_vocabulary: tuple[str, ...] = Field(
-        _ALLOWED_PROPOSAL_SEVERITIES,
-        validation_alias=AliasChoices("WORKFLOW_PROPOSALS_SEVERITY_VOCABULARY"),
-        description="Allowed severity labels for proposal policy evaluation.",
-    )
-    notifications_enabled: bool = Field(
-        False,
-        alias="WORKFLOW_PROPOSALS_NOTIFICATIONS_ENABLED",
-        description="Emit webhook notifications for high-signal proposal categories.",
-    )
-    notifications_webhook_url: Optional[str] = Field(
-        None,
-        alias="WORKFLOW_PROPOSALS_NOTIFICATIONS_WEBHOOK_URL",
-        description="Webhook endpoint for proposal alerts.",
-    )
-    notifications_authorization: Optional[str] = Field(
-        None,
-        alias="WORKFLOW_PROPOSALS_NOTIFICATIONS_AUTHORIZATION",
-        description="Optional Authorization header for webhook calls.",
-    )
-    notifications_timeout_seconds: int = Field(
-        5,
-        alias="WORKFLOW_PROPOSALS_NOTIFICATIONS_TIMEOUT_SECONDS",
-        description="Webhook timeout in seconds.",
-        gt=0,
-    )
-
-    @field_validator("proposal_delivery_provider_default", mode="before")
-    @classmethod
-    def _normalize_proposal_delivery_provider_default(cls, value: object) -> str:
-        normalized = str(value or "").strip().lower() or "github"
-        if normalized not in {"github", "jira"}:
-            raise ValueError(
-                "workflow_proposals.proposal_delivery_provider_default must be github or jira"
-            )
-        return normalized
-
-    @field_validator("proposal_targets_default", mode="before")
-    @classmethod
-    def _normalize_setting_targets_default(cls, value: object) -> str:
-        text = str(value or "").strip().lower()
-        if not text:
-            return "workflow_repo"
-        if text not in _ALLOWED_TARGET_DEFAULTS:
-            allowed = ", ".join(_ALLOWED_TARGET_DEFAULTS)
-            raise ValueError(
-                f"workflow_proposals.proposal_targets_default must be one of: {allowed}"
-            )
-        return text
-
-    @field_validator("moonmind_severity_floor_default", mode="before")
-    @classmethod
-    def _normalize_setting_severity_floor(cls, value: object) -> str:
-        text = str(value or "").strip().lower()
-        if not text:
-            return "high"
-        if text not in _ALLOWED_PROPOSAL_SEVERITIES:
-            allowed = ", ".join(_ALLOWED_PROPOSAL_SEVERITIES)
-            raise ValueError(
-                "workflow_proposals.moonmind_severity_floor_default must be one of: "
-                f"{allowed}"
-            )
-        return text
-
-    @field_validator("moonmind_ci_repository", mode="before")
-    @classmethod
-    def _normalize_setting_ci_repo(cls, value: object) -> str:
-        text = str(value or "").strip()
-        if not text:
-            return "MoonLadderStudios/MoonMind"
-        return text
-
-    @field_validator("severity_vocabulary", mode="before")
-    @classmethod
-    def _normalize_setting_severity_vocab(cls, value: object) -> tuple[str, ...]:
-        if value is None or value == "":
-            return _ALLOWED_PROPOSAL_SEVERITIES
-        if isinstance(value, str):
-            tokens = [token.strip().lower() for token in value.split(",")]
-        elif isinstance(value, Sequence):
-            tokens = [str(token).strip().lower() for token in value]
-        else:
-            tokens = [str(value).strip().lower()]
-        normalized = tuple(dict.fromkeys(token for token in tokens if token))
-        if not normalized:
-            return _ALLOWED_PROPOSAL_SEVERITIES
-        invalid = [
-            token for token in normalized if token not in _ALLOWED_PROPOSAL_SEVERITIES
-        ]
-        if invalid:
-            allowed = ", ".join(_ALLOWED_PROPOSAL_SEVERITIES)
-            raise ValueError(
-                f"workflow_proposals.severity_vocabulary must be subset of: {allowed}"
-            )
-        ordered = tuple(
-            token for token in _ALLOWED_PROPOSAL_SEVERITIES if token in normalized
-        )
-        return ordered or _ALLOWED_PROPOSAL_SEVERITIES
-
-    model_config = SettingsConfigDict(
-        populate_by_name=True,
-        env_prefix="",
-        env_file=str(ENV_FILE),
-        env_file_encoding="utf-8",
-        extra="ignore",
-    )
-
 class ExecutionNotificationSettings(BaseSettings):
     """Operator notification settings for terminal execution outcomes."""
 
@@ -2579,7 +2346,6 @@ class AppSettings(BaseSettings):
     )
     workflow: AppWorkflowSettings = Field(default_factory=AppWorkflowSettings)
     feature_flags: FeatureFlagsSettings = Field(default_factory=FeatureFlagsSettings)
-    workflow_proposals: WorkflowProposalSettings = Field(default_factory=WorkflowProposalSettings)
     execution_notifications: ExecutionNotificationSettings = Field(
         default_factory=ExecutionNotificationSettings
     )
@@ -2587,14 +2353,6 @@ class AppSettings(BaseSettings):
         default_factory=IntegrationCallbackSettings
     )
     jules: JulesSettings = Field(default_factory=JulesSettings)
-    worker_enable_proposals: Optional[bool] = Field(
-        None,
-        validation_alias=AliasChoices("MOONMIND_ENABLE_PROPOSALS"),
-        exclude=True,
-        description=(
-            "Compatibility passthrough for worker workflow-proposal bootstrap env flags."
-        ),
-    )
     worker_stage_command_timeout_seconds: Optional[int] = Field(
         None,
         validation_alias=AliasChoices(
@@ -2824,8 +2582,6 @@ class AppSettings(BaseSettings):
         super().model_post_init(__context)
         if not self.workflow.codex_queue:
             self.workflow.codex_queue = self.workflow.default_queue
-        if self.worker_enable_proposals is not None:
-            self.workflow.enable_proposals = self.worker_enable_proposals
         if self.worker_stage_command_timeout_seconds is not None:
             self.workflow.stage_command_timeout_seconds = (
                 self.worker_stage_command_timeout_seconds

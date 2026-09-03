@@ -480,8 +480,6 @@ class _RunWorkflowOutputBase(TypedDict):
 
 
 class RunWorkflowOutput(_RunWorkflowOutputBase, total=False):
-    proposals_generated: int
-    proposals_submitted: int
     mergeAutomationDisposition: str
     headSha: str
     executionOutcome: dict[str, Any]
@@ -496,7 +494,6 @@ STATE_WAITING_ON_DEPENDENCIES = "waiting_on_dependencies"
 STATE_PLANNING = "planning"
 STATE_AWAITING_SLOT = "awaiting_slot"
 STATE_EXECUTING = "executing"
-STATE_PROPOSALS = "proposals"
 STATE_AWAITING_EXTERNAL = "awaiting_external"
 STATE_FINALIZING = "finalizing"
 STATE_COMPLETED = "completed"
@@ -635,6 +632,11 @@ RUN_PUBLISH_MODE_REPOSITORY_OPERATION_PATCH = "run-publish-mode-repository-opera
 # their original verdict-only decisions.
 RUN_HANDOFF_ACCEPTED_DISPOSITION_GATE_PATCH = "run-handoff-accepted-disposition-gate-v1"
 RUN_WORKFLOW_PUBLISH_OUTCOME_PATCH = "run-workflow-publish-outcome-v1"
+# This marker was recorded by every pre-removal workflow that reached the
+# retired follow-up stage, including executions where generation was disabled.
+# Keep its deprecation at the former stage boundary until Temporal retention
+# has eliminated those histories.
+RUN_WORKFLOW_NESTED_PROPOSE_TASKS_PATCH = "run-workflow-nested-propose-tasks"
 RUN_CANONICAL_NO_COMMIT_OUTCOME_PATCH = "run-canonical-no-commit-outcome-v1"
 RUN_UNGATED_CONTINUATION_DISPOSITION_PATCH = "run-ungated-continuation-disposition-v1"
 RUN_GATED_STEP_CONTINUATION_PATCH = "run-gated-step-continuation-v1"
@@ -1731,16 +1733,6 @@ class MoonMindRunWorkflow:
         # Temporal's workflow start_time / execution_time, which fire as soon
         # as Temporal schedules the workflow even if it is awaiting a slot.
         self._started_at: datetime | None = None
-
-        # Proposal tracking
-        self._proposals_generated = 0
-        self._proposals_submitted = 0
-        self._proposals_delivered = 0
-        self._proposals_errors: list[str] = []
-        self._proposal_validation_errors: list[dict[str, Any]] = []
-        self._proposal_delivery_failures: list[dict[str, Any]] = []
-        self._proposal_external_links: list[dict[str, Any]] = []
-        self._proposal_dedup_updates: list[dict[str, Any]] = []
 
         # Auth profile slot tracking for managed agent runs.
         # Set when a child AgentRun acquires a slot so the parent can
@@ -3102,7 +3094,7 @@ class MoonMindRunWorkflow:
                 outputs[target_key] = value.strip()
         return outputs
 
-    def _proposal_step_output_refs(
+    def _step_execution_output_refs(
         self,
         logical_step_id: str,
     ) -> dict[str, Any]:
@@ -3135,224 +3127,6 @@ class MoonMindRunWorkflow:
                 if compact_manifest_refs:
                     outputs["stepExecutionManifestRefs"] = compact_manifest_refs
         return outputs
-
-    def _proposal_generation_parameters(
-        self,
-        parameters: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        """Return redacted compact metadata for proposal generation activities."""
-
-        task_node = parameters.get("workflow")
-        if not isinstance(task_node, Mapping):
-            task_node = parameters.get("task")
-        task = task_node if isinstance(task_node, Mapping) else {}
-
-        compact_task: dict[str, Any] = {}
-        for key in (
-            "proposalTitle",
-            "proposalIdea",
-            "suggestedTitle",
-            "titleSuggestion",
-            "recommendedNextAction",
-            "nextAction",
-            "nextStep",
-            "next_step",
-        ):
-            value = self._coerce_text(task.get(key), max_chars=500)
-            if value:
-                compact_task[key] = self._sanitize_operator_summary(value) or value
-
-        compact_sections = {
-            "runtime": (
-                "mode",
-                "model",
-                "effort",
-                "profileId",
-                "providerProfile",
-                "executionProfileRef",
-            ),
-            "git": ("branch", "startingBranch", "targetBranch", "baseBranch"),
-            "publish": ("mode", "enabled", "strategy"),
-        }
-        for key, allowed_keys in compact_sections.items():
-            value = self._proposal_compact_mapping(
-                task.get(key),
-                allowed_keys=allowed_keys,
-                max_chars=200,
-            )
-            if value:
-                compact_task[key] = value
-        for key in ("skill", "tool", "skills"):
-            value = self._proposal_compact_selector_metadata(task.get(key))
-            if value:
-                compact_task[key] = value
-
-        compact_steps = self._proposal_compact_steps(task.get("steps"))
-        if compact_steps:
-            compact_task["steps"] = compact_steps
-
-        authored_presets = task.get("authoredPresets")
-        if isinstance(authored_presets, Sequence) and not isinstance(
-            authored_presets, (str, bytes)
-        ):
-            compact_presets: list[dict[str, Any]] = []
-            for index, preset in enumerate(authored_presets[:5]):
-                if not isinstance(preset, Mapping):
-                    continue
-                compact_preset: dict[str, Any] = {}
-                for key in ("id", "name", "source", "presetId", "presetDigest"):
-                    value = self._coerce_text(preset.get(key), max_chars=160)
-                    if value:
-                        compact_preset[key] = value
-                source_ref = self._coerce_text(
-                    preset.get("sourceRef") or preset.get("artifactRef"),
-                    max_chars=400,
-                )
-                if source_ref:
-                    compact_preset["sourceRef"] = source_ref
-                if compact_preset:
-                    compact_preset["index"] = index
-                    compact_presets.append(compact_preset)
-            if compact_presets:
-                compact_task["authoredPresets"] = compact_presets
-
-        return {"workflow": compact_task} if compact_task else {}
-
-    def _proposal_compact_mapping(
-        self,
-        value: object,
-        *,
-        allowed_keys: Sequence[str],
-        max_chars: int,
-    ) -> dict[str, Any]:
-        if not isinstance(value, Mapping):
-            return {}
-        compact: dict[str, Any] = {}
-        for key in allowed_keys:
-            item = value.get(key)
-            if isinstance(item, (bool, int, float)):
-                compact[key] = item
-                continue
-            text = self._coerce_text(item, max_chars=max_chars)
-            if text:
-                compact[key] = text
-        return compact
-
-    def _proposal_compact_steps(self, value: object) -> list[dict[str, Any]]:
-        if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
-            return []
-        compact_steps: list[dict[str, Any]] = []
-        for step in value[:50]:
-            if not isinstance(step, Mapping):
-                continue
-            compact_step: dict[str, Any] = {}
-            for key in ("id", "title", "type"):
-                text = self._coerce_text(step.get(key), max_chars=160)
-                if text:
-                    compact_step[key] = text
-            for key in ("tool", "skill", "skills"):
-                selector = self._proposal_compact_selector_metadata(step.get(key))
-                if selector:
-                    compact_step[key] = selector
-            source = self._proposal_compact_source_metadata(step.get("source"))
-            if source:
-                compact_step["source"] = source
-            if any(
-                key in compact_step for key in ("tool", "skill", "skills", "source")
-            ):
-                compact_steps.append(compact_step)
-        return compact_steps
-
-    def _proposal_compact_source_metadata(self, value: object) -> dict[str, Any]:
-        if not isinstance(value, Mapping):
-            return {}
-        compact: dict[str, Any] = {}
-        for key in (
-            "kind",
-            "presetId",
-            "presetSlug",
-            "presetDigest",
-            "originalStepId",
-        ):
-            text = self._coerce_text(value.get(key), max_chars=160)
-            if text:
-                compact[key] = text
-        include_path = value.get("includePath")
-        if isinstance(include_path, Sequence) and not isinstance(
-            include_path, (str, bytes)
-        ):
-            compact_include_path = [
-                text
-                for item in include_path[:20]
-                if (text := self._coerce_text(item, max_chars=160))
-            ]
-            if compact_include_path:
-                compact["includePath"] = compact_include_path
-        return compact
-
-    def _proposal_compact_selector_metadata(self, value: object) -> dict[str, Any]:
-        if not isinstance(value, Mapping):
-            return {}
-        compact: dict[str, Any] = {}
-        for key in ("id", "name", "version", "source", "mode"):
-            text = self._coerce_text(value.get(key), max_chars=160)
-            if text:
-                compact[key] = text
-        for key in ("include", "exclude", "sets"):
-            items = value.get(key)
-            if not isinstance(items, Sequence) or isinstance(items, (str, bytes)):
-                continue
-            compact_items: list[Any] = []
-            for item in items[:20]:
-                if isinstance(item, str):
-                    text = self._coerce_text(item, max_chars=160)
-                    if text:
-                        compact_items.append(text)
-                    continue
-                if not isinstance(item, Mapping):
-                    continue
-                compact_item: dict[str, Any] = {}
-                for item_key in ("id", "name", "version", "source"):
-                    text = self._coerce_text(item.get(item_key), max_chars=160)
-                    if text:
-                        compact_item[item_key] = text
-                if compact_item:
-                    compact_items.append(compact_item)
-            if compact_items:
-                compact[key] = compact_items
-        resolved_ref = self._coerce_text(
-            value.get("resolvedSkillsetRef")
-            or value.get("resolved_skillset_ref")
-            or value.get("manifestRef")
-            or value.get("manifest_ref"),
-            max_chars=400,
-        )
-        if resolved_ref:
-            compact["resolvedSkillsetRef"] = resolved_ref
-        return compact
-
-    def _proposal_generation_evidence_refs(self) -> dict[str, Any]:
-        refs: dict[str, Any] = {
-            "inputRef": self._input_ref,
-            "planRef": self._plan_ref,
-            "logsRef": self._logs_ref,
-            "summaryRef": self._summary_ref,
-            "finishSummaryRef": self._report_ref,
-        }
-        if self._last_diagnostics_ref:
-            refs["diagnosticsRef"] = self._last_diagnostics_ref
-        if self._last_step_id:
-            step_refs = self._proposal_step_output_refs(self._last_step_id)
-            if step_refs:
-                refs["lastStep"] = {
-                    "id": self._last_step_id,
-                    "outputRefs": step_refs,
-                }
-        return {
-            key: value
-            for key, value in refs.items()
-            if value is not None and value != {}
-        }
 
     def _step_execution_side_effects(
         self,
@@ -7015,7 +6789,7 @@ class MoonMindRunWorkflow:
         row = self._step_ledger_row_for(logical_step_id)
         if not isinstance(row, dict):
             return
-        compact_refs = self._proposal_step_output_refs(logical_step_id)
+        compact_refs = self._step_execution_output_refs(logical_step_id)
         output_refs = list(
             dict.fromkeys(
                 str(value).strip()
@@ -11158,20 +10932,7 @@ class MoonMindRunWorkflow:
             )
             return {"status": "canceled"}
 
-        await self._run_proposals_stage(parameters=parameters)
-        if self._cancel_requested:
-            await self._run_finalizing_stage(
-                parameters=parameters, status="canceled", error=None
-            )
-            self._close_status = CLOSE_STATUS_CANCELED
-            self._set_state(STATE_CANCELED, summary="Execution canceled.")
-            await self._record_terminal_state(
-                state=STATE_CANCELED,
-                close_status=CLOSE_STATUS_CANCELED,
-                summary="Execution canceled.",
-            )
-            return {"status": "canceled"}
-
+        workflow.deprecate_patch(RUN_WORKFLOW_NESTED_PROPOSE_TASKS_PATCH)
         self._set_state(STATE_FINALIZING, summary="Finalizing execution.")
 
         output_status = "success"
@@ -11288,9 +11049,6 @@ class MoonMindRunWorkflow:
                     output["finalizationOutcome"] = dict(finalization_outcome)
                 if execution_outcome or finalization_outcome:
                     break
-        if self._proposals_generated > 0 or self._proposals_submitted > 0:
-            output["proposals_generated"] = self._proposals_generated
-            output["proposals_submitted"] = self._proposals_submitted
         if self._merge_automation_disposition:
             output["mergeAutomationDisposition"] = self._merge_automation_disposition
         if self._gated_continuation_request:
@@ -16210,8 +15968,6 @@ class MoonMindRunWorkflow:
                 "execution initialized",
                 "planning execution strategy.",
                 "planning execution strategy",
-                "generating workflow proposals.",
-                "generating workflow proposals",
                 "finalizing execution.",
                 "finalizing execution",
             }
@@ -16234,109 +15990,6 @@ class MoonMindRunWorkflow:
                 nested_publish, path="parameters.workflow.publish"
             )
         return {}
-
-    def _proposal_telemetry_signals(self) -> list[dict[str, Any]]:
-        """Build compact run-quality signals for proposal generation."""
-
-        signals: list[dict[str, Any]] = []
-
-        def add_signal(
-            *,
-            signal_type: str,
-            summary: str | None,
-            severity: str = "medium",
-            diagnostics_ref: str | None = None,
-            extra: dict[str, Any] | None = None,
-        ) -> None:
-            bounded_summary = self._coerce_text(summary, max_chars=500)
-            if not bounded_summary:
-                return
-            signal: dict[str, Any] = {
-                "type": signal_type,
-                "tags": [signal_type],
-                "severity": severity,
-                "summary": bounded_summary,
-            }
-            bounded_ref = self._coerce_text(diagnostics_ref, max_chars=400)
-            if bounded_ref:
-                signal["diagnostics_ref"] = bounded_ref
-            if extra:
-                signal.update(extra)
-            signals.append(signal)
-
-        if self._publish_repair_attempts > 0:
-            add_signal(
-                signal_type="retry",
-                severity="high" if self._publish_repair_attempts >= 2 else "medium",
-                summary=(
-                    "Publish required "
-                    f"{self._publish_repair_attempts} repair attempt"
-                    f"{'s' if self._publish_repair_attempts != 1 else ''}."
-                ),
-                extra={"retries": self._publish_repair_attempts},
-            )
-
-        summary = self._coerce_text(self._last_step_summary, max_chars=500)
-        diagnostics_ref = self._coerce_text(self._last_diagnostics_ref, max_chars=400)
-        summary_lc = (summary or "").lower()
-        if summary:
-            if any(term in summary_lc for term in ("flaky", "flake")):
-                add_signal(
-                    signal_type="flaky_test",
-                    summary=summary,
-                    diagnostics_ref=diagnostics_ref,
-                )
-            if "retry" in summary_lc or "retried" in summary_lc:
-                add_signal(
-                    signal_type="retry",
-                    summary=summary,
-                    diagnostics_ref=diagnostics_ref,
-                )
-            if any(term in summary_lc for term in ("loop", "repeated")):
-                add_signal(
-                    signal_type="loop_detected",
-                    severity="high",
-                    summary=summary,
-                    diagnostics_ref=diagnostics_ref,
-                )
-            if any(
-                term in summary_lc
-                for term in ("missing file", "missing ref", "not found")
-            ):
-                add_signal(
-                    signal_type="missing_ref",
-                    severity="high",
-                    summary=summary,
-                    diagnostics_ref=diagnostics_ref,
-                )
-            if any(term in summary_lc for term in ("artifact", "diagnostic")):
-                add_signal(
-                    signal_type="artifact_gap",
-                    summary=summary,
-                    diagnostics_ref=diagnostics_ref,
-                )
-
-        return signals[:3]
-
-    def _proposal_generation_requested(self, parameters: Mapping[str, Any]) -> bool:
-        if workflow.patched("run-workflow-nested-propose-tasks"):
-            task_node = parameters.get("task")
-            if isinstance(task_node, Mapping):
-                propose_tasks_value = (
-                    task_node["proposeTasks"]
-                    if "proposeTasks" in task_node
-                    else parameters.get("proposeTasks")
-                )
-                return _coerce_bool(propose_tasks_value, default=False)
-            return _coerce_bool(parameters.get("proposeTasks"), default=False)
-        else:
-            return _coerce_bool(parameters.get("proposeTasks"), default=False)
-
-    @staticmethod
-    def _compact_proposal_rows(raw: Any) -> list[dict[str, Any]]:
-        if not isinstance(raw, list):
-            return []
-        return [dict(item) for item in raw if isinstance(item, dict)]
 
     def _resolve_task_body_instructions(
         self, task_payload: Mapping[str, Any]
@@ -22198,160 +21851,6 @@ class MoonMindRunWorkflow:
                     f"Jules branch-publish auto-merge failed: {exc}"
                 ) from exc
 
-    async def _run_proposals_stage(self, *, parameters: dict[str, Any]) -> None:
-        """Best-effort proposal generation phase.
-
-        Runs only when proposal generation is requested by the run payload.
-        Failures are logged but do not fail the workflow.
-        """
-        if not self._proposal_generation_requested(parameters):
-            return
-
-        if workflow.patched("enable_task_proposals_gate"):
-            if not settings.workflow.enable_proposals:
-                self._get_logger().info(
-                    "Workflow proposal generation is globally disabled"
-                )
-                return
-
-        self._set_state(STATE_PROPOSALS, summary="Generating workflow proposals.")
-
-        try:
-            proposal_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
-                "proposal.generate"
-            )
-            generate_payload = {
-                "principal": self._principal(),
-                "workflow_id": workflow.info().workflow_id,
-                "run_id": workflow.info().run_id,
-                "repo": self._repo,
-                "parameters": self._proposal_generation_parameters(parameters),
-                "evidenceRefs": self._proposal_generation_evidence_refs(),
-                "observability": {
-                    "operatorSummary": self._operator_summary,
-                    "lastStep": {
-                        "id": self._last_step_id,
-                        "summary": self._last_step_summary,
-                        "diagnosticsRef": self._last_diagnostics_ref,
-                    },
-                },
-            }
-            telemetry_signals = self._proposal_telemetry_signals()
-            if telemetry_signals:
-                generate_payload["telemetrySignals"] = telemetry_signals
-            if workflow.patched("idempotency_key_phase3"):
-                generate_payload["idempotency_key"] = (
-                    f"{workflow.info().workflow_id}_proposal_generate"
-                )
-
-            candidates = await workflow.execute_activity(
-                "proposal.generate",
-                generate_payload,
-                cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                **self._execute_kwargs_for_route(proposal_route),
-            )
-        except Exception as exc:
-            self._get_logger().warning(
-                "Proposal generation failed (best-effort): %s", exc
-            )
-            self._proposals_errors.append(f"generation failed: {str(exc)[:200]}")
-            return
-
-        candidate_list = candidates if isinstance(candidates, list) else []
-        self._proposals_generated = len(candidate_list)
-
-        if not candidate_list:
-            return
-
-        try:
-            submit_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("proposal.submit")
-            task_node = parameters.get("workflow")
-            if not isinstance(task_node, dict):
-                task_node = parameters.get("task")
-            task = task_node if isinstance(task_node, dict) else {}
-            policy = task.get("proposalPolicy")
-            policy_payload: dict[str, Any] = {}
-            if isinstance(policy, dict):
-                from moonmind.workflows.executions.execution_contract import (
-                    WorkflowProposalPolicy,
-                )
-
-                try:
-                    parsed_policy = WorkflowProposalPolicy.model_validate(policy)
-                    policy_payload = parsed_policy.model_dump(
-                        by_alias=True,
-                        exclude_none=True,
-                    )
-                except Exception as exc:
-                    self._get_logger().warning(
-                        "Failed to validate workflow.proposalPolicy: %s", exc
-                    )
-            origin = {
-                "source": "workflow",
-                "workflow_id": workflow.info().workflow_id,
-                "temporal_run_id": workflow.info().run_id,
-                "trigger_repo": self._repo or "",
-            }
-            submit_payload = {
-                "candidates": candidate_list,
-                "policy": policy_payload,
-                "origin": origin,
-                "principal": self._principal(),
-            }
-            if workflow.patched("idempotency_key_phase3"):
-                submit_payload["idempotency_key"] = (
-                    f"{workflow.info().workflow_id}_proposal_submit"
-                )
-
-            submit_result = await workflow.execute_activity(
-                "proposal.submit",
-                submit_payload,
-                cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                **self._execute_kwargs_for_route(submit_route),
-            )
-            if isinstance(submit_result, dict):
-                self._proposals_submitted = int(
-                    submit_result.get("submitted_count")
-                    or submit_result.get("submittedCount")
-                    or 0
-                )
-                self._proposals_delivered = int(
-                    submit_result.get("delivered_count")
-                    or submit_result.get("deliveredCount")
-                    or 0
-                )
-                self._proposal_validation_errors.extend(
-                    self._compact_proposal_rows(
-                        submit_result.get("validation_errors")
-                        or submit_result.get("validationErrors")
-                    )
-                )
-                self._proposal_delivery_failures.extend(
-                    self._compact_proposal_rows(
-                        submit_result.get("delivery_failures")
-                        or submit_result.get("deliveryFailures")
-                    )
-                )
-                self._proposal_external_links.extend(
-                    self._compact_proposal_rows(
-                        submit_result.get("external_links")
-                        or submit_result.get("externalLinks")
-                    )
-                )
-                self._proposal_dedup_updates.extend(
-                    self._compact_proposal_rows(
-                        submit_result.get("dedup_updates")
-                        or submit_result.get("dedupUpdates")
-                    )
-                )
-                errors = submit_result.get("errors") or []
-                self._proposals_errors.extend(errors)
-        except Exception as exc:
-            self._get_logger().warning(
-                "Proposal submission failed (best-effort): %s", exc
-            )
-            self._proposals_errors.append(f"submission failed: {str(exc)[:200]}")
-
     def _finish_summary_failure_summary(self) -> dict[str, Any] | None:
         moonspec_summary = self._moonspec_gate_failure_summary()
         if moonspec_summary is not None:
@@ -23051,17 +22550,6 @@ class MoonMindRunWorkflow:
                     "mode": publish_mode,
                     "status": publish_status,
                     "reason": publish_reason,
-                },
-                "proposals": {
-                    "requested": self._proposal_generation_requested(parameters),
-                    "generatedCount": self._proposals_generated,
-                    "submittedCount": self._proposals_submitted,
-                    "deliveredCount": self._proposals_delivered,
-                    "validationErrors": self._proposal_validation_errors,
-                    "deliveryFailures": self._proposal_delivery_failures,
-                    "externalLinks": self._proposal_external_links,
-                    "dedupUpdates": self._proposal_dedup_updates,
-                    "errors": self._proposals_errors,
                 },
                 "dependencies": {
                     "declaredIds": list(self._declared_dependencies),

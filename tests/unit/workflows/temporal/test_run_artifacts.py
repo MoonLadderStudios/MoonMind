@@ -4349,6 +4349,7 @@ async def test_run_marks_blocked_outcome_as_failed_terminal_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workflow = MoonMindRunWorkflow()
+    deprecated_patches: list[str] = []
     blocker_summary = "Workflow blocked by plan step: blocked upstream."
     finalizing_calls: list[dict[str, Any]] = []
     terminal_calls: list[dict[str, Any]] = []
@@ -4442,6 +4443,11 @@ async def test_run_marks_blocked_outcome_as_failed_terminal_state(
     )
     monkeypatch.setattr(
         run_workflow_module.workflow,
+        "deprecate_patch",
+        deprecated_patches.append,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
         "upsert_memo",
         lambda _memo: None,
     )
@@ -4464,11 +4470,6 @@ async def test_run_marks_blocked_outcome_as_failed_terminal_state(
         MoonMindRunWorkflow,
         "_run_execution_stage",
         fake_run_execution_stage,
-    )
-    monkeypatch.setattr(
-        MoonMindRunWorkflow,
-        "_run_proposals_stage",
-        fake_noop_async,
     )
     monkeypatch.setattr(
         MoonMindRunWorkflow,
@@ -4497,12 +4498,13 @@ async def test_run_marks_blocked_outcome_as_failed_terminal_state(
     ]
     assert states[-1] == ("failed", blocker_summary)
     assert workflow._close_status == "failed"
+    assert deprecated_patches == [
+        run_workflow_module.RUN_WORKFLOW_NESTED_PROPOSE_TASKS_PATCH
+    ]
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("cancel_stage", ["proposals", "finalizing"])
 async def test_run_observes_cancel_after_late_stages_before_completion(
     monkeypatch: pytest.MonkeyPatch,
-    cancel_stage: str,
 ) -> None:
     workflow = MoonMindRunWorkflow()
     finalizing_calls: list[dict[str, str | None]] = []
@@ -4530,14 +4532,6 @@ async def test_run_observes_cancel_after_late_stages_before_completion(
     async def fake_run_execution_stage(*_args: Any, **_kwargs: Any) -> None:
         return None
 
-    async def fake_run_proposals_stage(
-        self: MoonMindRunWorkflow,
-        *,
-        parameters: dict[str, Any],
-    ) -> None:
-        if cancel_stage == "proposals":
-            self._cancel_requested = True
-
     async def fake_run_finalizing_stage(
         self: MoonMindRunWorkflow,
         *,
@@ -4546,8 +4540,7 @@ async def test_run_observes_cancel_after_late_stages_before_completion(
         error: str | None = None,
     ) -> None:
         finalizing_calls.append({"status": status, "error": error})
-        if cancel_stage == "finalizing":
-            self._cancel_requested = True
+        self._cancel_requested = True
 
     async def fake_record_terminal_state(
         self: MoonMindRunWorkflow,
@@ -4584,8 +4577,8 @@ async def test_run_observes_cancel_after_late_stages_before_completion(
         (),
         {
             "namespace": "default",
-            "workflow_id": "wf-cancel-after-proposals",
-            "run_id": "run-cancel-after-proposals",
+            "workflow_id": "wf-cancel-during-finalizing",
+            "run_id": "run-cancel-during-finalizing",
             "task_queue": "mm.workflow",
             "search_attributes": {},
         },
@@ -4597,6 +4590,7 @@ async def test_run_observes_cancel_after_late_stages_before_completion(
         lambda: datetime.now(timezone.utc),
     )
     monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
+    monkeypatch.setattr(run_workflow_module.workflow, "deprecate_patch", lambda _patch_id: None)
     monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
     monkeypatch.setattr(
         run_workflow_module.workflow,
@@ -4611,7 +4605,6 @@ async def test_run_observes_cancel_after_late_stages_before_completion(
     )
     monkeypatch.setattr(MoonMindRunWorkflow, "_run_planning_stage", fake_run_planning_stage)
     monkeypatch.setattr(MoonMindRunWorkflow, "_run_execution_stage", fake_run_execution_stage)
-    monkeypatch.setattr(MoonMindRunWorkflow, "_run_proposals_stage", fake_run_proposals_stage)
     monkeypatch.setattr(MoonMindRunWorkflow, "_run_finalizing_stage", fake_run_finalizing_stage)
     monkeypatch.setattr(MoonMindRunWorkflow, "_record_terminal_state", fake_record_terminal_state)
     monkeypatch.setattr(MoonMindRunWorkflow, "_set_state", capture_set_state)
@@ -4619,8 +4612,7 @@ async def test_run_observes_cancel_after_late_stages_before_completion(
     result = await workflow.run({"workflowType": "MoonMind.UserWorkflow"})
 
     assert result == {"status": "canceled"}
-    expected_finalizing_status = "canceled" if cancel_stage == "proposals" else "success"
-    assert finalizing_calls == [{"status": expected_finalizing_status, "error": None}]
+    assert finalizing_calls == [{"status": "success", "error": None}]
     assert terminal_calls == [
         {
             "state": "canceled",
@@ -4726,6 +4718,7 @@ async def test_run_records_no_commit_terminal_state_for_skipped_publish(
         lambda: datetime.now(timezone.utc),
     )
     monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
+    monkeypatch.setattr(run_workflow_module.workflow, "deprecate_patch", lambda _patch_id: None)
     monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
     monkeypatch.setattr(
         run_workflow_module.workflow,
@@ -4740,7 +4733,6 @@ async def test_run_records_no_commit_terminal_state_for_skipped_publish(
     )
     monkeypatch.setattr(MoonMindRunWorkflow, "_run_planning_stage", fake_run_planning_stage)
     monkeypatch.setattr(MoonMindRunWorkflow, "_run_execution_stage", fake_run_execution_stage)
-    monkeypatch.setattr(MoonMindRunWorkflow, "_run_proposals_stage", fake_noop_async)
     monkeypatch.setattr(MoonMindRunWorkflow, "_run_finalizing_stage", fake_run_finalizing_stage)
     monkeypatch.setattr(MoonMindRunWorkflow, "_record_terminal_state", fake_record_terminal_state)
     monkeypatch.setattr(MoonMindRunWorkflow, "_set_state", capture_set_state)
@@ -6797,116 +6789,6 @@ async def test_run_execution_stage_stops_after_publish_lease_conflict(
     assert steps[1]["status"] == "skipped"
 
 @pytest.mark.asyncio
-async def test_run_proposals_stage_global_disable_halts_execution(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from moonmind.config.settings import settings
-    workflow = MoonMindRunWorkflow()
-    monkeypatch.setattr(settings.workflow, "enable_proposals", False)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
-    
-    # Enable proposing tasks in params, but global switch should stop it
-    await workflow._run_proposals_stage(parameters={"proposeTasks": True})
-    
-    assert workflow._state == "initializing"  # State shouldn't change to PROPOSALS
-
-@pytest.mark.asyncio
-async def test_run_proposals_stage_ignores_legacy_fallback_policy(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from moonmind.config.settings import settings
-    monkeypatch.setattr(settings.workflow, "enable_proposals", True)
-
-    workflow = MoonMindRunWorkflow()
-    workflow._owner_id = "owner-1"
-    workflow._owner_type = "user"
-    workflow_info = type("WorkflowInfo", (), {"workflow_id": "wf-1", "run_id": "run-1", "namespace": "default"})()
-    monkeypatch.setattr(run_workflow_module.workflow, "info", lambda: workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
-    monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc))
-    
-    captured_policy = None
-    async def mock_execute_activity(activity, payload, **kwargs):
-        nonlocal captured_policy
-        if activity == "proposal.generate":
-            return [{"title": "t1", "summary": "s1", "workflowCreateRequest": {}}]
-        if activity == "proposal.submit":
-            captured_policy = payload["policy"]
-            return {"submitted_count": 1, "errors": []}
-        return None
-            
-    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", mock_execute_activity)
-    
-    await workflow._run_proposals_stage(
-        parameters={
-            "proposeTasks": True,
-            "proposalMaxItems": 8,
-            "proposalTargets": "file",
-            "proposalDefaultRuntime": "gemini",
-        }
-    )
-    
-    assert captured_policy is not None
-    assert captured_policy == {}
-
-@pytest.mark.asyncio
-async def test_run_proposals_stage_uses_workflow_proposal_policy(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from moonmind.config.settings import settings
-    monkeypatch.setattr(settings.workflow, "enable_proposals", True)
-
-    workflow = MoonMindRunWorkflow()
-    workflow._owner_id = "owner-1"
-    workflow._owner_type = "user"
-    workflow_info = type("WorkflowInfo", (), {"workflow_id": "wf-1", "run_id": "run-1", "namespace": "default"})()
-    monkeypatch.setattr(run_workflow_module.workflow, "info", lambda: workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
-    monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc))
-    
-    captured_policy = None
-    captured_origin = None
-    async def mock_execute_activity(activity, payload, **kwargs):
-        nonlocal captured_policy, captured_origin
-        if activity == "proposal.generate":
-            return [{"title": "t1", "summary": "s1", "workflowCreateRequest": {}}]
-        if activity == "proposal.submit":
-            captured_policy = payload["policy"]
-            captured_origin = payload["origin"]
-            return {"submitted_count": 1, "errors": []}
-        return None
-            
-    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", mock_execute_activity)
-    
-    await workflow._run_proposals_stage(
-        parameters={
-            "proposeTasks": True,
-            # Legacy fields should be ignored
-            "proposalMaxItems": 8,
-            "proposalTargets": "file",
-            "proposalDefaultRuntime": "gemini",
-            "workflow": {
-                "proposeTasks": True,
-                "proposalPolicy": {
-                    "maxItems": {"workflow_repo": 12},
-                    "targets": ["workflow_repo"],
-                    "defaultRuntime": "claude_code",
-                }
-            }
-        }
-    )
-    
-    assert captured_policy is not None
-    assert captured_policy["maxItems"] == {"workflow_repo": 12}
-    assert captured_policy["targets"] == ["workflow_repo"]
-    assert captured_policy["defaultRuntime"] == "claude_code"
-    
-    # Also verify origin format DOC-REQ-005
-    assert captured_origin["source"] == "workflow"
-    assert "workflow_id" in captured_origin
-    assert "temporal_run_id" in captured_origin
-    assert "trigger_repo" in captured_origin
-
 def test_update_memo_persists_pull_request_url_under_canonical_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

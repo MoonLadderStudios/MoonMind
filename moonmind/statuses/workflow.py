@@ -17,7 +17,6 @@ class MoonMindWorkflowState(str, enum.Enum):
     AWAITING_SLOT = "awaiting_slot"
     EXECUTING = "executing"
     AWAITING_EXTERNAL = "awaiting_external"
-    PROPOSALS = "proposals"
     FINALIZING = "finalizing"
     NO_COMMIT = "no_commit"
     COMPLETED = "completed"
@@ -33,7 +32,6 @@ WorkflowLifecycleState = Literal[
     "awaiting_slot",
     "executing",
     "awaiting_external",
-    "proposals",
     "finalizing",
     "no_commit",
     "completed",
@@ -108,7 +106,6 @@ OPERATOR_SIGNAL_ALLOWED_WORKFLOW_STATES: frozenset[MoonMindWorkflowState] = froz
         MoonMindWorkflowState.PLANNING,
         MoonMindWorkflowState.AWAITING_SLOT,
         MoonMindWorkflowState.EXECUTING,
-        MoonMindWorkflowState.PROPOSALS,
         MoonMindWorkflowState.AWAITING_EXTERNAL,
         MoonMindWorkflowState.FINALIZING,
     }

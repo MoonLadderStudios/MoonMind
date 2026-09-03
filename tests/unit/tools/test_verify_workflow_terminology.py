@@ -5,8 +5,12 @@ import sys
 from pathlib import Path
 
 
-MODULE_PATH = Path(__file__).resolve().parents[3] / "tools" / "verify_workflow_terminology.py"
-SPEC = importlib.util.spec_from_file_location("verify_workflow_terminology", MODULE_PATH)
+MODULE_PATH = (
+    Path(__file__).resolve().parents[3] / "tools" / "verify_workflow_terminology.py"
+)
+SPEC = importlib.util.spec_from_file_location(
+    "verify_workflow_terminology", MODULE_PATH
+)
 assert SPEC is not None
 verify_workflow_terminology = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
@@ -35,9 +39,13 @@ def test_runtime_check_rejects_attempt_route_and_legacy_ui_copy(tmp_path: Path) 
     _write(
         tmp_path / "frontend/src/generated/openapi.ts",
         'attempts?: components["schemas"]["StepExecutionProjectionModel"][];\n'
-        + "task" + "CreateRequest?: unknown;\n"
-        + '"/api/task-' + 'step-templates": unknown;\n'
-        + "list_recurring_" + "tasks_api_recurring_" + "tasks_get: unknown;\n",
+        + "task"
+        + "CreateRequest?: unknown;\n"
+        + '"/api/task-'
+        + 'step-templates": unknown;\n'
+        + "list_recurring_"
+        + "tasks_api_recurring_"
+        + "tasks_get: unknown;\n",
     )
     _write(
         tmp_path / "moonmind/workflows/temporal/client.py",
@@ -163,3 +171,51 @@ def test_docs_check_rejects_unqualified_term_on_line_with_allowed_term(
 
     assert len(findings) == 1
     assert findings[0].rule == "canonical-doc-unqualified-task"
+
+
+def test_removed_follow_up_check_rejects_active_source_config_and_docs(
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path / "moonmind/workflows/temporal/runtime.py",
+        'activity = "proposal.' + 'generate"\n',
+    )
+    _write(tmp_path / ".env-template", "WORKFLOW_" + "PROPOSALS_LIMIT=3\n")
+    _write(
+        tmp_path / "docs/Workflows/Feature.md",
+        "The removed route was /api/" + "proposals.\n",
+    )
+
+    findings = verify_workflow_terminology.check_removed_follow_up_identifiers(
+        root=tmp_path
+    )
+
+    assert len(findings) == 3
+    assert {finding.rule for finding in findings} == {"removed-follow-up-subsystem"}
+    assert {finding.path for finding in findings} == {
+        Path(".env-template"),
+        Path("docs/Workflows/Feature.md"),
+        Path("moonmind/workflows/temporal/runtime.py"),
+    }
+
+
+def test_removed_follow_up_check_allows_retirement_evidence_and_rejection_paths(
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path / "docs/Archive/ProposalSystem/README.md",
+        "Historical table: workflow_" + "proposals.\n",
+    )
+    _write(
+        tmp_path / "docs/Workflows/FollowUpWorkSystem.md",
+        "Rejected legacy field: propose" + "Tasks.\n",
+    )
+    _write(
+        tmp_path / "moonmind/workflows/executions/execution_contract.py",
+        'REMOVED = {"proposal_' + 'policy"}\n',
+    )
+
+    assert (
+        verify_workflow_terminology.check_removed_follow_up_identifiers(root=tmp_path)
+        == []
+    )

@@ -226,7 +226,6 @@ The current allowed values for `state` are:
 - `planning`
 - `awaiting_slot`
 - `executing`
-- `proposals`
 - `awaiting_external`
 - `finalizing`
 - `no_commit`
@@ -565,7 +564,7 @@ Example:
  "mm_entry": "run"
  },
  "memo": {
- "title": "Refactor proposal",
+ "title": "Refactor request",
  "summary": "Execution resumed."
  },
  "artifactRefs": ["artifact://input/123"],

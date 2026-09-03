@@ -13,7 +13,6 @@ const CANONICAL_WORKFLOW_STATES = [
   'awaiting_slot',
   'executing',
   'awaiting_external',
-  'proposals',
   'finalizing',
   'no_commit',
   'completed',
@@ -79,8 +78,6 @@ describe('executionStatusPillProps', () => {
     expect(executionStatusPillProps('failed')).toEqual({ className: 'status status-failed' });
     expect(executionStatusPillProps('executing').className).toBe('status status-running is-executing');
     expect(executionStatusPillProps('planning').className).toBe('status status-planning is-planning');
-    expect(executionStatusPillProps('proposals')).toEqual({ className: 'status status-running' });
-
     expect(executionStatusPillProps('waiting_on_dependencies')).toEqual({
       className: 'status status-awaiting-dependencies',
     });

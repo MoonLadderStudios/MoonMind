@@ -1432,7 +1432,7 @@ def test_runtime_planner_routes_jira_issue_creator_as_agent_skill_step():
         inputs={
             "task": {
                 "title": "Break down proposal workflow",
-                "instructions": "Break down docs/Workflows/WorkflowProposalSystem.md.",
+                "instructions": "Break down docs/Steps/StepExecutionsAndCheckpointing.md.",
                 "runtime": {"mode": "codex_cli"},
                 "publish": {"mode": "pr"},
                 "storyOutput": {
@@ -4392,9 +4392,7 @@ async def test_main_async_activity_fleet(
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactActivities")
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactService")
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactRepository")
-@patch("moonmind.workflows.temporal.worker_runtime.TemporalProposalActivities")
 async def test_build_runtime_activities_injects_concrete_handlers(
-    mock_proposal_activities_cls,
     mock_repository_cls,
     mock_service_cls,
     mock_artifact_activities_cls,
@@ -4488,45 +4486,10 @@ async def test_build_runtime_activities_injects_concrete_handlers(
         sandbox_activities=mock_sandbox_activities_cls.return_value,
         integration_activities=mock_jules_activities_cls.return_value,
         agent_runtime_activities=None,
-        proposal_activities=mock_proposal_activities_cls.return_value,
         review_activities=ANY,
         agent_skills_activities=ANY,
     )
-    mock_proposal_activities_cls.assert_called_once_with(
-        artifact_service=ANY,
-        proposal_service_factory=ANY,
-    )
-    proposal_service_factory = mock_proposal_activities_cls.call_args.kwargs[
-        "proposal_service_factory"
-    ]
-    assert callable(proposal_service_factory)
-    import typing
-    assert isinstance(proposal_service_factory(), typing.AsyncContextManager)
     await resources.aclose()
-
-@pytest.mark.asyncio
-async def test_proposal_service_factory_uses_delivery_enabled_service() -> None:
-    service = object()
-
-    @asynccontextmanager
-    async def _fake_session_context():
-        yield "session"
-
-    with (
-        patch(
-            "api_service.db.base.get_async_session_context",
-            side_effect=_fake_session_context,
-        ),
-        patch(
-            "moonmind.workflows.get_workflow_proposal_service",
-            return_value=service,
-        ) as factory,
-    ):
-        proposal_service_factory = worker_runtime._build_proposal_service_factory()
-        async with proposal_service_factory() as resolved:
-            assert resolved is service
-
-    factory.assert_called_once_with("session")
 
 @pytest.mark.asyncio
 @patch("moonmind.workflows.temporal.worker_runtime._build_agent_runtime_deps")
@@ -4540,9 +4503,7 @@ async def test_proposal_service_factory_uses_delivery_enabled_service() -> None:
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactActivities")
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactService")
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactRepository")
-@patch("moonmind.workflows.temporal.worker_runtime.TemporalProposalActivities")
 async def test_build_runtime_activities_reconciles_managed_sessions_only_on_agent_runtime_fleet(
-    mock_proposal_activities_cls,
     mock_repository_cls,
     mock_service_cls,
     mock_artifact_activities_cls,
@@ -4664,7 +4625,6 @@ async def test_build_runtime_activities_reconciles_managed_sessions_only_on_agen
         sandbox_activities=mock_sandbox_activities_cls.return_value,
         integration_activities=mock_jules_activities_cls.return_value,
         agent_runtime_activities=mock_agent_runtime_activities_cls.return_value,
-        proposal_activities=mock_proposal_activities_cls.return_value,
         review_activities=ANY,
         agent_skills_activities=ANY,
     )
@@ -4682,9 +4642,7 @@ async def test_build_runtime_activities_reconciles_managed_sessions_only_on_agen
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactActivities")
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactService")
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactRepository")
-@patch("moonmind.workflows.temporal.worker_runtime.TemporalProposalActivities")
 async def test_build_runtime_activities_registers_deployment_tool_only_on_deployment_fleet(
-    mock_proposal_activities_cls,
     mock_repository_cls,
     mock_service_cls,
     mock_artifact_activities_cls,
@@ -4730,7 +4688,6 @@ async def test_build_runtime_activities_registers_deployment_tool_only_on_deploy
         sandbox_activities=mock_sandbox_activities_cls.return_value,
         integration_activities=mock_jules_activities_cls.return_value,
         agent_runtime_activities=None,
-        proposal_activities=mock_proposal_activities_cls.return_value,
         review_activities=ANY,
         agent_skills_activities=ANY,
     )
@@ -4742,7 +4699,6 @@ async def test_build_runtime_activities_registers_deployment_tool_only_on_deploy
 @patch("moonmind.workflows.temporal.worker_runtime._build_agent_runtime_deps")
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalAgentRuntimeActivities")
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalReviewActivities")
-@patch("moonmind.workflows.temporal.worker_runtime.TemporalProposalActivities")
 @patch("moonmind.workflows.temporal.worker_runtime.AgentSkillsActivities")
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactActivities")
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalPlanActivities")
@@ -4758,7 +4714,6 @@ async def test_build_runtime_activities_registers_unrestricted_mode(
     mock_plan_activities_cls,
     mock_artifact_activities_cls,
     mock_agent_skills_activities_cls,
-    mock_proposal_activities_cls,
     mock_review_activities_cls,
     mock_agent_runtime_activities_cls,
     mock_build_deps,

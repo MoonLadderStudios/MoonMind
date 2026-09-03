@@ -23,7 +23,6 @@ describe('workflow status helpers', () => {
       'awaiting_slot',
       'executing',
       'awaiting_external',
-      'proposals',
       'finalizing',
       'no_commit',
       'completed',
@@ -45,7 +44,6 @@ describe('workflow status helpers', () => {
     expect(formatWorkflowStatusLabel('awaiting_slot')).toBe('Awaiting slot');
     expect(formatWorkflowStatusLabel('executing')).toBe('Executing');
     expect(formatWorkflowStatusLabel('awaiting_external')).toBe('Awaiting external');
-    expect(formatWorkflowStatusLabel('proposals')).toBe('Proposals');
     expect(formatWorkflowStatusLabel('finalizing')).toBe('Finalizing');
     expect(formatWorkflowStatusLabel('no_commit')).toBe('No commit');
     expect(formatWorkflowStatusLabel('completed')).toBe('Completed');
@@ -65,7 +63,6 @@ describe('workflow status helpers', () => {
     expect(workflowStatusPillProps('awaiting_external')).toEqual({
       className: 'status status-awaiting-external',
     });
-    expect(workflowStatusPillProps('proposals')).toEqual({ className: 'status status-running' });
     expect(workflowStatusPillProps('finalizing')).toMatchObject({
       className: 'status status-finalizing is-finalizing',
     });

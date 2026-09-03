@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 from api_service.services.provider_profile_tier_capabilities import (
@@ -21,7 +22,7 @@ def _profile(**overrides):
         "model_catalog_evidence_json": {
             "credentialGeneration": 3,
             "imageRef": "img:v2",
-            "validatedAt": "2026-09-03T04:00:00+00:00",
+            "validatedAt": datetime.now(UTC).isoformat(),
             "models": [
                 {"qualifiedId": "opencode-model-a"},
                 {"qualifiedId": "opencode-model-b", "label": "Model B"},

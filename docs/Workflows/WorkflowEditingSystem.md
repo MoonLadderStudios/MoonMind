@@ -32,7 +32,6 @@ This design applies to:
 This design does **not** apply to:
 
 - legacy queue jobs
-- proposal review flows
 - recurring schedule editing
 - inline edit modals on the detail page
 - direct mutation of previously stored artifacts
@@ -422,7 +421,6 @@ This design intentionally does not include:
 
 - a separate edit-only form distinct from `/workflows/new`
 - queue-first Workflow editing UX
-- proposal editing
 - manifest-run editing
 - recurring schedule editing
 - inline quick-edit controls on the detail page
@@ -436,7 +434,6 @@ The following concepts should be removed from canonical docs and primary UI flow
 - `/tasks/queue/new`
 - queue-job update behavior
 - queue resubmit language when the action is actually a Temporal rerun
-- proposal-centric wording for standard Workflow editing
 
 ## 17. Completion criteria
 
