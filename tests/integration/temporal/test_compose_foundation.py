@@ -156,6 +156,39 @@ def _network_aliases(service_config: dict, network_name: str) -> set[str]:
         return set()
     return {str(alias) for alias in network_config.get("aliases", [])}
 
+
+def _label_map(service_config: dict) -> dict[str, str]:
+    labels = service_config.get("labels", {})
+    if isinstance(labels, dict):
+        return {str(key): str(value) for key, value in labels.items()}
+    if isinstance(labels, list):
+        return {
+            key: value
+            for key, value in (
+                str(label).split("=", 1) for label in labels if "=" in str(label)
+            )
+        }
+    return {}
+
+
+def test_reloadable_runtime_services_record_checked_out_source_revision():
+    services = _load_compose()["services"]
+    runtime_services = {
+        "api",
+        *(
+            service
+            for service in services
+            if service.startswith("temporal-worker-")
+            and service != "temporal-worker-deployment-control"
+        ),
+    }
+
+    for service in runtime_services:
+        assert _label_map(services[service])["moonmind.runtime_source_revision"] == (
+            "${MOONMIND_RUNTIME_SOURCE_REVISION:-untracked}"
+        )
+
+
 def test_temporal_compose_topology_and_private_exposure():
     compose = _load_compose()
     services = compose["services"]
