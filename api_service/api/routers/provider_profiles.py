@@ -756,7 +756,37 @@ def _normalized_create_values(body: ProviderProfileCreate) -> dict[str, Any]:
         except IsolationPolicyError as exc:
             raise HTTPException(status_code=422, detail=exc.as_detail()) from exc
     elif values.get("clear_env_keys") is None:
-        values["clear_env_keys"] = []
+        # #3821: omitted expert-manual policy inherits the backend-derived
+        # value when the strategy is known; unknown strategies preserve
+        # legacy empty behavior (classified as legacy_custom, warning only).
+        try:
+            from moonmind.provider_profiles.isolation_policy import (
+                derive_isolation_policy as _derive_manual_default,
+            )
+
+            _manual_inferred = infer_authentication_method(
+                credential_source=values.get("credential_source"),
+                runtime_materialization_mode=values.get(
+                    "runtime_materialization_mode"
+                ),
+                authentication_methods=capabilities["authentication_methods"],
+                auth_state=values.get("auth_state"),
+                last_auth_method=values.get("last_auth_method"),
+            )
+            _manual_derived = _derive_manual_default(
+                runtime_id=body.runtime_id,
+                provider_id=body.provider_id,
+                authentication_method=_manual_inferred or "",
+                credential_source=values.get("credential_source"),
+                runtime_materialization_mode=values.get(
+                    "runtime_materialization_mode"
+                ),
+            )
+            values["clear_env_keys"] = (
+                list(_manual_derived.keys) if _manual_derived is not None else []
+            )
+        except Exception:
+            values["clear_env_keys"] = []
 
     manual_defaults: dict[str, Any] = {
         "priority": 100,
@@ -1575,6 +1605,34 @@ async def update_profile(
                 "last_auth_method": ProviderProfileAuthMethod.OAUTH_VOLUME.value,
             }
         )
+        # #3821: imported OAuth volumes materialize the backend-derived
+        # isolation policy so the subsequent launchable check sees a
+        # current policy instead of a stale empty value.
+        try:
+            from moonmind.provider_profiles.isolation_policy import (
+                derive_isolation_policy as _derive_import_policy,
+            )
+            from moonmind.provider_profiles.isolation_policy import (
+                merge_enrollment_policy as _merge_import_policy,
+            )
+
+            _import_derived = _derive_import_policy(
+                runtime_id=profile.runtime_id,
+                provider_id=update_data.get("provider_id", profile.provider_id),
+                authentication_method="oauth",
+                credential_source="oauth_volume",
+                runtime_materialization_mode="oauth_home",
+            )
+            update_data["clear_env_keys"] = _merge_import_policy(
+                stored_keys=list(profile.clear_env_keys or []),
+                derived=_import_derived,
+            )
+        except Exception:
+            logger.warning(
+                "provider_profile_isolation_import_merge_failed profile_id=%s",
+                profile_id,
+                exc_info=True,
+            )
         profile.credential_generation = int(profile.credential_generation) + 1
     model_tiers_supplied = "model_tiers" in update_data
     default_model_tier_supplied = "default_model_tier" in update_data
