@@ -1338,12 +1338,33 @@ async def update_profile(
     # below. The backend isolation authority owns the value for all
     # supported combinations.
     if "clear_env_keys" in update_data and not bool(getattr(current_user, "is_superuser", False)):
+        # #3821: derive the prospective contract from update_data so an atomic
+        # provider/credential change plus its new backend-derived policy can be
+        # validated together. An import flag resolves to the oauth contract it
+        # will materialize below.
+        if import_existing_credential_volume:
+            _target_credential_source: Any = "oauth_volume"
+            _target_materialization_mode: Any = "oauth_home"
+            _target_auth_state: Any = update_data.get("auth_state", profile.auth_state)
+            _target_last_auth_method: Any = "oauth_volume"
+        else:
+            _target_credential_source = update_data.get(
+                "credential_source", profile.credential_source
+            )
+            _target_materialization_mode = update_data.get(
+                "runtime_materialization_mode",
+                profile.runtime_materialization_mode,
+            )
+            _target_auth_state = update_data.get("auth_state", profile.auth_state)
+            _target_last_auth_method = update_data.get(
+                "last_auth_method", profile.last_auth_method
+            )
         inferred_method = infer_authentication_method(
-            credential_source=profile.credential_source,
-            runtime_materialization_mode=profile.runtime_materialization_mode,
+            credential_source=_target_credential_source,
+            runtime_materialization_mode=_target_materialization_mode,
             authentication_methods=capabilities["authentication_methods"],
-            auth_state=profile.auth_state,
-            last_auth_method=profile.last_auth_method,
+            auth_state=_target_auth_state,
+            last_auth_method=_target_last_auth_method,
         )
         if inferred_method is not None:
             try:
@@ -1353,7 +1374,7 @@ async def update_profile(
 
                 preset_for_profile = get_provider_profile_creation_preset(
                     runtime_id=profile.runtime_id,
-                    provider_id=profile.provider_id,
+                    provider_id=target_provider_id,
                     authentication_method=_PresetMethod(inferred_method),
                 )
                 preset_clear_field = preset_for_profile.fields.get("clear_env_keys")
@@ -1372,22 +1393,47 @@ async def update_profile(
                         # converge a stale profile back to exactly the
                         # backend-derived policy. This is normalization, not
                         # freeform authorship: any other value stays locked.
+                        # Repair applies only to stored policies classified as
+                        # missing/stale/unsafe; intentional legacy_custom
+                        # supersets and audited expert overrides stay locked.
                         _repair_accepted = False
                         try:
                             from moonmind.provider_profiles.isolation_policy import (
+                                classify_existing_policy as _classify_repair_policy,
                                 derive_isolation_policy as _derive_repair_policy,
                             )
 
                             _repair_derived = _derive_repair_policy(
                                 runtime_id=profile.runtime_id,
-                                provider_id=profile.provider_id,
+                                provider_id=target_provider_id,
                                 authentication_method=inferred_method,
-                                credential_source=profile.credential_source,
-                                runtime_materialization_mode=profile.runtime_materialization_mode,
+                                credential_source=_target_credential_source,
+                                runtime_materialization_mode=_target_materialization_mode,
+                            )
+                            _stored_behavior = (
+                                dict(profile.command_behavior or {})
+                                if isinstance(profile.command_behavior, dict)
+                                else {}
+                            )
+                            _stored_marker = _stored_behavior.get("_isolation_override")
+                            _has_expert_override = isinstance(
+                                _stored_marker, dict
+                            ) and isinstance(_stored_marker.get("keys"), list)
+                            _stored_classification = _classify_repair_policy(
+                                stored_keys=list(existing),
+                                derived=_repair_derived,
+                                credential_free=_repair_derived is not None
+                                and len(_repair_derived.keys) == 0,
                             )
                             if (
                                 _repair_derived is not None
                                 and req_norm == sorted(_repair_derived.keys)
+                                and not _has_expert_override
+                                and _stored_classification
+                                in {
+                                    "missing_or_stale",
+                                    "unsafe_unknown_incomplete",
+                                }
                             ):
                                 update_data["clear_env_keys"] = list(_repair_derived.keys)
                                 _repair_accepted = True

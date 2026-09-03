@@ -1993,6 +1993,7 @@ async def ensure_provider_profile_managers_started():
 
         async with get_async_session_context() as session:
             await reconcile_provider_profile_isolation_policies(session=session)
+            await session.commit()
     except Exception as exc:  # pragma: no cover - bounded startup reconciliation
         logger.warning(
             "Provider profile isolation reconciliation deferred: %s",
