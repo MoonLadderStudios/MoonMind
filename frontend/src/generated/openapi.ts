@@ -4404,6 +4404,10 @@ export interface paths {
         /**
          * Settings Spa Fallback Route
          * @description Serve the settings SPA shell for extensionless settings sub-routes.
+         *
+         *     An empty sub-path is the trailing-slash form of the bare `/settings` entry
+         *     point. The client normalizes it the same way, so a direct load must resolve
+         *     to the same page and boot payload rather than 404.
          */
         get: operations["settings_spa_fallback_route_settings__dashboard_path__get"];
         put?: never;
