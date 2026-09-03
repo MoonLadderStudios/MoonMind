@@ -11440,6 +11440,10 @@ export interface components {
             /** Authentication Method */
             authentication_method?: string | null;
             creation_capabilities: components["schemas"]["ProviderProfileCreationCapabilitiesResponse"];
+            /** Launch Isolation */
+            launch_isolation?: {
+                [key: string]: unknown;
+            } | null;
             /** Created At */
             created_at: string | null;
             /** Updated At */
