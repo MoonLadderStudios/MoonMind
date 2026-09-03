@@ -11,6 +11,11 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from moonmind.provider_profiles.isolation_policy import (
+    ISOLATION_LOCK_REASON,
+    ISOLATION_POLICY_SOURCE,
+    derive_isolation_policy,
+)
 from moonmind.workflows.temporal.runtime.providers.registry import (
     get_provider,
     get_provider_default,
@@ -289,7 +294,29 @@ def _editable_field(value: object) -> dict[str, Any]:
     }
 
 
-def _oauth_method(runtime_id: str) -> dict[str, Any]:
+def _isolation_locked_field(
+    *, runtime_id: str, provider_id: str, authentication_method: str
+) -> dict[str, Any]:
+    """Return the locked clear_env_keys field from the isolation authority."""
+    policy = derive_isolation_policy(
+        runtime_id=runtime_id,
+        provider_id=provider_id,
+        authentication_method=authentication_method,
+        credential_source="oauth_volume"
+        if authentication_method == "oauth"
+        else ("secret_ref" if authentication_method == "api_key" else "none"),
+        runtime_materialization_mode="oauth_home"
+        if authentication_method == "oauth"
+        else None,
+    )
+    return _locked_field(
+        list(policy.keys) if policy is not None else [],
+        ISOLATION_POLICY_SOURCE,
+        ISOLATION_LOCK_REASON,
+    )
+
+
+def _oauth_method(runtime_id: str, provider_id: str = "") -> dict[str, Any]:
     mount_path = get_provider_default(runtime_id, "volume_mount_path")
     return {
         "id": "oauth",
@@ -307,6 +334,11 @@ def _oauth_method(runtime_id: str) -> dict[str, Any]:
                 "runtime_provider_strategy",
                 "OAuth enrollment owns runtime materialization.",
             ),
+            "clear_env_keys": _isolation_locked_field(
+                runtime_id=runtime_id,
+                provider_id=provider_id,
+                authentication_method="oauth",
+            ),
         },
         "secret_roles": [],
         "imported_volume": {
@@ -319,6 +351,16 @@ def _oauth_method(runtime_id: str) -> dict[str, Any]:
 
 
 def _api_key_method(strategy: ProviderApiKeyStrategy) -> dict[str, Any]:
+    # #3821: resolve through the single isolation authority; fall back to the
+    # legacy strategy tuple only when the authority has no entry.
+    _policy = derive_isolation_policy(
+        runtime_id=strategy.runtime_id,
+        provider_id=strategy.provider_id,
+        authentication_method="api_key",
+        credential_source="secret_ref",
+        runtime_materialization_mode=strategy.materialization_mode,
+    )
+    _clear_keys = list(_policy.keys) if _policy is not None else list(strategy.clear_env_keys)
     return {
         "id": "api_key",
         "label": "API key",
@@ -336,9 +378,9 @@ def _api_key_method(strategy: ProviderApiKeyStrategy) -> dict[str, Any]:
                 "Guided API-key setup owns runtime materialization.",
             ),
             "clear_env_keys": _locked_field(
-                list(strategy.clear_env_keys),
-                "runtime_provider_strategy",
-                "The runtime strategy owns launch credential isolation.",
+                _clear_keys,
+                ISOLATION_POLICY_SOURCE,
+                ISOLATION_LOCK_REASON,
             ),
         },
         "secret_roles": [
@@ -374,6 +416,11 @@ def _no_credentials_method() -> dict[str, Any]:
                 "composite",
                 "runtime_provider_capability",
                 "The credential-free provider strategy owns materialization.",
+            ),
+            "clear_env_keys": _locked_field(
+                [],
+                ISOLATION_POLICY_SOURCE,
+                ISOLATION_LOCK_REASON,
             ),
         },
         "secret_roles": [],
@@ -441,7 +488,7 @@ def provider_profile_creation_capabilities(
         oauth_provider and oauth_provider.get("provider_id") == provider_id
     )
     if oauth_supported:
-        methods.append(_oauth_method(runtime_id))
+        methods.append(_oauth_method(runtime_id, provider_id))
 
     api_key_strategy = provider_api_key_strategy(runtime_id, provider_id)
     if api_key_strategy is not None:

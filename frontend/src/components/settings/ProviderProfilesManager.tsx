@@ -1017,7 +1017,9 @@ function buildSavePayload(
     delete payload.tags;
   }
   omitWhenRecommended('priority', 'priority');
-  omitWhenRecommended('clear_env_keys', 'clear_env_keys');
+  // #3821: standard guided creation never authors clear_env_keys; the
+  // backend isolation authority owns the value.
+  delete payload.clear_env_keys;
 
   if (options.importExistingCredentialVolume) {
     payload.import_existing_credential_volume = true;
@@ -4161,7 +4163,7 @@ export function ProviderProfilesManager({
                 </div>
                 {manualCreationAllowed ? (
                   <label className="flex flex-col gap-1.5 text-sm font-medium text-amber-800 dark:text-amber-300">
-                    <span>Clear env keys — manual expert path (no audit trail recorded)</span>
+                    <span>Clear env keys — manual expert path (validated; overrides are audited)</span>
                     <textarea
                       rows={3}
                       className="w-full rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 font-mono text-sm"
@@ -4173,11 +4175,11 @@ export function ProviderProfilesManager({
                         }))
                       }
                     />
-                    <p className="text-xs text-amber-700 dark:text-amber-300">Warning: freeform clear_env_keys is only allowed for unsupported combinations via the manual creation path. No audit event is recorded for this change; the value must satisfy launch-safety validation and bypasses backend-recommended isolation policy, so review it carefully.</p>
+                    <p className="text-xs text-amber-700 dark:text-amber-300">Warning: freeform clear_env_keys is only allowed for unsupported combinations via the manual creation path. Values are validated by the backend (known keys, valid names, bounded list, no unsafe keys); updates to supported profiles require superuser permission with an audit reason and warning acknowledgement, and are recorded with actor metadata. Bypassing backend-recommended isolation can break launches or leak credentials, so review it carefully.</p>
                   </label>
                 ) : (
                   <div className="rounded-xl bg-slate-50 dark:bg-slate-900 p-3 text-xs text-slate-500 dark:text-slate-400">
-                    <div className="font-medium text-slate-700 dark:text-slate-300">Launch-security metadata — clear environment keys</div>
+                    <div className="font-medium text-slate-700 dark:text-slate-300">Launch environment isolation — clear environment keys</div>
                     <div>Value: {selectedAuthenticationCapability?.fields.clear_env_keys ? String((selectedAuthenticationCapability.fields.clear_env_keys.value as string[]).join(', ') || 'empty') : (form.clearEnvKeysText || (editingProfile?.clear_env_keys?.join(', ') || 'Backend strategy — runtime_provider_isolation_policy'))}</div>
                     <div>Source: {selectedAuthenticationCapability?.fields.clear_env_keys?.source ?? 'runtime_provider_isolation_policy'} · Locked by backend launch-safety policy</div>
                     <div>Lock reason: {selectedAuthenticationCapability?.fields.clear_env_keys?.lock_reason ?? 'Environment clearing is backend-owned launch security policy.'}</div>
