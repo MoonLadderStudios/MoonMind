@@ -148,9 +148,13 @@ async def test_supported_workflow_routes_render_console_shell(
         "/skills",
         "/skills/local/editor",
         "/settings",
+        "/settings/",
         "/settings/providers-secrets",
+        "/settings/providers-secrets/",
         "/settings/user-workspace",
+        "/settings/user-workspace/",
         "/settings/operations",
+        "/settings/operations/",
         "/manifests",
         "/manifests/default-workflow",
         "/oauth-terminal",
@@ -169,6 +173,47 @@ async def test_supported_dashboard_deep_links_share_spa_shell(
 
     boot_payload = _extract_boot_payload(response.text)
     assert boot_payload == {"page": "dashboard", "apiBase": "/api"}
+
+
+@pytest.mark.parametrize(
+    "section",
+    ("providers-secrets", "user-workspace", "operations", "legacy-alias"),
+)
+async def test_settings_entry_ignores_retired_section_page_identity(
+    async_client: AsyncClient,
+    section: str,
+) -> None:
+    """MoonLadderStudios/MoonMind#3816 + SettingsPage.md 5.3: `?section=` is retired
+    page identity, so the server neither redirects on it nor leaks it into boot."""
+    response = await async_client.get(
+        f"/settings?section={section}", follow_redirects=False
+    )
+
+    assert response.status_code == 200
+    boot_payload = _extract_boot_payload(response.text)
+    assert boot_payload == {"page": "dashboard", "apiBase": "/api"}
+
+
+@pytest.mark.parametrize(
+    ("path", "expected_location"),
+    (
+        ("/secrets", "/settings/providers-secrets"),
+        ("/workers", "/settings/operations"),
+    ),
+)
+async def test_legacy_settings_paths_redirect_and_strip_retired_section(
+    async_client: AsyncClient,
+    path: str,
+    expected_location: str,
+) -> None:
+    """MoonLadderStudios/MoonMind#3816: user-visible legacy paths keep a redirect,
+    but `section` never selects a sibling Configuration page."""
+    response = await async_client.get(
+        f"{path}?section=user-workspace", follow_redirects=False
+    )
+
+    assert response.status_code == 307
+    assert response.headers["location"] == expected_location
 
 
 async def test_ui_info_endpoint_exposes_spa_capabilities_and_endpoints(
