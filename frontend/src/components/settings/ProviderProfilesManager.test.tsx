@@ -2485,7 +2485,7 @@ describe('MoonLadderStudios/MoonMind#3815 cross-boundary verification (#3822 cov
     fireEvent.click(await screen.findByLabelText('API key'));
     await screen.findByText(/Backend preset provider-profile-create-v1-test loaded/);
     fireEvent.click(screen.getByLabelText('Show advanced options'));
-    expect(screen.getByText(/Launch-security metadata — clear environment keys/)).toBeTruthy();
+    expect(screen.getByText(/Launch environment isolation — clear environment keys/)).toBeTruthy();
     expect(screen.getByText(/Value: MINIMAX_API_KEY/)).toBeTruthy();
     expect(screen.getAllByText(/Source: runtime_provider_isolation_policy/).length).toBeGreaterThan(0);
     expect(screen.queryByLabelText('Clear env keys')).toBeNull();

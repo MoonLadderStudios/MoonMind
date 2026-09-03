@@ -381,6 +381,26 @@ def apply_oauth_connected_state(
     validated_at: datetime,
 ) -> None:
     """Stamp connected command_behavior + home overrides after OAuth success."""
+    # #3821: OAuth enrollment reuses the single isolation authority so the
+    # persisted policy always matches readiness and launch.
+    try:
+        from moonmind.provider_profiles.isolation_policy import (
+            derive_isolation_policy,
+            merge_enrollment_policy,
+        )
+
+        profile.clear_env_keys = merge_enrollment_policy(
+            stored_keys=list(profile.clear_env_keys or []),
+            derived=derive_isolation_policy(
+                runtime_id=profile.runtime_id,
+                provider_id=profile.provider_id,
+                authentication_method="oauth",
+                credential_source="oauth_volume",
+                runtime_materialization_mode="oauth_home",
+            ),
+        )
+    except Exception:
+        logger.warning("provider_profile_isolation_oauth_merge_failed", exc_info=True)
     if mapping is not None:
         profile.home_path_overrides = {
             **(profile.home_path_overrides or {}),
