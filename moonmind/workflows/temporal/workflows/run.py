@@ -926,6 +926,13 @@ RUN_OMNIGENT_REMEDIATION_CHECKPOINT_RESTORE_PATCH = (
 RUN_OMNIGENT_INITIAL_VERIFICATION_CHECKPOINT_RESTORE_PATCH = (
     "run-omnigent-initial-verification-checkpoint-restore-v1"
 )
+# A checkpoint may first become available after a headless remediation attempt.
+# Adopt that archive at the attempt the controller just verified instead of
+# resetting the workspace head to attempt zero.  The head payload changes, so
+# histories that already adopted a late checkpoint retain their recorded value.
+RUN_LATE_REMEDIATION_HEAD_ATTEMPT_ORDINAL_PATCH = (
+    "run-late-remediation-head-attempt-ordinal-v1"
+)
 # A pull-request handoff is another fresh Omnigent sandbox and must publish the
 # exact candidate accepted by the controlling verifier. Restore the cumulative
 # remediation head (or the latest implementation archive when no remediation
@@ -7755,6 +7762,18 @@ class MoonMindRunWorkflow:
             return None
         identity = self._canonical_step_checkpoint_identity(checkpoint_step_id)
         normalized_verdict = str(verdict or "").strip().upper()
+        head_attempt_ordinal = 0
+        state = self._remediation_loop_state
+        if (
+            workflow.patched(RUN_LATE_REMEDIATION_HEAD_ATTEMPT_ORDINAL_PATCH)
+            and state is not None
+            and state.loop_id == spec.loop_id
+        ):
+            # Initial verification owns attempt zero.  When checkpoint capture
+            # first succeeds after a headless remediation, however, the archive
+            # already represents that completed attempt and must be admitted at
+            # the same ordinal as the loop controller.
+            head_attempt_ordinal = state.attempt_ordinal
         head = RemediationWorkspaceHead(
             loopId=spec.loop_id,
             branchRef=f"checkpoint-branch:{spec.loop_id}",
@@ -7767,6 +7786,7 @@ class MoonMindRunWorkflow:
             headStepExecutionId=(
                 build_step_execution_id(identity) if identity is not None else None
             ),
+            headAttemptOrdinal=head_attempt_ordinal,
             latestVerificationRef=gate_result_ref,
             latestVerificationVerdict=normalized_verdict,
             status=(
