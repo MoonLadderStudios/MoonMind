@@ -62,7 +62,11 @@ from moonmind.omnigent.settings import (
     resolved_proxy_forward_headers,
     resolved_server_url,
 )
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+from moonmind.schemas.agent_runtime_models import (
+    AgentExecutionRequest,
+    AgentRunResult,
+    resolve_execution_budget,
+)
 from moonmind.workflows.adapters.omnigent_agent_adapter import (
     OmnigentAdapterError,
     OmnigentAgentSelection,
@@ -73,6 +77,11 @@ from moonmind.workflows.adapters.omnigent_agent_adapter import (
 from moonmind.workflows.adapters.omnigent_client import (
     OmnigentClientError,
     OmnigentHttpClient,
+)
+from moonmind.workflows.provider_failures import (
+    PROVIDER_ERROR_CLASS_RATE_LIMIT,
+    build_provider_failure_event,
+    classify_provider_failure,
 )
 from moonmind.workflows.skills.run_projection import prepend_skill_activation_summary
 
@@ -99,16 +108,80 @@ _MARKED_TOOL_ONLY_QUIET_PERIOD_SECONDS = 300.0
 # waiting the full no-progress budget only delays an already-known failure.
 _MARKED_TURN_START_TIMEOUT_SECONDS = 300.0
 _TERMINAL_RECONCILIATION_INTERVAL_SECONDS = 30.0
+_MARKED_TURN_ACTIVITY_RETRY_RESERVE_SECONDS = 600.0
 _ACTIVITY_HEARTBEAT_STATE: ContextVar[dict[str, Any] | None] = ContextVar(
     "omnigent_activity_heartbeat_state",
     default=None,
 )
 
 
+def _durable_terminal_status_with_evidence(durable_row: Any) -> str | None:
+    """Return a restorable bridge terminal only after evidence publication.
+
+    Indexed provider events may update the coarse row status before the marked
+    turn is objectively terminal. ``mark_terminal`` publishes the compact refs
+    in the same authority handoff that makes the status safe to restore.
+    """
+
+    status = str(getattr(durable_row, "status", "") or "").strip().lower()
+    terminal_refs = getattr(durable_row, "terminal_refs", None)
+    terminal_bundle_keys = {
+        "outputRefs",
+        "diagnosticsRef",
+        "metadataRefs",
+        "resourceProjection",
+        "failureClass",
+        "failureCode",
+        "summary",
+    }
+    if (
+        status not in _TERMINAL_STATUSES
+        or getattr(durable_row, "first_message_posted_at", None) is None
+        or not isinstance(terminal_refs, Mapping)
+        or not terminal_bundle_keys <= set(terminal_refs)
+        or not isinstance(terminal_refs.get("outputRefs"), list)
+        or not isinstance(terminal_refs.get("metadataRefs"), Mapping)
+        or not isinstance(terminal_refs.get("resourceProjection"), Mapping)
+        or not str(terminal_refs.get("summary") or "").strip()
+    ):
+        return None
+    return status
+
+
 class OmnigentSessionStillRunningError(OmnigentClientError):
     """Raised when the stream ends while the provider session is still active."""
 
     code = "OMNIGENT_CURRENT_TURN_TERMINAL_AMBIGUOUS"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        session_id: str | None = None,
+        snapshot: Mapping[str, Any] | None = None,
+        timeout_seconds: float | None = None,
+        event_count: int | None = None,
+        turn_state: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.session_id = session_id
+        self.snapshot = dict(snapshot) if snapshot is not None else None
+        self.timeout_seconds = timeout_seconds
+        self.event_count = event_count
+        self.turn_state = dict(turn_state) if turn_state is not None else None
+
+    def diagnostics(self) -> dict[str, Any]:
+        diagnostics = super().diagnostics()
+        diagnostics.update(
+            _marked_turn_timeout_diagnostics(
+                session_id=self.session_id,
+                snapshot=self.snapshot,
+                timeout_seconds=self.timeout_seconds,
+                event_count=self.event_count,
+                turn_state=self.turn_state,
+            )
+        )
+        return diagnostics
 
 
 class OmnigentSameSessionContinuationRequired(OmnigentSessionStillRunningError):
@@ -131,9 +204,7 @@ class OmnigentSameSessionContinuationRequired(OmnigentSessionStillRunningError):
         session_id: str,
         snapshot: Mapping[str, Any],
     ) -> None:
-        super().__init__(message)
-        self.session_id = session_id
-        self.snapshot = dict(snapshot)
+        super().__init__(message, session_id=session_id, snapshot=snapshot)
 
 
 class OmnigentTurnNotStartedError(OmnigentSessionStillRunningError):
@@ -155,10 +226,9 @@ class OmnigentTurnNotStartedError(OmnigentSessionStillRunningError):
         snapshot: Mapping[str, Any] | None = None,
         waited_seconds: float | None = None,
     ) -> None:
-        super().__init__(message)
+        super().__init__(message, snapshot=snapshot)
         # The decisive inactive snapshot is the terminal evidence for this
         # failure; the execution boundary captures it before finalizing.
-        self.snapshot = dict(snapshot) if snapshot is not None else None
         self.waited_seconds = waited_seconds
 
 
@@ -805,6 +875,7 @@ def _marked_turn_item_state(
             "progress": False,
             "terminalAssistantAfterWork": False,
             "unfinishedToolCall": False,
+            "unfinishedToolName": None,
             "signature": None,
         }
 
@@ -846,6 +917,7 @@ def _marked_turn_item_state(
             "progress": False,
             "terminalAssistantAfterWork": False,
             "unfinishedToolCall": False,
+            "unfinishedToolName": None,
             "signature": None,
         }
 
@@ -853,8 +925,10 @@ def _marked_turn_item_state(
     last_text_assistant_index = -1
     progress = False
     pending_call_ids: set[str] = set()
+    pending_call_names: dict[str, str] = {}
     instrumentation_call_ids: set[str] = set()
     anonymous_pending_calls = 0
+    anonymous_pending_call_names: list[str] = []
     for index, raw_item in enumerate(
         raw_items[progress_start_index:],
         start=progress_start_index,
@@ -876,10 +950,13 @@ def _marked_turn_item_state(
                 continue
             last_tool_index = index
             call_id = str(item_data.get("call_id") or "").strip()
+            tool_name = str(item_data.get("name") or "").strip()
             if call_id:
                 pending_call_ids.add(call_id)
+                pending_call_names[call_id] = tool_name
             else:
                 anonymous_pending_calls += 1
+                anonymous_pending_call_names.append(tool_name)
         elif item_type == "function_call_output":
             progress = True
             call_id = str(item_data.get("call_id") or "").strip()
@@ -888,8 +965,10 @@ def _marked_turn_item_state(
             last_tool_index = index
             if call_id:
                 pending_call_ids.discard(call_id)
+                pending_call_names.pop(call_id, None)
             elif anonymous_pending_calls:
                 anonymous_pending_calls -= 1
+                anonymous_pending_call_names.pop(0)
         elif item_type == "message":
             role = str(item_data.get("role") or "").strip().lower()
             if role != "assistant":
@@ -906,7 +985,9 @@ def _marked_turn_item_state(
                 # an output item); calls that genuinely remain active are
                 # ordered after that message and are added on later iterations.
                 pending_call_ids.clear()
+                pending_call_names.clear()
                 anonymous_pending_calls = 0
+                anonymous_pending_call_names.clear()
 
     last_item = next(
         (item for item in reversed(raw_items) if isinstance(item, Mapping)),
@@ -922,6 +1003,10 @@ def _marked_turn_item_state(
         str(last_item_data.get("role") or ""),
         str(last_item_data.get("call_id") or ""),
     )
+    unfinished_tool_name = next(
+        (name for name in pending_call_names.values() if name),
+        next((name for name in anonymous_pending_call_names if name), None),
+    )
     return {
         "markerIndex": marked_message_index,
         "boundarySource": boundary_source,
@@ -930,8 +1015,132 @@ def _marked_turn_item_state(
             last_text_assistant_index > max(progress_start_index - 1, last_tool_index)
         ),
         "unfinishedToolCall": bool(pending_call_ids or anonymous_pending_calls),
+        "unfinishedToolName": unfinished_tool_name,
         "signature": signature,
     }
+
+
+def _snapshot_provider_rate_limit_evidence(snapshot: Mapping[str, Any] | None) -> str:
+    """Return a bounded statement about provider rate-limit evidence.
+
+    Omnigent's snapshot contract exposes ``last_task_error`` even when it is
+    null.  That lets timeout diagnostics distinguish "the provider reported no
+    task error" from "this adapter supplied no provider-error evidence" without
+    scanning arbitrary transcript text or inventing a quota verdict.
+    """
+
+    if not isinstance(snapshot, Mapping) or "last_task_error" not in snapshot:
+        return "unavailable"
+    last_task_error = snapshot.get("last_task_error")
+    if last_task_error is None:
+        return "not_observed"
+    if not isinstance(last_task_error, Mapping):
+        return "provider_error_observed_unclassified"
+
+    provider_error_class = str(
+        last_task_error.get("provider_error_class")
+        or last_task_error.get("providerErrorClass")
+        or ""
+    ).strip()
+    provider_error_code = str(last_task_error.get("code") or "").strip()
+    provider_error_text = " ".join(
+        str(last_task_error.get(key) or "").strip()
+        for key in ("code", "title", "message", "cause", "remediation")
+    ).strip()
+    provider_failure = build_provider_failure_event(
+        classification=classify_provider_failure(provider_error_text),
+        provider_error_class=provider_error_class or None,
+        provider_error_code=provider_error_code or None,
+    )
+    if (
+        provider_failure is not None
+        and provider_failure.provider_error_class == PROVIDER_ERROR_CLASS_RATE_LIMIT
+    ):
+        return "observed"
+    return "provider_error_observed_non_rate_limit"
+
+
+def _marked_turn_timeout_diagnostics(
+    *,
+    session_id: str | None,
+    snapshot: Mapping[str, Any] | None,
+    timeout_seconds: float | None,
+    event_count: int | None,
+    turn_state: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Build safe, compact evidence for an ambiguous marked-turn timeout."""
+
+    state = dict(turn_state) if isinstance(turn_state, Mapping) else {}
+    latest_snapshot = dict(snapshot) if isinstance(snapshot, Mapping) else {}
+    raw_items = latest_snapshot.get("items")
+    items = raw_items if isinstance(raw_items, list) else []
+    last_item = next(
+        (item for item in reversed(items) if isinstance(item, Mapping)),
+        {},
+    )
+    raw_data = last_item.get("data")
+    last_item_data = raw_data if isinstance(raw_data, Mapping) else {}
+    last_item_tool_name = (
+        str(last_item_data.get("name") or "").strip()
+        if str(last_item.get("type") or "").strip() == "function_call"
+        else ""
+    )
+    unresolved_tool_name = str(state.get("unfinishedToolName") or "").strip()
+    try:
+        normalized_status = (
+            normalize_omnigent_observation(latest_snapshot)
+            if latest_snapshot
+            else None
+        )
+    except OmnigentContractError:
+        normalized_status = None
+
+    return {
+        "omnigentSessionId": session_id,
+        "markedTurnTimeoutSeconds": timeout_seconds,
+        "eventsCaptured": event_count,
+        "sessionStatus": normalized_status,
+        "currentTurnProgress": bool(state.get("progress")),
+        "unfinishedToolCall": bool(state.get("unfinishedToolCall")),
+        "lastItemType": str(last_item.get("type") or "").strip() or None,
+        "lastItemStatus": str(last_item.get("status") or "").strip() or None,
+        "lastToolName": unresolved_tool_name or last_item_tool_name or None,
+        "providerRateLimitEvidence": _snapshot_provider_rate_limit_evidence(
+            latest_snapshot
+        ),
+    }
+
+
+def _marked_turn_evidence_message(
+    reason: str,
+    diagnostics: Mapping[str, Any],
+) -> str:
+    """Append bounded provider/session facts to an operator-facing error."""
+
+    waited_seconds = diagnostics.get("markedTurnTimeoutSeconds")
+    waited_detail = (
+        f"waitedSeconds={waited_seconds}; " if waited_seconds is not None else ""
+    )
+    return (
+        f"{reason}; "
+        f"{waited_detail}"
+        f"sessionStatus={diagnostics.get('sessionStatus') or 'unknown'}; "
+        f"currentTurnProgress={str(bool(diagnostics.get('currentTurnProgress'))).lower()}; "
+        f"unfinishedToolCall={str(bool(diagnostics.get('unfinishedToolCall'))).lower()}; "
+        f"lastItemType={diagnostics.get('lastItemType') or 'unknown'}; "
+        f"lastToolName={diagnostics.get('lastToolName') or 'none'}; "
+        "providerRateLimitEvidence="
+        f"{diagnostics.get('providerRateLimitEvidence') or 'unavailable'}"
+    )
+
+
+def _marked_turn_timeout_message(diagnostics: Mapping[str, Any]) -> str:
+    """Render the bounded timeout evidence into the operator-facing error."""
+
+    return _marked_turn_evidence_message(
+        "Omnigent current marked turn did not reach terminal state before timeout",
+        diagnostics,
+    )
 
 
 def _snapshot_projects_active_response(snapshot: Mapping[str, Any]) -> bool:
@@ -1151,6 +1360,8 @@ async def _await_marked_turn_terminal(
     )
     quiet_signature: tuple[Any, ...] | None = None
     quiet_since: float | None = None
+    last_snapshot: dict[str, Any] | None = None
+    last_turn_state: dict[str, Any] | None = None
     while loop.time() < deadline:
         observation_started_at = loop.time()
         snapshot = await client.get_session(session_id)
@@ -1170,6 +1381,8 @@ async def _await_marked_turn_terminal(
             marker=marker,
             baseline_item_ids=baseline_item_ids,
         )
+        last_snapshot = dict(snapshot)
+        last_turn_state = dict(turn_state)
         progress = bool(turn_state["progress"])
         if not isinstance(snapshot.get("items"), list) and normalized in {
             "completed",
@@ -1292,8 +1505,20 @@ async def _await_marked_turn_terminal(
             }
         )
         await asyncio.sleep(max(0.1, interval_seconds))
+    diagnostics = _marked_turn_timeout_diagnostics(
+        session_id=session_id,
+        snapshot=last_snapshot,
+        timeout_seconds=timeout_seconds,
+        event_count=event_count,
+        turn_state=last_turn_state,
+    )
     raise OmnigentSessionStillRunningError(
-        "Omnigent current marked turn did not reach terminal state before timeout"
+        _marked_turn_timeout_message(diagnostics),
+        session_id=session_id,
+        snapshot=last_snapshot,
+        timeout_seconds=timeout_seconds,
+        event_count=event_count,
+        turn_state=last_turn_state,
     )
 
 
@@ -1696,6 +1921,31 @@ async def _restore_active_journals(
     return restored[0], restored[1]
 
 
+def _resolved_marked_turn_timeout_seconds(request: AgentExecutionRequest) -> float:
+    """Reserve part of the published Activity budget for one safe retry.
+
+    The parent workflow sizes both StartToClose and ScheduleToClose from the
+    published base budget. The local poll must therefore finish early enough
+    for its retryable exception, Temporal backoff, session reattachment, and a
+    terminal quiet-period check to occur before ScheduleToClose expires. The
+    reserve is capped so a large request no longer inherits the old hidden
+    1,800-second deadline, and at half the budget so short explicit budgets
+    still spend most of their available window on the initial attempt.
+    """
+
+    base_seconds = float(
+        resolve_execution_budget(
+            agent_kind=request.agent_kind,
+            timeout_policy=request.timeout_policy,
+        ).base_seconds
+    )
+    retry_reserve_seconds = min(
+        _MARKED_TURN_ACTIVITY_RETRY_RESERVE_SECONDS,
+        base_seconds / 2.0,
+    )
+    return max(1.0, base_seconds - retry_reserve_seconds)
+
+
 async def run_omnigent_execution(
     request: AgentExecutionRequest,
     *,
@@ -1708,6 +1958,7 @@ async def run_omnigent_execution(
 ) -> AgentRunResult:
     """Execute one Omnigent session and return only terminal AgentRunResult."""
 
+    marked_turn_timeout_seconds = _resolved_marked_turn_timeout_seconds(request)
     gate = build_omnigent_gate()
     if not gate.enabled:
         raise RuntimeError(
@@ -1855,15 +2106,9 @@ async def run_omnigent_execution(
                 bridge_session_id = str(
                     getattr(durable_row, "bridge_session_id", "") or ""
                 )
-                restored_status = (
-                    str(getattr(durable_row, "status", "") or "").strip().lower()
+                durable_terminal_status = _durable_terminal_status_with_evidence(
+                    durable_row
                 )
-                if (
-                    restored_status in _TERMINAL_STATUSES
-                    and getattr(durable_row, "first_message_posted_at", None)
-                    is not None
-                ):
-                    durable_terminal_status = restored_status
                 external_state["bridgeSessionId"] = bridge_session_id
                 assert_bridge_session_binding(
                     authorization,
@@ -2432,6 +2677,7 @@ async def run_omnigent_execution(
                     event_count=event_count["value"],
                     snapshot=initial_snapshot,
                     snapshot_observed_at=initial_snapshot_observed_at,
+                    timeout_seconds=marked_turn_timeout_seconds,
                     start_watchdog=start_watchdog,
                 )
                 if reattached_terminal is not None:
@@ -2511,6 +2757,7 @@ async def run_omnigent_execution(
                     event_count=event_count["value"],
                     snapshot=observed_snapshot,
                     snapshot_observed_at=observed_at,
+                    timeout_seconds=marked_turn_timeout_seconds,
                     start_watchdog=start_watchdog,
                 )
                 observed_status = normalize_omnigent_observation(observed_snapshot)
@@ -2690,6 +2937,7 @@ async def run_omnigent_execution(
                             baseline_item_ids=pre_dispatch_item_ids,
                             event_count=event_count["value"],
                             terminal_status=terminal_event_status,
+                            timeout_seconds=marked_turn_timeout_seconds,
                             start_watchdog=start_watchdog,
                         )
                         if normalized == "idle" and terminal_status == "completed":
@@ -2802,6 +3050,7 @@ async def run_omnigent_execution(
                             if normalized_snapshot in {"failed", "canceled", "timed_out"}
                             else "completed"
                         ),
+                        timeout_seconds=marked_turn_timeout_seconds,
                         start_watchdog=start_watchdog,
                     )
                     external_state["terminalReconciliation"] = {
@@ -2816,9 +3065,23 @@ async def run_omnigent_execution(
                 }:
                     if closed_turn_state is not None:
                         if not closed_turn_state["progress"]:
+                            diagnostics = _marked_turn_timeout_diagnostics(
+                                session_id=session_id,
+                                snapshot=final_snapshot,
+                                timeout_seconds=None,
+                                event_count=event_count["value"],
+                                turn_state=closed_turn_state,
+                            )
                             raise OmnigentSessionStillRunningError(
-                                "Omnigent stream ended before the current marked turn "
-                                "produced provider work"
+                                _marked_turn_evidence_message(
+                                    "Omnigent stream ended before the current marked "
+                                    "turn produced provider work",
+                                    diagnostics,
+                                ),
+                                session_id=session_id,
+                                snapshot=final_snapshot,
+                                event_count=event_count["value"],
+                                turn_state=closed_turn_state,
                             )
                         (
                             terminal_status,
@@ -2830,13 +3093,29 @@ async def run_omnigent_execution(
                             baseline_item_ids=pre_dispatch_item_ids,
                             event_count=event_count["value"],
                             terminal_status=normalized_snapshot,
+                            timeout_seconds=marked_turn_timeout_seconds,
                             start_watchdog=start_watchdog,
                         )
                     else:
                         terminal_status = normalized_snapshot
                 elif normalized_snapshot in _NON_TERMINAL_STATUSES:
+                    diagnostics = _marked_turn_timeout_diagnostics(
+                        session_id=session_id,
+                        snapshot=final_snapshot,
+                        timeout_seconds=None,
+                        event_count=event_count["value"],
+                        turn_state=closed_turn_state,
+                    )
                     raise OmnigentSessionStillRunningError(
-                        "Omnigent stream ended while the provider session is still running"
+                        _marked_turn_evidence_message(
+                            "Omnigent stream ended while the provider session is still "
+                            "running",
+                            diagnostics,
+                        ),
+                        session_id=session_id,
+                        snapshot=final_snapshot,
+                        event_count=event_count["value"],
+                        turn_state=closed_turn_state,
                     )
                 if terminal_status is not None:
                     # The stream ended without emitting a terminal event but the
@@ -3247,6 +3526,8 @@ async def run_omnigent_execution(
             metadata=result_metadata,
         )
     except OmnigentSessionStillRunningError:
+        await _cancel_task(heartbeat_task)
+        await _cancel_task(stream_task)
         raise
     except (OmnigentClientError, httpx.HTTPError) as exc:
         # §17 transport rows: upstream unreachable / host register-connect /
