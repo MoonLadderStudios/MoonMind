@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
 from typing import Any, Literal, Mapping, Sequence
 from urllib.parse import urlsplit
 
@@ -61,8 +60,31 @@ _SECRET_REF_PATH_PATTERN = re.compile(r"^[A-Za-z0-9._/-]+$")
 _SECRET_REF_FIELD_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 _CONTAINER_VOLUME_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _CONTAINER_RESERVED_ENV_KEYS = frozenset({"ARTIFACT_DIR", "JOB_ID", "REPOSITORY"})
-_PROPOSAL_POLICY_TARGETS = ("workflow_repo", "moonmind")
-_PROPOSAL_SEVERITIES = ("low", "medium", "high", "critical")
+_REMOVED_FOLLOW_UP_FIELDS = {
+    "proposeTasks": "proposeTasks",
+    "propose_tasks": "proposeTasks",
+    "proposalPolicy": "proposalPolicy",
+    "proposal_policy": "proposalPolicy",
+}
+_REMOVED_FOLLOW_UP_MESSAGE = (
+    "has been removed. Submit a separate workflow or explicitly create an issue instead."
+)
+
+
+def reject_removed_follow_up_fields(
+    value: object,
+    *,
+    field_path: str,
+) -> None:
+    """Reject retired automatic follow-up controls at an input boundary."""
+
+    if not isinstance(value, Mapping):
+        return
+    for source_field, canonical_field in _REMOVED_FOLLOW_UP_FIELDS.items():
+        if source_field in value:
+            raise WorkflowContractError(
+                f"{field_path}.{canonical_field} {_REMOVED_FOLLOW_UP_MESSAGE}"
+            )
 _AUTO_PUBLISH_MIGRATION_FALLBACK_SKILLS = frozenset(
     {
         "pr-resolver",
@@ -524,11 +546,6 @@ def _default_publish_mode() -> str:
     mode = getattr(settings.workflow, "default_publish_mode", "pr") or "pr"
     normalized = str(mode).strip().lower()
     return normalized if normalized in SUPPORTED_PUBLISH_MODES else "pr"
-
-def _default_propose_tasks() -> bool:
-    """Default proposal generation to explicit workflow opt-in."""
-
-    return False
 
 def _normalize_runtime_value(value: object, *, field_name: str) -> str | None:
     candidate = _clean_optional_str(value)
@@ -1570,146 +1587,6 @@ class WorkflowContainerSelection(BaseModel):
             )
         return self
 
-class WorkflowProposalProviderPolicy(BaseModel):
-    """Provider-specific proposal delivery metadata."""
-
-    model_config = ConfigDict(populate_by_name=True, extra="allow")
-
-    repository: str | None = Field(None, alias="repository")
-    project_key: str | None = Field(None, alias="projectKey")
-    issue_type: str | None = Field(None, alias="issueType")
-    labels: list[str] | None = Field(None, alias="labels")
-    components: list[str] | None = Field(None, alias="components")
-
-    @field_validator("repository", "project_key", "issue_type", mode="before")
-    @classmethod
-    def _clean_optional(cls, value: object) -> str | None:
-        return _clean_optional_str(value)
-
-    @field_validator("labels", "components", mode="before")
-    @classmethod
-    def _normalize_string_list(cls, value: object) -> list[str] | None:
-        if value is None or value == "":
-            return None
-        if not isinstance(value, list):
-            raise WorkflowContractError(
-                "workflow.proposalPolicy.delivery labels/components must be lists"
-            )
-        normalized: list[str] = []
-        seen: set[str] = set()
-        for raw in value:
-            item = _clean_optional_str(raw)
-            if not item or item in seen:
-                continue
-            normalized.append(item)
-            seen.add(item)
-        return normalized or None
-
-class WorkflowProposalDeliveryPolicy(BaseModel):
-    """Optional provider routing policy for proposal delivery."""
-
-    model_config = ConfigDict(populate_by_name=True, extra="allow")
-
-    provider: str | None = Field(None, alias="provider")
-    github: WorkflowProposalProviderPolicy | None = Field(None, alias="github")
-    jira: WorkflowProposalProviderPolicy | None = Field(None, alias="jira")
-
-    @field_validator("provider", mode="before")
-    @classmethod
-    def _normalize_provider(cls, value: object) -> str | None:
-        cleaned = _clean_optional_str(value)
-        if not cleaned:
-            return None
-        lowered = cleaned.lower()
-        if lowered not in {"auto", "github", "jira"}:
-            raise WorkflowContractError(
-                "workflow.proposalPolicy.delivery.provider must be github, jira, or auto"
-            )
-        return lowered
-
-class WorkflowProposalPolicy(BaseModel):
-    """Optional policy block controlling worker proposal emission."""
-
-    model_config = ConfigDict(populate_by_name=True, extra="allow")
-
-    targets: list[str] | None = Field(None, alias="targets")
-    max_items: dict[str, int] | None = Field(None, alias="maxItems")
-    min_severity_for_moonmind: str | None = Field(None, alias="minSeverityForMoonMind")
-    default_runtime: str | None = Field(None, alias="defaultRuntime")
-    delivery: WorkflowProposalDeliveryPolicy | None = Field(None, alias="delivery")
-
-    @field_validator("default_runtime", mode="before")
-    @classmethod
-    def _normalize_default_runtime(cls, value: object) -> str | None:
-        return _normalize_runtime_value(value, field_name="workflow.proposalPolicy.defaultRuntime")
-
-    @field_validator("targets", mode="before")
-    @classmethod
-    def _normalize_targets(cls, value: object) -> list[str] | None:
-        if value is None or value == "":
-            return None
-        if not isinstance(value, list):
-            raise WorkflowContractError("workflow.proposalPolicy.targets must be a list")
-        normalized: list[str] = []
-        seen: set[str] = set()
-        for raw in value:
-            target = _clean_optional_str(raw)
-            if not target:
-                continue
-            lowered = target.lower()
-            if lowered not in _PROPOSAL_POLICY_TARGETS:
-                raise WorkflowContractError(
-                    "workflow.proposalPolicy.targets entries must be 'workflow_repo' or 'moonmind'"
-                )
-            if lowered in seen:
-                continue
-            normalized.append(lowered)
-            seen.add(lowered)
-        return normalized or None
-
-    @field_validator("max_items", mode="before")
-    @classmethod
-    def _normalize_max_items(cls, value: object) -> dict[str, int] | None:
-        if value is None or value == "":
-            return None
-        if not isinstance(value, Mapping):
-            raise WorkflowContractError("workflow.proposalPolicy.maxItems must be an object")
-        normalized: dict[str, int] = {}
-        key_aliases = {
-            "workflow_repo": ("workflowRepo", "workflow_repo"),
-            "moonmind": ("moonmind",),
-        }
-        for key in _PROPOSAL_POLICY_TARGETS:
-            raw = None
-            for source_key in key_aliases[key]:
-                if source_key in value:
-                    raw = value.get(source_key)
-                    break
-            if raw is None:
-                continue
-            try:
-                parsed = int(raw)
-            except (TypeError, ValueError):
-                continue
-            if parsed <= 0:
-                continue
-            normalized[key] = parsed
-        return normalized or None
-
-    @field_validator("min_severity_for_moonmind", mode="before")
-    @classmethod
-    def _normalize_min_severity(cls, value: object) -> str | None:
-        cleaned = _clean_optional_str(value)
-        if not cleaned:
-            return None
-        lowered = cleaned.lower()
-        if lowered not in _PROPOSAL_SEVERITIES:
-            allowed = ", ".join(_PROPOSAL_SEVERITIES)
-            raise WorkflowContractError(
-                f"workflow.proposalPolicy.minSeverityForMoonMind must be one of: {allowed}"
-            )
-        return lowered
-
 class WorkflowInputAttachmentRef(BaseModel):
     """Compact task input attachment reference for task-shaped submissions."""
 
@@ -2169,15 +2046,11 @@ class WorkflowExecutionSpec(BaseModel):
         default_factory=WorkflowPublishSelection, alias="publish"
     )
     git: WorkflowGitSelection | None = Field(None, alias="git")
-    propose_tasks: bool = Field(
-        default_factory=_default_propose_tasks, alias="proposeTasks"
-    )
     steps: list[WorkflowStepSpec] = Field(default_factory=list, alias="steps")
     input_attachments: list[WorkflowInputAttachmentRef] = Field(
         default_factory=list, alias="inputAttachments"
     )
     container: WorkflowContainerSelection | None = Field(None, alias="container")
-    proposal_policy: WorkflowProposalPolicy | None = Field(None, alias="proposalPolicy")
     authored_presets: list[AuthoredPresetBinding] | None = Field(
         None, alias="authoredPresets"
     )
@@ -2208,25 +2081,12 @@ class WorkflowExecutionSpec(BaseModel):
             raise WorkflowContractError("workflow.authoredPresets must be a list")
         return value
 
-    @field_validator("propose_tasks", mode="before")
-    @classmethod
-    def _normalize_propose_tasks(cls, value: object) -> bool:
-        if value is None or value == "":
-            return _default_propose_tasks()
-        if isinstance(value, bool):
-            return value
-        lowered = str(value).strip().lower()
-        if lowered in {"1", "true", "yes", "on"}:
-            return True
-        if lowered in {"0", "false", "no", "off"}:
-            return False
-        raise WorkflowContractError("workflow.proposeTasks must be a boolean")
-
     @model_validator(mode="before")
     @classmethod
     def _lift_legacy_spec_shape(cls, value: object) -> object:
         if not isinstance(value, Mapping):
             return value
+        reject_removed_follow_up_fields(value, field_path="workflow")
         reject_workflow_capability_identity_versions(value, field_path="workflow")
         payload = dict(value)
         runtime_node = payload.get("runtime")
@@ -2386,59 +2246,6 @@ class WorkflowExecutionSpec(BaseModel):
 
         return self
 
-@dataclass
-class EffectiveProposalPolicy:
-    """Resolved proposal policy derived from config and optional overrides."""
-
-    allow_workflow_repo: bool
-    allow_moonmind: bool
-    max_items_workflow_repo: int
-    max_items_moonmind: int
-    min_severity_for_moonmind: str
-    severity_rank: dict[str, int]
-    delivery_provider: str
-    provider_metadata: dict[str, Any] = field(default_factory=dict)
-    remaining_workflow_repo_slots: int = field(init=False)
-    remaining_moonmind_slots: int = field(init=False)
-
-    def __post_init__(self) -> None:
-        self.remaining_workflow_repo_slots = (
-            self.max_items_workflow_repo if self.allow_workflow_repo else 0
-        )
-        self.remaining_moonmind_slots = (
-            self.max_items_moonmind if self.allow_moonmind else 0
-        )
-
-    def consume_workflow_repo_slot(self) -> bool:
-        if not self.allow_workflow_repo or self.remaining_workflow_repo_slots <= 0:
-            return False
-        self.remaining_workflow_repo_slots -= 1
-        return True
-
-    def consume_moonmind_slot(self) -> bool:
-        if not self.allow_moonmind or self.remaining_moonmind_slots <= 0:
-            return False
-        self.remaining_moonmind_slots -= 1
-        return True
-
-    def has_workflow_repo_capacity(self) -> bool:
-        return self.allow_workflow_repo and self.remaining_workflow_repo_slots > 0
-
-    def has_moonmind_capacity(self) -> bool:
-        return self.allow_moonmind and self.remaining_moonmind_slots > 0
-
-    def severity_meets_floor(self, severity: str | None) -> bool:
-        if not self.allow_moonmind:
-            return False
-        normalized = str(severity or "").strip().lower()
-        if not normalized:
-            return False
-        candidate_rank = self.severity_rank.get(normalized)
-        if candidate_rank is None:
-            return False
-        floor_rank = self.severity_rank.get(self.min_severity_for_moonmind, 0)
-        return candidate_rank >= floor_rank
-
 class CanonicalWorkflowExecutionPayload(BaseModel):
     """Top-level canonical queue payload for workflow jobs."""
 
@@ -2463,6 +2270,14 @@ class CanonicalWorkflowExecutionPayload(BaseModel):
         alias="workflow",
         validation_alias=AliasChoices("workflow", "task"),
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_removed_root_fields(cls, value: object) -> object:
+        if not isinstance(value, Mapping):
+            return value
+        reject_removed_follow_up_fields(value, field_path="payload")
+        return value
 
     @field_validator("repository", mode="before")
     @classmethod
@@ -2953,89 +2768,6 @@ def decode_recorded_legacy_workflow_history_v1(
     canonical["requiredCapabilities"] = legacy_required
     return canonical
 
-def build_effective_proposal_policy(
-    *,
-    policy: WorkflowProposalPolicy | None,
-    default_targets: str,
-    default_max_items_workflow_repo: int,
-    default_max_items_moonmind: int,
-    default_moonmind_severity_floor: str,
-    severity_vocabulary: Sequence[str] | None = None,
-) -> EffectiveProposalPolicy:
-    """Merge defaults + overrides into a runtime proposal policy helper."""
-
-    normalized_vocab = [
-        str(token or "").strip().lower()
-        for token in (severity_vocabulary or _PROPOSAL_SEVERITIES)
-    ]
-    filtered_vocab = [
-        token for token in normalized_vocab if token in _PROPOSAL_SEVERITIES
-    ]
-    if not filtered_vocab:
-        filtered_vocab = list(_PROPOSAL_SEVERITIES)
-
-    # Preserve canonical severity progression regardless of operator-provided order.
-    severity_rank = {token: index for index, token in enumerate(_PROPOSAL_SEVERITIES)}
-
-    default_targets_normalized = str(default_targets or "").strip().lower()
-    if default_targets_normalized == "both":
-        default_target_list = list(_PROPOSAL_POLICY_TARGETS)
-    elif default_targets_normalized in _PROPOSAL_POLICY_TARGETS:
-        default_target_list = [default_targets_normalized]
-    else:
-        default_target_list = ["workflow_repo"]
-    configured_targets = (
-        list(policy.targets) if policy and policy.targets else default_target_list
-    )
-    allow_workflow_repo = "workflow_repo" in configured_targets
-    allow_moonmind = "moonmind" in configured_targets
-    if not allow_workflow_repo and not allow_moonmind:
-        allow_workflow_repo = True
-
-    max_items = dict(policy.max_items or {}) if policy and policy.max_items else {}
-    max_items_workflow_repo = int(max_items.get("workflow_repo") or 0)
-    if max_items_workflow_repo <= 0:
-        max_items_workflow_repo = max(1, int(default_max_items_workflow_repo or 1))
-    max_items_moonmind = int(max_items.get("moonmind") or 0)
-    if max_items_moonmind <= 0:
-        max_items_moonmind = max(1, int(default_max_items_moonmind or 1))
-
-    severity_floor = (
-        (policy.min_severity_for_moonmind or "").strip().lower()
-        if policy and policy.min_severity_for_moonmind
-        else str(default_moonmind_severity_floor or "").strip().lower()
-    )
-    if not severity_floor:
-        severity_floor = "high"
-    if severity_floor not in severity_rank:
-        if "high" in severity_rank:
-            severity_floor = "high"
-        else:
-            severity_floor = filtered_vocab[-1]
-
-    return EffectiveProposalPolicy(
-        allow_workflow_repo=allow_workflow_repo,
-        allow_moonmind=allow_moonmind,
-        max_items_workflow_repo=max_items_workflow_repo,
-        max_items_moonmind=max_items_moonmind,
-        min_severity_for_moonmind=severity_floor,
-        severity_rank=severity_rank,
-        delivery_provider=(
-            policy.delivery.provider
-            if (
-                policy
-                and policy.delivery
-                and policy.delivery.provider
-            )
-            else "auto"
-        ),
-        provider_metadata=(
-            policy.delivery.model_dump(by_alias=False, exclude_none=True)
-            if policy and policy.delivery
-            else {}
-        ),
-    )
-
 def normalize_queue_job_payload(
     *,
     job_type: str,
@@ -3377,6 +3109,7 @@ __all__ = [
     "is_auto_publish_capable_skill",
     "is_self_managed_publish_skill",
     "normalize_queue_job_payload",
+    "reject_removed_follow_up_fields",
     "resolve_publish_mode_for_skill",
     "reject_workflow_capability_identity_versions",
     "strip_workflow_capability_identity_versions",

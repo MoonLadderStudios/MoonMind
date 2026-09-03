@@ -20,8 +20,7 @@ matches_openapi_affecting_path() {
         moonmind/schemas/temporal_artifact_models.py|\
         moonmind/schemas/temporal_models.py|\
         moonmind/schemas/temporal_signal_contracts.py|\
-        moonmind/schemas/workflow_models.py|\
-        moonmind/schemas/workflow_proposal_models.py)
+        moonmind/schemas/workflow_models.py)
             return 0
             ;;
         tools/export_openapi.py|\

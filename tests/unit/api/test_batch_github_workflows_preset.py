@@ -88,6 +88,10 @@ async def test_batch_github_workflows_seed_and_expansion_contract(tmp_path):
         '--github-repository "MoonLadderStudios/MoonMind"'
         in step["instructions"]
     )
+    assert (
+        '--repository-connection-ref "$MOONMIND_REPOSITORY_CONNECTION_REF"'
+        in step["instructions"]
+    )
     assert "only for open Issue objects returned by GitHub" in step["instructions"]
     assert (
         "$MOONMIND_ACTIVE_SKILLS_DIR/batch-github-workflows/bin/batch_workflows.py"

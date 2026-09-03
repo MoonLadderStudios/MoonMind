@@ -95,9 +95,6 @@ from api_service.services.control_stop_continuation import (
     SqlControlStopContinuationRepository,
     TemporalControlStopContinuationStarter,
 )
-from api_service.services.checkpoint_branch_service import (
-    CheckpointBranchService,
-)
 from api_service.services.checkpoint_branch_turn_execution import (
     CheckpointBranchTurnExecutionOwner,
     CheckpointBranchTurnLaunchError,
@@ -308,12 +305,12 @@ from api_service.api.execution_principal import (
 from moonmind.workflows.executions.execution_contract import (
     WorkflowContractError,
     WorkflowInputAttachmentRef,
-    WorkflowProposalPolicy,
     WorkflowSkillSelectors,
     allows_repository_publish_for_skill_context,
     build_authoritative_workflow_input_snapshot,
     is_non_repository_side_effect_skill,
     is_self_managed_publish_skill,
+    reject_removed_follow_up_fields,
     reject_workflow_capability_identity_versions,
     resolve_publish_mode_for_skill,
 )
@@ -353,7 +350,6 @@ _DASHBOARD_STATUS_BY_STATE: dict[MoonMindWorkflowState, str] = {
     MoonMindWorkflowState.PLANNING: "running",
     MoonMindWorkflowState.AWAITING_SLOT: "queued",
     MoonMindWorkflowState.EXECUTING: "running",
-    MoonMindWorkflowState.PROPOSALS: "running",
     MoonMindWorkflowState.AWAITING_EXTERNAL: "awaiting_action",
     MoonMindWorkflowState.FINALIZING: "running",
     MoonMindWorkflowState.NO_COMMIT: "completed",
@@ -450,7 +446,6 @@ _TEMPORAL_STATUS_VALUES = (
     "planning",
     "awaiting_slot",
     "executing",
-    "proposals",
     "awaiting_external",
     "finalizing",
     "completed",
@@ -580,7 +575,6 @@ _NON_TERMINAL_MM_STATES = frozenset(
         "planning",
         "awaiting_slot",
         "executing",
-        "proposals",
         "awaiting_external",
         "finalizing",
     }
@@ -3314,7 +3308,7 @@ def _skill_lifecycle_intent(
     resolved_skillset_ref: str | None,
 ) -> ExecutionSkillLifecycleIntentModel | None:
     raw = _first_mapping(params.get("skillLifecycleIntent"))
-    source = _coerce_temporal_scalar(raw.get("source")) or "proposal"
+    source = _coerce_temporal_scalar(raw.get("source")) or "execution"
     resolution_mode = _coerce_temporal_scalar(raw.get("resolutionMode"))
     explanation = _coerce_temporal_scalar(raw.get("explanation"))
     selectors = _skill_selector_names(raw.get("selectors")) or task_skills or []
@@ -4290,12 +4284,6 @@ def _serialize_execution(
         getattr(record, "finish_outcome_code", None),
         logger=logger,
     )
-    proposal_summary = _proposal_summary_from_memo(memo)
-    if isinstance(finish_summary, Mapping):
-        finish_proposals = finish_summary.get("proposals")
-        if isinstance(finish_proposals, Mapping):
-            proposal_summary = dict(finish_proposals)
-    proposal_outcomes = _proposal_outcomes_from_summary(proposal_summary)
     run_metrics = _run_metrics_from_summary(
         record=record,
         finish_summary=finish_summary,
@@ -4304,7 +4292,6 @@ def _serialize_execution(
     )
     improvement_signals = _improvement_signals_from_summary(
         finish_summary=finish_summary,
-        proposal_summary=proposal_summary,
     )
     log_context = _execution_log_context(
         record=record,
@@ -4316,7 +4303,6 @@ def _serialize_execution(
         finish_summary=finish_summary,
         close_status=close_status,
         state_value=state_value,
-        proposal_summary=proposal_summary,
         pr_url=pr_url,
     )
     progress = _bounded_execution_progress_from_sources(
@@ -4457,8 +4443,6 @@ def _serialize_execution(
         improvement_signals=improvement_signals,
         recommended_next_action=recommended_next_action,
         log_context=log_context,
-        proposal_summary=proposal_summary,
-        proposal_outcomes=proposal_outcomes,
         finish_outcome_code=finish_outcome_code,
         finish_summary=finish_summary,
         debug_fields=debug_fields,
@@ -4536,18 +4520,6 @@ def _verified_output_branch(
     if isinstance(url, str) and url.startswith("https://github.com/"):
         result["url"] = url
     return {key: value for key, value in result.items() if value not in (None, "")}
-
-
-def _proposal_summary_from_memo(memo: Mapping[str, Any]) -> dict[str, Any] | None:
-    direct = memo.get("proposals")
-    if isinstance(direct, Mapping):
-        return dict(direct)
-    finish_summary = _finish_summary_from_memo(memo)
-    if isinstance(finish_summary, Mapping):
-        proposals = finish_summary.get("proposals")
-        if isinstance(proposals, Mapping):
-            return dict(proposals)
-    return None
 
 
 def _int_or_none(value: object) -> int | None:
@@ -4661,7 +4633,6 @@ def _compact_signal(
 def _improvement_signals_from_summary(
     *,
     finish_summary: Mapping[str, Any] | None,
-    proposal_summary: Mapping[str, Any] | None,
 ) -> list[dict[str, Any]]:
     signals: list[dict[str, Any]] = []
     if isinstance(finish_summary, Mapping):
@@ -4724,17 +4695,6 @@ def _improvement_signals_from_summary(
                         tags=tags,
                     )
                 )
-    if isinstance(proposal_summary, Mapping):
-        errors = proposal_summary.get("errors") or []
-        if isinstance(errors, list) and errors:
-            signals.append(
-                _compact_signal(
-                    code="proposal_stage_errors",
-                    source="finish_summary.proposals",
-                    summary=str(errors[0]),
-                    tags=["artifact_gap"],
-                )
-            )
     return signals
 
 
@@ -4765,7 +4725,6 @@ def _recommended_next_action(
     finish_summary: Mapping[str, Any] | None,
     close_status: str | None,
     state_value: str,
-    proposal_summary: Mapping[str, Any] | None,
     pr_url: str | None,
 ) -> str:
     finish_outcome = (
@@ -4776,13 +4735,6 @@ def _recommended_next_action(
     code = ""
     if isinstance(finish_outcome, Mapping):
         code = str(finish_outcome.get("code") or "").strip().upper()
-    submitted_count = (
-        _int_or_none(proposal_summary.get("submittedCount"))
-        if proposal_summary
-        else None
-    )
-    if submitted_count and submitted_count > 0:
-        return "Review generated improvement proposals."
     if code in {"PUBLISHED_PR", "PUBLISHED_BRANCH"}:
         return (
             "Review published output."
@@ -4796,56 +4748,8 @@ def _recommended_next_action(
     if code == "CANCELLED" or state_value == "canceled":
         return "Review cancellation reason and rerun if needed."
     if code == "FAILED" or str(close_status or "").lower() == "failed":
-        return "Review failure diagnostics and create a follow-up proposal if needed."
+        return "Review failure diagnostics and create a separate workflow or issue if needed."
     return "Monitor execution until a terminal outcome is available."
-
-
-def _proposal_outcomes_from_summary(
-    proposal_summary: Mapping[str, Any] | None,
-) -> list[dict[str, Any]]:
-    if not proposal_summary:
-        return []
-    outcomes: list[dict[str, Any]] = []
-    outcome_index: dict[tuple[str, str], dict[str, Any]] = {}
-
-    def merge_outcome(item: Mapping[str, Any], *, default_status: str) -> None:
-        outcome = dict(item)
-        outcome.setdefault("deliveryStatus", default_status)
-        external_url = str(outcome.get("externalUrl") or "").strip()
-        external_key = str(outcome.get("externalKey") or "").strip()
-        keys: list[tuple[str, str]] = []
-        if external_url:
-            keys.append(("url", external_url))
-        if external_key:
-            keys.append(("key", external_key))
-        if not keys:
-            outcomes.append(outcome)
-            return
-        existing = next(
-            (outcome_index[key] for key in keys if key in outcome_index), None
-        )
-        if existing is None:
-            for key in keys:
-                outcome_index[key] = outcome
-            outcomes.append(outcome)
-            return
-        existing.update({k: v for k, v in outcome.items() if v is not None})
-        for key in keys:
-            outcome_index[key] = existing
-
-    for item in proposal_summary.get("externalLinks") or []:
-        if not isinstance(item, Mapping):
-            continue
-        merge_outcome(item, default_status="delivered")
-    for item in proposal_summary.get("dedupUpdates") or []:
-        if not isinstance(item, Mapping):
-            continue
-        merge_outcome(item, default_status="updated")
-    for item in proposal_summary.get("deliveryFailures") or []:
-        if not isinstance(item, Mapping):
-            continue
-        merge_outcome(item, default_status="failed")
-    return outcomes
 
 
 def _recovery_checkpoint_ref_from_record(record) -> str | None:
@@ -7449,12 +7353,6 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
             "can_pause",
             "can_cancel",
         },
-        "proposals": {
-            "can_set_title",
-            "can_update_inputs",
-            "can_pause",
-            "can_cancel",
-        },
         "awaiting_external": {
             "can_approve",
             "can_pause",
@@ -8226,19 +8124,6 @@ def _normalize_task_skill_selectors(
         raise _invalid_workflow_request(f"{field_name} must be an object.")
     try:
         return WorkflowSkillSelectors.model_validate(dict(raw)).model_dump(
-            by_alias=True,
-            exclude_none=True,
-        )
-    except (WorkflowContractError, ValidationError, ValueError) as exc:
-        raise _invalid_workflow_request(str(exc)) from exc
-
-def _normalize_workflow_proposal_policy(raw: Any) -> dict[str, Any] | None:
-    if raw is None:
-        return None
-    if not isinstance(raw, Mapping):
-        raise _invalid_workflow_request("payload.workflow.proposalPolicy must be an object.")
-    try:
-        return WorkflowProposalPolicy.model_validate(dict(raw)).model_dump(
             by_alias=True,
             exclude_none=True,
         )
@@ -10847,6 +10732,11 @@ async def _create_execution_from_workflow_request(
         raise _invalid_workflow_request(
             f"{shape_name} Temporal submit requests require {required_field}."
         )
+    try:
+        reject_removed_follow_up_fields(payload, field_path="payload")
+        reject_removed_follow_up_fields(task_payload, field_path="workflow")
+    except WorkflowContractError as exc:
+        raise _invalid_workflow_request(str(exc)) from exc
     _reject_submit_version_identity(task_payload)
 
     # Resolve child-agent runtime inheritance before downstream normalization
@@ -11055,10 +10945,6 @@ async def _create_execution_from_workflow_request(
         task_payload.get("skills"),
         field_name="payload.workflow.skills",
     )
-    normalized_proposal_policy = _normalize_workflow_proposal_policy(
-        task_payload.get("proposalPolicy")
-    )
-    propose_tasks = _coerce_bool(task_payload.get("proposeTasks"), default=False)
     normalized_task_for_planner: dict[str, Any] = {}
     instructions = str(task_payload.get("instructions") or "").strip()
     if report_output_payload.get("enabled"):
@@ -11071,9 +10957,6 @@ async def _create_execution_from_workflow_request(
         normalized_task_for_planner["instructions"] = instructions
     if report_output_payload:
         normalized_task_for_planner["reportOutput"] = dict(report_output_payload)
-    normalized_task_for_planner["proposeTasks"] = propose_tasks
-    if normalized_proposal_policy is not None:
-        normalized_task_for_planner["proposalPolicy"] = normalized_proposal_policy
     normalized_input_attachments = _normalize_task_input_attachments(
         task_payload.get("inputAttachments")
         or task_payload.get("input_attachments"),
@@ -12197,32 +12080,17 @@ def _build_recurring_target(
                 target[target_key] = value
         return target
 
-    root_propose_tasks = target_payload.pop("proposeTasks", None)
-    root_proposal_policy = target_payload.pop("proposalPolicy", None)
     task_key, task_payload = _recurring_workflow_payload(target_payload)
     if task_key is not None:
-        propose_tasks_value = (
-            task_payload["proposeTasks"]
-            if "proposeTasks" in task_payload
-            else root_propose_tasks
-        )
-        proposal_policy_value = (
-            task_payload["proposalPolicy"]
-            if "proposalPolicy" in task_payload
-            else root_proposal_policy
-        )
-        task_payload["proposeTasks"] = _coerce_bool(
-            propose_tasks_value,
-            default=False,
-        )
-        normalized_proposal_policy = _normalize_workflow_proposal_policy(
-            proposal_policy_value
-        )
-        if normalized_proposal_policy is not None:
-            task_payload["proposalPolicy"] = normalized_proposal_policy
-        else:
-            task_payload.pop("proposalPolicy", None)
+        task_payload.pop("proposeTasks", None)
+        task_payload.pop("propose_tasks", None)
+        task_payload.pop("proposalPolicy", None)
+        task_payload.pop("proposal_policy", None)
         target_payload[task_key] = task_payload
+    target_payload.pop("proposeTasks", None)
+    target_payload.pop("propose_tasks", None)
+    target_payload.pop("proposalPolicy", None)
+    target_payload.pop("proposal_policy", None)
     _stamp_recurring_runtime_metadata(target_payload, runtime_metadata)
     return {
         "workflowType": workflow_type,
@@ -18460,9 +18328,10 @@ async def rerun_execution(
             canonical_identifier=canonical_workflow_id,
         )
 
-    execution = _serialize_execution(record, user=user)
     if snapshot_ref:
         await session.commit()
+        await session.refresh(record)
+    execution = _serialize_execution(record, user=user)
     return execution
 
 

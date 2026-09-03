@@ -5300,6 +5300,25 @@ async def update_github_issue_status(
             )
     pull_request_url = _github_status_pull_request_url(inputs, _context)
     if mode == "finalize_after_pr_or_done":
+        if (
+            not pull_request_url
+            and assessment_available
+            and assessment_verdict
+            and assessment_verdict != "FULLY_IMPLEMENTED"
+        ):
+            return ToolResult(
+                status="FAILED",
+                outputs={
+                    "issueRef": issue_ref,
+                    "decision": "blocked",
+                    "assessmentVerdict": assessment_verdict,
+                    "summary": (
+                        "Skipped GitHub issue finalization because the initial "
+                        f"assessment was {assessment_verdict} and no authoritative "
+                        "pull request URL was available."
+                    ),
+                },
+            )
         push_status, commit_count = _github_status_publish_change_evidence(
             inputs,
             _context,

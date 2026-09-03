@@ -393,6 +393,9 @@ async def test_long_running_launch_is_visible_through_observability_routes(
     profile = ManagedRuntimeProfile(
         runtimeId="test_runtime",
         profileId="profile-1",
+        # #3821: operator-supplied clearing policy for a runtime outside the
+        # backend strategy table; launches as preserved legacy custom.
+        clearEnvKeys=["OPENAI_API_KEY"],
         commandTemplate=[
             "python3",
             "-c",

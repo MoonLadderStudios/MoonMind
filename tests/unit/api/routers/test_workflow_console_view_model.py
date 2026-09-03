@@ -28,12 +28,6 @@ def test_normalize_status_maps_temporal_executing_to_running() -> None:
 def test_normalize_status_maps_temporal_planning_to_running() -> None:
     assert dashboard_view_model.normalize_status("temporal", "planning") == "running"
 
-def test_normalize_status_maps_temporal_proposals_to_running() -> None:
-    assert dashboard_view_model.normalize_status("temporal", "proposals") == "running"
-    assert dashboard_view_model.normalize_status("proposals", "proposals") == "running"
-    assert dashboard_view_model.status_maps()["temporal"]["proposals"] == "running"
-    assert "proposals" not in dashboard_view_model.status_maps()
-
 def test_normalize_status_maps_temporal_canceled_spellings_to_canceled() -> None:
     assert dashboard_view_model.normalize_status("temporal", "canceled") == "canceled"
     assert dashboard_view_model.normalize_status("temporal", "cancelled") == "canceled"
@@ -423,7 +417,6 @@ def test_build_runtime_config_uses_settings_defaults(monkeypatch) -> None:
     assert config["system"]["defaultModelByRuntime"]["claude_code"] == "claude-test-model"
     assert config["system"]["defaultEffortByRuntime"]["codex_cli"] == "medium"
     assert config["system"]["defaultPublishMode"] == "branch"
-    assert config["system"]["defaultProposeWorkflows"] is False
 
 def test_build_runtime_config_includes_configured_repository_options(
     monkeypatch,

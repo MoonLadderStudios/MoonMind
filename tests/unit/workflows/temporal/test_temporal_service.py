@@ -2650,7 +2650,7 @@ async def test_create_execution_keeps_future_remediation_policy_inert(
                     "remediationPolicy": {
                         "enabled": True,
                         "triggers": ["failed", "attention_required", "stuck"],
-                        "createMode": "proposal",
+                        "createMode": "immediate_task",
                         "templateRef": "admin_healer_default",
                         "authorityMode": "approval_gated",
                         "maxActiveRemediations": 1,
@@ -3383,7 +3383,7 @@ async def test_record_terminal_state_fans_out_dependency_resolution_signals(
             summary="Prerequisite completed from workflow terminal path.",
             finish_summary={
                 "finishOutcome": {"code": "SUCCESS"},
-                "proposals": {"submittedCount": 1},
+                "artifacts": {"count": 1},
             },
         )
 
@@ -3396,7 +3396,7 @@ async def test_record_terminal_state_fans_out_dependency_resolution_signals(
         assert source.finish_outcome_code == "SUCCESS"
         assert source.finish_summary_json == {
             "finishOutcome": {"code": "SUCCESS"},
-            "proposals": {"submittedCount": 1},
+            "artifacts": {"count": 1},
         }
         mock_client_adapter.signal_workflow.assert_awaited_once()
         assert mock_client_adapter.signal_workflow.await_args.args[0] == (

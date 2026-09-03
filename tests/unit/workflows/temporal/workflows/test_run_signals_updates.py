@@ -1254,6 +1254,87 @@ def test_child_state_changed_sets_provider_profile_waiting_reason(monkeypatch):
     assert workflow_instance._waiting_reason is None
     assert workflow_instance._attention_required is False
 
+
+@pytest.mark.asyncio
+async def test_generic_omnigent_production_projection_crosses_temporal_boundary(
+    mock_run_environment,
+    monkeypatch,
+):
+    from moonmind.omnigent import production as omnigent_production
+    from moonmind.workflows.temporal.client import TemporalClientAdapter
+
+    monkeypatch.setattr(omnigent_production, "generic_host_enabled", lambda: True)
+    monkeypatch.setattr(omnigent_production, "opencode_support_enabled", lambda: True)
+    monkeypatch.setattr(
+        omnigent_production,
+        "resolved_server_url",
+        lambda: "http://omnigent.test",
+    )
+    monkeypatch.setattr(
+        omnigent_production,
+        "resolve_deployed_server_build_digest",
+        lambda: "sha256:" + "a" * 64,
+    )
+    monkeypatch.setenv(
+        "MOONMIND_OMNIGENT_HOST_SERVER_URL",
+        "http://omnigent-host.test",
+    )
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EXPECTED_HOST_OWNER", "moonmind-test")
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        injected_adapter = TemporalClientAdapter(env.client)
+        monkeypatch.setattr(
+            omnigent_production,
+            "TemporalClientAdapter",
+            lambda: injected_adapter,
+        )
+        async with Worker(
+            env.client,
+            task_queue="test-omnigent-state-projection",
+            workflows=[MoonMindUserWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            workflow_id = "test-generic-omnigent-state-projection"
+            handle = await env.client.start_workflow(
+                MoonMindUserWorkflow.run,
+                {
+                    "workflow_type": "MoonMind.UserWorkflow",
+                    "initial_parameters": {},
+                    "plan_artifact_ref": "ref-123",
+                },
+                id=workflow_id,
+                task_queue="test-omnigent-state-projection",
+            )
+            services = omnigent_production.build_generic_omnigent_execution_services(
+                session_factory=object(),
+                artifact_gateway=object(),
+                run_store=object(),
+            )
+
+            await services.generic_realizer._notify_execution_state(
+                workflow_id,
+                "awaiting_slot",
+                "Waiting for Provider Profile capacity.",
+            )
+            status = await handle.query("get_status")
+            assert status["state"] == STATE_AWAITING_SLOT
+            assert status["waiting_reason"] == "provider_profile_slot"
+            assert status["summary"] == "Waiting for Provider Profile capacity."
+
+            await services.generic_realizer._notify_execution_state(
+                workflow_id,
+                "running",
+                "Agent is running.",
+            )
+            status = await handle.query("get_status")
+            assert status["state"] == "executing"
+            assert status["waiting_reason"] is None
+            assert status["summary"] == "Agent is running."
+
+            result = await handle.result()
+            assert result["status"] == "success"
+
+
 def test_mm_started_at_stamped_on_launch_and_immutable_across_requeue(monkeypatch):
     """``mm_started_at`` is set exactly once when the child reports it has
     crossed from awaiting_slot into launching/running. A subsequent return to

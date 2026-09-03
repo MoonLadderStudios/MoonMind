@@ -166,6 +166,90 @@ def test_merge_automation_summary_payload_bounds_published_artifact_refs() -> No
     assert len(workflow._resolver_attempt_artifact_refs) == max_refs + 3
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("include_parent_plan", [True, False])
+async def test_prepare_omnigent_resolver_request_compiles_child_plan(
+    monkeypatch: pytest.MonkeyPatch,
+    include_parent_plan: bool,
+) -> None:
+    payload = _payload()
+    parent_plan = {
+        "planRef": "omnigent-execution-plan:sha256:" + "a" * 64,
+        "planDigest": "sha256:" + "a" * 64,
+        "planArtifactRef": "art-parent-plan",
+        "taskInputSnapshotRef": "art-parent-task",
+        "taskInputSnapshotDigest": "sha256:" + "b" * 64,
+    }
+    payload["resolverTemplate"] = {
+        "targetRuntime": "omnigent",
+    }
+    if include_parent_plan:
+        payload["resolverTemplate"]["parentOmnigentExecutionPlan"] = parent_plan
+    workflow = MoonMindMergeAutomationWorkflow()
+    workflow._input = merge_automation_module.MergeAutomationStartInput.model_validate(
+        payload
+    )
+    child_plan = {
+        "planRef": "omnigent-execution-plan:sha256:" + "c" * 64,
+        "planDigest": "sha256:" + "c" * 64,
+        "planArtifactRef": "art-child-plan",
+        "taskInputSnapshotRef": "art-child-task",
+        "taskInputSnapshotDigest": "sha256:" + "d" * 64,
+    }
+    child_request = {
+        "workflow_type": "MoonMind.UserWorkflow",
+        "title": "Resolve PR #350",
+        "initial_parameters": {
+            "targetRuntime": "omnigent",
+            "task": {"tool": {"type": "skill", "name": "pr-resolver"}},
+        },
+    }
+    observed: dict[str, Any] = {}
+
+    async def fake_execute_activity(
+        activity_type: str,
+        activity_payload: dict[str, Any],
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        observed.update(
+            {
+                "activityType": activity_type,
+                "payload": activity_payload,
+                "taskQueue": kwargs.get("task_queue"),
+            }
+        )
+        prepared = dict(activity_payload["childWorkflowRequest"])
+        prepared_parameters = dict(prepared["initial_parameters"])
+        prepared_parameters["omnigentExecutionPlan"] = child_plan
+        prepared_parameters["resolvedSkillsetRef"] = "art-child-skills"
+        prepared["initial_parameters"] = prepared_parameters
+        return prepared
+
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+
+    prepared = await workflow._prepare_omnigent_resolver_request(
+        child_request,
+        resolver_workflow_id="resolver:child:1",
+    )
+
+    assert observed["activityType"] == "omnigent.prepare_child_execution_plan"
+    assert observed["taskQueue"] == "mm.activity.agent_runtime"
+    assert observed["payload"]["parentWorkflowId"] == "wf-parent"
+    assert observed["payload"]["childWorkflowId"] == "resolver:child:1"
+    if include_parent_plan:
+        assert observed["payload"]["parentExecutionPlan"] == parent_plan
+    else:
+        assert "parentExecutionPlan" not in observed["payload"]
+    assert prepared["initial_parameters"]["omnigentExecutionPlan"] == child_plan
+    assert prepared["initial_parameters"]["resolvedSkillsetRef"] == (
+        "art-child-skills"
+    )
+
+
 def test_legacy_gated_continuation_uses_fallback_poll_deadline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -155,7 +155,7 @@ Execution requests dispatch into `MoonMind.UserWorkflow` or another allowed work
 |---|---|---|---|
 | `workflow` | `mm.workflow` | Workflow orchestration | Workflow code only; no side effects. |
 | `artifacts` | `mm.activity.artifacts` | Artifact I/O, provider profiles | I/O-bound artifact storage and metadata. |
-| `llm` | `mm.activity.llm` | LLM calls, plan generation, proposals | Rate-limited by provider quotas. |
+| `llm` | `mm.activity.llm` | LLM calls, plan generation, and review gates | Rate-limited by provider quotas. |
 | `sandbox` | `mm.activity.sandbox` | Repo checkout, patch, tests, commands | CPU/memory heavy; strict concurrency limits. |
 | `integrations` | `mm.activity.integrations` | External provider calls | Protected with rate limiting and circuit breakers. |
 | `agent_runtime` | `mm.activity.agent_runtime` | Supervised agent execution, artifact publish | Long-lived runtime executions. |
@@ -174,7 +174,7 @@ The legacy `/api/queue/jobs` lifecycle routes and `/api/queue` worker callback r
 - [../Api/ExecutionsApiContract.md](../Api/ExecutionsApiContract.md) — direct execution lifecycle contract
 - [WorkflowArchitecture.md](WorkflowArchitecture.md) — overall Workflow system design
 - [../UI/WorkflowConsoleArchitecture.md](../UI/WorkflowConsoleArchitecture.md) — Workflow-oriented UI over execution APIs
-- [WorkflowProposalSystem.md](WorkflowProposalSystem.md) — Workflow proposal generation
+- [FollowUpWorkSystem.md](FollowUpWorkSystem.md) — explicit follow-up work boundaries
 - [WorkflowCancellation.md](WorkflowCancellation.md) — cancellation flow
 - [../Observability/LiveLogs.md](../Observability/LiveLogs.md) — managed-run log and observability design
 - [../Temporal/TemporalArchitecture.md](../Temporal/TemporalArchitecture.md) — Temporal infrastructure

@@ -501,7 +501,6 @@ _STATUS_MAPS: dict[str, dict[str, str]] = {
         "initializing": "queued",
         "planning": "running",
         "executing": "running",
-        "proposals": "running",
         "awaiting_external": "awaiting_action",
         "awaiting_slot": "queued",
         "waiting_on_dependencies": "waiting",
@@ -786,9 +785,6 @@ def build_runtime_config(
                 "latencyMs": int(os.environ.get("MOONMIND_FOLLOWUP_RETRIEVAL_MAX_LATENCY_MS", "5000")),
                 "maxLifetimeSeconds": int(os.environ.get("MOONMIND_FOLLOWUP_RETRIEVAL_MAX_LIFETIME_SECONDS", "900")),
             },
-            # Keep workflow proposals opt-in from the submit form so Temporal
-            # remains the default execution substrate for new runs.
-            "defaultProposeWorkflows": False,
             "workerRuntimeEnv": "MOONMIND_WORKER_RUNTIME",
             "supportedRuntimes": supported_runtimes,
             "supportedWorkerRuntimes": list(_SUPPORTED_WORKER_RUNTIMES),

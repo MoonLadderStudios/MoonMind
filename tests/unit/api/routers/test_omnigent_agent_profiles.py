@@ -8,12 +8,14 @@ from api_service.api.routers.omnigent_agent_profiles import (
     AgentProfileDocument,
     GuidedProfileCreate,
     _default_builtin_opencode_launch_policy_refs,
+    _catalog_refresh_preserves_builtin_binding,
     _digest,
     _normalized,
     _preserve_builtin_opencode_model,
     _response,
     router,
 )
+from moonmind.omnigent.harness_platform import create_catalog_snapshot
 
 
 def document(**source):
@@ -52,6 +54,79 @@ def test_catalog_refresh_preserves_bootstrap_qualified_opencode_model():
 
     assert reconciled["model"] == active["model"]
     assert seed["model"] == {}
+
+
+def test_catalog_refresh_preserves_binding_when_only_live_inventory_changes():
+    implementation = {
+        "sourceKind": "core",
+        "package": "omnigent.harnesses.opencode",
+        "version": "1.0.0",
+        "digest": "sha256:" + "1" * 64,
+    }
+    harnesses = [
+        {
+            "id": "opencode-native",
+            "label": "OpenCode",
+            "implementation": implementation,
+        }
+    ]
+    authority = create_catalog_snapshot(
+        endpointRef="default",
+        omnigentVersion="1.2.3",
+        omnigentBuildDigest="sha256:" + "2" * 64,
+        sourceDigest="sha256:" + "3" * 64,
+        harnesses=harnesses,
+    )
+    observation = create_catalog_snapshot(
+        endpointRef="default",
+        omnigentVersion="1.2.3",
+        omnigentBuildDigest="sha256:" + "2" * 64,
+        sourceDigest="sha256:" + "4" * 64,
+        harnesses=harnesses,
+    )
+
+    assert _catalog_refresh_preserves_builtin_binding(
+        authority_payload=authority.model_dump(by_alias=True, mode="json"),
+        observation=observation,
+        harness_id="opencode-native",
+        implementation_ref=authority.harnesses[0].implementation.implementation_ref(),
+    )
+
+
+def test_catalog_refresh_rejects_a_changed_omnigent_build():
+    harnesses = [
+        {
+            "id": "opencode-native",
+            "label": "OpenCode",
+            "implementation": {
+                "sourceKind": "core",
+                "package": "omnigent.harnesses.opencode",
+                "version": "1.0.0",
+                "digest": "sha256:" + "1" * 64,
+            },
+        }
+    ]
+    authority = create_catalog_snapshot(
+        endpointRef="default",
+        omnigentVersion="1.2.3",
+        omnigentBuildDigest="sha256:" + "2" * 64,
+        sourceDigest="sha256:" + "3" * 64,
+        harnesses=harnesses,
+    )
+    observation = create_catalog_snapshot(
+        endpointRef="default",
+        omnigentVersion="1.2.4",
+        omnigentBuildDigest="sha256:" + "5" * 64,
+        sourceDigest="sha256:" + "4" * 64,
+        harnesses=harnesses,
+    )
+
+    assert not _catalog_refresh_preserves_builtin_binding(
+        authority_payload=authority.model_dump(by_alias=True, mode="json"),
+        observation=observation,
+        harness_id="opencode-native",
+        implementation_ref=authority.harnesses[0].implementation.implementation_ref(),
+    )
 
 
 @pytest.mark.asyncio

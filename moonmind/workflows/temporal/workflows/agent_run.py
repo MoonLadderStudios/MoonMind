@@ -243,6 +243,9 @@ OMNIGENT_SESSION_ADMISSION_PATCH_ID = (
 OMNIGENT_COMPACT_RESOLVE_INTENT_PATCH_ID = (
     "agent-run-omnigent-compact-resolve-intent-v1"
 )
+OMNIGENT_COMPACT_WORKSPACE_CHECKPOINT_PATCH_ID = (
+    "agent-run-omnigent-compact-workspace-checkpoint-v1"
+)
 OMNIGENT_EXECUTION_PLAN_ADMISSION_PATCH_ID = (
     "agent-run-omnigent-execution-plan-admission-v1"
 )
@@ -620,6 +623,7 @@ class MoonMindAgentRun:
         agent_run_id: str,
         admitted_feature_generation: str,
         compact_plan_authority: bool,
+        compact_workspace_checkpoint_authority: bool,
     ) -> dict[str, Any]:
         """Build the replay-versioned AgentRun-to-Activity handoff.
 
@@ -667,6 +671,19 @@ class MoonMindAgentRun:
                 ).encode("utf-8")
                 payload["executionInputRefsDigest"] = (
                     "sha256:" + hashlib.sha256(encoded_refs).hexdigest()
+                )
+            checkpoint_restore_ref = str(
+                (request.workspace_spec or {}).get(
+                    "workspaceCheckpointRestoreRef"
+                )
+                or ""
+            ).strip()
+            if (
+                compact_workspace_checkpoint_authority
+                and checkpoint_restore_ref
+            ):
+                payload["workspaceCheckpointRestoreRef"] = (
+                    checkpoint_restore_ref
                 )
         else:
             payload["request"] = request.model_dump(
@@ -4678,6 +4695,9 @@ class MoonMindAgentRun:
         use_compact_omnigent_resolve_intent = workflow.patched(
             OMNIGENT_COMPACT_RESOLVE_INTENT_PATCH_ID
         )
+        use_compact_omnigent_workspace_checkpoint = workflow.patched(
+            OMNIGENT_COMPACT_WORKSPACE_CHECKPOINT_PATCH_ID
+        )
         use_omnigent_execution_plan_admission = workflow.patched(
             OMNIGENT_EXECUTION_PLAN_ADMISSION_PATCH_ID
         )
@@ -5577,6 +5597,9 @@ class MoonMindAgentRun:
                                     compact_plan_authority=(
                                         use_compact_omnigent_resolve_intent
                                         and plan_bound_session
+                                    ),
+                                    compact_workspace_checkpoint_authority=(
+                                        use_compact_omnigent_workspace_checkpoint
                                     ),
                                 ),
                                 cancellation_type=(

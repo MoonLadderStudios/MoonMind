@@ -216,26 +216,60 @@ def _complete_fake_profile(profile: dict[str, Any]) -> dict[str, Any]:
     """Expand common test shorthand into a production-shaped profile payload."""
 
     if profile.get("profile_id") != "codex-default":
-        return dict(profile)
-    defaults: dict[str, Any] = {
-        "runtime_id": "codex_cli",
-        "provider_id": "openai",
-    }
-    if profile.get("credential_source") == "oauth_volume":
-        defaults.update(
-            {
-                "runtime_materialization_mode": "oauth_home",
-                "max_parallel_runs": 1,
-            }
-        )
-    elif profile.get("credential_source") == "secret_ref":
-        defaults.update(
-            {
-                "runtime_materialization_mode": "api_key_env",
-                "secret_refs": {"openai_api_key": "env://OPENAI_API_KEY"},
-            }
-        )
-    defaults.update(profile)
+        defaults = dict(profile)
+    else:
+        defaults = {
+            "runtime_id": "codex_cli",
+            "provider_id": "openai",
+        }
+        if profile.get("credential_source") == "oauth_volume":
+            defaults.update(
+                {
+                    "runtime_materialization_mode": "oauth_home",
+                    "max_parallel_runs": 1,
+                }
+            )
+        elif profile.get("credential_source") == "secret_ref":
+            defaults.update(
+                {
+                    "runtime_materialization_mode": "api_key_env",
+                    "secret_refs": {"openai_api_key": "env://OPENAI_API_KEY"},
+                }
+            )
+        defaults.update(profile)
+    # #3821: adapter fixtures carry backend-derived isolation policy so the
+    # shared launch-ready predicate evaluates them the way production does.
+    if "clear_env_keys" not in defaults and "clearEnvKeys" not in defaults:
+        try:
+            from moonmind.provider_profiles.isolation_policy import (
+                derive_isolation_policy as _derive_fixture_policy,
+            )
+
+            _source = str(defaults.get("credential_source") or "")
+            _materialization = str(
+                defaults.get("runtime_materialization_mode") or ""
+            )
+            if _source == "oauth_volume" and _materialization == "oauth_home":
+                _method = "oauth"
+            elif _source == "secret_ref":
+                _method = "api_key"
+            elif _source == "none":
+                _method = "none"
+            else:
+                _method = ""
+            _derived = _derive_fixture_policy(
+                runtime_id=defaults.get("runtime_id"),
+                provider_id=defaults.get("provider_id"),
+                authentication_method=_method,
+                credential_source=_source,
+                runtime_materialization_mode=_materialization,
+            )
+            if _derived is not None:
+                defaults["clear_env_keys"] = list(_derived.keys)
+        except Exception:
+            # Best-effort fixture enrichment only; a derivation failure leaves
+            # the profile without keys, preserving the pre-existing behavior.
+            pass
     return defaults
 
 
@@ -1331,6 +1365,15 @@ async def test_start_passes_oauth_profile_auth_target_to_launch_session(
                     "volume_ref": "codex_auth_volume",
                     "volume_mount_path": "/home/app/.codex-auth",
                     "max_parallel_runs": 1,
+                    # #3821: backend-derived isolation policy for
+                    # codex_cli/openai/oauth.
+                    "clear_env_keys": [
+                        "OPENAI_API_KEY",
+                        "OPENAI_BASE_URL",
+                        "OPENAI_ORG_ID",
+                        "OPENAI_PROJECT",
+                        "MINIMAX_API_KEY",
+                    ],
                 }
             ]
         ),

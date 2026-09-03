@@ -43,7 +43,7 @@ TemporalExecutionService.create_execution()  ← service.py
   │  extracts initial_parameters from payload:
   │    requestType, repository, requiredCapabilities,
   │    targetRuntime, model, effort, publishMode,
-  │    proposeTasks, stepCount, priority, maxAttempts
+  │    stepCount, priority, maxAttempts
   │
   ▼
 TemporalExecutionService.create_execution()  ← service.py
@@ -303,7 +303,7 @@ canonical open backlog is maintained in
 │                                                                           │
 │   MoonMind.UserWorkflow  (task queue: mm.workflow)                                 │
 │   ┌──────────────────────────────────────────────────────────────────┐    │
-│   │ initialize ──► plan ──► execute ──► [proposals] ──► finalize    │    │
+│   │ initialize ──► plan ──► execute ──► finalize                   │    │
 │   │                  │          │                                    │    │
 │   │    ┌─────────────┘          └──────────────────┐                │    │
 │   │    ▼                                          ▼                 │    │

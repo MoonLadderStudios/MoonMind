@@ -39,6 +39,7 @@ from api_service.services.provider_profile_creation_presets import (
 from api_service.services.provider_profile_service import (
     _managed_secret_statuses_for_profiles,
     _manager_profile_payload,
+    apply_oauth_connected_state,
     normalize_runtime_default_profile,
 )
 from api_service.services.provider_profile_readiness import (
@@ -905,6 +906,7 @@ class _TrackedProfile:
         volume_mount_path: str | None = None,
         command_behavior: dict | None = None,
         provider_id: str = "unknown",
+        clear_env_keys: list[str] | None = None,
     ) -> None:
         self.profile_id = profile_id
         self.runtime_id = runtime_id
@@ -921,6 +923,45 @@ class _TrackedProfile:
         self.volume_mount_path = volume_mount_path
         self.command_behavior = command_behavior or {}
         self.priority = priority
+        if clear_env_keys is not None:
+            self.clear_env_keys = list(clear_env_keys)
+        else:
+            # #3821: default fixtures to the backend-derived isolation policy
+            # so the shared launch-ready predicate evaluates them the way
+            # production does. Unknown strategies keep no policy (blocked).
+            self.clear_env_keys = None
+            try:
+                from moonmind.provider_profiles.isolation_policy import (
+                    derive_isolation_policy as _derive_fixture_policy,
+                )
+                from api_service.services.provider_profile_creation import (
+                    infer_authentication_method as _infer_fixture_method,
+                    provider_profile_creation_capabilities as _fixture_capabilities,
+                )
+
+                _capabilities = _fixture_capabilities(
+                    runtime_id=runtime_id, provider_id=provider_id
+                )
+                _method = _infer_fixture_method(
+                    credential_source=credential_source,
+                    runtime_materialization_mode=runtime_materialization_mode,
+                    authentication_methods=_capabilities["authentication_methods"],
+                    auth_state=auth_state,
+                    last_auth_method=None,
+                )
+                _derived = _derive_fixture_policy(
+                    runtime_id=runtime_id,
+                    provider_id=provider_id,
+                    authentication_method=_method or "",
+                    credential_source=credential_source,
+                    runtime_materialization_mode=runtime_materialization_mode,
+                )
+                if _derived is not None:
+                    self.clear_env_keys = list(_derived.keys)
+            except Exception:
+                # Best-effort fixture default only; derivation failures keep
+                # the legacy no-policy behavior for unknown strategies.
+                self.clear_env_keys = None
         self._is_default = is_default
         self._events = events
 
@@ -1982,6 +2023,9 @@ async def test_create_provider_profile(
         "credential_source": "secret_ref",
         "runtime_materialization_mode": "api_key_env",
         "secret_refs": {"API_KEY": "env://secret_v1"},
+        # #3821: unknown strategy needs an explicit shape-valid policy to
+        # classify as legacy_custom (warning) instead of missing (error).
+        "clear_env_keys": ["CUSTOM_LEGACY_KEY"],
         "max_parallel_runs": 5,
         "cooldown_after_429_seconds": 60,
         "rate_limit_policy": "queue",
@@ -2704,6 +2748,8 @@ async def test_create_enabled_provider_profile_clears_default_disabled_reason(
         "credential_source": "secret_ref",
         "runtime_materialization_mode": "api_key_env",
         "secret_refs": {"API_KEY": "env://enabled_profile_secret"},
+        # #3821: unknown strategy needs explicit policy for legacy_custom.
+        "clear_env_keys": ["CUSTOM_LEGACY_KEY"],
         "enabled": True,
         "auth_state": "connected",
         "last_auth_method": "secret_ref",
@@ -2758,6 +2804,7 @@ async def test_create_second_profile_can_become_runtime_default(
         "credential_source": "secret_ref",
         "runtime_materialization_mode": "api_key_env",
         "secret_refs": {"API_KEY": "env://first_secret"},
+        "clear_env_keys": ["CUSTOM_LEGACY_KEY"],
         "enabled": True,
         "auth_state": "connected",
         "disabled_reason": None,
@@ -2769,6 +2816,7 @@ async def test_create_second_profile_can_become_runtime_default(
         "credential_source": "secret_ref",
         "runtime_materialization_mode": "api_key_env",
         "secret_refs": {"API_KEY": "env://second_secret"},
+        "clear_env_keys": ["CUSTOM_LEGACY_KEY"],
         "enabled": True,
         "auth_state": "connected",
         "disabled_reason": None,
@@ -2810,6 +2858,7 @@ async def test_update_profile_can_become_runtime_default(
         "credential_source": "secret_ref",
         "runtime_materialization_mode": "api_key_env",
         "secret_refs": {"API_KEY": "env://patch_first_secret"},
+        "clear_env_keys": ["CUSTOM_LEGACY_KEY"],
         "enabled": True,
         "auth_state": "connected",
         "disabled_reason": None,
@@ -2822,6 +2871,7 @@ async def test_update_profile_can_become_runtime_default(
         "credential_source": "secret_ref",
         "runtime_materialization_mode": "api_key_env",
         "secret_refs": {"API_KEY": "env://patch_second_secret"},
+        "clear_env_keys": ["CUSTOM_LEGACY_KEY"],
         "enabled": True,
         "auth_state": "connected",
         "disabled_reason": None,
@@ -2898,6 +2948,8 @@ async def test_update_profile_clears_disabled_reason_when_enabled(
         "credential_source": "secret_ref",
         "runtime_materialization_mode": "api_key_env",
         "secret_refs": {"API_KEY": "env://patch_enabled_secret"},
+        # #3821: unknown strategy needs explicit policy for later enable.
+        "clear_env_keys": ["CUSTOM_LEGACY_KEY"],
         "auth_state": "connected",
         "disabled_reason": "missing_credentials",
     }
@@ -2947,6 +2999,8 @@ async def test_update_profile_enabled_accepts_active_database_secret_ref(
         "credential_source": "secret_ref",
         "runtime_materialization_mode": "api_key_env",
         "secret_refs": {"OPENAI_API_KEY": f"db://{secret_slug}"},
+        # #3821: unknown strategy needs explicit policy for later enable.
+        "clear_env_keys": ["CUSTOM_LEGACY_KEY"],
         "auth_state": "connected",
         "disabled_reason": "missing_credentials",
     }
@@ -3036,6 +3090,14 @@ async def test_update_claude_anthropic_can_replace_minimax_runtime_default(
                     credential_source=ProviderCredentialSource.SECRET_REF,
                     runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
                     secret_refs={"ANTHROPIC_AUTH_TOKEN": "env://MINIMAX_API_KEY"},
+                    # #3821: backend-derived isolation policy for
+                    # claude_code/minimax/api_key.
+                    clear_env_keys=[
+                        "ANTHROPIC_API_KEY",
+                        "ANTHROPIC_AUTH_TOKEN",
+                        "ANTHROPIC_BASE_URL",
+                        "MINIMAX_API_KEY",
+                    ],
                     enabled=True,
                     auth_state=ProviderProfileAuthState.CONNECTED,
                     disabled_reason=None,
@@ -3052,6 +3114,15 @@ async def test_update_claude_anthropic_can_replace_minimax_runtime_default(
                     runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
                     volume_ref="claude_auth_volume",
                     volume_mount_path="/home/app/.claude",
+                    # #3821: backend-derived isolation policy for
+                    # claude_code/anthropic/oauth.
+                    clear_env_keys=[
+                        "ANTHROPIC_API_KEY",
+                        "ANTHROPIC_AUTH_TOKEN",
+                        "ANTHROPIC_BASE_URL",
+                        "CLAUDE_API_KEY",
+                        "OPENAI_API_KEY",
+                    ],
                     enabled=True,
                     auth_state=ProviderProfileAuthState.CONNECTED,
                     disabled_reason=None,
@@ -3469,8 +3540,9 @@ async def test_claude_manual_auth_commit_stores_secret_ref_only(
         "CUSTOM_ENV": {"from_secret_ref": "custom_tool"},
         "ANTHROPIC_API_KEY": {"from_secret_ref": "anthropic_api_key"},
     }
-    assert "ANTHROPIC_API_KEY" in profile_payload["clear_env_keys"]
     assert "ANTHROPIC_AUTH_TOKEN" in profile_payload["clear_env_keys"]
+    assert "ANTHROPIC_BASE_URL" in profile_payload["clear_env_keys"]
+    assert "CLAUDE_API_KEY" in profile_payload["clear_env_keys"]
     assert "OPENAI_API_KEY" in profile_payload["clear_env_keys"]
     assert "CUSTOM_ENV" in profile_payload["clear_env_keys"]
     assert profile_payload["clear_env_keys"].count("OPENAI_API_KEY") == 1
@@ -3797,6 +3869,14 @@ async def test_provider_api_key_setup_failed_validation_updates_state_without_se
                     credential_source=ProviderCredentialSource.SECRET_REF,
                     runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
                     secret_refs={"openai_api_key": "env://OPENAI_API_KEY"},
+                    # #3821: backend-derived isolation policy for
+                    # codex_cli/openai/api_key.
+                    clear_env_keys=[
+                        "OPENAI_BASE_URL",
+                        "OPENAI_ORG_ID",
+                        "OPENAI_PROJECT",
+                        "MINIMAX_API_KEY",
+                    ],
                     enabled=True,
                     is_default=False,
                     priority=10_000,
@@ -4662,6 +4742,11 @@ def _mm3788_profile_payload(
     runtime_id: str,
     enabled: bool = True,
 ) -> dict[str, Any]:
+    # #3821: supply a superset isolation policy covering known minimax
+    # strategies so both known (codex_cli/claude_code) and custom runtimes
+    # classify as legacy_custom (warning, launchable) instead of
+    # missing_or_stale (error). Omitted policies would fail closed for
+    # enabled profiles.
     return {
         "profile_id": profile_id,
         "runtime_id": runtime_id,
@@ -4670,6 +4755,14 @@ def _mm3788_profile_payload(
         "runtime_materialization_mode": "api_key_env",
         # The same managed secret may back one profile per runtime.
         "secret_refs": {"MINIMAX_API_KEY": "env://mm3788_minimax_secret"},
+        "clear_env_keys": [
+            "MINIMAX_API_KEY",
+            "OPENAI_API_KEY",
+            "OPENAI_BASE_URL",
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_BASE_URL",
+        ],
         "enabled": enabled,
         "auth_state": "connected" if enabled else "not_configured",
         "disabled_reason": None if enabled else "missing_credentials",
@@ -4829,3 +4922,293 @@ async def test_mm3788_runtime_filter_still_applies_profile_visibility(
     assert "mm3788_visible_owned" in listed_ids
     # Runtime scoping narrows the result set; it never widens visibility.
     assert "mm3788_hidden_other_owner" not in listed_ids
+
+
+# ---- MoonLadderStudios/MoonMind#3821 launch-safety isolation wiring ----
+
+_MM3821_CODEX_API_KEY_DERIVED = [
+    "OPENAI_BASE_URL",
+    "OPENAI_ORG_ID",
+    "OPENAI_PROJECT",
+    "MINIMAX_API_KEY",
+]
+
+
+@pytest.mark.asyncio
+async def test_3821_guided_create_with_clear_env_keys_rejected(
+    client_app: AsyncClient, _module_db
+) -> None:
+    _override_current_user()
+    profile_id = f"mm3821-locked-create-{uuid4().hex}"
+
+    async with client_app as client:
+        response = await client.post(
+            "/api/v1/provider-profiles",
+            json={
+                "profile_id": profile_id,
+                "runtime_id": "codex_cli",
+                "provider_id": "openai",
+                "authentication_method": "api_key",
+                "preset_version": CODEX_OPENAI_API_KEY_PRESET_VERSION,
+                "clear_env_keys": ["OPENAI_API_KEY"],
+            },
+        )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "provider_profile_clear_env_keys_locked"
+    assert detail["field"] == "clear_env_keys"
+    async with db_base.async_session_maker() as session:
+        assert await session.get(ManagedAgentProviderProfile, profile_id) is None
+
+
+@pytest.mark.asyncio
+async def test_3821_non_superuser_update_of_clear_env_keys_locked(
+    client_app: AsyncClient, _module_db
+) -> None:
+    _override_current_user()
+    profile_id = f"mm3821-locked-update-{uuid4().hex}"
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="codex_cli",
+                provider_id="openai",
+                credential_source=ProviderCredentialSource.SECRET_REF,
+                runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                secret_refs={"openai_api_key": "env://OPENAI_API_KEY"},
+                clear_env_keys=list(_MM3821_CODEX_API_KEY_DERIVED),
+                enabled=True,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+            )
+        )
+        await session.commit()
+
+    async with client_app as client:
+        response = await client.patch(
+            f"/api/v1/provider-profiles/{profile_id}",
+            json={"clear_env_keys": ["OPENAI_API_KEY"]},
+        )
+
+    assert response.status_code == 422
+    assert (
+        response.json()["detail"]["code"]
+        == "provider_profile_clear_env_keys_locked"
+    )
+    async with db_base.async_session_maker() as session:
+        persisted = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert persisted is not None
+        assert sorted(persisted.clear_env_keys) == sorted(
+            _MM3821_CODEX_API_KEY_DERIVED
+        )
+
+
+@pytest.mark.asyncio
+async def test_3821_non_superuser_update_repair_to_derived_accepted(
+    client_app: AsyncClient, _module_db
+) -> None:
+    _override_current_user()
+    profile_id = f"mm3821-repair-update-{uuid4().hex}"
+    secret_slug = f"mm3821-repair-openai-{uuid4().hex}"
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedSecret(
+                slug=secret_slug,
+                ciphertext="encrypted-test-value",
+                status=SecretStatus.ACTIVE,
+                details={},
+            )
+        )
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="codex_cli",
+                provider_id="openai",
+                credential_source=ProviderCredentialSource.SECRET_REF,
+                runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                secret_refs={"openai_api_key": f"db://{secret_slug}"},
+                clear_env_keys=["OPENAI_API_KEY"],
+                enabled=True,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+            )
+        )
+        await session.commit()
+
+    async with client_app as client:
+        response = await client.patch(
+            f"/api/v1/provider-profiles/{profile_id}",
+            json={"clear_env_keys": list(reversed(_MM3821_CODEX_API_KEY_DERIVED))},
+        )
+        assert response.status_code == 200
+        fetched = await client.get(f"/api/v1/provider-profiles/{profile_id}")
+
+    assert fetched.status_code == 200
+    assert fetched.json()["clear_env_keys"] == _MM3821_CODEX_API_KEY_DERIVED
+    isolation = fetched.json()["launch_isolation"]
+    assert isolation["classification"] == "current"
+    assert isolation["source"] == "runtime_provider_isolation_policy"
+
+
+@pytest.mark.asyncio
+async def test_3821_stale_isolation_policy_blocks_readiness(
+    client_app: AsyncClient, _module_db
+) -> None:
+    _override_current_user()
+    profile_id = f"mm3821-stale-readiness-{uuid4().hex}"
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="codex_cli",
+                provider_id="openai",
+                credential_source=ProviderCredentialSource.SECRET_REF,
+                runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                secret_refs={"openai_api_key": "env://OPENAI_API_KEY"},
+                clear_env_keys=["OPENAI_API_KEY"],
+                enabled=True,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+            )
+        )
+        await session.commit()
+
+    async with client_app as client:
+        response = await client.get(f"/api/v1/provider-profiles/{profile_id}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["launch_ready"] is False
+    assert payload["readiness"]["status"] == "blocked"
+    isolation_check = next(
+        check
+        for check in payload["readiness"]["checks"]
+        if check["id"] == "launch_isolation"
+    )
+    assert isolation_check["status"] == "error"
+    assert "repair" in isolation_check["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_3821_launch_isolation_shape_in_get(
+    client_app: AsyncClient, _module_db
+) -> None:
+    _override_current_user()
+    profile_id = f"mm3821-isolation-shape-{uuid4().hex}"
+
+    async with client_app as client:
+        created = await client.post(
+            "/api/v1/provider-profiles",
+            json={
+                "profile_id": profile_id,
+                "runtime_id": "codex_cli",
+                "provider_id": "openai",
+                "authentication_method": "api_key",
+                "preset_version": CODEX_OPENAI_API_KEY_PRESET_VERSION,
+            },
+        )
+        assert created.status_code == 201
+        response = await client.get(f"/api/v1/provider-profiles/{profile_id}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["clear_env_keys"] == _MM3821_CODEX_API_KEY_DERIVED
+    isolation = payload["launch_isolation"]
+    assert isolation["effective_keys"] == _MM3821_CODEX_API_KEY_DERIVED
+    assert isolation["source"] == "runtime_provider_isolation_policy"
+    assert isolation["derived"] is True
+    assert isolation["editable"] is False
+    assert isolation["lock_reason"]
+    assert isolation["strategy_id"] == "codex_cli/openai/api_key"
+    assert set(isolation["explanations"]) == set(_MM3821_CODEX_API_KEY_DERIVED)
+    assert isolation["classification"] == "current"
+
+
+def test_3821_oauth_enrollment_merge_preserves_unknown_keys() -> None:
+    from datetime import datetime, timezone
+
+    profile = ManagedAgentProviderProfile(
+        profile_id="mm3821-enrollment-merge",
+        runtime_id="codex_cli",
+        provider_id="openai",
+        credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+        runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+        clear_env_keys=["CUSTOM_LEGACY_KEY"],
+        command_behavior={},
+        home_path_overrides={},
+        auth_state=ProviderProfileAuthState.OAUTH_PENDING,
+    )
+    apply_oauth_connected_state(
+        profile,
+        mapping=None,
+        validated_at=datetime.now(timezone.utc),
+    )
+
+    assert "CUSTOM_LEGACY_KEY" in profile.clear_env_keys
+    assert "OPENAI_API_KEY" in profile.clear_env_keys
+
+
+@pytest.mark.asyncio
+async def test_3821_startup_reconciliation_normalizes_and_flags(
+    _module_db,
+) -> None:
+    from api_service.services.provider_profile_service import (
+        reconcile_provider_profile_isolation_policies,
+    )
+
+    normalize_id = f"mm3821-reconcile-normalize-{uuid4().hex}"
+    preserve_id = f"mm3821-reconcile-preserve-{uuid4().hex}"
+    repair_id = f"mm3821-reconcile-repair-{uuid4().hex}"
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=normalize_id,
+                runtime_id="codex_cli",
+                provider_id="openai",
+                credential_source=ProviderCredentialSource.SECRET_REF,
+                runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                clear_env_keys=list(reversed(_MM3821_CODEX_API_KEY_DERIVED)),
+                enabled=False,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+            )
+        )
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=preserve_id,
+                runtime_id="codex_cli",
+                provider_id="openai",
+                credential_source=ProviderCredentialSource.SECRET_REF,
+                runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                clear_env_keys=[*_MM3821_CODEX_API_KEY_DERIVED, "CUSTOM_LEGACY_KEY"],
+                enabled=False,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+            )
+        )
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=repair_id,
+                runtime_id="codex_cli",
+                provider_id="openai",
+                credential_source=ProviderCredentialSource.SECRET_REF,
+                runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                clear_env_keys=["OPENAI_API_KEY"],
+                enabled=False,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+            )
+        )
+        await session.commit()
+
+        counts = await reconcile_provider_profile_isolation_policies(session=session)
+        await session.commit()
+
+        normalized = await session.get(ManagedAgentProviderProfile, normalize_id)
+        preserved = await session.get(ManagedAgentProviderProfile, preserve_id)
+        repair = await session.get(ManagedAgentProviderProfile, repair_id)
+
+    assert counts["normalized"] >= 1
+    assert counts["preserve_custom"] >= 1
+    assert counts["repair_required"] >= 1
+    assert normalized is not None
+    assert list(normalized.clear_env_keys) == _MM3821_CODEX_API_KEY_DERIVED
+    assert preserved is not None
+    assert "CUSTOM_LEGACY_KEY" in preserved.clear_env_keys
+    assert repair is not None
+    assert repair.clear_env_keys == ["OPENAI_API_KEY"]

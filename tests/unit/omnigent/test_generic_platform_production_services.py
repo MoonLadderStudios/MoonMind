@@ -1502,6 +1502,8 @@ async def test_host_cleanup_claim_fences_a_stale_activity() -> None:
 
 async def _generic_publication_harness(
     publication: dict[str, object],
+    *,
+    execution_state_notifier=None,
 ) -> SimpleNamespace:
     """Build the real generic-host realizer around one publication outcome."""
 
@@ -1729,6 +1731,7 @@ async def _generic_publication_harness(
         session_cleanup_service=SessionCleanup(),
         workspace_publisher=WorkspacePublisher(),
         turn_command_service=TurnCommands(),
+        execution_state_notifier=execution_state_notifier,
         heartbeat_interval_seconds=0.005,
         heartbeat_ttl_seconds=60,
     )
@@ -1835,6 +1838,62 @@ async def test_generic_realizer_persists_authority_and_releases_provider_last() 
 
     assert replay.summary == "done"
     assert events[len(first_execution_events) :] == []
+
+
+@pytest.mark.asyncio
+async def test_generic_realizer_projects_provider_capacity_wait() -> None:
+    projected: list[tuple[str, str, str]] = []
+
+    async def notify(workflow_id: str, state: str, reason: str) -> None:
+        projected.append((workflow_id, state, reason))
+
+    harness = await _generic_publication_harness(
+        _PUSHED_PUBLICATION,
+        execution_state_notifier=notify,
+    )
+
+    result = await harness.realizer.execute(
+        harness.publish_request,
+        _plan("opencode-go/model"),
+    )
+
+    assert result.failure_class is None
+    assert projected == [
+        (
+            "workflow-1",
+            "awaiting_slot",
+            "Waiting for Provider Profile capacity.",
+        ),
+        (
+            "workflow-1",
+            "launching",
+            "Provider Profile capacity acquired.",
+        ),
+        ("workflow-1", "running", "Agent is running."),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_generic_realizer_ignores_state_projection_failure() -> None:
+    async def unavailable_notifier(
+        _workflow_id: str,
+        _state: str,
+        _reason: str,
+    ) -> None:
+        raise RuntimeError("projection unavailable")
+
+    harness = await _generic_publication_harness(
+        _PUSHED_PUBLICATION,
+        execution_state_notifier=unavailable_notifier,
+    )
+
+    result = await harness.realizer.execute(
+        harness.publish_request,
+        _plan("opencode-go/model"),
+    )
+
+    assert result.failure_class is None
+    assert result.summary == "done"
 
 
 @pytest.mark.asyncio

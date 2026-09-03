@@ -562,6 +562,22 @@ def _credential_free_preset(
     )
 
 
+def _derived_clear_keys(*, runtime_id: str, provider_id: str, method: str) -> list[str]:
+    """Resolve preset clear_env_keys through the #3821 isolation authority."""
+    from moonmind.provider_profiles.isolation_policy import derive_isolation_policy
+
+    policy = derive_isolation_policy(
+        runtime_id=runtime_id,
+        provider_id=provider_id,
+        authentication_method=method,
+    )
+    if policy is None:
+        raise ValueError(
+            f"No isolation policy for {runtime_id}/{provider_id}/{method}."
+        )
+    return list(policy.keys)
+
+
 def _supported_presets() -> dict[
     tuple[str, str, ProviderProfileAuthenticationMethod],
     ProviderProfileCreationPreset,
@@ -571,37 +587,26 @@ def _supported_presets() -> dict[
             runtime_id="codex_cli",
             provider_id="openai",
             mount_path="/home/app/.codex",
-            clear_env_keys=[
-                "OPENAI_API_KEY",
-                "OPENAI_BASE_URL",
-                "OPENAI_ORG_ID",
-                "OPENAI_PROJECT",
-                "MINIMAX_API_KEY",
-            ],
+            clear_env_keys=_derived_clear_keys(
+                runtime_id="codex_cli", provider_id="openai", method="oauth"
+            ),
         ),
         _oauth_preset(
             runtime_id="claude_code",
             provider_id="anthropic",
             mount_path="/home/app/.claude",
-            clear_env_keys=[
-                "ANTHROPIC_API_KEY",
-                "ANTHROPIC_AUTH_TOKEN",
-                "ANTHROPIC_BASE_URL",
-                "CLAUDE_API_KEY",
-                "OPENAI_API_KEY",
-            ],
+            clear_env_keys=_derived_clear_keys(
+                runtime_id="claude_code", provider_id="anthropic", method="oauth"
+            ),
         ),
         _api_key_preset(
             runtime_id="codex_cli",
             provider_id="openai",
             materialization_mode="api_key_env",
             secret_role="openai_api_key",
-            clear_env_keys=[
-                "OPENAI_BASE_URL",
-                "OPENAI_ORG_ID",
-                "OPENAI_PROJECT",
-                "MINIMAX_API_KEY",
-            ],
+            clear_env_keys=_derived_clear_keys(
+                runtime_id="codex_cli", provider_id="openai", method="api_key"
+            ),
             env_template={
                 "OPENAI_API_KEY": {"from_secret_ref": "openai_api_key"}
             },
@@ -612,12 +617,9 @@ def _supported_presets() -> dict[
             provider_id="anthropic",
             materialization_mode="api_key_env",
             secret_role="anthropic_api_key",
-            clear_env_keys=[
-                "ANTHROPIC_AUTH_TOKEN",
-                "ANTHROPIC_BASE_URL",
-                "CLAUDE_API_KEY",
-                "OPENAI_API_KEY",
-            ],
+            clear_env_keys=_derived_clear_keys(
+                runtime_id="claude_code", provider_id="anthropic", method="api_key"
+            ),
             env_template={
                 "ANTHROPIC_API_KEY": {"from_secret_ref": "anthropic_api_key"}
             },
@@ -628,13 +630,9 @@ def _supported_presets() -> dict[
             provider_id="opencode-go",
             materialization_mode="composite",
             secret_role="opencode_api_key",
-            clear_env_keys=[
-                "OPENCODE_AUTH_CONTENT",
-                "OPENCODE_CONFIG",
-                "OPENCODE_CONFIG_CONTENT",
-                "OPENAI_API_KEY",
-                "ANTHROPIC_API_KEY",
-            ],
+            clear_env_keys=_derived_clear_keys(
+                runtime_id="opencode", provider_id="opencode-go", method="api_key"
+            ),
             env_template={},
             auth_strategy="opencode_auth_json",
             system_tags=["api-key", "opencode", "go"],

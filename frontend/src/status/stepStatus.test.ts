@@ -106,7 +106,6 @@ describe('step status helpers', () => {
       'waiting_on_dependencies',
       'planning',
       'awaiting_slot',
-      'proposals',
       'finalizing',
       'no_commit',
       'preparing',

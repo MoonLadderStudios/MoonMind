@@ -21,7 +21,6 @@ from temporalio.common import (
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
-from moonmind.config import settings
 from moonmind.workflows.temporal.activity_catalog import (
     ARTIFACTS_TASK_QUEUE,
     INTEGRATIONS_TASK_QUEUE,
@@ -38,8 +37,6 @@ INTEGRATION_START_CALLS: list[Dict[str, Any]] = []
 INTEGRATION_STATUS_CALLS: list[Dict[str, Any]] = []
 INTEGRATION_FETCH_RESULT_CALLS: list[Dict[str, Any]] = []
 INTEGRATION_MERGE_PR_CALLS: list[Dict[str, Any]] = []
-PROPOSAL_GENERATE_CALLS: list[Dict[str, Any]] = []
-PROPOSAL_SUBMIT_CALLS: list[Dict[str, Any]] = []
 
 def _trusted_search_attributes() -> TypedSearchAttributes:
     return TypedSearchAttributes(
@@ -231,39 +228,6 @@ async def mock_integration_merge_pr(args: Dict[str, Any]) -> Dict[str, Any]:
     INTEGRATION_MERGE_PR_CALLS.append(args)
     return {"merged": True}
 
-@activity.defn(name="proposal.generate")
-async def mock_proposal_generate(args: Dict[str, Any]) -> list[Dict[str, Any]]:
-    PROPOSAL_GENERATE_CALLS.append(args)
-    return [
-        {
-            "title": "Fix flaky test in module X",
-            "summary": "Test xyz is flaky due to race condition",
-            "category": "testing",
-            "tags": ["flaky", "testing"],
-            "workflowCreateRequest": {
-                "payload": {
-                    "repository": "moonladder/moonmind",
-                    "workflow": {"instructions": "Fix the flaky test"},
-                }
-            },
-        }
-    ]
-
-@activity.defn(name="proposal.generate")
-async def mock_proposal_generate_empty(args: Dict[str, Any]) -> list[Dict[str, Any]]:
-    PROPOSAL_GENERATE_CALLS.append(args)
-    return []
-
-@activity.defn(name="proposal.submit")
-async def mock_proposal_submit(args: Dict[str, Any]) -> Dict[str, Any]:
-    PROPOSAL_SUBMIT_CALLS.append(args)
-    candidates = args.get("candidates") or []
-    return {
-        "generated_count": len(candidates),
-        "submitted_count": len(candidates),
-        "errors": [],
-    }
-
 class TestMoonMindUserWorkflow(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         PLAN_GENERATE_CALLS.clear()
@@ -274,8 +238,6 @@ class TestMoonMindUserWorkflow(unittest.IsolatedAsyncioTestCase):
         INTEGRATION_STATUS_CALLS.clear()
         INTEGRATION_FETCH_RESULT_CALLS.clear()
         INTEGRATION_MERGE_PR_CALLS.clear()
-        PROPOSAL_GENERATE_CALLS.clear()
-        PROPOSAL_SUBMIT_CALLS.clear()
 
     async def test_moonmind_run_workflow(self) -> None:
         async with await WorkflowEnvironment.start_time_skipping() as env:
@@ -600,201 +562,6 @@ class TestMoonMindUserWorkflow(unittest.IsolatedAsyncioTestCase):
                     desc.search_attributes.get("mm_state"),
                     ["failed"],
                 )
-
-    async def test_proposals_stage_enabled(self) -> None:
-        """When canonical task.proposeTasks is true, proposal activities are invoked."""
-        original_enabled = settings.workflow.enable_proposals
-        settings.workflow.enable_proposals = True
-        try:
-            async with await WorkflowEnvironment.start_time_skipping() as env:
-                await _register_test_search_attributes(env)
-                async with (
-                    Worker(
-                        env.client,
-                        task_queue=LLM_TASK_QUEUE,
-                        activities=[
-                            mock_plan_generate,
-                            mock_proposal_generate,
-                        ],
-                    ),
-                    Worker(
-                        env.client,
-                        task_queue=ARTIFACTS_TASK_QUEUE,
-                        activities=[mock_artifact_read, mock_proposal_submit],
-                    ),
-                    Worker(
-                        env.client,
-                        task_queue=SANDBOX_TASK_QUEUE,
-                        activities=[
-                            mock_sandbox_command,
-                            mock_skill_execute_with_telemetry,
-                        ],
-                    ),
-                    Worker(
-                        env.client,
-                        task_queue="test-task-queue",
-                        workflows=[MoonMindUserWorkflow],
-                        workflow_runner=UnsandboxedWorkflowRunner(),
-                    ),
-                ):
-                    result = await env.client.execute_workflow(
-                        MoonMindUserWorkflow.run,
-                        {
-                            "workflowType": "MoonMind.UserWorkflow",
-                            "initialParameters": {
-                                "repo": "moonladder/moonmind",
-                                "workflow": {
-                                    "instructions": "Run with proposals.",
-                                    "proposeTasks": True,
-                                    "proposalPolicy": {
-                                        "defaultRuntime": "claude_code",
-                                    },
-                                },
-                            },
-                        },
-                        id="test-workflow-proposals-enabled",
-                        task_queue="test-task-queue",
-                        search_attributes=_trusted_search_attributes(),
-                    )
-
-                self.assertEqual(result["status"], "success")
-                self.assertEqual(len(PROPOSAL_GENERATE_CALLS), 1)
-                self.assertEqual(
-                    PROPOSAL_GENERATE_CALLS[0].get("telemetrySignals"),
-                    [
-                        {
-                            "type": "flaky_test",
-                            "tags": ["flaky_test"],
-                            "severity": "medium",
-                            "summary": "Retried a flaky test and wrote diagnostics for review.",
-                            "diagnostics_ref": "artifact://diag-mm-794",
-                        },
-                        {
-                            "type": "retry",
-                            "tags": ["retry"],
-                            "severity": "medium",
-                            "summary": "Retried a flaky test and wrote diagnostics for review.",
-                            "diagnostics_ref": "artifact://diag-mm-794",
-                        },
-                        {
-                            "type": "artifact_gap",
-                            "tags": ["artifact_gap"],
-                            "severity": "medium",
-                            "summary": "Retried a flaky test and wrote diagnostics for review.",
-                            "diagnostics_ref": "artifact://diag-mm-794",
-                        },
-                    ],
-                )
-                self.assertEqual(len(PROPOSAL_SUBMIT_CALLS), 1)
-                self.assertEqual(result.get("proposals_generated"), 1)
-                self.assertEqual(result.get("proposals_submitted"), 1)
-        finally:
-            settings.workflow.enable_proposals = original_enabled
-
-    async def test_proposals_stage_ignores_root_flag_when_task_payload_exists(self) -> None:
-        """A new task payload without task.proposeTasks must not use root proposal flags."""
-        original_enabled = settings.workflow.enable_proposals
-        settings.workflow.enable_proposals = True
-        try:
-            async with await WorkflowEnvironment.start_time_skipping() as env:
-                await _register_test_search_attributes(env)
-                async with (
-                    Worker(
-                        env.client,
-                        task_queue=LLM_TASK_QUEUE,
-                        activities=[
-                            mock_plan_generate,
-                            mock_proposal_generate,
-                        ],
-                    ),
-                    Worker(
-                        env.client,
-                        task_queue=ARTIFACTS_TASK_QUEUE,
-                        activities=[mock_artifact_read, mock_proposal_submit],
-                    ),
-                    Worker(
-                        env.client,
-                        task_queue=SANDBOX_TASK_QUEUE,
-                        activities=[mock_sandbox_command, mock_skill_execute],
-                    ),
-                    Worker(
-                        env.client,
-                        task_queue="test-task-queue",
-                        workflows=[MoonMindUserWorkflow],
-                        workflow_runner=UnsandboxedWorkflowRunner(),
-                    ),
-                ):
-                    result = await env.client.execute_workflow(
-                        MoonMindUserWorkflow.run,
-                        {
-                            "workflowType": "MoonMind.UserWorkflow",
-                            "initialParameters": {
-                                "repo": "moonladder/moonmind",
-                                "proposeTasks": True,
-                                "workflow": {
-                                    "instructions": "Run without canonical proposal opt-in.",
-                                },
-                            },
-                        },
-                        id="test-workflow-proposals-root-ignored-with-task",
-                        task_queue="test-task-queue",
-                        search_attributes=_trusted_search_attributes(),
-                    )
-
-                self.assertEqual(result["status"], "success")
-                self.assertEqual(len(PROPOSAL_GENERATE_CALLS), 0)
-                self.assertEqual(len(PROPOSAL_SUBMIT_CALLS), 0)
-                self.assertNotIn("proposals_generated", result)
-        finally:
-            settings.workflow.enable_proposals = original_enabled
-
-    async def test_proposals_stage_disabled(self) -> None:
-        """When proposeTasks is absent, proposal activities are not called."""
-        async with await WorkflowEnvironment.start_time_skipping() as env:
-            await _register_test_search_attributes(env)
-            async with (
-                Worker(
-                    env.client,
-                    task_queue=LLM_TASK_QUEUE,
-                    activities=[
-                        mock_plan_generate,
-                        mock_proposal_generate_empty,
-                    ],
-                ),
-                Worker(
-                    env.client,
-                    task_queue=ARTIFACTS_TASK_QUEUE,
-                    activities=[mock_artifact_read, mock_proposal_submit],
-                ),
-                Worker(
-                    env.client,
-                    task_queue=SANDBOX_TASK_QUEUE,
-                    activities=[mock_sandbox_command, mock_skill_execute],
-                ),
-                Worker(
-                    env.client,
-                    task_queue="test-task-queue",
-                    workflows=[MoonMindUserWorkflow],
-                    workflow_runner=UnsandboxedWorkflowRunner(),
-                ),
-            ):
-                result = await env.client.execute_workflow(
-                    MoonMindUserWorkflow.run,
-                    {
-                        "workflowType": "MoonMind.UserWorkflow",
-                        "initialParameters": {
-                            "repo": "moonladder/moonmind",
-                        },
-                    },
-                    id="test-workflow-proposals-disabled",
-                    task_queue="test-task-queue",
-                    search_attributes=_trusted_search_attributes(),
-                )
-
-            self.assertEqual(result["status"], "success")
-            self.assertEqual(len(PROPOSAL_GENERATE_CALLS), 0)
-            self.assertEqual(len(PROPOSAL_SUBMIT_CALLS), 0)
-            self.assertNotIn("proposals_generated", result)
 
     async def test_moonmind_run_signal_completion(self) -> None:
         async with await WorkflowEnvironment.start_time_skipping() as env:

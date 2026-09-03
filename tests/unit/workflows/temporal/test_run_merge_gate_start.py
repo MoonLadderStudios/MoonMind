@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from moonmind.workflows.temporal.workflows.run import (
     MoonMindRunWorkflow,
     _worker_capability_unavailable_error,
@@ -536,6 +538,75 @@ def test_build_merge_gate_start_payload_preserves_parent_runtime_profile() -> No
     assert resolver_template["effort"] == "high"
     assert "profileId" not in resolver_template
     assert "providerProfile" not in resolver_template
+
+
+def test_build_merge_gate_start_payload_preserves_parent_omnigent_plan(
+    monkeypatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._repo = "MoonLadderStudios/MoonMind"
+    monkeypatch.setattr(workflow, "_workflow_patch_enabled", lambda _patch_id: True)
+    parent_plan = {
+        "planRef": "omnigent-execution-plan:sha256:" + "a" * 64,
+        "planDigest": "sha256:" + "a" * 64,
+        "planArtifactRef": "art-parent-plan",
+        "taskInputSnapshotRef": "art-parent-task",
+        "taskInputSnapshotDigest": "sha256:" + "b" * 64,
+    }
+
+    payload = workflow._build_merge_gate_start_payload(
+        parameters={
+            "publishMode": "none",
+            "targetRuntime": "omnigent",
+            "profileId": "opencode-zen-free",
+            "model": "opencode/muse-spark-1.3-contributor-free",
+            "effort": "xhigh",
+            "omnigentExecutionPlan": parent_plan,
+            "workflow": {
+                "publish": {"mergeAutomation": {"enabled": True}},
+            },
+        },
+        pull_request_url="https://github.com/MoonLadderStudios/MoonMind/pull/341",
+        head_sha="abc123",
+        parent_workflow_id="mm:parent",
+        parent_run_id="run-1",
+    )
+
+    assert payload is not None
+    assert payload["resolverTemplate"]["targetRuntime"] == "omnigent"
+    assert payload["resolverTemplate"]["executionProfileRef"] == (
+        "opencode-zen-free"
+    )
+    assert payload["resolverTemplate"]["parentOmnigentExecutionPlan"] == parent_plan
+
+
+def test_build_merge_gate_start_payload_rejects_missing_omnigent_plan(
+    monkeypatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._repo = "MoonLadderStudios/MoonMind"
+    monkeypatch.setattr(workflow, "_workflow_patch_enabled", lambda _patch_id: True)
+
+    with pytest.raises(
+        ValueError,
+        match="requires persisted parent execution-plan authority",
+    ):
+        workflow._build_merge_gate_start_payload(
+            parameters={
+                "publishMode": "none",
+                "targetRuntime": "omnigent",
+                "workflow": {
+                    "publish": {"mergeAutomation": {"enabled": True}},
+                },
+            },
+            pull_request_url=(
+                "https://github.com/MoonLadderStudios/MoonMind/pull/341"
+            ),
+            head_sha="abc123",
+            parent_workflow_id="mm:parent",
+            parent_run_id="run-1",
+        )
+
 
 def test_build_merge_gate_start_payload_inherits_task_runtime_profile() -> None:
     workflow = MoonMindRunWorkflow()

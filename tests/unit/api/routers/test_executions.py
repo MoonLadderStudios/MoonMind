@@ -6,7 +6,6 @@ import asyncio
 import base64
 import json
 from contextlib import asynccontextmanager
-import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -33,7 +32,6 @@ from api_service.api.routers.executions import (
     _execution_recurrence_provenance,
     _expand_goal_preset_for_workflow_submission,
     _extract_cost_estimate_usd,
-    _effective_user_roles,
     _hydrate_related_run_metadata,
     _merge_workflow_preserving_artifact_instructions,
     _canonical_recovery_manifest_ref,
@@ -7040,7 +7038,7 @@ def test_create_workflow_omnigent_browser_payload_persists_canonical_intent(
         )
     )
 
-def test_create_task_shaped_execution_preserves_proposal_and_skill_intent(
+def test_create_task_shaped_execution_preserves_skill_intent(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
     test_client, service, _user = client
@@ -7053,25 +7051,18 @@ def test_create_task_shaped_execution_preserves_proposal_and_skill_intent(
             "payload": {
                 "repository": "MoonLadderStudios/MoonMind",
                 "workflow": {
-                    "instructions": "Improve managed-session proposals.",
+                    "instructions": "Improve managed-session execution.",
                     "runtime": {"mode": "codex"},
-                    "proposeTasks": True,
-                    "proposalPolicy": {
-                        "targets": ["workflow_repo", "moonmind"],
-                        "maxItems": {"workflow_repo": 2, "moonmind": 1},
-                        "minSeverityForMoonMind": "medium",
-                        "defaultRuntime": "claude_code",
+                    "skills": {
+                        "sets": ["deployment-default", "execution-quality"],
+                        "include": [{"name": "moonmind-doc-writer"}],
+                        "exclude": ["legacy-runner"],
+                        "materializationMode": "hybrid",
                     },
-                        "skills": {
-                            "sets": ["deployment-default", "proposal-quality"],
-                            "include": [{"name": "moonmind-doc-writer"}],
-                            "exclude": ["legacy-proposer"],
-                            "materializationMode": "hybrid",
-                        },
                     "steps": [
                         {
                             "id": "review",
-                            "instructions": "Review the proposal contract.",
+                            "instructions": "Review the execution contract.",
                             "skills": {
                                 "sets": ["docs-review"],
                                 "include": [{"name": "architecture-review"}],
@@ -7088,19 +7079,10 @@ def test_create_task_shaped_execution_preserves_proposal_and_skill_intent(
         "initial_parameters"
     ]
 
-    assert "proposeTasks" not in initial_parameters
-    assert "proposalPolicy" not in initial_parameters
-    assert initial_parameters["workflow"]["proposeTasks"] is True
-    assert initial_parameters["workflow"]["proposalPolicy"] == {
-        "targets": ["workflow_repo", "moonmind"],
-        "maxItems": {"workflow_repo": 2, "moonmind": 1},
-        "minSeverityForMoonMind": "medium",
-        "defaultRuntime": "claude_code",
-    }
     assert initial_parameters["workflow"]["skills"] == {
-        "sets": ["deployment-default", "proposal-quality"],
+        "sets": ["deployment-default", "execution-quality"],
         "include": [{"name": "moonmind-doc-writer"}],
-        "exclude": ["legacy-proposer"],
+        "exclude": ["legacy-runner"],
         "materializationMode": "hybrid",
     }
     assert initial_parameters["workflow"]["steps"][0]["skills"] == {
@@ -7108,28 +7090,44 @@ def test_create_task_shaped_execution_preserves_proposal_and_skill_intent(
         "include": [{"name": "architecture-review"}],
     }
 
-def test_create_task_shaped_execution_rejects_invalid_proposal_policy(
+@pytest.mark.parametrize(
+    ("container", "field", "value"),
+    [
+        ("workflow", "proposeTasks", True),
+        ("workflow", "proposalPolicy", {}),
+        ("payload", "propose_tasks", False),
+        ("payload", "proposal_policy", {}),
+    ],
+)
+def test_create_task_shaped_execution_rejects_removed_follow_up_fields(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    container: str,
+    field: str,
+    value: object,
 ) -> None:
     test_client, service, _user = client
+    payload: dict[str, object] = {
+        "workflow": {"instructions": "Run the requested work."}
+    }
+    target = payload if container == "payload" else payload["workflow"]
+    assert isinstance(target, dict)
+    target[field] = value
 
     response = test_client.post(
         "/api/executions",
         json={
             "type": "workflow",
-            "payload": {
-                "workflow": {
-                    "instructions": "Improve managed-session proposals.",
-                    "proposalPolicy": {
-                        "targets": ["side-channel"],
-                    },
-                },
-            },
+            "payload": payload,
         },
     )
 
     assert response.status_code == 422
-    assert "workflow.proposalPolicy.targets" in response.json()["detail"]["message"]
+    canonical = "proposeTasks" if "propose" in field else "proposalPolicy"
+    expected_container = "payload" if container == "payload" else "workflow"
+    assert (
+        f"{expected_container}.{canonical} has been removed"
+        in response.json()["detail"]["message"]
+    )
     service.create_execution.assert_not_awaited()
 
 def test_create_task_shaped_execution_accepts_provider_profile_alias() -> None:
@@ -7768,112 +7766,6 @@ def test_serialize_execution_exposes_merge_automation_as_publish_mode() -> None:
     assert "mergeAutomationSelected" not in payload.model_dump(by_alias=True)
 
 
-def test_serialize_execution_exposes_proposal_outcome_summary() -> None:
-    record = _build_execution_record(state=MoonMindWorkflowState.PROPOSALS)
-    record.memo["proposals"] = {
-        "requested": True,
-        "generatedCount": 2,
-        "submittedCount": 2,
-        "deliveredCount": 1,
-        "validationErrors": [
-            {"code": "proposal_missing_task", "message": "proposal skipped: [REDACTED]"}
-        ],
-        "deliveryFailures": [
-            {
-                "provider": "jira",
-                "code": "delivery_failed",
-                "message": "delivery failed: [REDACTED]",
-            }
-        ],
-        "externalLinks": [
-            {
-                "provider": "jira",
-                "externalKey": "MM-901",
-                "externalUrl": "https://jira.example/browse/MM-901",
-            }
-        ],
-        "dedupUpdates": [
-            {
-                "provider": "github",
-                "externalKey": "42",
-                "created": False,
-                "duplicateSource": "existing-open-issue",
-            }
-        ],
-    }
-
-    payload = _serialize_execution(record).model_dump(by_alias=True)
-
-    assert payload["state"] == "proposals"
-    assert payload["dashboardStatus"] == "running"
-    assert payload["proposalSummary"]["deliveredCount"] == 1
-    assert payload["proposalSummary"]["externalLinks"][0]["externalKey"] == "MM-901"
-    assert payload["proposalOutcomes"][0]["provider"] == "jira"
-    assert (
-        payload["proposalOutcomes"][0]["externalUrl"]
-        == "https://jira.example/browse/MM-901"
-    )
-
-
-def test_serialize_execution_deduplicates_proposal_outcomes_by_external_key() -> None:
-    record = _build_execution_record(state=MoonMindWorkflowState.PROPOSALS)
-    record.memo["proposals"] = {
-        "externalLinks": [
-            {
-                "provider": "jira",
-                "externalKey": "MM-901",
-                "externalUrl": "https://jira.example/browse/MM-901",
-            }
-        ],
-        "dedupUpdates": [
-            {
-                "provider": "jira",
-                "externalKey": "MM-901",
-                "created": False,
-                "duplicateSource": "existing-open-issue",
-            }
-        ],
-    }
-
-    payload = _serialize_execution(record).model_dump(by_alias=True)
-
-    assert payload["proposalOutcomes"] == [
-        {
-            "provider": "jira",
-            "externalKey": "MM-901",
-            "externalUrl": "https://jira.example/browse/MM-901",
-            "deliveryStatus": "updated",
-            "created": False,
-            "duplicateSource": "existing-open-issue",
-        }
-    ]
-
-def test_serialize_execution_includes_failed_proposal_outcomes() -> None:
-    record = _build_execution_record(state=MoonMindWorkflowState.COMPLETED)
-    record.memo["proposals"] = {
-        "deliveryFailures": [
-            {
-                "provider": "jira",
-                "externalKey": "MM-902",
-                "code": "delivery_failed",
-                "message": "delivery failed: [REDACTED]",
-            }
-        ],
-    }
-
-    payload = _serialize_execution(record).model_dump(by_alias=True)
-
-    assert payload["proposalOutcomes"] == [
-        {
-            "provider": "jira",
-            "externalKey": "MM-902",
-            "code": "delivery_failed",
-            "message": "delivery failed: [REDACTED]",
-            "deliveryStatus": "failed",
-        }
-    ]
-
-
 def test_serialize_execution_projects_observability_from_finish_summary() -> None:
     record = _build_execution_record(state=MoonMindWorkflowState.COMPLETED)
     record.close_status = TemporalExecutionCloseStatus.COMPLETED
@@ -7887,7 +7779,6 @@ def test_serialize_execution_projects_observability_from_finish_summary() -> Non
             "tags": ["flaky_test", "retry"],
             "severity": "high",
         },
-        "proposals": {"requested": True, "submittedCount": 1},
         "cost": {"status": "not_recorded", "amountUsd": None},
     }
 
@@ -7901,7 +7792,9 @@ def test_serialize_execution_projects_observability_from_finish_summary() -> Non
         "cost": {"status": "not_recorded", "amountUsd": None},
     }
     assert payload["improvementSignals"][0]["tags"] == ["flaky_test", "retry"]
-    assert payload["recommendedNextAction"] == "Review generated improvement proposals."
+    assert payload["recommendedNextAction"] == (
+        "No follow-up required unless the outcome is unexpected."
+    )
     assert payload["logContext"] == {
         "workflowId": "mm:wf-1",
         "runId": "run-2",
@@ -7974,7 +7867,7 @@ def test_create_task_shaped_execution_preserves_story_output_contract(
             "payload": {
                 "workflow": {
                     "title": "Break down task proposal design",
-                    "instructions": "Extract stories from docs/Workflows/WorkflowProposalSystem.md.",
+                    "instructions": "Extract stories from docs/Steps/StepExecutionsAndCheckpointing.md.",
                     "storyOutput": {
                         "mode": "jira",
                         "jira": {
@@ -8017,7 +7910,7 @@ def test_create_task_shaped_execution_defaults_partial_story_output_mode(
             "payload": {
                 "workflow": {
                     "title": "Break down task proposal design",
-                    "instructions": "Extract stories from docs/Workflows/WorkflowProposalSystem.md.",
+                    "instructions": "Extract stories from docs/Steps/StepExecutionsAndCheckpointing.md.",
                     "storyOutput": {
                         "jira": {
                             "projectKey": "MM",
@@ -10623,113 +10516,6 @@ def test_create_task_shaped_execution_once_schedule_sets_start_delay(
     assert 200 <= start_delay.total_seconds() <= 300
     assert response.json()["scheduledFor"] is not None
 
-def test_create_task_shaped_recurring_schedule_normalizes_proposal_intent(
-    client: tuple[TestClient, AsyncMock, SimpleNamespace],
-) -> None:
-    test_client, _service, _user = client
-    test_client.app.dependency_overrides[get_async_session] = _empty_session_override
-    next_run_at = datetime.now(UTC) + timedelta(hours=1)
-
-    with patch(
-        "api_service.services.recurring_workflows_service.RecurringWorkflowsService"
-    ) as service_cls:
-        service = service_cls.return_value
-        service.create_definition = AsyncMock(
-            return_value=SimpleNamespace(
-                id=uuid4(),
-                name="Inline schedule",
-                cron="0 * * * *",
-                timezone="UTC",
-                next_run_at=next_run_at,
-            )
-        )
-
-        response = test_client.post(
-            "/api/executions",
-            json={
-                "type": "workflow",
-                "payload": {
-                    "proposeTasks": True,
-                    "proposalPolicy": {"targets": ["moonmind"]},
-                    "schedule": {
-                        "mode": "recurring",
-                        "cron": "0 * * * *",
-                    },
-                    "workflow": {
-                        "instructions": "Run this on a schedule",
-                        "proposeTasks": True,
-                        "proposalPolicy": {
-                            "targets": ["workflow_repo"],
-                            "defaultRuntime": "claude_code",
-                        },
-                    },
-                },
-            },
-        )
-
-    assert response.status_code == 201, response.json()
-    target = service.create_definition.await_args.kwargs["target"]
-    assert target["workflowType"] == "MoonMind.UserWorkflow"
-    stored_payload = target["initialParameters"]
-    assert "schedule" not in stored_payload
-    assert "proposeTasks" not in stored_payload
-    assert "proposalPolicy" not in stored_payload
-    assert stored_payload["workflow"]["proposeTasks"] is True
-    assert stored_payload["workflow"]["proposalPolicy"] == {
-        "targets": ["workflow_repo"],
-        "defaultRuntime": "claude_code",
-    }
-
-def test_create_task_shaped_recurring_schedule_uses_root_proposal_fallbacks(
-    client: tuple[TestClient, AsyncMock, SimpleNamespace],
-) -> None:
-    test_client, _service, _user = client
-    test_client.app.dependency_overrides[get_async_session] = _empty_session_override
-    next_run_at = datetime.now(UTC) + timedelta(hours=1)
-
-    with patch(
-        "api_service.services.recurring_workflows_service.RecurringWorkflowsService"
-    ) as service_cls:
-        service = service_cls.return_value
-        service.create_definition = AsyncMock(
-            return_value=SimpleNamespace(
-                id=uuid4(),
-                name="Inline schedule",
-                cron="0 * * * *",
-                timezone="UTC",
-                next_run_at=next_run_at,
-            )
-        )
-
-        response = test_client.post(
-            "/api/executions",
-            json={
-                "type": "workflow",
-                "payload": {
-                    "proposeTasks": True,
-                    "proposalPolicy": {"targets": ["moonmind"]},
-                    "schedule": {
-                        "mode": "recurring",
-                        "cron": "0 * * * *",
-                    },
-                    "workflow": {
-                        "instructions": "Run this on a schedule",
-                    },
-                },
-            },
-        )
-
-    assert response.status_code == 201, response.json()
-    target = service.create_definition.await_args.kwargs["target"]
-    assert target["workflowType"] == "MoonMind.UserWorkflow"
-    stored_payload = target["initialParameters"]
-    assert "schedule" not in stored_payload
-    assert "proposeTasks" not in stored_payload
-    assert "proposalPolicy" not in stored_payload
-    assert stored_payload["workflow"]["proposeTasks"] is True
-    assert stored_payload["workflow"]["proposalPolicy"] == {"targets": ["moonmind"]}
-
-
 def test_create_task_shaped_recurring_schedule_preserves_runtime_selection(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -12330,7 +12116,7 @@ def test_serialize_execution_surfaces_compact_skill_runtime_metadata() -> None:
     assert skill_runtime["promptIndexRef"] == "artifact:prompt-index-1"
     assert skill_runtime["activationSummaryRef"] == "artifact:activation-summary-1"
     assert skill_runtime["lifecycleIntent"] == {
-        "source": "proposal",
+        "source": "execution",
         "selectors": ["operator-default", "pr-resolver"],
         "resolvedSkillsetRef": "artifact:resolved-skills-1",
         "resolutionMode": "snapshot-reuse",
@@ -15184,6 +14970,71 @@ def test_direct_rerun_rejects_stale_plan_before_execution_creation(
     service.create_execution.assert_not_awaited()
 
 
+def test_direct_rerun_commits_snapshot_lineage_before_serialization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for mm:f724a9b2's rerun returning 500 after creation."""
+    app = FastAPI()
+    app.include_router(router)
+    service = AsyncMock()
+    source_record = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    source_record.owner_type = SimpleNamespace(value="user")
+    source_record.input_ref = None
+    source_record.parameters = {
+        "targetRuntime": "omnigent",
+        "workflow": {"instructions": "Retry the original task."},
+        "omnigentExecutionPlan": {
+            "planRef": "omnigent-execution-plan:sha256:" + "a" * 64,
+            "planDigest": "sha256:" + "a" * 64,
+            "planArtifactRef": "art_original_plan",
+            "taskInputSnapshotRef": "art_original_input",
+            "taskInputSnapshotDigest": "sha256:" + "b" * 64,
+        },
+    }
+    rerun_record = _build_execution_record(state=MoonMindWorkflowState.INITIALIZING)
+    rerun_record.workflow_id = "mm:created-rerun"
+    rerun_record.run_id = "run-created-rerun"
+    service.describe_execution.return_value = source_record
+    service._full_rerun_parameters = Mock(
+        side_effect=TemporalExecutionService._full_rerun_parameters
+    )
+    service.create_execution.return_value = rerun_record
+    app.dependency_overrides[_get_service] = lambda: service
+    _override_temporal_client(app)
+    user = _override_user_dependencies(app, is_superuser=True)
+    session = AsyncMock()
+    session.get.return_value = source_record
+    app.dependency_overrides[get_async_session] = lambda: session
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    reuse_snapshot = AsyncMock(return_value="art_snapshot_1")
+    monkeypatch.setattr(
+        executions_module,
+        "_reuse_original_task_input_snapshot_from_source",
+        reuse_snapshot,
+    )
+    serialized = _serialize_execution(rerun_record, user=user)
+
+    def serialize_after_snapshot_commit(record: Any, **_kwargs: Any):
+        session.commit.assert_awaited_once()
+        session.refresh.assert_awaited_once_with(record)
+        return serialized
+
+    monkeypatch.setattr(
+        executions_module,
+        "_serialize_execution",
+        serialize_after_snapshot_commit,
+    )
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            f"/api/executions/{source_record.workflow_id}/rerun"
+        )
+
+    assert response.status_code == 201
+    assert response.json()["workflowId"] == "mm:created-rerun"
+    reuse_snapshot.assert_awaited_once()
+
+
 def test_task_input_snapshot_artifact_id_strips_input_prefix_without_scheme() -> None:
     assert _artifact_id_from_ref("input/art-full-input") == "art-full-input"
     assert _artifact_id_from_ref("artifact://input/art-full-input") == "art-full-input"
@@ -15718,7 +15569,6 @@ def test_describe_execution_exposes_dependency_bypass_action(
         MoonMindWorkflowState.WAITING_ON_DEPENDENCIES,
         MoonMindWorkflowState.AWAITING_SLOT,
         MoonMindWorkflowState.PLANNING,
-        MoonMindWorkflowState.PROPOSALS,
         MoonMindWorkflowState.FINALIZING,
     ],
 )

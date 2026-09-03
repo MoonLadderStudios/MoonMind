@@ -503,7 +503,6 @@ Use:
 /workflows/{workflowId}/steps
 /workflows/{workflowId}/artifacts
 /workflows/{workflowId}/runs
-/proposals
 /schedules
 ```
 

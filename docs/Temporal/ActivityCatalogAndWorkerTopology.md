@@ -73,7 +73,7 @@ GitHub credential, sandbox, local-git, or agent-runtime capabilities.
  - external integrations
  - managed runtime supervision
  - provider-profile coordination support
- - proposal/review support
+ - review support
  - future agent skill resolution and materialization
 
 2. Define worker fleets with clear:
@@ -234,7 +234,6 @@ Activity Type names use dotted namespaces.
 - `provider_profile.*` — provider-profile coordination support
 - `oauth_session.*` — OAuth session lifecycle support
 - `agent_runtime.*` — managed runtime launch/supervision/result/cancel operations
-- `proposal.*` — workflow proposal generation/submission
 - `step.review` — review gate execution
 
 ### 6.2 Target-state namespace not yet fully implemented
@@ -554,18 +553,14 @@ Versioning so in-flight histories keep their recorded order while new histories
 use the current order. Activity retry cannot repair a workflow-task
 nondeterminism caused by an unguarded order change.
 
-## 8.10 Proposal and review activities
+## 8.10 Review activities
 
 Current implemented activities:
 
-- `proposal.generate`
-- `proposal.submit`
 - `step.review`
 
 Queues:
 
-- `proposal.generate` → `mm.activity.llm`
-- `proposal.submit` → `mm.activity.artifacts`
 - `step.review` → `mm.activity.llm`
 
 These are support families, not agent-runtime families.
@@ -835,7 +830,7 @@ The catalog is already live for:
 - provider-profile support
 - OAuth session support
 - managed runtime supervision
-- proposals and review
+- review gates
 
 The key architectural rule for current and future work is:
 

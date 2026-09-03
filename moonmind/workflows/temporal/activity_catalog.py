@@ -1055,6 +1055,7 @@ def build_default_activity_catalog(
                 ),
             )
             for activity_type, start_to_close, schedule_to_close in (
+                ("omnigent.prepare_child_execution_plan", 300, 600),
                 ("omnigent.ensure_provider_profile_lease", 60, 180),
                 ("omnigent.ensure_host", 300, 600),
                 ("omnigent.ensure_provider_session", 60, 180),
@@ -1591,24 +1592,6 @@ def build_default_activity_catalog(
                 "repair_projection",
                 "cleanup",
             )
-        ),
-        TemporalActivityDefinition(
-            activity_type="proposal.generate",
-            family="proposal",
-            capability_class="llm",
-            task_queue=cfg.activity_llm_task_queue,
-            fleet=LLM_FLEET,
-            timeouts=TemporalActivityTimeouts(300, 600),
-            retries=_activity_retries(max_attempts=3, max_interval_seconds=120),
-        ),
-        TemporalActivityDefinition(
-            activity_type="proposal.submit",
-            family="proposal",
-            capability_class="artifacts",
-            task_queue=cfg.activity_artifacts_task_queue,
-            fleet=ARTIFACTS_FLEET,
-            timeouts=TemporalActivityTimeouts(120, 300),
-            retries=_activity_retries(max_attempts=3, max_interval_seconds=60),
         ),
         TemporalActivityDefinition(
             activity_type="agent_skill.resolve",

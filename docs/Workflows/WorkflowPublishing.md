@@ -309,7 +309,7 @@ For Jira-backed work, the pull request title must include the canonical Jira iss
 Examples:
 
 ```text
-MM-597 Validate proposal delivery records before submission
+MM-597 Validate delivery records before submission
 MM-489 Render shimmer band and halo layers
 MM-398 Add Jira Orchestrate blocker preflight
 ```
