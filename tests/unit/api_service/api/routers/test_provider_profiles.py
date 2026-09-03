@@ -2002,7 +2002,7 @@ async def test_create_provider_profile(
     async with client_app as client:
         response = await client.post("/api/v1/provider-profiles", json=payload)
     
-    assert response.status_code == 201, f"DEBUG_422_BODY={response.text[:3000]}"
+    assert response.status_code == 201
     data = response.json()
     assert data["profile_id"] == "new_profile"
     assert data["credential_source"] == "secret_ref"
