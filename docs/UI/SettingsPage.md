@@ -676,6 +676,10 @@ The design is satisfied when:
 28. A concurrent-change `version_conflict` stops the save, refreshes the affected descriptors, shows the conflict, and requires explicit resubmission.
 29. Rendered rows keep the descriptor fields section 9 declares load-bearing, including active state, activation guidance, application requirements, and ordering.
 
+Conformance suite (MoonLadderStudios/MoonMind#3822): `frontend/src/entrypoints/settingsConformance.test.tsx`.
+Focused command: `node ./node_modules/vitest/vitest.mjs run --config frontend/vite.config.ts frontend/src/entrypoints/settingsConformance.test.tsx`
+(also covered by `npm run frontend:ci` / `npm run ui:test` in CI).
+
 ---
 
 ## 16. Decision Summary
