@@ -176,6 +176,7 @@ services:
     labels:
       - "ai.model.context.protocol.version=2025-03-26"
       - "ai.model.context.protocol.endpoint=/mcp"
+      - "moonmind.runtime_source_revision=${MOONMIND_RUNTIME_SOURCE_REVISION:-untracked}"
     depends_on:
       init-db:
         condition: service_completed_successfully
@@ -356,6 +357,8 @@ services:
   temporal-worker-workflow:
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     init: true
+    labels:
+      moonmind.runtime_source_revision: "${MOONMIND_RUNTIME_SOURCE_REVISION:-untracked}"
     environment:
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
@@ -421,6 +424,8 @@ services:
   temporal-worker-artifacts:
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     init: true
+    labels:
+      moonmind.runtime_source_revision: "${MOONMIND_RUNTIME_SOURCE_REVISION:-untracked}"
     environment:
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
@@ -477,6 +482,8 @@ services:
   temporal-worker-llm:
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     init: true
+    labels:
+      moonmind.runtime_source_revision: "${MOONMIND_RUNTIME_SOURCE_REVISION:-untracked}"
     environment:
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
@@ -535,6 +542,8 @@ services:
   temporal-worker-sandbox:
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     init: true
+    labels:
+      moonmind.runtime_source_revision: "${MOONMIND_RUNTIME_SOURCE_REVISION:-untracked}"
     environment:
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
@@ -622,6 +631,8 @@ services:
   temporal-worker-agent-runtime:
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     init: true
+    labels:
+      moonmind.runtime_source_revision: "${MOONMIND_RUNTIME_SOURCE_REVISION:-untracked}"
     environment:
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
@@ -859,6 +870,8 @@ services:
   temporal-worker-integrations:
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     init: true
+    labels:
+      moonmind.runtime_source_revision: "${MOONMIND_RUNTIME_SOURCE_REVISION:-untracked}"
     environment:
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
