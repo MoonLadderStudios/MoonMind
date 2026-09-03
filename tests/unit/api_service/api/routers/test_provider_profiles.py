@@ -1983,6 +1983,9 @@ async def test_create_provider_profile(
         "credential_source": "secret_ref",
         "runtime_materialization_mode": "api_key_env",
         "secret_refs": {"API_KEY": "env://secret_v1"},
+        # #3821: unknown strategy needs an explicit shape-valid policy to
+        # classify as legacy_custom (warning) instead of missing (error).
+        "clear_env_keys": ["CUSTOM_LEGACY_KEY"],
         "max_parallel_runs": 5,
         "cooldown_after_429_seconds": 60,
         "rate_limit_policy": "queue",
@@ -2705,6 +2708,8 @@ async def test_create_enabled_provider_profile_clears_default_disabled_reason(
         "credential_source": "secret_ref",
         "runtime_materialization_mode": "api_key_env",
         "secret_refs": {"API_KEY": "env://enabled_profile_secret"},
+        # #3821: unknown strategy needs explicit policy for legacy_custom.
+        "clear_env_keys": ["CUSTOM_LEGACY_KEY"],
         "enabled": True,
         "auth_state": "connected",
         "last_auth_method": "secret_ref",
@@ -2759,6 +2764,7 @@ async def test_create_second_profile_can_become_runtime_default(
         "credential_source": "secret_ref",
         "runtime_materialization_mode": "api_key_env",
         "secret_refs": {"API_KEY": "env://first_secret"},
+        "clear_env_keys": ["CUSTOM_LEGACY_KEY"],
         "enabled": True,
         "auth_state": "connected",
         "disabled_reason": None,
@@ -2770,6 +2776,7 @@ async def test_create_second_profile_can_become_runtime_default(
         "credential_source": "secret_ref",
         "runtime_materialization_mode": "api_key_env",
         "secret_refs": {"API_KEY": "env://second_secret"},
+        "clear_env_keys": ["CUSTOM_LEGACY_KEY"],
         "enabled": True,
         "auth_state": "connected",
         "disabled_reason": None,
@@ -2811,6 +2818,7 @@ async def test_update_profile_can_become_runtime_default(
         "credential_source": "secret_ref",
         "runtime_materialization_mode": "api_key_env",
         "secret_refs": {"API_KEY": "env://patch_first_secret"},
+        "clear_env_keys": ["CUSTOM_LEGACY_KEY"],
         "enabled": True,
         "auth_state": "connected",
         "disabled_reason": None,
@@ -2823,6 +2831,7 @@ async def test_update_profile_can_become_runtime_default(
         "credential_source": "secret_ref",
         "runtime_materialization_mode": "api_key_env",
         "secret_refs": {"API_KEY": "env://patch_second_secret"},
+        "clear_env_keys": ["CUSTOM_LEGACY_KEY"],
         "enabled": True,
         "auth_state": "connected",
         "disabled_reason": None,
@@ -2899,6 +2908,8 @@ async def test_update_profile_clears_disabled_reason_when_enabled(
         "credential_source": "secret_ref",
         "runtime_materialization_mode": "api_key_env",
         "secret_refs": {"API_KEY": "env://patch_enabled_secret"},
+        # #3821: unknown strategy needs explicit policy for later enable.
+        "clear_env_keys": ["CUSTOM_LEGACY_KEY"],
         "auth_state": "connected",
         "disabled_reason": "missing_credentials",
     }
@@ -2948,6 +2959,8 @@ async def test_update_profile_enabled_accepts_active_database_secret_ref(
         "credential_source": "secret_ref",
         "runtime_materialization_mode": "api_key_env",
         "secret_refs": {"OPENAI_API_KEY": f"db://{secret_slug}"},
+        # #3821: unknown strategy needs explicit policy for later enable.
+        "clear_env_keys": ["CUSTOM_LEGACY_KEY"],
         "auth_state": "connected",
         "disabled_reason": "missing_credentials",
     }
@@ -4664,6 +4677,11 @@ def _mm3788_profile_payload(
     runtime_id: str,
     enabled: bool = True,
 ) -> dict[str, Any]:
+    # #3821: supply a superset isolation policy covering known minimax
+    # strategies so both known (codex_cli/claude_code) and custom runtimes
+    # classify as legacy_custom (warning, launchable) instead of
+    # missing_or_stale (error). Omitted policies would fail closed for
+    # enabled profiles.
     return {
         "profile_id": profile_id,
         "runtime_id": runtime_id,
@@ -4672,6 +4690,14 @@ def _mm3788_profile_payload(
         "runtime_materialization_mode": "api_key_env",
         # The same managed secret may back one profile per runtime.
         "secret_refs": {"MINIMAX_API_KEY": "env://mm3788_minimax_secret"},
+        "clear_env_keys": [
+            "MINIMAX_API_KEY",
+            "OPENAI_API_KEY",
+            "OPENAI_BASE_URL",
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_BASE_URL",
+        ],
         "enabled": enabled,
         "auth_state": "connected" if enabled else "not_configured",
         "disabled_reason": None if enabled else "missing_credentials",

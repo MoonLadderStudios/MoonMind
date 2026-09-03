@@ -327,12 +327,6 @@ def classify_existing_policy(
             return "current"
         if credential_free:
             return "empty_safe_only_credential_free"
-        if derived is None:
-            # Unknown strategy: no backend policy exists to enforce, so an
-            # empty expert-manual value preserves legacy behavior (no
-            # clearing) instead of blocking. Shape-valid non-empty values
-            # below also preserve as legacy_custom.
-            return "legacy_custom"
         return "missing_or_stale"
     if derived is None:
         # Unknown strategy: preserve, never silently erase. Shape-valid
@@ -440,12 +434,14 @@ def resolve_launch_clear_env_keys(
 
     if derived is None:
         # Unknown strategy: a shape-valid manually-shaped policy (including
-        # regex-valid custom keys) may launch as preserved legacy custom.
-        # Empty preserves legacy no-clearing behavior for expert-manual
-        # custom runtimes with no backend policy to enforce; only
-        # malformed/forbidden values fail closed.
+        # regex-valid custom keys) may launch as preserved legacy custom;
+        # empty, malformed, or forbidden values fail closed.
         if not stored:
-            return [], {"source": "legacy_custom", "derived": False, "strategy_id": "unknown"}
+            raise IsolationPolicyError(
+                "No launch-safety isolation policy can be produced for this "
+                "runtime/provider/credential contract.",
+                code="provider_profile_isolation_missing",
+            )
         try:
             validate_isolation_key_shape(stored)
         except IsolationPolicyError as exc:
